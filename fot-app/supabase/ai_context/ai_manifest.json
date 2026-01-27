@@ -1,0 +1,12 @@
+{
+  "generated_at": "2025-11-27T14:06:57.200Z",
+  "version": "1.0.0",
+  "source_files": {
+    "prod_sql": "2178467904f745e4556ffd1195848cf9cbe05a24ccc8f9a590c7451ba64330ae",
+    "tables_json": "da0abe8443bd27c8246f1e971f620f2c14846d83a3d865f5c984ee716cd2e60a",
+    "indexes_json": "19964b02ddd6f830cbaa5128a9b41caa6d68192b57544c90d1e456dca464c9bb",
+    "triggers_json": "2480ff0cdf2b0284d34235afa48191917d61ad77a1bdee8c3e314f9da8202acb",
+    "functions_json": "8e6f356d97e100faf0646a75ca70b04a5b2c0dc2b661c4ff34e3bb5de48e643e",
+    "enums_json": "ebdc8f09a50fc0316df4143cb339e3663587dcf5f49e32087ff0cac71d96fa39"
+  }
+}

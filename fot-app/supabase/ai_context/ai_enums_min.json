@@ -1,0 +1,45 @@
+{
+  "public.boq_item_type": {
+    "schema": "public",
+    "name": "boq_item_type",
+    "values": [
+      "мат",
+      "суб-мат",
+      "мат-комп.",
+      "раб",
+      "суб-раб",
+      "раб-комп."
+    ],
+    "comment": "Тип позиции в BOQ: материалы (мат, суб-мат, мат-комп.) и работы (раб, суб-раб, раб-комп.)"
+  },
+  "public.currency_type": {
+    "schema": "public",
+    "name": "currency_type",
+    "values": [
+      "RUB",
+      "USD",
+      "EUR",
+      "CNY"
+    ],
+    "comment": null
+  },
+  "public.delivery_price_type": {
+    "schema": "public",
+    "name": "delivery_price_type",
+    "values": [
+      "в цене",
+      "не в цене",
+      "суммой"
+    ],
+    "comment": null
+  },
+  "public.material_type": {
+    "schema": "public",
+    "name": "material_type",
+    "values": [
+      "основн.",
+      "вспомогат."
+    ],
+    "comment": null
+  }
+}

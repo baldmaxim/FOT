@@ -1,0 +1,122 @@
+{
+  "graphql._internal_resolve(query text, variables jsonb, \"operationName\" text, extensions jsonb)": {
+    "schema": "graphql",
+    "name": "_internal_resolve",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "graphql.comment_directive(comment_ text)": {
+    "schema": "graphql",
+    "name": "comment_directive",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "graphql.exception(message text)": {
+    "schema": "graphql",
+    "name": "exception",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "graphql.get_schema_version()": {
+    "schema": "graphql",
+    "name": "get_schema_version",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "graphql.increment_schema_version()": {
+    "schema": "graphql",
+    "name": "increment_schema_version",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "graphql.resolve(query text, variables jsonb, \"operationName\" text, extensions jsonb)": {
+    "schema": "graphql",
+    "name": "resolve",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "graphql_public.graphql(\"operationName\" text, query text, variables jsonb, extensions jsonb)": {
+    "schema": "graphql_public",
+    "name": "graphql",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "pgbouncer.get_auth(p_usename text)": {
+    "schema": "pgbouncer",
+    "name": "get_auth",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "public.set_updated_at()": {
+    "schema": "public",
+    "name": "set_updated_at",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "public.update_boq_items_updated_at()": {
+    "schema": "public",
+    "name": "update_boq_items_updated_at",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "public.update_client_positions_updated_at()": {
+    "schema": "public",
+    "name": "update_client_positions_updated_at",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "public.update_markup_parameters_updated_at()": {
+    "schema": "public",
+    "name": "update_markup_parameters_updated_at",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "public.update_markup_tactics_updated_at()": {
+    "schema": "public",
+    "name": "update_markup_tactics_updated_at",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "public.update_tender_markup_percentage_updated_at()": {
+    "schema": "public",
+    "name": "update_tender_markup_percentage_updated_at",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "public.update_updated_at_column()": {
+    "schema": "public",
+    "name": "update_updated_at_column",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "vault._crypto_aead_det_decrypt(message bytea, additional bytea, key_id bigint, context bytea, nonce bytea)": {
+    "schema": "vault",
+    "name": "_crypto_aead_det_decrypt",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "vault._crypto_aead_det_encrypt(message bytea, additional bytea, key_id bigint, context bytea, nonce bytea)": {
+    "schema": "vault",
+    "name": "_crypto_aead_det_encrypt",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "vault._crypto_aead_det_noncegen()": {
+    "schema": "vault",
+    "name": "_crypto_aead_det_noncegen",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "vault.create_secret(new_secret text, new_name text, new_description text, new_key_id uuid)": {
+    "schema": "vault",
+    "name": "create_secret",
+    "returns": "void",
+    "purpose": "Function"
+  },
+  "vault.update_secret(secret_id uuid, new_secret text, new_name text, new_description text, new_key_id uuid)": {
+    "schema": "vault",
+    "name": "update_secret",
+    "returns": "void",
+    "purpose": "Function"
+  }
+}

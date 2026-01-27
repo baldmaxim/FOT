@@ -1,0 +1,1606 @@
+{
+  "public.boq_items": {
+    "schema": "public",
+    "name": "boq_items",
+    "comment": "Элементы позиций заказчика (Bill of Quantities Items)",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "gen_random_uuid()"
+      },
+      {
+        "name": "tender_id",
+        "type": "uuid",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "client_position_id",
+        "type": "uuid",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "sort_number",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "boq_item_type",
+        "type": "boq_item_type",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "material_type",
+        "type": "material_type",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "material_name_id",
+        "type": "uuid",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "work_name_id",
+        "type": "uuid",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "unit_code",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "quantity",
+        "type": "numeric(18,6)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "base_quantity",
+        "type": "numeric(18,6)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "consumption_coefficient",
+        "type": "numeric(10,4)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "conversion_coefficient",
+        "type": "numeric(10,4)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "delivery_price_type",
+        "type": "delivery_price_type",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "delivery_amount",
+        "type": "numeric(15,2)",
+        "nullable": true,
+        "default": "0.00"
+      },
+      {
+        "name": "currency_type",
+        "type": "currency_type",
+        "nullable": true,
+        "default": "'RUB'::currency_type"
+      },
+      {
+        "name": "total_amount",
+        "type": "numeric(18,2)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "detail_cost_category_id",
+        "type": "uuid",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "quote_link",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "commercial_markup",
+        "type": "numeric(10,4)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "total_commercial_material_cost",
+        "type": "numeric(18,2)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "total_commercial_work_cost",
+        "type": "numeric(18,2)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "parent_work_item_id",
+        "type": "uuid",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "unit_rate",
+        "type": "numeric(18,2)",
+        "nullable": true,
+        "default": "0.00"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "client_position_id",
+        "references": "public.client_positions.id"
+      },
+      {
+        "column": "detail_cost_category_id",
+        "references": "public.detail_cost_categories.id"
+      },
+      {
+        "column": "material_name_id",
+        "references": "public.material_names.id"
+      },
+      {
+        "column": "parent_work_item_id",
+        "references": "public.boq_items.id"
+      },
+      {
+        "column": "tender_id",
+        "references": "public.tenders.id"
+      },
+      {
+        "column": "unit_code",
+        "references": "public.units.code"
+      },
+      {
+        "column": "work_name_id",
+        "references": "public.work_names.id"
+      }
+    ]
+  },
+  "public.client_positions": {
+    "schema": "public",
+    "name": "client_positions",
+    "comment": "Позиции заказчика из ВОРа (Bill of Quantities)",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "uuid_generate_v4()"
+      },
+      {
+        "name": "tender_id",
+        "type": "uuid",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "position_number",
+        "type": "numeric(10,2)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "unit_code",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "volume",
+        "type": "numeric(18,6)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "client_note",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "item_no",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "work_name",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "manual_volume",
+        "type": "numeric(18,6)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "manual_note",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "hierarchy_level",
+        "type": "integer",
+        "nullable": true,
+        "default": "0"
+      },
+      {
+        "name": "is_additional",
+        "type": "boolean",
+        "nullable": true,
+        "default": "false"
+      },
+      {
+        "name": "parent_position_id",
+        "type": "uuid",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "total_material",
+        "type": "numeric(18,2)",
+        "nullable": true,
+        "default": "0"
+      },
+      {
+        "name": "total_works",
+        "type": "numeric(18,2)",
+        "nullable": true,
+        "default": "0"
+      },
+      {
+        "name": "material_cost_per_unit",
+        "type": "numeric(18,6)",
+        "nullable": true,
+        "default": "0"
+      },
+      {
+        "name": "work_cost_per_unit",
+        "type": "numeric(18,6)",
+        "nullable": true,
+        "default": "0"
+      },
+      {
+        "name": "total_commercial_material",
+        "type": "numeric(18,2)",
+        "nullable": true,
+        "default": "0"
+      },
+      {
+        "name": "total_commercial_work",
+        "type": "numeric(18,2)",
+        "nullable": true,
+        "default": "0"
+      },
+      {
+        "name": "total_commercial_material_per_unit",
+        "type": "numeric(18,6)",
+        "nullable": true,
+        "default": "0"
+      },
+      {
+        "name": "total_commercial_work_per_unit",
+        "type": "numeric(18,6)",
+        "nullable": true,
+        "default": "0"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "now()"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "parent_position_id",
+        "references": "public.client_positions.id"
+      },
+      {
+        "column": "tender_id",
+        "references": "public.tenders.id"
+      },
+      {
+        "column": "unit_code",
+        "references": "public.units.code"
+      }
+    ]
+  },
+  "public.construction_cost_volumes": {
+    "schema": "public",
+    "name": "construction_cost_volumes",
+    "comment": null,
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "uuid_generate_v4()"
+      },
+      {
+        "name": "tender_id",
+        "type": "uuid",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "detail_cost_category_id",
+        "type": "uuid",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "volume",
+        "type": "numeric(18,6)",
+        "nullable": true,
+        "default": "0"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "detail_cost_category_id",
+        "references": "public.detail_cost_categories.id"
+      },
+      {
+        "column": "tender_id",
+        "references": "public.tenders.id"
+      }
+    ]
+  },
+  "public.cost_categories": {
+    "schema": "public",
+    "name": "cost_categories",
+    "comment": "Справочник      \r\n  категорий затрат",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "uuid_generate_v4()"
+      },
+      {
+        "name": "name",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "unit",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "unit",
+        "references": "public.units.code"
+      }
+    ]
+  },
+  "public.detail_cost_categories": {
+    "schema": "public",
+    "name": "detail_cost_categories",
+    "comment": "Детальные категории затрат по локациям",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "uuid_generate_v4()"
+      },
+      {
+        "name": "cost_category_id",
+        "type": "uuid",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "location",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "name",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "unit",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "order_num",
+        "type": "integer",
+        "nullable": true,
+        "default": "0"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "cost_category_id",
+        "references": "public.cost_categories.id"
+      },
+      {
+        "column": "unit",
+        "references": "public.units.code"
+      }
+    ]
+  },
+  "public.markup_parameters": {
+    "schema": "public",
+    "name": "markup_parameters",
+    "comment": "Справочник параметров наценок",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "uuid_generate_v4()"
+      },
+      {
+        "name": "key",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "label",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "is_active",
+        "type": "boolean",
+        "nullable": false,
+        "default": "true"
+      },
+      {
+        "name": "order_num",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "default_value",
+        "type": "numeric(5,2)",
+        "nullable": false,
+        "default": "0"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": []
+  },
+  "public.markup_tactics": {
+    "schema": "public",
+    "name": "markup_tactics",
+    "comment": "Хранение тактик наценок для конструктора наценок",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "uuid_generate_v4()"
+      },
+      {
+        "name": "name",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "sequences",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'{\"мат\": [], \"раб\": [], \"суб-мат\": [], \"суб-раб\": [], \"мат-комп.\": [], \"раб-комп.\": []}'::jsonb"
+      },
+      {
+        "name": "base_costs",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'{\"мат\": 0, \"раб\": 0, \"суб-мат\": 0, \"суб-раб\": 0, \"мат-комп.\": 0, \"раб-комп.\": 0}'::jsonb"
+      },
+      {
+        "name": "user_id",
+        "type": "uuid",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "is_global",
+        "type": "boolean",
+        "nullable": true,
+        "default": "false"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "user_id",
+        "references": "auth.users.id"
+      }
+    ]
+  },
+  "public.material_names": {
+    "schema": "public",
+    "name": "material_names",
+    "comment": "Справочник наименований материалов",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "uuid_generate_v4()"
+      },
+      {
+        "name": "name",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "unit",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "unit",
+        "references": "public.units.code"
+      }
+    ]
+  },
+  "public.materials_library": {
+    "schema": "public",
+    "name": "materials_library",
+    "comment": "Справочник материалов (Material library) с полной детализацией",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "uuid_generate_v4()"
+      },
+      {
+        "name": "material_type",
+        "type": "material_type",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "item_type",
+        "type": "boq_item_type",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "consumption_coefficient",
+        "type": "numeric(10,4)",
+        "nullable": true,
+        "default": "1.0000"
+      },
+      {
+        "name": "unit_rate",
+        "type": "numeric(15,2)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "currency_type",
+        "type": "currency_type",
+        "nullable": false,
+        "default": "'RUB'::currency_type"
+      },
+      {
+        "name": "delivery_price_type",
+        "type": "delivery_price_type",
+        "nullable": false,
+        "default": "'в цене'::delivery_price_type"
+      },
+      {
+        "name": "delivery_amount",
+        "type": "numeric(15,2)",
+        "nullable": true,
+        "default": "0.00"
+      },
+      {
+        "name": "material_name_id",
+        "type": "uuid",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "material_name_id",
+        "references": "public.material_names.id"
+      }
+    ]
+  },
+  "public.notifications": {
+    "schema": "public",
+    "name": "notifications",
+    "comment": "Системные уведомления для пользователей",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "gen_random_uuid()"
+      },
+      {
+        "name": "type",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "title",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "message",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "related_entity_type",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "related_entity_id",
+        "type": "uuid",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "is_read",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "now()"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": []
+  },
+  "public.subcontract_growth_exclusions": {
+    "schema": "public",
+    "name": "subcontract_growth_exclusions",
+    "comment": "Исключения категорий затрат из расчёта роста субподряда",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "uuid_generate_v4()"
+      },
+      {
+        "name": "tender_id",
+        "type": "uuid",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "detail_cost_category_id",
+        "type": "uuid",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "detail_cost_category_id",
+        "references": "public.detail_cost_categories.id"
+      },
+      {
+        "column": "tender_id",
+        "references": "public.tenders.id"
+      }
+    ]
+  },
+  "public.template_items": {
+    "schema": "public",
+    "name": "template_items",
+    "comment": null,
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "gen_random_uuid()"
+      },
+      {
+        "name": "template_id",
+        "type": "uuid",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "kind",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "work_library_id",
+        "type": "uuid",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "material_library_id",
+        "type": "uuid",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "parent_work_item_id",
+        "type": "uuid",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "conversation_coeff",
+        "type": "numeric(18,6)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "position",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "note",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "detail_cost_category_id",
+        "type": "uuid",
+        "nullable": true,
+        "default": null
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "detail_cost_category_id",
+        "references": "public.detail_cost_categories.id"
+      },
+      {
+        "column": "material_library_id",
+        "references": "public.materials_library.id"
+      },
+      {
+        "column": "parent_work_item_id",
+        "references": "public.template_items.id"
+      },
+      {
+        "column": "template_id",
+        "references": "public.templates.id"
+      },
+      {
+        "column": "work_library_id",
+        "references": "public.works_library.id"
+      }
+    ]
+  },
+  "public.templates": {
+    "schema": "public",
+    "name": "templates",
+    "comment": null,
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "gen_random_uuid()"
+      },
+      {
+        "name": "name",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "detail_cost_category_id",
+        "type": "uuid",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "now()"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "detail_cost_category_id",
+        "references": "public.detail_cost_categories.id"
+      }
+    ]
+  },
+  "public.tender_markup_percentage": {
+    "schema": "public",
+    "name": "tender_markup_percentage",
+    "comment": "Проценты наценок по тендерам (связь с справочником параметров)",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "uuid_generate_v4()"
+      },
+      {
+        "name": "tender_id",
+        "type": "uuid",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "markup_parameter_id",
+        "type": "uuid",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "value",
+        "type": "numeric(5,2)",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "now()"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "markup_parameter_id",
+        "references": "public.markup_parameters.id"
+      },
+      {
+        "column": "tender_id",
+        "references": "public.tenders.id"
+      }
+    ]
+  },
+  "public.tender_pricing_distribution": {
+    "schema": "public",
+    "name": "tender_pricing_distribution",
+    "comment": "Правила распределения затрат и наценок между КП (материалы) и работами для каждого        \r\n  тендера",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "uuid_generate_v4()"
+      },
+      {
+        "name": "tender_id",
+        "type": "uuid",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "markup_tactic_id",
+        "type": "uuid",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "basic_material_base_target",
+        "type": "text",
+        "nullable": false,
+        "default": "'material'::text"
+      },
+      {
+        "name": "basic_material_markup_target",
+        "type": "text",
+        "nullable": false,
+        "default": "'work'::text"
+      },
+      {
+        "name": "auxiliary_material_base_target",
+        "type": "text",
+        "nullable": false,
+        "default": "'work'::text"
+      },
+      {
+        "name": "auxiliary_material_markup_target",
+        "type": "text",
+        "nullable": false,
+        "default": "'work'::text"
+      },
+      {
+        "name": "work_base_target",
+        "type": "text",
+        "nullable": false,
+        "default": "'work'::text"
+      },
+      {
+        "name": "work_markup_target",
+        "type": "text",
+        "nullable": false,
+        "default": "'work'::text"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "subcontract_basic_material_base_target",
+        "type": "text",
+        "nullable": false,
+        "default": "'work'::text"
+      },
+      {
+        "name": "subcontract_basic_material_markup_target",
+        "type": "text",
+        "nullable": false,
+        "default": "'work'::text"
+      },
+      {
+        "name": "subcontract_auxiliary_material_base_target",
+        "type": "text",
+        "nullable": false,
+        "default": "'work'::text"
+      },
+      {
+        "name": "subcontract_auxiliary_material_markup_target",
+        "type": "text",
+        "nullable": false,
+        "default": "'work'::text"
+      },
+      {
+        "name": "component_material_base_target",
+        "type": "text",
+        "nullable": false,
+        "default": "'work'::text"
+      },
+      {
+        "name": "component_material_markup_target",
+        "type": "text",
+        "nullable": false,
+        "default": "'work'::text"
+      },
+      {
+        "name": "component_work_base_target",
+        "type": "text",
+        "nullable": false,
+        "default": "'work'::text"
+      },
+      {
+        "name": "component_work_markup_target",
+        "type": "text",
+        "nullable": false,
+        "default": "'work'::text"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "markup_tactic_id",
+        "references": "public.markup_tactics.id"
+      },
+      {
+        "column": "tender_id",
+        "references": "public.tenders.id"
+      }
+    ]
+  },
+  "public.tenders": {
+    "schema": "public",
+    "name": "tenders",
+    "comment": "Основная таблица для хранения информации о тендерах",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "uuid_generate_v4()"
+      },
+      {
+        "name": "title",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "client_name",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "tender_number",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "submission_deadline",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "version",
+        "type": "integer",
+        "nullable": true,
+        "default": "1"
+      },
+      {
+        "name": "area_client",
+        "type": "numeric(12,2)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "area_sp",
+        "type": "numeric(12,2)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "usd_rate",
+        "type": "numeric(10,4)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "eur_rate",
+        "type": "numeric(10,4)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "cny_rate",
+        "type": "numeric(10,4)",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "upload_folder",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "bsm_link",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "tz_link",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "qa_form_link",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      },
+      {
+        "name": "created_by",
+        "type": "uuid",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "markup_tactic_id",
+        "type": "uuid",
+        "nullable": true,
+        "default": null
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "created_by",
+        "references": "auth.users.id"
+      },
+      {
+        "column": "markup_tactic_id",
+        "references": "public.markup_tactics.id"
+      }
+    ]
+  },
+  "public.units": {
+    "schema": "public",
+    "name": "units",
+    "comment": null,
+    "columns": [
+      {
+        "name": "code",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "name",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "category",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "sort_order",
+        "type": "integer",
+        "nullable": true,
+        "default": "0"
+      },
+      {
+        "name": "is_active",
+        "type": "boolean",
+        "nullable": true,
+        "default": "true"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      }
+    ],
+    "primary_key": "code",
+    "foreign_keys": []
+  },
+  "public.work_names": {
+    "schema": "public",
+    "name": "work_names",
+    "comment": "Справочник наименований работ",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "uuid_generate_v4()"
+      },
+      {
+        "name": "name",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "unit",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "unit",
+        "references": "public.units.code"
+      }
+    ]
+  },
+  "public.works_library": {
+    "schema": "public",
+    "name": "works_library",
+    "comment": "Справочник работ (Works library) с полной детализацией",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "uuid_generate_v4()"
+      },
+      {
+        "name": "work_name_id",
+        "type": "uuid",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "item_type",
+        "type": "boq_item_type",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "unit_rate",
+        "type": "numeric(15,2)",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "currency_type",
+        "type": "currency_type",
+        "nullable": false,
+        "default": "'RUB'::currency_type"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "default": "now()"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": [
+      {
+        "column": "work_name_id",
+        "references": "public.work_names.id"
+      }
+    ]
+  },
+  "supabase_migrations.schema_migrations": {
+    "schema": "supabase_migrations",
+    "name": "schema_migrations",
+    "comment": null,
+    "columns": [
+      {
+        "name": "version",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "statements",
+        "type": "text[]",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "name",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      }
+    ],
+    "primary_key": "version",
+    "foreign_keys": []
+  },
+  "supabase_migrations.seed_files": {
+    "schema": "supabase_migrations",
+    "name": "seed_files",
+    "comment": null,
+    "columns": [
+      {
+        "name": "path",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "hash",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      }
+    ],
+    "primary_key": "path",
+    "foreign_keys": []
+  },
+  "vault.secrets": {
+    "schema": "vault",
+    "name": "secrets",
+    "comment": "Table with encrypted `secret` column for storing sensitive information on disk.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": false,
+        "default": "gen_random_uuid()"
+      },
+      {
+        "name": "name",
+        "type": "text",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "nullable": false,
+        "default": "''::text"
+      },
+      {
+        "name": "secret",
+        "type": "text",
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "key_id",
+        "type": "uuid",
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "nonce",
+        "type": "bytea",
+        "nullable": true,
+        "default": "vault._crypto_aead_det_noncegen()"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "CURRENT_TIMESTAMP"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "default": "CURRENT_TIMESTAMP"
+      }
+    ],
+    "primary_key": "id",
+    "foreign_keys": []
+  }
+}

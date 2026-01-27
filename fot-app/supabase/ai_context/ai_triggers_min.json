@@ -1,0 +1,128 @@
+[
+  {
+    "trigger_name": "boq_items_updated_at_trigger",
+    "table": "public.boq_items",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_boq_items_updated_at"
+  },
+  {
+    "trigger_name": "trigger_update_client_positions_updated_at",
+    "table": "public.client_positions",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_client_positions_updated_at"
+  },
+  {
+    "trigger_name": "update_construction_cost_volumes_updated_at",
+    "table": "public.construction_cost_volumes",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_updated_at_column"
+  },
+  {
+    "trigger_name": "update_cost_categories_updated_at",
+    "table": "public.cost_categories",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_updated_at_column"
+  },
+  {
+    "trigger_name": "update_detail_cost_categories_updated_at",
+    "table": "public.detail_cost_categories",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_updated_at_column"
+  },
+  {
+    "trigger_name": "trigger_update_markup_parameters_updated_at",
+    "table": "public.markup_parameters",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_markup_parameters_updated_at"
+  },
+  {
+    "trigger_name": "trigger_update_markup_tactics_updated_at",
+    "table": "public.markup_tactics",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_markup_tactics_updated_at"
+  },
+  {
+    "trigger_name": "update_material_names_updated_at",
+    "table": "public.material_names",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_updated_at_column"
+  },
+  {
+    "trigger_name": "update_materials_library_updated_at",
+    "table": "public.materials_library",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_updated_at_column"
+  },
+  {
+    "trigger_name": "update_subcontract_growth_exclusions_updated_at",
+    "table": "public.subcontract_growth_exclusions",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_updated_at_column"
+  },
+  {
+    "trigger_name": "set_updated_at_template_items",
+    "table": "public.template_items",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "set_updated_at"
+  },
+  {
+    "trigger_name": "set_updated_at_templates",
+    "table": "public.templates",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "set_updated_at"
+  },
+  {
+    "trigger_name": "trigger_update_tender_markup_percentage_updated_at",
+    "table": "public.tender_markup_percentage",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_tender_markup_percentage_updated_at"
+  },
+  {
+    "trigger_name": "set_updated_at_tender_pricing_distribution",
+    "table": "public.tender_pricing_distribution",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_updated_at_column"
+  },
+  {
+    "trigger_name": "update_tenders_updated_at",
+    "table": "public.tenders",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_updated_at_column"
+  },
+  {
+    "trigger_name": "update_units_updated_at",
+    "table": "public.units",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_updated_at_column"
+  },
+  {
+    "trigger_name": "update_work_names_updated_at",
+    "table": "public.work_names",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_updated_at_column"
+  },
+  {
+    "trigger_name": "update_works_library_updated_at",
+    "table": "public.works_library",
+    "timing": "BEFORE",
+    "event": "UPDATE",
+    "function": "update_updated_at_column"
+  }
+]

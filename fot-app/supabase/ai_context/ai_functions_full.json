@@ -1,0 +1,195 @@
+{
+  "graphql._internal_resolve(query text, variables jsonb, \"operationName\" text, extensions jsonb)": {
+    "schema": "graphql",
+    "name": "_internal_resolve",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "graphql.comment_directive(comment_ text)": {
+    "schema": "graphql",
+    "name": "comment_directive",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "graphql.exception(message text)": {
+    "schema": "graphql",
+    "name": "exception",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "graphql.get_schema_version()": {
+    "schema": "graphql",
+    "name": "get_schema_version",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [
+      "graphql"
+    ],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "graphql.increment_schema_version()": {
+    "schema": "graphql",
+    "name": "increment_schema_version",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "graphql.resolve(query text, variables jsonb, \"operationName\" text, extensions jsonb)": {
+    "schema": "graphql",
+    "name": "resolve",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "graphql_public.graphql(\"operationName\" text, query text, variables jsonb, extensions jsonb)": {
+    "schema": "graphql_public",
+    "name": "graphql",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "pgbouncer.get_auth(p_usename text)": {
+    "schema": "pgbouncer",
+    "name": "get_auth",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [
+      "pg_authid"
+    ],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "public.set_updated_at()": {
+    "schema": "public",
+    "name": "set_updated_at",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "public.update_boq_items_updated_at()": {
+    "schema": "public",
+    "name": "update_boq_items_updated_at",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "public.update_client_positions_updated_at()": {
+    "schema": "public",
+    "name": "update_client_positions_updated_at",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "public.update_markup_parameters_updated_at()": {
+    "schema": "public",
+    "name": "update_markup_parameters_updated_at",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "public.update_markup_tactics_updated_at()": {
+    "schema": "public",
+    "name": "update_markup_tactics_updated_at",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "public.update_tender_markup_percentage_updated_at()": {
+    "schema": "public",
+    "name": "update_tender_markup_percentage_updated_at",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "public.update_updated_at_column()": {
+    "schema": "public",
+    "name": "update_updated_at_column",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "vault._crypto_aead_det_decrypt(message bytea, additional bytea, key_id bigint, context bytea, nonce bytea)": {
+    "schema": "vault",
+    "name": "_crypto_aead_det_decrypt",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "vault._crypto_aead_det_encrypt(message bytea, additional bytea, key_id bigint, context bytea, nonce bytea)": {
+    "schema": "vault",
+    "name": "_crypto_aead_det_encrypt",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "vault._crypto_aead_det_noncegen()": {
+    "schema": "vault",
+    "name": "_crypto_aead_det_noncegen",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [],
+    "side_effects": [],
+    "is_trigger_function": false
+  },
+  "vault.create_secret(new_secret text, new_name text, new_description text, new_key_id uuid)": {
+    "schema": "vault",
+    "name": "create_secret",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [
+      "vault"
+    ],
+    "side_effects": [
+      "INSERT",
+      "UPDATE"
+    ],
+    "is_trigger_function": false
+  },
+  "vault.update_secret(secret_id uuid, new_secret text, new_name text, new_description text, new_key_id uuid)": {
+    "schema": "vault",
+    "name": "update_secret",
+    "returns": "void",
+    "comment": null,
+    "affected_tables": [
+      "vault"
+    ],
+    "side_effects": [
+      "UPDATE"
+    ],
+    "is_trigger_function": false
+  }
+}
