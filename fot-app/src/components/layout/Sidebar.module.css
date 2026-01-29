@@ -139,6 +139,26 @@
   color: var(--text-tertiary);
 }
 
+.logoutBtn {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.logoutBtn:hover {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
 @media (max-width: 768px) {
   .sidebar {
     display: none;

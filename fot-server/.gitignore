@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Environment variables (IMPORTANT - contains secrets!)
+.env
+.env.local
+.env.*.local
+
+# Build output
+dist/
+build/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage/
+
+# Temporary files
+tmp/
+temp/

@@ -1,71 +1,218 @@
-import './App.css';
-import { useTheme } from './hooks/useTheme';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ToastProvider } from './contexts/ToastContext';
+import { ProtectedRoute, PublicRoute } from './components/auth/ProtectedRoute';
 import { Layout } from './components/layout/Layout';
-import { StatCard } from './components/ui/StatCard';
-import { Button } from './components/ui/Button';
-import { ActivityList } from './components/dashboard/ActivityList';
-import { PresenceProgress } from './components/dashboard/PresenceProgress';
-import { QuickActions } from './components/dashboard/QuickActions';
-import {
-  UsersIcon,
-  MapPinIcon,
-  DollarIcon,
-  CheckCircleIcon,
-  PlusIcon
-} from './components/ui/Icons';
+import { EmployeeLayout } from './components/layout/EmployeeLayout';
+import { useTheme } from './hooks/useTheme';
 
-const App = () => {
+// Auth pages
+import { LoginPage, RegisterPage, TwoFactorPage, PendingApprovalPage } from './pages/auth';
+
+// Dashboard
+import { DashboardPage } from './pages/DashboardPage';
+
+// Super Admin
+import { UserManagementPage } from './pages/super-admin/UserManagementPage';
+import { OrganizationsPage } from './pages/super-admin/OrganizationsPage';
+import { StructurePage } from './pages/super-admin/StructurePage';
+import { DataAuditPage } from './pages/super-admin/DataAuditPage';
+
+// Tender & SKUD
+import { TenderPage } from './pages/tender/TenderPage';
+import { SKUDPage } from './pages/skud/SKUDPage';
+import { SKUDAnalysisPage } from './pages/skud/SKUDAnalysisPage';
+
+// Profile
+import { ProfilePage } from './pages/profile';
+
+// Employee
+import { EmployeeDashboardPage } from './pages/employee';
+
+import './App.css';
+
+// Компонент для умного редиректа на основе должности
+const PositionBasedRedirect = () => {
+  const { positionType } = useAuth();
+
+  // Worker (Рабочий/Инженер) → личный кабинет сотрудника
+  if (positionType === 'worker') {
+    return <Navigate to="/employee" replace />;
+  }
+
+  // Header (Руководитель), Admin, Super Admin → дашборд
+  return <Navigate to="/dashboard" replace />;
+};
+
+const AppRoutes = () => {
   const { theme, toggleTheme } = useTheme();
 
-  const today = new Date().toLocaleDateString('ru-RU', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric'
-  });
-
   return (
-    <Layout title="Обзор" theme={theme} onToggleTheme={toggleTheme}>
-      <div className="content-header">
-        <div className="date-display">{today}</div>
-        <Button icon={<PlusIcon />}>Добавить сотрудника</Button>
-      </div>
+    <Routes>
+      {/* Public routes */}
+      <Route
+        path="/login"
+        element={
+          <PublicRoute>
+            <LoginPage />
+          </PublicRoute>
+        }
+      />
+      <Route
+        path="/register"
+        element={
+          <PublicRoute>
+            <RegisterPage />
+          </PublicRoute>
+        }
+      />
+      <Route path="/verify-2fa" element={<TwoFactorPage />} />
+      <Route path="/pending-approval" element={<PendingApprovalPage />} />
 
-      <div className="stats-grid">
-        <StatCard
-          label="Всего сотрудников"
-          value="—"
-          icon={<UsersIcon />}
-          iconType="blue"
-        />
-        <StatCard
-          label="На объектах"
-          value="—"
-          icon={<MapPinIcon />}
-          iconType="green"
-        />
-        <StatCard
-          label="ФОТ за месяц"
-          value="— ₽"
-          icon={<DollarIcon />}
-          iconType="orange"
-        />
-        <StatCard
-          label="Выработка"
-          value="—%"
-          icon={<CheckCircleIcon />}
-          iconType="green"
-        />
-      </div>
+      {/* Root redirect based on position */}
+      <Route element={<ProtectedRoute />}>
+        <Route path="/" element={<PositionBasedRedirect />} />
+      </Route>
 
-      <div className="content-grid">
-        <ActivityList />
-        <div className="right-column">
-          <PresenceProgress />
-          <QuickActions />
-        </div>
-      </div>
-    </Layout>
+      {/* Employee routes (for viewers) */}
+      <Route element={<ProtectedRoute />}>
+        <Route
+          path="/employee"
+          element={
+            <EmployeeLayout title="Личный кабинет">
+              <EmployeeDashboardPage />
+            </EmployeeLayout>
+          }
+        />
+        <Route
+          path="/employee/*"
+          element={
+            <EmployeeLayout title="Личный кабинет">
+              <div style={{ padding: '28px' }}>Страница в разработке</div>
+            </EmployeeLayout>
+          }
+        />
+      </Route>
+
+      {/* Header/Admin routes (dashboard access) */}
+      <Route element={<ProtectedRoute requiredPosition="header" />}>
+        <Route
+          path="/dashboard"
+          element={
+            <Layout title="Обзор" theme={theme} onToggleTheme={toggleTheme}>
+              <DashboardPage />
+            </Layout>
+          }
+        />
+        <Route
+          path="/tender"
+          element={
+            <Layout title="Сотрудники" theme={theme} onToggleTheme={toggleTheme}>
+              <TenderPage />
+            </Layout>
+          }
+        />
+        <Route
+          path="/skud"
+          element={
+            <Layout title="СКУД" theme={theme} onToggleTheme={toggleTheme}>
+              <SKUDPage />
+            </Layout>
+          }
+        />
+        <Route
+          path="/skud-analysis"
+          element={
+            <Layout title="Анализ СКУД" theme={theme} onToggleTheme={toggleTheme}>
+              <SKUDAnalysisPage />
+            </Layout>
+          }
+        />
+        <Route
+          path="/timesheet"
+          element={
+            <Layout title="Табель" theme={theme} onToggleTheme={toggleTheme}>
+              <div>Timesheet Page (в разработке)</div>
+            </Layout>
+          }
+        />
+      </Route>
+
+      {/* Profile - available for all authenticated users */}
+      <Route element={<ProtectedRoute />}>
+        <Route
+          path="/profile"
+          element={
+            <Layout title="Личный кабинет" theme={theme} onToggleTheme={toggleTheme}>
+              <ProfilePage />
+            </Layout>
+          }
+        />
+      </Route>
+
+      {/* Super Admin routes */}
+      <Route element={<ProtectedRoute requiredPosition="super_admin" />}>
+        <Route
+          path="/admin/users"
+          element={
+            <Layout title="Управление пользователями" theme={theme} onToggleTheme={toggleTheme}>
+              <UserManagementPage />
+            </Layout>
+          }
+        />
+        <Route
+          path="/admin/organizations"
+          element={
+            <Layout title="Управление организациями" theme={theme} onToggleTheme={toggleTheme}>
+              <OrganizationsPage />
+            </Layout>
+          }
+        />
+        <Route
+          path="/admin/structure"
+          element={
+            <Layout title="Структура Организации" theme={theme} onToggleTheme={toggleTheme}>
+              <StructurePage />
+            </Layout>
+          }
+        />
+        <Route
+          path="/admin/audit"
+          element={
+            <Layout title="Аудит данных" theme={theme} onToggleTheme={toggleTheme}>
+              <DataAuditPage />
+            </Layout>
+          }
+        />
+      </Route>
+
+      {/* Unauthorized page */}
+      <Route
+        path="/unauthorized"
+        element={
+          <div style={{ padding: '40px', textAlign: 'center' }}>
+            <h1>Доступ запрещён</h1>
+            <p>У вас недостаточно прав для просмотра этой страницы.</p>
+            <a href="/">Вернуться на главную</a>
+          </div>
+        }
+      />
+
+      {/* Catch all - redirect to home */}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+};
+
+const App = () => {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <ToastProvider>
+          <AppRoutes />
+        </ToastProvider>
+      </AuthProvider>
+    </BrowserRouter>
   );
 };
 

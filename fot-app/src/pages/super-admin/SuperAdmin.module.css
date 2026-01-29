@@ -1,0 +1,691 @@
+.container {
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.header {
+  margin-bottom: 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.header h1 {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: var(--text-secondary);
+}
+
+.error {
+  background: var(--error-muted);
+  border: 1px solid var(--error);
+  color: var(--error);
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.tab {
+  padding: 8px 16px;
+  border: none;
+  background: none;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.tab:hover {
+  background: var(--bg-tertiary);
+}
+
+.tab.active {
+  background: var(--accent);
+  color: white;
+}
+
+.userList {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.empty {
+  text-align: center;
+  padding: 40px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  border: 1px dashed var(--border);
+}
+
+.userCard {
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--border);
+}
+
+.userInfo {
+  margin-bottom: 16px;
+}
+
+.userName {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.adminBadge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  background: #7c3aed;
+  color: white;
+  border-radius: 10px;
+}
+
+.userEmail {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.userDate {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}
+
+.userMeta {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.approved {
+  font-size: 12px;
+  padding: 2px 8px;
+  background: var(--success-muted);
+  color: var(--success);
+  border-radius: 10px;
+}
+
+.notApproved {
+  font-size: 12px;
+  padding: 2px 8px;
+  background: var(--error-muted);
+  color: var(--error);
+  border-radius: 10px;
+}
+
+.twoFaEnabled {
+  font-size: 12px;
+  padding: 2px 8px;
+  background: var(--accent-muted);
+  color: var(--accent);
+  border-radius: 10px;
+}
+
+.twoFaDisabled {
+  font-size: 12px;
+  padding: 2px 8px;
+  background: var(--warning-muted);
+  color: var(--warning);
+  border-radius: 10px;
+}
+
+.userActions {
+  display: flex;
+  gap: 12px;
+}
+
+.approveBtn {
+  padding: 8px 16px;
+  background: var(--success);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.approveBtn:hover {
+  opacity: 0.9;
+}
+
+.rejectBtn {
+  padding: 8px 16px;
+  background: transparent;
+  color: var(--error);
+  border: 1px solid var(--error);
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.rejectBtn:hover {
+  background: var(--error-muted);
+}
+
+.userControls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.controlGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.controlGroup label {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.controlGroup select {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.twoFaActions {
+  margin-left: auto;
+}
+
+.deleteAction {
+  margin-left: 8px;
+}
+
+.primaryBtn {
+  padding: 8px 16px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.primaryBtn:hover {
+  opacity: 0.9;
+}
+
+.dangerBtn {
+  padding: 8px 16px;
+  background: transparent;
+  color: var(--error);
+  border: 1px solid var(--error);
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.dangerBtn:hover {
+  background: var(--error-muted);
+}
+
+/* Modal */
+.modalOverlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  max-width: 500px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modalHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modalHeader h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.closeBtn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: none;
+  font-size: 24px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.closeBtn:hover {
+  background: var(--bg-tertiary);
+}
+
+.modalLoading {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.modalContent {
+  padding: 20px;
+}
+
+.qrSection {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.qrSection p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0 0 16px 0;
+}
+
+.qrSection img {
+  border-radius: 8px;
+  border: 4px solid var(--bg-elevated);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.secretSection {
+  margin-bottom: 20px;
+}
+
+.secretSection p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0 0 8px 0;
+}
+
+.secretSection code {
+  display: block;
+  padding: 12px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  font-family: 'Space Mono', monospace;
+  font-size: 14px;
+  word-break: break-all;
+  text-align: center;
+  color: var(--text-primary);
+}
+
+.recoverySection {
+  margin-bottom: 20px;
+}
+
+.recoverySection p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0 0 12px 0;
+}
+
+.recoveryCodes {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.recoveryCodes code {
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  font-family: 'Space Mono', monospace;
+  font-size: 13px;
+  text-align: center;
+  color: var(--text-primary);
+}
+
+.warning {
+  padding: 12px;
+  background: var(--warning-muted);
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--warning);
+}
+
+/* Compact User List */
+.userListCompact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.userRow {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.userRow:last-child {
+  border-bottom: none;
+}
+
+.userRow.expanded {
+  background: var(--bg-tertiary);
+}
+
+.userRowHeader {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: background 0.15s;
+  gap: 16px;
+}
+
+.userRowHeader:hover {
+  background: var(--bg-tertiary);
+}
+
+.userRowInfo {
+  flex: 1;
+  min-width: 200px;
+}
+
+.userRowName {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.userRowEmail {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+.userRowMeta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.userRowRole {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  background: var(--bg-elevated);
+  border-radius: 4px;
+}
+
+.userRowOrg {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.expandIcon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.expandIcon svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.2s;
+}
+
+.userRowControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border);
+  animation: slideDown 0.2s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.controlActions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* Name editing */
+.nameEditGroup {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.nameInput {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  min-width: 200px;
+}
+
+.nameInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.editNameBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.editNameBtn:hover {
+  border-color: var(--accent);
+  background: var(--bg-tertiary);
+}
+
+.editNameBtn svg {
+  color: var(--text-tertiary);
+}
+
+.saveBtn {
+  padding: 6px 12px;
+  background: var(--success);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.saveBtn:hover {
+  opacity: 0.9;
+}
+
+.cancelBtn {
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.cancelBtn:hover {
+  background: var(--bg-tertiary);
+}
+
+/* Organization users list */
+.orgUsersList {
+  width: 100%;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.orgUsersHeader {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+.orgUserItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  margin-bottom: 6px;
+}
+
+.orgUserItem:last-child {
+  margin-bottom: 0;
+}
+
+.orgUserName {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.orgUserRole {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  background: var(--bg-elevated);
+  border-radius: 4px;
+}
+
+.orgUsersEmpty {
+  width: 100%;
+  margin-top: 16px;
+  padding: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-tertiary);
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .userRowHeader {
+    flex-wrap: wrap;
+  }
+
+  .userRowMeta {
+    width: 100%;
+    margin-top: 8px;
+    flex-wrap: wrap;
+  }
+
+  .userRowControls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .controlGroup {
+    width: 100%;
+  }
+
+  .controlGroup select {
+    flex: 1;
+  }
+
+  .controlActions {
+    margin-left: 0;
+    margin-top: 8px;
+    justify-content: flex-end;
+  }
+}

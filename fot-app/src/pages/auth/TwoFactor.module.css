@@ -1,0 +1,303 @@
+.container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg-primary);
+}
+
+.wrapper {
+  width: 100%;
+  max-width: 420px;
+  animation: fadeIn 0.4s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Логотип */
+.logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-bottom: 48px;
+}
+
+.logoIcon {
+  width: 44px;
+  height: 44px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.logoIcon span {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.logoIcon::after {
+  content: '';
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+.logoText {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: var(--text-primary);
+}
+
+.logoText span {
+  color: var(--text-tertiary);
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+/* Карточка */
+.card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 40px;
+}
+
+.cardHeader {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.cardIcon {
+  width: 56px;
+  height: 56px;
+  background: var(--accent-muted);
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20px;
+}
+
+.cardIcon svg {
+  width: 28px;
+  height: 28px;
+  color: var(--accent);
+}
+
+.cardHeader h1 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.cardHeader p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* Поля ввода кода */
+.codeInputs {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-bottom: 24px;
+}
+
+.codeInput {
+  width: 52px;
+  height: 64px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-family: 'Space Mono', monospace;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-align: center;
+  outline: none;
+  transition: all 0.15s ease;
+  caret-color: var(--accent);
+}
+
+.codeInput::placeholder {
+  color: var(--text-tertiary);
+  opacity: 0.5;
+}
+
+.codeInput:hover {
+  border-color: var(--border-hover, #3f3f46);
+}
+
+.codeInput:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-muted);
+  background: var(--bg-secondary);
+}
+
+.codeInput.filled {
+  border-color: var(--accent);
+  background: var(--bg-secondary);
+}
+
+.codeInput.error {
+  border-color: var(--error);
+  box-shadow: 0 0 0 3px var(--error-muted);
+  animation: shake 0.4s ease;
+}
+
+.codeInput.success {
+  border-color: var(--success);
+  box-shadow: 0 0 0 3px var(--success-muted);
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-6px); }
+  40%, 80% { transform: translateX(6px); }
+}
+
+/* Сообщение об ошибке */
+.errorMessage {
+  background: var(--error-muted);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.errorMessage svg {
+  width: 18px;
+  height: 18px;
+  color: var(--error);
+  flex-shrink: 0;
+}
+
+.errorMessage span {
+  font-size: 13px;
+  color: var(--error);
+}
+
+/* Кнопка */
+.submitBtn {
+  width: 100%;
+  height: 50px;
+  background: var(--accent);
+  border: none;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  color: white;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.submitBtn:hover {
+  background: var(--accent-hover, #2563eb);
+}
+
+.submitBtn:active {
+  transform: scale(0.98);
+}
+
+.submitBtn:disabled {
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+
+.submitBtn:disabled:hover {
+  background: var(--bg-elevated);
+  transform: none;
+}
+
+.submitBtn svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* Спиннер загрузки */
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Ссылка назад */
+.backLink {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 24px;
+  font-size: 13px;
+  color: var(--text-tertiary);
+  text-decoration: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s ease;
+  width: 100%;
+}
+
+.backLink:hover {
+  color: var(--text-secondary);
+}
+
+.backLink svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Футер */
+.footer {
+  text-align: center;
+  margin-top: 32px;
+}
+
+.footer p {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.6;
+}
+
+.footer a {
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.footer a:hover {
+  text-decoration: underline;
+}

@@ -1,0 +1,647 @@
+/* ========================================
+   LOGIN PAGE - Two Panel Design
+   ======================================== */
+
+.loginContainer {
+  min-height: 100vh;
+  display: flex;
+  background: var(--bg-primary);
+}
+
+/* Левая панель — брендинг */
+.brandPanel {
+  width: 45%;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 48px;
+  position: relative;
+  overflow: hidden;
+}
+
+.brandPanel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background:
+    radial-gradient(ellipse at 20% 20%, rgba(59, 130, 246, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 80%, rgba(59, 130, 246, 0.05) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+.brandContent {
+  position: relative;
+  z-index: 1;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 80px;
+}
+
+.logoIcon {
+  width: 48px;
+  height: 48px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.logoIcon span {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.logoIcon::after {
+  content: '';
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+.logoText {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: var(--text-primary);
+}
+
+.logoText span {
+  color: var(--text-tertiary);
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+.brandHeadline {
+  max-width: 400px;
+}
+
+.brandHeadline h1 {
+  font-size: 42px;
+  font-weight: 700;
+  letter-spacing: -1.5px;
+  line-height: 1.15;
+  margin-bottom: 20px;
+  color: var(--text-primary);
+}
+
+.brandHeadline h1 span {
+  color: var(--accent);
+}
+
+.brandHeadline p {
+  font-size: 16px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.features {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 48px;
+}
+
+.feature {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  animation: fadeIn 0.4s ease backwards;
+}
+
+.feature:nth-child(1) { animation-delay: 0.1s; }
+.feature:nth-child(2) { animation-delay: 0.2s; }
+.feature:nth-child(3) { animation-delay: 0.3s; }
+
+.featureIcon {
+  width: 36px;
+  height: 36px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.featureIcon svg {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.featureText {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.brandFooter {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.version {
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.brandFooterLinks {
+  display: flex;
+  gap: 20px;
+}
+
+.brandFooterLinks a {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.brandFooterLinks a:hover {
+  color: var(--text-secondary);
+}
+
+/* Правая панель — форма */
+.authPanel {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px;
+  background: var(--bg-primary);
+}
+
+.authContainer {
+  width: 100%;
+  max-width: 380px;
+  animation: fadeIn 0.4s ease;
+}
+
+.authHeader {
+  margin-bottom: 32px;
+}
+
+.authHeader h2 {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.authHeader p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.authForm {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.formGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.formLabel {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.formInput {
+  height: 48px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 16px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--text-primary);
+  outline: none;
+  transition: all 0.15s ease;
+  width: 100%;
+}
+
+.formInput::placeholder {
+  color: var(--text-tertiary);
+}
+
+.formInput:hover:not(:disabled) {
+  border-color: var(--border-hover, #3f3f46);
+}
+
+.formInput:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-muted);
+}
+
+.formInput:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.formInput.inputError {
+  border-color: var(--error);
+  box-shadow: 0 0 0 3px var(--error-muted);
+}
+
+.inputWrapper {
+  position: relative;
+}
+
+.inputWrapper .formInput {
+  padding-right: 48px;
+}
+
+.inputIcon {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: color 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.inputIcon:hover {
+  color: var(--text-secondary);
+}
+
+.inputIcon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.formRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.checkboxWrapper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.checkbox {
+  width: 18px;
+  height: 18px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.checkbox.checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.checkbox svg {
+  width: 12px;
+  height: 12px;
+  color: white;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.checkbox.checked svg {
+  opacity: 1;
+}
+
+.checkboxLabel {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.forgotLink {
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+
+.forgotLink:hover {
+  color: var(--accent-hover, #2563eb);
+}
+
+.submitBtn {
+  height: 48px;
+  background: var(--accent);
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  color: white;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.submitBtn:hover:not(:disabled) {
+  background: var(--accent-hover, #2563eb);
+}
+
+.submitBtn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.submitBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.submitBtn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.authFooterLogin {
+  margin-top: 32px;
+  text-align: center;
+}
+
+.authFooterLogin p {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  margin: 0;
+}
+
+.authFooterLogin a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.authFooterLogin a:hover {
+  text-decoration: underline;
+}
+
+/* Animation */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .brandPanel {
+    width: 40%;
+    padding: 32px;
+  }
+
+  .brandHeadline h1 {
+    font-size: 32px;
+  }
+}
+
+@media (max-width: 768px) {
+  .loginContainer {
+    flex-direction: column;
+  }
+
+  .brandPanel {
+    width: 100%;
+    padding: 32px 24px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .brandHeadline {
+    display: none;
+  }
+
+  .features {
+    display: none;
+  }
+
+  .logo {
+    margin-bottom: 0;
+  }
+
+  .brandFooter {
+    display: none;
+  }
+
+  .authPanel {
+    padding: 32px 24px;
+  }
+}
+
+/* ========================================
+   OTHER AUTH PAGES (Register, 2FA, etc.)
+   ======================================== */
+
+.authCard {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 40px;
+  width: 100%;
+  max-width: 400px;
+  animation: fadeIn 0.4s ease;
+}
+
+/* Error / Success / Info alerts */
+.error {
+  background: var(--error-muted);
+  border: 1px solid var(--error);
+  color: var(--error);
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.success {
+  background: var(--success-muted);
+  border: 1px solid var(--success);
+  color: var(--success);
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.info {
+  background: var(--accent-muted);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+/* Standard auth footer for other pages */
+.authFooter {
+  text-align: center;
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+
+.authFooter p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.authFooter a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.authFooter a:hover {
+  text-decoration: underline;
+}
+
+/* Two Factor Page */
+.twoFactorCode {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.twoFactorCode input {
+  width: 48px;
+  height: 56px;
+  text-align: center;
+  font-size: 24px;
+  font-weight: 600;
+  padding: 0;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.twoFactorCode input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Pending Approval Page */
+.pendingIcon {
+  width: 80px;
+  height: 80px;
+  margin: 0 auto 24px;
+  background: var(--warning-muted);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pendingIcon svg {
+  width: 40px;
+  height: 40px;
+  color: var(--warning);
+}
+
+.pendingContent {
+  text-align: center;
+}
+
+.pendingContent h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 12px 0;
+}
+
+.pendingContent p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0 0 8px 0;
+  line-height: 1.5;
+}
+
+.logoutLink {
+  display: inline-block;
+  margin-top: 20px;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.logoutLink:hover {
+  text-decoration: underline;
+}
+
+/* Recovery codes */
+.recoveryCodes {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.recoveryCode {
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 14px;
+  text-align: center;
+  color: var(--text-primary);
+}
+
+/* QR Code */
+.qrContainer {
+  display: flex;
+  justify-content: center;
+  margin: 20px 0;
+}
+
+.qrContainer img {
+  border-radius: 8px;
+  border: 4px solid white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}

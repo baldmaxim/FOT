@@ -1,0 +1,15 @@
+# OS files
+.DS_Store
+**/.DS_Store
+Thumbs.db
+
+# Archives
+*.zip
+
+# Temporary exports
+exports/
+
+# IDE
+.idea/
+*.swp
+*.swo

@@ -1,0 +1,105 @@
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  animation: slideIn 0.3s ease;
+  min-width: 300px;
+  max-width: 400px;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+}
+
+.icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.message {
+  flex: 1;
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.close {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-tertiary);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.close:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.close svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Toast types */
+.success {
+  border-color: var(--success);
+  background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(34, 197, 94, 0.05) 100%);
+}
+
+.success .icon {
+  color: var(--success);
+}
+
+.error {
+  border-color: var(--error);
+  background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(239, 68, 68, 0.05) 100%);
+}
+
+.error .icon {
+  color: var(--error);
+}
+
+.warning {
+  border-color: var(--warning);
+  background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(234, 179, 8, 0.05) 100%);
+}
+
+.warning .icon {
+  color: var(--warning);
+}
+
+.info {
+  border-color: var(--accent);
+  background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(59, 130, 246, 0.05) 100%);
+}
+
+.info .icon {
+  color: var(--accent);
+}
