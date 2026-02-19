@@ -15,13 +15,12 @@ interface ApiResponse<T> {
   message?: string;
 }
 
+const orgQuery = (orgId?: string) => orgId ? `?organization_id=${orgId}` : '';
+
 export const structureApi = {
-  /**
-   * Получить дерево структуры организации
-   */
-  async getTree(): Promise<ApiResponse<OrgStructureResponse>> {
+  async getTree(organizationId?: string): Promise<ApiResponse<OrgStructureResponse>> {
     try {
-      return await apiClient.get<ApiResponse<OrgStructureResponse>>('/structure');
+      return await apiClient.get<ApiResponse<OrgStructureResponse>>(`/structure${orgQuery(organizationId)}`);
     } catch (error) {
       return {
         success: false,
@@ -30,12 +29,9 @@ export const structureApi = {
     }
   },
 
-  /**
-   * Создать компанию
-   */
-  async createCompany(name: string, description?: string): Promise<ApiResponse<OrgCompany>> {
+  async createCompany(name: string, description?: string, organizationId?: string): Promise<ApiResponse<OrgCompany>> {
     try {
-      return await apiClient.post<ApiResponse<OrgCompany>>('/structure/companies', {
+      return await apiClient.post<ApiResponse<OrgCompany>>(`/structure/companies${orgQuery(organizationId)}`, {
         name,
         description,
       });
@@ -47,16 +43,14 @@ export const structureApi = {
     }
   },
 
-  /**
-   * Создать отдел
-   */
   async createDepartment(
     name: string,
     companyId: string | null,
-    description?: string
+    description?: string,
+    organizationId?: string
   ): Promise<ApiResponse<OrgDepartment>> {
     try {
-      return await apiClient.post<ApiResponse<OrgDepartment>>('/structure/departments', {
+      return await apiClient.post<ApiResponse<OrgDepartment>>(`/structure/departments${orgQuery(organizationId)}`, {
         name,
         company_id: companyId,
         description,
@@ -69,16 +63,14 @@ export const structureApi = {
     }
   },
 
-  /**
-   * Создать подразделение
-   */
   async createSubdivision(
     name: string,
     departmentId: string | null,
-    description?: string
+    description?: string,
+    organizationId?: string
   ): Promise<ApiResponse<OrgSubdivision>> {
     try {
-      return await apiClient.post<ApiResponse<OrgSubdivision>>('/structure/subdivisions', {
+      return await apiClient.post<ApiResponse<OrgSubdivision>>(`/structure/subdivisions${orgQuery(organizationId)}`, {
         name,
         department_id: departmentId,
         description,
@@ -91,12 +83,9 @@ export const structureApi = {
     }
   },
 
-  /**
-   * Удалить компанию
-   */
-  async deleteCompany(id: string): Promise<ApiResponse<void>> {
+  async deleteCompany(id: string, organizationId?: string): Promise<ApiResponse<void>> {
     try {
-      return await apiClient.delete<ApiResponse<void>>(`/structure/companies/${id}`);
+      return await apiClient.delete<ApiResponse<void>>(`/structure/companies/${id}${orgQuery(organizationId)}`);
     } catch (error) {
       return {
         success: false,
@@ -105,12 +94,9 @@ export const structureApi = {
     }
   },
 
-  /**
-   * Удалить отдел
-   */
-  async deleteDepartment(id: string): Promise<ApiResponse<void>> {
+  async deleteDepartment(id: string, organizationId?: string): Promise<ApiResponse<void>> {
     try {
-      return await apiClient.delete<ApiResponse<void>>(`/structure/departments/${id}`);
+      return await apiClient.delete<ApiResponse<void>>(`/structure/departments/${id}${orgQuery(organizationId)}`);
     } catch (error) {
       return {
         success: false,
@@ -119,12 +105,9 @@ export const structureApi = {
     }
   },
 
-  /**
-   * Удалить подразделение
-   */
-  async deleteSubdivision(id: string): Promise<ApiResponse<void>> {
+  async deleteSubdivision(id: string, organizationId?: string): Promise<ApiResponse<void>> {
     try {
-      return await apiClient.delete<ApiResponse<void>>(`/structure/subdivisions/${id}`);
+      return await apiClient.delete<ApiResponse<void>>(`/structure/subdivisions/${id}${orgQuery(organizationId)}`);
     } catch (error) {
       return {
         success: false,
@@ -137,12 +120,9 @@ export const structureApi = {
   // Методы для строительных участков (sites)
   // ============================================
 
-  /**
-   * Получить список всех участков
-   */
-  async getSites(): Promise<ApiResponse<OrgSite[]>> {
+  async getSites(organizationId?: string): Promise<ApiResponse<OrgSite[]>> {
     try {
-      return await apiClient.get<ApiResponse<OrgSite[]>>('/structure/sites');
+      return await apiClient.get<ApiResponse<OrgSite[]>>(`/structure/sites${orgQuery(organizationId)}`);
     } catch (error) {
       return {
         success: false,
@@ -151,12 +131,9 @@ export const structureApi = {
     }
   },
 
-  /**
-   * Получить участок по ID
-   */
-  async getSiteById(id: string): Promise<ApiResponse<OrgSite>> {
+  async getSiteById(id: string, organizationId?: string): Promise<ApiResponse<OrgSite>> {
     try {
-      return await apiClient.get<ApiResponse<OrgSite>>(`/structure/sites/${id}`);
+      return await apiClient.get<ApiResponse<OrgSite>>(`/structure/sites/${id}${orgQuery(organizationId)}`);
     } catch (error) {
       return {
         success: false,
@@ -165,9 +142,6 @@ export const structureApi = {
     }
   },
 
-  /**
-   * Создать строительный участок
-   */
   async createSite(data: {
     name: string;
     company_id?: string | null;
@@ -179,9 +153,9 @@ export const structureApi = {
     start_date?: string;
     planned_end_date?: string;
     status?: 'planning' | 'active' | 'completed' | 'suspended';
-  }): Promise<ApiResponse<OrgSite>> {
+  }, organizationId?: string): Promise<ApiResponse<OrgSite>> {
     try {
-      return await apiClient.post<ApiResponse<OrgSite>>('/structure/sites', data);
+      return await apiClient.post<ApiResponse<OrgSite>>(`/structure/sites${orgQuery(organizationId)}`, data);
     } catch (error) {
       return {
         success: false,
@@ -190,9 +164,6 @@ export const structureApi = {
     }
   },
 
-  /**
-   * Обновить участок
-   */
   async updateSite(
     id: string,
     data: Partial<{
@@ -208,10 +179,11 @@ export const structureApi = {
       status: 'planning' | 'active' | 'completed' | 'suspended';
       is_active: boolean;
       sort_order: number;
-    }>
+    }>,
+    organizationId?: string
   ): Promise<ApiResponse<OrgSite>> {
     try {
-      return await apiClient.put<ApiResponse<OrgSite>>(`/structure/sites/${id}`, data);
+      return await apiClient.put<ApiResponse<OrgSite>>(`/structure/sites/${id}${orgQuery(organizationId)}`, data);
     } catch (error) {
       return {
         success: false,
@@ -220,12 +192,9 @@ export const structureApi = {
     }
   },
 
-  /**
-   * Удалить участок
-   */
-  async deleteSite(id: string): Promise<ApiResponse<void>> {
+  async deleteSite(id: string, organizationId?: string): Promise<ApiResponse<void>> {
     try {
-      return await apiClient.delete<ApiResponse<void>>(`/structure/sites/${id}`);
+      return await apiClient.delete<ApiResponse<void>>(`/structure/sites/${id}${orgQuery(organizationId)}`);
     } catch (error) {
       return {
         success: false,
@@ -234,12 +203,9 @@ export const structureApi = {
     }
   },
 
-  /**
-   * Получить расширенное дерево структуры (с участками)
-   */
-  async getTreeExtended(): Promise<ApiResponse<OrgStructureResponseExtended>> {
+  async getTreeExtended(organizationId?: string): Promise<ApiResponse<OrgStructureResponseExtended>> {
     try {
-      return await apiClient.get<ApiResponse<OrgStructureResponseExtended>>('/structure/extended');
+      return await apiClient.get<ApiResponse<OrgStructureResponseExtended>>(`/structure/extended${orgQuery(organizationId)}`);
     } catch (error) {
       return {
         success: false,
@@ -248,12 +214,9 @@ export const structureApi = {
     }
   },
 
-  /**
-   * Назначить менеджера участка
-   */
-  async setSiteManager(siteId: string, managerId: number | null): Promise<ApiResponse<OrgSite>> {
+  async setSiteManager(siteId: string, managerId: number | null, organizationId?: string): Promise<ApiResponse<OrgSite>> {
     try {
-      return await apiClient.put<ApiResponse<OrgSite>>(`/structure/sites/${siteId}/manager`, {
+      return await apiClient.put<ApiResponse<OrgSite>>(`/structure/sites/${siteId}/manager${orgQuery(organizationId)}`, {
         manager_id: managerId,
       });
     } catch (error) {
@@ -264,15 +227,13 @@ export const structureApi = {
     }
   },
 
-  /**
-   * Изменить статус участка
-   */
   async setSiteStatus(
     siteId: string,
-    status: 'planning' | 'active' | 'completed' | 'suspended'
+    status: 'planning' | 'active' | 'completed' | 'suspended',
+    organizationId?: string
   ): Promise<ApiResponse<OrgSite>> {
     try {
-      return await apiClient.put<ApiResponse<OrgSite>>(`/structure/sites/${siteId}/status`, {
+      return await apiClient.put<ApiResponse<OrgSite>>(`/structure/sites/${siteId}/status${orgQuery(organizationId)}`, {
         status,
       });
     } catch (error) {

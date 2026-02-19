@@ -38,6 +38,32 @@
   background: var(--accent-primary-hover);
 }
 
+.orgSelector {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+}
+
+.orgSelector label {
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.orgSelector select {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 14px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
 .loading {
   text-align: center;
   padding: 60px 20px;
@@ -351,6 +377,12 @@
 
   .title {
     font-size: 20px;
+  }
+
+  .orgSelector {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
   }
 
   .nodeHeader {

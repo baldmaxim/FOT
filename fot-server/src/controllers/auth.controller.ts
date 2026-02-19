@@ -148,16 +148,30 @@ export const authController = {
         return;
       }
 
-      // Получаем профиль
+      // Получаем профиль с данными системной роли
       const { data: profile, error: profileError } = await supabase
         .from('user_profiles')
-        .select('*')
+        .select(`
+          *,
+          system_role:system_roles!system_role_id(code, name)
+        `)
         .eq('id', authData.user.id)
         .single();
 
       if (profileError || !profile) {
         res.status(404).json({ success: false, error: 'User profile not found' });
         return;
+      }
+
+      // Маппинг system_role_id в position_type для обратной совместимости
+      let positionType = profile.position_type;
+      if (profile.system_role) {
+        const roleCode = profile.system_role.code;
+        // Маппинг кода роли в ENUM значение
+        if (roleCode === 'super_admin') positionType = 'super_admin';
+        else if (roleCode === 'admin') positionType = 'admin';
+        else if (roleCode === 'header') positionType = 'header';
+        else if (roleCode === 'worker') positionType = 'worker';
       }
 
       // Проверяем одобрение
@@ -187,7 +201,7 @@ export const authController = {
           profile: {
             id: profile.id,
             full_name: profile.full_name,
-            position_type: profile.position_type,
+            position_type: positionType,
             imported_position: profile.imported_position,
             organization_id: profile.organization_id,
             is_approved: profile.is_approved,
@@ -213,7 +227,7 @@ export const authController = {
         profile: {
           id: profile.id,
           full_name: profile.full_name,
-          position_type: profile.position_type,
+          position_type: positionType,
           imported_position: profile.imported_position,
           employee_id: profile.employee_id,
           supervisor_id: profile.supervisor_id,
@@ -500,15 +514,30 @@ export const authController = {
    */
   async getMe(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      // Получаем профиль с данными системной роли
       const { data: profile, error } = await supabase
         .from('user_profiles')
-        .select('*')
+        .select(`
+          *,
+          system_role:system_roles!system_role_id(code, name)
+        `)
         .eq('id', req.user.id)
         .single();
 
       if (error || !profile) {
         res.status(404).json({ success: false, error: 'Profile not found' });
         return;
+      }
+
+      // Маппинг system_role_id в position_type для обратной совместимости
+      let positionType = profile.position_type;
+      if (profile.system_role) {
+        const roleCode = profile.system_role.code;
+        // Маппинг кода роли в ENUM значение
+        if (roleCode === 'super_admin') positionType = 'super_admin';
+        else if (roleCode === 'admin') positionType = 'admin';
+        else if (roleCode === 'header') positionType = 'header';
+        else if (roleCode === 'worker') positionType = 'worker';
       }
 
       res.json({
@@ -520,7 +549,7 @@ export const authController = {
         profile: {
           id: profile.id,
           full_name: profile.full_name,
-          position_type: profile.position_type,
+          position_type: positionType,
           imported_position: profile.imported_position,
           employee_id: profile.employee_id,
           supervisor_id: profile.supervisor_id,

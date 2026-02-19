@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import { structureController } from '../controllers/structure.controller.js';
-import { authenticate, requirePosition, requireOrganization, require2FA } from '../middleware/auth.js';
+import { authenticate, requirePosition, requireOrganization, require2FA, injectOrganizationFromQuery } from '../middleware/auth.js';
 
 const router = Router();
 
 // Все роуты требуют аутентификации и организации
 router.use(authenticate as any);
 router.use(requireOrganization as any);
+router.use(injectOrganizationFromQuery as any);
 
 // GET /api/structure - получение дерева (worker+)
 router.get(

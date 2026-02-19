@@ -1,17 +1,23 @@
-import { useState, useEffect, type FC } from 'react';
+import { useState, useEffect, useCallback, type FC } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { structureApi } from '../../api/structure';
-import type { OrgCompany, OrgDepartment, OrgSubdivision, OrgStructureResponse } from '../../types';
+import { adminService } from '../../services/adminService';
+import type { OrgCompany, OrgDepartment, OrgSubdivision, OrgStructureResponse, Organization } from '../../types';
 import styles from './StructurePage.module.css';
 
 export const StructurePage: FC = () => {
-  const { hasPosition } = useAuth();
+  const { hasPosition, profile } = useAuth();
   const isSuperAdmin = hasPosition('super_admin');
+  const needsOrgSelector = isSuperAdmin && !profile?.organization_id;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [structure, setStructure] = useState<OrgStructureResponse | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+
+  // Селектор организации для super_admin
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
 
   // Модалки
   const [showAddModal, setShowAddModal] = useState(false);
@@ -20,15 +26,31 @@ export const StructurePage: FC = () => {
   const [newName, setNewName] = useState('');
   const [saving, setSaving] = useState(false);
 
+  const effectiveOrgId = needsOrgSelector ? (selectedOrgId ?? undefined) : undefined;
+
+  // Загрузка списка организаций для super_admin
+  useEffect(() => {
+    if (!needsOrgSelector) return;
+    adminService.getOrganizations().then((orgs) => {
+      setOrganizations(orgs);
+      if (orgs.length === 1) setSelectedOrgId(orgs[0].id);
+    }).catch(() => {
+      setError('Ошибка загрузки организаций');
+    });
+  }, [needsOrgSelector]);
+
   // Загрузка структуры
-  const loadStructure = async () => {
+  const loadStructure = useCallback(async () => {
+    if (needsOrgSelector && !selectedOrgId) {
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       setError(null);
-      const response = await structureApi.getTree();
+      const response = await structureApi.getTree(effectiveOrgId);
       if (response.success && response.data) {
         setStructure(response.data);
-        // Раскрываем все компании по умолчанию
         const expanded = new Set<string>();
         response.data.tree.companies.forEach((c) => {
           expanded.add(`company-${c.id}`);
@@ -45,11 +67,11 @@ export const StructurePage: FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [effectiveOrgId, needsOrgSelector, selectedOrgId]);
 
   useEffect(() => {
     loadStructure();
-  }, []);
+  }, [loadStructure]);
 
   // Добавление элемента
   const handleAdd = async () => {
@@ -60,11 +82,11 @@ export const StructurePage: FC = () => {
       let response;
 
       if (addType === 'company') {
-        response = await structureApi.createCompany(newName.trim());
+        response = await structureApi.createCompany(newName.trim(), undefined, effectiveOrgId);
       } else if (addType === 'department') {
-        response = await structureApi.createDepartment(newName.trim(), addParentId);
+        response = await structureApi.createDepartment(newName.trim(), addParentId, undefined, effectiveOrgId);
       } else {
-        response = await structureApi.createSubdivision(newName.trim(), addParentId);
+        response = await structureApi.createSubdivision(newName.trim(), addParentId, undefined, effectiveOrgId);
       }
 
       if (response.success) {
@@ -90,11 +112,11 @@ export const StructurePage: FC = () => {
     try {
       let response;
       if (type === 'company') {
-        response = await structureApi.deleteCompany(id);
+        response = await structureApi.deleteCompany(id, effectiveOrgId);
       } else if (type === 'department') {
-        response = await structureApi.deleteDepartment(id);
+        response = await structureApi.deleteDepartment(id, effectiveOrgId);
       } else {
-        response = await structureApi.deleteSubdivision(id);
+        response = await structureApi.deleteSubdivision(id, effectiveOrgId);
       }
 
       if (response.success) {
@@ -203,7 +225,7 @@ export const StructurePage: FC = () => {
     );
   };
 
-  if (loading) {
+  if (loading && !needsOrgSelector) {
     return (
       <div className={styles.container}>
         <div className={styles.loading}>Загрузка структуры...</div>
@@ -223,7 +245,7 @@ export const StructurePage: FC = () => {
           )}
         </div>
 
-        {isSuperAdmin && (
+        {isSuperAdmin && (!needsOrgSelector || selectedOrgId) && (
           <button
             className={styles.addCompanyBtn}
             onClick={() => openAddModal('company')}
@@ -233,6 +255,21 @@ export const StructurePage: FC = () => {
         )}
       </div>
 
+      {needsOrgSelector && (
+        <div className={styles.orgSelector}>
+          <label>Организация:</label>
+          <select
+            value={selectedOrgId || ''}
+            onChange={(e) => setSelectedOrgId(e.target.value || null)}
+          >
+            <option value="">-- Выберите организацию --</option>
+            {organizations.map((org) => (
+              <option key={org.id} value={org.id}>{org.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {error && (
         <div className={styles.error}>
           {error}
@@ -240,23 +277,51 @@ export const StructurePage: FC = () => {
         </div>
       )}
 
-      <div className={styles.tree}>
-        {structure?.tree.companies.length === 0 && structure?.orphanDepartments.length === 0 ? (
+      {needsOrgSelector && !selectedOrgId ? (
+        <div className={styles.tree}>
           <div className={styles.empty}>
-            <p>Структура организации пуста</p>
-            <p className={styles.emptyHint}>
-              Добавьте компании, отделы и подразделения вручную или импортируйте сотрудников — структура создастся автоматически
-            </p>
+            <p>Выберите организацию для просмотра структуры</p>
           </div>
-        ) : (
-          <>
-            {/* Компании с вложенными отделами и подразделениями */}
-            {structure?.tree.companies.map((company) =>
-              renderTreeNode(
-                'company',
-                company,
-                <>
-                  {company.departments.map((dept) =>
+        </div>
+      ) : loading ? (
+        <div className={styles.loading}>Загрузка структуры...</div>
+      ) : (
+        <div className={styles.tree}>
+          {structure?.tree.companies.length === 0 && structure?.orphanDepartments.length === 0 ? (
+            <div className={styles.empty}>
+              <p>Структура организации пуста</p>
+              <p className={styles.emptyHint}>
+                Добавьте компании, отделы и подразделения вручную или импортируйте сотрудников — структура создастся автоматически
+              </p>
+            </div>
+          ) : (
+            <>
+              {structure?.tree.companies.map((company) =>
+                renderTreeNode(
+                  'company',
+                  company,
+                  <>
+                    {company.departments.map((dept) =>
+                      renderTreeNode(
+                        'department',
+                        dept,
+                        <>
+                          {dept.subdivisions.map((sub) =>
+                            renderTreeNode('subdivision', sub, null, 2)
+                          )}
+                        </>,
+                        1
+                      )
+                    )}
+                  </>,
+                  0
+                )
+              )}
+
+              {structure?.orphanDepartments && structure.orphanDepartments.length > 0 && (
+                <div className={styles.orphanSection}>
+                  <div className={styles.orphanHeader}>Отделы без компании</div>
+                  {structure.orphanDepartments.map((dept) =>
                     renderTreeNode(
                       'department',
                       dept,
@@ -265,35 +330,15 @@ export const StructurePage: FC = () => {
                           renderTreeNode('subdivision', sub, null, 2)
                         )}
                       </>,
-                      1
+                      0
                     )
                   )}
-                </>,
-                0
-              )
-            )}
-
-            {/* Отделы без компании */}
-            {structure?.orphanDepartments && structure.orphanDepartments.length > 0 && (
-              <div className={styles.orphanSection}>
-                <div className={styles.orphanHeader}>Отделы без компании</div>
-                {structure.orphanDepartments.map((dept) =>
-                  renderTreeNode(
-                    'department',
-                    dept,
-                    <>
-                      {dept.subdivisions.map((sub) =>
-                        renderTreeNode('subdivision', sub, null, 2)
-                      )}
-                    </>,
-                    0
-                  )
-                )}
-              </div>
-            )}
-          </>
-        )}
-      </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* Модалка добавления */}
       {showAddModal && (

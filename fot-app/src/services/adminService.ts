@@ -1,5 +1,5 @@
 import { apiClient } from '../api/client';
-import type { PendingUser, TwoFactorData, EmployeePositionType, Organization } from '../types';
+import type { TwoFactorData, EmployeePositionType, Organization } from '../types';
 
 interface ApiResponse<T> {
   success: boolean;
@@ -13,49 +13,36 @@ interface UserFromApi {
   organization_id: string | null;
   organization_name: string | null;
   position_type: EmployeePositionType;
+  imported_position: string | null;
+  employee_id: string | null;
+  supervisor_id: string | null;
   is_approved: boolean;
   two_factor_enabled: boolean;
   approved_at: string | null;
   created_at: string;
 }
 
-interface UserWithProfile {
+interface PendingUserFromApi {
   id: string;
   email: string;
-  profile: {
-    id: string;
-    full_name: string | null;
-    organization_id: string | null;
-    position_type: EmployeePositionType;
-    is_approved: boolean;
-    two_factor_enabled: boolean;
-    created_at: string;
-  };
+  full_name: string | null;
+  organization_id: string | null;
+  organization_name: string | null;
+  position_type: EmployeePositionType;
+  imported_position: string | null;
+  created_at: string;
 }
 
 export const adminService = {
   // User management
-  async getPendingUsers(): Promise<PendingUser[]> {
-    const response = await apiClient.get<ApiResponse<PendingUser[]>>('/admin/users/pending');
+  async getPendingUsers(): Promise<PendingUserFromApi[]> {
+    const response = await apiClient.get<ApiResponse<PendingUserFromApi[]>>('/admin/users/pending');
     return response.data || [];
   },
 
-  async getAllUsers(): Promise<UserWithProfile[]> {
+  async getAllUsers(): Promise<UserFromApi[]> {
     const response = await apiClient.get<ApiResponse<UserFromApi[]>>('/admin/users');
-    // Преобразуем формат для фронтенда
-    return (response.data || []).map(user => ({
-      id: user.id,
-      email: '', // Email не возвращается из API для безопасности
-      profile: {
-        id: user.id,
-        full_name: user.full_name,
-        organization_id: user.organization_id,
-        position_type: user.position_type,
-        is_approved: user.is_approved,
-        two_factor_enabled: user.two_factor_enabled,
-        created_at: user.created_at,
-      },
-    }));
+    return response.data || [];
   },
 
   async approveUser(userId: string): Promise<void> {

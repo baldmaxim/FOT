@@ -1,3 +1,69 @@
+# Claude Code Rules
+
+## Общие правила
+
+- Использовать TypeScript для всего кода
+- Следовать функциональному подходу с React hooks
+- Компоненты создавать как функциональные (FC)
+- Использовать строгую типизацию, избегать `any`
+- Максимум 500 строк на файл — иначе дели на части
+
+## Структура проекта
+
+```
+src/
+├── components/     # UI компоненты
+├── pages/          # Страницы приложения
+├── hooks/          # Кастомные хуки
+├── utils/          # Утилиты и хелперы
+├── types/          # TypeScript типы и интерфейсы
+├── services/       # API и сервисы
+├── store/          # Состояние приложения
+└── assets/         # Статические ресурсы
+```
+
+## Именование
+
+- Компоненты: `PascalCase` (например, `UserCard.tsx`)
+- Хуки: `camelCase` с префиксом `use` (например, `useAuth.ts`)
+- Утилиты: `camelCase` (например, `formatDate.ts`)
+- Типы/Интерфейсы: `PascalCase` с префиксом `I` для интерфейсов (например, `IUser`)
+- Константы: `UPPER_SNAKE_CASE`
+
+## Стиль кода
+
+- Использовать arrow functions для компонентов
+- Деструктуризация пропсов в параметрах функции
+- Экспорт компонентов через `export const`
+- Один компонент на файл
+
+## Пример компонента
+
+```tsx
+import { FC } from 'react';
+
+interface IButtonProps {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+}
+
+export const Button: FC<IButtonProps> = ({ label, onClick, disabled = false }) => {
+  return (
+    <button onClick={onClick} disabled={disabled}>
+      {label}
+    </button>
+  );
+};
+```
+
+## Запрещено
+
+- Использовать `var` (только `const` и `let`)
+- Игнорировать TypeScript ошибки через `@ts-ignore`
+- Использовать inline стили (кроме динамических значений)
+- Мутировать состояние напрямую
+
 ## Адаптивность (обязательно)
 
 Все UI компоненты ОБЯЗАНЫ быть адаптированы под:

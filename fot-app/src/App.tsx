@@ -33,14 +33,37 @@ import './App.css';
 
 // Компонент для умного редиректа на основе должности
 const PositionBasedRedirect = () => {
-  const { positionType } = useAuth();
+  const { positionType, canAccess } = useAuth();
+
+  // DEBUG: выводим текущую роль
+  console.log('[PositionBasedRedirect] positionType:', positionType);
 
   // Worker (Рабочий/Инженер) → личный кабинет сотрудника
   if (positionType === 'worker') {
+    console.log('[PositionBasedRedirect] Redirecting to /employee (worker)');
     return <Navigate to="/employee" replace />;
   }
 
-  // Header (Руководитель), Admin, Super Admin → дашборд
+  // Super Admin → управление пользователями (главная страница суперадмина)
+  if (positionType === 'super_admin') {
+    console.log('[PositionBasedRedirect] Redirecting to /admin/users (super_admin)');
+    return <Navigate to="/admin/users" replace />;
+  }
+
+  // Admin → управление пользователями
+  if (positionType === 'admin') {
+    console.log('[PositionBasedRedirect] Redirecting to /admin/users (admin)');
+    return <Navigate to="/admin/users" replace />;
+  }
+
+  // Header (Руководитель) → дашборд
+  if (canAccess('header')) {
+    console.log('[PositionBasedRedirect] Redirecting to /dashboard (header)');
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  // По умолчанию → дашборд
+  console.log('[PositionBasedRedirect] Redirecting to /dashboard (default)');
   return <Navigate to="/dashboard" replace />;
 };
 

@@ -13,6 +13,7 @@ export type AuditAction =
   | 'USER_REJECTED'
   | 'USER_DELETED'
   | 'EMAIL_CONFIRMED'
+  | 'POSITION_CHANGED'
   | 'ROLE_CHANGED'
   | 'ORG_ASSIGNED'
   | 'NAME_CHANGED'

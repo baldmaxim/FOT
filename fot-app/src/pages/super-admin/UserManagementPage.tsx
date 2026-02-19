@@ -1,29 +1,42 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { adminService } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
-import type { PendingUser, TwoFactorData, EmployeePositionType, Organization } from '../../types';
+import type { TwoFactorData, EmployeePositionType, Organization } from '../../types';
 import { POSITION_LABELS } from '../../types';
 import styles from './SuperAdmin.module.css';
 
-interface UserWithProfile {
+interface UserFromApi {
+  id: string;
+  email?: string;
+  full_name: string | null;
+  organization_id: string | null;
+  organization_name: string | null;
+  position_type: EmployeePositionType;
+  imported_position: string | null;
+  employee_id: string | null;
+  supervisor_id: string | null;
+  is_approved: boolean;
+  two_factor_enabled: boolean;
+  approved_at: string | null;
+  created_at: string;
+}
+
+interface PendingUserFromApi {
   id: string;
   email: string;
-  profile: {
-    id: string;
-    full_name: string | null;
-    organization_id: string | null;
-    position_type: EmployeePositionType;
-    is_approved: boolean;
-    two_factor_enabled: boolean;
-    created_at: string;
-  };
+  full_name: string | null;
+  organization_id: string | null;
+  organization_name: string | null;
+  position_type: EmployeePositionType;
+  imported_position: string | null;
+  created_at: string;
 }
 
 export const UserManagementPage: React.FC = () => {
   const toast = useToast();
   const [activeTab, setActiveTab] = useState<'pending' | 'all'>('pending');
-  const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
-  const [allUsers, setAllUsers] = useState<UserWithProfile[]>([]);
+  const [pendingUsers, setPendingUsers] = useState<PendingUserFromApi[]>([]);
+  const [allUsers, setAllUsers] = useState<UserFromApi[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
@@ -102,7 +115,8 @@ export const UserManagementPage: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [loadData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Пустой массив - загружаем только при монтировании
 
   const handleApprove = async (userId: string) => {
     try {
@@ -296,7 +310,7 @@ export const UserManagementPage: React.FC = () => {
         <div className={styles.userListCompact}>
           {allUsers.map(user => {
             const isExpanded = expandedUserId === user.id;
-            const isSuperAdmin = user.profile.position_type === 'super_admin';
+            const isSuperAdmin = user.position_type === 'super_admin';
 
             return (
               <div key={user.id} className={`${styles.userRow} ${isExpanded ? styles.expanded : ''}`}>
@@ -304,18 +318,18 @@ export const UserManagementPage: React.FC = () => {
                 <div className={styles.userRowHeader} onClick={() => toggleExpand(user.id)}>
                   <div className={styles.userRowInfo}>
                     <div className={styles.userRowName}>
-                      {user.profile.full_name || 'Без имени'}
+                      {user.full_name || 'Без имени'}
                       {isSuperAdmin && <span className={styles.adminBadge}>Super Admin</span>}
                     </div>
-                    <div className={styles.userRowEmail}>{user.email}</div>
+                    <div className={styles.userRowEmail}>{user.email || ''}</div>
                   </div>
 
                   <div className={styles.userRowMeta}>
-                    <span className={styles.userRowRole}>{getPositionName(user.profile.position_type)}</span>
-                    <span className={styles.userRowOrg}>{getOrgName(user.profile.organization_id)}</span>
-                    {!user.profile.is_approved ? (
+                    <span className={styles.userRowRole}>{getPositionName(user.position_type)}</span>
+                    <span className={styles.userRowOrg}>{getOrgName(user.organization_id)}</span>
+                    {!user.is_approved ? (
                       <span className={styles.notApproved}>Не одобрен</span>
-                    ) : !user.profile.two_factor_enabled ? (
+                    ) : !user.two_factor_enabled ? (
                       <span className={styles.twoFaDisabled}>Ожидает 2FA</span>
                     ) : (
                       <span className={styles.approved}>Активен</span>
@@ -360,9 +374,9 @@ export const UserManagementPage: React.FC = () => {
                       ) : (
                         <button
                           className={styles.editNameBtn}
-                          onClick={() => handleNameEdit(user.id, user.profile.full_name)}
+                          onClick={() => handleNameEdit(user.id, user.full_name)}
                         >
-                          {user.profile.full_name || 'Без имени'}
+                          {user.full_name || 'Без имени'}
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
                             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
@@ -376,7 +390,7 @@ export const UserManagementPage: React.FC = () => {
                         <div className={styles.controlGroup}>
                           <label>Должность:</label>
                           <select
-                            value={user.profile.position_type}
+                            value={user.position_type}
                             onChange={(e) => handlePositionChange(user.id, e.target.value as EmployeePositionType)}
                           >
                             <option value="worker">Сотрудник</option>
@@ -388,7 +402,7 @@ export const UserManagementPage: React.FC = () => {
                         <div className={styles.controlGroup}>
                           <label>Организация:</label>
                           <select
-                            value={user.profile.organization_id || ''}
+                            value={user.organization_id || ''}
                             onChange={(e) => handleOrgChange(user.id, e.target.value)}
                           >
                             <option value="">Не назначена</option>
@@ -401,7 +415,7 @@ export const UserManagementPage: React.FC = () => {
                     )}
 
                     <div className={styles.controlActions}>
-                      {user.profile.two_factor_enabled ? (
+                      {user.two_factor_enabled ? (
                         <button
                           className={styles.dangerBtn}
                           onClick={() => handleDisable2FA(user.id)}
@@ -411,7 +425,7 @@ export const UserManagementPage: React.FC = () => {
                       ) : (
                         <button
                           className={styles.primaryBtn}
-                          onClick={() => handleGenerate2FA(user.id, user.profile.full_name || user.email)}
+                          onClick={() => handleGenerate2FA(user.id, user.full_name || user.email || '')}
                         >
                           Выдать 2FA
                         </button>

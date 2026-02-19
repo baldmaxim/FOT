@@ -14,6 +14,7 @@ interface UserInOrg {
   position_type: EmployeePositionType;
   is_approved: boolean;
   two_factor_enabled: boolean;
+  organization_id: string | null;
 }
 
 export const OrganizationsPage: React.FC = () => {
@@ -43,12 +44,12 @@ export const OrganizationsPage: React.FC = () => {
       setOrganizations(orgs);
       setAllUsers(users.map(u => ({
         id: u.id,
-        full_name: u.profile.full_name,
-        position_type: u.profile.position_type,
-        is_approved: u.profile.is_approved,
-        two_factor_enabled: u.profile.two_factor_enabled,
-        organization_id: u.profile.organization_id,
-      })) as (UserInOrg & { organization_id: string | null })[]);
+        full_name: u.full_name,
+        position_type: u.position_type,
+        is_approved: u.is_approved,
+        two_factor_enabled: u.two_factor_enabled,
+        organization_id: u.organization_id,
+      })));
     } catch {
       toast.error('Ошибка загрузки данных');
     } finally {
@@ -58,7 +59,8 @@ export const OrganizationsPage: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [loadData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Пустой массив - загружаем только при монтировании
 
   const toggleExpand = (orgId: string) => {
     setExpandedOrgId(prev => prev === orgId ? null : orgId);
@@ -66,8 +68,7 @@ export const OrganizationsPage: React.FC = () => {
   };
 
   const getUsersInOrg = (orgId: string): UserInOrg[] => {
-    return (allUsers as (UserInOrg & { organization_id: string | null })[])
-      .filter(u => u.organization_id === orgId);
+    return allUsers.filter(u => u.organization_id === orgId);
   };
 
   const getPositionName = (positionType: EmployeePositionType) => {

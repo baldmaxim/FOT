@@ -117,6 +117,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       loading: false,
     });
 
+    // DEBUG: выводим роль пользователя
+    console.log('[AuthContext] Login successful:', {
+      email: response.user.email,
+      position_type: response.profile.position_type,
+      full_name: response.profile.full_name,
+    });
+
     return { requires2FA: false };
   }, []);
 
@@ -156,6 +163,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const refreshProfile = useCallback(async (): Promise<void> => {
     try {
       const { user, profile } = await apiClient.get<{ user: User; profile: UserProfile }>('/auth/me');
+      console.log('[AuthContext] refreshProfile response:', { user, profile });
       setState(prev => ({
         ...prev,
         user,
