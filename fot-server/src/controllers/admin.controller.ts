@@ -12,10 +12,22 @@ import type { AuthenticatedRequest, UserProfile, OrganizationEncrypted, Organiza
 function decryptOrganization(encrypted: OrganizationEncrypted): Organization {
   return {
     id: encrypted.id,
-    name: encryptionService.decrypt(encrypted.name_encrypted),
+    name: encryptionService.decryptField(encrypted.name_encrypted) || 'Неизвестная организация',
     created_at: encrypted.created_at,
     updated_at: encrypted.updated_at,
   };
+}
+
+/**
+ * Логирует ошибки Supabase с деталями
+ */
+function logSupabaseError(context: string, error: unknown) {
+  console.error(`[${context}] Supabase error:`, {
+    message: error instanceof Error ? error.message : String(error),
+    details: (error as any)?.details,
+    hint: (error as any)?.hint,
+    code: (error as any)?.code,
+  });
 }
 
 // Схемы валидации
@@ -31,26 +43,47 @@ export const adminController = {
    */
   async getAllUsers(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { data: users, error } = await supabase
+      // Получаем всех пользователей без вложенных данных
+      const { data: users, error: usersError } = await supabase
         .from('user_profiles')
-        .select(`
-          *,
-          organizations (id, name)
-        `)
+        .select('*')
         .order('created_at', { ascending: false });
 
-      if (error) {
-        console.error('Get users error:', error);
+      if (usersError) {
+        logSupabaseError('GetUsers', usersError);
         res.status(500).json({ success: false, error: 'Failed to fetch users' });
         return;
       }
 
+      // Получаем организации для пользователей с organization_id
+      const orgIds = users
+        .filter((u: UserProfile) => u.organization_id)
+        .map((u: UserProfile) => u.organization_id);
+
+      let orgMap: Record<string, string> = {};
+      if (orgIds.length > 0) {
+        const { data: orgs, error: orgsError } = await supabase
+          .from('organizations')
+          .select('id, name_encrypted')
+          .in('id', orgIds);
+
+        if (orgsError) {
+          logSupabaseError('GetUsers-Orgs', orgsError);
+        } else if (orgs) {
+          // Расшифровываем названия организаций
+          orgMap = orgs.reduce((acc, org) => {
+            acc[org.id] = encryptionService.decryptField(org.name_encrypted) || 'Неизвестная организация';
+            return acc;
+          }, {} as Record<string, string>);
+        }
+      }
+
       // Убираем чувствительные данные
-      const sanitizedUsers = users.map((u: UserProfile & { organizations?: { id: string; name: string } }) => ({
+      const sanitizedUsers = users.map((u: UserProfile) => ({
         id: u.id,
         full_name: u.full_name,
         organization_id: u.organization_id,
-        organization_name: u.organizations?.name || null,
+        organization_name: u.organization_id ? (orgMap[u.organization_id] || null) : null,
         position_type: u.position_type,
         imported_position: u.imported_position,
         employee_id: u.employee_id,
@@ -63,7 +96,7 @@ export const adminController = {
 
       res.json({ success: true, data: sanitizedUsers });
     } catch (error) {
-      console.error('Get users error:', error);
+      console.error('[GetUsers-Catch] Error:', error instanceof Error ? error.stack : error);
       res.status(500).json({ success: false, error: 'Failed to fetch users' });
     }
   },
@@ -74,27 +107,55 @@ export const adminController = {
    */
   async getPendingUsers(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { data: users, error } = await supabase
+      // Получаем ожидающих пользователей без вложенных данных
+      const { data: users, error: usersError } = await supabase
         .from('user_profiles')
-        .select(`
-          *,
-          organizations (id, name)
-        `)
+        .select('*')
         .eq('is_approved', false)
         .order('created_at', { ascending: false });
 
-      if (error) {
-        console.error('Get pending users error:', error);
+      if (usersError) {
+        logSupabaseError('GetPendingUsers', usersError);
         res.status(500).json({ success: false, error: 'Failed to fetch pending users' });
         return;
       }
 
-      // Получаем email из auth.users для каждого пользователя
+      if (!users || users.length === 0) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+
+      // Получаем организации для пользователей с organization_id
+      const orgIds = users
+        .filter((u: UserProfile) => u.organization_id)
+        .map((u: UserProfile) => u.organization_id);
+
+      let orgMap: Record<string, string> = {};
+      if (orgIds.length > 0) {
+        const { data: orgs, error: orgsError } = await supabase
+          .from('organizations')
+          .select('id, name_encrypted')
+          .in('id', orgIds);
+
+        if (orgsError) {
+          logSupabaseError('GetPendingUsers-Orgs', orgsError);
+        } else if (orgs) {
+          orgMap = orgs.reduce((acc, org) => {
+            acc[org.id] = encryptionService.decryptField(org.name_encrypted) || 'Неизвестная организация';
+            return acc;
+          }, {} as Record<string, string>);
+        }
+      }
+
+      // Получаем email из auth.users для всех пользователей пакетно
       const usersWithEmail = await Promise.all(
-        users.map(async (u: UserProfile & { organizations?: { id: string; name: string } }) => {
+        users.map(async (u: UserProfile) => {
           let email = '';
           try {
-            const { data: authUser } = await supabase.auth.admin.getUserById(u.id);
+            const { data: authUser, error: authError } = await supabase.auth.admin.getUserById(u.id);
+            if (authError) {
+              console.error(`Failed to get email for user ${u.id}:`, authError);
+            }
             email = authUser?.user?.email || '';
           } catch (e) {
             console.error('Failed to get user email:', e);
@@ -105,7 +166,7 @@ export const adminController = {
             email,
             full_name: u.full_name,
             organization_id: u.organization_id,
-            organization_name: u.organizations?.name || null,
+            organization_name: u.organization_id ? (orgMap[u.organization_id] || null) : null,
             position_type: u.position_type,
             imported_position: u.imported_position,
             created_at: u.created_at,
@@ -115,7 +176,7 @@ export const adminController = {
 
       res.json({ success: true, data: usersWithEmail });
     } catch (error) {
-      console.error('Get pending users error:', error);
+      console.error('[GetPendingUsers-Catch] Error:', error instanceof Error ? error.stack : error);
       res.status(500).json({ success: false, error: 'Failed to fetch pending users' });
     }
   },
