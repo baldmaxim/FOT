@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { employeesController } from '../controllers/employees.controller.js';
-import { authenticate, requirePosition, requireOrganization, require2FA } from '../middleware/auth.js';
+import { authenticate, requirePosition, requireOrganization, require2FA, injectOrganizationFromQuery } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -26,6 +26,7 @@ const upload = multer({
 
 // Все роуты требуют аутентификации и организации
 router.use(authenticate as any);
+router.use(injectOrganizationFromQuery as any);
 router.use(requireOrganization as any);
 
 // GET /api/employees - получение списка (worker+)

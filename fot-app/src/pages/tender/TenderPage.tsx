@@ -1,15 +1,20 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Users, Plus, Upload, Search, Archive, Trash2, Edit3, X, Check, ChevronDown, ChevronUp, AlertTriangle, FileSpreadsheet } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
+import { adminService } from '../../services/adminService';
 import { useAuth } from '../../contexts/AuthContext';
-import type { Employee, EmployeeInput } from '../../types';
+import type { Employee, EmployeeInput, Organization } from '../../types';
 import '../../styles/TenderPage.css';
 
 export const TenderPage: React.FC = () => {
-  const { hasPosition, canAccess } = useAuth();
+  const { hasPosition, canAccess, profile } = useAuth();
   const isSuperAdmin = hasPosition('super_admin');
+  const needsOrgSelector = isSuperAdmin && !profile?.organization_id;
   const canEdit = canAccess('header'); // header и выше (admin, super_admin)
   const [deleting, setDeleting] = useState(false);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
+  const effectiveOrgId = needsOrgSelector ? (selectedOrgId ?? undefined) : undefined;
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,18 +46,33 @@ export const TenderPage: React.FC = () => {
   // Edit form state
   const [editFormData, setEditFormData] = useState<Partial<EmployeeInput>>({});
 
+  // Загрузка списка организаций для super_admin
+  useEffect(() => {
+    if (!needsOrgSelector) return;
+    adminService.getOrganizations().then((orgs) => {
+      setOrganizations(orgs);
+      if (orgs.length === 1) setSelectedOrgId(orgs[0].id);
+    }).catch(() => {
+      setError('Ошибка загрузки организаций');
+    });
+  }, [needsOrgSelector]);
+
   const loadEmployees = useCallback(async () => {
+    if (needsOrgSelector && !selectedOrgId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError('');
     try {
-      const data = await employeeService.getAll();
+      const data = await employeeService.getAll(effectiveOrgId);
       setEmployees(data.filter(e => showArchived ? e.is_archived : !e.is_archived));
     } catch {
       setError('Ошибка загрузки сотрудников');
     } finally {
       setLoading(false);
     }
-  }, [showArchived]);
+  }, [showArchived, effectiveOrgId, needsOrgSelector, selectedOrgId]);
 
   useEffect(() => {
     loadEmployees();
@@ -249,6 +269,21 @@ export const TenderPage: React.FC = () => {
         <div className="error-banner" style={{ background: '#fef2f2', color: '#dc2626', padding: '12px', borderRadius: '8px', marginBottom: '16px' }}>
           {error}
           <button onClick={() => setError('')} style={{ marginLeft: '12px' }}>×</button>
+        </div>
+      )}
+
+      {needsOrgSelector && (
+        <div className="org-selector" style={{ marginBottom: 16 }}>
+          <select
+            value={selectedOrgId || ''}
+            onChange={(e) => setSelectedOrgId(e.target.value || null)}
+            className="filter-select"
+          >
+            <option value="">Выберите организацию</option>
+            {organizations.map((org) => (
+              <option key={org.id} value={org.id}>{org.name}</option>
+            ))}
+          </select>
         </div>
       )}
 

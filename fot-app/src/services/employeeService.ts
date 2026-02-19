@@ -12,8 +12,9 @@ interface ImportResult {
 }
 
 export const employeeService = {
-  async getAll(): Promise<Employee[]> {
-    const response = await apiClient.get<ApiResponse<Employee[]>>('/employees');
+  async getAll(organizationId?: string): Promise<Employee[]> {
+    const query = organizationId ? `?organization_id=${organizationId}` : '';
+    const response = await apiClient.get<ApiResponse<Employee[]>>(`/employees${query}`);
     return response.data || [];
   },
 
