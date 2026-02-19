@@ -51,6 +51,8 @@ export const sigurController = {
       const connection = (req.query.connection as 'external' | 'internal') || undefined;
       const data = await sigurService.getEmployees(undefined, connection);
 
+      console.log('[sigur employees] sample (first 2):', JSON.stringify(data.slice(0, 2), null, 2));
+
       res.json({ success: true, data, count: data.length });
     } catch (error) {
       console.error('Sigur get employees error:', error);
@@ -71,6 +73,8 @@ export const sigurController = {
 
       const connection = (req.query.connection as 'external' | 'internal') || undefined;
       const data = await sigurService.getDepartments(connection);
+
+      console.log('[sigur departments] sample (first 2):', JSON.stringify(data.slice(0, 2), null, 2));
 
       res.json({ success: true, data, count: data.length });
     } catch (error) {
@@ -225,22 +229,28 @@ export const sigurController = {
       const { startTime, endTime, connection: conn } = req.query;
       const connection = (conn as 'external' | 'internal') || undefined;
 
-      console.log('[sigur preview] fetching events (limited):', { startTime, endTime, connection });
+      console.log('[sigur preview] fetching events (paginated):', { startTime, endTime, connection });
 
-      // Для preview берём только 200 событий вместо всех
-      const rawData = await sigurService.getEventsLimited(
+      // Забираем все события с пагинацией (как при синхронизации)
+      const rawData = await sigurService.getEvents(
         startTime as string | undefined,
         endTime as string | undefined,
-        200,
         connection,
       );
 
       console.log('[sigur preview] rawData count:', rawData.length);
 
-      // Маппим для показа плоских полей
+      // Маппим и фильтруем по дате
+      const startDateStr = (startTime as string)?.split('T')[0];
+      const endDateStr = (endTime as string)?.split('T')[0];
+
       const mapped = rawData
         .map((raw: unknown) => mapSigurEvent(raw as Record<string, unknown>))
         .filter(Boolean)
+        .filter(evt => {
+          if (!startDateStr || !endDateStr) return true;
+          return evt!.eventDate >= startDateStr && evt!.eventDate <= endDateStr;
+        })
         .slice(0, 20);
 
       const sampleFields = ['physicalPerson', 'eventDate', 'eventTime', 'direction', 'accessPoint', 'cardNumber'];

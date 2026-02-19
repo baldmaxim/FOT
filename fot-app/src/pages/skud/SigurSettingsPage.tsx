@@ -228,7 +228,9 @@ export const SigurSettingsPage = () => {
                           const val = row[f];
                           const display = f === 'direction' && typeof val === 'string'
                             ? (DIRECTION_LABELS[val] || val)
-                            : String(val ?? '—');
+                            : f === 'eventDate' && typeof val === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(val)
+                              ? val.split('-').reverse().join('.')
+                              : String(val ?? '—');
                           return (
                             <td key={f} title={display}>
                               {display}

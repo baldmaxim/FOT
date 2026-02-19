@@ -588,6 +588,7 @@ CREATE TABLE IF NOT EXISTS public.skud_daily_summary (
     first_entry time without time zone,
     last_exit time without time zone,
     total_hours numeric(5,2),
+    break_hours numeric(5,2) DEFAULT 0,
     is_present boolean DEFAULT false,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
@@ -2030,6 +2031,7 @@ $function$
 
 
 -- Function: public.recalculate_skud_daily_summary
+-- Считает сумму интервалов вход→выход (реальное время на работе)
 CREATE OR REPLACE FUNCTION public.recalculate_skud_daily_summary(p_organization_id uuid, p_employee_id bigint, p_date date)
  RETURNS void
  LANGUAGE plpgsql
@@ -2038,8 +2040,14 @@ AS $function$
 DECLARE
     v_first_entry TIME;
     v_last_exit TIME;
+    v_total_seconds DECIMAL := 0;
+    v_break_seconds DECIMAL := 0;
     v_total_hours DECIMAL(5,2);
+    v_break_hours DECIMAL(5,2);
+    v_prev_exit TIME := NULL;
+    v_rec RECORD;
 BEGIN
+    -- Первый вход и последний выход (для отчётности)
     SELECT event_time INTO v_first_entry
     FROM skud_events
     WHERE organization_id = p_organization_id
@@ -2058,19 +2066,47 @@ BEGIN
     ORDER BY event_time DESC
     LIMIT 1;
 
+    -- Суммируем интервалы вход→выход
+    -- Сортируем все события по времени, парим вход с ближайшим выходом
+    FOR v_rec IN
+        SELECT event_time, direction
+        FROM skud_events
+        WHERE organization_id = p_organization_id
+          AND employee_id = p_employee_id
+          AND event_date = p_date
+        ORDER BY event_time ASC
+    LOOP
+        IF v_rec.direction = 'entry' THEN
+            -- Если был предыдущий выход, считаем перерыв
+            IF v_prev_exit IS NOT NULL THEN
+                v_break_seconds := v_break_seconds + EXTRACT(EPOCH FROM (v_rec.event_time - v_prev_exit));
+            END IF;
+            -- Запоминаем время входа для текущего интервала
+            -- (используем переменную v_prev_exit как маркер: NULL = сейчас внутри)
+            v_prev_exit := NULL;
+        ELSIF v_rec.direction = 'exit' THEN
+            v_prev_exit := v_rec.event_time;
+        END IF;
+    END LOOP;
+
+    -- total_hours = сумма всех интервалов вход→выход
     IF v_first_entry IS NOT NULL AND v_last_exit IS NOT NULL AND v_last_exit > v_first_entry THEN
-        v_total_hours := EXTRACT(EPOCH FROM (v_last_exit - v_first_entry)) / 3600;
+        v_total_seconds := EXTRACT(EPOCH FROM (v_last_exit - v_first_entry)) - v_break_seconds;
+        v_total_hours := GREATEST(v_total_seconds / 3600, 0);
+        v_break_hours := v_break_seconds / 3600;
     ELSE
         v_total_hours := NULL;
+        v_break_hours := 0;
     END IF;
 
-    INSERT INTO skud_daily_summary (organization_id, employee_id, date, first_entry, last_exit, total_hours, is_present)
-    VALUES (p_organization_id, p_employee_id, p_date, v_first_entry, v_last_exit, v_total_hours, v_first_entry IS NOT NULL)
+    INSERT INTO skud_daily_summary (organization_id, employee_id, date, first_entry, last_exit, total_hours, break_hours, is_present)
+    VALUES (p_organization_id, p_employee_id, p_date, v_first_entry, v_last_exit, v_total_hours, v_break_hours, v_first_entry IS NOT NULL)
     ON CONFLICT (organization_id, employee_id, date)
     DO UPDATE SET
         first_entry = EXCLUDED.first_entry,
         last_exit = EXCLUDED.last_exit,
         total_hours = EXCLUDED.total_hours,
+        break_hours = EXCLUDED.break_hours,
         is_present = EXCLUDED.is_present,
         updated_at = NOW();
 END;
