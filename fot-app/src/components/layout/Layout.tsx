@@ -9,9 +9,10 @@ interface ILayoutProps {
   title: string;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
+  showPeriodTabs?: boolean;
 }
 
-export const Layout: FC<ILayoutProps> = ({ children, title, theme, onToggleTheme }) => {
+export const Layout: FC<ILayoutProps> = ({ children, title, theme, onToggleTheme, showPeriodTabs = false }) => {
   const { isOpen, open, close } = useMobileMenu();
 
   return (
@@ -19,7 +20,7 @@ export const Layout: FC<ILayoutProps> = ({ children, title, theme, onToggleTheme
       {isOpen && <div className={styles.overlay} onClick={close} />}
       <Sidebar theme={theme} isOpen={isOpen} onClose={close} />
       <main className={styles.main}>
-        <Header title={title} theme={theme} onToggleTheme={onToggleTheme} onMenuOpen={open} />
+        <Header title={title} theme={theme} onToggleTheme={onToggleTheme} onMenuOpen={open} showPeriodTabs={showPeriodTabs} />
         <div className={styles.content}>
           {children}
         </div>

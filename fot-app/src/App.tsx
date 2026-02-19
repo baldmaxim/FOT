@@ -139,7 +139,7 @@ const AppRoutes = () => {
         <Route
           path="/dashboard"
           element={
-            <Layout title="Обзор" theme={theme} onToggleTheme={toggleTheme}>
+            <Layout title="Обзор" theme={theme} onToggleTheme={toggleTheme} showPeriodTabs>
               <DashboardPage />
             </Layout>
           }

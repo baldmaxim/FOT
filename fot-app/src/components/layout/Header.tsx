@@ -11,11 +11,12 @@ interface IHeaderProps {
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
   onMenuOpen?: () => void;
+  showPeriodTabs?: boolean;
 }
 
 const periodTabs = ['Сегодня', 'Неделя', 'Месяц'];
 
-export const Header: FC<IHeaderProps> = ({ title, theme, onToggleTheme, onMenuOpen }) => {
+export const Header: FC<IHeaderProps> = ({ title, theme, onToggleTheme, onMenuOpen, showPeriodTabs = false }) => {
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState(0);
 
@@ -32,7 +33,7 @@ export const Header: FC<IHeaderProps> = ({ title, theme, onToggleTheme, onMenuOp
           </button>
         )}
         <h1 className={styles.title}>{title}</h1>
-        <Tabs tabs={periodTabs} activeTab={activeTab} onTabChange={setActiveTab} />
+        {showPeriodTabs && <Tabs tabs={periodTabs} activeTab={activeTab} onTabChange={setActiveTab} />}
       </div>
 
       <div className={styles.right}>
