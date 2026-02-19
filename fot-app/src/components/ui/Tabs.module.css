@@ -36,19 +36,6 @@
 
 @media (max-width: 768px) {
   .tabs {
-    overflow-x: auto;
-    flex-shrink: 0;
-  }
-
-  .tab {
-    white-space: nowrap;
-    padding: 5px 8px;
-    font-size: 11px;
-  }
-}
-
-@media (max-width: 430px) {
-  .tabs {
     display: none;
   }
 }

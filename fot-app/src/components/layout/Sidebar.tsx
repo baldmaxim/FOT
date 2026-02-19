@@ -42,6 +42,7 @@ const navGroups: INavGroup[] = [
     items: [
       { id: 'access', path: '/skud', label: 'СКУД', icon: ShieldIcon },
       { id: 'access-analysis', path: '/skud-analysis', label: 'Анализ СКУД', icon: BarChartIcon },
+      { id: 'sigur-settings', path: '/skud-settings', label: 'Настройки СКУД', icon: SettingsIcon },
     ]
   },
   {

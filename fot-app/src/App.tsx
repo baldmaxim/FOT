@@ -22,6 +22,7 @@ import { DataAuditPage } from './pages/super-admin/DataAuditPage';
 import { TenderPage } from './pages/tender/TenderPage';
 import { SKUDPage } from './pages/skud/SKUDPage';
 import { SKUDAnalysisPage } from './pages/skud/SKUDAnalysisPage';
+import { SigurSettingsPage } from './pages/skud/SigurSettingsPage';
 
 // Profile
 import { ProfilePage } from './pages/profile';
@@ -164,6 +165,14 @@ const AppRoutes = () => {
           element={
             <Layout title="Анализ СКУД" theme={theme} onToggleTheme={toggleTheme}>
               <SKUDAnalysisPage />
+            </Layout>
+          }
+        />
+        <Route
+          path="/skud-settings"
+          element={
+            <Layout title="Настройки СКУД" theme={theme} onToggleTheme={toggleTheme}>
+              <SigurSettingsPage />
             </Layout>
           }
         />

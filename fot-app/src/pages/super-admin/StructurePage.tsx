@@ -21,7 +21,7 @@ export const StructurePage: FC = () => {
 
   // Модалки
   const [showAddModal, setShowAddModal] = useState(false);
-  const [addType, setAddType] = useState<'company' | 'department' | 'subdivision'>('company');
+  const [addType, setAddType] = useState<'organization' | 'company' | 'department' | 'subdivision'>('company');
   const [addParentId, setAddParentId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [saving, setSaving] = useState(false);
@@ -79,6 +79,17 @@ export const StructurePage: FC = () => {
 
     try {
       setSaving(true);
+
+      if (addType === 'organization') {
+        const org = await adminService.createOrganization(newName.trim());
+        setShowAddModal(false);
+        setNewName('');
+        const orgs = await adminService.getOrganizations();
+        setOrganizations(orgs);
+        setSelectedOrgId(org.id);
+        return;
+      }
+
       let response;
 
       if (addType === 'company') {
@@ -143,7 +154,7 @@ export const StructurePage: FC = () => {
   };
 
   // Открытие модалки добавления
-  const openAddModal = (type: 'company' | 'department' | 'subdivision', parentId: string | null = null) => {
+  const openAddModal = (type: 'organization' | 'company' | 'department' | 'subdivision', parentId: string | null = null) => {
     setAddType(type);
     setAddParentId(parentId);
     setNewName('');
@@ -246,12 +257,20 @@ export const StructurePage: FC = () => {
         </div>
 
         {isSuperAdmin && (!needsOrgSelector || selectedOrgId) && (
-          <button
-            className={styles.addCompanyBtn}
-            onClick={() => openAddModal('company')}
-          >
-            + Добавить компанию
-          </button>
+          <div className={styles.headerActions}>
+            <button
+              className={styles.addCompanyBtn}
+              onClick={() => openAddModal('company')}
+            >
+              + Компания
+            </button>
+            <button
+              className={styles.addDeptBtn}
+              onClick={() => openAddModal('department', null)}
+            >
+              + Отдел
+            </button>
+          </div>
         )}
       </div>
 
@@ -267,6 +286,13 @@ export const StructurePage: FC = () => {
               <option key={org.id} value={org.id}>{org.name}</option>
             ))}
           </select>
+          <button
+            className={styles.addOrgBtn}
+            onClick={() => openAddModal('organization')}
+            title="Добавить организацию"
+          >
+            + Организация
+          </button>
         </div>
       )}
 
@@ -345,6 +371,7 @@ export const StructurePage: FC = () => {
         <div className={styles.modalOverlay} onClick={() => setShowAddModal(false)}>
           <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
             <h2 className={styles.modalTitle}>
+              {addType === 'organization' && 'Добавить организацию'}
               {addType === 'company' && 'Добавить компанию'}
               {addType === 'department' && 'Добавить отдел'}
               {addType === 'subdivision' && 'Добавить подразделение'}
@@ -357,7 +384,9 @@ export const StructurePage: FC = () => {
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder={
-                  addType === 'company'
+                  addType === 'organization'
+                    ? 'Название организации'
+                    : addType === 'company'
                     ? 'Название компании'
                     : addType === 'department'
                     ? 'Название отдела'

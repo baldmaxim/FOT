@@ -36,4 +36,10 @@ router.get('/zones', sigurController.getZones as any);
 // GET /api/sigur/access-rules — режимы доступа
 router.get('/access-rules', sigurController.getAccessRules as any);
 
+// GET /api/sigur/preview — предпросмотр сырых данных Sigur
+router.get('/preview', sigurController.preview as any);
+
+// POST /api/sigur/sync — синхронизация событий из Sigur в БД
+router.post('/sync', sigurController.sync as any);
+
 export default router;

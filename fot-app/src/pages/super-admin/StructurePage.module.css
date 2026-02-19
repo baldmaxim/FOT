@@ -23,9 +23,15 @@
   margin: 0;
 }
 
-.addCompanyBtn {
+.headerActions {
+  display: flex;
+  gap: 8px;
+}
+
+.addCompanyBtn,
+.addDeptBtn {
   padding: 10px 20px;
-  background: var(--accent-primary);
+  background: var(--primary);
   color: white;
   border: none;
   border-radius: 8px;
@@ -34,8 +40,16 @@
   transition: background 0.2s;
 }
 
+.addDeptBtn {
+  background: #22c55e;
+}
+
 .addCompanyBtn:hover {
-  background: var(--accent-primary-hover);
+  background: var(--primary-hover);
+}
+
+.addDeptBtn:hover {
+  background: #16a34a;
 }
 
 .orgSelector {
@@ -57,11 +71,28 @@
 .orgSelector select {
   flex: 1;
   padding: 8px 12px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 14px;
   background: var(--bg-primary);
   color: var(--text-primary);
+}
+
+.addOrgBtn {
+  padding: 8px 16px;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 14px;
+  white-space: nowrap;
+  transition: background 0.2s;
+}
+
+.addOrgBtn:hover {
+  background: var(--primary-hover);
 }
 
 .loading {
@@ -129,7 +160,7 @@
 }
 
 .nodeHeader:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .companyNode {
@@ -195,7 +226,7 @@
 .addChildBtn {
   padding: 4px 8px;
   font-size: 12px;
-  background: var(--accent-primary);
+  background: var(--primary);
   color: white;
   border: none;
   border-radius: 4px;
@@ -204,7 +235,7 @@
 }
 
 .addChildBtn:hover {
-  background: var(--accent-primary-hover);
+  background: var(--primary-hover);
 }
 
 .deleteBtn {
@@ -227,7 +258,7 @@
 
 .nodeChildren {
   margin-left: 20px;
-  border-left: 1px dashed var(--border-color);
+  border-left: 1px dashed var(--border);
   padding-left: 8px;
 }
 
@@ -235,7 +266,7 @@
 .orphanSection {
   margin-top: 24px;
   padding-top: 24px;
-  border-top: 1px dashed var(--border-color);
+  border-top: 1px dashed var(--border);
 }
 
 .orphanHeader {
@@ -291,7 +322,7 @@
 .formGroup input {
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 14px;
   background: var(--bg-secondary);
@@ -300,7 +331,7 @@
 
 .formGroup input:focus {
   outline: none;
-  border-color: var(--accent-primary);
+  border-color: var(--primary);
 }
 
 .modalActions {
@@ -313,18 +344,18 @@
   padding: 10px 20px;
   background: var(--bg-secondary);
   color: var(--text-primary);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
   border-radius: 8px;
   cursor: pointer;
 }
 
 .cancelBtn:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .saveBtn {
   padding: 10px 20px;
-  background: var(--accent-primary);
+  background: var(--primary);
   color: white;
   border: none;
   border-radius: 8px;
@@ -333,7 +364,7 @@
 }
 
 .saveBtn:hover:not(:disabled) {
-  background: var(--accent-primary-hover);
+  background: var(--primary-hover);
 }
 
 .saveBtn:disabled {
@@ -350,6 +381,15 @@
   .header {
     flex-direction: column;
     gap: 12px;
+  }
+
+  .headerActions {
+    width: 100%;
+  }
+
+  .headerActions .addCompanyBtn,
+  .headerActions .addDeptBtn {
+    flex: 1;
   }
 
   .nodeChildren {
@@ -383,6 +423,14 @@
     flex-direction: column;
     align-items: stretch;
     gap: 8px;
+  }
+
+  .addOrgBtn {
+    text-align: center;
+  }
+
+  .headerActions {
+    flex-direction: column;
   }
 
   .nodeHeader {

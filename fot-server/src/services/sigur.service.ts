@@ -105,8 +105,8 @@ class SigurService {
 
     const client = this.createClient(config);
 
-    const response = await client.post('/api/v1/auth', {
-      login: config.username,
+    const response = await client.post('/api/v1/users/auth', {
+      username: config.username,
       password: config.password,
     });
 
