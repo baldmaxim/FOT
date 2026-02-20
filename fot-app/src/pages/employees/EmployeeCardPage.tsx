@@ -138,6 +138,9 @@ export const EmployeeCardPage: FC = () => {
             <span className="card-position">{employee.position_name}</span>
           )}
           {employee.is_archived && <span className="card-badge-archived">Архив</span>}
+          <div style={{ fontSize: '11px', color: '#999', marginTop: '4px', wordBreak: 'break-all' }}>
+            id: {employee.id} | encrypted: {employee.full_name_encrypted}
+          </div>
         </div>
 
         {canEdit && (

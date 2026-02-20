@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { skudController } from '../controllers/skud.controller.js';
-import { authenticate, requireRole, requireOrganization, require2FA } from '../middleware/auth.js';
+import { authenticate, requireRole, requireOrganization, require2FA, injectOrganizationFromQuery } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -26,6 +26,7 @@ const upload = multer({
 
 // Все роуты требуют аутентификации и организации
 router.use(authenticate as any);
+router.use(injectOrganizationFromQuery as any);
 router.use(requireOrganization as any);
 
 // GET /api/skud/daily-summary - дневные сводки (viewer+)
@@ -33,6 +34,13 @@ router.get(
   '/daily-summary',
   requireRole('viewer', 'manager', 'owner', 'super_admin') as any,
   skudController.getDailySummary as any
+);
+
+// GET /api/skud/employee-events/:employeeId - события конкретного сотрудника (viewer+)
+router.get(
+  '/employee-events/:employeeId',
+  requireRole('viewer', 'manager', 'owner', 'super_admin') as any,
+  skudController.getEmployeeEvents as any
 );
 
 // GET /api/skud/events - события СКУД (viewer+)

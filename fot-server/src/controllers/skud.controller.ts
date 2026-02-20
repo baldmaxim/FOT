@@ -31,6 +31,82 @@ interface DailySummaryRow {
   is_present: boolean;
 }
 
+/** Запрос событий по employee_id */
+async function queryEventsByEmployeeId(
+  employeeId: number,
+  orgId: string | undefined,
+  startDate: unknown,
+  endDate: unknown,
+) {
+  let query = supabase
+    .from('skud_events')
+    .select('*')
+    .eq('employee_id', employeeId)
+    .order('event_date', { ascending: false })
+    .order('event_time', { ascending: false });
+
+  if (orgId) query = query.eq('organization_id', orgId);
+  if (startDate && typeof startDate === 'string') query = query.gte('event_date', startDate);
+  if (endDate && typeof endDate === 'string') query = query.lte('event_date', endDate);
+
+  const { data } = await query;
+  return data || [];
+}
+
+/** Пагинированный поиск по ФИО + бэкфилл employee_id */
+async function searchAndBackfillByName(
+  employeeId: number,
+  employeeName: string,
+  orgId: string,
+  startDate: unknown,
+  endDate: unknown,
+) {
+  const PAGE_SIZE = 1000;
+  const MAX_SCAN = 50000;
+  let offset = 0;
+  const matched: Record<string, unknown>[] = [];
+  const idsToBackfill: number[] = [];
+
+  while (offset < MAX_SCAN) {
+    let query = supabase
+      .from('skud_events')
+      .select('*')
+      .eq('organization_id', orgId)
+      .is('employee_id', null)
+      .range(offset, offset + PAGE_SIZE - 1);
+
+    if (startDate && typeof startDate === 'string') query = query.gte('event_date', startDate);
+    if (endDate && typeof endDate === 'string') query = query.lte('event_date', endDate);
+
+    const { data: page } = await query;
+    if (!page || page.length === 0) break;
+
+    for (const ev of page) {
+      const name = encryptionService.decrypt(ev.physical_person_encrypted).toLowerCase().trim();
+      if (name === employeeName) {
+        matched.push(ev);
+        idsToBackfill.push(ev.id);
+      }
+    }
+
+    if (page.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
+  }
+
+  // Бэкфилл employee_id на найденные записи (в фоне)
+  if (idsToBackfill.length > 0) {
+    supabase
+      .from('skud_events')
+      .update({ employee_id: employeeId })
+      .in('id', idsToBackfill)
+      .then(() => {
+        console.log(`[employee-events] backfilled employee_id=${employeeId} on ${idsToBackfill.length} events`);
+      });
+  }
+
+  return matched;
+}
+
 export const skudController = {
   /**
    * GET /api/skud/daily-summary
@@ -83,6 +159,61 @@ export const skudController = {
     } catch (error) {
       console.error('Get daily summary error:', error);
       res.status(500).json({ success: false, error: 'Failed to fetch daily summary' });
+    }
+  },
+
+  /**
+   * GET /api/skud/employee-events/:employeeId
+   * События СКУД конкретного сотрудника.
+   * 1) Ищем по employee_id — быстрый путь
+   * 2) Если пусто — ищем по ФИО и бэкфиллим employee_id на найденные записи
+   */
+  async getEmployeeEvents(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const employeeId = parseInt(req.params.employeeId, 10);
+      if (isNaN(employeeId)) {
+        res.status(400).json({ success: false, error: 'Invalid employeeId' });
+        return;
+      }
+
+      const { startDate, endDate } = req.query;
+      const isSuperAdmin = req.user.position_type === 'super_admin';
+      const organizationId = req.user.organization_id
+        || (isSuperAdmin && typeof req.query.organization_id === 'string' ? req.query.organization_id : undefined);
+
+      // Получаем ФИО и organization_id сотрудника
+      let empQuery = supabase.from('employees').select('full_name_encrypted, organization_id').eq('id', employeeId);
+      if (organizationId) empQuery = empQuery.eq('organization_id', organizationId);
+      const { data: empData } = await empQuery.single();
+
+      const effectiveOrgId = organizationId || empData?.organization_id || undefined;
+
+      // 1) Быстрый путь — по employee_id
+      let events = await queryEventsByEmployeeId(employeeId, effectiveOrgId, startDate, endDate);
+
+      // 2) Фоллбэк — по ФИО + бэкфилл employee_id
+      if (events.length === 0 && empData?.full_name_encrypted && effectiveOrgId) {
+        const employeeName = encryptionService.decrypt(empData.full_name_encrypted).toLowerCase().trim();
+        events = await searchAndBackfillByName(employeeId, employeeName, effectiveOrgId, startDate, endDate);
+      }
+
+      // Расшифровываем для ответа
+      const result = events.map(event => ({
+        id: event.id,
+        physical_person: encryptionService.decrypt(event.physical_person_encrypted),
+        card_number: event.card_number_encrypted
+          ? encryptionService.decrypt(event.card_number_encrypted) : null,
+        event_date: event.event_date,
+        event_time: event.event_time,
+        access_point: event.access_point,
+        direction: event.direction,
+        employee_id: event.employee_id,
+      }));
+
+      res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Get employee events error:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch employee events' });
     }
   },
 
@@ -472,20 +603,89 @@ export const skudController = {
         posMap.set(p.id, encryptionService.decrypt(p.name_encrypted));
       }
 
-      // Загружаем события за сегодня
-      const today = new Date().toISOString().slice(0, 10);
-      const { data: events } = await supabase
+      // Загружаем события за сегодня (локальная дата, не UTC)
+      const today = formatDateToISO(new Date());
+
+      // Карта ФИО → employee.id для фоллбэка
+      const nameToEmpId = new Map<string, number>();
+      for (const emp of employees) {
+        const name = encryptionService.decrypt(emp.full_name_encrypted).toLowerCase().trim();
+        nameToEmpId.set(name, emp.id);
+      }
+
+      // 1) Быстрый запрос по employee_id
+      const { data: eventsByEmpId } = await supabase
         .from('skud_events')
         .select('employee_id, event_time, direction')
         .eq('event_date', today)
         .in('employee_id', empIds)
         .order('event_time', { ascending: false });
 
-      // Последнее событие для каждого сотрудника
       const latestEvent = new Map<number, { event_time: string; direction: string | null }>();
-      for (const evt of events || []) {
+      for (const evt of eventsByEmpId || []) {
         if (evt.employee_id && !latestEvent.has(evt.employee_id)) {
           latestEvent.set(evt.employee_id, { event_time: evt.event_time, direction: evt.direction });
+        }
+      }
+
+      // 2) Фоллбэк: если есть сотрудники без событий — ищем по ФИО
+      const missingEmpIds = empIds.filter(id => !latestEvent.has(id));
+      if (missingEmpIds.length > 0) {
+        let fallbackQuery = supabase
+          .from('skud_events')
+          .select('physical_person_encrypted, event_time, direction, id')
+          .eq('event_date', today)
+          .is('employee_id', null)
+          .order('event_time', { ascending: false });
+
+        if (organizationId) {
+          fallbackQuery = fallbackQuery.eq('organization_id', organizationId);
+        }
+
+        const { data: unmatchedEvents } = await fallbackQuery;
+
+        // Диагностика
+        const unmatchedNames = new Set<string>();
+
+        const backfillPairs: { eventId: number; employeeId: number }[] = [];
+
+        for (const evt of unmatchedEvents || []) {
+          const evtName = encryptionService.decrypt(evt.physical_person_encrypted).toLowerCase().trim();
+          const empId = nameToEmpId.get(evtName);
+          if (!empId) {
+            unmatchedNames.add(evtName);
+            continue;
+          }
+
+          if (!latestEvent.has(empId)) {
+            latestEvent.set(empId, { event_time: evt.event_time, direction: evt.direction });
+          }
+          backfillPairs.push({ eventId: evt.id, employeeId: empId });
+        }
+
+        console.log(`[getPresence] date=${today}, empById=${(eventsByEmpId || []).length}, unmatchedEvts=${(unmatchedEvents || []).length}, matchedByName=${backfillPairs.length}, noMatch=${unmatchedNames.size}, missing=${missingEmpIds.length - backfillPairs.length > 0 ? missingEmpIds.length - new Set(backfillPairs.map(b => b.employeeId)).size : 0}`);
+        if (unmatchedNames.size > 0) {
+          console.log(`[getPresence] unmatched event names (sample):`, [...unmatchedNames].slice(0, 5));
+          console.log(`[getPresence] employee names (sample):`, [...nameToEmpId.keys()].slice(0, 5));
+        }
+
+        // Backfill employee_id в фоне
+        if (backfillPairs.length > 0) {
+          const byEmployee = new Map<number, number[]>();
+          for (const { eventId, employeeId } of backfillPairs) {
+            if (!byEmployee.has(employeeId)) byEmployee.set(employeeId, []);
+            byEmployee.get(employeeId)!.push(eventId);
+          }
+
+          Promise.all(
+            [...byEmployee.entries()].map(([employeeId, eventIds]) =>
+              supabase.from('skud_events').update({ employee_id: employeeId }).in('id', eventIds)
+            )
+          ).then(() => {
+            console.log(`[getPresence] backfilled employee_id for ${backfillPairs.length} events`);
+          }).catch(err => {
+            console.error('[getPresence] backfill error:', err);
+          });
         }
       }
 

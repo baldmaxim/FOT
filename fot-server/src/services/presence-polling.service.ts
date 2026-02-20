@@ -9,6 +9,7 @@ const EMPLOYEE_CACHE_TTL = 5 * 60_000; // 5 минут
 const BATCH_SIZE = 500;
 
 let pollingTimer: ReturnType<typeof setInterval> | null = null;
+let fullDaySynced = false;
 
 // Кэш сотрудников
 let employeeCache: {
@@ -49,13 +50,21 @@ async function pollEvents(): Promise<void> {
     if (!sigurService.isConfigured()) return;
 
     const now = new Date();
-    const todayStr = now.toISOString().slice(0, 10);
-
-    // Окно: последние EVENT_WINDOW_MINUTES минут
-    const windowStart = new Date(now.getTime() - EVENT_WINDOW_MINUTES * 60_000);
     const pad = (n: number) => String(n).padStart(2, '0');
-    const startTime = `${todayStr}T${pad(windowStart.getHours())}:${pad(windowStart.getMinutes())}:${pad(windowStart.getSeconds())}`;
+    const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
+    // При первом запуске — полный fetch за весь день, потом только последние 5 минут
+    let startTime: string;
     const endTime = `${todayStr}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+    if (!fullDaySynced) {
+      startTime = `${todayStr}T00:00:00`;
+      fullDaySynced = true;
+      console.log('[presence-polling] full-day sync for', todayStr);
+    } else {
+      const windowStart = new Date(now.getTime() - EVENT_WINDOW_MINUTES * 60_000);
+      startTime = `${todayStr}T${pad(windowStart.getHours())}:${pad(windowStart.getMinutes())}:${pad(windowStart.getSeconds())}`;
+    }
 
     const rawEvents = await sigurService.getEvents(startTime, endTime, undefined, 'PASS_DETECTED');
     if (rawEvents.length === 0) return;

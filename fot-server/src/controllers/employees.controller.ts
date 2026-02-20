@@ -75,6 +75,7 @@ function decryptEmployee(encrypted: EmployeeEncrypted, structureCache: Structure
     id: encrypted.id,
     organization_id: encrypted.organization_id,
     full_name: encryptionService.decrypt(encrypted.full_name_encrypted),
+    full_name_encrypted: encrypted.full_name_encrypted,
     last_name: safeDecrypt(encrypted.last_name_encrypted),
     first_name: safeDecrypt(encrypted.first_name_encrypted),
     middle_name: safeDecrypt(encrypted.middle_name_encrypted),

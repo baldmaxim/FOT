@@ -37,6 +37,17 @@ export const skudService = {
     return response.data || [];
   },
 
+  async getEmployeeEvents(employeeId: number, startDate?: string, endDate?: string): Promise<SkudEvent[]> {
+    const params = new URLSearchParams();
+    if (startDate) params.append('startDate', startDate);
+    if (endDate) params.append('endDate', endDate);
+    const query = params.toString();
+    const response = await apiClient.get<ApiResponse<SkudEvent[]>>(
+      `/skud/employee-events/${employeeId}${query ? `?${query}` : ''}`
+    );
+    return response.data || [];
+  },
+
   async getDailySummary(date: string, organizationId?: string): Promise<SkudDailySummary[]> {
     const params = new URLSearchParams({ date });
     if (organizationId) params.append('organization_id', organizationId);

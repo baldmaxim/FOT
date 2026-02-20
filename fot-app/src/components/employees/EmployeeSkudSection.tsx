@@ -59,11 +59,11 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({ employeeId 
         const now = new Date();
         const startDate = new Date(now);
         startDate.setDate(startDate.getDate() - daysToShow);
-        const events = await skudService.getEvents({
-          employeeId: String(employeeId),
-          startDate: startDate.toISOString().slice(0, 10),
-          endDate: now.toISOString().slice(0, 10),
-        });
+        const events = await skudService.getEmployeeEvents(
+          employeeId,
+          startDate.toISOString().slice(0, 10),
+          now.toISOString().slice(0, 10),
+        );
         setGroups(groupByDay(events));
       } catch {
         setGroups([]);

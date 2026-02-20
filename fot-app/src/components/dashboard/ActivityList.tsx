@@ -1,8 +1,10 @@
-import { type FC, useState, useEffect } from 'react';
+import { type FC, useState, useEffect, useMemo } from 'react';
 import { Card, CardHeader, CardContent } from '../ui/Card';
 import { formatElapsed } from '../../utils/formatElapsed';
 import type { IEmployeePresence } from '../../types';
 import styles from './ActivityList.module.css';
+
+type TabFilter = 'all' | 'online' | 'offline';
 
 interface IActivityListProps {
   employees: IEmployeePresence[];
@@ -44,6 +46,17 @@ const EmployeeRow: FC<{ employee: IEmployeePresence }> = ({ employee }) => {
 };
 
 export const ActivityList: FC<IActivityListProps> = ({ employees, loading }) => {
+  const [tab, setTab] = useState<TabFilter>('all');
+
+  const onlineCount = useMemo(() => employees.filter(e => e.status === 'online').length, [employees]);
+  const offlineCount = useMemo(() => employees.filter(e => e.status === 'offline').length, [employees]);
+
+  const filtered = useMemo(() => {
+    if (tab === 'online') return employees.filter(e => e.status === 'online');
+    if (tab === 'offline') return employees.filter(e => e.status === 'offline');
+    return employees;
+  }, [employees, tab]);
+
   if (loading) {
     return (
       <Card>
@@ -61,14 +74,38 @@ export const ActivityList: FC<IActivityListProps> = ({ employees, loading }) => 
     <Card>
       <CardHeader title="Присутствие сотрудников" />
       <CardContent>
+        <div className={styles.tabs}>
+          <button
+            className={`${styles.tab} ${tab === 'all' ? styles.tabActive : ''}`}
+            onClick={() => setTab('all')}
+          >
+            Все <span className={styles.tabCount}>{employees.length}</span>
+          </button>
+          <button
+            className={`${styles.tab} ${tab === 'online' ? styles.tabActive : ''}`}
+            onClick={() => setTab('online')}
+          >
+            На работе <span className={styles.tabCount}>{onlineCount}</span>
+          </button>
+          <button
+            className={`${styles.tab} ${tab === 'offline' ? styles.tabActive : ''}`}
+            onClick={() => setTab('offline')}
+          >
+            Ушли <span className={styles.tabCount}>{offlineCount}</span>
+          </button>
+        </div>
         <div className={styles.list}>
-          {employees.length === 0 ? (
+          {filtered.length === 0 ? (
             <div className={styles.empty}>
-              <span className={styles.emptyText}>Нет данных</span>
-              <span className={styles.emptyHint}>Выберите отдел для просмотра</span>
+              <span className={styles.emptyText}>
+                {employees.length === 0 ? 'Нет данных' : 'Нет сотрудников'}
+              </span>
+              {employees.length === 0 && (
+                <span className={styles.emptyHint}>Выберите отдел для просмотра</span>
+              )}
             </div>
           ) : (
-            employees.map(emp => (
+            filtered.map(emp => (
               <EmployeeRow key={emp.employee_id} employee={emp} />
             ))
           )}
