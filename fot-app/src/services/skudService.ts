@@ -1,5 +1,5 @@
 import { apiClient } from '../api/client';
-import type { SkudEvent, SkudDailySummary } from '../types';
+import type { SkudEvent, SkudDailySummary, IEmployeePresence } from '../types';
 
 interface ApiResponse<T> {
   success: boolean;
@@ -55,6 +55,12 @@ export const skudService = {
   async getAccessPoints(organizationId?: string): Promise<string[]> {
     const query = organizationId ? `?organization_id=${organizationId}` : '';
     const response = await apiClient.get<ApiResponse<string[]>>(`/skud/access-points${query}`);
+    return response.data || [];
+  },
+
+  async getPresence(departmentId?: string): Promise<IEmployeePresence[]> {
+    const params = departmentId ? `?department_id=${departmentId}` : '';
+    const response = await apiClient.get<ApiResponse<IEmployeePresence[]>>(`/skud/presence${params}`);
     return response.data || [];
   },
 

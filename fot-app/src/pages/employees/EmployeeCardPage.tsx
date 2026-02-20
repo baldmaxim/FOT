@@ -5,6 +5,7 @@ import { employeeService } from '../../services/employeeService';
 import { useAuth } from '../../contexts/AuthContext';
 import { EmployeeInfoSection } from '../../components/employees/EmployeeInfoSection';
 import { EmployeeHistorySection } from '../../components/employees/EmployeeHistorySection';
+import { EmployeeSkudSection } from '../../components/employees/EmployeeSkudSection';
 import type { Employee, EmployeeInput, EmployeeHistoryEvent } from '../../types';
 import '../../styles/EmployeeCardPage.css';
 
@@ -20,7 +21,7 @@ export const EmployeeCardPage: FC = () => {
   const [error, setError] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<Partial<EmployeeInput>>({});
-  const [activeTab, setActiveTab] = useState<'info' | 'history'>('info');
+  const [activeTab, setActiveTab] = useState<'info' | 'history' | 'skud'>('info');
 
   const loadData = useCallback(async () => {
     if (!id) return;
@@ -177,6 +178,12 @@ export const EmployeeCardPage: FC = () => {
         >
           История
         </button>
+        <button
+          className={`card-tab ${activeTab === 'skud' ? 'active' : ''}`}
+          onClick={() => setActiveTab('skud')}
+        >
+          СКУД
+        </button>
       </div>
 
       <div className="card-content">
@@ -192,6 +199,9 @@ export const EmployeeCardPage: FC = () => {
         )}
         {activeTab === 'history' && (
           <EmployeeHistorySection history={history} />
+        )}
+        {activeTab === 'skud' && (
+          <EmployeeSkudSection employeeId={employee.id} />
         )}
       </div>
     </div>

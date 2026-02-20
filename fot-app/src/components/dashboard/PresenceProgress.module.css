@@ -1,5 +1,5 @@
 .list {
-  padding: 8px 0;
+  padding: 16px 20px;
 }
 
 .empty {
@@ -18,4 +18,67 @@
 .emptyHint {
   font-size: 12px;
   color: var(--text-tertiary);
+}
+
+.summary {
+  margin-bottom: 16px;
+}
+
+.summaryRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.summaryLabel {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.summaryValue {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.progressBar {
+  height: 6px;
+  background: var(--bg-elevated);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--success);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.stats {
+  display: flex;
+  gap: 16px;
+}
+
+.stat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.statDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.statDot[data-status="online"] {
+  background: var(--success);
+}
+
+.statDot[data-status="offline"] {
+  background: var(--text-tertiary);
 }

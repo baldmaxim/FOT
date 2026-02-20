@@ -1,0 +1,136 @@
+/* Department dropdown on Dashboard */
+.dash-dept-dropdown {
+  position: relative;
+}
+
+.dash-dept-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: border-color var(--transition);
+  min-width: 160px;
+  max-width: 280px;
+}
+
+.dash-dept-trigger:hover {
+  border-color: var(--primary);
+}
+
+.dash-dept-trigger.has-value {
+  color: var(--text-primary);
+}
+
+.dash-dept-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dash-dept-chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+
+.dash-dept-chevron.open {
+  transform: rotate(180deg);
+}
+
+.dash-dept-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 260px;
+  max-width: 340px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  z-index: 100;
+}
+
+.dash-dept-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+
+.dash-dept-search input {
+  flex: 1;
+  border: none;
+  background: none;
+  outline: none;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.dash-dept-search input::placeholder {
+  color: var(--text-muted);
+}
+
+.dash-dept-list {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.dash-dept-item {
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--transition);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dash-dept-item:hover {
+  background: var(--surface-hover);
+}
+
+.dash-dept-item.selected {
+  background: var(--primary-light);
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.dash-dept-empty {
+  padding: 16px 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .dash-dept-trigger {
+    min-width: 120px;
+    max-width: 200px;
+    font-size: 0.8rem;
+    padding: 6px 10px;
+  }
+
+  .dash-dept-menu {
+    min-width: 220px;
+    right: 0;
+    left: auto;
+  }
+}
+
+@media (max-width: 430px) {
+  .dash-dept-trigger {
+    min-width: 100px;
+    max-width: 160px;
+  }
+}

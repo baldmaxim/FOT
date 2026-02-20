@@ -42,30 +42,10 @@ const PositionBasedRedirect = () => {
 
   // Worker (Рабочий/Инженер) → личный кабинет сотрудника
   if (positionType === 'worker') {
-    console.log('[PositionBasedRedirect] Redirecting to /employee (worker)');
     return <Navigate to="/employee" replace />;
   }
 
-  // Super Admin → управление пользователями (главная страница суперадмина)
-  if (positionType === 'super_admin') {
-    console.log('[PositionBasedRedirect] Redirecting to /admin/users (super_admin)');
-    return <Navigate to="/admin/users" replace />;
-  }
-
-  // Admin → управление пользователями
-  if (positionType === 'admin') {
-    console.log('[PositionBasedRedirect] Redirecting to /admin/users (admin)');
-    return <Navigate to="/admin/users" replace />;
-  }
-
-  // Header (Руководитель) → дашборд
-  if (canAccess('header')) {
-    console.log('[PositionBasedRedirect] Redirecting to /dashboard (header)');
-    return <Navigate to="/dashboard" replace />;
-  }
-
-  // По умолчанию → дашборд
-  console.log('[PositionBasedRedirect] Redirecting to /dashboard (default)');
+  // Все остальные (header, admin, super_admin) → дашборд
   return <Navigate to="/dashboard" replace />;
 };
 

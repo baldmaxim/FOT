@@ -166,6 +166,15 @@ export interface SkudEvent {
   direction: string | null;
 }
 
+export interface IEmployeePresence {
+  employee_id: number;
+  full_name: string;
+  department_name: string | null;
+  position_name: string | null;
+  status: 'online' | 'offline' | 'unknown';
+  since: string | null;
+}
+
 export interface SkudDailySummary {
   id: number;
   employee_id: number;

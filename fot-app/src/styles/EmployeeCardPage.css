@@ -241,6 +241,186 @@
   color: var(--text-muted);
 }
 
+/* ==================== SKUD Section ==================== */
+
+.skud-loading {
+  text-align: center;
+  padding: 48px 24px;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+.skud-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.skud-period-selector {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-tertiary);
+  padding: 4px;
+  border-radius: var(--radius-md);
+  width: fit-content;
+}
+
+.skud-period-btn {
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.skud-period-btn:hover {
+  color: var(--text-primary);
+}
+
+.skud-period-btn.active {
+  background: var(--surface);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.skud-days-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skud-day-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.skud-day-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  transition: background 0.12s ease;
+}
+
+.skud-day-header:hover {
+  background: var(--bg-tertiary);
+}
+
+.skud-day-chevron {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  display: flex;
+}
+
+.skud-day-date {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.skud-day-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.skud-time-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.skud-time-badge.entry {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+[data-theme="dark"] .skud-time-badge.entry {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+.skud-time-badge.exit {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
+[data-theme="dark"] .skud-time-badge.exit {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+}
+
+.skud-events-count {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.skud-day-events {
+  border-top: 1px solid var(--border);
+  padding: 8px 16px 12px 42px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skud-event-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.skud-event-icon {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.skud-event-row.entry .skud-event-icon {
+  color: #16a34a;
+}
+
+.skud-event-row.exit .skud-event-icon {
+  color: #dc2626;
+}
+
+.skud-event-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 500;
+  color: var(--text-primary);
+  min-width: 60px;
+}
+
+.skud-event-direction {
+  min-width: 44px;
+}
+
+.skud-event-point {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
 /* ==================== Responsive ==================== */
 
 @media (max-width: 768px) {
@@ -264,6 +444,14 @@
 
   .card-history {
     padding: 16px;
+  }
+
+  .skud-day-date {
+    font-size: 0.85rem;
+  }
+
+  .skud-day-events {
+    padding-left: 24px;
   }
 }
 
@@ -296,5 +484,25 @@
 
   .card-edit-actions button {
     justify-content: center;
+  }
+
+  .skud-day-header {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .skud-day-summary {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .skud-day-events {
+    padding-left: 16px;
+    padding-right: 8px;
+  }
+
+  .skud-event-row {
+    gap: 6px;
+    flex-wrap: wrap;
   }
 }
