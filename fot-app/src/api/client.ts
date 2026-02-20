@@ -57,7 +57,7 @@ export const apiClient = {
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: 'Ошибка сервера' }));
       throw new ApiError(
-        error.message || 'Произошла ошибка',
+        error.message || error.error || 'Произошла ошибка',
         response.status,
         error.code
       );

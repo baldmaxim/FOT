@@ -42,10 +42,10 @@ export const sigurService = {
     return result;
   },
 
-  async sync(startDate: string, endDate: string): Promise<ISigurSyncResult> {
+  async sync(startDate: string, endDate: string, organizationId?: string): Promise<ISigurSyncResult> {
     const response = await apiClient.post<ApiResponse<ISigurSyncResult>>(
       '/sigur/sync',
-      { startDate, endDate }
+      { startDate, endDate, organization_id: organizationId }
     );
     return response.data;
   },
@@ -64,5 +64,26 @@ export const sigurService = {
 
   async getDepartments(): Promise<{ data: unknown[]; count: number }> {
     return apiClient.get('/sigur/departments');
+  },
+
+  async syncOrganizations(): Promise<{ imported: number; skipped: number; total: number }> {
+    const response = await apiClient.post<ApiResponse<{ imported: number; skipped: number; total: number }>>(
+      '/sigur/sync-organizations'
+    );
+    return response.data;
+  },
+
+  async syncEmployees(): Promise<{ imported: number; skipped: number; total: number; errors: string[] }> {
+    const response = await apiClient.post<ApiResponse<{ imported: number; skipped: number; total: number; errors: string[] }>>(
+      '/sigur/sync-employees'
+    );
+    return response.data;
+  },
+
+  async cleanDuplicateOrganizations(): Promise<{ totalBefore: number; totalAfter: number; duplicatesRemoved: number; errors: string[] }> {
+    const response = await apiClient.post<ApiResponse<{ totalBefore: number; totalAfter: number; duplicatesRemoved: number; errors: string[] }>>(
+      '/sigur/clean-duplicate-organizations'
+    );
+    return response.data;
   },
 };

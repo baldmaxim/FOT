@@ -24,6 +24,10 @@ const PAGE_SIZE = 100;
 class SigurService {
   private tokens: Partial<Record<ConnectionType, SigurTokenInfo>> = {};
   private clients: Partial<Record<ConnectionType, AxiosInstance>> = {};
+  private employeeCache: { data: Record<string, unknown>[]; fetchedAt: number } | null = null;
+  private employeeFetchPromise: Promise<Record<string, unknown>[]> | null = null;
+  private departmentCache: { map: Map<number, string>; fetchedAt: number } | null = null;
+  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 минут
 
   /**
    * Возвращает конфигурацию подключения по типу, если все переменные заданы.
@@ -86,7 +90,7 @@ class SigurService {
   private createClient(config: SigurConnectionConfig): AxiosInstance {
     return axios.create({
       baseURL: config.url,
-      timeout: 30000,
+      timeout: 120000,
       httpsAgent: new https.Agent({
         rejectUnauthorized: false, // self-signed сертификаты Sigur
       }),
@@ -124,7 +128,7 @@ class SigurService {
     // Создаём клиент с токеном
     this.clients[connType] = axios.create({
       baseURL: config.url,
-      timeout: 30000,
+      timeout: 120000,
       httpsAgent: new https.Agent({
         rejectUnauthorized: false,
       }),
@@ -175,12 +179,12 @@ class SigurService {
   /**
    * Итерационно забирает все записи с пагинацией.
    */
-  async fetchAllPaginated<T>(endpoint: string, params?: Record<string, any>, connection?: ConnectionType): Promise<T[]> {
+  async fetchAllPaginated<T>(endpoint: string, params?: Record<string, any>, connection?: ConnectionType, pageSize = PAGE_SIZE): Promise<T[]> {
     const allItems: T[] = [];
     let offset = 0;
     let page = 0;
 
-    console.log(`[sigur paginate] start: ${endpoint}`, params);
+    console.log(`[sigur paginate] start: ${endpoint} (pageSize=${pageSize})`, params);
 
     while (true) {
       page++;
@@ -188,7 +192,7 @@ class SigurService {
 
       const response = await this.request<any>(endpoint, {
         ...params,
-        limit: PAGE_SIZE,
+        limit: pageSize,
         offset,
       }, connection);
 
@@ -201,11 +205,11 @@ class SigurService {
 
       allItems.push(...items);
 
-      if (items.length < PAGE_SIZE) {
+      if (items.length < pageSize) {
         break;
       }
 
-      offset += PAGE_SIZE;
+      offset += pageSize;
     }
 
     console.log(`[sigur paginate] done: ${allItems.length} total items in ${page} pages`);
@@ -233,6 +237,57 @@ class SigurService {
   /** Получить список сотрудников */
   async getEmployees(filters?: Record<string, any>, connection?: ConnectionType) {
     return this.fetchAllPaginated('/api/v1/employees', filters, connection);
+  }
+
+  /** Получить сотрудников одним запросом (для preview) */
+  async getEmployeesLimited(maxItems = 5000, connection?: ConnectionType) {
+    const response = await this.request<any>('/api/v1/employees', { limit: maxItems }, connection);
+    const items = response?.data || response || [];
+    return Array.isArray(items) ? items : [];
+  }
+
+  /** Получить сотрудников с кэшем (TTL 5 мин, дедупликация запросов) */
+  async getEmployeesCached(connection?: ConnectionType): Promise<Record<string, unknown>[]> {
+    if (this.employeeCache && (Date.now() - this.employeeCache.fetchedAt) < this.CACHE_TTL) {
+      return this.employeeCache.data;
+    }
+    // Если fetch уже идёт — ждём его завершения
+    if (this.employeeFetchPromise) {
+      console.log('[sigur] waiting for ongoing employee fetch...');
+      return this.employeeFetchPromise;
+    }
+    console.log('[sigur] fetching employees (no cache)...');
+    this.employeeFetchPromise = this.getEmployeesLimited(5000, connection)
+      .then(data => {
+        this.employeeCache = { data, fetchedAt: Date.now() };
+        console.log('[sigur] cached', data.length, 'employees');
+        return data;
+      })
+      .finally(() => {
+        this.employeeFetchPromise = null;
+      });
+    return this.employeeFetchPromise;
+  }
+
+  /** Получить справочник отделов с кэшем: departmentId → name */
+  async getDepartmentMapCached(connection?: ConnectionType): Promise<Map<number, string>> {
+    if (this.departmentCache && (Date.now() - this.departmentCache.fetchedAt) < this.CACHE_TTL) {
+      return this.departmentCache.map;
+    }
+    console.log('[sigur] fetching departments for cache...');
+    const response = await this.request<any>('/api/v1/departments', { limit: 500 }, connection);
+    const items = response?.data || response || [];
+    const map = new Map<number, string>();
+    if (Array.isArray(items)) {
+      for (const dept of items) {
+        if (typeof dept.id === 'number' && typeof dept.name === 'string') {
+          map.set(dept.id, dept.name);
+        }
+      }
+    }
+    this.departmentCache = { map, fetchedAt: Date.now() };
+    console.log('[sigur] cached', map.size, 'departments');
+    return map;
   }
 
   /** Получить список отделов */
@@ -270,11 +325,12 @@ class SigurService {
   }
 
   /** Получить события (расширенные) с фильтрами по времени */
-  async getEvents(startTime?: string, endTime?: string, connection?: ConnectionType) {
+  async getEvents(startTime?: string, endTime?: string, connection?: ConnectionType, eventType?: string) {
     const params: Record<string, any> = {};
     if (startTime) params.startTime = this.ensureTimezone(startTime);
     if (endTime) params.endTime = this.ensureTimezone(endTime);
-    return this.fetchAllPaginated('/api/v1/events/parsed', params, connection);
+    if (eventType) params.eventType = eventType;
+    return this.fetchAllPaginated('/api/v1/events/parsed', params, connection, 1000);
   }
 
   /** Получить ограниченное кол-во событий (для preview) */
@@ -291,6 +347,18 @@ class SigurService {
   async getEventCodes(connection?: ConnectionType) {
     return this.request('/api/v1/events/codes', undefined, connection);
   }
+
+  /** Предзагрузка кэша сотрудников при старте сервера */
+  warmUpCache(): void {
+    if (!this.isConfigured()) return;
+    console.log('[sigur] warming up employee cache...');
+    this.getEmployeesCached().catch(e =>
+      console.warn('[sigur] cache warmup failed:', (e as Error).message),
+    );
+  }
 }
 
 export const sigurService = new SigurService();
+
+// Предзагрузка кэша при импорте модуля (старт сервера)
+sigurService.warmUpCache();

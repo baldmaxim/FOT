@@ -41,4 +41,13 @@ router.get('/preview', sigurController.preview as any);
 // POST /api/sigur/sync — синхронизация событий из Sigur в БД
 router.post('/sync', sigurController.sync as any);
 
+// POST /api/sigur/sync-employees — импорт сотрудников из Sigur в БД
+router.post('/sync-employees', sigurController.syncEmployees as any);
+
+// POST /api/sigur/sync-organizations — импорт отделов Sigur как организаций
+router.post('/sync-organizations', sigurController.syncOrganizations as any);
+
+// POST /api/sigur/clean-duplicate-organizations — удаление дублей организаций
+router.post('/clean-duplicate-organizations', sigurController.cleanDuplicateOrganizations as any);
+
 export default router;
