@@ -113,7 +113,8 @@ export interface Employee {
   last_name: string | null;
   first_name: string | null;
   middle_name: string | null;
-  position: string;
+  position_name: string | null;
+  position_id: string | null;
   hire_date: string;
   birth_date: string | null;
   current_salary: number | null;
@@ -122,13 +123,8 @@ export interface Employee {
   patent_issue_date: string | null;
   patent_expiry_date: string | null;
   email: string | null;
-  // Структура из справочников org_*
-  company: string | null;
   department: string | null;
-  subdivision: string | null;
-  org_company_id: string | null;
   org_department_id: string | null;
-  org_subdivision_id: string | null;
   is_archived: boolean;
   archived_at: string | null;
   created_at: string;
@@ -137,7 +133,6 @@ export interface Employee {
 
 export interface EmployeeInput {
   full_name: string;
-  position: string;
   hire_date: string;
   birth_date?: string | null;
   current_salary?: number | null;
@@ -146,10 +141,8 @@ export interface EmployeeInput {
   patent_issue_date?: string | null;
   patent_expiry_date?: string | null;
   email?: string | null;
-  // Структура через справочники
-  org_company_id?: string | null;
+  position_id?: string | null;
   org_department_id?: string | null;
-  org_subdivision_id?: string | null;
 }
 
 // Timesheet types
@@ -202,23 +195,10 @@ export interface PendingUser {
   organization_name: string | null;
 }
 
-// Структура организации - Компания
-export interface OrgCompany {
-  id: string;
-  organization_id: string;
-  name: string;
-  description: string | null;
-  sort_order: number;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
 // Структура организации - Отдел
 export interface OrgDepartment {
   id: string;
   organization_id: string;
-  company_id: string | null;
   parent_id: string | null;
   sigur_department_id: number | null;
   name: string;
@@ -231,39 +211,19 @@ export interface OrgDepartment {
 
 // Узел дерева отделов (рекурсивный)
 export interface OrgDepartmentNode extends OrgDepartment {
-  subdivisions: OrgSubdivision[];
   children: OrgDepartmentNode[];
-}
-
-// Структура организации - Подразделение
-export interface OrgSubdivision {
-  id: string;
-  organization_id: string;
-  department_id: string | null;
-  name: string;
-  description: string | null;
-  sort_order: number;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
 }
 
 // Полная структура для дерева
 export interface OrgStructureTree {
-  companies: (OrgCompany & {
-    departments: OrgDepartmentNode[];
-  })[];
+  departments: OrgDepartmentNode[];
 }
 
 // Ответ API структуры
 export interface OrgStructureResponse {
-  tree: OrgStructureTree;
-  orphanDepartments: OrgDepartmentNode[];
+  departments: OrgDepartmentNode[];
   stats: {
-    companies: number;
     departments: number;
-    subdivisions: number;
-    sites: number;
   };
 }
 
@@ -289,7 +249,6 @@ export interface SystemRole {
 export interface OrgSite {
   id: string;
   organization_id: string;
-  company_id: string | null;
   department_id: string | null;
   name: string;
   code: string | null;
@@ -312,6 +271,7 @@ export interface Position {
   name: string;
   category: 'worker' | 'engineer' | 'manager' | 'admin' | 'other' | null;
   grade: number | null;
+  sigur_position_id: number | null;
   is_active: boolean;
   sort_order: number;
   created_at: string;
@@ -325,10 +285,8 @@ export type AssignmentType = 'main' | 'secondary' | 'temp' | 'part_time';
 export interface EmployeeAssignment {
   id: string;
   employee_id: number;
-  org_company_id: string | null;
   org_department_id: string | null;
   org_site_id: string | null;
-  org_subdivision_id: string | null;
   position_id: string | null;
   effective_from: string;
   effective_to: string | null;
@@ -345,20 +303,16 @@ export interface EmployeeAssignment {
 
 // Назначение с расшифрованными названиями
 export interface EmployeeAssignmentWithNames extends EmployeeAssignment {
-  company_name: string | null;
   department_name: string | null;
   site_name: string | null;
-  subdivision_name: string | null;
   position_name: string | null;
   position_category: string | null;
 }
 
 // Input для создания назначения
 export interface EmployeeAssignmentInput {
-  org_company_id?: string | null;
   org_department_id?: string | null;
   org_site_id?: string | null;
-  org_subdivision_id?: string | null;
   position_id?: string | null;
   effective_from: string;
   is_primary?: boolean;
@@ -428,7 +382,7 @@ export interface EmployeeHistoryEvent {
 }
 
 // Элемент дерева организационной структуры
-export type OrgUnitType = 'company' | 'department' | 'site' | 'subdivision';
+export type OrgUnitType = 'department' | 'site';
 
 export interface OrgStructureUnit {
   id: string;
@@ -440,29 +394,4 @@ export interface OrgStructureUnit {
   sort_order: number;
   is_active: boolean;
   employee_count: number;
-}
-
-// Обновлённый OrgStructureTree с участками
-export interface OrgStructureTreeExtended {
-  companies: (OrgCompany & {
-    departments: (OrgDepartment & {
-      sites: OrgSite[];
-      subdivisions: OrgSubdivision[];
-    })[];
-    // Участки напрямую под компанией
-    sites: OrgSite[];
-  })[];
-}
-
-// Ответ API структуры (расширенный)
-export interface OrgStructureResponseExtended {
-  tree: OrgStructureTreeExtended;
-  orphanDepartments: (OrgDepartment & { sites: OrgSite[]; subdivisions: OrgSubdivision[] })[];
-  orphanSites: OrgSite[];
-  stats: {
-    companies: number;
-    departments: number;
-    sites: number;
-    subdivisions: number;
-  };
 }

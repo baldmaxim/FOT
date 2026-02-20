@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, type FC } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { structureApi } from '../../api/structure';
 import { adminService } from '../../services/adminService';
-import type { OrgCompany, OrgDepartmentNode, OrgSubdivision, OrgStructureResponse, Organization } from '../../types';
+import type { OrgDepartmentNode, OrgStructureResponse, Organization } from '../../types';
 import styles from './StructurePage.module.css';
 
 export const StructurePage: FC = () => {
@@ -21,9 +21,7 @@ export const StructurePage: FC = () => {
 
   // Модалки
   const [showAddModal, setShowAddModal] = useState(false);
-  const [addType, setAddType] = useState<'organization' | 'company' | 'department' | 'subdivision'>('company');
-  const [addParentId, setAddParentId] = useState<string | null>(null);
-  const [addCompanyId, setAddCompanyId] = useState<string | null>(null);
+  const [addType, setAddType] = useState<'organization' | 'department'>('department');
   const [addParentDeptId, setAddParentDeptId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [saving, setSaving] = useState(false);
@@ -60,18 +58,12 @@ export const StructurePage: FC = () => {
             if (d.children) expandDepts(d.children);
           });
         };
-        response.data.tree.companies.forEach((c) => {
-          expanded.add(`company-${c.id}`);
-          expandDepts(c.departments);
-        });
-        if (response.data.orphanDepartments) {
-          expandDepts(response.data.orphanDepartments as OrgDepartmentNode[]);
-        }
+        expandDepts(response.data.departments);
         setExpandedNodes(expanded);
       } else {
         setError(response.error || 'Ошибка загрузки');
       }
-    } catch (err) {
+    } catch {
       setError('Ошибка загрузки структуры');
     } finally {
       setLoading(false);
@@ -99,17 +91,9 @@ export const StructurePage: FC = () => {
         return;
       }
 
-      let response;
-
-      if (addType === 'company') {
-        response = await structureApi.createCompany(newName.trim(), undefined, effectiveOrgId);
-      } else if (addType === 'department') {
-        response = await structureApi.createDepartment(
-          newName.trim(), addCompanyId, undefined, effectiveOrgId, addParentDeptId
-        );
-      } else {
-        response = await structureApi.createSubdivision(newName.trim(), addParentId, undefined, effectiveOrgId);
-      }
+      const response = await structureApi.createDepartment(
+        newName.trim(), undefined, effectiveOrgId, addParentDeptId
+      );
 
       if (response.success) {
         setShowAddModal(false);
@@ -118,35 +102,27 @@ export const StructurePage: FC = () => {
       } else {
         setError(response.error || 'Ошибка создания');
       }
-    } catch (err) {
+    } catch {
       setError('Ошибка создания элемента');
     } finally {
       setSaving(false);
     }
   };
 
-  // Удаление элемента
-  const handleDelete = async (type: 'company' | 'department' | 'subdivision', id: string, name: string) => {
+  // Удаление отдела
+  const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Удалить "${name}"? Все дочерние элементы также будут удалены.`)) {
       return;
     }
 
     try {
-      let response;
-      if (type === 'company') {
-        response = await structureApi.deleteCompany(id, effectiveOrgId);
-      } else if (type === 'department') {
-        response = await structureApi.deleteDepartment(id, effectiveOrgId);
-      } else {
-        response = await structureApi.deleteSubdivision(id, effectiveOrgId);
-      }
-
+      const response = await structureApi.deleteDepartment(id, effectiveOrgId);
       if (response.success) {
         await loadStructure();
       } else {
         setError(response.error || 'Ошибка удаления');
       }
-    } catch (err) {
+    } catch {
       setError('Ошибка удаления элемента');
     }
   };
@@ -166,24 +142,20 @@ export const StructurePage: FC = () => {
 
   // Открытие модалки добавления
   const openAddModal = (
-    type: 'organization' | 'company' | 'department' | 'subdivision',
-    parentId: string | null = null,
-    companyId: string | null = null,
+    type: 'organization' | 'department',
     parentDeptId: string | null = null,
   ) => {
     setAddType(type);
-    setAddParentId(parentId);
-    setAddCompanyId(companyId);
     setAddParentDeptId(parentDeptId);
     setNewName('');
     setShowAddModal(true);
   };
 
   // Рекурсивный рендер отдела
-  const renderDepartmentNode = (dept: OrgDepartmentNode, level: number, companyId: string | null) => {
+  const renderDepartmentNode = (dept: OrgDepartmentNode, level: number) => {
     const nodeId = `department-${dept.id}`;
     const isExpanded = expandedNodes.has(nodeId);
-    const hasChildren = (dept.children && dept.children.length > 0) || (dept.subdivisions && dept.subdivisions.length > 0);
+    const hasChildren = dept.children && dept.children.length > 0;
 
     return (
       <div key={dept.id} className={styles.treeNode} style={{ marginLeft: level * 24 }}>
@@ -203,21 +175,14 @@ export const StructurePage: FC = () => {
             <div className={styles.nodeActions}>
               <button
                 className={styles.addChildBtn}
-                onClick={() => openAddModal('department', null, companyId, dept.id)}
+                onClick={() => openAddModal('department', dept.id)}
                 title="Добавить подотдел"
               >
                 + Подотдел
               </button>
               <button
-                className={styles.addChildBtn}
-                onClick={() => openAddModal('subdivision', dept.id)}
-                title="Добавить подразделение"
-              >
-                + Подр.
-              </button>
-              <button
                 className={styles.deleteBtn}
-                onClick={() => handleDelete('department', dept.id, dept.name)}
+                onClick={() => handleDelete(dept.id, dept.name)}
                 title="Удалить"
               >
                 ×
@@ -228,68 +193,7 @@ export const StructurePage: FC = () => {
 
         {isExpanded && hasChildren && (
           <div className={styles.nodeChildren}>
-            {dept.children?.map((child) => renderDepartmentNode(child, level + 1, companyId))}
-            {dept.subdivisions?.map((sub) => (
-              <div key={sub.id} className={styles.treeNode} style={{ marginLeft: (level + 1) * 24 }}>
-                <div className={`${styles.nodeHeader} ${styles.subdivisionNode}`}>
-                  <span className={styles.expandPlaceholder} />
-                  <span className={styles.nodeType}>Подразделение</span>
-                  <span className={styles.nodeName}>{sub.name}</span>
-                  {isSuperAdmin && (
-                    <div className={styles.nodeActions}>
-                      <button
-                        className={styles.deleteBtn}
-                        onClick={() => handleDelete('subdivision', sub.id, sub.name)}
-                        title="Удалить"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // Рендер компании
-  const renderCompanyNode = (company: OrgCompany & { departments: OrgDepartmentNode[] }) => {
-    const nodeId = `company-${company.id}`;
-    const isExpanded = expandedNodes.has(nodeId);
-
-    return (
-      <div key={company.id} className={styles.treeNode}>
-        <div className={`${styles.nodeHeader} ${styles.companyNode}`}>
-          <button className={styles.expandBtn} onClick={() => toggleNode(nodeId)}>
-            {isExpanded ? '▼' : '▶'}
-          </button>
-          <span className={styles.nodeType}>Компания</span>
-          <span className={styles.nodeName}>{company.name}</span>
-          {isSuperAdmin && (
-            <div className={styles.nodeActions}>
-              <button
-                className={styles.addChildBtn}
-                onClick={() => openAddModal('department', null, company.id, null)}
-                title="Добавить отдел"
-              >
-                + Отдел
-              </button>
-              <button
-                className={styles.deleteBtn}
-                onClick={() => handleDelete('company', company.id, company.name)}
-                title="Удалить"
-              >
-                ×
-              </button>
-            </div>
-          )}
-        </div>
-        {isExpanded && company.departments.length > 0 && (
-          <div className={styles.nodeChildren}>
-            {company.departments.map((dept) => renderDepartmentNode(dept, 1, company.id))}
+            {dept.children.map((child) => renderDepartmentNode(child, level + 1))}
           </div>
         )}
       </div>
@@ -311,7 +215,7 @@ export const StructurePage: FC = () => {
           <h1 className={styles.title}>Структура Организации</h1>
           {structure && (
             <p className={styles.stats}>
-              Компаний: {structure.stats.companies} | Отделов: {structure.stats.departments} | Подразделений: {structure.stats.subdivisions}
+              Отделов: {structure.stats.departments}
             </p>
           )}
         </div>
@@ -319,14 +223,8 @@ export const StructurePage: FC = () => {
         {isSuperAdmin && (!needsOrgSelector || selectedOrgId) && (
           <div className={styles.headerActions}>
             <button
-              className={styles.addCompanyBtn}
-              onClick={() => openAddModal('company')}
-            >
-              + Компания
-            </button>
-            <button
               className={styles.addDeptBtn}
-              onClick={() => openAddModal('department', null)}
+              onClick={() => openAddModal('department')}
             >
               + Отдел
             </button>
@@ -373,28 +271,17 @@ export const StructurePage: FC = () => {
         <div className={styles.loading}>Загрузка структуры...</div>
       ) : (
         <div className={styles.tree}>
-          {structure?.tree.companies.length === 0 && structure?.orphanDepartments.length === 0 ? (
+          {!structure?.departments?.length ? (
             <div className={styles.empty}>
               <p>Структура организации пуста</p>
               <p className={styles.emptyHint}>
-                Добавьте компании, отделы и подразделения вручную или импортируйте сотрудников — структура создастся автоматически
+                Добавьте отделы вручную или синхронизируйте из Sigur
               </p>
             </div>
           ) : (
-            <>
-              {structure?.tree.companies.map((company) =>
-                renderCompanyNode(company as OrgCompany & { departments: OrgDepartmentNode[] })
-              )}
-
-              {structure?.orphanDepartments && structure.orphanDepartments.length > 0 && (
-                <div className={styles.orphanSection}>
-                  <div className={styles.orphanHeader}>Отделы без компании</div>
-                  {(structure.orphanDepartments as OrgDepartmentNode[]).map((dept) =>
-                    renderDepartmentNode(dept, 0, null)
-                  )}
-                </div>
-              )}
-            </>
+            structure.departments.map((dept) =>
+              renderDepartmentNode(dept, 0)
+            )
           )}
         </div>
       )}
@@ -404,10 +291,7 @@ export const StructurePage: FC = () => {
         <div className={styles.modalOverlay} onClick={() => setShowAddModal(false)}>
           <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
             <h2 className={styles.modalTitle}>
-              {addType === 'organization' && 'Добавить организацию'}
-              {addType === 'company' && 'Добавить компанию'}
-              {addType === 'department' && 'Добавить отдел'}
-              {addType === 'subdivision' && 'Добавить подразделение'}
+              {addType === 'organization' ? 'Добавить организацию' : 'Добавить отдел'}
             </h2>
 
             <div className={styles.formGroup}>
@@ -419,11 +303,7 @@ export const StructurePage: FC = () => {
                 placeholder={
                   addType === 'organization'
                     ? 'Название организации'
-                    : addType === 'company'
-                    ? 'Название компании'
-                    : addType === 'department'
-                    ? 'Название отдела'
-                    : 'Название подразделения'
+                    : 'Название отдела'
                 }
                 autoFocus
               />

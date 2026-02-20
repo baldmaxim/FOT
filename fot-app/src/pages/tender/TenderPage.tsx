@@ -38,7 +38,6 @@ export const TenderPage: React.FC = () => {
   // Form state for adding
   const [formData, setFormData] = useState<EmployeeInput>({
     full_name: '',
-    position: '',
     hire_date: new Date().toISOString().split('T')[0],
     current_salary: null,
   });
@@ -84,7 +83,7 @@ export const TenderPage: React.FC = () => {
     const groupSet = new Set<string>();
 
     employees.forEach(emp => {
-      if (emp.position) posSet.add(emp.position);
+      if (emp.position_name) posSet.add(emp.position_name);
       if (emp.department) groupSet.add(emp.department);
     });
 
@@ -98,9 +97,9 @@ export const TenderPage: React.FC = () => {
     return employees.filter(emp => {
       const matchesSearch = searchQuery === '' ||
         emp.full_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        emp.position.toLowerCase().includes(searchQuery.toLowerCase());
+        (emp.position_name || '').toLowerCase().includes(searchQuery.toLowerCase());
 
-      const matchesPosition = positionFilter === '' || emp.position === positionFilter;
+      const matchesPosition = positionFilter === '' || emp.position_name === positionFilter;
       const matchesGroup = groupFilter === '' || emp.department === groupFilter;
 
       return matchesSearch && matchesPosition && matchesGroup;
@@ -108,14 +107,13 @@ export const TenderPage: React.FC = () => {
   }, [employees, searchQuery, positionFilter, groupFilter]);
 
   const handleAddEmployee = async () => {
-    if (!formData.full_name || !formData.position || !formData.hire_date) return;
+    if (!formData.full_name || !formData.hire_date) return;
 
     try {
       await employeeService.create(formData);
       setShowAddModal(false);
       setFormData({
         full_name: '',
-        position: '',
         hire_date: new Date().toISOString().split('T')[0],
         current_salary: null,
       });
@@ -201,7 +199,7 @@ export const TenderPage: React.FC = () => {
   const startEditing = (emp: Employee) => {
     setEditFormData({
       full_name: emp.full_name,
-      position: emp.position,
+      position_id: emp.position_id || undefined,
       hire_date: emp.hire_date,
       birth_date: emp.birth_date || undefined,
       current_salary: emp.current_salary,
@@ -399,7 +397,7 @@ export const TenderPage: React.FC = () => {
                   {index + 1}
                 </span>
                 <span className="col-name">{emp.full_name}</span>
-                <span className="col-position">{emp.position}</span>
+                <span className="col-position">{emp.position_name || '—'}</span>
                 <span className="col-tenure">{calculateTenure(emp.hire_date)}</span>
                 <span className="col-salary">{formatSalary(emp.current_salary)}</span>
                 <span className="col-date">{formatDate(emp.hire_date)}</span>
@@ -425,11 +423,9 @@ export const TenderPage: React.FC = () => {
                         </div>
                         <div className="form-group">
                           <label>Должность</label>
-                          <input
-                            type="text"
-                            value={editFormData.position || ''}
-                            onChange={e => setEditFormData({ ...editFormData, position: e.target.value })}
-                          />
+                          <span style={{ padding: '8px 0', color: 'var(--text-muted)' }}>
+                            {employees.find(e => e.id === expandedId)?.position_name || '—'}
+                          </span>
                         </div>
                         <div className="form-group">
                           <label>Дата найма</label>
@@ -472,7 +468,7 @@ export const TenderPage: React.FC = () => {
                       <div className="expanded-info">
                         <div className="info-item">
                           <span className="info-label">Должность</span>
-                          <span className="info-value">{emp.position}</span>
+                          <span className="info-value">{emp.position_name || '—'}</span>
                         </div>
                         <div className="info-item">
                           <span className="info-label">Дата найма</span>
@@ -541,16 +537,6 @@ export const TenderPage: React.FC = () => {
                 value={formData.full_name}
                 onChange={e => setFormData({ ...formData, full_name: e.target.value })}
                 placeholder="Иванов Иван Иванович"
-              />
-            </div>
-
-            <div className="form-group">
-              <label>Должность</label>
-              <input
-                type="text"
-                value={formData.position}
-                onChange={e => setFormData({ ...formData, position: e.target.value })}
-                placeholder="Менеджер"
               />
             </div>
 

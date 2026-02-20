@@ -238,12 +238,18 @@ export const sigurSyncController = {
 
   /**
    * POST /api/sigur/sync-employees
-   * Импорт сотрудников из Sigur в БД с раздельным ФИО
+   * Импорт сотрудников из Sigur в БД с привязкой к подразделениям и должностям
    */
   async syncEmployees(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!sigurService.isConfigured()) {
         res.status(503).json({ success: false, error: 'Sigur не настроен' });
+        return;
+      }
+
+      const organizationId = req.body.organization_id || req.user.organization_id;
+      if (!organizationId) {
+        res.status(400).json({ success: false, error: 'organization_id обязателен' });
         return;
       }
 
@@ -254,39 +260,49 @@ export const sigurSyncController = {
       console.log('[syncEmployees] got', sigurEmployees.length, 'employees from Sigur');
 
       if (sigurEmployees.length === 0) {
-        res.json({ success: true, data: { imported: 0, skipped: 0, total: 0 } });
+        res.json({ success: true, data: { imported: 0, updated: 0, skipped: 0, total: 0 } });
         return;
-      }
-
-      // Справочник отделов Sigur → organizationId
-      const deptMap = await sigurService.getDepartmentMapCached(connection);
-
-      const { data: orgsData } = await supabase.from('organizations').select('id, name_encrypted');
-      const orgNameToId = new Map<string, string>();
-      for (const org of orgsData || []) {
-        if (org.name_encrypted) {
-          const name = encryptionService.decrypt(org.name_encrypted).toLowerCase().trim();
-          orgNameToId.set(name, org.id);
-        }
-      }
-
-      let fallbackOrgId: string | null = null;
-      if (orgNameToId.size === 1) {
-        fallbackOrgId = [...orgNameToId.values()][0];
-      } else if (orgsData && orgsData.length > 0) {
-        fallbackOrgId = orgsData[0].id;
       }
 
       // Загружаем существующих сотрудников для upsert по sigur_employee_id
       const { data: existingEmps } = await supabase
         .from('employees')
         .select('id, sigur_employee_id')
+        .eq('organization_id', organizationId)
         .not('sigur_employee_id', 'is', null);
 
       const sigurIdToDbId = new Map<number, number>();
       for (const e of existingEmps || []) {
         if (e.sigur_employee_id != null) {
           sigurIdToDbId.set(e.sigur_employee_id, e.id);
+        }
+      }
+
+      // Маппинг org_departments: sigur_department_id → db uuid
+      const { data: dbDepartments } = await supabase
+        .from('org_departments')
+        .select('id, sigur_department_id')
+        .eq('organization_id', organizationId)
+        .not('sigur_department_id', 'is', null);
+
+      const sigurDeptToDbId = new Map<number, string>();
+      for (const d of dbDepartments || []) {
+        if (d.sigur_department_id != null) {
+          sigurDeptToDbId.set(d.sigur_department_id, d.id);
+        }
+      }
+
+      // Маппинг positions: sigur_position_id → db uuid
+      const { data: dbPositions } = await supabase
+        .from('positions')
+        .select('id, sigur_position_id')
+        .eq('organization_id', organizationId)
+        .not('sigur_position_id', 'is', null);
+
+      const sigurPosToDbId = new Map<number, string>();
+      for (const p of dbPositions || []) {
+        if (p.sigur_position_id != null) {
+          sigurPosToDbId.set(p.sigur_position_id, p.id);
         }
       }
 
@@ -304,28 +320,35 @@ export const sigurSyncController = {
 
         const sigurEmpId = emp.id as number | undefined;
 
-        // Если уже импортирован — пропускаем (идемпотентность)
-        if (sigurEmpId && sigurIdToDbId.has(sigurEmpId)) {
-          skipped++;
-          continue;
-        }
+        // Резолвим подразделение и должность
+        const sigurDeptId = emp.departmentId as number | undefined;
+        const orgDepartmentId = sigurDeptId ? sigurDeptToDbId.get(sigurDeptId) || null : null;
 
-        // Определяем организацию через отдел
-        const deptId = emp.departmentId as number;
-        const deptName = deptId ? deptMap.get(deptId) : null;
-        const orgId = deptName ? orgNameToId.get(deptName.toLowerCase().trim()) : null;
-        const organizationId = orgId || fallbackOrgId;
-        if (!organizationId) {
-          errors.push(`Нет организации для: ${fullName}`);
-          skipped++;
+        const sigurPosId = emp.positionId as number | undefined;
+        const positionId = sigurPosId ? sigurPosToDbId.get(sigurPosId) || null : null;
+
+        // Если уже импортирован — обновляем привязки
+        if (sigurEmpId && sigurIdToDbId.has(sigurEmpId)) {
+          const dbId = sigurIdToDbId.get(sigurEmpId)!;
+          const updateFields: Record<string, unknown> = {};
+
+          if (orgDepartmentId) updateFields.org_department_id = orgDepartmentId;
+          if (positionId) updateFields.position_id = positionId;
+
+          if (Object.keys(updateFields).length > 0) {
+            const { error: updateError } = await supabase
+              .from('employees')
+              .update(updateFields)
+              .eq('id', dbId);
+            if (!updateError) updated++;
+            else errors.push(`update ${fullName}: ${updateError.message}`);
+          } else {
+            skipped++;
+          }
           continue;
         }
 
         const fio = parseFIO(fullName);
-
-        // Извлекаем должность из Sigur (если доступна)
-        const sigurPosition = (emp.positionName as string) || (emp.position as string) || null;
-        const positionText = sigurPosition?.trim() || 'Сотрудник';
 
         inserts.push({
           organization_id: organizationId,
@@ -333,9 +356,10 @@ export const sigurSyncController = {
           last_name_encrypted: encryptionService.encrypt(fio.lastName),
           first_name_encrypted: fio.firstName ? encryptionService.encrypt(fio.firstName) : null,
           middle_name_encrypted: fio.middleName ? encryptionService.encrypt(fio.middleName) : null,
-          position_encrypted: encryptionService.encrypt(positionText),
           hire_date_encrypted: encryptionService.encrypt(new Date().toISOString().slice(0, 10)),
           sigur_employee_id: sigurEmpId || null,
+          org_department_id: orgDepartmentId,
+          position_id: positionId,
         });
       }
 
@@ -418,7 +442,6 @@ export const sigurSyncController = {
       }
 
       // Определяем корневой элемент (Объект) — не создаём как отдел
-      // Корень = parentId === null или parentId === 0 или это первый элемент с name вроде "Объект"
       const rootDept = departments.find(d =>
         (d.parentId === null || d.parentId === undefined || d.parentId === 0) &&
         departments.some(child => child.parentId === d.id)
@@ -510,6 +533,99 @@ export const sigurSyncController = {
     } catch (error) {
       console.error('Sigur syncDepartments error:', error);
       res.status(500).json({ success: false, error: 'Ошибка импорта отделов из Sigur' });
+    }
+  },
+
+  /**
+   * POST /api/sigur/sync-positions
+   * Импорт должностей из Sigur в positions таблицу
+   */
+  async syncPositions(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!sigurService.isConfigured()) {
+        res.status(503).json({ success: false, error: 'Sigur не настроен' });
+        return;
+      }
+
+      const organizationId = req.body.organization_id || req.user.organization_id;
+      if (!organizationId) {
+        res.status(400).json({ success: false, error: 'organization_id обязателен' });
+        return;
+      }
+
+      const connection = (req.body.connection as 'external' | 'internal') || undefined;
+      const sigurPositions = await sigurService.getPositions(connection);
+
+      if (!sigurPositions || sigurPositions.length === 0) {
+        res.json({ success: true, data: { imported: 0, updated: 0, skipped: 0, total: 0 } });
+        return;
+      }
+
+      console.log(`[syncPositions] got ${sigurPositions.length} positions from Sigur`);
+
+      // Загружаем существующие должности для upsert по sigur_position_id
+      const { data: existingPositions } = await supabase
+        .from('positions')
+        .select('id, sigur_position_id, name_encrypted')
+        .eq('organization_id', organizationId);
+
+      const sigurIdToDbId = new Map<number, string>();
+      for (const p of existingPositions || []) {
+        if (p.sigur_position_id != null) {
+          sigurIdToDbId.set(p.sigur_position_id, p.id);
+        }
+      }
+
+      let imported = 0;
+      let updated = 0;
+      let skipped = 0;
+      const errors: string[] = [];
+
+      for (const pos of sigurPositions) {
+        const name = (pos.name as string) || '';
+        const sigurId = pos.id as number;
+
+        if (!name.trim()) { skipped++; continue; }
+
+        if (sigurIdToDbId.has(sigurId)) {
+          const dbId = sigurIdToDbId.get(sigurId)!;
+          const { error: updateError } = await supabase
+            .from('positions')
+            .update({ name_encrypted: encryptionService.encrypt(name.trim()) })
+            .eq('id', dbId);
+
+          if (updateError) {
+            errors.push(`update ${name}: ${updateError.message}`);
+          } else {
+            updated++;
+          }
+        } else {
+          const { error: insertError } = await supabase
+            .from('positions')
+            .insert({
+              organization_id: organizationId,
+              name_encrypted: encryptionService.encrypt(name.trim()),
+              sigur_position_id: sigurId,
+              category: 'other',
+            });
+
+          if (insertError) {
+            errors.push(`insert ${name}: ${insertError.message}`);
+          } else {
+            imported++;
+          }
+        }
+      }
+
+      console.log(`[syncPositions] done: ${imported} imported, ${updated} updated, ${skipped} skipped`);
+
+      res.json({
+        success: true,
+        data: { imported, updated, skipped, total: sigurPositions.length, errors },
+      });
+    } catch (error) {
+      console.error('Sigur syncPositions error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка импорта должностей из Sigur' });
     }
   },
 

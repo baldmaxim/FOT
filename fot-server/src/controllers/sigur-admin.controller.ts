@@ -189,8 +189,8 @@ export const sigurAdminController = {
       }
 
       const TABLES_WITH_ORG_ID = [
-        'employees', 'org_companies', 'org_departments', 'org_sites',
-        'org_subdivisions', 'positions', 'skud_daily_summary', 'skud_events', 'user_profiles',
+        'employees', 'org_departments', 'org_sites',
+        'positions', 'skud_daily_summary', 'skud_events', 'user_profiles',
       ];
 
       const errors: string[] = [];

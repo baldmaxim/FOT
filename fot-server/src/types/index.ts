@@ -64,7 +64,6 @@ export interface EmployeeEncrypted {
   last_name_encrypted: string | null;
   first_name_encrypted: string | null;
   middle_name_encrypted: string | null;
-  position_encrypted: string;
   current_salary_encrypted: string | null;
   birth_date_encrypted: string | null;
   hire_date_encrypted: string;
@@ -72,11 +71,9 @@ export interface EmployeeEncrypted {
   pension_number_encrypted: string | null;
   patent_issue_date_encrypted: string | null;
   patent_expiry_date_encrypted: string | null;
-  email: string | null;  // Не шифруется - публичные данные
-  // Ссылки на справочники структуры
-  org_company_id: string | null;
+  email: string | null;
   org_department_id: string | null;
-  org_subdivision_id: string | null;
+  position_id: string | null;
   sigur_employee_id: number | null;
   is_archived: boolean;
   archived_at: string | null;
@@ -92,7 +89,8 @@ export interface Employee {
   last_name: string | null;
   first_name: string | null;
   middle_name: string | null;
-  position: string;
+  position_name: string | null;
+  position_id: string | null;
   current_salary: number | null;
   birth_date: string | null;
   hire_date: string;
@@ -101,13 +99,8 @@ export interface Employee {
   patent_issue_date: string | null;
   patent_expiry_date: string | null;
   email: string | null;
-  // Структура (из справочников org_*)
-  company: string | null;
   department: string | null;
-  subdivision: string | null;
-  org_company_id: string | null;
   org_department_id: string | null;
-  org_subdivision_id: string | null;
   is_archived: boolean;
   archived_at: string | null;
   created_at: string;
@@ -231,35 +224,10 @@ export interface JWTPayload {
   exp: number;
 }
 
-// Структура организации - Компания (зашифровано)
-export interface OrgCompanyEncrypted {
-  id: string;
-  organization_id: string;
-  name_encrypted: string;
-  description_encrypted: string | null;
-  sort_order: number;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-// Структура организации - Компания (расшифровано)
-export interface OrgCompany {
-  id: string;
-  organization_id: string;
-  name: string;
-  description: string | null;
-  sort_order: number;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
 // Структура организации - Отдел (зашифровано)
 export interface OrgDepartmentEncrypted {
   id: string;
   organization_id: string;
-  company_id: string | null;
   parent_id: string | null;
   sigur_department_id: number | null;
   name_encrypted: string;
@@ -274,7 +242,6 @@ export interface OrgDepartmentEncrypted {
 export interface OrgDepartment {
   id: string;
   organization_id: string;
-  company_id: string | null;
   parent_id: string | null;
   sigur_department_id: number | null;
   name: string;
@@ -285,41 +252,12 @@ export interface OrgDepartment {
   updated_at: string;
 }
 
-// Структура организации - Подразделение (зашифровано)
-export interface OrgSubdivisionEncrypted {
-  id: string;
-  organization_id: string;
-  department_id: string | null;
-  name_encrypted: string;
-  description_encrypted: string | null;
-  sort_order: number;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-// Структура организации - Подразделение (расшифровано)
-export interface OrgSubdivision {
-  id: string;
-  organization_id: string;
-  department_id: string | null;
-  name: string;
-  description: string | null;
-  sort_order: number;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
 // Узел дерева отделов (рекурсивный)
 export interface OrgDepartmentNode extends OrgDepartment {
-  subdivisions: OrgSubdivision[];
   children: OrgDepartmentNode[];
 }
 
 // Полная структура для дерева
 export interface OrgStructureTree {
-  companies: (OrgCompany & {
-    departments: OrgDepartmentNode[];
-  })[];
+  departments: OrgDepartmentNode[];
 }

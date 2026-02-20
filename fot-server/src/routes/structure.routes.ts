@@ -16,24 +16,6 @@ router.get(
   structureController.getTree as any
 );
 
-// === Компании (только super_admin) ===
-
-// POST /api/structure/companies - создание компании
-router.post(
-  '/companies',
-  requirePosition('super_admin') as any,
-  require2FA as any,
-  structureController.createCompany as any
-);
-
-// DELETE /api/structure/companies/:id - удаление компании
-router.delete(
-  '/companies/:id',
-  requirePosition('super_admin') as any,
-  require2FA as any,
-  structureController.deleteCompany as any
-);
-
 // === Отделы (только super_admin) ===
 
 // POST /api/structure/departments - создание отдела
@@ -50,24 +32,6 @@ router.delete(
   requirePosition('super_admin') as any,
   require2FA as any,
   structureController.deleteDepartment as any
-);
-
-// === Подразделения (только super_admin) ===
-
-// POST /api/structure/subdivisions - создание подразделения
-router.post(
-  '/subdivisions',
-  requirePosition('super_admin') as any,
-  require2FA as any,
-  structureController.createSubdivision as any
-);
-
-// DELETE /api/structure/subdivisions/:id - удаление подразделения
-router.delete(
-  '/subdivisions/:id',
-  requirePosition('super_admin') as any,
-  require2FA as any,
-  structureController.deleteSubdivision as any
 );
 
 export default router;

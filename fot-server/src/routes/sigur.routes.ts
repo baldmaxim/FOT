@@ -59,6 +59,9 @@ router.post('/sync-employees', sigurSyncController.syncEmployees as any);
 // POST /api/sigur/sync-departments — импорт отделов с иерархией
 router.post('/sync-departments', sigurSyncController.syncDepartments as any);
 
+// POST /api/sigur/sync-positions — импорт должностей из Sigur
+router.post('/sync-positions', sigurSyncController.syncPositions as any);
+
 // === Admin эндпоинты ===
 
 // POST /api/sigur/sync-organizations — импорт отделов Sigur как организаций
