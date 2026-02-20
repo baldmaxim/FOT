@@ -38,10 +38,12 @@ export const skudController = {
    */
   async getDailySummary(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const organizationId = req.user.organization_id;
+      const isSuperAdmin = req.user.position_type === 'super_admin';
+      const organizationId = req.user.organization_id
+        || (isSuperAdmin && typeof req.query.organization_id === 'string' ? req.query.organization_id : undefined);
       const { date } = req.query; // YYYY-MM-DD (первый день месяца)
 
-      if (!organizationId) {
+      if (!organizationId && !isSuperAdmin) {
         res.status(400).json({ success: false, error: 'Organization required' });
         return;
       }
@@ -58,13 +60,18 @@ export const skudController = {
       const startStr = formatDateToISO(startDate);
       const endStr = formatDateToISO(endDate);
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('skud_daily_summary')
         .select('*')
-        .eq('organization_id', organizationId)
         .gte('date', startStr)
         .lte('date', endStr)
         .order('date');
+
+      if (organizationId) {
+        query = query.eq('organization_id', organizationId);
+      }
+
+      const { data, error } = await query;
 
       if (error) {
         console.error('Get daily summary error:', error);
@@ -85,10 +92,13 @@ export const skudController = {
    */
   async getEvents(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const organizationId = req.user.organization_id;
-      const { startDate, endDate, accessPoint, employeeId } = req.query;
+      const isSuperAdmin = req.user.position_type === 'super_admin';
+      const organizationId = req.user.organization_id
+        || (isSuperAdmin && typeof req.query.organization_id === 'string' ? req.query.organization_id : undefined);
+      const { startDate, endDate, accessPoint, employeeId, search } = req.query;
+      const searchStr = typeof search === 'string' ? search.trim().toLowerCase() : '';
 
-      if (!organizationId) {
+      if (!organizationId && !isSuperAdmin) {
         res.status(400).json({ success: false, error: 'Organization required' });
         return;
       }
@@ -96,10 +106,17 @@ export const skudController = {
       let query = supabase
         .from('skud_events')
         .select('*')
-        .eq('organization_id', organizationId)
         .order('event_date', { ascending: false })
-        .order('event_time', { ascending: false })
-        .limit(1000);
+        .order('event_time', { ascending: false });
+
+      // Лимит только при обычном просмотре (без поиска)
+      if (!searchStr) {
+        query = query.limit(1000);
+      }
+
+      if (organizationId) {
+        query = query.eq('organization_id', organizationId);
+      }
 
       if (startDate && typeof startDate === 'string') {
         query = query.gte('event_date', startDate);
@@ -145,7 +162,12 @@ export const skudController = {
         employee_id: event.employee_id,
       }));
 
-      res.json({ success: true, data: decrypted });
+      // Серверный поиск по расшифрованным данным
+      const result = searchStr
+        ? decrypted.filter(e => e.physical_person.toLowerCase().includes(searchStr))
+        : decrypted;
+
+      res.json({ success: true, data: result });
     } catch (error) {
       console.error('Get events error:', error);
       res.status(500).json({ success: false, error: 'Failed to fetch events' });
@@ -158,18 +180,25 @@ export const skudController = {
    */
   async getAccessPoints(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const organizationId = req.user.organization_id;
+      const isSuperAdmin = req.user.position_type === 'super_admin';
+      const organizationId = req.user.organization_id
+        || (isSuperAdmin && typeof req.query.organization_id === 'string' ? req.query.organization_id : undefined);
 
-      if (!organizationId) {
+      if (!organizationId && !isSuperAdmin) {
         res.status(400).json({ success: false, error: 'Organization required' });
         return;
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('skud_events')
         .select('access_point')
-        .eq('organization_id', organizationId)
         .not('access_point', 'is', null);
+
+      if (organizationId) {
+        query = query.eq('organization_id', organizationId);
+      }
+
+      const { data, error } = await query;
 
       if (error) {
         console.error('Get access points error:', error);

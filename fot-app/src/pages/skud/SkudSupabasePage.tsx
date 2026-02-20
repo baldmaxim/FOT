@@ -1,7 +1,9 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Search, X, HardDrive, RefreshCw, AlertCircle } from 'lucide-react';
 import { skudService } from '../../services/skudService';
-import type { SkudEvent, SkudDailySummary } from '../../types';
+import { adminService } from '../../services/adminService';
+import { useAuth } from '../../contexts/AuthContext';
+import type { SkudEvent, SkudDailySummary, Organization } from '../../types';
 import '../../styles/SkudSupabasePage.css';
 
 type TabId = 'events' | 'summary' | 'access-points';
@@ -35,64 +37,88 @@ const formatCellValue = (value: unknown): string => {
 };
 
 export const SkudSupabasePage: React.FC = () => {
+  const { hasPosition } = useAuth();
+  const isSuperAdmin = hasPosition('super_admin');
+
   const [activeTab, setActiveTab] = useState<TabId>('events');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
   // Даты
   const [startDate, setStartDate] = useState(monthStart);
   const [endDate, setEndDate] = useState(today);
+
+  // Фильтр по организации (super_admin)
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [orgFilter, setOrgFilter] = useState('');
 
   // Данные
   const [events, setEvents] = useState<SkudEvent[]>([]);
   const [summary, setSummary] = useState<SkudDailySummary[]>([]);
   const [accessPoints, setAccessPoints] = useState<string[]>([]);
 
+  // Загрузка организаций
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    adminService.getOrganizations().then(setOrganizations).catch(() => {});
+  }, [isSuperAdmin]);
+
+  // Debounce поиска (для табa events — серверный поиск)
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchInput(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setSearchQuery(value), 400);
+  }, []);
+
   const loadEvents = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await skudService.getEvents({ startDate, endDate });
+      const data = await skudService.getEvents({
+        startDate,
+        endDate,
+        organizationId: orgFilter || undefined,
+        search: searchQuery || undefined,
+      });
       setEvents(data);
-      console.log(`[skud-db] События: ${data.length} записей`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка загрузки');
       setEvents([]);
     } finally {
       setLoading(false);
     }
-  }, [startDate, endDate]);
+  }, [startDate, endDate, orgFilter, searchQuery]);
 
   const loadSummary = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await skudService.getDailySummary(startDate);
+      const data = await skudService.getDailySummary(startDate, orgFilter || undefined);
       setSummary(data);
-      console.log(`[skud-db] Сводка: ${data.length} записей`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка загрузки');
       setSummary([]);
     } finally {
       setLoading(false);
     }
-  }, [startDate]);
+  }, [startDate, orgFilter]);
 
   const loadAccessPoints = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await skudService.getAccessPoints();
+      const data = await skudService.getAccessPoints(orgFilter || undefined);
       setAccessPoints(data);
-      console.log(`[skud-db] Точки доступа: ${data.length}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка загрузки');
       setAccessPoints([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [orgFilter]);
 
   const loadData = useCallback(() => {
     if (activeTab === 'events') loadEvents();
@@ -120,16 +146,24 @@ export const SkudSupabasePage: React.FC = () => {
     return Array.from(keys);
   }, [tableData]);
 
-  const filteredData = useMemo(() => {
-    if (!searchQuery.trim()) return tableData;
-    const q = searchQuery.toLowerCase();
+  // Для табов summary/access-points — локальная фильтрация
+  const displayData = useMemo(() => {
+    if (activeTab === 'events') return tableData;
+    if (!searchInput.trim()) return tableData;
+    const q = searchInput.toLowerCase();
     return tableData.filter(row =>
       columns.some(col => formatCellValue(row[col]).toLowerCase().includes(q))
     );
-  }, [tableData, searchQuery, columns]);
+  }, [activeTab, tableData, searchInput, columns]);
 
   const handleTabChange = (tabId: TabId) => {
     setActiveTab(tabId);
+    setSearchInput('');
+    setSearchQuery('');
+  };
+
+  const clearSearch = () => {
+    setSearchInput('');
     setSearchQuery('');
   };
 
@@ -141,7 +175,9 @@ export const SkudSupabasePage: React.FC = () => {
           <h1>Просмотр СКУД (база)</h1>
           {!loading && tableData.length > 0 && (
             <span className="skud-db-count">
-              {filteredData.length}{searchQuery ? ` / ${tableData.length}` : ''}
+              {activeTab !== 'events' && searchInput
+                ? `${displayData.length} / ${tableData.length}`
+                : tableData.length}
             </span>
           )}
         </div>
@@ -168,33 +204,47 @@ export const SkudSupabasePage: React.FC = () => {
         ))}
       </div>
 
-      {activeTab !== 'access-points' && (
-        <div className="skud-db-dates">
-          <label>
-            С:
-            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
-          </label>
-          <label>
-            По:
-            <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} />
-          </label>
-          {activeTab === 'events' && (
-            <span className="skud-db-limit">макс. 1000 записей</span>
-          )}
-        </div>
-      )}
+      <div className="skud-db-filters">
+        {activeTab !== 'access-points' && (
+          <div className="skud-db-dates">
+            <label>
+              С:
+              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
+            </label>
+            <label>
+              По:
+              <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} />
+            </label>
+          </div>
+        )}
+
+        {isSuperAdmin && organizations.length > 0 && (
+          <div className="skud-db-org-filter">
+            <select
+              value={orgFilter}
+              onChange={e => setOrgFilter(e.target.value)}
+              className="skud-db-org-select"
+            >
+              <option value="">Все организации</option>
+              {organizations.map(org => (
+                <option key={org.id} value={org.id}>{org.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
 
       <div className="skud-db-search-wrap">
         <Search size={16} className="skud-db-search-icon" />
         <input
           type="text"
-          placeholder="Поиск по всем полям..."
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
+          placeholder={activeTab === 'events' ? 'Поиск по ФИО (все записи)...' : 'Поиск по всем полям...'}
+          value={searchInput}
+          onChange={e => handleSearchChange(e.target.value)}
           className="skud-db-search-input"
         />
-        {searchQuery && (
-          <button className="skud-db-search-clear" onClick={() => setSearchQuery('')}>
+        {searchInput && (
+          <button className="skud-db-search-clear" onClick={clearSearch}>
             <X size={14} />
           </button>
         )}
@@ -212,8 +262,10 @@ export const SkudSupabasePage: React.FC = () => {
           <div className="spinner"></div>
           <p>Загрузка из базы...</p>
         </div>
-      ) : tableData.length === 0 && !error ? (
-        <div className="skud-db-empty">Нет данных за выбранный период</div>
+      ) : displayData.length === 0 && !error ? (
+        <div className="skud-db-empty">
+          {searchInput ? 'Ничего не найдено' : 'Нет данных за выбранный период'}
+        </div>
       ) : (
         <div className="skud-db-table-wrap">
           <table className="skud-db-table">
@@ -226,7 +278,7 @@ export const SkudSupabasePage: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {filteredData.map((row, idx) => (
+              {displayData.map((row, idx) => (
                 <tr key={idx}>
                   <td className="skud-db-td-num">{idx + 1}</td>
                   {columns.map(col => (
@@ -238,9 +290,6 @@ export const SkudSupabasePage: React.FC = () => {
               ))}
             </tbody>
           </table>
-          {filteredData.length === 0 && searchQuery && (
-            <div className="skud-db-empty">Ничего не найдено</div>
-          )}
         </div>
       )}
     </div>

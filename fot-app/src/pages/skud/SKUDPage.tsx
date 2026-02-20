@@ -123,6 +123,7 @@ export const SKUDPage: React.FC = () => {
         startDate: dateStr,
         endDate: dateStr,
         employeeId: String(employeeId),
+        organizationId: effectiveOrgId,
       });
       setEvents(data);
     } catch {
@@ -130,7 +131,7 @@ export const SKUDPage: React.FC = () => {
     } finally {
       setLoadingEvents(false);
     }
-  }, []);
+  }, [effectiveOrgId]);
 
   useEffect(() => { loadEmployees(); }, [loadEmployees]);
 

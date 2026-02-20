@@ -107,8 +107,6 @@
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  margin-bottom: 0.75rem;
-  flex-shrink: 0;
 }
 
 .skud-db-dates label {
@@ -136,6 +134,38 @@
 .skud-db-limit {
   font-size: 0.75rem;
   color: var(--text-3);
+}
+
+/* Filters row */
+.skud-db-filters {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.skud-db-org-filter {
+  display: flex;
+  align-items: center;
+}
+
+.skud-db-org-select {
+  padding: 0.375rem 0.5rem;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-1);
+  font-size: 0.8125rem;
+  outline: none;
+  cursor: pointer;
+  min-width: 180px;
+  transition: border-color 0.15s;
+}
+
+.skud-db-org-select:focus {
+  border-color: var(--primary);
 }
 
 /* Search */

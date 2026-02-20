@@ -18,6 +18,8 @@ interface SkudFilters {
   endDate?: string;
   accessPoint?: string;
   employeeId?: string;
+  organizationId?: string;
+  search?: string;
 }
 
 export const skudService = {
@@ -27,14 +29,18 @@ export const skudService = {
     if (filters?.endDate) params.append('endDate', filters.endDate);
     if (filters?.accessPoint) params.append('accessPoint', filters.accessPoint);
     if (filters?.employeeId) params.append('employeeId', filters.employeeId);
+    if (filters?.organizationId) params.append('organization_id', filters.organizationId);
+    if (filters?.search) params.append('search', filters.search);
 
     const query = params.toString();
     const response = await apiClient.get<ApiResponse<SkudEvent[]>>(`/skud/events${query ? `?${query}` : ''}`);
     return response.data || [];
   },
 
-  async getDailySummary(date: string): Promise<SkudDailySummary[]> {
-    const response = await apiClient.get<ApiResponse<SkudDailySummary[]>>(`/skud/daily-summary?date=${date}`);
+  async getDailySummary(date: string, organizationId?: string): Promise<SkudDailySummary[]> {
+    const params = new URLSearchParams({ date });
+    if (organizationId) params.append('organization_id', organizationId);
+    const response = await apiClient.get<ApiResponse<SkudDailySummary[]>>(`/skud/daily-summary?${params.toString()}`);
     return response.data || [];
   },
 
@@ -46,8 +52,9 @@ export const skudService = {
     return response.data;
   },
 
-  async getAccessPoints(): Promise<string[]> {
-    const response = await apiClient.get<ApiResponse<string[]>>('/skud/access-points');
+  async getAccessPoints(organizationId?: string): Promise<string[]> {
+    const query = organizationId ? `?organization_id=${organizationId}` : '';
+    const response = await apiClient.get<ApiResponse<string[]>>(`/skud/access-points${query}`);
     return response.data || [];
   },
 
