@@ -4225,3 +4225,37 @@ CREATE ROLE supabase_replication_admin WITH LOGIN REPLICATION;
 
 -- Role: supabase_storage_admin
 CREATE ROLE supabase_storage_admin WITH CREATEROLE LOGIN NOINHERIT;
+
+-- ============================================
+-- Управление сотрудниками: статус занятости и блокировка отдела
+-- ============================================
+ALTER TABLE public.employees
+  ADD COLUMN IF NOT EXISTS employment_status text NOT NULL DEFAULT 'active'
+  CHECK (employment_status IN ('active', 'fired'));
+
+ALTER TABLE public.employees
+  ADD COLUMN IF NOT EXISTS department_locked boolean NOT NULL DEFAULT false;
+
+-- ============================================
+-- Дедупликация событий СКУД: хэш-колонка + partial unique index
+-- ============================================
+ALTER TABLE public.skud_events
+  ADD COLUMN IF NOT EXISTS dedup_hash text;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skud_events_dedup_hash
+  ON public.skud_events (dedup_hash)
+  WHERE dedup_hash IS NOT NULL;
+
+-- Функция для поиска дублей (возвращает id строк к удалению, оставляя MIN(id) на каждый хэш)
+CREATE OR REPLACE FUNCTION public.find_skud_duplicate_ids()
+RETURNS TABLE(id bigint) AS $$
+  SELECT se.id
+  FROM public.skud_events se
+  INNER JOIN (
+    SELECT dedup_hash, MIN(se2.id) AS keep_id
+    FROM public.skud_events se2
+    WHERE se2.dedup_hash IS NOT NULL
+    GROUP BY se2.dedup_hash
+    HAVING COUNT(*) > 1
+  ) dupes ON se.dedup_hash = dupes.dedup_hash AND se.id <> dupes.keep_id;
+$$ LANGUAGE sql STABLE;

@@ -1,6 +1,23 @@
-import { type FC } from 'react';
-import { X, Check } from 'lucide-react';
-import type { Employee, EmployeeInput } from '../../types';
+import { useState, type FC } from 'react';
+import { X, Check, ChevronDown } from 'lucide-react';
+import type { Employee, EmployeeInput, OrgDepartmentNode } from '../../types';
+
+interface IDepartmentOption {
+  id: string;
+  name: string;
+  level: number;
+}
+
+const flattenDepartments = (nodes: OrgDepartmentNode[], level = 0): IDepartmentOption[] => {
+  const result: IDepartmentOption[] = [];
+  for (const node of nodes) {
+    result.push({ id: node.id, name: node.name, level });
+    if (node.children?.length) {
+      result.push(...flattenDepartments(node.children, level + 1));
+    }
+  }
+  return result;
+};
 
 interface IEmployeeInfoSectionProps {
   employee: Employee;
@@ -9,6 +26,9 @@ interface IEmployeeInfoSectionProps {
   onEditDataChange: (data: Partial<EmployeeInput>) => void;
   onSave: () => void;
   onCancel: () => void;
+  departments?: OrgDepartmentNode[];
+  onMoveDepartment?: (departmentId: string) => Promise<void>;
+  canEdit?: boolean;
 }
 
 const formatDate = (dateStr: string | null) => {
@@ -37,7 +57,22 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
   onEditDataChange,
   onSave,
   onCancel,
+  departments,
+  onMoveDepartment,
+  canEdit,
 }) => {
+  const [moving, setMoving] = useState(false);
+  const flatDepts = departments ? flattenDepartments(departments) : [];
+
+  const handleDepartmentChange = async (deptId: string) => {
+    if (!onMoveDepartment || !deptId) return;
+    setMoving(true);
+    try {
+      await onMoveDepartment(deptId);
+    } finally {
+      setMoving(false);
+    }
+  };
   if (isEditing) {
     return (
       <div className="card-edit-form">
@@ -87,7 +122,27 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
       </div>
       <div className="info-item">
         <span className="info-label">Отдел</span>
-        <span className="info-value">{employee.department || '—'}</span>
+        {canEdit && flatDepts.length > 0 ? (
+          <div className="info-value-select">
+            <select
+              className="dept-select"
+              value={employee.org_department_id || ''}
+              onChange={e => handleDepartmentChange(e.target.value)}
+              disabled={moving}
+            >
+              <option value="">— Не назначен —</option>
+              {flatDepts.map(d => (
+                <option key={d.id} value={d.id}>
+                  {'  '.repeat(d.level)}{d.name}
+                </option>
+              ))}
+            </select>
+            <ChevronDown size={14} className="dept-select-icon" />
+            {moving && <span className="dept-moving">Сохранение...</span>}
+          </div>
+        ) : (
+          <span className="info-value">{employee.department || '—'}</span>
+        )}
       </div>
       {employee.birth_date && (
         <div className="info-item">

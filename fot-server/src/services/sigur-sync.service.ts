@@ -498,14 +498,18 @@ export async function syncEmployeesLogic(
 
   const { data: existingEmps } = await supabase
     .from('employees')
-    .select('id, sigur_employee_id')
+    .select('id, sigur_employee_id, employment_status, department_locked')
     .eq('organization_id', organizationId)
     .not('sigur_employee_id', 'is', null);
 
   const sigurIdToDbId = new Map<number, number>();
+  const firedSigurIds = new Set<number>();
+  const lockedDeptSigurIds = new Set<number>();
   for (const e of existingEmps || []) {
     if (e.sigur_employee_id != null) {
       sigurIdToDbId.set(e.sigur_employee_id, e.id);
+      if (e.employment_status === 'fired') firedSigurIds.add(e.sigur_employee_id);
+      if (e.department_locked) lockedDeptSigurIds.add(e.sigur_employee_id);
     }
   }
 
@@ -560,6 +564,10 @@ export async function syncEmployeesLogic(
     if (!fullName.trim()) { skipped++; continue; }
 
     const sigurEmpId = emp.id as number | undefined;
+
+    // Пропускаем уволенных сотрудников
+    if (sigurEmpId && firedSigurIds.has(sigurEmpId)) { skipped++; continue; }
+
     const sigurDeptId = emp.departmentId as number | undefined;
     const orgDepartmentId = sigurDeptId ? sigurDeptToDbId.get(sigurDeptId) || null : null;
     const sigurPosId = emp.positionId as number | undefined;
@@ -600,7 +608,10 @@ export async function syncEmployeesLogic(
       const dbId = sigurIdToDbId.get(sigurEmpId)!;
       const updateFields: Record<string, unknown> = {};
 
-      if (orgDepartmentId) updateFields.org_department_id = orgDepartmentId;
+      // Не обновляем отдел если заблокирован вручную
+      if (orgDepartmentId && !(sigurEmpId && lockedDeptSigurIds.has(sigurEmpId))) {
+        updateFields.org_department_id = orgDepartmentId;
+      }
       if (positionId) updateFields.position_id = positionId;
 
       if (Object.keys(updateFields).length > 0) {

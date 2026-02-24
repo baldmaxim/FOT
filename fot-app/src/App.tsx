@@ -25,6 +25,9 @@ import { SigurSettingsPage } from './pages/skud/SigurSettingsPage';
 import { SigurRawDataPage } from './pages/skud/SigurRawDataPage';
 import { SkudSupabasePage } from './pages/skud/SkudSupabasePage';
 
+// Staff management
+import { StaffManagePage } from './pages/staff/StaffManagePage';
+
 // Profile
 import { ProfilePage } from './pages/profile';
 
@@ -138,6 +141,14 @@ const AppRoutes = () => {
           element={
             <Layout title="Карточка сотрудника" theme={theme} onToggleTheme={toggleTheme}>
               <EmployeeCardPage />
+            </Layout>
+          }
+        />
+        <Route
+          path="/staff-manage"
+          element={
+            <Layout title="Управление сотрудниками" theme={theme} onToggleTheme={toggleTheme}>
+              <StaffManagePage />
             </Layout>
           }
         />

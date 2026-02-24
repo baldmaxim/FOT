@@ -5,6 +5,7 @@ import { encryptionService } from '../services/encryption.service.js';
 import { auditService } from '../services/audit.service.js';
 import { sigurService } from '../services/sigur.service.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
+import { computeDedupHash } from '../utils/dedup.utils.js';
 import { parseDate, formatDateToISO } from '../utils/date.utils.js';
 import { getOrgId } from '../utils/org.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -22,6 +23,7 @@ interface SkudEventRow {
   access_point: string | null;
   direction: 'entry' | 'exit' | null;
   employee_id: number | null;
+  dedup_hash: string;
 }
 
 interface DailySummaryRow {
@@ -392,6 +394,7 @@ export const skudController = {
       const errors: string[] = [];
       const eventsToInsert: SkudEventRow[] = [];
       const summariesToUpdate = new Set<string>(); // employee_id:date
+      const seenHashes = new Set<string>(); // дедупликация внутри файла
 
       for (let i = 0; i < dataRows.length; i++) {
         const row = dataRows[i];
@@ -430,6 +433,11 @@ export const skudController = {
         const direction: 'entry' | 'exit' =
           (doorRaw === '1' || doorRaw.toLowerCase() === 'вход') ? 'entry' : 'exit';
 
+        // Дедупликация
+        const dedupHash = computeDedupHash(physicalPerson, eventDate, eventTime, accessPoint, direction);
+        if (seenHashes.has(dedupHash)) continue;
+        seenHashes.add(dedupHash);
+
         // Сопоставляем с сотрудником
         const employeeId = employeeMap.get(physicalPerson.toLowerCase()) || null;
 
@@ -442,6 +450,7 @@ export const skudController = {
           access_point: accessPoint,
           direction,
           employee_id: employeeId,
+          dedup_hash: dedupHash,
         });
 
         // Отмечаем для пересчёта сводки
@@ -459,10 +468,10 @@ export const skudController = {
         return;
       }
 
-      // Вставляем события
+      // Вставляем события (ON CONFLICT DO NOTHING для защиты от дублей с существующими)
       const { error: insertError } = await supabase
         .from('skud_events')
-        .insert(eventsToInsert);
+        .upsert(eventsToInsert, { onConflict: 'dedup_hash', ignoreDuplicates: true });
 
       if (insertError) {
         console.error('Import insert error:', insertError);
@@ -538,7 +547,8 @@ export const skudController = {
       let empQuery = supabase
         .from('employees')
         .select('id, full_name_encrypted, org_department_id, position_id')
-        .eq('is_archived', false);
+        .eq('is_archived', false)
+        .eq('employment_status', 'active');
 
       if (organizationId) {
         empQuery = empQuery.eq('organization_id', organizationId);
@@ -777,18 +787,6 @@ export const skudController = {
 
         send({ type: 'day_start', day, dayIndex: dayIdx, totalDays: days.length, percent: Math.round((dayIdx / days.length) * 100) });
 
-        // Пропуск дня если у сотрудника уже есть события
-        const { count: existingCount } = await supabase
-          .from('skud_events')
-          .select('id', { count: 'exact', head: true })
-          .eq('employee_id', employeeId)
-          .eq('event_date', day);
-        if (existingCount && existingCount > 0) {
-          totalSkipped += existingCount;
-          send({ type: 'day_done', day, raw: 0, matched: 0, inserted: 0, cached: true });
-          continue;
-        }
-
         const rawEvents = await sigurService.getEvents(dayStart, dayEnd, connection, 'PASS_DETECTED', { pageSize: 3000 });
         totalRaw += rawEvents.length;
 
@@ -815,35 +813,29 @@ export const skudController = {
           .map(raw => mapSigurEvent(raw as Record<string, unknown>))
           .filter((m): m is NonNullable<typeof m> => m !== null);
 
-        // Дедупликация
-        const { data: existingById } = await supabase
+        // Дедупликация по хэшам
+        const { data: existingHashes } = await supabase
           .from('skud_events')
-          .select('event_date, event_time, physical_person_encrypted')
-          .eq('employee_id', employeeId)
-          .eq('event_date', day);
-
-        const { data: existingByOrg } = await supabase
-          .from('skud_events')
-          .select('event_date, event_time, physical_person_encrypted')
-          .eq('organization_id', employeeOrgId)
+          .select('dedup_hash')
           .eq('event_date', day)
-          .is('employee_id', null);
+          .not('dedup_hash', 'is', null);
 
         const existingSet = new Set<string>();
-        for (const evt of [...(existingById || []), ...(existingByOrg || [])]) {
-          const name = encryptionService.decrypt(evt.physical_person_encrypted).toLowerCase().trim();
-          existingSet.add(`${name}|${evt.event_date}|${evt.event_time}`);
+        for (const evt of existingHashes || []) {
+          if (evt.dedup_hash) existingSet.add(evt.dedup_hash);
         }
 
         const toInsert: SkudEventRow[] = [];
         for (const m of mapped) {
-          const nameKey = m.physicalPerson.toLowerCase().trim();
-          const dedupKey = `${nameKey}|${m.eventDate}|${m.eventTime}`;
-          if (existingSet.has(dedupKey)) {
+          const dedupHash = computeDedupHash(
+            m.physicalPerson, m.eventDate, m.eventTime,
+            m.accessPoint, m.direction,
+          );
+          if (existingSet.has(dedupHash)) {
             totalSkipped++;
             continue;
           }
-          existingSet.add(dedupKey);
+          existingSet.add(dedupHash);
           toInsert.push({
             organization_id: employeeOrgId,
             physical_person_encrypted: encryptionService.encrypt(m.physicalPerson),
@@ -853,6 +845,7 @@ export const skudController = {
             access_point: m.accessPoint,
             direction: m.direction,
             employee_id: employeeId,
+            dedup_hash: dedupHash,
           });
           summariesToUpdate.add(m.eventDate);
         }
@@ -861,7 +854,7 @@ export const skudController = {
         const BATCH = 500;
         for (let i = 0; i < toInsert.length; i += BATCH) {
           const batch = toInsert.slice(i, i + BATCH);
-          const { error: insertErr } = await supabase.from('skud_events').insert(batch);
+          const { error: insertErr } = await supabase.from('skud_events').upsert(batch, { onConflict: 'dedup_hash', ignoreDuplicates: true });
           if (!insertErr) {
             dayInserted += batch.length;
             totalInserted += batch.length;
@@ -891,6 +884,62 @@ export const skudController = {
     } catch (error) {
       console.error('syncEmployee error:', error);
       res.status(500).json({ success: false, error: 'Ошибка синхронизации событий сотрудника' });
+    }
+  },
+
+  /**
+   * POST /api/skud/clean-duplicates
+   * Бэкфилл dedup_hash + удаление дублей
+   */
+  async cleanDuplicates(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const BATCH = 1000;
+      let offset = 0;
+      let totalUpdated = 0;
+      let totalDeleted = 0;
+
+      // 1. Бэкфилл: вычисляем dedup_hash для строк без него
+      while (true) {
+        const { data: rows } = await supabase
+          .from('skud_events')
+          .select('id, physical_person_encrypted, event_date, event_time, access_point, direction')
+          .is('dedup_hash', null)
+          .order('id')
+          .range(offset, offset + BATCH - 1);
+
+        if (!rows || rows.length === 0) break;
+
+        for (const row of rows) {
+          const name = encryptionService.decrypt(row.physical_person_encrypted);
+          const hash = computeDedupHash(name, row.event_date, row.event_time, row.access_point, row.direction);
+          await supabase.from('skud_events').update({ dedup_hash: hash }).eq('id', row.id);
+          totalUpdated++;
+        }
+
+        if (rows.length < BATCH) break;
+        offset += BATCH;
+      }
+
+      // 2. Удаляем дубли: оставляем MIN(id) для каждого dedup_hash
+      const { data: dupes } = await supabase.rpc('find_skud_duplicate_ids');
+      if (dupes && dupes.length > 0) {
+        const idsToDelete: number[] = dupes.map((d: { id: number }) => d.id);
+        // Удаляем батчами
+        for (let i = 0; i < idsToDelete.length; i += BATCH) {
+          const batch = idsToDelete.slice(i, i + BATCH);
+          await supabase.from('skud_events').delete().in('id', batch);
+          totalDeleted += batch.length;
+        }
+      }
+
+      await auditService.logFromRequest(req, req.user.id, 'CLEAN_SKUD_DUPLICATES', {
+        details: { totalUpdated, totalDeleted },
+      });
+
+      res.json({ success: true, data: { hashesUpdated: totalUpdated, duplicatesDeleted: totalDeleted } });
+    } catch (error) {
+      console.error('Clean duplicates error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка очистки дублей' });
     }
   },
 

@@ -126,6 +126,8 @@ export interface Employee {
   email: string | null;
   department: string | null;
   org_department_id: string | null;
+  employment_status: 'active' | 'fired';
+  department_locked: boolean;
   is_archived: boolean;
   archived_at: string | null;
   created_at: string;

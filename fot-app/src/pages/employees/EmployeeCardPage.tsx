@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback, type FC } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { ArrowLeft, Edit3, Archive, RotateCcw, Trash2 } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
+import { structureApi } from '../../api/structure';
 import { useAuth } from '../../contexts/AuthContext';
 import { EmployeeInfoSection } from '../../components/employees/EmployeeInfoSection';
 import { EmployeeHistorySection } from '../../components/employees/EmployeeHistorySection';
 import { EmployeeSkudSection } from '../../components/employees/EmployeeSkudSection';
-import type { Employee, EmployeeInput, EmployeeHistoryEvent } from '../../types';
+import type { Employee, EmployeeInput, EmployeeHistoryEvent, OrgDepartmentNode } from '../../types';
 import '../../styles/EmployeeCardPage.css';
 
 export const EmployeeCardPage: FC = () => {
@@ -25,18 +26,23 @@ export const EmployeeCardPage: FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<Partial<EmployeeInput>>({});
   const [activeTab, setActiveTab] = useState<'info' | 'history' | 'skud'>('info');
+  const [departments, setDepartments] = useState<OrgDepartmentNode[]>([]);
 
   const loadData = useCallback(async () => {
     if (!id) return;
     setLoading(true);
     setError('');
     try {
-      const [emp, hist] = await Promise.all([
+      const [emp, hist, struct] = await Promise.all([
         employeeService.getById(Number(id)),
         employeeService.getHistory(Number(id)).catch(() => [] as EmployeeHistoryEvent[]),
+        structureApi.getTree().catch(() => null),
       ]);
       setEmployee(emp);
       setHistory(hist);
+      if (struct?.data?.departments) {
+        setDepartments(struct.data.departments);
+      }
     } catch {
       setError('Ошибка загрузки данных сотрудника');
     } finally {
@@ -97,6 +103,16 @@ export const EmployeeCardPage: FC = () => {
       navigate(backPath);
     } catch {
       setError('Ошибка удаления');
+    }
+  };
+
+  const handleMoveDepartment = async (departmentId: string) => {
+    if (!employee) return;
+    try {
+      await employeeService.moveDepartment(employee.id, departmentId);
+      loadData();
+    } catch {
+      setError('Ошибка перемещения в отдел');
     }
   };
 
@@ -201,6 +217,9 @@ export const EmployeeCardPage: FC = () => {
             onEditDataChange={setEditData}
             onSave={saveEditing}
             onCancel={() => { setIsEditing(false); setEditData({}); }}
+            departments={departments}
+            onMoveDepartment={handleMoveDepartment}
+            canEdit={canEdit}
           />
         )}
         {activeTab === 'history' && (

@@ -94,6 +94,8 @@ function decryptEmployee(encrypted: EmployeeEncrypted, structureCache: Structure
     email: encrypted.email || null,
     department: encrypted.org_department_id ? structureCache.departments.get(encrypted.org_department_id) || null : null,
     org_department_id: encrypted.org_department_id,
+    employment_status: encrypted.employment_status,
+    department_locked: encrypted.department_locked,
     is_archived: encrypted.is_archived,
     archived_at: encrypted.archived_at,
     created_at: encrypted.created_at,
@@ -740,6 +742,112 @@ export const employeesController = {
     } catch (error) {
       console.error('Import employees error:', error);
       res.status(500).json({ success: false, error: 'Ошибка импорта' });
+    }
+  },
+
+  /**
+   * POST /api/employees/:id/fire — уволить сотрудника
+   */
+  async fire(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+
+      const { data, error } = await supabase
+        .from('employees')
+        .update({ employment_status: 'fired' })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error || !data) {
+        res.status(404).json({ success: false, error: 'Employee not found' });
+        return;
+      }
+
+      await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE', {
+        entityType: 'employee',
+        entityId: id,
+      });
+
+      const structureCache = await loadStructureCache(data.organization_id);
+      const employee = decryptEmployee(data as EmployeeEncrypted, structureCache);
+      res.json({ success: true, data: employee });
+    } catch (error) {
+      console.error('Fire employee error:', error);
+      res.status(500).json({ success: false, error: 'Failed to fire employee' });
+    }
+  },
+
+  /**
+   * POST /api/employees/:id/rehire — восстановить на работу
+   */
+  async rehire(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+
+      const { data, error } = await supabase
+        .from('employees')
+        .update({ employment_status: 'active' })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error || !data) {
+        res.status(404).json({ success: false, error: 'Employee not found' });
+        return;
+      }
+
+      await auditService.logFromRequest(req, req.user.id, 'REHIRE_EMPLOYEE', {
+        entityType: 'employee',
+        entityId: id,
+      });
+
+      const structureCache = await loadStructureCache(data.organization_id);
+      const employee = decryptEmployee(data as EmployeeEncrypted, structureCache);
+      res.json({ success: true, data: employee });
+    } catch (error) {
+      console.error('Rehire employee error:', error);
+      res.status(500).json({ success: false, error: 'Failed to rehire employee' });
+    }
+  },
+
+  /**
+   * POST /api/employees/:id/move-department — переместить в другой отдел
+   */
+  async moveDepartment(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { org_department_id } = req.body as { org_department_id: string };
+
+      if (!org_department_id) {
+        res.status(400).json({ success: false, error: 'org_department_id required' });
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('employees')
+        .update({ org_department_id, department_locked: true })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error || !data) {
+        res.status(404).json({ success: false, error: 'Employee not found' });
+        return;
+      }
+
+      await auditService.logFromRequest(req, req.user.id, 'MOVE_EMPLOYEE_DEPARTMENT', {
+        entityType: 'employee',
+        entityId: id,
+        details: { org_department_id },
+      });
+
+      const structureCache = await loadStructureCache(data.organization_id);
+      const employee = decryptEmployee(data as EmployeeEncrypted, structureCache);
+      res.json({ success: true, data: employee });
+    } catch (error) {
+      console.error('Move department error:', error);
+      res.status(500).json({ success: false, error: 'Failed to move employee' });
     }
   },
 };

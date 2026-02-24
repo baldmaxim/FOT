@@ -2,6 +2,7 @@ import { sigurService } from './sigur.service.js';
 import { encryptionService } from './encryption.service.js';
 import { supabase } from '../config/database.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
+import { computeDedupHash } from '../utils/dedup.utils.js';
 
 const POLL_INTERVAL = 60_000; // 1 минута
 const EVENT_WINDOW_MINUTES = 5; // окно опроса — последние 5 минут
@@ -79,16 +80,16 @@ async function pollEvents(): Promise<void> {
     const employeeMap = await getEmployeeMap();
     const fallbackOrgId = await getFallbackOrgId();
 
-    // Дедупликация: загружаем существующие за сегодня
+    // Дедупликация: загружаем существующие хэши за сегодня
     const { data: existingEvents } = await supabase
       .from('skud_events')
-      .select('physical_person_encrypted, event_date, event_time')
-      .eq('event_date', todayStr);
+      .select('dedup_hash')
+      .eq('event_date', todayStr)
+      .not('dedup_hash', 'is', null);
 
     const existingSet = new Set<string>();
     for (const evt of existingEvents || []) {
-      const name = encryptionService.decrypt(evt.physical_person_encrypted).toLowerCase().trim();
-      existingSet.add(`${name}|${evt.event_date}|${evt.event_time}`);
+      if (evt.dedup_hash) existingSet.add(evt.dedup_hash);
     }
 
     const inserts: {
@@ -100,6 +101,7 @@ async function pollEvents(): Promise<void> {
       access_point: string | null;
       direction: 'entry' | 'exit' | null;
       employee_id: number | null;
+      dedup_hash: string;
     }[] = [];
     const summariesToUpdate = new Set<string>();
 
@@ -107,11 +109,14 @@ async function pollEvents(): Promise<void> {
       const mapped = mapSigurEvent(raw as Record<string, unknown>);
       if (!mapped) continue;
 
-      const nameKey = mapped.physicalPerson.toLowerCase().trim();
-      const dedupKey = `${nameKey}|${mapped.eventDate}|${mapped.eventTime}`;
-      if (existingSet.has(dedupKey)) continue;
-      existingSet.add(dedupKey);
+      const dedupHash = computeDedupHash(
+        mapped.physicalPerson, mapped.eventDate, mapped.eventTime,
+        mapped.accessPoint, mapped.direction,
+      );
+      if (existingSet.has(dedupHash)) continue;
+      existingSet.add(dedupHash);
 
+      const nameKey = mapped.physicalPerson.toLowerCase().trim();
       const emp = employeeMap.get(nameKey);
       const orgId = emp?.organization_id || fallbackOrgId;
       if (!orgId) continue;
@@ -125,6 +130,7 @@ async function pollEvents(): Promise<void> {
         access_point: mapped.accessPoint,
         direction: mapped.direction,
         employee_id: emp?.id || null,
+        dedup_hash: dedupHash,
       });
 
       if (emp) {
@@ -136,7 +142,7 @@ async function pollEvents(): Promise<void> {
     let totalInserted = 0;
     for (let i = 0; i < inserts.length; i += BATCH_SIZE) {
       const batch = inserts.slice(i, i + BATCH_SIZE);
-      const { error } = await supabase.from('skud_events').insert(batch);
+      const { error } = await supabase.from('skud_events').upsert(batch, { onConflict: 'dedup_hash', ignoreDuplicates: true });
       if (error) {
         console.error('[presence-polling] insert error:', error.message);
       } else {

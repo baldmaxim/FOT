@@ -80,6 +80,13 @@ router.post(
   skudController.syncEmployee as any
 );
 
+// POST /api/skud/clean-duplicates - бэкфилл хэшей + удаление дублей (owner+)
+router.post(
+  '/clean-duplicates',
+  requireRole('owner', 'super_admin') as any,
+  skudController.cleanDuplicates as any
+);
+
 // DELETE /api/skud/clear - очистка данных (owner+, требуется 2FA)
 router.delete(
   '/clear',

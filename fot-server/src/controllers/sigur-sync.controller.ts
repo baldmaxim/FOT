@@ -4,6 +4,7 @@ import { supabase } from '../config/database.js';
 import { encryptionService } from '../services/encryption.service.js';
 import { auditService } from '../services/audit.service.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
+import { computeDedupHash } from '../utils/dedup.utils.js';
 import {
   syncOrganizationsLogic,
   cleanDuplicateOrganizationsLogic,
@@ -111,16 +112,16 @@ export const sigurSyncController = {
           continue;
         }
 
-        // Дедупликация
+        // Дедупликация: загружаем существующие хэши за день
         const { data: existingEvents } = await supabase
           .from('skud_events')
-          .select('physical_person_encrypted, event_date, event_time')
-          .eq('event_date', day);
+          .select('dedup_hash')
+          .eq('event_date', day)
+          .not('dedup_hash', 'is', null);
 
         const existingSet = new Set<string>();
         for (const evt of existingEvents || []) {
-          const name = encryptionService.decrypt(evt.physical_person_encrypted).toLowerCase().trim();
-          existingSet.add(`${name}|${evt.event_date}|${evt.event_time}`);
+          if (evt.dedup_hash) existingSet.add(evt.dedup_hash);
         }
 
         const dayInserts: {
@@ -132,6 +133,7 @@ export const sigurSyncController = {
           access_point: string | null;
           direction: 'entry' | 'exit' | null;
           employee_id: number | null;
+          dedup_hash: string;
         }[] = [];
         let daySkipped = 0;
 
@@ -139,15 +141,18 @@ export const sigurSyncController = {
           const mapped = mapSigurEvent(raw as Record<string, unknown>);
           if (!mapped) continue;
 
-          const nameKey = mapped.physicalPerson.toLowerCase().trim();
-          const dedupKey = `${nameKey}|${mapped.eventDate}|${mapped.eventTime}`;
-          if (existingSet.has(dedupKey)) {
+          const dedupHash = computeDedupHash(
+            mapped.physicalPerson, mapped.eventDate, mapped.eventTime,
+            mapped.accessPoint, mapped.direction,
+          );
+          if (existingSet.has(dedupHash)) {
             totalSkipped++;
             daySkipped++;
             continue;
           }
-          existingSet.add(dedupKey);
+          existingSet.add(dedupHash);
 
+          const nameKey = mapped.physicalPerson.toLowerCase().trim();
           const emp = (mapped.employeeId != null ? sigurIdMap.get(mapped.employeeId) : undefined)
             || employeeMap.get(nameKey);
           const orgId = emp?.organization_id || fallbackOrgId;
@@ -162,6 +167,7 @@ export const sigurSyncController = {
             access_point: mapped.accessPoint,
             direction: mapped.direction,
             employee_id: emp?.id || null,
+            dedup_hash: dedupHash,
           });
 
           if (emp) {
@@ -174,7 +180,7 @@ export const sigurSyncController = {
         let dayInserted = 0;
         for (let i = 0; i < dayInserts.length; i += BATCH_SIZE) {
           const batch = dayInserts.slice(i, i + BATCH_SIZE);
-          const { error: insertError } = await supabase.from('skud_events').insert(batch);
+          const { error: insertError } = await supabase.from('skud_events').upsert(batch, { onConflict: 'dedup_hash', ignoreDuplicates: true });
           if (insertError) {
             errors.push(`[${day}] Ошибка вставки: ${insertError.message}`);
           } else {

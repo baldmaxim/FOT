@@ -105,4 +105,25 @@ router.post(
   employeesController.restore as any
 );
 
+// POST /api/employees/:id/fire - уволить (header+)
+router.post(
+  '/:id/fire',
+  requirePosition('header', 'admin', 'super_admin') as any,
+  employeesController.fire as any
+);
+
+// POST /api/employees/:id/rehire - восстановить на работу (header+)
+router.post(
+  '/:id/rehire',
+  requirePosition('header', 'admin', 'super_admin') as any,
+  employeesController.rehire as any
+);
+
+// POST /api/employees/:id/move-department - переместить в отдел (header+)
+router.post(
+  '/:id/move-department',
+  requirePosition('header', 'admin', 'super_admin') as any,
+  employeesController.moveDepartment as any
+);
+
 export default router;

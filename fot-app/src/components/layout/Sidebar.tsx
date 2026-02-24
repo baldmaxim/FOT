@@ -34,6 +34,7 @@ const navGroups: INavGroup[] = [
     items: [
       { id: 'overview', path: '/', label: 'Обзор', icon: GridIcon },
       { id: 'employees', path: '/tender', label: 'Сотрудники', icon: UsersIcon },
+      { id: 'staff-manage', path: '/staff-manage', label: 'Управление', icon: SettingsIcon },
       { id: 'timesheet', path: '/timesheet', label: 'Табель', icon: CalendarIcon },
     ]
   },

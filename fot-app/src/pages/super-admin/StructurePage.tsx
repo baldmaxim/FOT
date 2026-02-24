@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, type FC } from 'react';
 import { structureApi } from '../../api/structure';
+import { useAuth } from '../../contexts/AuthContext';
 import type { OrgDepartmentNode, OrgStructureResponse } from '../../types';
 import styles from './StructurePage.module.css';
 
@@ -12,11 +13,15 @@ const countEmployeesInBranch = (node: OrgDepartmentNode): number => {
 };
 
 export const StructurePage: FC = () => {
+  const { profile } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [structure, setStructure] = useState<OrgStructureResponse | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
+  const [addingTo, setAddingTo] = useState<string | null>(null); // 'root' | parentId | null
+  const [newDeptName, setNewDeptName] = useState('');
+  const [creating, setCreating] = useState(false);
 
   const loadStructure = useCallback(async () => {
     try {
@@ -68,6 +73,52 @@ export const StructurePage: FC = () => {
 
   const collapseAll = () => setExpandedNodes(new Set());
 
+  const startAdding = (parentId: string | null) => {
+    setAddingTo(parentId ?? 'root');
+    setNewDeptName('');
+  };
+
+  const cancelAdding = () => {
+    setAddingTo(null);
+    setNewDeptName('');
+  };
+
+  const handleCreate = async () => {
+    if (!newDeptName.trim() || creating) return;
+    setCreating(true);
+    const parentId = addingTo === 'root' ? null : addingTo;
+    const orgId = profile?.organization_id || structure?.departments[0]?.organization_id;
+    const res = await structureApi.createDepartment(newDeptName.trim(), undefined, orgId || undefined, parentId);
+    setCreating(false);
+    if (res.success) {
+      cancelAdding();
+      await loadStructure();
+    } else {
+      setError(res.error || 'Ошибка создания отдела');
+    }
+  };
+
+  const renderInlineForm = (level: number) => (
+    <div className={styles.inlineForm} style={{ paddingLeft: 12 + level * 20 }}>
+      <input
+        className={styles.inlineInput}
+        type="text"
+        placeholder="Название отдела"
+        value={newDeptName}
+        onChange={(e) => setNewDeptName(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') handleCreate();
+          if (e.key === 'Escape') cancelAdding();
+        }}
+        autoFocus
+      />
+      <button className={styles.inlineSubmit} onClick={handleCreate} disabled={!newDeptName.trim() || creating}>
+        {creating ? '...' : 'Создать'}
+      </button>
+      <button className={styles.inlineCancel} onClick={cancelAdding}>Отмена</button>
+    </div>
+  );
+
   const filterTree = (nodes: OrgDepartmentNode[], query: string): OrgDepartmentNode[] => {
     if (!query.trim()) return nodes;
     const q = query.toLowerCase().trim();
@@ -88,6 +139,7 @@ export const StructurePage: FC = () => {
   const renderNode = (node: OrgDepartmentNode, level: number) => {
     const isExpanded = expandedNodes.has(node.id);
     const hasChildren = node.children.length > 0;
+    const isAddingHere = addingTo === node.id;
 
     return (
       <div key={node.id} className={styles.treeNode}>
@@ -102,11 +154,17 @@ export const StructurePage: FC = () => {
             <span className={styles.leafIcon}>●</span>
           )}
           <span className={styles.nodeName}>{node.name}</span>
+          <button
+            className={styles.nodeAddBtn}
+            title="Добавить подотдел"
+            onClick={(e) => { e.stopPropagation(); startAdding(node.id); }}
+          >+</button>
         </div>
 
-        {isExpanded && hasChildren && (
+        {(isExpanded || isAddingHere) && (
           <div className={styles.nodeChildren}>
-            {node.children.map((child) => renderNode(child, level + 1))}
+            {hasChildren && node.children.map((child) => renderNode(child, level + 1))}
+            {isAddingHere && renderInlineForm(level + 1)}
           </div>
         )}
       </div>
@@ -154,6 +212,7 @@ export const StructurePage: FC = () => {
               onChange={(e) => setSearchQuery(e.target.value)}
             />
             <div className={styles.toolbarActions}>
+              <button className={styles.addBtn} onClick={() => startAdding(null)}>+ Добавить отдел</button>
               <button className={styles.toolbarBtn} onClick={expandAll}>Развернуть</button>
               <button className={styles.toolbarBtn} onClick={collapseAll}>Свернуть</button>
             </div>
@@ -167,6 +226,7 @@ export const StructurePage: FC = () => {
             ) : (
               displayTree.map((node) => renderNode(node, 0))
             )}
+            {addingTo === 'root' && renderInlineForm(0)}
           </div>
         </>
       )}

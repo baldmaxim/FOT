@@ -226,6 +226,109 @@
   margin-left: 20px;
 }
 
+/* Add button in toolbar */
+.addBtn {
+  padding: 8px 14px;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+
+.addBtn:hover {
+  opacity: 0.9;
+}
+
+/* Node add button */
+.nodeAddBtn {
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: all 0.15s;
+}
+
+.nodeHeader:hover .nodeAddBtn {
+  opacity: 1;
+}
+
+.nodeAddBtn:hover {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+/* Inline form */
+.inlineForm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+}
+
+.inlineInput {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--primary);
+  border-radius: 6px;
+  font-size: 13px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  outline: none;
+  min-width: 0;
+}
+
+.inlineSubmit {
+  padding: 6px 12px;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  transition: opacity 0.2s;
+}
+
+.inlineSubmit:hover {
+  opacity: 0.9;
+}
+
+.inlineSubmit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.inlineCancel {
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+
+.inlineCancel:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .container {
@@ -247,6 +350,18 @@
 
   .nodeChildren {
     margin-left: 12px;
+  }
+
+  .nodeAddBtn {
+    opacity: 1;
+  }
+
+  .inlineForm {
+    flex-wrap: wrap;
+  }
+
+  .inlineInput {
+    width: 100%;
   }
 }
 

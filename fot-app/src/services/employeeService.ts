@@ -85,4 +85,21 @@ export const employeeService = {
     const response = await apiClient.delete<ApiResponse<{ deleted: number }>>('/employees/all');
     return response.data;
   },
+
+  async fire(id: number): Promise<Employee> {
+    const response = await apiClient.post<ApiResponse<Employee>>(`/employees/${id}/fire`);
+    return response.data;
+  },
+
+  async rehire(id: number): Promise<Employee> {
+    const response = await apiClient.post<ApiResponse<Employee>>(`/employees/${id}/rehire`);
+    return response.data;
+  },
+
+  async moveDepartment(id: number, orgDepartmentId: string): Promise<Employee> {
+    const response = await apiClient.post<ApiResponse<Employee>>(`/employees/${id}/move-department`, {
+      org_department_id: orgDepartmentId,
+    });
+    return response.data;
+  },
 };
