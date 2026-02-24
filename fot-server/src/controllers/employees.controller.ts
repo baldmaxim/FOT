@@ -824,6 +824,37 @@ export const employeesController = {
         return;
       }
 
+      // Получаем текущие данные сотрудника для переноса в назначение
+      const { data: empBefore } = await supabase
+        .from('employees')
+        .select('position_id, org_company_id')
+        .eq('id', id)
+        .single();
+
+      const today = new Date().toISOString().slice(0, 10);
+
+      // Закрываем все активные назначения
+      await supabase
+        .from('employee_assignments')
+        .update({ effective_to: today })
+        .eq('employee_id', id)
+        .is('effective_to', null);
+
+      // Создаём новое назначение с новым отделом
+      await supabase
+        .from('employee_assignments')
+        .insert({
+          employee_id: Number(id),
+          org_department_id,
+          org_company_id: empBefore?.org_company_id || null,
+          position_id: empBefore?.position_id || null,
+          effective_from: today,
+          is_primary: true,
+          assignment_type: 'main',
+          change_reason: 'Перевод в другой отдел',
+          created_by: req.user.id,
+        });
+
       const { data, error } = await supabase
         .from('employees')
         .update({ org_department_id, department_locked: true })

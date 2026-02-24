@@ -862,10 +862,6 @@
 }
 
 /* Department edit column */
-.employees-table.has-dept-edit .table-header,
-.employees-table.has-dept-edit .table-row {
-  grid-template-columns: 40px 2fr 1.2fr 0.8fr 1.4fr;
-}
 
 .col-dept-edit {
   position: relative;
@@ -903,7 +899,6 @@
 }
 
 .dept-edit-picker {
-  position: relative;
   flex: 1;
   min-width: 0;
 }
@@ -941,16 +936,13 @@
 }
 
 .dept-edit-menu {
-  position: absolute;
-  top: calc(100% + 2px);
-  left: 0;
-  z-index: 100;
-  min-width: 220px;
-  max-width: 320px;
+  position: fixed;
+  z-index: 9999;
+  width: 280px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   overflow: hidden;
 }
 
@@ -978,9 +970,10 @@
 }
 
 .dept-edit-list {
-  max-height: 200px;
+  max-height: 220px;
   overflow-y: auto;
   padding: 4px 0;
+  overscroll-behavior: contain;
 }
 
 .dept-edit-item {
@@ -2562,11 +2555,6 @@
     padding: 8px;
   }
 
-  .employees-table.has-dept-edit .table-header,
-  .employees-table.has-dept-edit .table-row {
-    grid-template-columns: 30px 1.5fr 1fr 0.7fr 1.2fr;
-  }
-
   .dept-edit-btn {
     font-size: 0.78rem;
     padding: 3px 6px;
@@ -2730,15 +2718,6 @@
     padding: 8px 12px;
   }
 
-  .col-dept-edit {
-    grid-column: 1 / -1;
-    padding-top: 4px;
-  }
-
-  .employees-table.has-dept-edit .table-header,
-  .employees-table.has-dept-edit .table-row {
-    grid-template-columns: 30px 1fr 1fr 0.7fr;
-  }
 }
 
 /* Analytics Tab */

@@ -4237,14 +4237,16 @@ ALTER TABLE public.employees
   ADD COLUMN IF NOT EXISTS department_locked boolean NOT NULL DEFAULT false;
 
 -- ============================================
--- Дедупликация событий СКУД: хэш-колонка + partial unique index
+-- Дедупликация событий СКУД: хэш-колонка + unique constraint
 -- ============================================
 ALTER TABLE public.skud_events
   ADD COLUMN IF NOT EXISTS dedup_hash text;
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_skud_events_dedup_hash
-  ON public.skud_events (dedup_hash)
-  WHERE dedup_hash IS NOT NULL;
+-- Обычный UNIQUE (не partial) — PostgreSQL допускает множественные NULL,
+-- а PostgREST требует non-partial constraint для ON CONFLICT / upsert.
+DROP INDEX IF EXISTS idx_skud_events_dedup_hash;
+ALTER TABLE public.skud_events
+  ADD CONSTRAINT uq_skud_events_dedup_hash UNIQUE (dedup_hash);
 
 -- Функция для поиска дублей (возвращает id строк к удалению, оставляя MIN(id) на каждый хэш)
 CREATE OR REPLACE FUNCTION public.find_skud_duplicate_ids()
