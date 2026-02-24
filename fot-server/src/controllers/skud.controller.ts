@@ -3,7 +3,10 @@ import * as XLSX from 'xlsx';
 import { supabase } from '../config/database.js';
 import { encryptionService } from '../services/encryption.service.js';
 import { auditService } from '../services/audit.service.js';
+import { sigurService } from '../services/sigur.service.js';
+import { mapSigurEvent } from '../utils/sigur.mapper.js';
 import { parseDate, formatDateToISO } from '../utils/date.utils.js';
+import { getOrgId } from '../utils/org.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 interface MulterRequest extends AuthenticatedRequest {
@@ -114,15 +117,8 @@ export const skudController = {
    */
   async getDailySummary(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const isSuperAdmin = req.user.position_type === 'super_admin';
-      const organizationId = req.user.organization_id
-        || (isSuperAdmin && typeof req.query.organization_id === 'string' ? req.query.organization_id : undefined);
+      const organizationId = getOrgId(req);
       const { date } = req.query; // YYYY-MM-DD (первый день месяца)
-
-      if (!organizationId && !isSuperAdmin) {
-        res.status(400).json({ success: false, error: 'Organization required' });
-        return;
-      }
 
       if (!date || typeof date !== 'string') {
         res.status(400).json({ success: false, error: 'Date parameter required' });
@@ -177,9 +173,7 @@ export const skudController = {
       }
 
       const { startDate, endDate } = req.query;
-      const isSuperAdmin = req.user.position_type === 'super_admin';
-      const organizationId = req.user.organization_id
-        || (isSuperAdmin && typeof req.query.organization_id === 'string' ? req.query.organization_id : undefined);
+      const organizationId = getOrgId(req);
 
       // Получаем ФИО и organization_id сотрудника
       let empQuery = supabase.from('employees').select('full_name_encrypted, organization_id').eq('id', employeeId);
@@ -223,16 +217,9 @@ export const skudController = {
    */
   async getEvents(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const isSuperAdmin = req.user.position_type === 'super_admin';
-      const organizationId = req.user.organization_id
-        || (isSuperAdmin && typeof req.query.organization_id === 'string' ? req.query.organization_id : undefined);
+      const organizationId = getOrgId(req);
       const { startDate, endDate, accessPoint, employeeId, search } = req.query;
       const searchStr = typeof search === 'string' ? search.trim().toLowerCase() : '';
-
-      if (!organizationId && !isSuperAdmin) {
-        res.status(400).json({ success: false, error: 'Organization required' });
-        return;
-      }
 
       let query = supabase
         .from('skud_events')
@@ -311,14 +298,7 @@ export const skudController = {
    */
   async getAccessPoints(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const isSuperAdmin = req.user.position_type === 'super_admin';
-      const organizationId = req.user.organization_id
-        || (isSuperAdmin && typeof req.query.organization_id === 'string' ? req.query.organization_id : undefined);
-
-      if (!organizationId && !isSuperAdmin) {
-        res.status(400).json({ success: false, error: 'Organization required' });
-        return;
-      }
+      const organizationId = getOrgId(req);
 
       let query = supabase
         .from('skud_events')
@@ -364,10 +344,10 @@ export const skudController = {
    */
   async import(req: MulterRequest, res: Response): Promise<void> {
     try {
-      const organizationId = req.user.organization_id;
+      const organizationId = getOrgId(req);
 
       if (!organizationId) {
-        res.status(400).json({ success: false, error: 'Organization required' });
+        res.status(400).json({ success: false, error: 'Organization required. Super admin: передайте ?organization_id=uuid' });
         return;
       }
 
@@ -528,24 +508,18 @@ export const skudController = {
    */
   async getPresence(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const isSuperAdmin = req.user.position_type === 'super_admin';
-      const organizationId = req.user.organization_id
-        || (isSuperAdmin && typeof req.query.organization_id === 'string' ? req.query.organization_id : undefined);
-
-      if (!organizationId && !isSuperAdmin) {
-        res.status(400).json({ success: false, error: 'Organization required' });
-        return;
-      }
+      const organizationId = getOrgId(req);
 
       const departmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
 
       // Собираем ID отдела + все дочерние
       let deptIds: string[] | null = null;
       if (departmentId) {
-        const { data: allDepts } = await supabase
+        let deptQuery = supabase
           .from('org_departments')
-          .select('id, parent_id')
-          .eq('organization_id', organizationId);
+          .select('id, parent_id');
+        if (organizationId) deptQuery = deptQuery.eq('organization_id', organizationId);
+        const { data: allDepts } = await deptQuery;
 
         deptIds = [departmentId];
         let changed = true;
@@ -722,16 +696,203 @@ export const skudController = {
   },
 
   /**
+   * POST /api/skud/sync-employee
+   * Синхронизация событий Sigur для конкретного сотрудника
+   * Body: { employeeId: number, startDate: string, endDate: string }
+   */
+  async syncEmployee(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { employeeId, startDate, endDate } = req.body as {
+        employeeId: unknown;
+        startDate: unknown;
+        endDate: unknown;
+      };
+
+      if (typeof employeeId !== 'number' || !Number.isInteger(employeeId)) {
+        res.status(400).json({ success: false, error: 'employeeId должен быть целым числом' });
+        return;
+      }
+      if (typeof startDate !== 'string' || typeof endDate !== 'string' || !startDate || !endDate) {
+        res.status(400).json({ success: false, error: 'startDate и endDate обязательны (YYYY-MM-DD)' });
+        return;
+      }
+      if (!sigurService.isConfigured()) {
+        res.status(503).json({ success: false, error: 'Sigur не настроен' });
+        return;
+      }
+
+      // 1. Загрузка сотрудника
+      const orgId = getOrgId(req);
+      let empQuery = supabase
+        .from('employees')
+        .select('id, organization_id, full_name_encrypted, sigur_employee_id')
+        .eq('id', employeeId)
+        .eq('is_archived', false);
+      if (orgId) empQuery = empQuery.eq('organization_id', orgId);
+
+      const { data: empData, error: empError } = await empQuery.single();
+      if (empError || !empData) {
+        res.status(404).json({ success: false, error: 'Сотрудник не найден' });
+        return;
+      }
+
+      const sigurEmpId: number | null = empData.sigur_employee_id;
+      const employeeOrgId: string = empData.organization_id;
+      const employeeName = encryptionService.decrypt(empData.full_name_encrypted).toLowerCase().trim();
+
+      console.log(`[sync-employee] id=${employeeId}, sigurId=${sigurEmpId}, name="${employeeName}"`);
+
+      // 2. Список дней
+      const days: string[] = [];
+      const cur = new Date(startDate);
+      const end = new Date(endDate);
+      while (cur <= end) {
+        days.push(cur.toISOString().slice(0, 10));
+        cur.setDate(cur.getDate() + 1);
+      }
+
+      // 3. SSE-стрим прогресса
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders();
+
+      const send = (data: Record<string, unknown>) => {
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
+
+      const connection = (req.body.connection as 'external' | 'internal') || undefined;
+      const summariesToUpdate = new Set<string>();
+      let totalInserted = 0;
+      let totalSkipped = 0;
+      let totalRaw = 0;
+
+      send({ type: 'start', totalDays: days.length, employeeName });
+
+      // 4. Обработка по дням
+      for (let dayIdx = 0; dayIdx < days.length; dayIdx++) {
+        const day = days[dayIdx];
+        const dayStart = `${day}T00:00:00`;
+        const dayEnd = `${day}T23:59:59`;
+
+        send({ type: 'day_start', day, dayIndex: dayIdx, totalDays: days.length, percent: Math.round((dayIdx / days.length) * 100) });
+
+        const rawEvents = await sigurService.getEvents(dayStart, dayEnd, connection, 'PASS_DETECTED', { pageSize: 3000 });
+        totalRaw += rawEvents.length;
+
+        if (rawEvents.length === 0) {
+          send({ type: 'day_done', day, raw: 0, matched: 0, inserted: 0 });
+          continue;
+        }
+
+        // Быстрая фильтрация по sigurEmpId на сырых данных (без маппинга)
+        const filtered = rawEvents.filter(raw => {
+          const r = raw as Record<string, any>;
+          const evtEmpId = r.data?.employeeId ?? r.additionalData?.accessObject?.data?.id;
+          if (sigurEmpId != null && evtEmpId != null) return evtEmpId === sigurEmpId;
+          const name = r.additionalData?.accessObject?.data?.name;
+          return typeof name === 'string' && name.toLowerCase().trim() === employeeName;
+        });
+
+        if (filtered.length === 0) {
+          send({ type: 'day_done', day, raw: rawEvents.length, matched: 0, inserted: 0 });
+          continue;
+        }
+
+        const mapped = filtered
+          .map(raw => mapSigurEvent(raw as Record<string, unknown>))
+          .filter((m): m is NonNullable<typeof m> => m !== null);
+
+        // Дедупликация
+        const { data: existingById } = await supabase
+          .from('skud_events')
+          .select('event_date, event_time, physical_person_encrypted')
+          .eq('employee_id', employeeId)
+          .eq('event_date', day);
+
+        const { data: existingByOrg } = await supabase
+          .from('skud_events')
+          .select('event_date, event_time, physical_person_encrypted')
+          .eq('organization_id', employeeOrgId)
+          .eq('event_date', day)
+          .is('employee_id', null);
+
+        const existingSet = new Set<string>();
+        for (const evt of [...(existingById || []), ...(existingByOrg || [])]) {
+          const name = encryptionService.decrypt(evt.physical_person_encrypted).toLowerCase().trim();
+          existingSet.add(`${name}|${evt.event_date}|${evt.event_time}`);
+        }
+
+        const toInsert: SkudEventRow[] = [];
+        for (const m of mapped) {
+          const nameKey = m.physicalPerson.toLowerCase().trim();
+          const dedupKey = `${nameKey}|${m.eventDate}|${m.eventTime}`;
+          if (existingSet.has(dedupKey)) {
+            totalSkipped++;
+            continue;
+          }
+          existingSet.add(dedupKey);
+          toInsert.push({
+            organization_id: employeeOrgId,
+            physical_person_encrypted: encryptionService.encrypt(m.physicalPerson),
+            card_number_encrypted: m.cardNumber ? encryptionService.encrypt(m.cardNumber) : null,
+            event_date: m.eventDate,
+            event_time: m.eventTime,
+            access_point: m.accessPoint,
+            direction: m.direction,
+            employee_id: employeeId,
+          });
+          summariesToUpdate.add(m.eventDate);
+        }
+
+        let dayInserted = 0;
+        const BATCH = 500;
+        for (let i = 0; i < toInsert.length; i += BATCH) {
+          const batch = toInsert.slice(i, i + BATCH);
+          const { error: insertErr } = await supabase.from('skud_events').insert(batch);
+          if (!insertErr) {
+            dayInserted += batch.length;
+            totalInserted += batch.length;
+          }
+        }
+
+        send({ type: 'day_done', day, raw: rawEvents.length, matched: filtered.length, inserted: dayInserted });
+      }
+
+      // 5. Пересчёт daily summary
+      for (const date of summariesToUpdate) {
+        await supabase.rpc('recalculate_skud_daily_summary', {
+          p_organization_id: employeeOrgId,
+          p_employee_id: employeeId,
+          p_date: date,
+        });
+      }
+
+      // 6. Аудит
+      await auditService.logFromRequest(req, req.user.id, 'SYNC_SIGUR_EMPLOYEE', {
+        details: { employeeId, sigurEmpId, startDate, endDate, rawFetched: totalRaw, inserted: totalInserted, skipped: totalSkipped },
+      });
+
+      console.log(`[sync-employee] done: raw=${totalRaw}, inserted=${totalInserted}, skipped=${totalSkipped}`);
+      send({ type: 'done', inserted: totalInserted, skipped: totalSkipped, total: totalInserted + totalSkipped });
+      res.end();
+    } catch (error) {
+      console.error('syncEmployee error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка синхронизации событий сотрудника' });
+    }
+  },
+
+  /**
    * DELETE /api/skud/clear
    * Очистка данных СКУД за период
    */
   async clear(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const organizationId = req.user.organization_id;
+      const organizationId = getOrgId(req);
       const { startDate, endDate } = req.body;
 
       if (!organizationId) {
-        res.status(400).json({ success: false, error: 'Organization required' });
+        res.status(400).json({ success: false, error: 'Organization required. Super admin: передайте ?organization_id=uuid' });
         return;
       }
 

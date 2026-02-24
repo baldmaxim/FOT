@@ -75,6 +75,62 @@ export const skudService = {
     return response.data || [];
   },
 
+  async syncEmployee(
+    employeeId: number,
+    startDate: string,
+    endDate: string,
+    onProgress?: (msg: string) => void,
+  ): Promise<{ inserted: number; skipped: number; total: number }> {
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+    const token = localStorage.getItem('access_token');
+
+    const response = await fetch(`${API_URL}/skud/sync-employee`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ employeeId, startDate, endDate }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: 'Ошибка' }));
+      throw new Error(err.error || 'Ошибка синхронизации');
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('SSE не поддерживается');
+
+    const decoder = new TextDecoder();
+    let result = { inserted: 0, skipped: 0, total: 0 };
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.type === 'day_start' && onProgress) {
+            onProgress(`День ${data.dayIndex + 1}/${data.totalDays} (${data.day})...`);
+          } else if (data.type === 'day_done' && onProgress && data.inserted > 0) {
+            onProgress(`${data.day}: +${data.inserted} событий`);
+          } else if (data.type === 'done') {
+            result = { inserted: data.inserted, skipped: data.skipped, total: data.total };
+          }
+        } catch { /* skip */ }
+      }
+    }
+
+    return result;
+  },
+
   async exportEvents(filters?: SkudFilters): Promise<Blob> {
     const params = new URLSearchParams();
     if (filters?.startDate) params.append('startDate', filters.startDate);

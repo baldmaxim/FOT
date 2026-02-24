@@ -287,6 +287,34 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
+.skud-sync-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--accent);
+}
+
+.skud-sync-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.skud-sync-btn .spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.skud-sync-result {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  padding: 4px 0;
+}
+
 .skud-days-list {
   display: flex;
   flex-direction: column;
@@ -366,6 +394,26 @@
 [data-theme="dark"] .skud-time-badge.exit {
   background: rgba(239, 68, 68, 0.15);
   color: #f87171;
+}
+
+.skud-time-badge.span {
+  background: rgba(245, 158, 11, 0.1);
+  color: #d97706;
+}
+
+[data-theme="dark"] .skud-time-badge.span {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
+.skud-time-badge.duration {
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+}
+
+[data-theme="dark"] .skud-time-badge.duration {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
 }
 
 .skud-events-count {

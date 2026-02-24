@@ -32,6 +32,7 @@ export type AuditAction =
   | 'IMPORT_SKUD'
   | 'CLEAR_SKUD'
   | 'SYNC_SIGUR'
+  | 'SYNC_SIGUR_EMPLOYEE'
   | 'VIEW_SALARY'
   | 'UPDATE_SALARY';
 

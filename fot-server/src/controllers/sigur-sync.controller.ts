@@ -45,17 +45,22 @@ export const sigurSyncController = {
 
       sendProgress({ type: 'status', message: 'Загрузка сотрудников...' });
 
-      // 1. Загружаем ВСЕХ сотрудников
+      // 1. Загружаем ВСЕХ сотрудников (маппинг по ФИО + по sigur_employee_id)
       const { data: employeesData } = await supabase
         .from('employees')
-        .select('id, organization_id, full_name_encrypted')
+        .select('id, organization_id, full_name_encrypted, sigur_employee_id')
         .eq('is_archived', false);
 
       const employeeMap = new Map<string, { id: number; organization_id: string }>();
+      const sigurIdMap = new Map<number, { id: number; organization_id: string }>();
       for (const emp of employeesData || []) {
         const name = encryptionService.decrypt(emp.full_name_encrypted).toLowerCase().trim();
+        const empRef = { id: emp.id, organization_id: emp.organization_id };
         if (!employeeMap.has(name)) {
-          employeeMap.set(name, { id: emp.id, organization_id: emp.organization_id });
+          employeeMap.set(name, empRef);
+        }
+        if (emp.sigur_employee_id != null) {
+          sigurIdMap.set(emp.sigur_employee_id, empRef);
         }
       }
 
@@ -98,7 +103,7 @@ export const sigurSyncController = {
           percent: Math.round((dayIdx / days.length) * 100),
         });
 
-        const rawEvents = await sigurService.getEvents(dayStart, dayEnd, connection, 'PASS_DETECTED');
+        const rawEvents = await sigurService.getEvents(dayStart, dayEnd, connection, 'PASS_DETECTED', { pageSize: 3000 });
         totalSigur += rawEvents.length;
 
         if (rawEvents.length === 0) {
@@ -143,7 +148,8 @@ export const sigurSyncController = {
           }
           existingSet.add(dedupKey);
 
-          const emp = employeeMap.get(nameKey);
+          const emp = (mapped.employeeId != null ? sigurIdMap.get(mapped.employeeId) : undefined)
+            || employeeMap.get(nameKey);
           const orgId = emp?.organization_id || fallbackOrgId;
           if (!orgId) continue;
 

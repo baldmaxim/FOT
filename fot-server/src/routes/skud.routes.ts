@@ -73,6 +73,13 @@ router.post(
   skudController.import as any
 );
 
+// POST /api/skud/sync-employee - синхронизация событий одного сотрудника из Sigur (manager+)
+router.post(
+  '/sync-employee',
+  requireRole('manager', 'owner', 'super_admin') as any,
+  skudController.syncEmployee as any
+);
+
 // DELETE /api/skud/clear - очистка данных (owner+, требуется 2FA)
 router.delete(
   '/clear',

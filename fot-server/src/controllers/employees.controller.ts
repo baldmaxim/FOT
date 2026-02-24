@@ -8,6 +8,7 @@ import { structureController } from './structure.controller.js';
 import { safeDecrypt } from '../utils/crypto.utils.js';
 import { parseDate } from '../utils/date.utils.js';
 import { parseFIO } from '../utils/fio.utils.js';
+import { getOrgId } from '../utils/org.utils.js';
 import type { AuthenticatedRequest, Employee, EmployeeEncrypted } from '../types/index.js';
 
 // Интерфейс для запроса с файлом
@@ -188,10 +189,10 @@ export const employeesController = {
   async create(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const validated = createEmployeeSchema.parse(req.body);
-      const organizationId = req.user.organization_id;
+      const organizationId = getOrgId(req);
 
       if (!organizationId) {
-        res.status(400).json({ success: false, error: 'Organization required' });
+        res.status(400).json({ success: false, error: 'Organization required. Super admin: передайте ?organization_id=uuid' });
         return;
       }
 
@@ -264,10 +265,10 @@ export const employeesController = {
     try {
       const { id } = req.params;
       const validated = updateEmployeeSchema.parse(req.body);
-      const organizationId = req.user.organization_id;
+      const organizationId = getOrgId(req);
 
       if (!organizationId) {
-        res.status(400).json({ success: false, error: 'Organization required' });
+        res.status(400).json({ success: false, error: 'Organization required. Super admin: передайте ?organization_id=uuid' });
         return;
       }
 
@@ -375,10 +376,10 @@ export const employeesController = {
   async delete(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const organizationId = req.user.organization_id;
+      const organizationId = getOrgId(req);
 
       if (!organizationId) {
-        res.status(400).json({ success: false, error: 'Organization required' });
+        res.status(400).json({ success: false, error: 'Organization required. Super admin: передайте ?organization_id=uuid' });
         return;
       }
 
@@ -412,10 +413,10 @@ export const employeesController = {
   async archive(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const organizationId = req.user.organization_id;
+      const organizationId = getOrgId(req);
 
       if (!organizationId) {
-        res.status(400).json({ success: false, error: 'Organization required' });
+        res.status(400).json({ success: false, error: 'Organization required. Super admin: передайте ?organization_id=uuid' });
         return;
       }
 
@@ -452,10 +453,10 @@ export const employeesController = {
   async restore(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const organizationId = req.user.organization_id;
+      const organizationId = getOrgId(req);
 
       if (!organizationId) {
-        res.status(400).json({ success: false, error: 'Organization required' });
+        res.status(400).json({ success: false, error: 'Organization required. Super admin: передайте ?organization_id=uuid' });
         return;
       }
 
@@ -563,7 +564,12 @@ export const employeesController = {
    */
   async deleteAll(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const organizationId = req.user.organization_id;
+      const organizationId = getOrgId(req);
+
+      if (!organizationId) {
+        res.status(400).json({ success: false, error: 'Organization required. Super admin: передайте ?organization_id=uuid' });
+        return;
+      }
 
       const { count: beforeCount } = await supabase
         .from('employees')
@@ -604,10 +610,10 @@ export const employeesController = {
    */
   async import(req: MulterRequest, res: Response): Promise<void> {
     try {
-      const organizationId = req.user.organization_id;
+      const organizationId = getOrgId(req);
 
       if (!organizationId) {
-        res.status(400).json({ success: false, error: 'Organization required' });
+        res.status(400).json({ success: false, error: 'Organization required. Super admin: передайте ?organization_id=uuid' });
         return;
       }
 

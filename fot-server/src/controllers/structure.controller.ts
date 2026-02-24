@@ -3,6 +3,7 @@ import { supabase } from '../config/database.js';
 import { encryptionService } from '../services/encryption.service.js';
 import { auditService } from '../services/audit.service.js';
 import { safeDecrypt } from '../utils/crypto.utils.js';
+import { getOrgId } from '../utils/org.utils.js';
 import type {
   AuthenticatedRequest,
   OrgDepartment,
@@ -97,11 +98,11 @@ export const structureController = {
    */
   async createDepartment(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const organizationId = req.user.organization_id;
+      const organizationId = getOrgId(req);
       const { name, description, parent_id } = req.body;
 
       if (!organizationId) {
-        res.status(400).json({ success: false, error: 'Организация не указана' });
+        res.status(400).json({ success: false, error: 'Организация не указана. Super admin: передайте ?organization_id=uuid' });
         return;
       }
 
@@ -144,8 +145,13 @@ export const structureController = {
    */
   async deleteDepartment(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const organizationId = req.user.organization_id;
+      const organizationId = getOrgId(req);
       const { id } = req.params;
+
+      if (!organizationId) {
+        res.status(400).json({ success: false, error: 'Организация не указана. Super admin: передайте ?organization_id=uuid' });
+        return;
+      }
 
       const { error } = await supabase
         .from('org_departments')

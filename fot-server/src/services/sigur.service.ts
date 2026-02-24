@@ -413,12 +413,17 @@ class SigurService {
   }
 
   /** Получить события (расширенные) с фильтрами по времени */
-  async getEvents(startTime?: string, endTime?: string, connection?: ConnectionType, eventType?: string) {
+  async getEvents(startTime?: string, endTime?: string, connection?: ConnectionType, eventType?: string, extraParams?: Record<string, any>) {
+    const pageSize = extraParams?.pageSize || 1000;
     const params: Record<string, any> = {};
     if (startTime) params.startTime = this.ensureTimezone(startTime);
     if (endTime) params.endTime = this.ensureTimezone(endTime);
     if (eventType) params.eventType = eventType;
-    return this.fetchAllPaginated('/api/v1/events/parsed', params, connection, 1000);
+    if (extraParams) {
+      const { pageSize: _, ...rest } = extraParams;
+      if (Object.keys(rest).length > 0) Object.assign(params, rest);
+    }
+    return this.fetchAllPaginated('/api/v1/events/parsed', params, connection, pageSize);
   }
 
   /** Получить ограниченное кол-во событий (для preview) */

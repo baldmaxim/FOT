@@ -6,8 +6,8 @@ const router = Router();
 
 // Все роуты требуют аутентификации и организации
 router.use(authenticate as any);
-router.use(requireOrganization as any);
 router.use(injectOrganizationFromQuery as any);
+router.use(requireOrganization as any);
 
 // GET /api/structure - получение дерева (worker+)
 router.get(

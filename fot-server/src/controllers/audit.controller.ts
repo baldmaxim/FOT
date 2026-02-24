@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { supabase } from '../config/database.js';
 import { safeDecrypt } from '../utils/crypto.utils.js';
+import { getOrgId } from '../utils/org.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 // Типы для результатов аудита
@@ -36,10 +37,10 @@ export const auditController = {
    */
   async runFullAudit(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const organizationId = req.user.organization_id;
+      const organizationId = getOrgId(req);
 
       if (!organizationId) {
-        res.status(400).json({ success: false, error: 'Organization required' });
+        res.status(400).json({ success: false, error: 'Organization required. Super admin: передайте ?organization_id=uuid' });
         return;
       }
 
@@ -118,11 +119,11 @@ export const auditController = {
    */
   async runSingleCheck(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const organizationId = req.user.organization_id;
+      const organizationId = getOrgId(req);
       const { checkType } = req.params;
 
       if (!organizationId) {
-        res.status(400).json({ success: false, error: 'Organization required' });
+        res.status(400).json({ success: false, error: 'Organization required. Super admin: передайте ?organization_id=uuid' });
         return;
       }
 
