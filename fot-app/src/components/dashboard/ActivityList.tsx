@@ -1,4 +1,5 @@
 import { type FC, useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardContent } from '../ui/Card';
 import { formatElapsed } from '../../utils/formatElapsed';
 import type { IEmployeePresence } from '../../types';
@@ -18,6 +19,7 @@ const getInitials = (name: string): string => {
 };
 
 const EmployeeRow: FC<{ employee: IEmployeePresence }> = ({ employee }) => {
+  const navigate = useNavigate();
   const [elapsed, setElapsed] = useState(() => formatElapsed(employee.since));
 
   useEffect(() => {
@@ -29,7 +31,7 @@ const EmployeeRow: FC<{ employee: IEmployeePresence }> = ({ employee }) => {
   const isOnline = employee.status === 'online';
 
   return (
-    <div className={styles.item}>
+    <div className={styles.item} onClick={() => navigate(`/tender/${employee.employee_id}`)}>
       <div className={styles.avatar}>{getInitials(employee.full_name)}</div>
       <div className={styles.content}>
         <div className={styles.name}>{employee.full_name}</div>
