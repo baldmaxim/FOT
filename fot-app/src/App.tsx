@@ -15,7 +15,7 @@ import { DashboardPage } from './pages/DashboardPage';
 // Super Admin
 import { UserManagementPage } from './pages/super-admin/UserManagementPage';
 import { OrganizationsPage } from './pages/super-admin/OrganizationsPage';
-import { StructurePage } from './pages/super-admin/StructurePage';
+import { ManagePage } from './pages/super-admin/ManagePage';
 import { DataAuditPage } from './pages/super-admin/DataAuditPage';
 
 // Tender & SKUD
@@ -25,8 +25,6 @@ import { SigurSettingsPage } from './pages/skud/SigurSettingsPage';
 import { SigurRawDataPage } from './pages/skud/SigurRawDataPage';
 import { SkudSupabasePage } from './pages/skud/SkudSupabasePage';
 
-// Staff management
-import { StaffManagePage } from './pages/staff/StaffManagePage';
 
 // Profile
 import { ProfilePage } from './pages/profile';
@@ -145,14 +143,6 @@ const AppRoutes = () => {
           }
         />
         <Route
-          path="/staff-manage"
-          element={
-            <Layout title="Управление сотрудниками" theme={theme} onToggleTheme={toggleTheme}>
-              <StaffManagePage />
-            </Layout>
-          }
-        />
-        <Route
           path="/skud-settings"
           element={
             <Layout title="Настройки СКУД" theme={theme} onToggleTheme={toggleTheme}>
@@ -219,8 +209,8 @@ const AppRoutes = () => {
         <Route
           path="/admin/structure"
           element={
-            <Layout title="Структура Организации" theme={theme} onToggleTheme={toggleTheme}>
-              <StructurePage />
+            <Layout title="Управление" theme={theme} onToggleTheme={toggleTheme}>
+              <ManagePage />
             </Layout>
           }
         />

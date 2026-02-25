@@ -34,7 +34,6 @@ const navGroups: INavGroup[] = [
     items: [
       { id: 'overview', path: '/', label: 'Обзор', icon: GridIcon },
       { id: 'employees', path: '/tender', label: 'Сотрудники', icon: UsersIcon },
-      { id: 'staff-manage', path: '/staff-manage', label: 'Управление', icon: SettingsIcon },
       { id: 'timesheet', path: '/timesheet', label: 'Табель', icon: CalendarIcon },
     ]
   },
@@ -50,7 +49,7 @@ const navGroups: INavGroup[] = [
     label: 'Система',
     items: [
       { id: 'admin-users', path: '/admin/users', label: 'Пользователи', icon: SettingsIcon, requiredPosition: 'super_admin' },
-      { id: 'admin-structure', path: '/admin/structure', label: 'Структура', icon: BuildingIcon, requiredPosition: 'super_admin' },
+      { id: 'admin-structure', path: '/admin/structure', label: 'Управление', icon: BuildingIcon, requiredPosition: 'super_admin' },
       { id: 'admin-audit', path: '/admin/audit', label: 'Аудит данных', icon: ClipboardCheckIcon, requiredPosition: 'super_admin' },
     ]
   }

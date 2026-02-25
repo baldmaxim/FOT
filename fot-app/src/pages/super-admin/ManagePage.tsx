@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, type FC } from 'react';
 import { structureApi } from '../../api/structure';
 import { employeeService } from '../../services/employeeService';
-import type { Employee, OrgDepartmentNode } from '../../types';
-import styles from './StaffManagePage.module.css';
+import { useAuth } from '../../contexts/AuthContext';
+import type { Employee, OrgDepartmentNode, OrgStructureResponse } from '../../types';
+import styles from './ManagePage.module.css';
 
 interface IDeptFlat {
   id: string;
@@ -23,33 +24,71 @@ const flattenTree = (nodes: OrgDepartmentNode[], level = 0): IDeptFlat[] => {
   return result;
 };
 
-export const StaffManagePage: FC = () => {
-  const [departments, setDepartments] = useState<IDeptFlat[]>([]);
+const filterTree = (nodes: OrgDepartmentNode[], query: string): OrgDepartmentNode[] => {
+  if (!query.trim()) return nodes;
+  const q = query.toLowerCase().trim();
+  return nodes.reduce<OrgDepartmentNode[]>((acc, node) => {
+    const childMatches = filterTree(node.children, query);
+    const selfMatch = node.name.toLowerCase().includes(q);
+    if (selfMatch || childMatches.length > 0) {
+      acc.push({ ...node, children: childMatches.length > 0 ? childMatches : node.children });
+    }
+    return acc;
+  }, []);
+};
+
+export const ManagePage: FC = () => {
+  const { profile } = useAuth();
+
+  // Structure state
+  const [structure, setStructure] = useState<OrgStructureResponse | null>(null);
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  const [addingTo, setAddingTo] = useState<string | null>(null);
+  const [newDeptName, setNewDeptName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [deptLoading, setDeptLoading] = useState(true);
+  const [deptSearch, setDeptSearch] = useState('');
+
+  // Employee state
   const [selectedDeptId, setSelectedDeptId] = useState<string | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(false);
-  const [deptLoading, setDeptLoading] = useState(true);
-  const [deptSearch, setDeptSearch] = useState('');
   const [empSearch, setEmpSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [moveTarget, setMoveTarget] = useState<Employee | null>(null);
   const [moveSearch, setMoveSearch] = useState('');
   const [actionLoading, setActionLoading] = useState<number | null>(null);
 
-  // Load departments
-  useEffect(() => {
-    const load = async () => {
+  // Load structure
+  const loadStructure = useCallback(async () => {
+    try {
       setDeptLoading(true);
-      const res = await structureApi.getTree();
-      if (res.success && res.data) {
-        setDepartments(flattenTree(res.data.departments));
+      setError(null);
+      const response = await structureApi.getTree();
+      if (response.success && response.data) {
+        setStructure(response.data);
+        setExpandedNodes(prev => {
+          if (prev.size > 0) return prev;
+          const expanded = new Set<string>();
+          for (const dept of response.data!.departments) {
+            expanded.add(dept.id);
+          }
+          return expanded;
+        });
+      } else {
+        setError(response.error || 'Ошибка загрузки');
       }
+    } catch {
+      setError('Ошибка загрузки структуры');
+    } finally {
       setDeptLoading(false);
-    };
-    load();
+    }
   }, []);
 
-  // Load employees when department selected
+  useEffect(() => { loadStructure(); }, [loadStructure]);
+
+  // Load employees
   const loadEmployees = useCallback(async (deptId: string | null) => {
     if (!deptId) { setEmployees([]); return; }
     setLoading(true);
@@ -62,32 +101,63 @@ export const StaffManagePage: FC = () => {
     setLoading(false);
   }, []);
 
-  useEffect(() => {
-    loadEmployees(selectedDeptId);
-  }, [selectedDeptId, loadEmployees]);
+  useEffect(() => { loadEmployees(selectedDeptId); }, [selectedDeptId, loadEmployees]);
 
-  // Filtered departments
-  const filteredDepts = useMemo(() => {
-    if (!deptSearch.trim()) return departments;
-    const q = deptSearch.toLowerCase().trim();
-    return departments.filter(d => d.name.toLowerCase().includes(q));
-  }, [departments, deptSearch]);
+  // Tree operations
+  const toggleNode = (id: string) => {
+    setExpandedNodes(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
-  // Filtered employees: "all" shows only active, "fired" shows fired
-  const filteredEmployees = useMemo(() => {
-    let list = employees;
-    if (statusFilter === 'all') list = list.filter(e => e.employment_status !== 'fired');
-    if (statusFilter === 'fired') list = list.filter(e => e.employment_status === 'fired');
-    if (empSearch.trim()) {
-      const q = empSearch.toLowerCase().trim();
-      list = list.filter(e => e.full_name.toLowerCase().includes(q));
+  const startAdding = (parentId: string | null) => {
+    setAddingTo(parentId ?? 'root');
+    setNewDeptName('');
+    if (parentId) {
+      setExpandedNodes(prev => new Set(prev).add(parentId));
     }
-    return list;
-  }, [employees, statusFilter, empSearch]);
+  };
 
-  const selectedDeptName = departments.find(d => d.id === selectedDeptId)?.name || '';
+  const cancelAdding = () => {
+    setAddingTo(null);
+    setNewDeptName('');
+  };
 
-  // Actions
+  const handleCreateDept = async () => {
+    if (!newDeptName.trim() || creating) return;
+    setCreating(true);
+    const parentId = addingTo === 'root' ? null : addingTo;
+    const orgId = profile?.organization_id || structure?.departments[0]?.organization_id;
+    const res = await structureApi.createDepartment(newDeptName.trim(), undefined, orgId || undefined, parentId);
+    setCreating(false);
+    if (res.success) {
+      cancelAdding();
+      await loadStructure();
+    } else {
+      setError(res.error || 'Ошибка создания отдела');
+    }
+  };
+
+  const handleDeleteDept = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm('Удалить этот отдел?')) return;
+    const orgId = profile?.organization_id || structure?.departments[0]?.organization_id;
+    const res = await structureApi.deleteDepartment(id, orgId || undefined);
+    if (res.success) {
+      if (selectedDeptId === id) {
+        setSelectedDeptId(null);
+        setEmployees([]);
+      }
+      await loadStructure();
+    } else {
+      setError(res.error || 'Ошибка удаления отдела');
+    }
+  };
+
+  // Employee actions
   const handleFire = async (emp: Employee) => {
     setActionLoading(emp.id);
     try {
@@ -110,7 +180,6 @@ export const StaffManagePage: FC = () => {
     setActionLoading(empId);
     try {
       await employeeService.moveDepartment(empId, newDeptId);
-      // Reload employees for current department
       await loadEmployees(selectedDeptId);
     } catch { /* ignore */ }
     setMoveTarget(null);
@@ -118,22 +187,115 @@ export const StaffManagePage: FC = () => {
     setActionLoading(null);
   };
 
-  // Stats
+  // Computed
+  const displayTree = useMemo(() =>
+    structure ? (deptSearch ? filterTree(structure.departments, deptSearch) : structure.departments) : [],
+    [structure, deptSearch]
+  );
+
+  const flatDepts = useMemo(() =>
+    structure ? flattenTree(structure.departments) : [],
+    [structure]
+  );
+
+  const filteredEmployees = useMemo(() => {
+    let list = employees;
+    if (statusFilter === 'all') list = list.filter(e => e.employment_status !== 'fired');
+    if (statusFilter === 'fired') list = list.filter(e => e.employment_status === 'fired');
+    if (empSearch.trim()) {
+      const q = empSearch.toLowerCase().trim();
+      list = list.filter(e => e.full_name.toLowerCase().includes(q));
+    }
+    return list;
+  }, [employees, statusFilter, empSearch]);
+
   const activeCount = employees.filter(e => e.employment_status === 'active').length;
   const firedCount = employees.filter(e => e.employment_status === 'fired').length;
 
-  // Filtered departments for move modal
   const moveDepts = useMemo(() => {
-    if (!moveSearch.trim()) return departments;
+    if (!moveSearch.trim()) return flatDepts;
     const q = moveSearch.toLowerCase().trim();
-    return departments.filter(d => d.name.toLowerCase().includes(q));
-  }, [departments, moveSearch]);
+    return flatDepts.filter(d => d.name.toLowerCase().includes(q));
+  }, [flatDepts, moveSearch]);
+
+  const selectedDeptName = flatDepts.find(d => d.id === selectedDeptId)?.name || '';
+
+  // Render helpers
+  const renderInlineForm = (level: number) => (
+    <div className={styles.inlineForm} style={{ paddingLeft: 8 + level * 14 }}>
+      <input
+        className={styles.inlineInput}
+        type="text"
+        placeholder="Название отдела"
+        value={newDeptName}
+        onChange={e => setNewDeptName(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') handleCreateDept();
+          if (e.key === 'Escape') cancelAdding();
+        }}
+        autoFocus
+      />
+      <button className={styles.inlineSubmit} onClick={handleCreateDept} disabled={!newDeptName.trim() || creating}>
+        {creating ? '...' : 'ОК'}
+      </button>
+      <button className={styles.inlineCancel} onClick={cancelAdding}>✕</button>
+    </div>
+  );
+
+  const renderNode = (node: OrgDepartmentNode, level: number): JSX.Element => {
+    const isExpanded = expandedNodes.has(node.id);
+    const hasChildren = node.children.length > 0;
+    const isSelected = selectedDeptId === node.id;
+    const isAddingHere = addingTo === node.id;
+
+    return (
+      <div key={node.id} className={styles.treeNode}>
+        <div
+          className={`${styles.nodeHeader} ${isSelected ? styles.nodeActive : ''}`}
+          style={{ paddingLeft: 8 + level * 14 }}
+          onClick={() => {
+            setSelectedDeptId(node.id);
+            if (hasChildren) toggleNode(node.id);
+          }}
+        >
+          {hasChildren ? (
+            <span className={styles.expandIcon}>{isExpanded ? '▾' : '▸'}</span>
+          ) : (
+            <span className={styles.leafIcon}>●</span>
+          )}
+          <span className={styles.nodeName}>{node.name}</span>
+          <button
+            className={styles.nodeAddBtn}
+            title="Добавить подотдел"
+            onClick={e => { e.stopPropagation(); startAdding(node.id); }}
+          >+</button>
+          <button
+            className={styles.nodeDeleteBtn}
+            title="Удалить отдел"
+            onClick={e => handleDeleteDept(node.id, e)}
+          >×</button>
+        </div>
+        {(isExpanded || isAddingHere) && (
+          <div className={styles.nodeChildren}>
+            {hasChildren && node.children.map(child => renderNode(child, level + 1))}
+            {isAddingHere && renderInlineForm(level + 1)}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className={styles.container}>
       {/* Department sidebar */}
       <div className={styles.sidebar}>
-        <p className={styles.sidebarTitle}>Отделы</p>
+        <div className={styles.sidebarHeader}>
+          <p className={styles.sidebarTitle}>Отделы</p>
+          <div className={styles.sidebarActions}>
+            <button className={styles.sidebarBtnAdd} onClick={() => startAdding(null)} title="Добавить отдел">+</button>
+            <button className={styles.sidebarBtn} onClick={loadStructure} title="Обновить">↻</button>
+          </div>
+        </div>
         <input
           className={styles.deptSearch}
           type="text"
@@ -141,26 +303,20 @@ export const StaffManagePage: FC = () => {
           value={deptSearch}
           onChange={e => setDeptSearch(e.target.value)}
         />
+        {error && <div className={styles.sidebarError}>{error}</div>}
         <div className={styles.deptList}>
           {deptLoading ? (
             <div className={styles.loading}>
               <div className={styles.spinner} />
             </div>
-          ) : filteredDepts.length === 0 ? (
-            <div className={styles.empty}>Нет отделов</div>
+          ) : displayTree.length === 0 ? (
+            <div className={styles.empty}>
+              {deptSearch ? 'Ничего не найдено' : 'Нет отделов'}
+            </div>
           ) : (
-            filteredDepts.map(dept => (
-              <div
-                key={dept.id}
-                className={`${styles.deptItem} ${selectedDeptId === dept.id ? styles.deptItemActive : ''}`}
-                style={{ paddingLeft: 10 + dept.level * 14 }}
-                onClick={() => setSelectedDeptId(dept.id)}
-              >
-                <span className={styles.deptIcon}>●</span>
-                <span className={styles.deptName}>{dept.name}</span>
-              </div>
-            ))
+            displayTree.map(node => renderNode(node, 0))
           )}
+          {addingTo === 'root' && renderInlineForm(0)}
         </div>
       </div>
 
@@ -301,4 +457,4 @@ export const StaffManagePage: FC = () => {
   );
 };
 
-export default StaffManagePage;
+export default ManagePage;
