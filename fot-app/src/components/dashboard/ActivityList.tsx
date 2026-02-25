@@ -20,20 +20,21 @@ const getInitials = (name: string): string => {
   return name.slice(0, 2).toUpperCase();
 };
 
-/** Прогресс рабочего дня (0-100%) по total_hours или first_entry */
+/** Прогресс рабочего дня (0-100%): online — от first_entry/since, offline — от total_hours */
 const getTimelinePercent = (employee: IEmployeePresence): number => {
   if (employee.status === 'unknown') return 0;
-  if (employee.total_hours != null && employee.total_hours > 0) {
-    return Math.min(100, Math.round((employee.total_hours / 8) * 100));
-  }
-  if (!employee.first_entry) return 0;
   if (employee.status === 'online') {
+    const timeStr = employee.first_entry || employee.since;
+    if (!timeStr) return 0;
     const now = new Date();
-    const [h, m] = employee.first_entry.split(':').map(Number);
+    const [h, m] = timeStr.split(':').map(Number);
     const entry = new Date();
     entry.setHours(h, m, 0, 0);
     const hoursWorked = (now.getTime() - entry.getTime()) / (1000 * 60 * 60);
     return Math.min(100, Math.round((hoursWorked / 8) * 100));
+  }
+  if (employee.total_hours != null && employee.total_hours > 0) {
+    return Math.min(100, Math.round((employee.total_hours / 8) * 100));
   }
   return 0;
 };
@@ -46,19 +47,22 @@ const formatWorkTime = (hours: number): string => {
   return `${m}м`;
 };
 
-/** Время присутствия: для online считаем от first_entry, для offline берём total_hours */
+/** Время присутствия: для online считаем от first_entry (fallback на since), для offline берём total_hours */
 const getWorkElapsed = (employee: IEmployeePresence): string => {
-  if (employee.status === 'online' && employee.first_entry) {
-    const now = new Date();
-    const [h, m] = employee.first_entry.split(':').map(Number);
-    const entry = new Date();
-    entry.setHours(h, m, 0, 0);
-    const diffMs = now.getTime() - entry.getTime();
-    if (diffMs < 0) return '0м';
-    const totalMin = Math.floor(diffMs / 60_000);
-    const hours = Math.floor(totalMin / 60);
-    const mins = totalMin % 60;
-    return hours > 0 ? `${hours}ч ${mins}м` : `${mins}м`;
+  if (employee.status === 'online') {
+    const timeStr = employee.first_entry || employee.since;
+    if (timeStr) {
+      const now = new Date();
+      const [h, m] = timeStr.split(':').map(Number);
+      const entry = new Date();
+      entry.setHours(h, m, 0, 0);
+      const diffMs = now.getTime() - entry.getTime();
+      if (diffMs < 0) return '0м';
+      const totalMin = Math.floor(diffMs / 60_000);
+      const hours = Math.floor(totalMin / 60);
+      const mins = totalMin % 60;
+      return hours > 0 ? `${hours}ч ${mins}м` : `${mins}м`;
+    }
   }
   if (employee.total_hours != null && employee.total_hours > 0) {
     return formatWorkTime(employee.total_hours);
