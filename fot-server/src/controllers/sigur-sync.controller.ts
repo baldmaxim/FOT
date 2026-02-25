@@ -46,19 +46,21 @@ export const sigurSyncController = {
 
       sendProgress({ type: 'status', message: 'Загрузка сотрудников...' });
 
-      // 1. Загружаем ВСЕХ сотрудников (маппинг по ФИО + по sigur_employee_id)
+      // 1. Загружаем ВСЕХ сотрудников (маппинг по name|org + по sigur_employee_id)
       const { data: employeesData } = await supabase
         .from('employees')
         .select('id, organization_id, full_name_encrypted, sigur_employee_id')
         .eq('is_archived', false);
 
-      const employeeMap = new Map<string, { id: number; organization_id: string }>();
+      // name|org_id → emp (исключает конфликты при одинаковых ФИО в разных org)
+      const employeeByNameOrg = new Map<string, { id: number; organization_id: string }>();
       const sigurIdMap = new Map<number, { id: number; organization_id: string }>();
       for (const emp of employeesData || []) {
         const name = encryptionService.decrypt(emp.full_name_encrypted).toLowerCase().trim();
         const empRef = { id: emp.id, organization_id: emp.organization_id };
-        if (!employeeMap.has(name)) {
-          employeeMap.set(name, empRef);
+        const key = `${name}|${emp.organization_id}`;
+        if (!employeeByNameOrg.has(key)) {
+          employeeByNameOrg.set(key, empRef);
         }
         if (emp.sigur_employee_id != null) {
           sigurIdMap.set(emp.sigur_employee_id, empRef);
@@ -90,7 +92,7 @@ export const sigurSyncController = {
       let totalNoOrg = 0;
       const summariesToUpdate = new Set<string>();
 
-      sendProgress({ type: 'start', totalDays: days.length, employees: employeeMap.size });
+      sendProgress({ type: 'start', totalDays: days.length, employees: employeeByNameOrg.size });
 
       // 3. Обрабатываем по одному дню
       for (let dayIdx = 0; dayIdx < days.length; dayIdx++) {
@@ -155,8 +157,10 @@ export const sigurSyncController = {
           existingSet.add(dedupHash);
 
           const nameKey = mapped.physicalPerson.toLowerCase().trim();
-          const emp = (mapped.employeeId != null ? sigurIdMap.get(mapped.employeeId) : undefined)
-            || employeeMap.get(nameKey);
+          let emp = mapped.employeeId != null ? sigurIdMap.get(mapped.employeeId) : undefined;
+          if (!emp && fallbackOrgId) {
+            emp = employeeByNameOrg.get(`${nameKey}|${fallbackOrgId}`);
+          }
           const orgId = emp?.organization_id || fallbackOrgId;
           if (!orgId) { totalNoOrg++; continue; }
 
@@ -204,17 +208,14 @@ export const sigurSyncController = {
         });
       }
 
-      // 4. Пересчитываем сводки
+      // 4. Пересчитываем сводки (пакетный RPC)
       if (summariesToUpdate.size > 0) {
         sendProgress({ type: 'status', message: 'Пересчёт сводок...' });
-        for (const key of summariesToUpdate) {
+        const pairs = [...summariesToUpdate].map(key => {
           const [empId, orgId, date] = key.split(':');
-          await supabase.rpc('recalculate_skud_daily_summary', {
-            p_organization_id: orgId,
-            p_employee_id: parseInt(empId, 10),
-            p_date: date,
-          });
-        }
+          return { org_id: orgId, emp_id: parseInt(empId, 10), date };
+        });
+        await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: pairs });
       }
 
       // 5. Аудит

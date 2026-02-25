@@ -496,10 +496,11 @@ export async function syncEmployeesLogic(
     return { imported: 0, updated: 0, skipped: 0, total: 0, errors: [] };
   }
 
+  // Глобальный поиск по sigur_employee_id (не только в целевой org)
+  // чтобы не создавать дубли при синхронизации в другую организацию
   const { data: existingEmps } = await supabase
     .from('employees')
-    .select('id, sigur_employee_id, employment_status, department_locked')
-    .eq('organization_id', organizationId)
+    .select('id, sigur_employee_id, employment_status, department_locked, organization_id')
     .not('sigur_employee_id', 'is', null);
 
   const sigurIdToDbId = new Map<number, number>();
@@ -507,7 +508,10 @@ export async function syncEmployeesLogic(
   const lockedDeptSigurIds = new Set<number>();
   for (const e of existingEmps || []) {
     if (e.sigur_employee_id != null) {
-      sigurIdToDbId.set(e.sigur_employee_id, e.id);
+      // Приоритет: сотрудник из целевой организации, иначе первый найденный
+      if (!sigurIdToDbId.has(e.sigur_employee_id) || e.organization_id === organizationId) {
+        sigurIdToDbId.set(e.sigur_employee_id, e.id);
+      }
       if (e.employment_status === 'fired') firedSigurIds.add(e.sigur_employee_id);
       if (e.department_locked) lockedDeptSigurIds.add(e.sigur_employee_id);
     }

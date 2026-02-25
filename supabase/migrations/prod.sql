@@ -4272,3 +4272,74 @@ CREATE TABLE IF NOT EXISTS public.skud_access_point_settings (
   created_at timestamptz DEFAULT now(),
   UNIQUE (organization_id, department_id, access_point_name)
 );
+
+-- ============================================
+-- ОПТИМИЗАЦИЯ ИНДЕКСОВ skud_events (2026-02-25)
+-- ============================================
+
+-- Покрывающий индекс для getEvents() ORDER BY event_date DESC, event_time DESC
+CREATE INDEX IF NOT EXISTS idx_skud_events_org_date_time
+  ON public.skud_events (organization_id, event_date DESC, event_time DESC)
+  INCLUDE (employee_id, access_point, direction);
+
+-- Покрывающий индекс для sync dedup (SELECT dedup_hash WHERE event_date + org_id)
+CREATE INDEX IF NOT EXISTS idx_skud_events_date_org_hash
+  ON public.skud_events (event_date, organization_id)
+  INCLUDE (dedup_hash)
+  WHERE dedup_hash IS NOT NULL;
+
+-- Частичный индекс для presence fallback WHERE employee_id IS NULL
+CREATE INDEX IF NOT EXISTS idx_skud_events_null_emp
+  ON public.skud_events (organization_id, event_date, event_time DESC)
+  WHERE employee_id IS NULL;
+
+-- Частичный индекс для access_point DB fallback
+CREATE INDEX IF NOT EXISTS idx_skud_events_org_access_point
+  ON public.skud_events (organization_id, access_point)
+  WHERE access_point IS NOT NULL;
+
+-- Частичный индекс для backfill-скрипта (cursor по id WHERE employee_id IS NULL)
+CREATE INDEX IF NOT EXISTS idx_skud_events_null_emp_id
+  ON public.skud_events (id)
+  WHERE employee_id IS NULL;
+
+-- Покрывающий индекс для активных сотрудников
+CREATE INDEX IF NOT EXISTS idx_employees_active
+  ON public.employees (organization_id, id)
+  INCLUDE (full_name_encrypted, org_department_id, position_id, sigur_employee_id, employment_status)
+  WHERE is_archived = false AND employment_status = 'active';
+
+-- Пакетное обновление employee_id (вместо поштучных UPDATE)
+CREATE OR REPLACE FUNCTION public.bulk_update_employee_ids(
+  p_event_ids bigint[],
+  p_employee_ids bigint[]
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  UPDATE skud_events
+  SET employee_id = updates.emp_id
+  FROM (
+    SELECT unnest(p_event_ids) AS evt_id,
+           unnest(p_employee_ids) AS emp_id
+  ) AS updates
+  WHERE skud_events.id = updates.evt_id
+    AND skud_events.employee_id IS NULL;
+END;
+$$;
+
+-- Пакетный пересчёт daily_summary (вместо N отдельных RPC)
+CREATE OR REPLACE FUNCTION public.batch_recalculate_skud_daily_summary(
+  p_pairs jsonb
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+  v_pair jsonb;
+BEGIN
+  FOR v_pair IN SELECT * FROM jsonb_array_elements(p_pairs)
+  LOOP
+    PERFORM recalculate_skud_daily_summary(
+      (v_pair->>'org_id')::uuid,
+      (v_pair->>'emp_id')::bigint,
+      (v_pair->>'date')::date
+    );
+  END LOOP;
+END;
+$$;

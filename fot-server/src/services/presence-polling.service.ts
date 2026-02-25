@@ -13,33 +13,42 @@ let pollingTimer: ReturnType<typeof setInterval> | null = null;
 let fullDaySynced = false;
 let lastSyncedDay = '';
 
-// Кэш сотрудников
+// Кэш сотрудников: по имени (name|org_id) и по sigur_employee_id
 let employeeCache: {
-  map: Map<string, { id: number; organization_id: string }>;
+  byNameOrg: Map<string, { id: number; organization_id: string }>;
+  bySigurId: Map<number, { id: number; organization_id: string }>;
   fetchedAt: number;
 } | null = null;
 
-async function getEmployeeMap(): Promise<Map<string, { id: number; organization_id: string }>> {
+interface EmployeeMaps {
+  byNameOrg: Map<string, { id: number; organization_id: string }>;
+  bySigurId: Map<number, { id: number; organization_id: string }>;
+}
+
+async function getEmployeeMaps(): Promise<EmployeeMaps> {
   if (employeeCache && (Date.now() - employeeCache.fetchedAt) < EMPLOYEE_CACHE_TTL) {
-    return employeeCache.map;
+    return employeeCache;
   }
 
   const { data } = await supabase
     .from('employees')
-    .select('id, organization_id, full_name_encrypted')
+    .select('id, organization_id, full_name_encrypted, sigur_employee_id')
     .eq('is_archived', false);
 
-  const map = new Map<string, { id: number; organization_id: string }>();
+  const byNameOrg = new Map<string, { id: number; organization_id: string }>();
+  const bySigurId = new Map<number, { id: number; organization_id: string }>();
   for (const emp of data || []) {
     const name = encryptionService.decrypt(emp.full_name_encrypted).toLowerCase().trim();
-    if (!map.has(name)) {
-      map.set(name, { id: emp.id, organization_id: emp.organization_id });
-    }
+    const ref = { id: emp.id, organization_id: emp.organization_id };
+    // Ключ: name|org_id — исключает конфликт при одинаковых ФИО в разных org
+    const key = `${name}|${emp.organization_id}`;
+    if (!byNameOrg.has(key)) byNameOrg.set(key, ref);
+    if (emp.sigur_employee_id != null) bySigurId.set(emp.sigur_employee_id, ref);
   }
 
-  employeeCache = { map, fetchedAt: Date.now() };
-  console.log(`[presence-polling] cached ${map.size} employees`);
-  return map;
+  employeeCache = { byNameOrg, bySigurId, fetchedAt: Date.now() };
+  console.log(`[presence-polling] cached ${byNameOrg.size} employees`);
+  return employeeCache;
 }
 
 async function getFallbackOrgId(): Promise<string | null> {
@@ -77,7 +86,7 @@ async function pollEvents(): Promise<void> {
     const rawEvents = await sigurService.getEvents(startTime, endTime, undefined, 'PASS_DETECTED');
     if (rawEvents.length === 0) return;
 
-    const employeeMap = await getEmployeeMap();
+    const { byNameOrg, bySigurId } = await getEmployeeMaps();
     const fallbackOrgId = await getFallbackOrgId();
 
     // Дедупликация: загружаем существующие хэши за сегодня
@@ -116,8 +125,15 @@ async function pollEvents(): Promise<void> {
       if (existingSet.has(dedupHash)) continue;
       existingSet.add(dedupHash);
 
+      // Маппинг: sigur_employee_id → name|org (учитывает дубли ФИО)
       const nameKey = mapped.physicalPerson.toLowerCase().trim();
-      const emp = employeeMap.get(nameKey);
+      let emp: { id: number; organization_id: string } | undefined;
+      if (mapped.employeeId != null) {
+        emp = bySigurId.get(mapped.employeeId);
+      }
+      if (!emp && fallbackOrgId) {
+        emp = byNameOrg.get(`${nameKey}|${fallbackOrgId}`);
+      }
       const orgId = emp?.organization_id || fallbackOrgId;
       if (!orgId) continue;
 
@@ -150,14 +166,13 @@ async function pollEvents(): Promise<void> {
       }
     }
 
-    // Пересчёт сводок
-    for (const key of summariesToUpdate) {
-      const [empId, orgId, date] = key.split(':');
-      await supabase.rpc('recalculate_skud_daily_summary', {
-        p_organization_id: orgId,
-        p_employee_id: parseInt(empId, 10),
-        p_date: date,
+    // Пересчёт сводок (пакетный RPC)
+    if (summariesToUpdate.size > 0) {
+      const pairs = [...summariesToUpdate].map(key => {
+        const [empId, orgId, date] = key.split(':');
+        return { org_id: orgId, emp_id: parseInt(empId, 10), date };
       });
+      await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: pairs });
     }
 
     if (totalInserted > 0) {

@@ -12,11 +12,12 @@ interface ImportResult {
 }
 
 export const employeeService = {
-  async getAll(params?: { organizationId?: string; departmentId?: string; archived?: boolean }): Promise<Employee[]> {
+  async getAll(params?: { organizationId?: string; departmentId?: string; archived?: boolean; view?: 'list' }): Promise<Employee[]> {
     const qs = new URLSearchParams();
     if (params?.organizationId) qs.set('organization_id', params.organizationId);
     if (params?.departmentId) qs.set('department_id', params.departmentId);
     if (params?.archived) qs.set('archived', 'true');
+    if (params?.view) qs.set('view', params.view);
     const query = qs.toString() ? `?${qs}` : '';
     const response = await apiClient.get<ApiResponse<Employee[]>>(`/employees${query}`);
     return response.data || [];

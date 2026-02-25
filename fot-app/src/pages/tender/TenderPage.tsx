@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Users, Plus, Upload, Search, Archive, X, AlertTriangle, FileSpreadsheet, List, GitBranch, ChevronDown, Check } from 'lucide-react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { employeeService } from '../../services/employeeService';
 import { apiClient } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
@@ -60,6 +61,8 @@ export const TenderPage: React.FC = () => {
   const editDeptRef = useRef<HTMLDivElement>(null);
   const editDeptTriggerRef = useRef<HTMLButtonElement>(null);
 
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -96,24 +99,32 @@ export const TenderPage: React.FC = () => {
   });
 
   useEffect(() => {
+    const t0 = performance.now();
+    console.log('[Employees] Loading department structure...');
     apiClient.get<{ success: boolean; data: { departments: IDbDepartment[] } }>('/structure')
       .then(res => {
         const departments = res.data?.departments || [];
         setDeptOptions(flattenDbTree(departments));
+        console.log(`[Employees] Structure loaded: ${departments.length} depts in ${(performance.now() - t0).toFixed(0)}ms`);
       })
-      .catch(() => {});
+      .catch((err) => { console.error('[Employees] Structure load error:', err); });
   }, []);
 
   const loadEmployees = useCallback(async () => {
     setLoading(true);
     setError('');
+    const t0 = performance.now();
+    console.log('[Employees] Start loading, archived =', showArchived);
     try {
-      const data = await employeeService.getAll({ archived: showArchived });
+      const data = await employeeService.getAll({ archived: showArchived, view: 'list' });
+      console.log(`[Employees] API response: ${data.length} rows in ${(performance.now() - t0).toFixed(0)}ms`);
       setEmployees(data);
-    } catch {
+    } catch (err) {
+      console.error('[Employees] Load error:', err);
       setError('Ошибка загрузки сотрудников');
     } finally {
       setLoading(false);
+      console.log(`[Employees] Total load time: ${(performance.now() - t0).toFixed(0)}ms`);
     }
   }, [showArchived]);
 
@@ -213,6 +224,13 @@ export const TenderPage: React.FC = () => {
       return matchesSearch && matchesPosition && matchesDept && matchesStatus;
     });
   }, [employees, searchQuery, positionFilter, selectedDept]);
+
+  const virtualizer = useVirtualizer({
+    count: filteredEmployees.length,
+    getScrollElement: () => tableContainerRef.current,
+    estimateSize: () => 44,
+    overscan: 20,
+  });
 
   const handleAddEmployee = async () => {
     if (!formData.full_name || !formData.hire_date) return;
@@ -444,111 +462,126 @@ export const TenderPage: React.FC = () => {
             <span>Должность</span>
             <span>Отдел</span>
           </div>
-          {filteredEmployees.map((emp, index) => (
-            <div
-              key={emp.id}
-              className={`table-row ${emp.is_archived ? 'archived' : ''}`}
-              onClick={() => handleRowClick(emp)}
-            >
-              <span className="col-number" style={{ width: '40px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                {index + 1}
-              </span>
-              <span className="col-name">{emp.full_name}</span>
-              <span className="col-position">{emp.position_name || '—'}</span>
-              <span className="col-dept-edit" onClick={e => e.stopPropagation()}>
-                {canEdit && editDeptEmpId === emp.id ? (
-                  <div className="dept-edit-row" ref={editDeptRef}>
-                    <div className="dept-edit-picker">
-                      <button
-                        ref={editDeptTriggerRef}
-                        type="button"
-                        className="dept-edit-trigger"
-                        onClick={() => {
-                          if (!editDeptOpen && editDeptTriggerRef.current) {
-                            const rect = editDeptTriggerRef.current.getBoundingClientRect();
-                            const menuW = 280;
-                            const menuH = 260;
-                            let left = rect.left;
-                            let top = rect.bottom + 4;
-                            if (left + menuW > window.innerWidth) left = window.innerWidth - menuW - 8;
-                            if (left < 8) left = 8;
-                            if (top + menuH > window.innerHeight) top = rect.top - menuH - 4;
-                            setEditDeptMenuPos({ top, left });
-                          }
-                          setEditDeptOpen(!editDeptOpen);
-                          setEditDeptSearch('');
-                        }}
-                      >
-                        <span className="dept-edit-trigger-text">
-                          {deptOptions.find(d => d.id === editDeptValue)?.name || '— Не назначен —'}
-                        </span>
-                        <ChevronDown size={12} className={`dept-edit-chevron ${editDeptOpen ? 'open' : ''}`} />
-                      </button>
-                      {editDeptOpen && editDeptMenuPos && (
-                        <div className="dept-edit-menu" style={{ top: editDeptMenuPos.top, left: editDeptMenuPos.left }}>
-                          <div className="dept-edit-search">
-                            <Search size={12} />
-                            <input
-                              type="text"
-                              placeholder="Поиск..."
-                              value={editDeptSearch}
-                              onChange={e => setEditDeptSearch(e.target.value)}
-                              autoFocus
-                            />
-                          </div>
-                          <div className="dept-edit-list">
-                            {filteredEditDepts.length === 0 ? (
-                              <div className="dept-edit-empty">Не найдено</div>
-                            ) : (
-                              filteredEditDepts.map(d => (
-                                <button
-                                  key={d.id}
-                                  type="button"
-                                  className={`dept-edit-item ${d.id === editDeptValue ? 'active' : ''}`}
-                                  style={{ paddingLeft: `${8 + d.level * 14}px` }}
-                                  onClick={() => {
-                                    setEditDeptValue(d.id);
-                                    setEditDeptOpen(false);
-                                    setEditDeptSearch('');
-                                  }}
-                                >
-                                  {d.name}
-                                </button>
-                              ))
+          <div ref={tableContainerRef} className="employees-table-body">
+            <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+              {virtualizer.getVirtualItems().map(virtualRow => {
+                const emp = filteredEmployees[virtualRow.index];
+                return (
+                  <div
+                    key={emp.id}
+                    className={`table-row ${emp.is_archived ? 'archived' : ''}`}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      height: virtualRow.size,
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                    onClick={() => handleRowClick(emp)}
+                  >
+                    <span className="col-number" style={{ width: '40px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                      {virtualRow.index + 1}
+                    </span>
+                    <span className="col-name">{emp.full_name}</span>
+                    <span className="col-position">{emp.position_name || '—'}</span>
+                    <span className="col-dept-edit" onClick={e => e.stopPropagation()}>
+                      {canEdit && editDeptEmpId === emp.id ? (
+                        <div className="dept-edit-row" ref={editDeptRef}>
+                          <div className="dept-edit-picker">
+                            <button
+                              ref={editDeptTriggerRef}
+                              type="button"
+                              className="dept-edit-trigger"
+                              onClick={() => {
+                                if (!editDeptOpen && editDeptTriggerRef.current) {
+                                  const rect = editDeptTriggerRef.current.getBoundingClientRect();
+                                  const menuW = 280;
+                                  const menuH = 260;
+                                  let left = rect.left;
+                                  let top = rect.bottom + 4;
+                                  if (left + menuW > window.innerWidth) left = window.innerWidth - menuW - 8;
+                                  if (left < 8) left = 8;
+                                  if (top + menuH > window.innerHeight) top = rect.top - menuH - 4;
+                                  setEditDeptMenuPos({ top, left });
+                                }
+                                setEditDeptOpen(!editDeptOpen);
+                                setEditDeptSearch('');
+                              }}
+                            >
+                              <span className="dept-edit-trigger-text">
+                                {deptOptions.find(d => d.id === editDeptValue)?.name || '— Не назначен —'}
+                              </span>
+                              <ChevronDown size={12} className={`dept-edit-chevron ${editDeptOpen ? 'open' : ''}`} />
+                            </button>
+                            {editDeptOpen && editDeptMenuPos && (
+                              <div className="dept-edit-menu" style={{ top: editDeptMenuPos.top, left: editDeptMenuPos.left }}>
+                                <div className="dept-edit-search">
+                                  <Search size={12} />
+                                  <input
+                                    type="text"
+                                    placeholder="Поиск..."
+                                    value={editDeptSearch}
+                                    onChange={e => setEditDeptSearch(e.target.value)}
+                                    autoFocus
+                                  />
+                                </div>
+                                <div className="dept-edit-list">
+                                  {filteredEditDepts.length === 0 ? (
+                                    <div className="dept-edit-empty">Не найдено</div>
+                                  ) : (
+                                    filteredEditDepts.map(d => (
+                                      <button
+                                        key={d.id}
+                                        type="button"
+                                        className={`dept-edit-item ${d.id === editDeptValue ? 'active' : ''}`}
+                                        style={{ paddingLeft: `${8 + d.level * 14}px` }}
+                                        onClick={() => {
+                                          setEditDeptValue(d.id);
+                                          setEditDeptOpen(false);
+                                          setEditDeptSearch('');
+                                        }}
+                                      >
+                                        {d.name}
+                                      </button>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
                             )}
                           </div>
+                          <button
+                            className="dept-edit-save"
+                            onClick={handleSaveEditDept}
+                            disabled={editDeptSaving || editDeptValue === emp.org_department_id}
+                            title="Сохранить"
+                          >
+                            <Check size={14} />
+                          </button>
+                          <button
+                            className="dept-edit-cancel"
+                            onClick={handleCancelEditDept}
+                            title="Отмена"
+                          >
+                            <X size={14} />
+                          </button>
                         </div>
+                      ) : canEdit ? (
+                        <button
+                          className="dept-edit-btn"
+                          onClick={e => handleStartEditDept(emp, e)}
+                        >
+                          {emp.department || '—'}
+                        </button>
+                      ) : (
+                        <span className="col-group">{emp.department || '—'}</span>
                       )}
-                    </div>
-                    <button
-                      className="dept-edit-save"
-                      onClick={handleSaveEditDept}
-                      disabled={editDeptSaving || editDeptValue === emp.org_department_id}
-                      title="Сохранить"
-                    >
-                      <Check size={14} />
-                    </button>
-                    <button
-                      className="dept-edit-cancel"
-                      onClick={handleCancelEditDept}
-                      title="Отмена"
-                    >
-                      <X size={14} />
-                    </button>
+                    </span>
                   </div>
-                ) : canEdit ? (
-                  <button
-                    className="dept-edit-btn"
-                    onClick={e => handleStartEditDept(emp, e)}
-                  >
-                    {emp.department || '—'}
-                  </button>
-                ) : (
-                  <span className="col-group">{emp.department || '—'}</span>
-                )}
-              </span>
+                );
+              })}
             </div>
-          ))}
+          </div>
         </div>
       )}
 

@@ -71,6 +71,39 @@ async function loadStructureCache(organizationId?: string): Promise<StructureCac
 /**
  * Расшифровывает сотрудника из БД формата в API формат
  */
+/**
+ * Лёгкая расшифровка для списка — только full_name + lookup из кэша
+ */
+function decryptEmployeeList(encrypted: EmployeeEncrypted, structureCache: StructureCache): Employee {
+  return {
+    id: encrypted.id,
+    organization_id: encrypted.organization_id,
+    full_name: encryptionService.decrypt(encrypted.full_name_encrypted),
+    full_name_encrypted: encrypted.full_name_encrypted,
+    last_name: null,
+    first_name: null,
+    middle_name: null,
+    position_name: encrypted.position_id ? structureCache.positions.get(encrypted.position_id) || null : null,
+    position_id: encrypted.position_id,
+    current_salary: null,
+    birth_date: null,
+    hire_date: '',
+    country: null,
+    pension_number: null,
+    patent_issue_date: null,
+    patent_expiry_date: null,
+    email: encrypted.email || null,
+    department: encrypted.org_department_id ? structureCache.departments.get(encrypted.org_department_id) || null : null,
+    org_department_id: encrypted.org_department_id,
+    employment_status: encrypted.employment_status,
+    department_locked: encrypted.department_locked,
+    is_archived: encrypted.is_archived,
+    archived_at: encrypted.archived_at,
+    created_at: encrypted.created_at,
+    updated_at: encrypted.updated_at,
+  };
+}
+
 function decryptEmployee(encrypted: EmployeeEncrypted, structureCache: StructureCache): Employee {
   return {
     id: encrypted.id,
@@ -109,17 +142,21 @@ export const employeesController = {
    */
   async getAll(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      const t0 = Date.now();
       const showArchived = req.query.archived === 'true';
       const organizationId = req.user.organization_id;
       const departmentId = req.query.department_id as string | undefined;
+      console.log(`[getAll] Start | archived=${showArchived} org=${organizationId} dept=${departmentId}`);
 
       // Пагинация Supabase (дефолт max-rows = 1000)
       const PAGE_SIZE = 1000;
       let allRows: EmployeeEncrypted[] = [];
       let from = 0;
       let hasMore = true;
+      let pageNum = 0;
 
       while (hasMore) {
+        const tPage = Date.now();
         let q = supabase
           .from('employees')
           .select('*')
@@ -137,17 +174,32 @@ export const employeesController = {
           return;
         }
 
+        console.log(`[getAll] Page ${pageNum}: ${data?.length || 0} rows in ${Date.now() - tPage}ms`);
         allRows = allRows.concat((data || []) as EmployeeEncrypted[]);
         hasMore = (data?.length || 0) === PAGE_SIZE;
         from += PAGE_SIZE;
+        pageNum++;
       }
 
-      const structureCache = await loadStructureCache(organizationId || undefined);
-      const employees = allRows.map(emp => decryptEmployee(emp, structureCache));
+      const tDb = Date.now() - t0;
+      console.log(`[getAll] DB total: ${allRows.length} rows in ${tDb}ms`);
 
+      const tCache = Date.now();
+      const structureCache = await loadStructureCache(organizationId || undefined);
+      console.log(`[getAll] Structure cache: depts=${structureCache.departments.size} pos=${structureCache.positions.size} in ${Date.now() - tCache}ms`);
+
+      const tDecrypt = Date.now();
+      const isListView = req.query.view === 'list';
+      const decryptFn = isListView ? decryptEmployeeList : decryptEmployee;
+      const employees = allRows.map(emp => decryptFn(emp, structureCache));
+      console.log(`[getAll] Decrypt(${isListView ? 'light' : 'full'}) ${employees.length} employees in ${Date.now() - tDecrypt}ms`);
+
+      const tAudit = Date.now();
       await auditService.logFromRequest(req, req.user.id, 'VIEW_EMPLOYEES', {
         details: { count: employees.length, archived: showArchived },
       });
+      console.log(`[getAll] Audit log in ${Date.now() - tAudit}ms`);
+      console.log(`[getAll] TOTAL: ${Date.now() - t0}ms`);
 
       res.json({ success: true, data: employees });
     } catch (error) {

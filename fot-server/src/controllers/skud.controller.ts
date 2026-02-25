@@ -98,12 +98,13 @@ async function searchAndBackfillByName(
     offset += PAGE_SIZE;
   }
 
-  // Бэкфилл employee_id на найденные записи (в фоне)
+  // Бэкфилл employee_id на найденные записи (в фоне, пакетный RPC)
   if (idsToBackfill.length > 0) {
     supabase
-      .from('skud_events')
-      .update({ employee_id: employeeId })
-      .in('id', idsToBackfill)
+      .rpc('bulk_update_employee_ids', {
+        p_event_ids: idsToBackfill,
+        p_employee_ids: idsToBackfill.map(() => employeeId),
+      })
       .then(() => {
         console.log(`[employee-events] backfilled employee_id=${employeeId} on ${idsToBackfill.length} events`);
       });
@@ -142,6 +143,10 @@ function getMonday(d: Date): Date {
 }
 
 const DAY_NAMES = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт'];
+
+// Кэш access points (TTL 10 минут)
+const AP_CACHE_TTL = 10 * 60_000;
+const accessPointCache = new Map<string, { data: string[]; at: number }>();
 
 export const skudController = {
   /**
@@ -496,10 +501,8 @@ export const skudController = {
         .order('event_date', { ascending: false })
         .order('event_time', { ascending: false });
 
-      // Лимит только при обычном просмотре (без поиска)
-      if (!searchStr) {
-        query = query.limit(1000);
-      }
+      // Лимит: 1000 для обычного просмотра, 10000 для поиска
+      query = query.limit(searchStr ? 10000 : 1000);
 
       if (organizationId) {
         query = query.eq('organization_id', organizationId);
@@ -582,8 +585,15 @@ export const skudController = {
         }
       }
 
-      // 2) Фоллбэк: уникальные точки из базы (с лимитом)
+      // 2) Фоллбэк: уникальные точки из базы (с кэшем)
       const organizationId = getOrgId(req);
+      const cacheKey = organizationId || '__all__';
+      const cached = accessPointCache.get(cacheKey);
+
+      if (cached && Date.now() - cached.at < AP_CACHE_TTL) {
+        res.json({ success: true, data: cached.data });
+        return;
+      }
 
       let query = supabase
         .from('skud_events')
@@ -604,6 +614,7 @@ export const skudController = {
       }
 
       const unique = [...new Set((data || []).map((d: { access_point: string }) => d.access_point))].sort();
+      accessPointCache.set(cacheKey, { data: unique, at: Date.now() });
 
       res.json({ success: true, data: unique });
     } catch (error) {
@@ -762,14 +773,13 @@ export const skudController = {
         return;
       }
 
-      // Пересчитываем дневные сводки
-      for (const key of summariesToUpdate) {
-        const [empId, date] = key.split(':');
-        await supabase.rpc('recalculate_skud_daily_summary', {
-          p_organization_id: organizationId,
-          p_employee_id: parseInt(empId, 10),
-          p_date: date,
+      // Пересчитываем дневные сводки (пакетный RPC)
+      if (summariesToUpdate.size > 0) {
+        const pairs = [...summariesToUpdate].map(key => {
+          const [empId, date] = key.split(':');
+          return { org_id: organizationId, emp_id: parseInt(empId, 10), date };
         });
+        await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: pairs });
       }
 
       await auditService.logFromRequest(req, req.user.id, 'IMPORT_SKUD', {
@@ -972,23 +982,17 @@ export const skudController = {
           console.log(`[getPresence] employee names (sample):`, [...nameToEmpId.keys()].slice(0, 5));
         }
 
-        // Backfill employee_id в фоне
+        // Backfill employee_id в фоне (пакетный RPC)
         if (backfillPairs.length > 0) {
-          const byEmployee = new Map<number, number[]>();
-          for (const { eventId, employeeId } of backfillPairs) {
-            if (!byEmployee.has(employeeId)) byEmployee.set(employeeId, []);
-            byEmployee.get(employeeId)!.push(eventId);
-          }
-
-          Promise.all(
-            [...byEmployee.entries()].map(([employeeId, eventIds]) =>
-              supabase.from('skud_events').update({ employee_id: employeeId }).in('id', eventIds)
-            )
-          ).then(() => {
-            console.log(`[getPresence] backfilled employee_id for ${backfillPairs.length} events`);
-          }).catch(err => {
-            console.error('[getPresence] backfill error:', err);
-          });
+          supabase
+            .rpc('bulk_update_employee_ids', {
+              p_event_ids: backfillPairs.map(b => b.eventId),
+              p_employee_ids: backfillPairs.map(b => b.employeeId),
+            })
+            .then(
+              () => { console.log(`[getPresence] backfilled employee_id for ${backfillPairs.length} events`); },
+              (err: Error) => { console.error('[getPresence] backfill error:', err); },
+            );
         }
       }
 
@@ -1132,11 +1136,12 @@ export const skudController = {
           .map(raw => mapSigurEvent(raw as Record<string, unknown>))
           .filter((m): m is NonNullable<typeof m> => m !== null);
 
-        // Дедупликация по хэшам
+        // Дедупликация по хэшам (с фильтром по организации)
         const { data: existingHashes } = await supabase
           .from('skud_events')
           .select('dedup_hash')
           .eq('event_date', day)
+          .eq('organization_id', employeeOrgId)
           .not('dedup_hash', 'is', null);
 
         const existingSet = new Set<string>();
@@ -1183,13 +1188,12 @@ export const skudController = {
         send({ type: 'day_done', day, raw: rawEvents.length, matched: filtered.length, inserted: dayInserted });
       }
 
-      // 5. Пересчёт daily summary
-      for (const date of summariesToUpdate) {
-        await supabase.rpc('recalculate_skud_daily_summary', {
-          p_organization_id: employeeOrgId,
-          p_employee_id: employeeId,
-          p_date: date,
-        });
+      // 5. Пересчёт daily summary (пакетный RPC)
+      if (summariesToUpdate.size > 0) {
+        const pairs = [...summariesToUpdate].map(date => ({
+          org_id: employeeOrgId, emp_id: employeeId, date,
+        }));
+        await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: pairs });
       }
 
       // 6. Аудит
