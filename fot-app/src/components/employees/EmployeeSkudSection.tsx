@@ -5,6 +5,7 @@ import type { SkudEvent } from '../../types';
 
 interface IEmployeeSkudSectionProps {
   employeeId: number;
+  departmentId?: string;
 }
 
 type Period = 'today' | 'week' | 'month';
@@ -47,8 +48,9 @@ const timeToSeconds = (time: string): number => {
   return h * 3600 + m * 60 + s;
 };
 
-const calculateWorkMinutes = (events: SkudEvent[]): number => {
-  const sorted = [...events].sort((a, b) => a.event_time.localeCompare(b.event_time));
+const calculateWorkMinutes = (events: SkudEvent[], internalPoints: Set<string>): number => {
+  const filtered = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
+  const sorted = [...filtered].sort((a, b) => a.event_time.localeCompare(b.event_time));
   let total = 0;
   let entryTime: number | null = null;
 
@@ -91,7 +93,7 @@ const EMPTY_LABELS: Record<Period, string> = {
   month: 'Нет событий СКУД за текущий месяц',
 };
 
-const groupByDay = (events: SkudEvent[]): IDayGroup[] => {
+const groupByDay = (events: SkudEvent[], internalPoints: Set<string>): IDayGroup[] => {
   const map = new Map<string, SkudEvent[]>();
   for (const ev of events) {
     const key = ev.event_date;
@@ -102,14 +104,16 @@ const groupByDay = (events: SkudEvent[]): IDayGroup[] => {
   const groups: IDayGroup[] = [];
   for (const [date, dayEvents] of map) {
     dayEvents.sort((a, b) => a.event_time.localeCompare(b.event_time));
-    const entries = dayEvents.filter(e => e.direction === 'entry');
-    const exits = dayEvents.filter(e => e.direction === 'exit');
+    // Для расчётов summary — фильтруем внутренние точки
+    const extEvents = dayEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point));
+    const entries = extEvents.filter(e => e.direction === 'entry');
+    const exits = extEvents.filter(e => e.direction === 'exit');
     groups.push({
       date,
-      events: dayEvents,
+      events: dayEvents, // все события для отображения
       firstEntry: entries.length > 0 ? entries[0].event_time : null,
       lastExit: exits.length > 0 ? exits[exits.length - 1].event_time : null,
-      totalSeconds: calculateWorkMinutes(dayEvents),
+      totalSeconds: calculateWorkMinutes(dayEvents, internalPoints),
       spanSeconds: entries.length > 0 && exits.length > 0
         ? timeToSeconds(exits[exits.length - 1].event_time) - timeToSeconds(entries[0].event_time)
         : 0,
@@ -120,26 +124,42 @@ const groupByDay = (events: SkudEvent[]): IDayGroup[] => {
   return groups;
 };
 
-export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({ employeeId }) => {
+export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({ employeeId, departmentId }) => {
   const [groups, setGroups] = useState<IDayGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
   const [period, setPeriod] = useState<Period>('today');
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [internalPoints, setInternalPoints] = useState<Set<string>>(new Set());
+
+  // Загружаем настройки внутренних точек
+  useEffect(() => {
+    if (!departmentId) {
+      setInternalPoints(new Set());
+      return;
+    }
+    skudService.getAccessPointSettings(departmentId).then(settings => {
+      const pts = new Set<string>();
+      for (const s of settings) {
+        if (s.is_internal) pts.add(s.access_point_name);
+      }
+      setInternalPoints(pts);
+    }).catch(() => {});
+  }, [departmentId]);
 
   const loadEvents = useCallback(async () => {
     setLoading(true);
     try {
       const { startDate, endDate } = getDateRange(period);
       const events = await skudService.getEmployeeEvents(employeeId, startDate, endDate);
-      setGroups(groupByDay(events));
+      setGroups(groupByDay(events, internalPoints));
     } catch {
       setGroups([]);
     } finally {
       setLoading(false);
     }
-  }, [employeeId, period]);
+  }, [employeeId, period, internalPoints]);
 
   useEffect(() => { loadEvents(); }, [loadEvents]);
 
@@ -242,22 +262,28 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({ employeeId 
 
               {expanded && (
                 <div className="skud-day-events">
-                  {group.events.map(ev => (
-                    <div key={ev.id} className={`skud-event-row ${ev.direction || ''}`}>
-                      <span className="skud-event-icon">
-                        {ev.direction === 'entry' ? <LogIn size={14} /> : <LogOut size={14} />}
-                      </span>
-                      <span className="skud-event-time">
-                        <Clock size={12} /> {formatTime(ev.event_time)}
-                      </span>
-                      <span className="skud-event-direction">
-                        {ev.direction === 'entry' ? 'Вход' : 'Выход'}
-                      </span>
-                      {ev.access_point && (
-                        <span className="skud-event-point">{ev.access_point}</span>
-                      )}
-                    </div>
-                  ))}
+                  {group.events.map(ev => {
+                    const isInternal = ev.access_point ? internalPoints.has(ev.access_point) : false;
+                    return (
+                      <div
+                        key={ev.id}
+                        className={`skud-event-row ${ev.direction || ''} ${isInternal ? 'internal' : ''}`}
+                      >
+                        <span className="skud-event-icon">
+                          {ev.direction === 'entry' ? <LogIn size={14} /> : <LogOut size={14} />}
+                        </span>
+                        <span className="skud-event-time">
+                          <Clock size={12} /> {formatTime(ev.event_time)}
+                        </span>
+                        <span className="skud-event-direction">
+                          {ev.direction === 'entry' ? 'Вход' : 'Выход'}
+                        </span>
+                        {ev.access_point && (
+                          <span className="skud-event-point">{ev.access_point}</span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

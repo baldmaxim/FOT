@@ -9,6 +9,8 @@ interface ISyncResult {
   matched: number;
   errors: string[];
   sigurTotal: number;
+  droppedNoName?: number;
+  droppedNoOrg?: number;
 }
 
 interface IPreviewData {
@@ -533,6 +535,12 @@ export const SigurSettingsPage = () => {
               <span className="sigur-sync-stat">Всего в Sigur: <strong>{syncResult.sigurTotal}</strong></span>
               <span className="sigur-sync-stat success">Импортировано: <strong>{syncResult.imported}</strong></span>
               <span className="sigur-sync-stat skipped">Пропущено: <strong>{syncResult.skipped}</strong></span>
+              {!!syncResult.droppedNoName && (
+                <span className="sigur-sync-stat skipped">Без ФИО: <strong>{syncResult.droppedNoName}</strong></span>
+              )}
+              {!!syncResult.droppedNoOrg && (
+                <span className="sigur-sync-stat skipped">Без организации: <strong>{syncResult.droppedNoOrg}</strong></span>
+              )}
               <span className="sigur-sync-stat">Сопоставлено: <strong>{syncResult.matched}</strong></span>
             </div>
             {syncResult.errors.length > 0 && (

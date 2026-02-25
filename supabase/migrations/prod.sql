@@ -4261,3 +4261,14 @@ RETURNS TABLE(id bigint) AS $$
     HAVING COUNT(*) > 1
   ) dupes ON se.dedup_hash = dupes.dedup_hash AND se.id <> dupes.keep_id;
 $$ LANGUAGE sql STABLE;
+
+-- Настройки точек доступа СКУД (внутренние/внешние) по отделам
+CREATE TABLE IF NOT EXISTS public.skud_access_point_settings (
+  id bigserial PRIMARY KEY,
+  organization_id uuid NOT NULL,
+  department_id uuid NOT NULL,
+  access_point_name text NOT NULL,
+  is_internal boolean DEFAULT false,
+  created_at timestamptz DEFAULT now(),
+  UNIQUE (organization_id, department_id, access_point_name)
+);

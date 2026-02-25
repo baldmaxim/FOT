@@ -451,6 +451,10 @@
   color: #dc2626;
 }
 
+.skud-event-row.internal {
+  opacity: 0.5;
+}
+
 .skud-event-time {
   display: inline-flex;
   align-items: center;

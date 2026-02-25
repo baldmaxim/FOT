@@ -188,6 +188,11 @@ export interface SkudDailySummary {
   is_present: boolean;
 }
 
+export interface IAccessPointSetting {
+  access_point_name: string;
+  is_internal: boolean;
+}
+
 // Organization types
 export interface Organization {
   id: string;

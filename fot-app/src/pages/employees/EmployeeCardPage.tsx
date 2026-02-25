@@ -226,7 +226,7 @@ export const EmployeeCardPage: FC = () => {
           <EmployeeHistorySection history={history} />
         )}
         {activeTab === 'skud' && (
-          <EmployeeSkudSection employeeId={employee.id} />
+          <EmployeeSkudSection employeeId={employee.id} departmentId={employee.org_department_id || undefined} />
         )}
       </div>
     </div>

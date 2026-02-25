@@ -1,5 +1,5 @@
 import { apiClient } from '../api/client';
-import type { SkudEvent, SkudDailySummary, IEmployeePresence } from '../types';
+import type { SkudEvent, SkudDailySummary, IEmployeePresence, IAccessPointSetting } from '../types';
 
 interface ApiResponse<T> {
   success: boolean;
@@ -129,6 +129,20 @@ export const skudService = {
     }
 
     return result;
+  },
+
+  async getAccessPointSettings(departmentId: string): Promise<IAccessPointSetting[]> {
+    const response = await apiClient.get<ApiResponse<IAccessPointSetting[]>>(
+      `/skud/access-point-settings?department_id=${departmentId}`
+    );
+    return response.data || [];
+  },
+
+  async saveAccessPointSettings(departmentId: string, settings: IAccessPointSetting[]): Promise<void> {
+    await apiClient.put<ApiResponse<null>>('/skud/access-point-settings', {
+      department_id: departmentId,
+      settings,
+    });
   },
 
   async exportEvents(filters?: SkudFilters): Promise<Blob> {

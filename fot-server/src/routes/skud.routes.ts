@@ -57,6 +57,20 @@ router.get(
   skudController.getAccessPoints as any
 );
 
+// GET /api/skud/access-point-settings - настройки точек доступа для отдела (viewer+)
+router.get(
+  '/access-point-settings',
+  requireRole('viewer', 'manager', 'owner', 'super_admin') as any,
+  skudController.getAccessPointSettings as any
+);
+
+// PUT /api/skud/access-point-settings - сохранение настроек точек доступа (manager+)
+router.put(
+  '/access-point-settings',
+  requireRole('manager', 'owner', 'super_admin') as any,
+  skudController.saveAccessPointSettings as any
+);
+
 // GET /api/skud/presence - статус присутствия сотрудников (header+)
 router.get(
   '/presence',

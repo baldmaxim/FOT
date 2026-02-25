@@ -86,6 +86,8 @@ export const sigurSyncController = {
       let totalSigur = 0;
       let totalInserted = 0;
       let totalSkipped = 0;
+      let totalNoName = 0;
+      let totalNoOrg = 0;
       const summariesToUpdate = new Set<string>();
 
       sendProgress({ type: 'start', totalDays: days.length, employees: employeeMap.size });
@@ -139,7 +141,7 @@ export const sigurSyncController = {
 
         for (const raw of rawEvents) {
           const mapped = mapSigurEvent(raw as Record<string, unknown>);
-          if (!mapped) continue;
+          if (!mapped) { totalNoName++; continue; }
 
           const dedupHash = computeDedupHash(
             mapped.physicalPerson, mapped.eventDate, mapped.eventTime,
@@ -156,7 +158,7 @@ export const sigurSyncController = {
           const emp = (mapped.employeeId != null ? sigurIdMap.get(mapped.employeeId) : undefined)
             || employeeMap.get(nameKey);
           const orgId = emp?.organization_id || fallbackOrgId;
-          if (!orgId) continue;
+          if (!orgId) { totalNoOrg++; continue; }
 
           dayInserts.push({
             organization_id: orgId,
@@ -221,6 +223,8 @@ export const sigurSyncController = {
           sigurTotal: totalSigur,
           imported: totalInserted,
           skipped: totalSkipped,
+          droppedNoName: totalNoName,
+          droppedNoOrg: totalNoOrg,
           errors: errors.length,
           matchedEmployees: summariesToUpdate.size,
           dateRange: { startDate, endDate },
@@ -231,6 +235,8 @@ export const sigurSyncController = {
         type: 'done',
         imported: totalInserted,
         skipped: totalSkipped,
+        droppedNoName: totalNoName,
+        droppedNoOrg: totalNoOrg,
         matched: summariesToUpdate.size,
         errors,
         sigurTotal: totalSigur,

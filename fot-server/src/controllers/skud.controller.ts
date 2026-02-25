@@ -598,6 +598,36 @@ export const skudController = {
         posMap.set(p.id, encryptionService.decrypt(p.name_encrypted));
       }
 
+      // Загружаем настройки внутренних точек доступа для отделов
+      const internalPointsByDept = new Map<string, Set<string>>();
+      if (deptIdSet.size > 0) {
+        let settingsQuery = supabase
+          .from('skud_access_point_settings')
+          .select('department_id, access_point_name')
+          .eq('is_internal', true)
+          .in('department_id', [...deptIdSet]);
+
+        if (organizationId) {
+          settingsQuery = settingsQuery.eq('organization_id', organizationId);
+        }
+
+        const { data: apSettings } = await settingsQuery;
+        for (const s of apSettings || []) {
+          if (!internalPointsByDept.has(s.department_id)) {
+            internalPointsByDept.set(s.department_id, new Set());
+          }
+          internalPointsByDept.get(s.department_id)!.add(s.access_point_name);
+        }
+      }
+
+      // Карта employee_id → Set<internal_access_point>
+      const empInternalPoints = new Map<number, Set<string>>();
+      for (const emp of employees) {
+        if (emp.org_department_id && internalPointsByDept.has(emp.org_department_id)) {
+          empInternalPoints.set(emp.id, internalPointsByDept.get(emp.org_department_id)!);
+        }
+      }
+
       // Загружаем события за сегодня (локальная дата, не UTC)
       const today = formatDateToISO(new Date());
 
@@ -611,16 +641,18 @@ export const skudController = {
       // 1) Быстрый запрос по employee_id
       const { data: eventsByEmpId } = await supabase
         .from('skud_events')
-        .select('employee_id, event_time, direction')
+        .select('employee_id, event_time, direction, access_point')
         .eq('event_date', today)
         .in('employee_id', empIds)
         .order('event_time', { ascending: false });
 
       const latestEvent = new Map<number, { event_time: string; direction: string | null }>();
       for (const evt of eventsByEmpId || []) {
-        if (evt.employee_id && !latestEvent.has(evt.employee_id)) {
-          latestEvent.set(evt.employee_id, { event_time: evt.event_time, direction: evt.direction });
-        }
+        if (!evt.employee_id || latestEvent.has(evt.employee_id)) continue;
+        // Пропускаем события от внутренних точек доступа
+        const internal = empInternalPoints.get(evt.employee_id);
+        if (internal && evt.access_point && internal.has(evt.access_point)) continue;
+        latestEvent.set(evt.employee_id, { event_time: evt.event_time, direction: evt.direction });
       }
 
       // 2) Фоллбэк: если есть сотрудники без событий — ищем по ФИО
@@ -628,7 +660,7 @@ export const skudController = {
       if (missingEmpIds.length > 0) {
         let fallbackQuery = supabase
           .from('skud_events')
-          .select('physical_person_encrypted, event_time, direction, id')
+          .select('physical_person_encrypted, event_time, direction, access_point, id')
           .eq('event_date', today)
           .is('employee_id', null)
           .order('event_time', { ascending: false });
@@ -653,7 +685,11 @@ export const skudController = {
           }
 
           if (!latestEvent.has(empId)) {
-            latestEvent.set(empId, { event_time: evt.event_time, direction: evt.direction });
+            // Пропускаем события от внутренних точек доступа
+            const internal = empInternalPoints.get(empId);
+            if (!(internal && evt.access_point && internal.has(evt.access_point))) {
+              latestEvent.set(empId, { event_time: evt.event_time, direction: evt.direction });
+            }
           }
           backfillPairs.push({ eventId: evt.id, employeeId: empId });
         }
@@ -998,6 +1034,103 @@ export const skudController = {
     } catch (error) {
       console.error('Clear SKUD error:', error);
       res.status(500).json({ success: false, error: 'Ошибка очистки данных' });
+    }
+  },
+
+  /**
+   * GET /api/skud/access-point-settings?department_id=uuid
+   * Получение настроек точек доступа для отдела
+   */
+  async getAccessPointSettings(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const organizationId = getOrgId(req);
+      const departmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
+
+      if (!departmentId) {
+        res.status(400).json({ success: false, error: 'department_id обязателен' });
+        return;
+      }
+
+      let query = supabase
+        .from('skud_access_point_settings')
+        .select('access_point_name, is_internal')
+        .eq('department_id', departmentId);
+
+      if (organizationId) {
+        query = query.eq('organization_id', organizationId);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error('Get access point settings error:', error);
+        res.status(500).json({ success: false, error: 'Ошибка получения настроек' });
+        return;
+      }
+
+      res.json({ success: true, data: data || [] });
+    } catch (error) {
+      console.error('Get access point settings error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка получения настроек' });
+    }
+  },
+
+  /**
+   * PUT /api/skud/access-point-settings
+   * Сохранение настроек точек доступа для отдела
+   * Body: { department_id: string, settings: [{ access_point_name: string, is_internal: boolean }] }
+   */
+  async saveAccessPointSettings(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const organizationId = getOrgId(req);
+
+      if (!organizationId) {
+        res.status(400).json({ success: false, error: 'Organization required' });
+        return;
+      }
+
+      const { department_id, settings } = req.body as {
+        department_id: string;
+        settings: { access_point_name: string; is_internal: boolean }[];
+      };
+
+      if (!department_id || !Array.isArray(settings)) {
+        res.status(400).json({ success: false, error: 'department_id и settings обязательны' });
+        return;
+      }
+
+      // Удалить старые настройки для этого отдела
+      await supabase
+        .from('skud_access_point_settings')
+        .delete()
+        .eq('organization_id', organizationId)
+        .eq('department_id', department_id);
+
+      // Вставить новые (только те, что помечены как internal)
+      const internalSettings = settings.filter(s => s.is_internal);
+      if (internalSettings.length > 0) {
+        const rows = internalSettings.map(s => ({
+          organization_id: organizationId,
+          department_id,
+          access_point_name: s.access_point_name,
+          is_internal: true,
+        }));
+
+        const { error } = await supabase
+          .from('skud_access_point_settings')
+          .insert(rows);
+
+        if (error) {
+          console.error('Save access point settings error:', error);
+          res.status(500).json({ success: false, error: 'Ошибка сохранения настроек' });
+          return;
+        }
+      }
+
+      res.json({ success: true, message: 'Настройки сохранены' });
+    } catch (error) {
+      console.error('Save access point settings error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка сохранения настроек' });
     }
   },
 };
