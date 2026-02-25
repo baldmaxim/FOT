@@ -41,7 +41,7 @@ const PunctualityCard: FC<{ punctuality: IDashboardStats['punctuality'] }> = ({ 
       </div>
       <div className={styles.punctChart}>
         <div className={styles.ring}>
-          <svg width="100" height="100" viewBox="0 0 100 100">
+          <svg width="100%" height="100%" viewBox="0 0 100 100">
             <circle cx="50" cy="50" r="42" fill="none" stroke="var(--bg-elevated)" strokeWidth="8" />
             <circle
               cx="50" cy="50" r="42" fill="none"

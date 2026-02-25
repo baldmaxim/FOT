@@ -1,3 +1,16 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  min-height: 400px;
+}
+
+.cardContent {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .tabs {
   display: flex;
   gap: 0;
@@ -41,8 +54,42 @@
   color: var(--primary, #3b82f6);
 }
 
+.searchBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 20px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  transition: border-color 0.15s ease;
+}
+
+.searchBar:focus-within {
+  border-color: var(--primary, #3b82f6);
+}
+
+.searchIcon {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.searchInput {
+  flex: 1;
+  border: none;
+  background: none;
+  outline: none;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.searchInput::placeholder {
+  color: var(--text-tertiary);
+}
+
 .list {
-  max-height: calc(100vh - 340px);
+  flex: 1;
   overflow-y: auto;
 }
 
@@ -222,10 +269,12 @@
 }
 
 @media (max-width: 768px) {
+  .card { min-height: 300px; max-height: calc(100vh - 200px); }
   .timeline { display: none; }
   .tabs { margin: 0 12px; overflow-x: auto; }
   .tab { padding: 8px 10px; font-size: 12px; white-space: nowrap; }
   .item { padding: 12px; gap: 10px; }
+  .searchBar { margin: 8px 12px; }
 }
 
 @media (max-width: 430px) {

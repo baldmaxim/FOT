@@ -261,6 +261,37 @@
 }
 
 @media (max-width: 768px) {
-  .row { grid-template-columns: 1fr; }
-  .punctChart { flex-direction: column; align-items: flex-start; }
+  .row { grid-template-columns: 1fr; gap: 10px; }
+  .card { padding: 14px; }
+  .title { margin-bottom: 12px; font-size: 12px; }
+  .ring { width: 80px; height: 80px; }
+  .ring svg { width: 80px; height: 80px; }
+  .ringValue span { font-size: 18px; }
+  .ringValue small { font-size: 9px; }
+  .punctChart { gap: 14px; }
+  .legendItem { padding: 5px 0; font-size: 11px; }
+  .legendDot { width: 6px; height: 6px; }
+  .legendLabel { gap: 6px; }
+  .riskItem { padding: 10px; gap: 10px; }
+  .riskAvatar { width: 28px; height: 28px; font-size: 10px; }
+  .riskName { font-size: 11px; }
+  .riskReason { font-size: 10px; }
+  .riskBadge { font-size: 9px; padding: 3px 6px; }
+}
+
+@media (max-width: 430px) {
+  .card { padding: 12px; border-radius: 10px; }
+  .title { margin-bottom: 10px; font-size: 11px; gap: 6px; }
+  .title svg { width: 14px; height: 14px; }
+  .ring { width: 64px; height: 64px; }
+  .ring svg { width: 64px; height: 64px; }
+  .ringValue span { font-size: 15px; }
+  .ringValue small { font-size: 8px; }
+  .punctChart { gap: 10px; }
+  .legendItem { padding: 3px 0; font-size: 10px; }
+  .legendVal { font-size: 10px; }
+  .bars { gap: 6px; }
+  .barTrack { height: 20px; }
+  .barText { font-size: 10px; }
+  .barEmpty { font-size: 10px; line-height: 20px; }
 }

@@ -196,6 +196,7 @@
   grid-template-columns: 1fr minmax(0, 340px);
   gap: 14px;
   overflow: hidden;
+  align-items: stretch;
 }
 
 /* Responsive */

@@ -285,8 +285,10 @@ export const skudController = {
         else if (s.first_entry! <= SLIGHTLY_LATE_THRESHOLD) slightlyLateCount++;
         else veryLateCount++;
       }
-      const thisWeekWorkDays = countWorkingDays(mondayStr, todayStr);
-      const expectedTotal = empIds.length * thisWeekWorkDays || 1;
+      // Считаем только дни, когда хотя бы 1 сотрудник пришёл (исключаем праздники)
+      const daysWithPresence = new Set(thisWeekWithEntry.map(s => s.date));
+      const actualWorkDays = daysWithPresence.size;
+      const expectedTotal = empIds.length * actualWorkDays || 1;
       const absentCount = Math.max(0, expectedTotal - thisWeekWithEntry.length);
       const punctuality = {
         onTime: Math.round((onTimeCount / expectedTotal) * 100),
@@ -405,7 +407,7 @@ export const skudController = {
 
       const lastWeekWorkDays = countWorkingDays(lastMondayStr, lastFridayStr);
       const weekComparison = {
-        thisWeek: calcWeekMetrics(thisWeekAllSummaries, empIds.length * thisWeekWorkDays),
+        thisWeek: calcWeekMetrics(thisWeekAllSummaries, empIds.length * actualWorkDays),
         lastWeek: calcWeekMetrics(lastWeekSummaries, empIds.length * lastWeekWorkDays),
       };
 

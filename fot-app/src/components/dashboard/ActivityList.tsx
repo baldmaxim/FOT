@@ -1,6 +1,6 @@
 import { type FC, useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Star } from 'lucide-react';
+import { Star, Search } from 'lucide-react';
 import { Card, CardHeader, CardContent } from '../ui/Card';
 import { formatElapsed } from '../../utils/formatElapsed';
 import { useFavorites } from '../../hooks/useFavorites';
@@ -148,6 +148,7 @@ const EmployeeRow: FC<{
 
 export const ActivityList: FC<IActivityListProps> = ({ employees, loading }) => {
   const [tab, setTab] = useState<TabFilter>('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const { favorites, toggle, isFavorite } = useFavorites();
 
   const onlineCount = useMemo(() => employees.filter(e => e.status === 'online').length, [employees]);
@@ -156,18 +157,30 @@ export const ActivityList: FC<IActivityListProps> = ({ employees, loading }) => 
   const favCount = useMemo(() => employees.filter(e => favorites.has(e.employee_id)).length, [employees, favorites]);
 
   const filtered = useMemo(() => {
-    if (tab === 'favorites') return employees.filter(e => favorites.has(e.employee_id));
-    if (tab === 'online') return employees.filter(e => e.status === 'online');
-    if (tab === 'offline') return employees.filter(e => e.status === 'offline');
-    if (tab === 'absent') return employees.filter(e => e.status === 'unknown');
-    return employees;
-  }, [employees, tab, favorites]);
+    let list = employees;
+    if (tab === 'favorites') list = list.filter(e => favorites.has(e.employee_id));
+    else if (tab === 'online') list = list.filter(e => e.status === 'online');
+    else if (tab === 'offline') list = list.filter(e => e.status === 'offline');
+    else if (tab === 'absent') list = list.filter(e => e.status === 'unknown');
+
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      list = list.filter(e => e.full_name.toLowerCase().includes(q));
+    }
+
+    // Избранные наверху
+    return [...list].sort((a, b) => {
+      const aFav = favorites.has(a.employee_id) ? 0 : 1;
+      const bFav = favorites.has(b.employee_id) ? 0 : 1;
+      return aFav - bFav;
+    });
+  }, [employees, tab, favorites, searchQuery]);
 
   if (loading) {
     return (
-      <Card>
+      <Card className={styles.card}>
         <CardHeader title="Присутствие сотрудников" />
-        <CardContent>
+        <CardContent className={styles.cardContent}>
           <div className={styles.empty}>
             <span className={styles.emptyText}>Загрузка...</span>
           </div>
@@ -177,9 +190,9 @@ export const ActivityList: FC<IActivityListProps> = ({ employees, loading }) => 
   }
 
   return (
-    <Card>
+    <Card className={styles.card}>
       <CardHeader title="Присутствие сотрудников" />
-      <CardContent>
+      <CardContent className={styles.cardContent}>
         <div className={styles.tabs}>
           {favCount > 0 && (
             <button
@@ -214,6 +227,16 @@ export const ActivityList: FC<IActivityListProps> = ({ employees, loading }) => 
           >
             Отсутствуют <span className={styles.tabCount}>{absentCount}</span>
           </button>
+        </div>
+        <div className={styles.searchBar}>
+          <Search size={14} className={styles.searchIcon} />
+          <input
+            type="text"
+            className={styles.searchInput}
+            placeholder="Поиск сотрудника..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+          />
         </div>
         <div className={styles.list}>
           {filtered.length === 0 ? (

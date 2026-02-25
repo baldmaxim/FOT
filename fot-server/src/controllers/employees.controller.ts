@@ -41,8 +41,20 @@ interface StructureCache {
 
 /**
  * Загружает кэш структуры организации (отделы, должности)
+ * Кэшируется в памяти на 60 секунд для избежания повторных запросов
  */
+const structureCacheStore = new Map<string, { data: StructureCache; expiresAt: number }>();
+const STRUCTURE_CACHE_TTL_MS = 60_000;
+
 async function loadStructureCache(organizationId?: string): Promise<StructureCache> {
+  const cacheKey = organizationId || '__global__';
+  const now = Date.now();
+  const cached = structureCacheStore.get(cacheKey);
+
+  if (cached && cached.expiresAt > now) {
+    return cached.data;
+  }
+
   const cache: StructureCache = {
     departments: new Map(),
     positions: new Map(),
@@ -65,6 +77,7 @@ async function loadStructureCache(organizationId?: string): Promise<StructureCac
     cache.positions.set(p.id, safeDecrypt(p.name_encrypted) || '');
   });
 
+  structureCacheStore.set(cacheKey, { data: cache, expiresAt: now + STRUCTURE_CACHE_TTL_MS });
   return cache;
 }
 
@@ -146,7 +159,8 @@ export const employeesController = {
       const showArchived = req.query.archived === 'true';
       const organizationId = req.user.organization_id;
       const departmentId = req.query.department_id as string | undefined;
-      console.log(`[getAll] Start | archived=${showArchived} org=${organizationId} dept=${departmentId}`);
+      const isListView = req.query.view === 'list';
+      console.log(`[getAll] Start | archived=${showArchived} org=${organizationId} dept=${departmentId} list=${isListView}`);
 
       // Пагинация Supabase (дефолт max-rows = 1000)
       const PAGE_SIZE = 1000;
@@ -155,11 +169,14 @@ export const employeesController = {
       let hasMore = true;
       let pageNum = 0;
 
+      // Для list view выбираем только колонки, используемые decryptEmployeeList
+      const listColumns = 'id, organization_id, full_name_encrypted, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at';
+
       while (hasMore) {
         const tPage = Date.now();
         let q = supabase
           .from('employees')
-          .select('*')
+          .select(isListView ? listColumns : '*')
           .eq('is_archived', showArchived)
           .order('id')
           .range(from, from + PAGE_SIZE - 1);
@@ -189,16 +206,13 @@ export const employeesController = {
       console.log(`[getAll] Structure cache: depts=${structureCache.departments.size} pos=${structureCache.positions.size} in ${Date.now() - tCache}ms`);
 
       const tDecrypt = Date.now();
-      const isListView = req.query.view === 'list';
       const decryptFn = isListView ? decryptEmployeeList : decryptEmployee;
       const employees = allRows.map(emp => decryptFn(emp, structureCache));
       console.log(`[getAll] Decrypt(${isListView ? 'light' : 'full'}) ${employees.length} employees in ${Date.now() - tDecrypt}ms`);
 
-      const tAudit = Date.now();
-      await auditService.logFromRequest(req, req.user.id, 'VIEW_EMPLOYEES', {
+      auditService.logFromRequest(req, req.user.id, 'VIEW_EMPLOYEES', {
         details: { count: employees.length, archived: showArchived },
-      });
-      console.log(`[getAll] Audit log in ${Date.now() - tAudit}ms`);
+      }).catch(() => {});
       console.log(`[getAll] TOTAL: ${Date.now() - t0}ms`);
 
       res.json({ success: true, data: employees });

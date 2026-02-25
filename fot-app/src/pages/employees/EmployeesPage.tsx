@@ -71,7 +71,7 @@ export const EmployeesPage: FC = () => {
     setLoading(true);
     setError('');
     try {
-      const data = await employeeService.getAll();
+      const data = await employeeService.getAll({ view: 'list' });
       setEmployees(data);
     } catch {
       setError('Ошибка загрузки сотрудников');
