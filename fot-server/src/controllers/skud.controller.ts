@@ -133,6 +133,24 @@ async function collectDeptIds(departmentId: string, organizationId: string | und
   return ids;
 }
 
+/** Получает ID всех предков отдела (от родителя до корня) */
+function getAncestorDeptIds(deptId: string, allDepts: { id: string; parent_id: string | null }[]): string[] {
+  const ancestors: string[] = [];
+  let currentId: string | null = deptId;
+  const visited = new Set<string>([deptId]);
+  while (currentId) {
+    const dept = allDepts.find(d => d.id === currentId);
+    if (dept?.parent_id && !visited.has(dept.parent_id)) {
+      ancestors.push(dept.parent_id);
+      visited.add(dept.parent_id);
+      currentId = dept.parent_id;
+    } else {
+      break;
+    }
+  }
+  return ancestors;
+}
+
 /** Вычисляет понедельник текущей/указанной недели */
 function getMonday(d: Date): Date {
   const date = new Date(d);
@@ -220,18 +238,18 @@ export const skudController = {
       }
       const yesterdayStr = formatDateToISO(yesterday);
 
-      // Запрос daily_summary за 2 недели
-      const { data: summaries, error: summariesError } = await supabase
+      // 4 недели назад (для среднего времени прихода)
+      const fourWeeksAgo = new Date(monday);
+      fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 21);
+      const fourWeeksAgoStr = formatDateToISO(fourWeeksAgo);
+
+      // Запрос daily_summary за 2 недели (для punctuality, risks, weekComparison)
+      const { data: summaries } = await supabase
         .from('skud_daily_summary')
         .select('employee_id, date, first_entry, last_exit, total_hours, is_present')
         .in('employee_id', empIds)
         .gte('date', lastMondayStr)
         .lte('date', todayStr);
-
-      console.log(`[dashboard-stats] empIds=${empIds.length}, lastMondayStr=${lastMondayStr}, mondayStr=${mondayStr}, todayStr=${todayStr}, summaries=${(summaries || []).length}, error=${summariesError?.message || 'none'}`);
-      const _thisWeekDbg = (summaries || []).filter(s => s.date >= mondayStr && s.date <= todayStr);
-      const _withEntryDbg = _thisWeekDbg.filter(s => s.first_entry);
-      console.log(`[dashboard-stats] thisWeek=${_thisWeekDbg.length}, withEntry=${_withEntryDbg.length}, dates=${[...new Set((summaries || []).map(s => s.date))].sort().join(',')}`);
 
       // Запрос entry-событий за сегодня для hourly activity
       let eventsQuery = supabase
@@ -277,30 +295,45 @@ export const skudController = {
         absent: Math.round((absentCount / expectedTotal) * 100),
       };
 
-      // Average arrival by day (this week)
-      const avgArrivalByDay: { day: string; avgTime: string | null; date: string }[] = [];
-      for (let i = 0; i < 5; i++) {
-        const d = new Date(monday);
-        d.setDate(d.getDate() + i);
-        const dateStr = formatDateToISO(d);
-        if (dateStr > todayStr) {
-          avgArrivalByDay.push({ day: DAY_NAMES[i], avgTime: null, date: dateStr });
-          continue;
-        }
-        const dayEntries = (summaries || []).filter(s => s.date === dateStr && s.first_entry);
-        if (dayEntries.length === 0) {
-          avgArrivalByDay.push({ day: DAY_NAMES[i], avgTime: null, date: dateStr });
-          continue;
-        }
-        const totalMinutes = dayEntries.reduce((sum, s) => {
-          const [h, m] = s.first_entry!.split(':').map(Number);
-          return sum + h * 60 + m;
-        }, 0);
-        const avgMin = Math.round(totalMinutes / dayEntries.length);
-        const avgH = String(Math.floor(avgMin / 60)).padStart(2, '0');
-        const avgM = String(avgMin % 60).padStart(2, '0');
-        avgArrivalByDay.push({ day: DAY_NAMES[i], avgTime: `${avgH}:${avgM}`, date: dateStr });
+      // Average arrival by weekday (из skud_events за 4 недели)
+      let arrivalEventsQuery = supabase
+        .from('skud_events')
+        .select('event_date, event_time, employee_id')
+        .eq('direction', 'entry')
+        .in('employee_id', empIds)
+        .gte('event_date', fourWeeksAgoStr)
+        .lte('event_date', todayStr)
+        .order('event_time', { ascending: true });
+      if (organizationId) arrivalEventsQuery = arrivalEventsQuery.eq('organization_id', organizationId);
+      const { data: arrivalEvents, error: arrivalErr } = await arrivalEventsQuery;
+      console.log('[avgArrival] dept:', departmentId, 'empIds:', empIds.length, 'events:', (arrivalEvents || []).length, 'range:', fourWeeksAgoStr, '-', todayStr, 'err:', arrivalErr?.message || 'none');
+
+      // Находим первый entry за каждый день для каждого сотрудника
+      const firstEntryMap = new Map<string, string>(); // "empId:date" -> event_time
+      for (const ev of arrivalEvents || []) {
+        const key = `${ev.employee_id}:${ev.event_date}`;
+        if (!firstEntryMap.has(key)) firstEntryMap.set(key, ev.event_time);
       }
+
+      // Группируем по дню недели
+      const arrivalByDow: number[][] = [[], [], [], [], []];
+      for (const [key, time] of firstEntryMap) {
+        const date = key.split(':').slice(1).join(':');
+        const d = new Date(date + 'T00:00:00');
+        const dow = d.getDay();
+        const dowIdx = dow === 0 ? 6 : dow - 1;
+        if (dowIdx >= 5) continue;
+        const [h, m] = time.split(':').map(Number);
+        arrivalByDow[dowIdx].push(h * 60 + m);
+      }
+      const avgArrivalByDay = DAY_NAMES.map((name, i) => {
+        const times = arrivalByDow[i];
+        if (times.length === 0) return { day: name, avgTime: null, date: '' };
+        const avg = Math.round(times.reduce((a, b) => a + b, 0) / times.length);
+        const avgH = String(Math.floor(avg / 60)).padStart(2, '0');
+        const avgM = String(avg % 60).padStart(2, '0');
+        return { day: name, avgTime: `${avgH}:${avgM}`, date: '' };
+      });
 
       // Risks (employees with most lates this week)
       const lateCountByEmp = new Map<number, number>();
@@ -387,7 +420,6 @@ export const skudController = {
           lateCount,
         }));
 
-      console.log(`[dashboard-stats] RESULT punctuality=${JSON.stringify(punctuality)}, avgArrival=${JSON.stringify(avgArrivalByDay)}, weekComp=${JSON.stringify(weekComparison)}`);
       res.json({
         success: true,
         data: { lateToday, lateYesterday, punctuality, avgArrivalByDay, risks, hourlyActivity, weekComparison, topLate },
@@ -838,20 +870,20 @@ export const skudController = {
 
       const departmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
 
+      // Загружаем все отделы (для дочерних + наследования настроек предков)
+      let allDeptsQuery = supabase.from('org_departments').select('id, parent_id');
+      if (organizationId) allDeptsQuery = allDeptsQuery.eq('organization_id', organizationId);
+      const { data: allDeptsData } = await allDeptsQuery;
+      const allDepts = allDeptsData || [];
+
       // Собираем ID отдела + все дочерние
       let deptIds: string[] | null = null;
       if (departmentId) {
-        let deptQuery = supabase
-          .from('org_departments')
-          .select('id, parent_id');
-        if (organizationId) deptQuery = deptQuery.eq('organization_id', organizationId);
-        const { data: allDepts } = await deptQuery;
-
         deptIds = [departmentId];
         let changed = true;
         while (changed) {
           changed = false;
-          for (const d of allDepts || []) {
+          for (const d of allDepts) {
             if (d.parent_id && deptIds.includes(d.parent_id) && !deptIds.includes(d.id)) {
               deptIds.push(d.id);
               changed = true;
@@ -904,14 +936,21 @@ export const skudController = {
         posMap.set(p.id, encryptionService.decrypt(p.name_encrypted));
       }
 
-      // Загружаем настройки внутренних точек доступа для отделов
+      // Загружаем настройки внутренних точек доступа (включая предков отделов)
+      const allDeptIdsForSettings = new Set<string>(deptIdSet);
+      for (const dId of deptIdSet) {
+        for (const ancestorId of getAncestorDeptIds(dId, allDepts)) {
+          allDeptIdsForSettings.add(ancestorId);
+        }
+      }
+
       const internalPointsByDept = new Map<string, Set<string>>();
-      if (deptIdSet.size > 0) {
+      if (allDeptIdsForSettings.size > 0) {
         let settingsQuery = supabase
           .from('skud_access_point_settings')
           .select('department_id, access_point_name')
           .eq('is_internal', true)
-          .in('department_id', [...deptIdSet]);
+          .in('department_id', [...allDeptIdsForSettings]);
 
         if (organizationId) {
           settingsQuery = settingsQuery.eq('organization_id', organizationId);
@@ -922,15 +961,23 @@ export const skudController = {
           if (!internalPointsByDept.has(s.department_id)) {
             internalPointsByDept.set(s.department_id, new Set());
           }
-          internalPointsByDept.get(s.department_id)!.add(s.access_point_name);
+          internalPointsByDept.get(s.department_id)!.add(s.access_point_name.trim());
         }
       }
 
-      // Карта employee_id → Set<internal_access_point>
+      // Карта employee_id → Set<internal_access_point> (с наследованием от предков)
       const empInternalPoints = new Map<number, Set<string>>();
       for (const emp of employees) {
-        if (emp.org_department_id && internalPointsByDept.has(emp.org_department_id)) {
-          empInternalPoints.set(emp.id, internalPointsByDept.get(emp.org_department_id)!);
+        if (!emp.org_department_id) continue;
+        const combined = new Set<string>();
+        const ownPoints = internalPointsByDept.get(emp.org_department_id);
+        if (ownPoints) for (const p of ownPoints) combined.add(p);
+        for (const ancestorId of getAncestorDeptIds(emp.org_department_id, allDepts)) {
+          const ancestorPoints = internalPointsByDept.get(ancestorId);
+          if (ancestorPoints) for (const p of ancestorPoints) combined.add(p);
+        }
+        if (combined.size > 0) {
+          empInternalPoints.set(emp.id, combined);
         }
       }
 
@@ -1246,7 +1293,14 @@ export const skudController = {
       res.end();
     } catch (error) {
       console.error('syncEmployee error:', error);
-      res.status(500).json({ success: false, error: 'Ошибка синхронизации событий сотрудника' });
+      if (res.headersSent) {
+        try {
+          res.write(`data: ${JSON.stringify({ type: 'error', error: 'Ошибка синхронизации событий сотрудника' })}\n\n`);
+        } catch { /* ignore */ }
+        res.end();
+      } else {
+        res.status(500).json({ success: false, error: 'Ошибка синхронизации событий сотрудника' });
+      }
     }
   },
 
@@ -1373,10 +1427,17 @@ export const skudController = {
         organizationId = dept?.organization_id;
       }
 
+      // Загружаем отделы для цепочки предков
+      let allDeptsQuery = supabase.from('org_departments').select('id, parent_id');
+      if (organizationId) allDeptsQuery = allDeptsQuery.eq('organization_id', organizationId);
+      const { data: allDepts } = await allDeptsQuery;
+
+      const deptChain = [departmentId, ...getAncestorDeptIds(departmentId, allDepts || [])];
+
       let query = supabase
         .from('skud_access_point_settings')
-        .select('access_point_name, is_internal')
-        .eq('department_id', departmentId);
+        .select('access_point_name, is_internal, department_id')
+        .in('department_id', deptChain);
 
       if (organizationId) {
         query = query.eq('organization_id', organizationId);
@@ -1390,7 +1451,23 @@ export const skudController = {
         return;
       }
 
-      res.json({ success: true, data: data || [] });
+      // Приоритет: настройки дочернего отдела перекрывают предков
+      const deptPriority = new Map(deptChain.map((id, idx) => [id, idx]));
+      const merged = new Map<string, { is_internal: boolean; priority: number }>();
+      for (const row of data || []) {
+        const priority = deptPriority.get(row.department_id) ?? 999;
+        const existing = merged.get(row.access_point_name);
+        if (!existing || priority < existing.priority) {
+          merged.set(row.access_point_name, { is_internal: row.is_internal, priority });
+        }
+      }
+
+      const result = [...merged.entries()].map(([name, { is_internal }]) => ({
+        access_point_name: name,
+        is_internal,
+      }));
+
+      res.json({ success: true, data: result });
     } catch (error) {
       console.error('Get access point settings error:', error);
       res.status(500).json({ success: false, error: 'Ошибка получения настроек' });

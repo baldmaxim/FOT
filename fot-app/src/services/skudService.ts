@@ -121,6 +121,8 @@ export const skudService = {
             onProgress(`День ${data.dayIndex + 1}/${data.totalDays} (${data.day})...`);
           } else if (data.type === 'day_done' && onProgress && data.inserted > 0) {
             onProgress(`${data.day}: +${data.inserted} событий`);
+          } else if (data.type === 'error') {
+            throw new Error(data.error || 'Ошибка синхронизации');
           } else if (data.type === 'done') {
             result = { inserted: data.inserted, skipped: data.skipped, total: data.total };
           }

@@ -106,7 +106,7 @@ export const EmployeeCardPage: FC = () => {
   useEffect(() => {
     if (!employee?.org_department_id) { setInternalPoints(new Set()); return; }
     skudService.getAccessPointSettings(employee.org_department_id).then(settings => {
-      setInternalPoints(new Set(settings.filter(s => s.is_internal).map(s => s.access_point_name)));
+      setInternalPoints(new Set(settings.filter(s => s.is_internal).map(s => s.access_point_name.trim())));
     }).catch(() => {});
   }, [employee?.org_department_id]);
 
