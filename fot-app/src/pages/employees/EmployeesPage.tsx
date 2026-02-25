@@ -14,6 +14,11 @@ const getInitials = (name: string): string => {
   return (parts[0]?.[0] || '?').toUpperCase();
 };
 
+const formatTime = (val: string): string => {
+  if (val.includes('T')) return val.slice(11, 16);
+  return val.slice(0, 5);
+};
+
 const collectChildIds = (node: OrgDepartmentNode): string[] => {
   const ids = [node.id];
   for (const child of node.children) ids.push(...collectChildIds(child));
@@ -85,16 +90,21 @@ export const EmployeesPage: FC = () => {
     } catch { /* ignore */ }
   }, []);
 
-  const loadPresence = useCallback(async () => {
+  const loadPresence = useCallback(async (deptId: string | null) => {
+    if (!deptId) {
+      setPresenceMap(new Map());
+      return;
+    }
     try {
-      const data = await skudService.getPresence();
+      const data = await skudService.getPresence(deptId);
       const map = new Map<number, IEmployeePresence>();
       data.forEach(p => map.set(p.employee_id, p));
       setPresenceMap(map);
     } catch { /* ignore */ }
   }, []);
 
-  useEffect(() => { loadEmployees(); loadDepartments(); loadPresence(); }, [loadEmployees, loadDepartments, loadPresence]);
+  useEffect(() => { loadEmployees(); loadDepartments(); }, [loadEmployees, loadDepartments]);
+  useEffect(() => { loadPresence(selectedDeptId); }, [selectedDeptId, loadPresence]);
 
   // Department employee counts
   const deptCounts = useMemo(() => {
@@ -432,7 +442,7 @@ export const EmployeesPage: FC = () => {
                     {presenceMap.get(emp.id)!.first_entry && (
                       <div className="ep-emp-stat">
                         <span className="ep-emp-stat-value">
-                          {presenceMap.get(emp.id)!.first_entry!.slice(11, 16)}
+                          {formatTime(presenceMap.get(emp.id)!.first_entry!)}
                         </span>
                         <span className="ep-emp-stat-label">Вход</span>
                       </div>

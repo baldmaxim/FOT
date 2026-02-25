@@ -221,12 +221,17 @@ export const skudController = {
       const yesterdayStr = formatDateToISO(yesterday);
 
       // Запрос daily_summary за 2 недели
-      const { data: summaries } = await supabase
+      const { data: summaries, error: summariesError } = await supabase
         .from('skud_daily_summary')
         .select('employee_id, date, first_entry, last_exit, total_hours, is_present')
         .in('employee_id', empIds)
         .gte('date', lastMondayStr)
         .lte('date', todayStr);
+
+      console.log(`[dashboard-stats] empIds=${empIds.length}, lastMondayStr=${lastMondayStr}, mondayStr=${mondayStr}, todayStr=${todayStr}, summaries=${(summaries || []).length}, error=${summariesError?.message || 'none'}`);
+      const _thisWeekDbg = (summaries || []).filter(s => s.date >= mondayStr && s.date <= todayStr);
+      const _withEntryDbg = _thisWeekDbg.filter(s => s.first_entry);
+      console.log(`[dashboard-stats] thisWeek=${_thisWeekDbg.length}, withEntry=${_withEntryDbg.length}, dates=${[...new Set((summaries || []).map(s => s.date))].sort().join(',')}`);
 
       // Запрос entry-событий за сегодня для hourly activity
       let eventsQuery = supabase
@@ -382,6 +387,7 @@ export const skudController = {
           lateCount,
         }));
 
+      console.log(`[dashboard-stats] RESULT punctuality=${JSON.stringify(punctuality)}, avgArrival=${JSON.stringify(avgArrivalByDay)}, weekComp=${JSON.stringify(weekComparison)}`);
       res.json({
         success: true,
         data: { lateToday, lateYesterday, punctuality, avgArrivalByDay, risks, hourlyActivity, weekComparison, topLate },
