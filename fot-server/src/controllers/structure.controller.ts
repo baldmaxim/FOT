@@ -1,8 +1,6 @@
 import { Response } from 'express';
 import { supabase } from '../config/database.js';
-import { encryptionService } from '../services/encryption.service.js';
 import { auditService } from '../services/audit.service.js';
-import { safeDecrypt } from '../utils/crypto.utils.js';
 import { getOrgId } from '../utils/org.utils.js';
 import type {
   AuthenticatedRequest,
@@ -20,8 +18,8 @@ function decryptDepartment(encrypted: OrgDepartmentEncrypted): OrgDepartment {
     organization_id: encrypted.organization_id,
     parent_id: encrypted.parent_id,
     sigur_department_id: encrypted.sigur_department_id,
-    name: encryptionService.decrypt(encrypted.name_encrypted),
-    description: safeDecrypt(encrypted.description_encrypted),
+    name: encrypted.name || '',
+    description: encrypted.description || null,
     sort_order: encrypted.sort_order,
     is_active: encrypted.is_active,
     created_at: encrypted.created_at,
@@ -116,8 +114,8 @@ export const structureController = {
         .insert({
           organization_id: organizationId,
           parent_id: parent_id || null,
-          name_encrypted: encryptionService.encrypt(name.trim()),
-          description_encrypted: description ? encryptionService.encrypt(description.trim()) : null,
+          name: name.trim(),
+          description: description ? description.trim() : null,
         })
         .select()
         .single();
@@ -191,7 +189,7 @@ export const structureController = {
 
     let query = supabase
       .from('org_departments')
-      .select('id, name_encrypted')
+      .select('id, name')
       .eq('organization_id', organizationId)
       .eq('is_active', true);
 
@@ -203,12 +201,8 @@ export const structureController = {
 
     const { data: existing } = await query;
 
-    const found = (existing || []).find((d: { name_encrypted: string }) => {
-      try {
-        return encryptionService.decrypt(d.name_encrypted).toLowerCase() === trimmedName.toLowerCase();
-      } catch {
-        return false;
-      }
+    const found = (existing || []).find((d: { name: string }) => {
+      return (d.name || '').toLowerCase() === trimmedName.toLowerCase();
     });
 
     if (found) {
@@ -220,7 +214,7 @@ export const structureController = {
       .insert({
         organization_id: organizationId,
         parent_id: parentId,
-        name_encrypted: encryptionService.encrypt(trimmedName),
+        name: trimmedName,
       })
       .select()
       .single();

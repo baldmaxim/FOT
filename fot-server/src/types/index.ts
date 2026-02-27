@@ -38,16 +38,16 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
-// Организация (зашифрованная версия в БД)
+// Организация в БД
 export interface OrganizationEncrypted {
   id: string;
-  name_encrypted: string;
+  name: string;
   parent_organization_id: string | null;
   created_at: string;
   updated_at: string;
 }
 
-// Организация (расшифрованная версия для API)
+// Организация для API
 export interface Organization {
   id: string;
   name: string;
@@ -56,21 +56,21 @@ export interface Organization {
   updated_at: string;
 }
 
-// Сотрудник (зашифрованная версия в БД)
+// Сотрудник в БД
 export interface EmployeeEncrypted {
   id: number;
   organization_id: string;
-  full_name_encrypted: string;
-  last_name_encrypted: string | null;
-  first_name_encrypted: string | null;
-  middle_name_encrypted: string | null;
-  current_salary_encrypted: string | null;
-  birth_date_encrypted: string | null;
-  hire_date_encrypted: string;
-  country_encrypted: string | null;
-  pension_number_encrypted: string | null;
-  patent_issue_date_encrypted: string | null;
-  patent_expiry_date_encrypted: string | null;
+  full_name: string;
+  last_name: string | null;
+  first_name: string | null;
+  middle_name: string | null;
+  current_salary: string | null;
+  birth_date: string | null;
+  hire_date: string;
+  country: string | null;
+  pension_number: string | null;
+  patent_issue_date: string | null;
+  patent_expiry_date: string | null;
   email: string | null;
   org_department_id: string | null;
   position_id: string | null;
@@ -83,12 +83,11 @@ export interface EmployeeEncrypted {
   updated_at: string;
 }
 
-// Сотрудник (расшифрованная версия для API)
+// Сотрудник для API
 export interface Employee {
   id: number;
   organization_id: string;
   full_name: string;
-  full_name_encrypted: string;
   last_name: string | null;
   first_name: string | null;
   middle_name: string | null;
@@ -112,13 +111,13 @@ export interface Employee {
   updated_at: string;
 }
 
-// История зарплаты
+// История зарплаты в БД
 export interface SalaryHistoryEncrypted {
   id: number;
   employee_id: number;
-  salary_encrypted: string;
+  salary: string;
   effective_date: string;
-  note_encrypted: string | null;
+  note: string | null;
   created_at: string;
 }
 
@@ -145,7 +144,7 @@ export interface TimeEntry {
   updated_at: string;
 }
 
-// СКУД события
+// СКУД события в БД
 export interface SKUDEventEncrypted {
   id: number;
   employee_id: number;
@@ -153,10 +152,10 @@ export interface SKUDEventEncrypted {
   event_time: string;
   event_datetime: string;
   event_type: 'entry' | 'exit';
-  physical_person_encrypted: string | null;
+  physical_person: string | null;
   department: string | null;
   location: string | null;
-  card_number_encrypted: string | null;
+  card_number: string | null;
   controller: string | null;
   door: string | null;
   manual_entry: boolean;
@@ -229,21 +228,21 @@ export interface JWTPayload {
   exp: number;
 }
 
-// Структура организации - Отдел (зашифровано)
+// Структура организации - Отдел в БД
 export interface OrgDepartmentEncrypted {
   id: string;
   organization_id: string;
   parent_id: string | null;
   sigur_department_id: number | null;
-  name_encrypted: string;
-  description_encrypted: string | null;
+  name: string;
+  description: string | null;
   sort_order: number;
   is_active: boolean;
   created_at: string;
   updated_at: string;
 }
 
-// Структура организации - Отдел (расшифровано)
+// Структура организации - Отдел для API
 export interface OrgDepartment {
   id: string;
   organization_id: string;

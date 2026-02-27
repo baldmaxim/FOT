@@ -1,15 +1,14 @@
 import { supabase } from '../config/database.js';
-import { encryptionService } from '../services/encryption.service.js';
 
 async function main() {
   // Показать 10 уникальных имён из событий
   const { data } = await supabase.from('skud_events')
-    .select('physical_person_encrypted')
+    .select('physical_person')
     .range(0, 99);
 
   const names = new Set<string>();
   for (const ev of data || []) {
-    const name = encryptionService.decrypt(ev.physical_person_encrypted);
+    const name = ev.physical_person || '';
     names.add(name);
     if (names.size >= 10) break;
   }
@@ -18,23 +17,22 @@ async function main() {
 
   // Показать ФИО из employees для сотрудника 15989
   const { data: emp } = await supabase.from('employees')
-    .select('full_name_encrypted')
+    .select('full_name')
     .eq('id', 15989)
     .single();
   if (emp) {
-    const empName = encryptionService.decrypt(emp.full_name_encrypted);
-    console.log(`\nEmployee 15989 name: "${empName}"`);
+    console.log(`\nEmployee 15989 name: "${emp.full_name}"`);
   }
 
   // Поиск "одинцов" в событиях (частичный)
   let found = 0;
   for (let offset = 0; offset < 2000; offset += 500) {
     const { data: page } = await supabase.from('skud_events')
-      .select('physical_person_encrypted, employee_id, event_date')
+      .select('physical_person, employee_id, event_date')
       .range(offset, offset + 499);
     if (!page) break;
     for (const ev of page) {
-      const name = encryptionService.decrypt(ev.physical_person_encrypted).toLowerCase();
+      const name = (ev.physical_person || '').toLowerCase();
       if (name.includes('одинцов')) {
         found++;
         if (found <= 3) console.log(`  partial match: "${name}" emp_id=${ev.employee_id} date=${ev.event_date}`);

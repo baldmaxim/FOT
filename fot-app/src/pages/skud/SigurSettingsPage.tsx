@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Settings, Wifi, WifiOff, RefreshCw, Eye, Download, Search, Save, Check, ChevronDown, MapPin } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Settings, Wifi, WifiOff, RefreshCw, Eye, Download, Search, Save, Check, MapPin, Filter, Trash2 } from 'lucide-react';
+import { SyncFilterTab } from '../../components/skud/SyncFilterTab';
 import { sigurService } from '../../services/sigurService';
 import { skudService } from '../../services/skudService';
-import { structureApi } from '../../api/structure';
 import { useAuth } from '../../contexts/AuthContext';
-import type { OrgDepartmentNode, IAccessPointSetting } from '../../types';
+import type { IAccessPointSetting } from '../../types';
 import '../../styles/SigurSettingsPage.css';
 
 interface ISyncResult {
@@ -15,6 +15,7 @@ interface ISyncResult {
   sigurTotal: number;
   droppedNoName?: number;
   droppedNoOrg?: number;
+  filteredByDept?: number;
 }
 
 interface IPreviewData {
@@ -58,32 +59,35 @@ const INITIAL_STEPS: ISyncAllStep[] = [
 ];
 
 const renderStepResult = (name: string, result: Record<string, unknown>) => {
+  let text = '';
   switch (name) {
     case 'organizations':
-      return `Импорт: ${result.imported}, пропущено: ${result.skipped}`;
+      text = `Импорт: ${result.imported}, пропущено: ${result.skipped}`;
+      break;
     case 'clean-duplicates':
-      return `Удалено дублей: ${result.duplicatesRemoved}`;
+      text = `Удалено дублей: ${result.duplicatesRemoved}`;
+      break;
     case 'departments':
-      return `Новых: ${result.imported}, обновлено: ${result.updated}, связей: ${result.parentLinksSet}`;
+      text = `Новых: ${result.imported}, обновлено: ${result.updated}, связей: ${result.parentLinksSet}`;
+      if (result.filtered) text += `, отфильтровано: ${result.filtered}`;
+      break;
     case 'positions':
-      return `Из Sigur: ${result.imported}, обновлено: ${result.updated}, seed: ${result.seeded ?? 0}`;
+      text = `Из Sigur: ${result.imported}, обновлено: ${result.updated}, seed: ${result.seeded ?? 0}`;
+      break;
     case 'employees':
-      return `Импорт: ${result.imported}, обновлено: ${result.updated}, пропущено: ${result.skipped}`;
+      text = `Импорт: ${result.imported}, обновлено: ${result.updated}, пропущено: ${result.skipped}`;
+      break;
     default:
-      return JSON.stringify(result);
+      text = JSON.stringify(result);
   }
+  const errors = result.errors as string[] | undefined;
+  if (errors && errors.length > 0) {
+    text += ` | Ошибки: ${errors.length}`;
+  }
+  return text;
 };
 
-const flattenDepts = (nodes: OrgDepartmentNode[], depth = 0): { id: string; name: string; depth: number }[] => {
-  const result: { id: string; name: string; depth: number }[] = [];
-  for (const n of nodes) {
-    result.push({ id: n.id, name: n.name, depth });
-    if (n.children?.length) result.push(...flattenDepts(n.children, depth + 1));
-  }
-  return result;
-};
-
-type SettingsTab = 'settings' | 'access-points';
+type SettingsTab = 'settings' | 'access-points' | 'sync-filter';
 
 export const SigurSettingsPage = () => {
   const { hasPosition } = useAuth();
@@ -118,18 +122,16 @@ export const SigurSettingsPage = () => {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<ISyncResult | null>(null);
   const [syncProgress, setSyncProgress] = useState<{ percent: number; day: string; message: string } | null>(null);
+  const [clearing, setClearing] = useState(false);
+  const [clearResult, setClearResult] = useState<{ deleted: number } | null>(null);
 
   // Точки доступа
   const [accessPoints, setAccessPoints] = useState<string[]>([]);
   const [apLoading, setApLoading] = useState(false);
-  const [departments, setDepartments] = useState<{ id: string; name: string; depth: number }[]>([]);
-  const [selectedDeptId, setSelectedDeptId] = useState('');
   const [apSettings, setApSettings] = useState<Map<string, boolean>>(new Map());
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
-  const [deptDropdownOpen, setDeptDropdownOpen] = useState(false);
-  const [deptSearch, setDeptSearch] = useState('');
-  const deptDropdownRef = useRef<HTMLDivElement>(null);
+  const [apSearch, setApSearch] = useState('');
 
   // Инициализация дат текущим месяцем
   useEffect(() => {
@@ -146,60 +148,30 @@ export const SigurSettingsPage = () => {
     setPreviewEnd(end);
   }, []);
 
-  // Загрузка отделов и точек доступа
+  // Загрузка точек доступа и общих настроек (независимо)
   useEffect(() => {
-    structureApi.getTree().then(res => {
-      if (res.success && res.data) {
-        setDepartments(flattenDepts(res.data.departments));
-      }
-    }).catch(() => {});
-
     setApLoading(true);
-    skudService.getAccessPoints().then(setAccessPoints).catch(() => {}).finally(() => setApLoading(false));
+    skudService.getAccessPoints()
+      .then(setAccessPoints)
+      .catch(() => {})
+      .finally(() => setApLoading(false));
+
+    skudService.getAccessPointSettings()
+      .then(settings => {
+        const map = new Map<string, boolean>();
+        for (const s of settings) {
+          map.set(s.access_point_name, s.is_internal);
+        }
+        setApSettings(map);
+      })
+      .catch(() => {});
   }, []);
 
-  // Закрытие dropdown при клике вне
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (deptDropdownRef.current && !deptDropdownRef.current.contains(e.target as Node)) {
-        setDeptDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  // Загрузка настроек при выборе отдела
-  useEffect(() => {
-    if (!selectedDeptId) {
-      setApSettings(new Map());
-      return;
-    }
-    skudService.getAccessPointSettings(selectedDeptId).then(settings => {
-      const map = new Map<string, boolean>();
-      for (const s of settings) {
-        map.set(s.access_point_name, s.is_internal);
-      }
-      setApSettings(map);
-      setSettingsSaved(false);
-    }).catch(() => {});
-  }, [selectedDeptId]);
-
-  const filteredDepts = useMemo(() => {
-    if (!deptSearch.trim()) return departments;
-    const q = deptSearch.toLowerCase();
-    return departments.filter(d => d.name.toLowerCase().includes(q));
-  }, [departments, deptSearch]);
-
-  const selectedDeptName = useMemo(() => {
-    return departments.find(d => d.id === selectedDeptId)?.name || '';
-  }, [departments, selectedDeptId]);
-
-  const selectDept = (id: string) => {
-    setSelectedDeptId(id);
-    setDeptDropdownOpen(false);
-    setDeptSearch('');
-  };
+  const filteredAccessPoints = useMemo(() => {
+    if (!apSearch.trim()) return accessPoints;
+    const q = apSearch.toLowerCase();
+    return accessPoints.filter(ap => ap.toLowerCase().includes(q));
+  }, [accessPoints, apSearch]);
 
   const toggleApInternal = (apName: string) => {
     setApSettings(prev => {
@@ -211,14 +183,13 @@ export const SigurSettingsPage = () => {
   };
 
   const handleSaveApSettings = async () => {
-    if (!selectedDeptId) return;
     setSavingSettings(true);
     try {
       const settings: IAccessPointSetting[] = accessPoints.map(ap => ({
         access_point_name: ap,
         is_internal: apSettings.get(ap) || false,
       }));
-      await skudService.saveAccessPointSettings(selectedDeptId, settings);
+      await skudService.saveAccessPointSettings(settings);
       setSettingsSaved(true);
       setTimeout(() => setSettingsSaved(false), 3000);
     } catch {
@@ -401,6 +372,23 @@ export const SigurSettingsPage = () => {
     }
   };
 
+  const handleClearEvents = async () => {
+    if (!syncStartDate || !syncEndDate) return;
+    if (!confirm(`Удалить все события с ${syncStartDate} по ${syncEndDate}?`)) return;
+    setClearing(true);
+    setClearResult(null);
+    setSyncResult(null);
+    setError('');
+    try {
+      const result = await sigurService.clearEvents(syncStartDate, syncEndDate);
+      setClearResult(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка удаления событий');
+    } finally {
+      setClearing(false);
+    }
+  };
+
   const statusBadge = () => {
     if (checking) {
       return <span className="sigur-status-badge checking"><span className="sigur-status-dot" />Проверка...</span>;
@@ -435,6 +423,13 @@ export const SigurSettingsPage = () => {
         >
           <MapPin size={14} />
           Точки доступа
+        </button>
+        <button
+          className={`sigur-tab ${activeTab === 'sync-filter' ? 'active' : ''}`}
+          onClick={() => setActiveTab('sync-filter')}
+        >
+          <Filter size={14} />
+          Синхронизация
         </button>
       </div>
 
@@ -503,6 +498,15 @@ export const SigurSettingsPage = () => {
                   {step.status === 'done' && step.result && (
                     <div className="sigur-step-result">
                       {renderStepResult(step.name, step.result)}
+                      {(step.result.errors as string[] | undefined)?.length ? (
+                        <details className="sigur-step-errors-detail">
+                          <summary>Ошибки ({(step.result.errors as string[]).length})</summary>
+                          <ul>
+                            {(step.result.errors as string[]).slice(0, 20).map((e, i) => <li key={i}>{e}</li>)}
+                            {(step.result.errors as string[]).length > 20 && <li>...и ещё {(step.result.errors as string[]).length - 20}</li>}
+                          </ul>
+                        </details>
+                      ) : null}
                     </div>
                   )}
                   {step.status === 'error' && step.error && (
@@ -643,10 +647,18 @@ export const SigurSettingsPage = () => {
           <button
             className="sigur-btn sigur-btn-primary"
             onClick={handleSync}
-            disabled={syncing || !connected || !syncStartDate || !syncEndDate}
+            disabled={syncing || clearing || !connected || !syncStartDate || !syncEndDate}
           >
             <Download size={14} />
             {syncing ? 'Синхронизация...' : 'Синхронизировать'}
+          </button>
+          <button
+            className="sigur-btn sigur-btn-danger"
+            onClick={handleClearEvents}
+            disabled={syncing || clearing || !syncStartDate || !syncEndDate}
+          >
+            <Trash2 size={14} />
+            {clearing ? 'Удаление...' : 'Очистить события'}
           </button>
         </div>
 
@@ -673,6 +685,9 @@ export const SigurSettingsPage = () => {
               {!!syncResult.droppedNoOrg && (
                 <span className="sigur-sync-stat skipped">Без организации: <strong>{syncResult.droppedNoOrg}</strong></span>
               )}
+              {!!syncResult.filteredByDept && (
+                <span className="sigur-sync-stat skipped">Отфильтровано (отдел): <strong>{syncResult.filteredByDept}</strong></span>
+              )}
               <span className="sigur-sync-stat">Сопоставлено: <strong>{syncResult.matched}</strong></span>
             </div>
             {syncResult.errors.length > 0 && (
@@ -685,58 +700,34 @@ export const SigurSettingsPage = () => {
             )}
           </div>
         )}
+
+        {clearResult && (
+          <div className="sigur-sync-result">
+            <div className="sigur-sync-stats">
+              <span className="sigur-sync-stat success">Удалено событий: <strong>{clearResult.deleted}</strong></span>
+            </div>
+          </div>
+        )}
       </div>
       </>}
 
+      {activeTab === 'sync-filter' && (
+        <SyncFilterTab connected={connected} canEdit={canEdit} />
+      )}
+
       {activeTab === 'access-points' && (
       <div className="sigur-section sigur-section--full-height">
-        <div className="sigur-ap-dept-selector">
-          <label>Отдел:</label>
-          <div className="sigur-ap-dept-dropdown" ref={deptDropdownRef}>
-            <button
-              className="sigur-ap-dept-trigger"
-              onClick={() => setDeptDropdownOpen(!deptDropdownOpen)}
-            >
-              <span>{selectedDeptName || '— Выберите отдел —'}</span>
-              <ChevronDown size={14} />
-            </button>
-            {deptDropdownOpen && (
-              <div className="sigur-ap-dept-menu">
-                <div className="sigur-ap-dept-search-wrap">
-                  <Search size={14} />
-                  <input
-                    type="text"
-                    placeholder="Поиск отдела..."
-                    value={deptSearch}
-                    onChange={e => setDeptSearch(e.target.value)}
-                    autoFocus
-                  />
-                </div>
-                <div className="sigur-ap-dept-list">
-                  <button
-                    className={`sigur-ap-dept-option ${!selectedDeptId ? 'active' : ''}`}
-                    onClick={() => selectDept('')}
-                  >
-                    — Все —
-                  </button>
-                  {filteredDepts.map(d => (
-                    <button
-                      key={d.id}
-                      className={`sigur-ap-dept-option ${selectedDeptId === d.id ? 'active' : ''}`}
-                      style={{ paddingLeft: `${12 + d.depth * 16}px` }}
-                      onClick={() => selectDept(d.id)}
-                    >
-                      {d.name}
-                    </button>
-                  ))}
-                  {filteredDepts.length === 0 && (
-                    <div className="sigur-ap-dept-empty">Не найдено</div>
-                  )}
-                </div>
-              </div>
-            )}
+        <div className="sigur-ap-toolbar">
+          <div className="sigur-ap-search-wrap">
+            <Search size={14} />
+            <input
+              type="text"
+              placeholder="Поиск точки доступа..."
+              value={apSearch}
+              onChange={e => setApSearch(e.target.value)}
+            />
           </div>
-          {selectedDeptId && canEdit && (
+          {canEdit && (
             <button
               className={`sigur-btn sigur-btn-primary ${settingsSaved ? 'sigur-btn-saved' : ''}`}
               onClick={handleSaveApSettings}
@@ -762,18 +753,18 @@ export const SigurSettingsPage = () => {
                 <tr>
                   <th>#</th>
                   <th>Точка доступа</th>
-                  <th>Тип</th>
+                  <th>Тип зоны</th>
                 </tr>
               </thead>
               <tbody>
-                {accessPoints.map((ap, idx) => {
+                {filteredAccessPoints.map((ap, idx) => {
                   const isInternal = apSettings.get(ap) || false;
                   return (
                     <tr key={ap}>
                       <td style={{ width: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>{idx + 1}</td>
                       <td>{ap}</td>
                       <td>
-                        {selectedDeptId && canEdit ? (
+                        {canEdit ? (
                           <button
                             className={`sigur-ap-type-btn ${isInternal ? 'internal' : 'external'}`}
                             onClick={() => toggleApInternal(ap)}
@@ -782,7 +773,7 @@ export const SigurSettingsPage = () => {
                           </button>
                         ) : (
                           <span className={`sigur-ap-type-label ${isInternal ? 'internal' : 'external'}`}>
-                            {selectedDeptId ? (isInternal ? 'Внутренняя' : 'Внешняя') : '—'}
+                            {isInternal ? 'Внутренняя' : 'Внешняя'}
                           </span>
                         )}
                       </td>

@@ -8,6 +8,7 @@ import { DashboardSidebar } from '../components/dashboard/DashboardSidebar';
 import { usePresence } from '../hooks/usePresence';
 import { useDashboardStats } from '../hooks/useDashboardStats';
 import { apiClient } from '../api/client';
+import type { DashboardPeriod } from '../types';
 import {
   UsersIcon,
   MapPinIcon,
@@ -95,9 +96,12 @@ export const DashboardPage: React.FC = () => {
     return deptOptions.filter(d => d.name.toLowerCase().includes(q));
   }, [deptOptions, deptSearchQuery]);
 
+  // Period toggle
+  const [period, setPeriod] = useState<DashboardPeriod>('today');
+
   // Data
   const { employees, loading } = usePresence(selectedDeptId);
-  const { stats, loading: statsLoading } = useDashboardStats(selectedDeptId);
+  const { stats, loading: statsLoading } = useDashboardStats(selectedDeptId, period);
 
   const onlineCount = useMemo(
     () => employees.filter(e => e.status === 'online').length,
@@ -114,36 +118,49 @@ export const DashboardPage: React.FC = () => {
     [employees, onlineCount],
   );
 
+  const deptInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDeptInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setDeptSearchQuery(e.target.value);
+    if (!deptDropdownOpen) setDeptDropdownOpen(true);
+  };
+
+  const handleDeptInputFocus = () => {
+    setDeptSearchQuery('');
+    setDeptDropdownOpen(true);
+  };
+
+  const handleDeptSelect = (deptId: string) => {
+    setSearchParams({ dept: deptId }, { replace: true });
+    setDeptDropdownOpen(false);
+    setDeptSearchQuery('');
+    deptInputRef.current?.blur();
+  };
+
   const deptSelector = (
     <div className="dash-dept-dropdown" ref={deptDropdownRef}>
-      <button
-        className={`dash-dept-trigger ${selectedDeptId ? 'has-value' : ''} ${!selectedDeptId ? 'dash-dept-trigger--large' : ''}`}
-        onClick={() => { setDeptDropdownOpen(!deptDropdownOpen); setDeptSearchQuery(''); }}
-      >
-        <span className="dash-dept-label">
-          {selectedDept ? selectedDept.name : 'Выберите отдел'}
-        </span>
+      <div className={`dash-dept-trigger ${selectedDeptId ? 'has-value' : ''} ${!selectedDeptId ? 'dash-dept-trigger--large' : ''}`}>
+        <Search size={selectedDeptId ? 14 : 16} className="dash-dept-search-icon" />
+        <input
+          ref={deptInputRef}
+          className="dash-dept-input"
+          type="text"
+          placeholder="Поиск отдела..."
+          value={deptDropdownOpen ? deptSearchQuery : (selectedDept?.name ?? '')}
+          onChange={handleDeptInputChange}
+          onFocus={handleDeptInputFocus}
+        />
         <ChevronDown size={selectedDeptId ? 14 : 18} className={`dash-dept-chevron ${deptDropdownOpen ? 'open' : ''}`} />
-      </button>
+      </div>
       {deptDropdownOpen && (
         <div className={`dash-dept-menu ${!selectedDeptId ? 'dash-dept-menu--center' : ''}`}>
-          <div className="dash-dept-search">
-            <Search size={14} />
-            <input
-              type="text"
-              placeholder="Поиск отдела..."
-              value={deptSearchQuery}
-              onChange={e => setDeptSearchQuery(e.target.value)}
-              autoFocus
-            />
-          </div>
           <div className="dash-dept-list">
             {filteredDeptOptions.map(dept => (
               <div
                 key={dept.id}
                 className={`dash-dept-item ${selectedDeptId === dept.id ? 'selected' : ''}`}
                 style={{ paddingLeft: 12 + dept.level * 16 }}
-                onClick={() => { setSearchParams({ dept: dept.id }, { replace: true }); setDeptDropdownOpen(false); }}
+                onClick={() => handleDeptSelect(dept.id)}
               >
                 {dept.name}
               </div>
@@ -176,45 +193,95 @@ export const DashboardPage: React.FC = () => {
             {deptSelector}
           </div>
 
-          <div className="stats-row">
-            <StatCard
-              label="Всего сотрудников"
-              value={employees.length > 0 ? String(employees.length) : '—'}
-              icon={<UsersIcon />}
-              iconType="blue"
-              change="Без изменений"
-              changeType="neutral"
-            />
-            <StatCard
-              label="В офисе"
-              value={onlineCount > 0 ? String(onlineCount) : '—'}
-              icon={<MapPinIcon />}
-              iconType="green"
-              change={stats && stats.lateYesterday !== undefined ? `${onlineCount > 0 ? '+' : ''}${onlineCount} сегодня` : undefined}
-              changeType="positive"
-            />
-            <StatCard
-              label="Вышли"
-              value={offlineCount > 0 ? String(offlineCount) : '—'}
-              icon={<LogOut size={18} />}
-              iconType="red"
-              change={offlineCount === 0 ? 'Никто не ушёл' : undefined}
-              changeType="neutral"
-            />
-            <StatCard
-              label="Присутствие"
-              value={employees.length > 0 ? `${presencePercent}%` : '—'}
-              icon={<CheckCircleIcon />}
-              iconType="green"
-            />
-            <StatCard
-              label="Опоздания сегодня"
-              value={stats ? String(stats.lateToday) : '—'}
-              icon={<ClockIcon />}
-              iconType="orange"
-              change={stats ? `${stats.lateToday > stats.lateYesterday ? '+' : ''}${stats.lateToday - stats.lateYesterday} к вчера` : undefined}
-              changeType={stats ? (stats.lateToday > stats.lateYesterday ? 'negative' : stats.lateToday < stats.lateYesterday ? 'positive' : 'neutral') : 'neutral'}
-            />
+          <div className="stats-section">
+            <div className="period-toggle">
+              {(['today', 'week', 'month'] as const).map(p => (
+                <button
+                  key={p}
+                  className={`period-btn ${period === p ? 'active' : ''}`}
+                  onClick={() => setPeriod(p)}
+                >
+                  {p === 'today' ? 'Сегодня' : p === 'week' ? 'Неделя' : 'Месяц'}
+                </button>
+              ))}
+            </div>
+            <div className="stats-row">
+              <StatCard
+                label="Всего сотрудников"
+                value={employees.length > 0 ? String(employees.length) : '—'}
+                icon={<UsersIcon />}
+                iconType="blue"
+                change="Без изменений"
+                changeType="neutral"
+              />
+              {period === 'today' ? (
+                <>
+                  <StatCard
+                    label="В офисе"
+                    value={onlineCount > 0 ? String(onlineCount) : '—'}
+                    icon={<MapPinIcon />}
+                    iconType="green"
+                    change={`${onlineCount > 0 ? '+' : ''}${onlineCount} сегодня`}
+                    changeType="positive"
+                  />
+                  <StatCard
+                    label="Вышли"
+                    value={offlineCount > 0 ? String(offlineCount) : '—'}
+                    icon={<LogOut size={18} />}
+                    iconType="red"
+                    change={offlineCount === 0 ? 'Никто не ушёл' : undefined}
+                    changeType="neutral"
+                  />
+                  <StatCard
+                    label="Присутствие"
+                    value={employees.length > 0 ? `${presencePercent}%` : '—'}
+                    icon={<CheckCircleIcon />}
+                    iconType="green"
+                  />
+                  <StatCard
+                    label="Опоздания сегодня"
+                    value={stats ? String(stats.lateToday) : '—'}
+                    icon={<ClockIcon />}
+                    iconType="orange"
+                    change={stats ? `${stats.lateToday > stats.lateYesterday ? '+' : ''}${stats.lateToday - stats.lateYesterday} к вчера` : undefined}
+                    changeType={stats ? (stats.lateToday > stats.lateYesterday ? 'negative' : stats.lateToday < stats.lateYesterday ? 'positive' : 'neutral') : 'neutral'}
+                  />
+                </>
+              ) : (
+                <>
+                  <StatCard
+                    label="Ср. посещаемость"
+                    value={stats?.periodStats ? String(stats.periodStats.avgPresent) : '—'}
+                    icon={<MapPinIcon />}
+                    iconType="green"
+                    change={stats?.periodStats ? `из ${employees.length} в день` : undefined}
+                    changeType="neutral"
+                  />
+                  <StatCard
+                    label="Ср. отсутствие"
+                    value={stats?.periodStats ? String(stats.periodStats.avgAbsent) : '—'}
+                    icon={<LogOut size={18} />}
+                    iconType="red"
+                    change={stats?.periodStats ? `в среднем за день` : undefined}
+                    changeType="neutral"
+                  />
+                  <StatCard
+                    label="Посещаемость"
+                    value={stats?.periodStats ? `${stats.periodStats.attendanceRate}%` : '—'}
+                    icon={<CheckCircleIcon />}
+                    iconType="green"
+                  />
+                  <StatCard
+                    label={period === 'week' ? 'Опоздания за неделю' : 'Опоздания за месяц'}
+                    value={stats?.periodStats ? String(stats.periodStats.lateCount) : '—'}
+                    icon={<ClockIcon />}
+                    iconType="orange"
+                    change={stats?.periodStats ? `${stats.periodStats.lateCount > stats.periodStats.prevLateCount ? '+' : ''}${stats.periodStats.lateCount - stats.periodStats.prevLateCount} к пред. ${period === 'week' ? 'неделе' : 'месяцу'}` : undefined}
+                    changeType={stats?.periodStats ? (stats.periodStats.lateCount > stats.periodStats.prevLateCount ? 'negative' : stats.periodStats.lateCount < stats.periodStats.prevLateCount ? 'positive' : 'neutral') : 'neutral'}
+                  />
+                </>
+              )}
+            </div>
           </div>
 
           {stats && !statsLoading && <AnalyticsRow stats={stats} />}

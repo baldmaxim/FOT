@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { supabase } from '../config/database.js';
 import { totpService } from '../services/totp.service.js';
 import { auditService } from '../services/audit.service.js';
-import { encryptionService } from '../services/encryption.service.js';
 import type { AuthenticatedRequest, UserProfile, OrganizationEncrypted, Organization } from '../types/index.js';
 
 /**
@@ -12,7 +11,7 @@ import type { AuthenticatedRequest, UserProfile, OrganizationEncrypted, Organiza
 function decryptOrganization(encrypted: OrganizationEncrypted): Organization {
   return {
     id: encrypted.id,
-    name: encryptionService.decryptField(encrypted.name_encrypted) || 'Неизвестная организация',
+    name: encrypted.name || 'Неизвестная организация',
     parent_organization_id: encrypted.parent_organization_id ?? null,
     created_at: encrypted.created_at,
     updated_at: encrypted.updated_at,
@@ -65,15 +64,14 @@ export const adminController = {
       if (orgIds.length > 0) {
         const { data: orgs, error: orgsError } = await supabase
           .from('organizations')
-          .select('id, name_encrypted')
+          .select('id, name')
           .in('id', orgIds);
 
         if (orgsError) {
           logSupabaseError('GetUsers-Orgs', orgsError);
         } else if (orgs) {
-          // Расшифровываем названия организаций
           orgMap = orgs.reduce((acc, org) => {
-            acc[org.id] = encryptionService.decryptField(org.name_encrypted) || 'Неизвестная организация';
+            acc[org.id] = org.name || 'Неизвестная организация';
             return acc;
           }, {} as Record<string, string>);
         }
@@ -135,14 +133,14 @@ export const adminController = {
       if (orgIds.length > 0) {
         const { data: orgs, error: orgsError } = await supabase
           .from('organizations')
-          .select('id, name_encrypted')
+          .select('id, name')
           .in('id', orgIds);
 
         if (orgsError) {
           logSupabaseError('GetPendingUsers-Orgs', orgsError);
         } else if (orgs) {
           orgMap = orgs.reduce((acc, org) => {
-            acc[org.id] = encryptionService.decryptField(org.name_encrypted) || 'Неизвестная организация';
+            acc[org.id] = org.name || 'Неизвестная организация';
             return acc;
           }, {} as Record<string, string>);
         }
@@ -667,7 +665,7 @@ export const adminController = {
 
       const { data: encrypted, error } = await supabase
         .from('organizations')
-        .insert({ name_encrypted: encryptionService.encrypt(name.trim()) })
+        .insert({ name: name.trim() })
         .select()
         .single();
 
@@ -708,7 +706,7 @@ export const adminController = {
       const { data: encrypted, error } = await supabase
         .from('organizations')
         .update({
-          name_encrypted: encryptionService.encrypt(name.trim()),
+          name: name.trim(),
           updated_at: new Date().toISOString(),
         })
         .eq('id', id)

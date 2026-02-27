@@ -6,7 +6,6 @@ import { supabase, supabaseAuth } from '../config/database.js';
 import { env } from '../config/env.js';
 import { totpService } from '../services/totp.service.js';
 import { auditService } from '../services/audit.service.js';
-import { encryptionService } from '../services/encryption.service.js';
 import type { AuthenticatedRequest, JWTPayload, UserProfile } from '../types/index.js';
 
 // Схемы валидации
@@ -573,7 +572,7 @@ export const authController = {
     try {
       const { data: orgsEncrypted, error } = await supabase
         .from('organizations')
-        .select('id, name_encrypted')
+        .select('id, name')
         .order('created_at');
 
       if (error) {
@@ -582,11 +581,10 @@ export const authController = {
         return;
       }
 
-      // Расшифровываем и сортируем по имени
       const organizations = (orgsEncrypted || [])
-        .map((org: { id: string; name_encrypted: string }) => ({
+        .map((org: { id: string; name: string }) => ({
           id: org.id,
-          name: encryptionService.decrypt(org.name_encrypted),
+          name: org.name || '',
         }))
         .sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name, 'ru'));
 

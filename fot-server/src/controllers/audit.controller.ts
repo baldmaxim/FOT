@@ -1,6 +1,5 @@
 import { Response } from 'express';
 import { supabase } from '../config/database.js';
-import { safeDecrypt } from '../utils/crypto.utils.js';
 import { getOrgId } from '../utils/org.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -173,7 +172,7 @@ async function checkUnassignedEmployees(organizationId: string): Promise<AuditCh
   // Находим сотрудников без активных назначений
   const { data: employees } = await supabase
     .from('employees')
-    .select('id, full_name_encrypted')
+    .select('id, full_name')
     .eq('organization_id', organizationId)
     .eq('is_archived', false);
 
@@ -189,7 +188,7 @@ async function checkUnassignedEmployees(organizationId: string): Promise<AuditCh
       if (!count || count === 0) {
         issues.push({
           employee_id: emp.id,
-          full_name: safeDecrypt(emp.full_name_encrypted) || 'Неизвестно',
+          full_name: emp.full_name || 'Неизвестно',
           issue_type: 'unassigned',
           details: 'Сотрудник не имеет активных назначений в структуре',
           severity: 'critical',
@@ -222,7 +221,7 @@ async function checkOrphanedAssignments(organizationId: string): Promise<AuditCh
       org_department_id,
       org_site_id,
       org_subdivision_id,
-      employees!inner(organization_id, full_name_encrypted, is_archived)
+      employees!inner(organization_id, full_name, is_archived)
     `)
     .is('effective_to', null)
     .eq('employees.organization_id', organizationId)
@@ -238,10 +237,10 @@ async function checkOrphanedAssignments(organizationId: string): Promise<AuditCh
       );
 
       if (hasOrphanedRefs) {
-        const emp = assignment.employees as { full_name_encrypted: string };
+        const emp = assignment.employees as { full_name: string };
         issues.push({
           employee_id: assignment.employee_id,
-          full_name: safeDecrypt(emp.full_name_encrypted) || 'Неизвестно',
+          full_name: emp.full_name || 'Неизвестно',
           issue_type: 'orphaned_assignment',
           details: 'Назначение не связано ни с одним подразделением (возможно удалено)',
           severity: 'critical',
@@ -267,7 +266,7 @@ async function checkEmployeesWithoutSalary(organizationId: string): Promise<Audi
   // Находим сотрудников без записей в tender_salary_history
   const { data: employees } = await supabase
     .from('employees')
-    .select('id, full_name_encrypted')
+    .select('id, full_name')
     .eq('organization_id', organizationId)
     .eq('is_archived', false);
 
@@ -281,7 +280,7 @@ async function checkEmployeesWithoutSalary(organizationId: string): Promise<Audi
       if (!count || count === 0) {
         issues.push({
           employee_id: emp.id,
-          full_name: safeDecrypt(emp.full_name_encrypted) || 'Неизвестно',
+          full_name: emp.full_name || 'Неизвестно',
           issue_type: 'no_salary',
           details: 'Зарплата не установлена',
           severity: 'warning',
@@ -307,18 +306,18 @@ async function checkExpiredPatents(organizationId: string): Promise<AuditCheckRe
 
   const { data: employees } = await supabase
     .from('employees')
-    .select('id, full_name_encrypted, patent_expiry_date_encrypted')
+    .select('id, full_name, patent_expiry_date')
     .eq('organization_id', organizationId)
     .eq('is_archived', false)
-    .not('patent_expiry_date_encrypted', 'is', null);
+    .not('patent_expiry_date', 'is', null);
 
   if (employees) {
     for (const emp of employees) {
-      const expiryDate = safeDecrypt(emp.patent_expiry_date_encrypted);
+      const expiryDate = emp.patent_expiry_date;
       if (expiryDate && expiryDate < today) {
         issues.push({
           employee_id: emp.id,
-          full_name: safeDecrypt(emp.full_name_encrypted) || 'Неизвестно',
+          full_name: emp.full_name || 'Неизвестно',
           issue_type: 'expired_patent',
           details: `Патент истёк ${expiryDate}`,
           severity: 'critical',
@@ -331,7 +330,7 @@ async function checkExpiredPatents(organizationId: string): Promise<AuditCheckRe
         if (daysUntilExpiry <= 30 && daysUntilExpiry > 0) {
           issues.push({
             employee_id: emp.id,
-            full_name: safeDecrypt(emp.full_name_encrypted) || 'Неизвестно',
+            full_name: emp.full_name || 'Неизвестно',
             issue_type: 'expiring_patent',
             details: `Патент истекает через ${daysUntilExpiry} дней (${expiryDate})`,
             severity: 'warning',
@@ -357,16 +356,16 @@ async function checkMissingBirthDate(organizationId: string): Promise<AuditCheck
 
   const { data: employees } = await supabase
     .from('employees')
-    .select('id, full_name_encrypted, birth_date_encrypted')
+    .select('id, full_name, birth_date')
     .eq('organization_id', organizationId)
     .eq('is_archived', false);
 
   if (employees) {
     for (const emp of employees) {
-      if (!emp.birth_date_encrypted || !safeDecrypt(emp.birth_date_encrypted)) {
+      if (!emp.birth_date) {
         issues.push({
           employee_id: emp.id,
-          full_name: safeDecrypt(emp.full_name_encrypted) || 'Неизвестно',
+          full_name: emp.full_name || 'Неизвестно',
           issue_type: 'no_birthdate',
           details: 'Не указана дата рождения',
           severity: 'info',
@@ -391,7 +390,7 @@ async function checkDuplicateEmployees(organizationId: string): Promise<AuditChe
 
   const { data: employees } = await supabase
     .from('employees')
-    .select('id, full_name_encrypted')
+    .select('id, full_name')
     .eq('organization_id', organizationId)
     .eq('is_archived', false);
 
@@ -400,7 +399,7 @@ async function checkDuplicateEmployees(organizationId: string): Promise<AuditChe
     const nameMap = new Map<string, { id: number; full_name: string }[]>();
 
     for (const emp of employees) {
-      const fullName = safeDecrypt(emp.full_name_encrypted) || '';
+      const fullName = emp.full_name || '';
       const normalizedName = fullName.toLowerCase().trim();
 
       if (normalizedName) {
@@ -443,7 +442,7 @@ async function checkMultipleAssignments(organizationId: string): Promise<AuditCh
 
   const { data: employees } = await supabase
     .from('employees')
-    .select('id, full_name_encrypted')
+    .select('id, full_name')
     .eq('organization_id', organizationId)
     .eq('is_archived', false);
 
@@ -458,7 +457,7 @@ async function checkMultipleAssignments(organizationId: string): Promise<AuditCh
       if (count && count > 1) {
         issues.push({
           employee_id: emp.id,
-          full_name: safeDecrypt(emp.full_name_encrypted) || 'Неизвестно',
+          full_name: emp.full_name || 'Неизвестно',
           issue_type: 'multiple_assignments',
           details: `Имеет ${count} активных назначений`,
           severity: 'info',

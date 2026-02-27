@@ -1,11 +1,14 @@
-import { useState, useEffect, useCallback, type FC } from 'react';
-import { LogIn, LogOut, ChevronDown, ChevronRight, Clock, RefreshCw, Timer } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef, type FC } from 'react';
+import { LogIn, LogOut, ChevronDown, ChevronRight, Clock, RefreshCw, Timer, X } from 'lucide-react';
 import { skudService } from '../../services/skudService';
 import type { SkudEvent } from '../../types';
 
 interface IEmployeeSkudSectionProps {
   employeeId: number;
   departmentId?: string;
+  onSync?: () => void;
+  focusDate?: string | null;
+  focusKey?: number;
 }
 
 type Period = 'today' | 'week' | 'month';
@@ -152,7 +155,7 @@ const groupByDay = (events: SkudEvent[], internalPoints: Set<string>): IDayGroup
   return groups;
 };
 
-export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({ employeeId, departmentId }) => {
+export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({ employeeId, departmentId, onSync, focusDate, focusKey }) => {
   const [groups, setGroups] = useState<IDayGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
@@ -160,6 +163,8 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({ employeeId,
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [internalPoints, setInternalPoints] = useState<Set<string>>(new Set());
+  const [customDate, setCustomDate] = useState<string | null>(null);
+  const prevFocusKey = useRef<number>(0);
 
   // Загружаем настройки внутренних точек
   useEffect(() => {
@@ -176,18 +181,40 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({ employeeId,
     }).catch(() => {});
   }, [departmentId]);
 
+  // React to focusDate from calendar click
+  useEffect(() => {
+    if (focusDate && focusKey !== undefined && focusKey !== prevFocusKey.current) {
+      prevFocusKey.current = focusKey;
+      setCustomDate(focusDate);
+    }
+  }, [focusDate, focusKey]);
+
+  const handlePeriodChange = (p: Period) => {
+    setCustomDate(null);
+    setPeriod(p);
+  };
+
   const loadEvents = useCallback(async () => {
     setLoading(true);
     try {
-      const { startDate, endDate } = getDateRange(period);
+      let startDate: string, endDate: string;
+      if (customDate) {
+        startDate = customDate;
+        endDate = customDate;
+      } else {
+        ({ startDate, endDate } = getDateRange(period));
+      }
       const events = await skudService.getEmployeeEvents(employeeId, startDate, endDate);
       setGroups(groupByDay(events, internalPoints));
+      if (customDate) {
+        setExpandedDays(new Set([customDate]));
+      }
     } catch {
       setGroups([]);
     } finally {
       setLoading(false);
     }
-  }, [employeeId, period, internalPoints]);
+  }, [employeeId, period, internalPoints, customDate]);
 
   useEffect(() => { loadEvents(); }, [loadEvents]);
 
@@ -203,7 +230,10 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({ employeeId,
         (msg) => setSyncResult(msg),
       );
       setSyncResult(`Загружено ${result.inserted} новых событий (пропущено ${result.skipped})`);
-      if (result.inserted > 0) await loadEvents();
+      if (result.inserted > 0) {
+        await loadEvents();
+        onSync?.();
+      }
     } catch {
       setSyncResult('Ошибка синхронизации');
     } finally {
@@ -220,13 +250,9 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({ employeeId,
     });
   };
 
-  if (loading) {
-    return <div className="skud-loading">Загрузка событий СКУД...</div>;
-  }
-
-  if (groups.length === 0) {
-    return <div className="card-history-empty">{EMPTY_LABELS[period]}</div>;
-  }
+  const emptyLabel = customDate
+    ? `Нет событий СКУД за ${formatDateLabel(customDate)}`
+    : EMPTY_LABELS[period];
 
   return (
     <div className="skud-section">
@@ -234,16 +260,24 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({ employeeId,
         {(['today', 'week', 'month'] as Period[]).map(p => (
           <button
             key={p}
-            className={`skud-period-btn ${period === p ? 'active' : ''}`}
-            onClick={() => setPeriod(p)}
+            className={`skud-period-btn ${!customDate && period === p ? 'active' : ''}`}
+            onClick={() => handlePeriodChange(p)}
           >
             {PERIOD_LABELS[p]}
           </button>
         ))}
+        {customDate && (
+          <button
+            className="skud-period-btn active skud-custom-date-btn"
+            onClick={() => setCustomDate(null)}
+          >
+            {formatDateLabel(customDate)} <X size={12} />
+          </button>
+        )}
         <button
           className="skud-period-btn skud-sync-btn"
           onClick={handleSync}
-          disabled={syncing}
+          disabled={syncing || !!customDate}
           title="Загрузить события из Сигур"
         >
           <RefreshCw size={14} className={syncing ? 'spinning' : ''} /> {syncing ? 'Синхронизация...' : 'Из Сигур'}
@@ -251,6 +285,11 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({ employeeId,
       </div>
       {syncResult && <div className="skud-sync-result">{syncResult}</div>}
 
+      {loading ? (
+        <div className="skud-loading">Загрузка событий СКУД...</div>
+      ) : groups.length === 0 ? (
+        <div className="card-history-empty">{emptyLabel}</div>
+      ) : (
       <div className="skud-days-list">
         {groups.map(group => {
           const expanded = expandedDays.has(group.date);
@@ -318,6 +357,7 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({ employeeId,
           );
         })}
       </div>
+      )}
     </div>
   );
 };

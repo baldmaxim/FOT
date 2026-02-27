@@ -4,7 +4,6 @@
  * Запуск: npx tsx src/scripts/backfill-employee-ids.ts
  */
 import { supabase } from '../config/database.js';
-import { encryptionService } from '../services/encryption.service.js';
 
 const BATCH = 1000;
 const CONCURRENCY = 50;
@@ -14,13 +13,13 @@ async function main() {
   console.log('[backfill-emp] Загрузка сотрудников...');
   const { data: employees } = await supabase
     .from('employees')
-    .select('id, full_name_encrypted, organization_id')
+    .select('id, full_name, organization_id')
     .eq('is_archived', false);
 
   // Ключ: "name|org_id" → employee_id (точное совпадение по организации)
   const empByNameOrg = new Map<string, number>();
   for (const emp of employees || []) {
-    const name = encryptionService.decrypt(emp.full_name_encrypted).toLowerCase().trim();
+    const name = (emp.full_name || '').toLowerCase().trim();
     const key = `${name}|${emp.organization_id}`;
     if (!empByNameOrg.has(key)) {
       empByNameOrg.set(key, emp.id);
@@ -36,7 +35,7 @@ async function main() {
   while (true) {
     const { data: rows, error } = await supabase
       .from('skud_events')
-      .select('id, physical_person_encrypted, organization_id')
+      .select('id, physical_person, organization_id')
       .is('employee_id', null)
       .gt('id', lastId)
       .order('id')
@@ -53,7 +52,7 @@ async function main() {
 
     const updates: { id: number; employee_id: number }[] = [];
     for (const row of rows) {
-      const name = encryptionService.decrypt(row.physical_person_encrypted).toLowerCase().trim();
+      const name = (row.physical_person || '').toLowerCase().trim();
       const key = `${name}|${row.organization_id}`;
       const empId = empByNameOrg.get(key);
       if (empId) {

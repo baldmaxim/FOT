@@ -176,6 +176,39 @@
   height: 16px;
 }
 
+/* ==================== Stats Period Selector ==================== */
+.ec-stats-period-selector {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 3px;
+  border-radius: 8px;
+  width: fit-content;
+}
+
+.ec-stats-period-btn {
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background: none;
+  border: none;
+}
+
+.ec-stats-period-btn:hover {
+  color: var(--text-secondary);
+}
+
+.ec-stats-period-btn.active {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
 /* ==================== Stats Row ==================== */
 .ec-stats-row {
   display: grid;
@@ -443,6 +476,10 @@
 
 .ec-cal-day:hover:not(.empty) {
   transform: scale(1.05);
+}
+
+.ec-cal-day.clickable:hover {
+  box-shadow: 0 0 0 2px var(--primary);
 }
 
 .ec-cal-day.empty {
@@ -845,6 +882,13 @@
 }
 
 @media (max-width: 430px) {
+  .ec-stats-period-selector {
+    margin-bottom: 8px;
+  }
+  .ec-stats-period-btn {
+    padding: 5px 12px;
+    font-size: 11px;
+  }
   .ec-content {
     padding: 8px;
   }

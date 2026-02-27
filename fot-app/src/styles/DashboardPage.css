@@ -7,19 +7,20 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 12px;
+  padding: 4px 12px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   color: var(--text-secondary);
   font-size: 0.85rem;
-  cursor: pointer;
+  cursor: text;
   transition: border-color var(--transition);
   min-width: 160px;
   max-width: 340px;
 }
 
-.dash-dept-trigger:hover {
+.dash-dept-trigger:hover,
+.dash-dept-trigger:focus-within {
   border-color: var(--primary);
 }
 
@@ -27,11 +28,24 @@
   color: var(--text-primary);
 }
 
-.dash-dept-label {
+.dash-dept-search-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.dash-dept-input {
   flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  border: none;
+  background: none;
+  outline: none;
+  font-size: inherit;
+  color: var(--text-primary);
+  padding: 4px 0;
+  min-width: 0;
+}
+
+.dash-dept-input::placeholder {
+  color: var(--text-muted);
 }
 
 .dash-dept-chevron {
@@ -55,28 +69,6 @@
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   z-index: 100;
-}
-
-.dash-dept-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border-subtle);
-  color: var(--text-muted);
-}
-
-.dash-dept-search input {
-  flex: 1;
-  border: none;
-  background: none;
-  outline: none;
-  font-size: 0.85rem;
-  color: var(--text-primary);
-}
-
-.dash-dept-search input::placeholder {
-  color: var(--text-muted);
 }
 
 .dash-dept-list {
@@ -182,12 +174,50 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Stats section with period toggle */
+.stats-section {
+  margin-bottom: 20px;
+}
+
+.period-toggle {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 3px;
+  width: fit-content;
+}
+
+.period-btn {
+  padding: 5px 14px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  border-radius: calc(var(--radius-md) - 2px);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.period-btn:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.period-btn.active {
+  color: var(--primary);
+  background: var(--primary-light, rgba(59, 130, 246, 0.1));
+  font-weight: 600;
+}
+
 /* Stats row — 5 cards */
 .stats-row {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   gap: 14px;
-  margin-bottom: 20px;
 }
 
 /* Main content grid */
@@ -239,6 +269,11 @@
 }
 
 @media (max-width: 430px) {
+  .period-btn {
+    padding: 4px 10px;
+    font-size: 0.75rem;
+  }
+
   .stats-row {
     grid-template-columns: repeat(2, 1fr);
     gap: 6px;

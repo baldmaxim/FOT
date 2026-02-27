@@ -312,6 +312,18 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
+.skud-custom-date-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--primary) !important;
+  color: white !important;
+}
+
+.skud-custom-date-btn:hover {
+  opacity: 0.85;
+}
+
 .skud-sync-btn {
   display: inline-flex;
   align-items: center;

@@ -15,10 +15,11 @@ interface IAttendanceCalendarProps {
   year: number;
   onPrevMonth: () => void;
   onNextMonth: () => void;
+  onDayClick?: (day: number) => void;
 }
 
 export const AttendanceCalendar: FC<IAttendanceCalendarProps> = ({
-  days, month, year, onPrevMonth, onNextMonth,
+  days, month, year, onPrevMonth, onNextMonth, onDayClick,
 }) => {
   const today = new Date();
   const isToday = (day: number) =>
@@ -80,8 +81,13 @@ export const AttendanceCalendar: FC<IAttendanceCalendarProps> = ({
             const status = data?.status || '';
             const classes = ['ec-cal-day', status, isToday(day) ? 'today' : ''].filter(Boolean).join(' ');
 
+            const clickable = data && data.status !== 'future' && data.status !== 'weekend';
             return (
-              <div key={day} className={classes}>
+              <div
+                key={day}
+                className={`${classes}${clickable ? ' clickable' : ''}`}
+                onClick={() => clickable && onDayClick?.(day)}
+              >
                 {day}
                 {data?.arrivalTime && (
                   <span className="ec-time-badge">{data.arrivalTime}</span>

@@ -133,26 +133,32 @@ export const skudService = {
     return result;
   },
 
-  async getAccessPointSettings(departmentId: string): Promise<IAccessPointSetting[]> {
+  async getAccessPointSettings(departmentId?: string): Promise<IAccessPointSetting[]> {
+    const params = departmentId ? `?department_id=${departmentId}` : '';
     const response = await apiClient.get<ApiResponse<IAccessPointSetting[]>>(
-      `/skud/access-point-settings?department_id=${departmentId}`
+      `/skud/access-point-settings${params}`
     );
     return response.data || [];
   },
 
-  async saveAccessPointSettings(departmentId: string, settings: IAccessPointSetting[]): Promise<void> {
+  async saveAccessPointSettings(settings: IAccessPointSetting[], departmentId?: string): Promise<void> {
     await apiClient.put<ApiResponse<null>>('/skud/access-point-settings', {
-      department_id: departmentId,
+      ...(departmentId ? { department_id: departmentId } : {}),
       settings,
     });
   },
 
-  async getDashboardStats(departmentId: string, signal?: AbortSignal): Promise<IDashboardStats> {
+  async getDashboardStats(departmentId: string, period = 'today', signal?: AbortSignal): Promise<IDashboardStats> {
     const response = await apiClient.get<ApiResponse<IDashboardStats>>(
-      `/skud/dashboard-stats?department_id=${departmentId}`,
+      `/skud/dashboard-stats?department_id=${departmentId}&period=${period}`,
       { signal },
     );
     return response.data;
+  },
+
+  async getOrganizations(): Promise<{ id: string; name: string }[]> {
+    const response = await apiClient.get<ApiResponse<{ id: string; name: string }[]>>('/skud/organizations');
+    return response.data || [];
   },
 
   async exportEvents(filters?: SkudFilters): Promise<Blob> {

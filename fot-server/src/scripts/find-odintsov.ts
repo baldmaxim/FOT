@@ -1,5 +1,4 @@
 import { supabase } from '../config/database.js';
-import { encryptionService } from '../services/encryption.service.js';
 
 async function main() {
   const target = 'одинцов';
@@ -11,14 +10,14 @@ async function main() {
   // Сканируем все события, ищем "одинцов" в имени
   for (let offset = 0; offset < 500000; offset += PAGE) {
     const { data } = await supabase.from('skud_events')
-      .select('id, physical_person_encrypted, event_date, employee_id')
+      .select('id, physical_person, event_date, employee_id')
       .range(offset, offset + PAGE - 1);
 
     if (!data || data.length === 0) break;
     scanned += data.length;
 
     for (const ev of data) {
-      const name = encryptionService.decrypt(ev.physical_person_encrypted);
+      const name = ev.physical_person || '';
       if (name.toLowerCase().includes(target)) {
         found++;
         const key = name.trim();
@@ -37,11 +36,11 @@ async function main() {
 
   // Имя в employees
   const { data: emp } = await supabase.from('employees')
-    .select('full_name_encrypted')
+    .select('full_name')
     .eq('id', 15989)
     .single();
   if (emp) {
-    console.log(`\nEmployee 15989: "${encryptionService.decrypt(emp.full_name_encrypted)}"`);
+    console.log(`\nEmployee 15989: "${emp.full_name}"`);
   }
 
   process.exit(0);

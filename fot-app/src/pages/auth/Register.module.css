@@ -710,12 +710,174 @@
 }
 
 /* Responsive */
-@media (max-width: 480px) {
+@media (max-width: 768px) {
+  .container {
+    padding: 20px;
+  }
+
+  .logo {
+    margin-bottom: 28px;
+  }
+
+  .card {
+    padding: 28px 24px;
+  }
+
+  .cardHeader {
+    margin-bottom: 24px;
+  }
+
+  .cardIcon {
+    width: 48px;
+    height: 48px;
+    margin-bottom: 16px;
+  }
+
+  .cardIcon svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  .cardHeader h1 {
+    font-size: 20px;
+  }
+
+  .steps {
+    margin-bottom: 24px;
+  }
+
+  .stepDivider {
+    width: 24px;
+  }
+
+  .successIcon {
+    width: 60px;
+    height: 60px;
+    margin-bottom: 20px;
+  }
+
+  .successIcon svg {
+    width: 30px;
+    height: 30px;
+  }
+
+  .successTitle {
+    font-size: 18px;
+  }
+
+  .footer {
+    margin-top: 24px;
+  }
+}
+
+@media (max-width: 430px) {
+  .container {
+    padding: 16px;
+  }
+
   .wrapper {
     max-width: 100%;
   }
 
+  .logo {
+    gap: 10px;
+    margin-bottom: 24px;
+  }
+
+  .logoIcon {
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
+  }
+
+  .logoIcon span {
+    font-size: 18px;
+  }
+
+  .logoText {
+    font-size: 15px;
+  }
+
   .card {
-    padding: 28px 20px;
+    padding: 24px 18px;
+    border-radius: 14px;
+  }
+
+  .cardHeader h1 {
+    font-size: 18px;
+  }
+
+  .cardHeader p {
+    font-size: 13px;
+  }
+
+  .form {
+    gap: 14px;
+  }
+
+  .formInput {
+    height: 44px;
+    font-size: 13px;
+  }
+
+  .formSelect {
+    height: 44px;
+    font-size: 13px;
+  }
+
+  .submitBtn {
+    height: 46px;
+    font-size: 13px;
+  }
+
+  .backBtn {
+    height: 46px;
+    font-size: 13px;
+  }
+
+  .orgOptions {
+    gap: 8px;
+  }
+
+  .radioOption {
+    font-size: 12px;
+  }
+
+  .steps {
+    gap: 6px;
+  }
+
+  .stepNumber {
+    width: 24px;
+    height: 24px;
+    font-size: 11px;
+  }
+
+  .stepDivider {
+    width: 20px;
+  }
+
+  .backLink {
+    margin-top: 16px;
+    font-size: 12px;
+  }
+
+  .footer {
+    margin-top: 20px;
+  }
+}
+
+@media (max-width: 390px) {
+  .card {
+    padding: 20px 16px;
+  }
+
+  .cardHeader h1 {
+    font-size: 17px;
+  }
+
+  .buttonRow {
+    flex-direction: column;
+    gap: 8px;
   }
 }

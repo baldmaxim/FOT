@@ -1,9 +1,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Search, X, HardDrive, RefreshCw, AlertCircle } from 'lucide-react';
 import { skudService } from '../../services/skudService';
-import { adminService } from '../../services/adminService';
 import { useAuth } from '../../contexts/AuthContext';
-import type { SkudEvent, SkudDailySummary, Organization } from '../../types';
+import type { SkudEvent, SkudDailySummary } from '../../types';
 import '../../styles/SkudSupabasePage.css';
 
 type TabId = 'events' | 'summary';
@@ -44,7 +43,7 @@ export const SkudSupabasePage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const abortRef = useRef<AbortController | null>(null);
 
   // Даты
@@ -52,7 +51,7 @@ export const SkudSupabasePage: React.FC = () => {
   const [endDate, setEndDate] = useState(today);
 
   // Фильтр по организации (super_admin)
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [organizations, setOrganizations] = useState<{ id: string; name: string }[]>([]);
   const [orgFilter, setOrgFilter] = useState('');
 
   // Данные
@@ -62,7 +61,7 @@ export const SkudSupabasePage: React.FC = () => {
   // Загрузка организаций
   useEffect(() => {
     if (!isSuperAdmin) return;
-    adminService.getOrganizations().then(setOrganizations).catch(() => {});
+    skudService.getOrganizations().then(setOrganizations).catch(() => {});
   }, [isSuperAdmin]);
 
   // Debounce поиска (для табa events — серверный поиск)
@@ -125,16 +124,9 @@ export const SkudSupabasePage: React.FC = () => {
     else loadSummary();
   }, [activeTab, loadEvents, loadSummary]);
 
-  // Для events — не загружать автоматически, только при наличии фильтра
   useEffect(() => {
-    if (activeTab === 'events') {
-      if (!searchQuery && !orgFilter) {
-        setEvents([]);
-        return;
-      }
-    }
     loadData();
-  }, [loadData, activeTab, searchQuery, orgFilter]);
+  }, [loadData]);
 
   // Данные для таблицы
   const tableData: Record<string, unknown>[] = useMemo(() => {
@@ -272,9 +264,7 @@ export const SkudSupabasePage: React.FC = () => {
         </div>
       ) : displayData.length === 0 && !error ? (
         <div className="skud-db-empty">
-          {activeTab === 'events' && !searchQuery && !orgFilter
-            ? 'Введите ФИО для поиска событий'
-            : searchInput ? 'Ничего не найдено' : 'Нет данных за выбранный период'}
+          {searchInput ? 'Ничего не найдено' : 'Нет данных за выбранный период'}
         </div>
       ) : (
         <div className="skud-db-table-wrap">

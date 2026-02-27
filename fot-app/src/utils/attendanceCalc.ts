@@ -231,6 +231,68 @@ export const getTodayTimeline = (events: SkudEvent[]): ITodayEvent[] => {
     }));
 };
 
+export const computePeriodData = (
+  days: IDayAttendance[],
+  year: number,
+  month: number,
+): { stats: IMonthStats; weeklyPattern: IWeekdayPattern[] } => {
+  const workDays = days.filter(d => d.status !== 'weekend' && d.status !== 'future');
+  const presentDays = workDays.filter(d => d.status === 'present' || d.status === 'late');
+  const lateDays = workDays.filter(d => d.status === 'late');
+
+  const attendancePercent = workDays.length > 0
+    ? Math.round((presentDays.length / workDays.length) * 100)
+    : 0;
+  const totalSecs = workDays.reduce((sum, d) => sum + d.totalSeconds, 0);
+
+  const arrivalMins = presentDays
+    .filter(d => d.arrivalTime)
+    .map(d => {
+      const [h, m] = d.arrivalTime!.split(':').map(Number);
+      return h * 60 + m;
+    });
+
+  let avgArrivalTime: string | null = null;
+  let avgArrivalDiffMinutes = 0;
+  if (arrivalMins.length > 0) {
+    const avg = arrivalMins.reduce((a, b) => a + b, 0) / arrivalMins.length;
+    avgArrivalTime = minutesToTime(avg);
+    avgArrivalDiffMinutes = Math.round(avg - WORK_START_MINUTES);
+  }
+
+  const stats: IMonthStats = {
+    attendancePercent,
+    lateCount: lateDays.length,
+    hoursWorked: Math.round(totalSecs / 3600),
+    hoursPlanned: workDays.length * 8,
+    avgArrivalTime,
+    avgArrivalDiffMinutes,
+  };
+
+  const DOW_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт'];
+  const arrivalByDow: number[][] = [[], [], [], [], []];
+  for (const d of presentDays) {
+    if (!d.arrivalTime) continue;
+    const dow = new Date(year, month, d.day).getDay();
+    const dowIdx = dow === 0 ? 6 : dow - 1;
+    if (dowIdx < 5) {
+      const [h, m] = d.arrivalTime.split(':').map(Number);
+      arrivalByDow[dowIdx].push(h * 60 + m);
+    }
+  }
+
+  const weeklyPattern: IWeekdayPattern[] = DOW_LABELS.map((label, i) => {
+    const times = arrivalByDow[i];
+    if (times.length === 0) return { day: label, avgTime: null, heightPercent: 0 };
+    const avg = times.reduce((a, b) => a + b, 0) / times.length;
+    const minM = 8 * 60 + 30, maxM = 9 * 60 + 30;
+    const pct = ((Math.max(minM, Math.min(maxM, avg)) - minM) / (maxM - minM)) * 100;
+    return { day: label, avgTime: minutesToTime(avg), heightPercent: Math.max(20, pct) };
+  });
+
+  return { stats, weeklyPattern };
+};
+
 export const isEmployeeOnSite = (events: SkudEvent[], internalPoints: Set<string>): boolean => {
   const today = new Date().toISOString().slice(0, 10);
   const todayExt = events

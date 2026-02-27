@@ -82,3 +82,86 @@
 .statDot[data-status="offline"] {
   background: var(--text-tertiary);
 }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .list {
+    padding: 12px 14px;
+  }
+
+  .summary {
+    margin-bottom: 12px;
+  }
+
+  .summaryLabel {
+    font-size: 12px;
+  }
+
+  .summaryValue {
+    font-size: 12px;
+  }
+
+  .progressBar {
+    height: 5px;
+  }
+
+  .stats {
+    gap: 12px;
+  }
+
+  .stat {
+    font-size: 11px;
+  }
+
+  .statDot {
+    width: 7px;
+    height: 7px;
+  }
+}
+
+@media (max-width: 430px) {
+  .list {
+    padding: 10px 12px;
+  }
+
+  .summary {
+    margin-bottom: 10px;
+  }
+
+  .summaryRow {
+    margin-bottom: 6px;
+  }
+
+  .summaryLabel {
+    font-size: 11px;
+  }
+
+  .summaryValue {
+    font-size: 11px;
+  }
+
+  .stats {
+    gap: 10px;
+  }
+
+  .stat {
+    gap: 4px;
+  }
+
+  .statDot {
+    width: 6px;
+    height: 6px;
+  }
+
+  .empty {
+    padding: 24px 12px;
+  }
+
+  .emptyText {
+    font-size: 13px;
+  }
+
+  .emptyHint {
+    font-size: 11px;
+  }
+}

@@ -3,7 +3,6 @@
  * Запуск: npx tsx src/scripts/backfill-dedup-hash.ts
  */
 import { supabase } from '../config/database.js';
-import { encryptionService } from '../services/encryption.service.js';
 import { computeDedupHash } from '../utils/dedup.utils.js';
 
 const BATCH = 1000;
@@ -17,7 +16,7 @@ async function backfill() {
   while (true) {
     const { data: rows, error } = await supabase
       .from('skud_events')
-      .select('id, physical_person_encrypted, event_date, event_time, access_point, direction')
+      .select('id, physical_person, event_date, event_time, access_point, direction')
       .is('dedup_hash', null)
       .order('id')
       .range(0, BATCH - 1);
@@ -31,7 +30,7 @@ async function backfill() {
     // Вычисляем хэши
     const updates: { id: number; hash: string }[] = [];
     for (const row of rows) {
-      const name = encryptionService.decrypt(row.physical_person_encrypted);
+      const name = row.physical_person || '';
       const hash = computeDedupHash(name, row.event_date, row.event_time, row.access_point, row.direction);
       updates.push({ id: row.id, hash });
     }

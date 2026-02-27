@@ -127,4 +127,23 @@ export const sigurService = {
     );
     return response.data;
   },
+
+  async getSyncFilter(): Promise<{ sigur_department_id: number; sigur_department_name: string }[]> {
+    const response = await apiClient.get<ApiResponse<{ sigur_department_id: number; sigur_department_name: string }[]>>(
+      '/sigur/sync-filter'
+    );
+    return response.data;
+  },
+
+  async updateSyncFilter(departments: { sigur_department_id: number; sigur_department_name: string }[]): Promise<void> {
+    await apiClient.put('/sigur/sync-filter', { departments });
+  },
+
+  async clearEvents(startDate: string, endDate: string): Promise<{ deleted: number }> {
+    const response = await apiClient.post<ApiResponse<{ deleted: number }>>(
+      '/sigur/clear-events',
+      { startDate, endDate }
+    );
+    return response.data;
+  },
 };

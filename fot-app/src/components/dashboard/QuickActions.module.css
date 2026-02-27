@@ -55,3 +55,58 @@
   width: 16px;
   height: 16px;
 }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .actions {
+    padding: 12px;
+    gap: 6px;
+  }
+
+  .action {
+    padding: 10px 12px;
+    gap: 10px;
+  }
+
+  .actionIcon {
+    width: 28px;
+    height: 28px;
+  }
+
+  .actionIcon svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .actionText {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 430px) {
+  .actions {
+    padding: 10px;
+  }
+
+  .action {
+    padding: 8px 10px;
+    gap: 8px;
+    border-radius: 6px;
+  }
+
+  .actionIcon {
+    width: 26px;
+    height: 26px;
+    border-radius: 5px;
+  }
+
+  .actionIcon svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .actionArrow svg {
+    width: 14px;
+    height: 14px;
+  }
+}

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { sigurController } from '../controllers/sigur.controller.js';
 import { sigurSyncController } from '../controllers/sigur-sync.controller.js';
 import { sigurAdminController } from '../controllers/sigur-admin.controller.js';
+import { sigurFilterController } from '../controllers/sigur-filter.controller.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 
 const router = Router();
@@ -56,6 +57,9 @@ router.post('/sync-all', sigurSyncController.syncAll as any);
 // POST /api/sigur/sync — синхронизация событий из Sigur в БД
 router.post('/sync', sigurSyncController.sync as any);
 
+// POST /api/sigur/clear-events — удаление событий за период
+router.post('/clear-events', sigurSyncController.clearEvents as any);
+
 // POST /api/sigur/sync-employees — импорт сотрудников из Sigur в БД
 router.post('/sync-employees', sigurSyncController.syncEmployees as any);
 
@@ -64,6 +68,14 @@ router.post('/sync-departments', sigurSyncController.syncDepartments as any);
 
 // POST /api/sigur/sync-positions — импорт должностей из Sigur
 router.post('/sync-positions', sigurSyncController.syncPositions as any);
+
+// === Фильтр синхронизации ===
+
+// GET /api/sigur/sync-filter — текущий whitelist отделов для синхронизации
+router.get('/sync-filter', sigurFilterController.getFilter as any);
+
+// PUT /api/sigur/sync-filter — замена whitelist отделов
+router.put('/sync-filter', sigurFilterController.updateFilter as any);
 
 // === Admin эндпоинты ===
 

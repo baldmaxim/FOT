@@ -1,5 +1,5 @@
 -- Database Schema SQL Export
--- Generated: 2026-02-19T11:35:38.468509
+-- Generated: 2026-02-26T16:48:53.477019
 -- Database: postgres
 -- Host: aws-1-eu-central-1.pooler.supabase.com
 
@@ -18,6 +18,36 @@ CREATE TABLE IF NOT EXISTS auth.audit_log_entries (
     CONSTRAINT audit_log_entries_pkey PRIMARY KEY (id)
 );
 COMMENT ON TABLE auth.audit_log_entries IS 'Auth: Audit trail for user actions.';
+
+-- Table: auth.custom_oauth_providers
+CREATE TABLE IF NOT EXISTS auth.custom_oauth_providers (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    provider_type text NOT NULL,
+    identifier text NOT NULL,
+    name text NOT NULL,
+    client_id text NOT NULL,
+    client_secret text NOT NULL,
+    acceptable_client_ids text[] NOT NULL DEFAULT '{}'::text[],
+    scopes text[] NOT NULL DEFAULT '{}'::text[],
+    pkce_enabled boolean NOT NULL DEFAULT true,
+    attribute_mapping jsonb NOT NULL DEFAULT '{}'::jsonb,
+    authorization_params jsonb NOT NULL DEFAULT '{}'::jsonb,
+    enabled boolean NOT NULL DEFAULT true,
+    email_optional boolean NOT NULL DEFAULT false,
+    issuer text,
+    discovery_url text,
+    skip_nonce_check boolean NOT NULL DEFAULT false,
+    cached_discovery jsonb,
+    discovery_cached_at timestamp with time zone,
+    authorization_url text,
+    token_url text,
+    userinfo_url text,
+    jwks_uri text,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    updated_at timestamp with time zone NOT NULL DEFAULT now(),
+    CONSTRAINT custom_oauth_providers_identifier_key UNIQUE (identifier),
+    CONSTRAINT custom_oauth_providers_pkey PRIMARY KEY (id)
+);
 
 -- Table: auth.flow_state
 -- Description: Stores metadata for all OAuth/SSO login flows
@@ -389,10 +419,8 @@ CREATE TABLE IF NOT EXISTS public.audit_logs (
 CREATE TABLE IF NOT EXISTS public.employee_assignments (
     id uuid NOT NULL DEFAULT gen_random_uuid(),
     employee_id integer NOT NULL,
-    org_company_id uuid,
     org_department_id uuid,
     org_site_id uuid,
-    org_subdivision_id uuid,
     position_id uuid,
     effective_from date NOT NULL,
     effective_to date,
@@ -407,19 +435,15 @@ CREATE TABLE IF NOT EXISTS public.employee_assignments (
     updated_at timestamp with time zone DEFAULT now(),
     CONSTRAINT employee_assignments_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id),
     CONSTRAINT employee_assignments_employee_id_fkey FOREIGN KEY (employee_id) REFERENCES public.employees(id),
-    CONSTRAINT employee_assignments_org_company_id_fkey FOREIGN KEY (org_company_id) REFERENCES public.org_companies(id),
     CONSTRAINT employee_assignments_org_department_id_fkey FOREIGN KEY (org_department_id) REFERENCES public.org_departments(id),
     CONSTRAINT employee_assignments_org_site_id_fkey FOREIGN KEY (org_site_id) REFERENCES public.org_sites(id),
-    CONSTRAINT employee_assignments_org_subdivision_id_fkey FOREIGN KEY (org_subdivision_id) REFERENCES public.org_subdivisions(id),
     CONSTRAINT employee_assignments_pkey PRIMARY KEY (id),
     CONSTRAINT employee_assignments_position_id_fkey FOREIGN KEY (position_id) REFERENCES public.positions(id)
 );
 COMMENT ON TABLE public.employee_assignments IS 'История назначений сотрудников (должность, отдел, участок)';
 COMMENT ON COLUMN public.employee_assignments.employee_id IS 'Сотрудник';
-COMMENT ON COLUMN public.employee_assignments.org_company_id IS 'Компания (nullable для гибкости)';
 COMMENT ON COLUMN public.employee_assignments.org_department_id IS 'Отдел (nullable для гибкости)';
 COMMENT ON COLUMN public.employee_assignments.org_site_id IS 'Строительный участок (nullable)';
-COMMENT ON COLUMN public.employee_assignments.org_subdivision_id IS 'Подразделение (nullable)';
 COMMENT ON COLUMN public.employee_assignments.position_id IS 'Должность из справочника';
 COMMENT ON COLUMN public.employee_assignments.effective_from IS 'Дата начала назначения';
 COMMENT ON COLUMN public.employee_assignments.effective_to IS 'Дата окончания (NULL = текущее)';
@@ -433,87 +457,63 @@ COMMENT ON COLUMN public.employee_assignments.order_number IS 'Номер при
 CREATE TABLE IF NOT EXISTS public.employees (
     id integer NOT NULL DEFAULT nextval('employees_id_seq'::regclass),
     organization_id uuid NOT NULL,
-    full_name_encrypted text NOT NULL,
-    last_name_encrypted text,
-    first_name_encrypted text,
-    middle_name_encrypted text,
-    position_encrypted text NOT NULL,
-    current_salary_encrypted text,
-    birth_date_encrypted text,
     is_archived boolean DEFAULT false,
     archived_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
-    country_encrypted text,
-    pension_number_encrypted text,
-    patent_issue_date_encrypted text,
-    patent_expiry_date_encrypted text,
-    hire_date_encrypted text,
-    org_company_id uuid,
     org_department_id uuid,
-    org_subdivision_id uuid,
     email text,
-    CONSTRAINT employees_org_company_id_fkey FOREIGN KEY (org_company_id) REFERENCES public.org_companies(id),
+    sigur_employee_id integer,
+    position_id uuid,
+    employment_status text NOT NULL DEFAULT 'active'::text,
+    department_locked boolean NOT NULL DEFAULT false,
+    full_name text,
+    last_name text,
+    first_name text,
+    middle_name text,
+    current_salary numeric,
+    birth_date text,
+    hire_date text,
+    country text,
+    pension_number text,
+    patent_issue_date text,
+    patent_expiry_date text,
     CONSTRAINT employees_org_department_id_fkey FOREIGN KEY (org_department_id) REFERENCES public.org_departments(id),
-    CONSTRAINT employees_org_subdivision_id_fkey FOREIGN KEY (org_subdivision_id) REFERENCES public.org_subdivisions(id),
     CONSTRAINT employees_pkey PRIMARY KEY (id),
+    CONSTRAINT employees_position_id_fkey FOREIGN KEY (position_id) REFERENCES public.positions(id),
     CONSTRAINT tender_employees_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id)
 );
 COMMENT ON TABLE public.employees IS 'Таблица сотрудников организации (с шифрованием персональных данных)';
-COMMENT ON COLUMN public.employees.last_name_encrypted IS 'Фамилия (зашифровано)';
-COMMENT ON COLUMN public.employees.first_name_encrypted IS 'Имя (зашифровано)';
-COMMENT ON COLUMN public.employees.middle_name_encrypted IS 'Отчество (зашифровано)';
-COMMENT ON COLUMN public.employees.country_encrypted IS 'Страна гражданства (зашифровано)';
-COMMENT ON COLUMN public.employees.pension_number_encrypted IS 'СНИЛС - страховой номер ПФР (зашифровано)';
-COMMENT ON COLUMN public.employees.patent_issue_date_encrypted IS 'Дата выдачи патента на работу (зашифровано)';
-COMMENT ON COLUMN public.employees.patent_expiry_date_encrypted IS 'Дата окончания патента на работу (зашифровано)';
-COMMENT ON COLUMN public.employees.hire_date_encrypted IS 'Дата приёма на работу (зашифровано)';
 COMMENT ON COLUMN public.employees.email IS 'Email сотрудника для связи с user_profile';
-
--- Table: public.org_companies
--- Description: Компании внутри организации
-CREATE TABLE IF NOT EXISTS public.org_companies (
-    id uuid NOT NULL DEFAULT gen_random_uuid(),
-    organization_id uuid NOT NULL,
-    name_encrypted text NOT NULL,
-    description_encrypted text,
-    sort_order integer DEFAULT 0,
-    is_active boolean DEFAULT true,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT org_companies_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id),
-    CONSTRAINT org_companies_pkey PRIMARY KEY (id)
-);
-COMMENT ON TABLE public.org_companies IS 'Компании внутри организации';
+COMMENT ON COLUMN public.employees.position_id IS 'Должность из справочника positions (FK)';
 
 -- Table: public.org_departments
 -- Description: Отделы внутри компаний
 CREATE TABLE IF NOT EXISTS public.org_departments (
     id uuid NOT NULL DEFAULT gen_random_uuid(),
     organization_id uuid NOT NULL,
-    company_id uuid,
-    name_encrypted text NOT NULL,
-    description_encrypted text,
     sort_order integer DEFAULT 0,
     is_active boolean DEFAULT true,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT org_departments_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.org_companies(id),
+    parent_id uuid,
+    sigur_department_id integer,
+    name text,
+    description text,
     CONSTRAINT org_departments_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id),
+    CONSTRAINT org_departments_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.org_departments(id),
     CONSTRAINT org_departments_pkey PRIMARY KEY (id)
 );
 COMMENT ON TABLE public.org_departments IS 'Отделы внутри компаний';
+COMMENT ON COLUMN public.org_departments.parent_id IS 'Родительский отдел для иерархии (self-referential)';
 
 -- Table: public.org_sites
 -- Description: Строительные участки/объекты
 CREATE TABLE IF NOT EXISTS public.org_sites (
     id uuid NOT NULL DEFAULT gen_random_uuid(),
     organization_id uuid NOT NULL,
-    company_id uuid,
     department_id uuid,
-    name_encrypted text NOT NULL,
     code text,
-    description_encrypted text,
     address text,
     manager_id integer,
     start_date date,
@@ -523,67 +523,64 @@ CREATE TABLE IF NOT EXISTS public.org_sites (
     sort_order integer DEFAULT 0,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT org_sites_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.org_companies(id),
+    name text,
+    description text,
     CONSTRAINT org_sites_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.org_departments(id),
     CONSTRAINT org_sites_manager_id_fkey FOREIGN KEY (manager_id) REFERENCES public.employees(id),
     CONSTRAINT org_sites_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id),
     CONSTRAINT org_sites_pkey PRIMARY KEY (id)
 );
 COMMENT ON TABLE public.org_sites IS 'Строительные участки/объекты';
-COMMENT ON COLUMN public.org_sites.company_id IS 'Компания (nullable для гибкой иерархии)';
 COMMENT ON COLUMN public.org_sites.department_id IS 'Отдел (nullable для гибкой иерархии)';
 COMMENT ON COLUMN public.org_sites.manager_id IS 'Начальник участка';
 COMMENT ON COLUMN public.org_sites.status IS 'Статус: planning, active, completed, suspended';
-
--- Table: public.org_subdivisions
--- Description: Подразделения внутри отделов
-CREATE TABLE IF NOT EXISTS public.org_subdivisions (
-    id uuid NOT NULL DEFAULT gen_random_uuid(),
-    organization_id uuid NOT NULL,
-    department_id uuid,
-    name_encrypted text NOT NULL,
-    description_encrypted text,
-    sort_order integer DEFAULT 0,
-    is_active boolean DEFAULT true,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now(),
-    site_id uuid,
-    CONSTRAINT org_subdivisions_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.org_departments(id),
-    CONSTRAINT org_subdivisions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id),
-    CONSTRAINT org_subdivisions_pkey PRIMARY KEY (id),
-    CONSTRAINT org_subdivisions_site_id_fkey FOREIGN KEY (site_id) REFERENCES public.org_sites(id)
-);
-COMMENT ON TABLE public.org_subdivisions IS 'Подразделения внутри отделов';
-COMMENT ON COLUMN public.org_subdivisions.site_id IS 'Строительный участок (nullable для гибкой иерархии)';
 
 -- Table: public.organizations
 CREATE TABLE IF NOT EXISTS public.organizations (
     id uuid NOT NULL DEFAULT gen_random_uuid(),
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
-    name_encrypted text,
+    parent_organization_id uuid,
+    name text,
+    CONSTRAINT organizations_parent_organization_id_fkey FOREIGN KEY (parent_organization_id) REFERENCES public.organizations(id),
     CONSTRAINT organizations_pkey PRIMARY KEY (id)
 );
-COMMENT ON COLUMN public.organizations.name_encrypted IS 'Название организации (зашифровано)';
+COMMENT ON COLUMN public.organizations.parent_organization_id IS 'Головная организация (для иерархии подрядчиков)';
 
 -- Table: public.positions
 -- Description: Справочник должностей организации
 CREATE TABLE IF NOT EXISTS public.positions (
     id uuid NOT NULL DEFAULT gen_random_uuid(),
     organization_id uuid NOT NULL,
-    name_encrypted text NOT NULL,
     category text,
     grade integer,
     is_active boolean DEFAULT true,
     sort_order integer DEFAULT 0,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
+    sigur_position_id integer,
+    name text,
     CONSTRAINT positions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id),
     CONSTRAINT positions_pkey PRIMARY KEY (id)
 );
 COMMENT ON TABLE public.positions IS 'Справочник должностей организации';
 COMMENT ON COLUMN public.positions.category IS 'Категория: worker, engineer, manager, admin, other';
 COMMENT ON COLUMN public.positions.grade IS 'Разряд или грейд должности';
+COMMENT ON COLUMN public.positions.sigur_position_id IS 'ID должности в Sigur для идемпотентной синхронизации';
+
+-- Table: public.skud_access_point_settings
+CREATE TABLE IF NOT EXISTS public.skud_access_point_settings (
+    id bigint NOT NULL DEFAULT nextval('skud_access_point_settings_id_seq'::regclass),
+    organization_id uuid NOT NULL,
+    department_id uuid NOT NULL,
+    access_point_name text NOT NULL,
+    is_internal boolean DEFAULT false,
+    created_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT skud_access_point_settings_organization_id_department_id_ac_key UNIQUE (access_point_name),
+    CONSTRAINT skud_access_point_settings_organization_id_department_id_ac_key UNIQUE (department_id),
+    CONSTRAINT skud_access_point_settings_organization_id_department_id_ac_key UNIQUE (organization_id),
+    CONSTRAINT skud_access_point_settings_pkey PRIMARY KEY (id)
+);
 
 -- Table: public.skud_daily_summary
 CREATE TABLE IF NOT EXISTS public.skud_daily_summary (
@@ -594,10 +591,10 @@ CREATE TABLE IF NOT EXISTS public.skud_daily_summary (
     first_entry time without time zone,
     last_exit time without time zone,
     total_hours numeric(5,2),
-    break_hours numeric(5,2) DEFAULT 0,
     is_present boolean DEFAULT false,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
+    break_hours numeric(5,2) DEFAULT 0,
     CONSTRAINT skud_daily_summary_employee_id_fkey FOREIGN KEY (employee_id) REFERENCES public.employees(id),
     CONSTRAINT skud_daily_summary_organization_id_employee_id_date_key UNIQUE (date),
     CONSTRAINT skud_daily_summary_organization_id_employee_id_date_key UNIQUE (employee_id),
@@ -610,17 +607,45 @@ CREATE TABLE IF NOT EXISTS public.skud_daily_summary (
 CREATE TABLE IF NOT EXISTS public.skud_events (
     id bigint NOT NULL DEFAULT nextval('skud_events_id_seq'::regclass),
     organization_id uuid NOT NULL,
-    physical_person_encrypted text NOT NULL,
-    card_number_encrypted text,
     event_date date NOT NULL,
     event_time time without time zone NOT NULL,
     access_point text,
     direction text,
     employee_id bigint,
     created_at timestamp with time zone DEFAULT now(),
+    dedup_hash text,
+    physical_person text,
+    card_number text,
     CONSTRAINT skud_events_employee_id_fkey FOREIGN KEY (employee_id) REFERENCES public.employees(id),
     CONSTRAINT skud_events_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id),
-    CONSTRAINT skud_events_pkey PRIMARY KEY (id)
+    CONSTRAINT skud_events_pkey PRIMARY KEY (id),
+    CONSTRAINT uq_skud_events_dedup_hash UNIQUE (dedup_hash)
+);
+
+-- Table: public.skud_sync_department_filter
+CREATE TABLE IF NOT EXISTS public.skud_sync_department_filter (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    organization_id uuid NOT NULL,
+    sigur_department_id integer NOT NULL,
+    sigur_department_name text,
+    created_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT skud_sync_department_filter_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id),
+    CONSTRAINT skud_sync_department_filter_organization_id_sigur_departmen_key UNIQUE (organization_id),
+    CONSTRAINT skud_sync_department_filter_organization_id_sigur_departmen_key UNIQUE (sigur_department_id),
+    CONSTRAINT skud_sync_department_filter_pkey PRIMARY KEY (id)
+);
+
+-- Table: public.skud_sync_employee_filter
+CREATE TABLE IF NOT EXISTS public.skud_sync_employee_filter (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    organization_id uuid NOT NULL,
+    sigur_employee_id integer NOT NULL,
+    sigur_employee_name text,
+    created_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT skud_sync_employee_filter_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id),
+    CONSTRAINT skud_sync_employee_filter_organization_id_sigur_employee_id_key UNIQUE (organization_id),
+    CONSTRAINT skud_sync_employee_filter_organization_id_sigur_employee_id_key UNIQUE (sigur_employee_id),
+    CONSTRAINT skud_sync_employee_filter_pkey PRIMARY KEY (id)
 );
 
 -- Table: public.system_roles
@@ -649,15 +674,15 @@ COMMENT ON COLUMN public.system_roles.is_system IS 'Системная роль 
 CREATE TABLE IF NOT EXISTS public.tender_salary_history (
     id integer NOT NULL DEFAULT nextval('tender_salary_history_id_seq'::regclass),
     employee_id integer NOT NULL,
-    salary_encrypted text NOT NULL,
     effective_date date NOT NULL,
-    note_encrypted text,
     created_at timestamp with time zone DEFAULT now(),
     change_reason text,
     order_number text,
     order_date date,
     created_by uuid,
     updated_at timestamp with time zone DEFAULT now(),
+    salary numeric,
+    note text,
     CONSTRAINT tender_salary_history_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id),
     CONSTRAINT tender_salary_history_employee_id_fkey FOREIGN KEY (employee_id) REFERENCES public.employees(id),
     CONSTRAINT tender_salary_history_pkey PRIMARY KEY (id)
@@ -964,49 +989,43 @@ CREATE OR REPLACE VIEW extensions.pg_stat_statements_info AS
 CREATE OR REPLACE VIEW public.employee_current_assignments AS
  SELECT ea.id AS assignment_id,
     ea.employee_id,
-    ea.org_company_id,
     ea.org_department_id,
     ea.org_site_id,
-    ea.org_subdivision_id,
     ea.position_id,
     ea.effective_from,
     ea.is_primary,
     ea.assignment_type,
-    c.name_encrypted AS company_name,
-    d.name_encrypted AS department_name,
-    s.name_encrypted AS site_name,
-    sub.name_encrypted AS subdivision_name,
-    p.name_encrypted AS position_name,
+    d.name AS department_name,
+    s.name AS site_name,
+    p.name AS position_name,
     p.category AS position_category
-   FROM (((((employee_assignments ea
-     LEFT JOIN org_companies c ON ((ea.org_company_id = c.id)))
+   FROM (((employee_assignments ea
      LEFT JOIN org_departments d ON ((ea.org_department_id = d.id)))
      LEFT JOIN org_sites s ON ((ea.org_site_id = s.id)))
-     LEFT JOIN org_subdivisions sub ON ((ea.org_subdivision_id = sub.id)))
      LEFT JOIN positions p ON ((ea.position_id = p.id)))
   WHERE (ea.effective_to IS NULL);
 
 -- View: public.employee_history
 CREATE OR REPLACE VIEW public.employee_history AS
  SELECT e.id AS employee_id,
-    e.full_name_encrypted,
+    e.full_name,
     'assignment'::text AS event_type,
     (a.id)::text AS event_id,
     a.effective_from AS event_date,
     a.effective_to AS event_end_date,
-    json_build_object('company_id', a.org_company_id, 'department_id', a.org_department_id, 'site_id', a.org_site_id, 'subdivision_id', a.org_subdivision_id, 'position_id', a.position_id, 'is_primary', a.is_primary, 'type', a.assignment_type, 'reason', a.change_reason, 'order_number', a.order_number) AS event_data,
+    json_build_object('department_id', a.org_department_id, 'site_id', a.org_site_id, 'position_id', a.position_id, 'is_primary', a.is_primary, 'type', a.assignment_type, 'reason', a.change_reason, 'order_number', a.order_number) AS event_data,
     a.created_at,
     a.created_by
    FROM (employees e
      JOIN employee_assignments a ON ((e.id = a.employee_id)))
 UNION ALL
  SELECT e.id AS employee_id,
-    e.full_name_encrypted,
+    e.full_name,
     'salary'::text AS event_type,
     (sh.id)::text AS event_id,
     sh.effective_date AS event_date,
     NULL::date AS event_end_date,
-    json_build_object('salary_encrypted', sh.salary_encrypted, 'reason', sh.change_reason, 'order_number', sh.order_number, 'note', sh.note_encrypted) AS event_data,
+    json_build_object('salary', sh.salary, 'reason', sh.change_reason, 'order_number', sh.order_number, 'note', sh.note) AS event_data,
     sh.created_at,
     sh.created_by
    FROM (employees e
@@ -1017,34 +1036,30 @@ UNION ALL
 CREATE OR REPLACE VIEW public.employees_current AS
  SELECT e.id,
     e.organization_id,
-    e.full_name_encrypted,
-    e.birth_date_encrypted,
-    e.pension_number_encrypted,
-    e.hire_date_encrypted,
-    e.country_encrypted,
-    e.patent_issue_date_encrypted,
-    e.patent_expiry_date_encrypted,
+    e.full_name,
+    e.birth_date,
+    e.pension_number,
+    e.hire_date,
+    e.country,
+    e.patent_issue_date,
+    e.patent_expiry_date,
     e.is_archived,
     e.archived_at,
     a.id AS assignment_id,
-    a.org_company_id,
     a.org_department_id,
     a.org_site_id,
-    a.org_subdivision_id,
     a.position_id,
     a.effective_from AS assignment_from,
     a.assignment_type,
-    c.name_encrypted AS company_name,
-    d.name_encrypted AS department_name,
-    s.name_encrypted AS site_name,
-    sub.name_encrypted AS subdivision_name,
-    p.name_encrypted AS position_name,
+    d.name AS department_name,
+    s.name AS site_name,
+    p.name AS position_name,
     p.category AS position_category,
-    ( SELECT sh.salary_encrypted
+    ( SELECT sh.salary
            FROM tender_salary_history sh
           WHERE (sh.employee_id = e.id)
           ORDER BY sh.effective_date DESC
-         LIMIT 1) AS current_salary_encrypted,
+         LIMIT 1) AS current_salary,
     ( SELECT sh.effective_date
            FROM tender_salary_history sh
           WHERE (sh.employee_id = e.id)
@@ -1053,43 +1068,27 @@ CREATE OR REPLACE VIEW public.employees_current AS
     ( SELECT count(*) AS count
            FROM employee_assignments a2
           WHERE ((a2.employee_id = e.id) AND (a2.effective_to IS NULL))) AS active_assignments_count,
-    ( SELECT json_agg(json_build_object('id', a2.id, 'company_id', a2.org_company_id, 'department_id', a2.org_department_id, 'site_id', a2.org_site_id, 'subdivision_id', a2.org_subdivision_id, 'position_id', a2.position_id, 'is_primary', a2.is_primary, 'type', a2.assignment_type, 'from', a2.effective_from)) AS json_agg
+    ( SELECT json_agg(json_build_object('id', a2.id, 'department_id', a2.org_department_id, 'site_id', a2.org_site_id, 'position_id', a2.position_id, 'is_primary', a2.is_primary, 'type', a2.assignment_type, 'from', a2.effective_from)) AS json_agg
            FROM employee_assignments a2
           WHERE ((a2.employee_id = e.id) AND (a2.effective_to IS NULL))) AS all_assignments,
     e.created_at,
     e.updated_at
-   FROM ((((((employees e
+   FROM ((((employees e
      LEFT JOIN employee_assignments a ON (((e.id = a.employee_id) AND (a.effective_to IS NULL) AND (a.is_primary = true))))
-     LEFT JOIN org_companies c ON ((a.org_company_id = c.id)))
      LEFT JOIN org_departments d ON ((a.org_department_id = d.id)))
      LEFT JOIN org_sites s ON ((a.org_site_id = s.id)))
-     LEFT JOIN org_subdivisions sub ON ((a.org_subdivision_id = sub.id)))
      LEFT JOIN positions p ON ((a.position_id = p.id)))
   WHERE (e.is_archived = false);
 
 -- View: public.org_structure_tree
 CREATE OR REPLACE VIEW public.org_structure_tree AS
  WITH structure AS (
-         SELECT c.id,
-            c.organization_id,
-            'company'::text AS unit_type,
-            c.name_encrypted,
-            c.description_encrypted,
-            NULL::uuid AS parent_id,
-            c.sort_order,
-            c.is_active,
-            ( SELECT count(*) AS count
-                   FROM (employees e
-                     JOIN employee_assignments ea ON ((e.id = ea.employee_id)))
-                  WHERE ((ea.org_company_id = c.id) AND (ea.effective_to IS NULL) AND (e.is_archived = false))) AS employee_count
-           FROM org_companies c
-        UNION ALL
          SELECT d.id,
             d.organization_id,
             'department'::text AS unit_type,
-            d.name_encrypted,
-            d.description_encrypted,
-            d.company_id AS parent_id,
+            d.name,
+            d.description,
+            NULL::uuid AS parent_id,
             d.sort_order,
             d.is_active,
             ( SELECT count(*) AS count
@@ -1100,10 +1099,10 @@ CREATE OR REPLACE VIEW public.org_structure_tree AS
         UNION ALL
          SELECT s.id,
             s.organization_id,
-            'site'::text AS unit_type,
-            s.name_encrypted,
-            s.description_encrypted,
-            COALESCE(s.department_id, s.company_id) AS parent_id,
+            'site'::text AS text,
+            s.name,
+            s.description,
+            s.department_id AS parent_id,
             s.sort_order,
             s.is_active,
             ( SELECT count(*) AS count
@@ -1111,26 +1110,12 @@ CREATE OR REPLACE VIEW public.org_structure_tree AS
                      JOIN employee_assignments ea ON ((e.id = ea.employee_id)))
                   WHERE ((ea.org_site_id = s.id) AND (ea.effective_to IS NULL) AND (e.is_archived = false))) AS employee_count
            FROM org_sites s
-        UNION ALL
-         SELECT sub.id,
-            sub.organization_id,
-            'subdivision'::text AS unit_type,
-            sub.name_encrypted,
-            sub.description_encrypted,
-            COALESCE(sub.site_id, sub.department_id) AS parent_id,
-            sub.sort_order,
-            sub.is_active,
-            ( SELECT count(*) AS count
-                   FROM (employees e
-                     JOIN employee_assignments ea ON ((e.id = ea.employee_id)))
-                  WHERE ((ea.org_subdivision_id = sub.id) AND (ea.effective_to IS NULL) AND (e.is_archived = false))) AS employee_count
-           FROM org_subdivisions sub
         )
  SELECT id,
     organization_id,
     unit_type,
-    name_encrypted,
-    description_encrypted,
+    name,
+    description,
     parent_id,
     sort_order,
     is_active,
@@ -1471,7 +1456,7 @@ $function$
 
 
 -- Function: extensions.hmac
-CREATE OR REPLACE FUNCTION extensions.hmac(text, text, text)
+CREATE OR REPLACE FUNCTION extensions.hmac(bytea, bytea, text)
  RETURNS bytea
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
@@ -1479,7 +1464,7 @@ AS '$libdir/pgcrypto', $function$pg_hmac$function$
 
 
 -- Function: extensions.hmac
-CREATE OR REPLACE FUNCTION extensions.hmac(bytea, bytea, text)
+CREATE OR REPLACE FUNCTION extensions.hmac(text, text, text)
  RETURNS bytea
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
@@ -1575,14 +1560,6 @@ AS '$libdir/pgcrypto', $function$pgp_pub_decrypt_bytea$function$
 
 
 -- Function: extensions.pgp_pub_encrypt
-CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt(text, bytea, text)
- RETURNS bytea
- LANGUAGE c
- PARALLEL SAFE STRICT
-AS '$libdir/pgcrypto', $function$pgp_pub_encrypt_text$function$
-
-
--- Function: extensions.pgp_pub_encrypt
 CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt(text, bytea)
  RETURNS bytea
  LANGUAGE c
@@ -1590,12 +1567,12 @@ CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt(text, bytea)
 AS '$libdir/pgcrypto', $function$pgp_pub_encrypt_text$function$
 
 
--- Function: extensions.pgp_pub_encrypt_bytea
-CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt_bytea(bytea, bytea, text)
+-- Function: extensions.pgp_pub_encrypt
+CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt(text, bytea, text)
  RETURNS bytea
  LANGUAGE c
  PARALLEL SAFE STRICT
-AS '$libdir/pgcrypto', $function$pgp_pub_encrypt_bytea$function$
+AS '$libdir/pgcrypto', $function$pgp_pub_encrypt_text$function$
 
 
 -- Function: extensions.pgp_pub_encrypt_bytea
@@ -1606,12 +1583,12 @@ CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt_bytea(bytea, bytea)
 AS '$libdir/pgcrypto', $function$pgp_pub_encrypt_bytea$function$
 
 
--- Function: extensions.pgp_sym_decrypt
-CREATE OR REPLACE FUNCTION extensions.pgp_sym_decrypt(bytea, text, text)
- RETURNS text
+-- Function: extensions.pgp_pub_encrypt_bytea
+CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt_bytea(bytea, bytea, text)
+ RETURNS bytea
  LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/pgcrypto', $function$pgp_sym_decrypt_text$function$
+ PARALLEL SAFE STRICT
+AS '$libdir/pgcrypto', $function$pgp_pub_encrypt_bytea$function$
 
 
 -- Function: extensions.pgp_sym_decrypt
@@ -1622,12 +1599,12 @@ CREATE OR REPLACE FUNCTION extensions.pgp_sym_decrypt(bytea, text)
 AS '$libdir/pgcrypto', $function$pgp_sym_decrypt_text$function$
 
 
--- Function: extensions.pgp_sym_decrypt_bytea
-CREATE OR REPLACE FUNCTION extensions.pgp_sym_decrypt_bytea(bytea, text, text)
- RETURNS bytea
+-- Function: extensions.pgp_sym_decrypt
+CREATE OR REPLACE FUNCTION extensions.pgp_sym_decrypt(bytea, text, text)
+ RETURNS text
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/pgcrypto', $function$pgp_sym_decrypt_bytea$function$
+AS '$libdir/pgcrypto', $function$pgp_sym_decrypt_text$function$
 
 
 -- Function: extensions.pgp_sym_decrypt_bytea
@@ -1638,12 +1615,12 @@ CREATE OR REPLACE FUNCTION extensions.pgp_sym_decrypt_bytea(bytea, text)
 AS '$libdir/pgcrypto', $function$pgp_sym_decrypt_bytea$function$
 
 
--- Function: extensions.pgp_sym_encrypt
-CREATE OR REPLACE FUNCTION extensions.pgp_sym_encrypt(text, text, text)
+-- Function: extensions.pgp_sym_decrypt_bytea
+CREATE OR REPLACE FUNCTION extensions.pgp_sym_decrypt_bytea(bytea, text, text)
  RETURNS bytea
  LANGUAGE c
- PARALLEL SAFE STRICT
-AS '$libdir/pgcrypto', $function$pgp_sym_encrypt_text$function$
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/pgcrypto', $function$pgp_sym_decrypt_bytea$function$
 
 
 -- Function: extensions.pgp_sym_encrypt
@@ -1654,8 +1631,16 @@ CREATE OR REPLACE FUNCTION extensions.pgp_sym_encrypt(text, text)
 AS '$libdir/pgcrypto', $function$pgp_sym_encrypt_text$function$
 
 
+-- Function: extensions.pgp_sym_encrypt
+CREATE OR REPLACE FUNCTION extensions.pgp_sym_encrypt(text, text, text)
+ RETURNS bytea
+ LANGUAGE c
+ PARALLEL SAFE STRICT
+AS '$libdir/pgcrypto', $function$pgp_sym_encrypt_text$function$
+
+
 -- Function: extensions.pgp_sym_encrypt_bytea
-CREATE OR REPLACE FUNCTION extensions.pgp_sym_encrypt_bytea(bytea, text, text)
+CREATE OR REPLACE FUNCTION extensions.pgp_sym_encrypt_bytea(bytea, text)
  RETURNS bytea
  LANGUAGE c
  PARALLEL SAFE STRICT
@@ -1663,7 +1648,7 @@ AS '$libdir/pgcrypto', $function$pgp_sym_encrypt_bytea$function$
 
 
 -- Function: extensions.pgp_sym_encrypt_bytea
-CREATE OR REPLACE FUNCTION extensions.pgp_sym_encrypt_bytea(bytea, text)
+CREATE OR REPLACE FUNCTION extensions.pgp_sym_encrypt_bytea(bytea, text, text)
  RETURNS bytea
  LANGUAGE c
  PARALLEL SAFE STRICT
@@ -1991,6 +1976,64 @@ AS $function$
   $function$
 
 
+-- Function: public.batch_recalculate_skud_daily_summary
+CREATE OR REPLACE FUNCTION public.batch_recalculate_skud_daily_summary(p_pairs jsonb)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+  v_pair jsonb;
+BEGIN
+  FOR v_pair IN SELECT * FROM jsonb_array_elements(p_pairs)
+  LOOP
+    PERFORM recalculate_skud_daily_summary(
+      (v_pair->>'org_id')::uuid,
+      (v_pair->>'emp_id')::bigint,
+      (v_pair->>'date')::date
+    );
+  END LOOP;
+END;
+$function$
+
+
+-- Function: public.bulk_update_employee_ids
+CREATE OR REPLACE FUNCTION public.bulk_update_employee_ids(p_event_ids bigint[], p_employee_ids bigint[])
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+BEGIN
+  UPDATE skud_events
+  SET employee_id = updates.emp_id
+  FROM (
+    SELECT unnest(p_event_ids) AS evt_id,
+           unnest(p_employee_ids) AS emp_id
+  ) AS updates
+  WHERE skud_events.id = updates.evt_id
+    AND skud_events.employee_id IS NULL;
+END;
+$function$
+
+
+-- Function: public.find_skud_duplicate_ids
+CREATE OR REPLACE FUNCTION public.find_skud_duplicate_ids()
+ RETURNS TABLE(id bigint)
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT se.id
+  FROM public.skud_events se
+  INNER JOIN (
+    SELECT dedup_hash, MIN(se2.id) AS keep_id
+    FROM public.skud_events se2
+    WHERE se2.dedup_hash IS NOT NULL
+    GROUP BY se2.dedup_hash
+    HAVING COUNT(*) > 1
+  ) dupes ON se.dedup_hash = dupes.dedup_hash AND se.id <> dupes.keep_id;
+$function$
+
+
 -- Function: public.generate_link_code
 CREATE OR REPLACE FUNCTION public.generate_link_code()
  RETURNS character varying
@@ -2037,150 +2080,104 @@ $function$
 
 
 -- Function: public.recalculate_skud_daily_summary
--- Считает сумму интервалов вход→выход (реальное время на работе)
--- Фильтрует внутренние точки доступа по настройкам отдела
 CREATE OR REPLACE FUNCTION public.recalculate_skud_daily_summary(p_organization_id uuid, p_employee_id bigint, p_date date)
  RETURNS void
  LANGUAGE plpgsql
  SECURITY DEFINER
-AS $function$
-DECLARE
-    v_first_entry TIME;
-    v_last_exit TIME;
-    v_total_seconds DECIMAL := 0;
-    v_break_seconds DECIMAL := 0;
-    v_total_hours DECIMAL(5,2);
-    v_break_hours DECIMAL(5,2);
-    v_prev_exit TIME := NULL;
-    v_rec RECORD;
-    v_dept_id uuid;
-BEGIN
-    -- Получить отдел сотрудника
-    SELECT org_department_id INTO v_dept_id
-    FROM employees
-    WHERE id = p_employee_id;
-
-    -- Первый вход (только по внешним точкам доступа)
-    SELECT event_time INTO v_first_entry
-    FROM skud_events e
-    WHERE e.organization_id = p_organization_id
-      AND e.employee_id = p_employee_id
-      AND e.event_date = p_date
-      AND e.direction = 'entry'
-      AND NOT EXISTS (
-        SELECT 1 FROM skud_access_point_settings s
-        WHERE s.organization_id = p_organization_id
-          AND s.department_id = v_dept_id
-          AND s.access_point_name = e.access_point
-          AND s.is_internal = true
-      )
-    ORDER BY event_time ASC
-    LIMIT 1;
-
-    -- Последний выход (только по внешним точкам доступа)
-    SELECT event_time INTO v_last_exit
-    FROM skud_events e
-    WHERE e.organization_id = p_organization_id
-      AND e.employee_id = p_employee_id
-      AND e.event_date = p_date
-      AND e.direction = 'exit'
-      AND NOT EXISTS (
-        SELECT 1 FROM skud_access_point_settings s
-        WHERE s.organization_id = p_organization_id
-          AND s.department_id = v_dept_id
-          AND s.access_point_name = e.access_point
-          AND s.is_internal = true
-      )
-    ORDER BY event_time DESC
-    LIMIT 1;
-
-    -- Суммируем интервалы вход→выход (только внешние точки)
-    FOR v_rec IN
-        SELECT event_time, direction
-        FROM skud_events e
-        WHERE e.organization_id = p_organization_id
-          AND e.employee_id = p_employee_id
-          AND e.event_date = p_date
-          AND NOT EXISTS (
-            SELECT 1 FROM skud_access_point_settings s
-            WHERE s.organization_id = p_organization_id
-              AND s.department_id = v_dept_id
-              AND s.access_point_name = e.access_point
-              AND s.is_internal = true
-          )
-        ORDER BY event_time ASC
-    LOOP
-        IF v_rec.direction = 'entry' THEN
-            IF v_prev_exit IS NOT NULL THEN
-                v_break_seconds := v_break_seconds + EXTRACT(EPOCH FROM (v_rec.event_time - v_prev_exit));
-            END IF;
-            v_prev_exit := NULL;
-        ELSIF v_rec.direction = 'exit' THEN
-            v_prev_exit := v_rec.event_time;
-        END IF;
-    END LOOP;
-
-    -- total_hours = сумма всех интервалов вход→выход
-    IF v_first_entry IS NOT NULL AND v_last_exit IS NOT NULL AND v_last_exit > v_first_entry THEN
-        v_total_seconds := EXTRACT(EPOCH FROM (v_last_exit - v_first_entry)) - v_break_seconds;
-        v_total_hours := GREATEST(v_total_seconds / 3600, 0);
-        v_break_hours := v_break_seconds / 3600;
-    ELSE
-        v_total_hours := NULL;
-        v_break_hours := 0;
-    END IF;
-
-    INSERT INTO skud_daily_summary (organization_id, employee_id, date, first_entry, last_exit, total_hours, break_hours, is_present)
-    VALUES (p_organization_id, p_employee_id, p_date, v_first_entry, v_last_exit, v_total_hours, v_break_hours, v_first_entry IS NOT NULL)
-    ON CONFLICT (organization_id, employee_id, date)
-    DO UPDATE SET
-        first_entry = EXCLUDED.first_entry,
-        last_exit = EXCLUDED.last_exit,
-        total_hours = EXCLUDED.total_hours,
-        break_hours = EXCLUDED.break_hours,
-        is_present = EXCLUDED.is_present,
-        updated_at = NOW();
-END;
+AS $function$
+DECLARE
+    v_first_entry TIME;
+    v_last_exit TIME;
+    v_total_seconds DECIMAL := 0;
+    v_break_seconds DECIMAL := 0;
+    v_total_hours DECIMAL(5,2);
+    v_break_hours DECIMAL(5,2);
+    v_prev_exit TIME := NULL;
+    v_rec RECORD;
+    v_dept_id uuid;
+BEGIN
+    SELECT org_department_id INTO v_dept_id
+    FROM employees
+    WHERE id = p_employee_id;
+
+    SELECT event_time INTO v_first_entry
+    FROM skud_events e
+    WHERE e.organization_id = p_organization_id
+      AND e.employee_id = p_employee_id
+      AND e.event_date = p_date
+      AND e.direction = 'entry'
+      AND NOT EXISTS (
+        SELECT 1 FROM skud_access_point_settings s
+        WHERE s.organization_id = p_organization_id
+          AND s.department_id = v_dept_id
+          AND s.access_point_name = e.access_point
+          AND s.is_internal = true
+      )
+    ORDER BY event_time ASC
+    LIMIT 1;
+
+    SELECT event_time INTO v_last_exit
+    FROM skud_events e
+    WHERE e.organization_id = p_organization_id
+      AND e.employee_id = p_employee_id
+      AND e.event_date = p_date
+      AND e.direction = 'exit'
+      AND NOT EXISTS (
+        SELECT 1 FROM skud_access_point_settings s
+        WHERE s.organization_id = p_organization_id
+          AND s.department_id = v_dept_id
+          AND s.access_point_name = e.access_point
+          AND s.is_internal = true
+      )
+    ORDER BY event_time DESC
+    LIMIT 1;
+
+    FOR v_rec IN
+        SELECT event_time, direction
+        FROM skud_events e
+        WHERE e.organization_id = p_organization_id
+          AND e.employee_id = p_employee_id
+          AND e.event_date = p_date
+          AND NOT EXISTS (
+            SELECT 1 FROM skud_access_point_settings s
+            WHERE s.organization_id = p_organization_id
+              AND s.department_id = v_dept_id
+              AND s.access_point_name = e.access_point
+              AND s.is_internal = true
+          )
+        ORDER BY event_time ASC
+    LOOP
+        IF v_rec.direction = 'entry' THEN
+            IF v_prev_exit IS NOT NULL THEN
+                v_break_seconds := v_break_seconds + EXTRACT(EPOCH FROM (v_rec.event_time - v_prev_exit));
+            END IF;
+            v_prev_exit := NULL;
+        ELSIF v_rec.direction = 'exit' THEN
+            v_prev_exit := v_rec.event_time;
+        END IF;
+    END LOOP;
+
+    IF v_first_entry IS NOT NULL AND v_last_exit IS NOT NULL AND v_last_exit > v_first_entry THEN
+        v_total_seconds := EXTRACT(EPOCH FROM (v_last_exit - v_first_entry)) - v_break_seconds;
+        v_total_hours := GREATEST(v_total_seconds / 3600, 0);
+        v_break_hours := v_break_seconds / 3600;
+    ELSE
+        v_total_hours := NULL;
+        v_break_hours := 0;
+    END IF;
+
+    INSERT INTO skud_daily_summary (organization_id, employee_id, date, first_entry, last_exit, total_hours, break_hours, is_present)
+    VALUES (p_organization_id, p_employee_id, p_date, v_first_entry, v_last_exit, v_total_hours, v_break_hours, v_first_entry IS NOT NULL)
+    ON CONFLICT (organization_id, employee_id, date)
+    DO UPDATE SET
+        first_entry = EXCLUDED.first_entry,
+        last_exit = EXCLUDED.last_exit,
+        total_hours = EXCLUDED.total_hours,
+        break_hours = EXCLUDED.break_hours,
+        is_present = EXCLUDED.is_present,
+        updated_at = NOW();
+END;
 $function$
-
-
--- Function: public.bulk_update_employee_ids
--- Пакетное обновление employee_id (вместо поштучных UPDATE)
-CREATE OR REPLACE FUNCTION public.bulk_update_employee_ids(
-  p_event_ids bigint[],
-  p_employee_ids bigint[]
-) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
-BEGIN
-  UPDATE skud_events
-  SET employee_id = updates.emp_id
-  FROM (
-    SELECT unnest(p_event_ids) AS evt_id,
-           unnest(p_employee_ids) AS emp_id
-  ) AS updates
-  WHERE skud_events.id = updates.evt_id
-    AND skud_events.employee_id IS NULL;
-END;
-$$;
-
-
--- Function: public.batch_recalculate_skud_daily_summary
--- Пакетный пересчёт daily_summary (вместо N отдельных RPC)
-CREATE OR REPLACE FUNCTION public.batch_recalculate_skud_daily_summary(
-  p_pairs jsonb
-) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
-DECLARE
-  v_pair jsonb;
-BEGIN
-  FOR v_pair IN SELECT * FROM jsonb_array_elements(p_pairs)
-  LOOP
-    PERFORM recalculate_skud_daily_summary(
-      (v_pair->>'org_id')::uuid,
-      (v_pair->>'emp_id')::bigint,
-      (v_pair->>'date')::date
-    );
-  END LOOP;
-END;
-$$;
 
 
 -- Function: public.update_updated_at_column
@@ -4011,6 +4008,21 @@ CREATE TRIGGER update_objects_updated_at BEFORE UPDATE ON storage.objects FOR EA
 -- Index on auth.audit_log_entries
 CREATE INDEX audit_logs_instance_id_idx ON auth.audit_log_entries USING btree (instance_id);
 
+-- Index on auth.custom_oauth_providers
+CREATE INDEX custom_oauth_providers_created_at_idx ON auth.custom_oauth_providers USING btree (created_at);
+
+-- Index on auth.custom_oauth_providers
+CREATE INDEX custom_oauth_providers_enabled_idx ON auth.custom_oauth_providers USING btree (enabled);
+
+-- Index on auth.custom_oauth_providers
+CREATE INDEX custom_oauth_providers_identifier_idx ON auth.custom_oauth_providers USING btree (identifier);
+
+-- Index on auth.custom_oauth_providers
+CREATE UNIQUE INDEX custom_oauth_providers_identifier_key ON auth.custom_oauth_providers USING btree (identifier);
+
+-- Index on auth.custom_oauth_providers
+CREATE INDEX custom_oauth_providers_provider_type_idx ON auth.custom_oauth_providers USING btree (provider_type);
+
 -- Index on auth.flow_state
 CREATE INDEX flow_state_created_at_idx ON auth.flow_state USING btree (created_at DESC);
 
@@ -4186,9 +4198,6 @@ CREATE INDEX idx_audit_logs_entity ON public.audit_logs USING btree (entity_type
 CREATE INDEX idx_audit_logs_user ON public.audit_logs USING btree (user_id);
 
 -- Index on public.employee_assignments
-CREATE INDEX idx_assignments_company ON public.employee_assignments USING btree (org_company_id);
-
--- Index on public.employee_assignments
 CREATE INDEX idx_assignments_current ON public.employee_assignments USING btree (employee_id) WHERE (effective_to IS NULL);
 
 -- Index on public.employee_assignments
@@ -4196,9 +4205,6 @@ CREATE INDEX idx_assignments_department ON public.employee_assignments USING btr
 
 -- Index on public.employee_assignments
 CREATE INDEX idx_assignments_employee ON public.employee_assignments USING btree (employee_id);
-
--- Index on public.employee_assignments
-CREATE INDEX idx_assignments_org_structure ON public.employee_assignments USING btree (org_company_id, org_department_id, org_site_id) WHERE (effective_to IS NULL);
 
 -- Index on public.employee_assignments
 CREATE INDEX idx_assignments_period ON public.employee_assignments USING btree (effective_from, effective_to);
@@ -4209,14 +4215,11 @@ CREATE INDEX idx_assignments_position ON public.employee_assignments USING btree
 -- Index on public.employee_assignments
 CREATE INDEX idx_assignments_site ON public.employee_assignments USING btree (org_site_id);
 
--- Index on public.employee_assignments
-CREATE INDEX idx_assignments_subdivision ON public.employee_assignments USING btree (org_subdivision_id);
+-- Index on public.employees
+CREATE INDEX idx_employees_active ON public.employees USING btree (organization_id, id) INCLUDE (full_name, org_department_id, position_id, sigur_employee_id, employment_status) WHERE ((is_archived = false) AND (employment_status = 'active'::text));
 
 -- Index on public.employees
 CREATE INDEX idx_employees_archived ON public.employees USING btree (is_archived);
-
--- Index on public.employees
-CREATE INDEX idx_employees_company ON public.employees USING btree (org_company_id);
 
 -- Index on public.employees
 CREATE INDEX idx_employees_department ON public.employees USING btree (org_department_id);
@@ -4225,22 +4228,19 @@ CREATE INDEX idx_employees_department ON public.employees USING btree (org_depar
 CREATE UNIQUE INDEX idx_employees_email ON public.employees USING btree (email) WHERE (email IS NOT NULL);
 
 -- Index on public.employees
-CREATE INDEX idx_employees_subdivision ON public.employees USING btree (org_subdivision_id);
+CREATE UNIQUE INDEX idx_employees_sigur_id ON public.employees USING btree (sigur_employee_id) WHERE ((sigur_employee_id IS NOT NULL) AND (is_archived = false));
 
 -- Index on public.employees
 CREATE INDEX idx_tender_employees_organization ON public.employees USING btree (organization_id);
 
--- Index on public.org_companies
-CREATE INDEX idx_org_companies_org ON public.org_companies USING btree (organization_id);
-
--- Index on public.org_departments
-CREATE INDEX idx_org_departments_company ON public.org_departments USING btree (company_id);
-
 -- Index on public.org_departments
 CREATE INDEX idx_org_departments_org ON public.org_departments USING btree (organization_id);
 
--- Index on public.org_sites
-CREATE INDEX idx_org_sites_company ON public.org_sites USING btree (company_id);
+-- Index on public.org_departments
+CREATE INDEX idx_org_departments_parent_id ON public.org_departments USING btree (parent_id);
+
+-- Index on public.org_departments
+CREATE UNIQUE INDEX idx_org_departments_sigur_id ON public.org_departments USING btree (organization_id, sigur_department_id) WHERE (sigur_department_id IS NOT NULL);
 
 -- Index on public.org_sites
 CREATE INDEX idx_org_sites_department ON public.org_sites USING btree (department_id);
@@ -4254,14 +4254,8 @@ CREATE INDEX idx_org_sites_organization ON public.org_sites USING btree (organiz
 -- Index on public.org_sites
 CREATE INDEX idx_org_sites_status ON public.org_sites USING btree (status) WHERE (is_active = true);
 
--- Index on public.org_subdivisions
-CREATE INDEX idx_org_subdivisions_dept ON public.org_subdivisions USING btree (department_id);
-
--- Index on public.org_subdivisions
-CREATE INDEX idx_org_subdivisions_org ON public.org_subdivisions USING btree (organization_id);
-
--- Index on public.org_subdivisions
-CREATE INDEX idx_org_subdivisions_site ON public.org_subdivisions USING btree (site_id);
+-- Index on public.organizations
+CREATE INDEX idx_organizations_parent_id ON public.organizations USING btree (parent_organization_id);
 
 -- Index on public.positions
 CREATE INDEX idx_positions_active ON public.positions USING btree (organization_id) WHERE (is_active = true);
@@ -4271,6 +4265,12 @@ CREATE INDEX idx_positions_category ON public.positions USING btree (category);
 
 -- Index on public.positions
 CREATE INDEX idx_positions_organization ON public.positions USING btree (organization_id);
+
+-- Index on public.positions
+CREATE UNIQUE INDEX idx_positions_sigur_id ON public.positions USING btree (organization_id, sigur_position_id) WHERE (sigur_position_id IS NOT NULL);
+
+-- Index on public.skud_access_point_settings
+CREATE UNIQUE INDEX skud_access_point_settings_organization_id_department_id_ac_key ON public.skud_access_point_settings USING btree (organization_id, department_id, access_point_name);
 
 -- Index on public.skud_daily_summary
 CREATE INDEX idx_skud_summary_employee ON public.skud_daily_summary USING btree (employee_id, date);
@@ -4282,28 +4282,40 @@ CREATE INDEX idx_skud_summary_org_date ON public.skud_daily_summary USING btree 
 CREATE UNIQUE INDEX skud_daily_summary_organization_id_employee_id_date_key ON public.skud_daily_summary USING btree (organization_id, employee_id, date);
 
 -- Index on public.skud_events
+CREATE INDEX idx_skud_events_date_org_hash ON public.skud_events USING btree (event_date, organization_id) INCLUDE (dedup_hash) WHERE (dedup_hash IS NOT NULL);
+
+-- Index on public.skud_events
 CREATE INDEX idx_skud_events_employee ON public.skud_events USING btree (employee_id, event_date);
+
+-- Index on public.skud_events
+CREATE INDEX idx_skud_events_null_emp ON public.skud_events USING btree (organization_id, event_date, event_time DESC) WHERE (employee_id IS NULL);
+
+-- Index on public.skud_events
+CREATE INDEX idx_skud_events_null_emp_id ON public.skud_events USING btree (id) WHERE (employee_id IS NULL);
+
+-- Index on public.skud_events
+CREATE INDEX idx_skud_events_org_access_point ON public.skud_events USING btree (organization_id, access_point) WHERE (access_point IS NOT NULL);
 
 -- Index on public.skud_events
 CREATE INDEX idx_skud_events_org_date ON public.skud_events USING btree (organization_id, event_date);
 
--- Index on public.skud_events (покрывающий для ORDER BY event_date DESC, event_time DESC)
-CREATE INDEX idx_skud_events_org_date_time ON public.skud_events (organization_id, event_date DESC, event_time DESC) INCLUDE (employee_id, access_point, direction);
+-- Index on public.skud_events
+CREATE INDEX idx_skud_events_org_date_time ON public.skud_events USING btree (organization_id, event_date DESC, event_time DESC) INCLUDE (employee_id, access_point, direction);
 
--- Index on public.skud_events (покрывающий для sync dedup)
-CREATE INDEX idx_skud_events_date_org_hash ON public.skud_events (event_date, organization_id) INCLUDE (dedup_hash) WHERE dedup_hash IS NOT NULL;
+-- Index on public.skud_events
+CREATE UNIQUE INDEX uq_skud_events_dedup_hash ON public.skud_events USING btree (dedup_hash);
 
--- Index on public.skud_events (частичный для presence fallback)
-CREATE INDEX idx_skud_events_null_emp ON public.skud_events (organization_id, event_date, event_time DESC) WHERE employee_id IS NULL;
+-- Index on public.skud_sync_department_filter
+CREATE INDEX idx_sync_dept_filter_org ON public.skud_sync_department_filter USING btree (organization_id);
 
--- Index on public.skud_events (частичный для access_point fallback)
-CREATE INDEX idx_skud_events_org_access_point ON public.skud_events (organization_id, access_point) WHERE access_point IS NOT NULL;
+-- Index on public.skud_sync_department_filter
+CREATE UNIQUE INDEX skud_sync_department_filter_organization_id_sigur_departmen_key ON public.skud_sync_department_filter USING btree (organization_id, sigur_department_id);
 
--- Index on public.skud_events (частичный для backfill cursor)
-CREATE INDEX idx_skud_events_null_emp_id ON public.skud_events (id) WHERE employee_id IS NULL;
+-- Index on public.skud_sync_employee_filter
+CREATE INDEX idx_sync_emp_filter_org ON public.skud_sync_employee_filter USING btree (organization_id);
 
--- Index on public.employees (покрывающий для активных сотрудников)
-CREATE INDEX idx_employees_active ON public.employees (organization_id, id) INCLUDE (full_name_encrypted, org_department_id, position_id, sigur_employee_id, employment_status) WHERE is_archived = false AND employment_status = 'active';
+-- Index on public.skud_sync_employee_filter
+CREATE UNIQUE INDEX skud_sync_employee_filter_organization_id_sigur_employee_id_key ON public.skud_sync_employee_filter USING btree (organization_id, sigur_employee_id);
 
 -- Index on public.system_roles
 CREATE INDEX idx_system_roles_code ON public.system_roles USING btree (code);

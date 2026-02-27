@@ -1,7 +1,6 @@
 import { Response } from 'express';
 import { sigurService } from '../services/sigur.service.js';
 import { supabase } from '../config/database.js';
-import { encryptionService } from '../services/encryption.service.js';
 import { auditService } from '../services/audit.service.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
 import { computeDedupHash } from '../utils/dedup.utils.js';
@@ -12,6 +11,7 @@ import {
   syncPositionsFromSigurLogic,
   seedPositionsLogic,
   syncEmployeesLogic,
+  getWhitelistedDepartmentIds,
 } from '../services/sigur-sync.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -49,14 +49,14 @@ export const sigurSyncController = {
       // 1. Загружаем ВСЕХ сотрудников (маппинг по name|org + по sigur_employee_id)
       const { data: employeesData } = await supabase
         .from('employees')
-        .select('id, organization_id, full_name_encrypted, sigur_employee_id')
+        .select('id, organization_id, full_name, sigur_employee_id')
         .eq('is_archived', false);
 
       // name|org_id → emp (исключает конфликты при одинаковых ФИО в разных org)
       const employeeByNameOrg = new Map<string, { id: number; organization_id: string }>();
       const sigurIdMap = new Map<number, { id: number; organization_id: string }>();
       for (const emp of employeesData || []) {
-        const name = encryptionService.decrypt(emp.full_name_encrypted).toLowerCase().trim();
+        const name = (emp.full_name || '').toLowerCase().trim();
         const empRef = { id: emp.id, organization_id: emp.organization_id };
         const key = `${name}|${emp.organization_id}`;
         if (!employeeByNameOrg.has(key)) {
@@ -75,6 +75,27 @@ export const sigurSyncController = {
         fallbackOrgId = orgs?.[0]?.id || null;
       }
 
+      // 1b. Проверяем whitelist отделов → фильтруем по Sigur-сотрудникам
+      const whitelist = await getWhitelistedDepartmentIds(fallbackOrgId || '');
+      let allowedNames: Set<string> | null = null;
+      let allowedSigurIds: Set<number> | null = null;
+
+      if (whitelist) {
+        sendProgress({ type: 'status', message: `Загрузка фильтра: ${whitelist.size} отделов...` });
+        const sigurEmployees = await sigurService.getEmployeesCached(connection);
+        allowedNames = new Set<string>();
+        allowedSigurIds = new Set<number>();
+        for (const emp of sigurEmployees) {
+          const deptId = emp.departmentId as number | undefined;
+          if (deptId && whitelist.has(deptId)) {
+            const name = ((emp.name as string) || '').toLowerCase().trim();
+            if (name) allowedNames.add(name);
+            if (typeof emp.id === 'number') allowedSigurIds.add(emp.id);
+          }
+        }
+        sendProgress({ type: 'status', message: `Фильтр: ${whitelist.size} отделов, ${allowedNames.size} сотрудников` });
+      }
+
       // 2. Генерируем список дней
       const days: string[] = [];
       const cur = new Date(startDate);
@@ -90,9 +111,10 @@ export const sigurSyncController = {
       let totalSkipped = 0;
       let totalNoName = 0;
       let totalNoOrg = 0;
+      let totalFilteredDept = 0;
       const summariesToUpdate = new Set<string>();
 
-      sendProgress({ type: 'start', totalDays: days.length, employees: employeeByNameOrg.size });
+      sendProgress({ type: 'start', totalDays: days.length, employees: employeeByNameOrg.size, filtered: !!whitelist });
 
       // 3. Обрабатываем по одному дню
       for (let dayIdx = 0; dayIdx < days.length; dayIdx++) {
@@ -130,8 +152,8 @@ export const sigurSyncController = {
 
         const dayInserts: {
           organization_id: string;
-          physical_person_encrypted: string;
-          card_number_encrypted: string | null;
+          physical_person: string;
+          card_number: string | null;
           event_date: string;
           event_time: string;
           access_point: string | null;
@@ -144,6 +166,16 @@ export const sigurSyncController = {
         for (const raw of rawEvents) {
           const mapped = mapSigurEvent(raw as Record<string, unknown>);
           if (!mapped) { totalNoName++; continue; }
+
+          // Фильтр по отделам: пропускаем сотрудников не из whitelisted отделов
+          if (allowedNames) {
+            const nameKey = mapped.physicalPerson.toLowerCase().trim();
+            const sigurEmpId = mapped.employeeId;
+            if (!allowedNames.has(nameKey) && !(sigurEmpId && allowedSigurIds?.has(sigurEmpId))) {
+              totalFilteredDept++;
+              continue;
+            }
+          }
 
           const dedupHash = computeDedupHash(
             mapped.physicalPerson, mapped.eventDate, mapped.eventTime,
@@ -166,8 +198,8 @@ export const sigurSyncController = {
 
           dayInserts.push({
             organization_id: orgId,
-            physical_person_encrypted: encryptionService.encrypt(mapped.physicalPerson),
-            card_number_encrypted: mapped.cardNumber ? encryptionService.encrypt(mapped.cardNumber) : null,
+            physical_person: mapped.physicalPerson,
+            card_number: mapped.cardNumber || null,
             event_date: mapped.eventDate,
             event_time: mapped.eventTime,
             access_point: mapped.accessPoint,
@@ -226,6 +258,7 @@ export const sigurSyncController = {
           skipped: totalSkipped,
           droppedNoName: totalNoName,
           droppedNoOrg: totalNoOrg,
+          filteredByDept: totalFilteredDept,
           errors: errors.length,
           matchedEmployees: summariesToUpdate.size,
           dateRange: { startDate, endDate },
@@ -238,6 +271,7 @@ export const sigurSyncController = {
         skipped: totalSkipped,
         droppedNoName: totalNoName,
         droppedNoOrg: totalNoOrg,
+        filteredByDept: totalFilteredDept,
         matched: summariesToUpdate.size,
         errors,
         sigurTotal: totalSigur,
@@ -314,6 +348,62 @@ export const sigurSyncController = {
   },
 
   /**
+   * POST /api/sigur/clear-events
+   * Удаление событий из skud_events за указанный период (по дням, чтобы не таймаутить)
+   */
+  async clearEvents(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { startDate, endDate } = req.body;
+      if (!startDate || !endDate) {
+        res.status(400).json({ success: false, error: 'startDate и endDate обязательны' });
+        return;
+      }
+
+      // Генерируем список дней
+      const days: string[] = [];
+      const cur = new Date(startDate);
+      const end = new Date(endDate);
+      while (cur <= end) {
+        days.push(cur.toISOString().slice(0, 10));
+        cur.setDate(cur.getDate() + 1);
+      }
+
+      let totalDeleted = 0;
+      const errors: string[] = [];
+
+      // Удаляем по дням чтобы не таймаутить
+      for (const day of days) {
+        const { count, error: deleteError } = await supabase
+          .from('skud_events')
+          .delete({ count: 'exact' })
+          .eq('event_date', day);
+
+        if (deleteError) {
+          errors.push(`[${day}] ${deleteError.message}`);
+        } else {
+          totalDeleted += count || 0;
+        }
+      }
+
+      // Удаляем сводки за этот период
+      await supabase
+        .from('skud_daily_summary')
+        .delete()
+        .gte('date', startDate)
+        .lte('date', endDate);
+
+      await auditService.logFromRequest(req, req.user.id, 'CLEAR_SKUD_EVENTS', {
+        details: { startDate, endDate, deletedCount: totalDeleted, errors },
+      });
+
+      res.json({ success: true, data: { deleted: totalDeleted, errors } });
+    } catch (error) {
+      console.error('Clear events error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка удаления событий' });
+    }
+  },
+
+  /**
    * POST /api/sigur/sync-all
    * Полная синхронизация структуры из Sigur (SSE)
    * Последовательность: организации → дубли → отделы → должности → сотрудники
@@ -334,6 +424,8 @@ export const sigurSyncController = {
         res.status(400).json({ success: false, error: 'organization_id обязателен' });
         return;
       }
+
+      console.log(`[syncAll] resolved organizationId: ${organizationId}, user.organization_id: ${req.user.organization_id}`);
 
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');

@@ -403,6 +403,16 @@ export interface EmployeeHistoryEvent {
 }
 
 // Dashboard analytics
+export interface IPeriodStats {
+  avgPresent: number;
+  avgAbsent: number;
+  attendanceRate: number;
+  lateCount: number;
+  prevLateCount: number;
+}
+
+export type DashboardPeriod = 'today' | 'week' | 'month';
+
 export interface IDashboardStats {
   lateToday: number;
   lateYesterday: number;
@@ -415,6 +425,7 @@ export interface IDashboardStats {
     lastWeek: { attendanceRate: number; avgArrival: string; avgHours: number; lateCount: number };
   } | null;
   topLate: Array<{ employee_id: number; full_name: string; lateCount: number; avgArrival: string }>;
+  periodStats: IPeriodStats | null;
 }
 
 // Элемент дерева организационной структуры

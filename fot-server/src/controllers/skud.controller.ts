@@ -1,7 +1,6 @@
 import { Response } from 'express';
 import * as XLSX from 'xlsx';
 import { supabase } from '../config/database.js';
-import { encryptionService } from '../services/encryption.service.js';
 import { auditService } from '../services/audit.service.js';
 import { sigurService } from '../services/sigur.service.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
@@ -16,8 +15,8 @@ interface MulterRequest extends AuthenticatedRequest {
 
 interface SkudEventRow {
   organization_id: string;
-  physical_person_encrypted: string;
-  card_number_encrypted: string | null;
+  physical_person: string;
+  card_number: string | null;
   event_date: string;
   event_time: string;
   access_point: string | null;
@@ -48,7 +47,8 @@ async function queryEventsByEmployeeId(
     .select('*')
     .eq('employee_id', employeeId)
     .order('event_date', { ascending: false })
-    .order('event_time', { ascending: false });
+    .order('event_time', { ascending: false })
+    .limit(5000);
 
   if (orgId) query = query.eq('organization_id', orgId);
   if (startDate && typeof startDate === 'string') query = query.gte('event_date', startDate);
@@ -87,7 +87,7 @@ async function searchAndBackfillByName(
     if (!page || page.length === 0) break;
 
     for (const ev of page) {
-      const name = encryptionService.decrypt(ev.physical_person_encrypted).toLowerCase().trim();
+      const name = (ev.physical_person || '').toLowerCase().trim();
       if (name === employeeName) {
         matched.push(ev);
         idsToBackfill.push(ev.id);
@@ -175,19 +175,94 @@ function countWorkingDays(startStr: string, endStr: string): number {
   return count;
 }
 
+/**
+ * Загружает ID и имена сотрудников, относящихся к отделам из sync filter.
+ * Возвращает null если фильтр не настроен (показывать всё).
+ */
+async function getSyncFilteredEmployees(
+  organizationId: string | undefined,
+): Promise<{ empIds: Set<number>; empNames: Set<string> } | null> {
+  if (!organizationId) return null;
+
+  // 1. Загружаем whitelist sigur_department_id
+  const { data: filterRows } = await supabase
+    .from('skud_sync_department_filter')
+    .select('sigur_department_id')
+    .eq('organization_id', organizationId);
+
+  if (!filterRows || filterRows.length === 0) {
+    console.log('[sync-filter] Нет фильтра для org', organizationId, '→ показываем всё');
+    return null;
+  }
+
+  const sigurDeptIds = filterRows.map(r => r.sigur_department_id);
+  console.log('[sync-filter] sigur_department_ids из фильтра:', sigurDeptIds);
+
+  // 2. Маппим sigur_department_id → org_departments.id
+  const { data: depts } = await supabase
+    .from('org_departments')
+    .select('id, parent_id, name, sigur_department_id')
+    .eq('organization_id', organizationId)
+    .in('sigur_department_id', sigurDeptIds);
+
+  console.log('[sync-filter] Найдено отделов по sigur_id:', depts?.length || 0,
+    depts?.map(d => `${d.name} (sigur=${d.sigur_department_id})`));
+
+  if (!depts || depts.length === 0) return { empIds: new Set(), empNames: new Set() };
+
+  // 3. Собираем дочерние отделы
+  const { data: allDepts } = await supabase
+    .from('org_departments')
+    .select('id, parent_id')
+    .eq('organization_id', organizationId);
+
+  const deptIds = new Set(depts.map(d => d.id));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const d of allDepts || []) {
+      if (d.parent_id && deptIds.has(d.parent_id) && !deptIds.has(d.id)) {
+        deptIds.add(d.id);
+        changed = true;
+      }
+    }
+  }
+  console.log('[sync-filter] Итого отделов (с дочерними):', deptIds.size);
+
+  // 4. Загружаем сотрудников из этих отделов
+  const { data: employees } = await supabase
+    .from('employees')
+    .select('id, full_name')
+    .eq('organization_id', organizationId)
+    .eq('is_archived', false)
+    .in('org_department_id', [...deptIds]);
+
+  const empIds = new Set<number>();
+  const empNames = new Set<string>();
+  for (const e of employees || []) {
+    empIds.add(e.id);
+    if (e.full_name) empNames.add(e.full_name.toLowerCase().trim());
+  }
+
+  console.log('[sync-filter] Найдено сотрудников:', empIds.size);
+
+  return { empIds, empNames };
+}
+
 // Кэш access points (TTL 10 минут)
 const AP_CACHE_TTL = 10 * 60_000;
 const accessPointCache = new Map<string, { data: string[]; at: number }>();
 
 export const skudController = {
   /**
-   * GET /api/skud/dashboard-stats?department_id=uuid
+   * GET /api/skud/dashboard-stats?department_id=uuid&period=today|week|month
    * Агрегированная аналитика для дашборда руководителя
    */
   async getDashboardStats(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const organizationId = getOrgId(req);
       const departmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
+      const period = (req.query.period as string) || 'today';
 
       if (!departmentId) {
         res.status(400).json({ success: false, error: 'department_id обязателен' });
@@ -199,7 +274,7 @@ export const skudController = {
       // Загрузить сотрудников отдела
       let empQuery = supabase
         .from('employees')
-        .select('id, full_name_encrypted')
+        .select('id, full_name')
         .eq('is_archived', false)
         .eq('employment_status', 'active')
         .in('org_department_id', deptIds);
@@ -207,14 +282,14 @@ export const skudController = {
 
       const { data: employees } = await empQuery;
       if (!employees || employees.length === 0) {
-        res.json({ success: true, data: { lateToday: 0, lateYesterday: 0, punctuality: { onTime: 0, slightlyLate: 0, veryLate: 0 }, avgArrivalByDay: [], risks: [], hourlyActivity: [], weekComparison: null, topLate: [] } });
+        res.json({ success: true, data: { lateToday: 0, lateYesterday: 0, punctuality: { onTime: 0, slightlyLate: 0, veryLate: 0 }, avgArrivalByDay: [], risks: [], hourlyActivity: [], weekComparison: null, topLate: [], periodStats: null } });
         return;
       }
 
       const empIds = employees.map(e => e.id);
       const empNameMap = new Map<number, string>();
       for (const e of employees) {
-        empNameMap.set(e.id, encryptionService.decrypt(e.full_name_encrypted));
+        empNameMap.set(e.id, e.full_name || '');
       }
 
       // Даты
@@ -230,6 +305,17 @@ export const skudController = {
       const lastMondayStr = formatDateToISO(lastMonday);
       const lastFridayStr = formatDateToISO(lastFriday);
 
+      // Даты для месяца
+      const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+      const monthStartStr = formatDateToISO(monthStart);
+      const prevMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const prevMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+      const prevMonthStartStr = formatDateToISO(prevMonthStart);
+      const prevMonthEndStr = formatDateToISO(prevMonthEnd);
+
+      // Определяем начало запроса summaries в зависимости от периода
+      const summaryStartDate = period === 'month' ? prevMonthStartStr : lastMondayStr;
+
       // Вчера (рабочий день — пропускаем выходные)
       const yesterday = new Date(today);
       yesterday.setDate(yesterday.getDate() - 1);
@@ -243,12 +329,12 @@ export const skudController = {
       fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 21);
       const fourWeeksAgoStr = formatDateToISO(fourWeeksAgo);
 
-      // Запрос daily_summary за 2 недели (для punctuality, risks, weekComparison)
+      // Запрос daily_summary (диапазон зависит от периода)
       const { data: summaries } = await supabase
         .from('skud_daily_summary')
         .select('employee_id, date, first_entry, last_exit, total_hours, is_present')
         .in('employee_id', empIds)
-        .gte('date', lastMondayStr)
+        .gte('date', summaryStartDate)
         .lte('date', todayStr);
 
       // Запрос entry-событий за сегодня для hourly activity
@@ -285,7 +371,6 @@ export const skudController = {
         else if (s.first_entry! <= SLIGHTLY_LATE_THRESHOLD) slightlyLateCount++;
         else veryLateCount++;
       }
-      // Считаем только дни, когда хотя бы 1 сотрудник пришёл (исключаем праздники)
       const daysWithPresence = new Set(thisWeekWithEntry.map(s => s.date));
       const actualWorkDays = daysWithPresence.size;
       const expectedTotal = empIds.length * actualWorkDays || 1;
@@ -442,9 +527,48 @@ export const skudController = {
           };
         });
 
+      // Period stats (для карточек статистики по периодам)
+      let periodStats: { avgPresent: number; avgAbsent: number; attendanceRate: number; lateCount: number; prevLateCount: number } | null = null;
+
+      if (period === 'week' || period === 'month') {
+        let pSummaries: typeof summaries;
+        let prevSummaries: typeof summaries;
+
+        if (period === 'week') {
+          pSummaries = (summaries || []).filter(s => s.date >= mondayStr && s.date <= todayStr);
+          prevSummaries = (summaries || []).filter(s => s.date >= lastMondayStr && s.date < mondayStr);
+        } else {
+          pSummaries = (summaries || []).filter(s => s.date >= monthStartStr && s.date <= todayStr);
+          prevSummaries = (summaries || []).filter(s => s.date >= prevMonthStartStr && s.date <= prevMonthEndStr);
+        }
+
+        // Рабочие дни с присутствием
+        const datesPresent = new Set((pSummaries || []).filter(s => s.first_entry).map(s => s.date));
+        const pWorkDays = datesPresent.size || 1;
+
+        // Средняя явка
+        const dailyPresent = new Map<string, number>();
+        for (const s of pSummaries || []) {
+          if (s.is_present) dailyPresent.set(s.date, (dailyPresent.get(s.date) || 0) + 1);
+        }
+        const totalPresent = [...dailyPresent.values()].reduce((a, b) => a + b, 0);
+        const avgPresent = Math.round(totalPresent / pWorkDays);
+        const avgAbsent = Math.max(0, empIds.length - avgPresent);
+
+        // Посещаемость
+        const pExpectedTotal = empIds.length * pWorkDays;
+        const attendanceRate = pExpectedTotal > 0 ? Math.round((totalPresent / pExpectedTotal) * 100) : 0;
+
+        // Опоздания
+        const pLateCount = (pSummaries || []).filter(s => s.first_entry && s.first_entry > LATE_THRESHOLD).length;
+        const prevLateCount = (prevSummaries || []).filter(s => s.first_entry && s.first_entry > LATE_THRESHOLD).length;
+
+        periodStats = { avgPresent, avgAbsent, attendanceRate, lateCount: pLateCount, prevLateCount };
+      }
+
       res.json({
         success: true,
-        data: { lateToday, lateYesterday, punctuality, avgArrivalByDay, risks, hourlyActivity, weekComparison, topLate },
+        data: { lateToday, lateYesterday, punctuality, avgArrivalByDay, risks, hourlyActivity, weekComparison, topLate, periodStats },
       });
     } catch (error) {
       console.error('getDashboardStats error:', error);
@@ -484,6 +608,18 @@ export const skudController = {
         query = query.eq('organization_id', organizationId);
       }
 
+      // Фильтрация по sync filter (отделы)
+      const syncFilter = await getSyncFilteredEmployees(organizationId);
+      if (syncFilter) {
+        const { empIds: allowedIds } = syncFilter;
+        if (allowedIds.size > 0) {
+          query = query.in('employee_id', [...allowedIds]);
+        } else {
+          res.json({ success: true, data: [] });
+          return;
+        }
+      }
+
       const { data, error } = await query;
 
       if (error) {
@@ -517,7 +653,7 @@ export const skudController = {
       const organizationId = getOrgId(req);
 
       // Получаем ФИО и organization_id сотрудника
-      let empQuery = supabase.from('employees').select('full_name_encrypted, organization_id').eq('id', employeeId);
+      let empQuery = supabase.from('employees').select('full_name, organization_id').eq('id', employeeId);
       if (organizationId) empQuery = empQuery.eq('organization_id', organizationId);
       const { data: empData } = await empQuery.single();
 
@@ -529,8 +665,8 @@ export const skudController = {
 
       // 2) Всегда ищем по ФИО (события без employee_id) + бэкфилл
       let byName: Record<string, unknown>[] = [];
-      if (empData?.full_name_encrypted && effectiveOrgId) {
-        const employeeName = encryptionService.decrypt(empData.full_name_encrypted).toLowerCase().trim();
+      if (empData?.full_name && effectiveOrgId) {
+        const employeeName = empData.full_name.toLowerCase().trim();
         console.log(`[employee-events] searching by name: "${employeeName}"`);
         byName = await searchAndBackfillByName(employeeId, employeeName, effectiveOrgId, startDate, endDate);
         console.log(`[employee-events] byName=${byName.length}`);
@@ -546,9 +682,8 @@ export const skudController = {
       // Расшифровываем для ответа
       const result = events.map((event: Record<string, unknown>) => ({
         id: event.id,
-        physical_person: encryptionService.decrypt(event.physical_person_encrypted as string),
-        card_number: event.card_number_encrypted
-          ? encryptionService.decrypt(event.card_number_encrypted as string) : null,
+        physical_person: event.physical_person,
+        card_number: event.card_number || null,
         event_date: event.event_date,
         event_time: event.event_time,
         access_point: event.access_point,
@@ -599,6 +734,18 @@ export const skudController = {
         query = query.eq('employee_id', parseInt(employeeId, 10));
       }
 
+      // Фильтрация по sync filter (отделы)
+      const syncFilter = await getSyncFilteredEmployees(organizationId);
+      if (syncFilter) {
+        const { empIds: allowedIds } = syncFilter;
+        if (allowedIds.size > 0) {
+          query = query.in('employee_id', [...allowedIds]);
+        } else {
+          res.json({ success: true, data: [] });
+          return;
+        }
+      }
+
       const { data, error } = await query;
 
       if (error) {
@@ -607,11 +754,10 @@ export const skudController = {
         return;
       }
 
-      // Расшифровываем данные
       const decrypted = (data || []).map((event: {
         id: number;
-        physical_person_encrypted: string;
-        card_number_encrypted: string | null;
+        physical_person: string;
+        card_number: string | null;
         event_date: string;
         event_time: string;
         access_point: string | null;
@@ -619,10 +765,8 @@ export const skudController = {
         employee_id: number | null;
       }) => ({
         id: event.id,
-        physical_person: encryptionService.decrypt(event.physical_person_encrypted),
-        card_number: event.card_number_encrypted
-          ? encryptionService.decrypt(event.card_number_encrypted)
-          : null,
+        physical_person: event.physical_person,
+        card_number: event.card_number || null,
         event_date: event.event_date,
         event_time: event.event_time,
         access_point: event.access_point,
@@ -630,9 +774,9 @@ export const skudController = {
         employee_id: event.employee_id,
       }));
 
-      // Серверный поиск по расшифрованным данным
+      // Серверный поиск
       const result = searchStr
-        ? decrypted.filter(e => e.physical_person.toLowerCase().includes(searchStr))
+        ? decrypted.filter(e => (e.physical_person || '').toLowerCase().includes(searchStr))
         : decrypted;
 
       res.json({ success: true, data: result });
@@ -733,13 +877,13 @@ export const skudController = {
       // Загружаем сотрудников для сопоставления по ФИО
       const { data: employeesData } = await supabase
         .from('employees')
-        .select('id, full_name_encrypted')
+        .select('id, full_name')
         .eq('organization_id', organizationId)
         .eq('is_archived', false);
 
       const employeeMap = new Map<string, number>();
       for (const emp of employeesData || []) {
-        const name = encryptionService.decrypt(emp.full_name_encrypted).toLowerCase().trim();
+        const name = (emp.full_name || '').toLowerCase().trim();
         employeeMap.set(name, emp.id);
       }
 
@@ -815,8 +959,8 @@ export const skudController = {
 
         eventsToInsert.push({
           organization_id: organizationId,
-          physical_person_encrypted: encryptionService.encrypt(physicalPerson),
-          card_number_encrypted: cardNumber ? encryptionService.encrypt(cardNumber) : null,
+          physical_person: physicalPerson,
+          card_number: cardNumber,
           event_date: eventDate,
           event_time: eventTime,
           access_point: accessPoint,
@@ -917,7 +1061,7 @@ export const skudController = {
       // Загружаем сотрудников
       let empQuery = supabase
         .from('employees')
-        .select('id, full_name_encrypted, org_department_id, position_id')
+        .select('id, full_name, org_department_id, position_id')
         .eq('is_archived', false)
         .eq('employment_status', 'active');
 
@@ -942,20 +1086,20 @@ export const skudController = {
 
       const [deptResult, posResult] = await Promise.all([
         deptIdSet.size > 0
-          ? supabase.from('org_departments').select('id, name_encrypted').in('id', [...deptIdSet])
+          ? supabase.from('org_departments').select('id, name').in('id', [...deptIdSet])
           : { data: [] },
         posIdSet.size > 0
-          ? supabase.from('positions').select('id, name_encrypted').in('id', [...posIdSet])
+          ? supabase.from('positions').select('id, name').in('id', [...posIdSet])
           : { data: [] },
       ]);
 
       const deptMap = new Map<string, string>();
       for (const d of deptResult.data || []) {
-        deptMap.set(d.id, encryptionService.decrypt(d.name_encrypted));
+        deptMap.set(d.id, d.name || '');
       }
       const posMap = new Map<string, string>();
       for (const p of posResult.data || []) {
-        posMap.set(p.id, encryptionService.decrypt(p.name_encrypted));
+        posMap.set(p.id, p.name || '');
       }
 
       // Загружаем настройки внутренних точек доступа (включая предков отделов)
@@ -1009,7 +1153,7 @@ export const skudController = {
       // Карта ФИО → employee.id для фоллбэка
       const nameToEmpId = new Map<string, number>();
       for (const emp of employees) {
-        const name = encryptionService.decrypt(emp.full_name_encrypted).toLowerCase().trim();
+        const name = (emp.full_name || '').toLowerCase().trim();
         nameToEmpId.set(name, emp.id);
       }
 
@@ -1050,7 +1194,7 @@ export const skudController = {
       if (missingEmpIds.length > 0) {
         let fallbackQuery = supabase
           .from('skud_events')
-          .select('physical_person_encrypted, event_time, direction, access_point, id')
+          .select('physical_person, event_time, direction, access_point, id')
           .eq('event_date', today)
           .is('employee_id', null)
           .order('event_time', { ascending: false });
@@ -1067,7 +1211,7 @@ export const skudController = {
         const backfillPairs: { eventId: number; employeeId: number }[] = [];
 
         for (const evt of unmatchedEvents || []) {
-          const evtName = encryptionService.decrypt(evt.physical_person_encrypted).toLowerCase().trim();
+          const evtName = (evt.physical_person || '').toLowerCase().trim();
           const empId = nameToEmpId.get(evtName);
           if (!empId) {
             unmatchedNames.add(evtName);
@@ -1096,15 +1240,28 @@ export const skudController = {
           console.log(`[getPresence] employee names (sample):`, [...nameToEmpId.keys()].slice(0, 5));
         }
 
-        // Backfill employee_id в фоне (пакетный RPC)
+        // Backfill employee_id в фоне + пересчёт daily_summary
         if (backfillPairs.length > 0) {
+          const uniqueBackfilledEmpIds = [...new Set(backfillPairs.map(b => b.employeeId))];
           supabase
             .rpc('bulk_update_employee_ids', {
               p_event_ids: backfillPairs.map(b => b.eventId),
               p_employee_ids: backfillPairs.map(b => b.employeeId),
             })
             .then(
-              () => { console.log(`[getPresence] backfilled employee_id for ${backfillPairs.length} events`); },
+              async () => {
+                console.log(`[getPresence] backfilled employee_id for ${backfillPairs.length} events`);
+                // Пересчитываем daily_summary для бэкфиллнутых сотрудников
+                if (organizationId && uniqueBackfilledEmpIds.length > 0) {
+                  const pairs = uniqueBackfilledEmpIds.map(empId => ({
+                    org_id: organizationId,
+                    emp_id: empId,
+                    date: today,
+                  }));
+                  await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: pairs });
+                  console.log(`[getPresence] recalculated daily_summary for ${pairs.length} employees`);
+                }
+              },
               (err: Error) => { console.error('[getPresence] backfill error:', err); },
             );
         }
@@ -1169,7 +1326,7 @@ export const skudController = {
 
         return {
           employee_id: emp.id,
-          full_name: encryptionService.decrypt(emp.full_name_encrypted),
+          full_name: emp.full_name || '',
           department_name: emp.org_department_id ? deptMap.get(emp.org_department_id) || null : null,
           position_name: emp.position_id ? posMap.get(emp.position_id) || null : null,
           status,
@@ -1222,7 +1379,7 @@ export const skudController = {
       const orgId = getOrgId(req);
       let empQuery = supabase
         .from('employees')
-        .select('id, organization_id, full_name_encrypted, sigur_employee_id')
+        .select('id, organization_id, full_name, sigur_employee_id')
         .eq('id', employeeId)
         .eq('is_archived', false);
       if (orgId) empQuery = empQuery.eq('organization_id', orgId);
@@ -1235,7 +1392,7 @@ export const skudController = {
 
       const sigurEmpId: number | null = empData.sigur_employee_id;
       const employeeOrgId: string = empData.organization_id;
-      const employeeName = encryptionService.decrypt(empData.full_name_encrypted).toLowerCase().trim();
+      const employeeName = (empData.full_name || '').toLowerCase().trim();
 
       console.log(`[sync-employee] id=${employeeId}, sigurId=${sigurEmpId}, name="${employeeName}"`);
 
@@ -1326,8 +1483,8 @@ export const skudController = {
           existingSet.add(dedupHash);
           toInsert.push({
             organization_id: employeeOrgId,
-            physical_person_encrypted: encryptionService.encrypt(m.physicalPerson),
-            card_number_encrypted: m.cardNumber ? encryptionService.encrypt(m.cardNumber) : null,
+            physical_person: m.physicalPerson,
+            card_number: m.cardNumber || null,
             event_date: m.eventDate,
             event_time: m.eventTime,
             access_point: m.accessPoint,
@@ -1396,7 +1553,7 @@ export const skudController = {
       while (true) {
         const { data: rows } = await supabase
           .from('skud_events')
-          .select('id, physical_person_encrypted, event_date, event_time, access_point, direction')
+          .select('id, physical_person, event_date, event_time, access_point, direction')
           .is('dedup_hash', null)
           .order('id')
           .range(offset, offset + BATCH - 1);
@@ -1404,7 +1561,7 @@ export const skudController = {
         if (!rows || rows.length === 0) break;
 
         for (const row of rows) {
-          const name = encryptionService.decrypt(row.physical_person_encrypted);
+          const name = row.physical_person || '';
           const hash = computeDedupHash(name, row.event_date, row.event_time, row.access_point, row.direction);
           await supabase.from('skud_events').update({ dedup_hash: hash }).eq('id', row.id);
           totalUpdated++;
@@ -1486,35 +1643,56 @@ export const skudController = {
 
   /**
    * GET /api/skud/access-point-settings?department_id=uuid
-   * Получение настроек точек доступа для отдела
+   * Получение настроек точек доступа.
+   * Если department_id не указан — возвращает общие настройки (корневой отдел организации).
    */
   async getAccessPointSettings(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       let organizationId = getOrgId(req);
-      const departmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
+      let departmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
 
+      // super_admin без привязки — находим первую организацию
+      if (!organizationId) {
+        const { data: orgs } = await supabase.from('organizations').select('id').limit(1);
+        organizationId = orgs?.[0]?.id;
+      }
+
+      // Если department_id не указан — загружаем все настройки организации
       if (!departmentId) {
-        res.status(400).json({ success: false, error: 'department_id обязателен' });
+        if (!organizationId) {
+          res.json({ success: true, data: [] });
+          return;
+        }
+        const { data, error } = await supabase
+          .from('skud_access_point_settings')
+          .select('access_point_name, is_internal')
+          .eq('organization_id', organizationId);
+
+        if (error) {
+          console.error('Get access point settings error:', error);
+          res.status(500).json({ success: false, error: 'Ошибка получения настроек' });
+          return;
+        }
+
+        const result = (data || []).map(row => ({
+          access_point_name: row.access_point_name,
+          is_internal: row.is_internal,
+        }));
+        res.json({ success: true, data: result });
         return;
       }
 
       // Если org не определён (super_admin), берём из отдела
       if (!organizationId) {
-        const { data: dept } = await supabase.from('org_departments').select('organization_id').eq('id', departmentId).single();
+        const { data: dept } = await supabase.from('org_departments').select('organization_id').eq('id', departmentId).maybeSingle();
         organizationId = dept?.organization_id;
       }
 
-      // Загружаем отделы для цепочки предков
-      let allDeptsQuery = supabase.from('org_departments').select('id, parent_id');
-      if (organizationId) allDeptsQuery = allDeptsQuery.eq('organization_id', organizationId);
-      const { data: allDepts } = await allDeptsQuery;
-
-      const deptChain = [departmentId, ...getAncestorDeptIds(departmentId, allDepts || [])];
-
+      // Загружаем настройки для конкретного отдела
       let query = supabase
         .from('skud_access_point_settings')
-        .select('access_point_name, is_internal, department_id')
-        .in('department_id', deptChain);
+        .select('access_point_name, is_internal')
+        .eq('department_id', departmentId);
 
       if (organizationId) {
         query = query.eq('organization_id', organizationId);
@@ -1528,20 +1706,9 @@ export const skudController = {
         return;
       }
 
-      // Приоритет: настройки дочернего отдела перекрывают предков
-      const deptPriority = new Map(deptChain.map((id, idx) => [id, idx]));
-      const merged = new Map<string, { is_internal: boolean; priority: number }>();
-      for (const row of data || []) {
-        const priority = deptPriority.get(row.department_id) ?? 999;
-        const existing = merged.get(row.access_point_name);
-        if (!existing || priority < existing.priority) {
-          merged.set(row.access_point_name, { is_internal: row.is_internal, priority });
-        }
-      }
-
-      const result = [...merged.entries()].map(([name, { is_internal }]) => ({
-        access_point_name: name,
-        is_internal,
+      const result = (data || []).map(row => ({
+        access_point_name: row.access_point_name,
+        is_internal: row.is_internal,
       }));
 
       res.json({ success: true, data: result });
@@ -1553,26 +1720,51 @@ export const skudController = {
 
   /**
    * PUT /api/skud/access-point-settings
-   * Сохранение настроек точек доступа для отдела
-   * Body: { department_id: string, settings: [{ access_point_name: string, is_internal: boolean }] }
+   * Сохранение общих настроек точек доступа (на корневом отделе организации).
+   * Body: { settings: [{ access_point_name: string, is_internal: boolean }], department_id?: string }
    */
   async saveAccessPointSettings(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       let organizationId = getOrgId(req);
+      if (!organizationId) {
+        const { data: orgs } = await supabase.from('organizations').select('id').limit(1);
+        organizationId = orgs?.[0]?.id;
+      }
 
       const { department_id, settings } = req.body as {
-        department_id: string;
+        department_id?: string;
         settings: { access_point_name: string; is_internal: boolean }[];
       };
 
-      if (!department_id || !Array.isArray(settings)) {
-        res.status(400).json({ success: false, error: 'department_id и settings обязательны' });
+      if (!Array.isArray(settings)) {
+        res.status(400).json({ success: false, error: 'settings обязательны' });
         return;
+      }
+
+      let targetDeptId = department_id || null;
+
+      // Если department_id не указан — находим корневой отдел
+      if (!targetDeptId) {
+        if (!organizationId) {
+          res.status(400).json({ success: false, error: 'Organization required' });
+          return;
+        }
+        const { data: rootDepts } = await supabase
+          .from('org_departments')
+          .select('id')
+          .eq('organization_id', organizationId)
+          .is('parent_id', null)
+          .limit(1);
+        if (!rootDepts || rootDepts.length === 0) {
+          res.status(400).json({ success: false, error: 'Корневой отдел не найден' });
+          return;
+        }
+        targetDeptId = rootDepts[0].id;
       }
 
       // Если org не определён (super_admin без привязки), берём из отдела
       if (!organizationId) {
-        const { data: dept } = await supabase.from('org_departments').select('organization_id').eq('id', department_id).single();
+        const { data: dept } = await supabase.from('org_departments').select('organization_id').eq('id', targetDeptId).maybeSingle();
         organizationId = dept?.organization_id;
       }
 
@@ -1581,19 +1773,18 @@ export const skudController = {
         return;
       }
 
-      // Удалить старые настройки для этого отдела
+      // Удалить старые настройки организации (все отделы)
       await supabase
         .from('skud_access_point_settings')
         .delete()
-        .eq('organization_id', organizationId)
-        .eq('department_id', department_id);
+        .eq('organization_id', organizationId);
 
       // Вставить новые (только те, что помечены как internal)
       const internalSettings = settings.filter(s => s.is_internal);
       if (internalSettings.length > 0) {
         const rows = internalSettings.map(s => ({
           organization_id: organizationId,
-          department_id,
+          department_id: targetDeptId,
           access_point_name: s.access_point_name.trim(),
           is_internal: true,
         }));
@@ -1613,6 +1804,43 @@ export const skudController = {
     } catch (error) {
       console.error('Save access point settings error:', error);
       res.status(500).json({ success: false, error: 'Ошибка сохранения настроек' });
+    }
+  },
+
+  /**
+   * GET /api/skud/organizations
+   * Возвращает только организации, у которых есть события в skud_events (super_admin)
+   */
+  async getOrganizations(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      // Получаем уникальные organization_id из skud_events
+      const { data: rows, error } = await supabase
+        .from('skud_events')
+        .select('organization_id')
+        .not('organization_id', 'is', null);
+
+      if (error) {
+        res.status(500).json({ success: false, error: error.message });
+        return;
+      }
+
+      const uniqueOrgIds = [...new Set((rows || []).map(r => r.organization_id))];
+      if (uniqueOrgIds.length === 0) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+
+      // Получаем названия организаций
+      const { data: orgs } = await supabase
+        .from('organizations')
+        .select('id, name')
+        .in('id', uniqueOrgIds)
+        .order('name');
+
+      res.json({ success: true, data: orgs || [] });
+    } catch (error) {
+      console.error('Get SKUD organizations error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка загрузки организаций' });
     }
   },
 };

@@ -15,13 +15,24 @@ import { EmployeeSkudSection } from '../../components/employees/EmployeeSkudSect
 import { AttendanceCalendar } from '../../components/employees/AttendanceCalendar';
 import { EmployeeCardSidebar } from '../../components/employees/EmployeeCardSidebar';
 import {
-  calculateAttendance, getTodayTimeline, isEmployeeOnSite,
+  calculateAttendance, getTodayTimeline, isEmployeeOnSite, computePeriodData,
 } from '../../utils/attendanceCalc';
 import type { Employee, EmployeeInput, EmployeeHistoryEvent, OrgDepartmentNode, SkudEvent } from '../../types';
 import '../../styles/EmployeeCardPage.css';
 import '../../styles/EmployeeCardV2.css';
 
 type Tab = 'attendance' | 'info' | 'history' | 'skud';
+type StatsPeriod = 'today' | 'week' | 'month';
+const STATS_PERIOD_LABELS: Record<StatsPeriod, string> = {
+  today: 'Сегодня',
+  week: 'Неделя',
+  month: 'Месяц',
+};
+const STATS_TREND_LABELS: Record<StatsPeriod, string> = {
+  today: 'за сегодня',
+  week: 'за неделю',
+  month: 'за текущий месяц',
+};
 const TABS: { key: Tab; label: string }[] = [
   { key: 'attendance', label: 'Посещаемость' },
   { key: 'info', label: 'Информация' },
@@ -64,6 +75,9 @@ export const EmployeeCardPage: FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('attendance');
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<Partial<EmployeeInput>>({});
+  const [statsPeriod, setStatsPeriod] = useState<StatsPeriod>('month');
+  const [skudFocusDate, setSkudFocusDate] = useState<string | null>(null);
+  const [skudFocusKey, setSkudFocusKey] = useState(0);
 
   // Calendar month
   const now = new Date();
@@ -111,6 +125,9 @@ export const EmployeeCardPage: FC = () => {
   }, [employee?.org_department_id]);
 
   // Load SKUD events for selected month
+  const [skudRefresh, setSkudRefresh] = useState(0);
+  const reloadSkudEvents = useCallback(() => setSkudRefresh(n => n + 1), []);
+
   useEffect(() => {
     if (!id) return;
     const startDate = new Date(calYear, calMonth, 1).toISOString().slice(0, 10);
@@ -118,7 +135,7 @@ export const EmployeeCardPage: FC = () => {
     skudService.getEmployeeEvents(Number(id), startDate, endDate)
       .then(setSkudEvents)
       .catch(() => setSkudEvents([]));
-  }, [id, calMonth, calYear]);
+  }, [id, calMonth, calYear, skudRefresh]);
 
   // Calculated attendance data
   const attendance = useMemo(
@@ -127,6 +144,28 @@ export const EmployeeCardPage: FC = () => {
   );
   const todayTimeline = useMemo(() => getTodayTimeline(skudEvents), [skudEvents]);
   const onSite = useMemo(() => isEmployeeOnSite(skudEvents, internalPoints), [skudEvents, internalPoints]);
+
+  // Period-filtered stats + weekly pattern
+  const periodData = useMemo(() => {
+    const { stats: mStats, weeklyPattern: mPattern } = attendance;
+    if (statsPeriod === 'month') return { stats: mStats, weeklyPattern: mPattern };
+    const n = new Date();
+    if (n.getFullYear() !== calYear || n.getMonth() !== calMonth)
+      return { stats: mStats, weeklyPattern: mPattern };
+    const todayDate = n.getDate();
+    const filteredDays = statsPeriod === 'today'
+      ? attendance.days.filter(d => d.day === todayDate)
+      : attendance.days.filter(d => d.day >= Math.max(1, todayDate - 6) && d.day <= todayDate);
+    return computePeriodData(filteredDays, calYear, calMonth);
+  }, [statsPeriod, attendance, calYear, calMonth]);
+
+  // Calendar day click → SKUD tab
+  const handleDayClick = useCallback((day: number) => {
+    const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    setSkudFocusDate(dateStr);
+    setSkudFocusKey(k => k + 1);
+    setActiveTab('skud');
+  }, [calYear, calMonth]);
 
   // Actions
   const startEditing = () => {
@@ -188,7 +227,7 @@ export const EmployeeCardPage: FC = () => {
   }
   if (!employee) return null;
 
-  const { stats } = attendance;
+  const { stats: pStats } = periodData;
   const todayLabel = `${now.getDate()} ${MONTH_LABELS_GEN[now.getMonth()]}`;
 
   return (
@@ -259,24 +298,35 @@ export const EmployeeCardPage: FC = () => {
         )}
       </div>
 
-      {/* ===== Stats Row ===== */}
+      {/* ===== Stats Period Selector + Stats Row ===== */}
+      <div className="ec-stats-period-selector">
+        {(['today', 'week', 'month'] as StatsPeriod[]).map(p => (
+          <button
+            key={p}
+            className={`ec-stats-period-btn ${statsPeriod === p ? 'active' : ''}`}
+            onClick={() => setStatsPeriod(p)}
+          >
+            {STATS_PERIOD_LABELS[p]}
+          </button>
+        ))}
+      </div>
       <div className="ec-stats-row">
         <div className="ec-stat-card">
           <div className="ec-stat-header">
             <span className="ec-stat-label">Посещаемость</span>
             <div className="ec-stat-icon green"><CheckCircle size={18} /></div>
           </div>
-          <div className="ec-stat-value">{stats.attendancePercent}%</div>
-          <div className="ec-stat-trend neutral">за текущий месяц</div>
+          <div className="ec-stat-value">{pStats.attendancePercent}%</div>
+          <div className="ec-stat-trend neutral">{STATS_TREND_LABELS[statsPeriod]}</div>
         </div>
         <div className="ec-stat-card">
           <div className="ec-stat-header">
-            <span className="ec-stat-label">Опозданий за месяц</span>
+            <span className="ec-stat-label">Опозданий</span>
             <div className="ec-stat-icon orange"><Clock size={18} /></div>
           </div>
-          <div className="ec-stat-value">{stats.lateCount}</div>
-          <div className={`ec-stat-trend ${stats.lateCount > 2 ? 'down' : 'neutral'}`}>
-            {stats.lateCount > 2 ? 'превышен лимит' : 'в пределах нормы'}
+          <div className="ec-stat-value">{pStats.lateCount}</div>
+          <div className={`ec-stat-trend ${pStats.lateCount > 2 ? 'down' : 'neutral'}`}>
+            {pStats.lateCount > 2 ? 'превышен лимит' : 'в пределах нормы'}
           </div>
         </div>
         <div className="ec-stat-card">
@@ -284,20 +334,20 @@ export const EmployeeCardPage: FC = () => {
             <span className="ec-stat-label">Отработано часов</span>
             <div className="ec-stat-icon blue"><DollarSign size={18} /></div>
           </div>
-          <div className="ec-stat-value">{stats.hoursWorked}ч</div>
-          <div className="ec-stat-trend neutral">из {stats.hoursPlanned}ч по плану</div>
+          <div className="ec-stat-value">{pStats.hoursWorked}ч</div>
+          <div className="ec-stat-trend neutral">из {pStats.hoursPlanned}ч по плану</div>
         </div>
         <div className="ec-stat-card">
           <div className="ec-stat-header">
             <span className="ec-stat-label">Ср. время прихода</span>
             <div className="ec-stat-icon purple"><BarChart3 size={18} /></div>
           </div>
-          <div className="ec-stat-value">{stats.avgArrivalTime || '—'}</div>
-          <div className={`ec-stat-trend ${stats.avgArrivalDiffMinutes > 0 ? 'down' : 'up'}`}>
-            {stats.avgArrivalDiffMinutes > 0
-              ? `+${stats.avgArrivalDiffMinutes} мин к норме`
-              : stats.avgArrivalDiffMinutes < 0
-                ? `${stats.avgArrivalDiffMinutes} мин к норме`
+          <div className="ec-stat-value">{pStats.avgArrivalTime || '—'}</div>
+          <div className={`ec-stat-trend ${pStats.avgArrivalDiffMinutes > 0 ? 'down' : 'up'}`}>
+            {pStats.avgArrivalDiffMinutes > 0
+              ? `+${pStats.avgArrivalDiffMinutes} мин к норме`
+              : pStats.avgArrivalDiffMinutes < 0
+                ? `${pStats.avgArrivalDiffMinutes} мин к норме`
                 : 'точно в норме'}
           </div>
         </div>
@@ -310,7 +360,7 @@ export const EmployeeCardPage: FC = () => {
             <button
               key={t.key}
               className={`ec-tab ${activeTab === t.key ? 'active' : ''}`}
-              onClick={() => setActiveTab(t.key)}
+              onClick={() => { setActiveTab(t.key); setSkudFocusDate(null); }}
             >
               {t.label}
             </button>
@@ -328,6 +378,7 @@ export const EmployeeCardPage: FC = () => {
               year={calYear}
               onPrevMonth={prevMonth}
               onNextMonth={nextMonth}
+              onDayClick={handleDayClick}
             />
             {/* Today's Timeline */}
             <div className="ec-card" style={{ marginTop: 16 }}>
@@ -360,7 +411,7 @@ export const EmployeeCardPage: FC = () => {
             </div>
           </div>
           <EmployeeCardSidebar
-            weeklyPattern={attendance.weeklyPattern}
+            weeklyPattern={periodData.weeklyPattern}
             alerts={attendance.alerts}
             employee={employee}
           />
@@ -393,6 +444,9 @@ export const EmployeeCardPage: FC = () => {
         <EmployeeSkudSection
           employeeId={employee.id}
           departmentId={employee.org_department_id || undefined}
+          onSync={reloadSkudEvents}
+          focusDate={skudFocusDate}
+          focusKey={skudFocusKey}
         />
       )}
     </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { skudService } from '../services/skudService';
-import type { IDashboardStats } from '../types';
+import type { IDashboardStats, DashboardPeriod } from '../types';
 
 const REFRESH_INTERVAL = 60_000;
 
@@ -10,7 +10,7 @@ interface IUseDashboardStatsReturn {
   error: string | null;
 }
 
-export const useDashboardStats = (departmentId: string | null): IUseDashboardStatsReturn => {
+export const useDashboardStats = (departmentId: string | null, period: DashboardPeriod = 'today'): IUseDashboardStatsReturn => {
   const [stats, setStats] = useState<IDashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -23,7 +23,7 @@ export const useDashboardStats = (departmentId: string | null): IUseDashboardSta
       return;
     }
     try {
-      const data = await skudService.getDashboardStats(departmentId, signal);
+      const data = await skudService.getDashboardStats(departmentId, period, signal);
       if (!signal?.aborted) {
         setStats(data);
         setError(null);
@@ -35,7 +35,7 @@ export const useDashboardStats = (departmentId: string | null): IUseDashboardSta
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [departmentId]);
+  }, [departmentId, period]);
 
   useEffect(() => {
     const ac = new AbortController();

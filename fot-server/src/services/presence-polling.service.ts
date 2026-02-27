@@ -1,5 +1,4 @@
 import { sigurService } from './sigur.service.js';
-import { encryptionService } from './encryption.service.js';
 import { supabase } from '../config/database.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
 import { computeDedupHash } from '../utils/dedup.utils.js';
@@ -32,13 +31,13 @@ async function getEmployeeMaps(): Promise<EmployeeMaps> {
 
   const { data } = await supabase
     .from('employees')
-    .select('id, organization_id, full_name_encrypted, sigur_employee_id')
+    .select('id, organization_id, full_name, sigur_employee_id')
     .eq('is_archived', false);
 
   const byNameOrg = new Map<string, { id: number; organization_id: string }>();
   const bySigurId = new Map<number, { id: number; organization_id: string }>();
   for (const emp of data || []) {
-    const name = encryptionService.decrypt(emp.full_name_encrypted).toLowerCase().trim();
+    const name = (emp.full_name || '').toLowerCase().trim();
     const ref = { id: emp.id, organization_id: emp.organization_id };
     // Ключ: name|org_id — исключает конфликт при одинаковых ФИО в разных org
     const key = `${name}|${emp.organization_id}`;
@@ -103,8 +102,8 @@ async function pollEvents(): Promise<void> {
 
     const inserts: {
       organization_id: string;
-      physical_person_encrypted: string;
-      card_number_encrypted: string | null;
+      physical_person: string;
+      card_number: string | null;
       event_date: string;
       event_time: string;
       access_point: string | null;
@@ -134,13 +133,14 @@ async function pollEvents(): Promise<void> {
       if (!emp && fallbackOrgId) {
         emp = byNameOrg.get(`${nameKey}|${fallbackOrgId}`);
       }
-      const orgId = emp?.organization_id || fallbackOrgId;
-      if (!orgId) continue;
+      // Пропускаем события сотрудников, которых нет в БД (не синхронизированы)
+      if (!emp) continue;
+      const orgId = emp.organization_id;
 
       inserts.push({
         organization_id: orgId,
-        physical_person_encrypted: encryptionService.encrypt(mapped.physicalPerson),
-        card_number_encrypted: mapped.cardNumber ? encryptionService.encrypt(mapped.cardNumber) : null,
+        physical_person: mapped.physicalPerson,
+        card_number: mapped.cardNumber || null,
         event_date: mapped.eventDate,
         event_time: mapped.eventTime,
         access_point: mapped.accessPoint,

@@ -2,10 +2,8 @@ import { Response } from 'express';
 import { z } from 'zod';
 import * as XLSX from 'xlsx';
 import { supabase } from '../config/database.js';
-import { encryptionService } from '../services/encryption.service.js';
 import { auditService } from '../services/audit.service.js';
 import { structureController } from './structure.controller.js';
-import { safeDecrypt } from '../utils/crypto.utils.js';
 import { parseDate } from '../utils/date.utils.js';
 import { parseFIO } from '../utils/fio.utils.js';
 import { getOrgId } from '../utils/org.utils.js';
@@ -60,8 +58,8 @@ async function loadStructureCache(organizationId?: string): Promise<StructureCac
     positions: new Map(),
   };
 
-  let deptQuery = supabase.from('org_departments').select('id, name_encrypted');
-  let posQuery = supabase.from('positions').select('id, name_encrypted');
+  let deptQuery = supabase.from('org_departments').select('id, name');
+  let posQuery = supabase.from('positions').select('id, name');
   if (organizationId) {
     deptQuery = deptQuery.eq('organization_id', organizationId);
     posQuery = posQuery.eq('organization_id', organizationId);
@@ -69,12 +67,12 @@ async function loadStructureCache(organizationId?: string): Promise<StructureCac
 
   const [departmentsRes, positionsRes] = await Promise.all([deptQuery, posQuery]);
 
-  (departmentsRes.data || []).forEach((d: { id: string; name_encrypted: string }) => {
-    cache.departments.set(d.id, safeDecrypt(d.name_encrypted) || '');
+  (departmentsRes.data || []).forEach((d: { id: string; name: string }) => {
+    cache.departments.set(d.id, d.name || '');
   });
 
-  (positionsRes.data || []).forEach((p: { id: string; name_encrypted: string }) => {
-    cache.positions.set(p.id, safeDecrypt(p.name_encrypted) || '');
+  (positionsRes.data || []).forEach((p: { id: string; name: string }) => {
+    cache.positions.set(p.id, p.name || '');
   });
 
   structureCacheStore.set(cacheKey, { data: cache, expiresAt: now + STRUCTURE_CACHE_TTL_MS });
@@ -91,8 +89,7 @@ function decryptEmployeeList(encrypted: EmployeeEncrypted, structureCache: Struc
   return {
     id: encrypted.id,
     organization_id: encrypted.organization_id,
-    full_name: encryptionService.decrypt(encrypted.full_name_encrypted),
-    full_name_encrypted: encrypted.full_name_encrypted,
+    full_name: encrypted.full_name || '',
     last_name: null,
     first_name: null,
     middle_name: null,
@@ -121,22 +118,19 @@ function decryptEmployee(encrypted: EmployeeEncrypted, structureCache: Structure
   return {
     id: encrypted.id,
     organization_id: encrypted.organization_id,
-    full_name: encryptionService.decrypt(encrypted.full_name_encrypted),
-    full_name_encrypted: encrypted.full_name_encrypted,
-    last_name: safeDecrypt(encrypted.last_name_encrypted),
-    first_name: safeDecrypt(encrypted.first_name_encrypted),
-    middle_name: safeDecrypt(encrypted.middle_name_encrypted),
+    full_name: encrypted.full_name || '',
+    last_name: encrypted.last_name || null,
+    first_name: encrypted.first_name || null,
+    middle_name: encrypted.middle_name || null,
     position_name: encrypted.position_id ? structureCache.positions.get(encrypted.position_id) || null : null,
     position_id: encrypted.position_id,
-    current_salary: encrypted.current_salary_encrypted
-      ? parseFloat(encryptionService.decrypt(encrypted.current_salary_encrypted))
-      : null,
-    birth_date: safeDecrypt(encrypted.birth_date_encrypted),
-    hire_date: encryptionService.decrypt(encrypted.hire_date_encrypted),
-    country: safeDecrypt(encrypted.country_encrypted),
-    pension_number: safeDecrypt(encrypted.pension_number_encrypted),
-    patent_issue_date: safeDecrypt(encrypted.patent_issue_date_encrypted),
-    patent_expiry_date: safeDecrypt(encrypted.patent_expiry_date_encrypted),
+    current_salary: encrypted.current_salary ? parseFloat(encrypted.current_salary) : null,
+    birth_date: encrypted.birth_date || null,
+    hire_date: encrypted.hire_date || '',
+    country: encrypted.country || null,
+    pension_number: encrypted.pension_number || null,
+    patent_issue_date: encrypted.patent_issue_date || null,
+    patent_expiry_date: encrypted.patent_expiry_date || null,
     email: encrypted.email || null,
     department: encrypted.org_department_id ? structureCache.departments.get(encrypted.org_department_id) || null : null,
     org_department_id: encrypted.org_department_id,
@@ -170,7 +164,7 @@ export const employeesController = {
       let pageNum = 0;
 
       // Для list view выбираем только колонки, используемые decryptEmployeeList
-      const listColumns = 'id, organization_id, full_name_encrypted, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at';
+      const listColumns = 'id, organization_id, full_name, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at';
 
       while (hasMore) {
         const tPage = Date.now();
@@ -266,31 +260,19 @@ export const employeesController = {
 
       const fio = parseFIO(validated.full_name);
 
-      const encryptedData = {
+      const insertData = {
         organization_id: organizationId,
-        full_name_encrypted: encryptionService.encrypt(validated.full_name),
-        last_name_encrypted: encryptionService.encrypt(fio.lastName),
-        first_name_encrypted: fio.firstName ? encryptionService.encrypt(fio.firstName) : null,
-        middle_name_encrypted: fio.middleName ? encryptionService.encrypt(fio.middleName) : null,
-        current_salary_encrypted: validated.current_salary
-          ? encryptionService.encrypt(String(validated.current_salary))
-          : null,
-        birth_date_encrypted: validated.birth_date
-          ? encryptionService.encrypt(validated.birth_date)
-          : null,
-        hire_date_encrypted: encryptionService.encrypt(validated.hire_date),
-        country_encrypted: validated.country
-          ? encryptionService.encrypt(validated.country)
-          : null,
-        pension_number_encrypted: validated.pension_number
-          ? encryptionService.encrypt(validated.pension_number)
-          : null,
-        patent_issue_date_encrypted: validated.patent_issue_date
-          ? encryptionService.encrypt(validated.patent_issue_date)
-          : null,
-        patent_expiry_date_encrypted: validated.patent_expiry_date
-          ? encryptionService.encrypt(validated.patent_expiry_date)
-          : null,
+        full_name: validated.full_name,
+        last_name: fio.lastName,
+        first_name: fio.firstName || null,
+        middle_name: fio.middleName || null,
+        current_salary: validated.current_salary ?? null,
+        birth_date: validated.birth_date || null,
+        hire_date: validated.hire_date,
+        country: validated.country || null,
+        pension_number: validated.pension_number || null,
+        patent_issue_date: validated.patent_issue_date || null,
+        patent_expiry_date: validated.patent_expiry_date || null,
         email: validated.email || null,
         org_department_id: validated.org_department_id || null,
         position_id: validated.position_id || null,
@@ -298,7 +280,7 @@ export const employeesController = {
 
       const { data, error } = await supabase
         .from('employees')
-        .insert(encryptedData)
+        .insert(insertData)
         .select()
         .single();
 
@@ -357,44 +339,32 @@ export const employeesController = {
       };
 
       if (validated.full_name !== undefined) {
-        updateData.full_name_encrypted = encryptionService.encrypt(validated.full_name);
+        updateData.full_name = validated.full_name;
         const fio = parseFIO(validated.full_name);
-        updateData.last_name_encrypted = encryptionService.encrypt(fio.lastName);
-        updateData.first_name_encrypted = fio.firstName ? encryptionService.encrypt(fio.firstName) : null;
-        updateData.middle_name_encrypted = fio.middleName ? encryptionService.encrypt(fio.middleName) : null;
+        updateData.last_name = fio.lastName;
+        updateData.first_name = fio.firstName || null;
+        updateData.middle_name = fio.middleName || null;
       }
       if (validated.current_salary !== undefined) {
-        updateData.current_salary_encrypted = validated.current_salary
-          ? encryptionService.encrypt(String(validated.current_salary))
-          : null;
+        updateData.current_salary = validated.current_salary ?? null;
       }
       if (validated.birth_date !== undefined) {
-        updateData.birth_date_encrypted = validated.birth_date
-          ? encryptionService.encrypt(validated.birth_date)
-          : null;
+        updateData.birth_date = validated.birth_date || null;
       }
       if (validated.hire_date !== undefined) {
-        updateData.hire_date_encrypted = encryptionService.encrypt(validated.hire_date);
+        updateData.hire_date = validated.hire_date;
       }
       if (validated.country !== undefined) {
-        updateData.country_encrypted = validated.country
-          ? encryptionService.encrypt(validated.country)
-          : null;
+        updateData.country = validated.country || null;
       }
       if (validated.pension_number !== undefined) {
-        updateData.pension_number_encrypted = validated.pension_number
-          ? encryptionService.encrypt(validated.pension_number)
-          : null;
+        updateData.pension_number = validated.pension_number || null;
       }
       if (validated.patent_issue_date !== undefined) {
-        updateData.patent_issue_date_encrypted = validated.patent_issue_date
-          ? encryptionService.encrypt(validated.patent_issue_date)
-          : null;
+        updateData.patent_issue_date = validated.patent_issue_date || null;
       }
       if (validated.patent_expiry_date !== undefined) {
-        updateData.patent_expiry_date_encrypted = validated.patent_expiry_date
-          ? encryptionService.encrypt(validated.patent_expiry_date)
-          : null;
+        updateData.patent_expiry_date = validated.patent_expiry_date || null;
       }
       if (validated.email !== undefined) {
         updateData.email = validated.email;
@@ -589,10 +559,10 @@ export const employeesController = {
 
         if (row.event_type === 'salary') {
           decryptedData = {
-            salary: eventData.salary_encrypted ? parseFloat(safeDecrypt(eventData.salary_encrypted as string) || '0') : null,
+            salary: eventData.salary ? parseFloat(String(eventData.salary)) : null,
             reason: eventData.reason,
             order_number: eventData.order_number,
-            note: eventData.note ? safeDecrypt(eventData.note as string) : null,
+            note: eventData.note || null,
           };
         } else if (row.event_type === 'assignment') {
           decryptedData = {
@@ -768,17 +738,17 @@ export const employeesController = {
 
         employeesToInsert.push({
           organization_id: organizationId,
-          full_name_encrypted: encryptionService.encrypt(fullName),
-          last_name_encrypted: encryptionService.encrypt(fio.lastName),
-          first_name_encrypted: fio.firstName ? encryptionService.encrypt(fio.firstName) : null,
-          middle_name_encrypted: fio.middleName ? encryptionService.encrypt(fio.middleName) : null,
-          hire_date_encrypted: encryptionService.encrypt(hireDate),
-          birth_date_encrypted: birthDate ? encryptionService.encrypt(birthDate) : null,
-          current_salary_encrypted: salary !== null ? encryptionService.encrypt(String(salary)) : null,
-          country_encrypted: country ? encryptionService.encrypt(country) : null,
-          pension_number_encrypted: pensionNumber ? encryptionService.encrypt(pensionNumber) : null,
-          patent_issue_date_encrypted: patentIssueDate ? encryptionService.encrypt(patentIssueDate) : null,
-          patent_expiry_date_encrypted: patentExpiryDate ? encryptionService.encrypt(patentExpiryDate) : null,
+          full_name: fullName,
+          last_name: fio.lastName,
+          first_name: fio.firstName || null,
+          middle_name: fio.middleName || null,
+          hire_date: hireDate,
+          birth_date: birthDate || null,
+          current_salary: salary,
+          country: country || null,
+          pension_number: pensionNumber || null,
+          patent_issue_date: patentIssueDate || null,
+          patent_expiry_date: patentExpiryDate || null,
           org_department_id: orgDepartmentId,
           email,
         });
