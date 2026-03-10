@@ -1,11 +1,15 @@
 import type { FC } from 'react';
 import { Clock, BarChart3, AlertTriangle } from 'lucide-react';
-import type { IDashboardStats } from '../../types';
+import type { IDashboardStats, DashboardPeriod } from '../../types';
 import styles from './AnalyticsRow.module.css';
 
 interface IAnalyticsRowProps {
   stats: IDashboardStats;
+  period: DashboardPeriod;
 }
+
+const getPeriodLabel = (period: DashboardPeriod): string =>
+  period === 'today' ? 'сегодня' : period === 'week' ? 'неделю' : 'месяц';
 
 const getInitials = (name: string): string => {
   const parts = name.split(' ');
@@ -30,14 +34,14 @@ const getBarClass = (time: string): string => {
 
 const CIRCUMFERENCE = 2 * Math.PI * 42; // r=42
 
-const PunctualityCard: FC<{ punctuality: IDashboardStats['punctuality'] }> = ({ punctuality }) => {
+const PunctualityCard: FC<{ punctuality: IDashboardStats['punctuality']; period: DashboardPeriod }> = ({ punctuality, period }) => {
   const offset = CIRCUMFERENCE - (punctuality.onTime / 100) * CIRCUMFERENCE;
 
   return (
     <div className={styles.card}>
       <div className={styles.title}>
         <Clock size={16} />
-        Пунктуальность за неделю
+        Пунктуальность за {getPeriodLabel(period)}
       </div>
       <div className={styles.punctChart}>
         <div className={styles.ring}>
@@ -90,7 +94,7 @@ const PunctualityCard: FC<{ punctuality: IDashboardStats['punctuality'] }> = ({ 
   );
 };
 
-const AvgArrivalCard: FC<{ data: IDashboardStats['avgArrivalByDay'] }> = ({ data }) => (
+const AvgArrivalCard: FC<{ data: IDashboardStats['avgArrivalByDay']; period: DashboardPeriod }> = ({ data, period }) => (
   <div className={styles.card}>
     <div className={styles.title}>
       <BarChart3 size={16} />
@@ -98,7 +102,7 @@ const AvgArrivalCard: FC<{ data: IDashboardStats['avgArrivalByDay'] }> = ({ data
     </div>
     <div className={styles.bars}>
       {data.map(item => (
-        <div key={item.day} className={styles.barRow}>
+        <div key={item.day} className={`${styles.barRow} ${period === 'today' && item.isToday ? styles.highlight : ''}`}>
           <span className={styles.barLabel}>{item.day}</span>
           <div className={styles.barTrack}>
             {item.avgTime ? (
@@ -118,14 +122,14 @@ const AvgArrivalCard: FC<{ data: IDashboardStats['avgArrivalByDay'] }> = ({ data
   </div>
 );
 
-const RisksCard: FC<{ risks: IDashboardStats['risks'] }> = ({ risks }) => (
+const RisksCard: FC<{ risks: IDashboardStats['risks']; period: DashboardPeriod }> = ({ risks, period }) => (
   <div className={styles.card}>
     <div className={styles.title}>
       <AlertTriangle size={16} />
       Требуют внимания
     </div>
     {risks.length === 0 ? (
-      <div className={styles.empty}>Нет рисков на этой неделе</div>
+      <div className={styles.empty}>Нет рисков за {getPeriodLabel(period)}</div>
     ) : (
       <div className={styles.risksList}>
         {risks.slice(0, 3).map(risk => (
@@ -145,10 +149,10 @@ const RisksCard: FC<{ risks: IDashboardStats['risks'] }> = ({ risks }) => (
   </div>
 );
 
-export const AnalyticsRow: FC<IAnalyticsRowProps> = ({ stats }) => (
+export const AnalyticsRow: FC<IAnalyticsRowProps> = ({ stats, period }) => (
   <div className={styles.row}>
-    <PunctualityCard punctuality={stats.punctuality} />
-    <AvgArrivalCard data={stats.avgArrivalByDay} />
-    <RisksCard risks={stats.risks} />
+    <PunctualityCard punctuality={stats.punctuality} period={period} />
+    <AvgArrivalCard data={stats.avgArrivalByDay} period={period} />
+    <RisksCard risks={stats.risks} period={period} />
   </div>
 );

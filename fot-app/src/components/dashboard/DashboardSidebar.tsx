@@ -1,10 +1,11 @@
 import type { FC } from 'react';
 import { TrendingUp, TrendingDown } from 'lucide-react';
-import type { IDashboardStats } from '../../types';
+import type { IDashboardStats, DashboardPeriod } from '../../types';
 import styles from './DashboardSidebar.module.css';
 
 interface IDashboardSidebarProps {
   stats: IDashboardStats;
+  period: DashboardPeriod;
 }
 
 const getInitials = (name: string): string => {
@@ -13,12 +14,18 @@ const getInitials = (name: string): string => {
   return name.slice(0, 2).toUpperCase();
 };
 
-const HourlyActivityCard: FC<{ data: IDashboardStats['hourlyActivity'] }> = ({ data }) => {
+const getPeriodLabel = (period: DashboardPeriod): string =>
+  period === 'today' ? 'сегодня' : period === 'week' ? 'неделю' : 'месяц';
+
+const HourlyActivityCard: FC<{ data: IDashboardStats['hourlyActivity']; period: DashboardPeriod }> = ({ data, period }) => {
   const maxCount = Math.max(...data.map(d => d.count), 1);
 
   return (
     <div className={styles.card}>
-      <div className={styles.cardTitle}>Активность по часам</div>
+      <div className={styles.cardTitle}>
+        Активность по часам
+        {period !== 'today' && <span className={styles.cardSubtitle}>(ср. за день)</span>}
+      </div>
       <div className={styles.hourlyBars}>
         {data.map(item => (
           <div
@@ -48,10 +55,11 @@ interface IComparisonItem {
   invertColors?: boolean;
 }
 
-const WeekComparisonCard: FC<{ comparison: IDashboardStats['weekComparison'] }> = ({ comparison }) => {
+const ComparisonCard: FC<{ comparison: IDashboardStats['weekComparison']; period: DashboardPeriod }> = ({ comparison, period }) => {
   if (!comparison) return null;
 
   const { thisWeek, lastWeek } = comparison;
+  const compTitle = period === 'today' ? 'Сравнение со вчера' : period === 'week' ? 'Сравнение с прошлой неделей' : 'Сравнение с прошлым месяцем';
 
   const items: IComparisonItem[] = [
     {
@@ -82,7 +90,7 @@ const WeekComparisonCard: FC<{ comparison: IDashboardStats['weekComparison'] }> 
 
   return (
     <div className={styles.card}>
-      <div className={styles.cardTitle}>Сравнение с прошлой неделей</div>
+      <div className={styles.cardTitle}>{compTitle}</div>
       {items.map(item => {
         const isUp = item.delta > 0;
         const isNeutral = item.delta === 0;
@@ -108,11 +116,11 @@ const WeekComparisonCard: FC<{ comparison: IDashboardStats['weekComparison'] }> 
   );
 };
 
-const TopLateCard: FC<{ data: IDashboardStats['topLate'] }> = ({ data }) => (
+const TopLateCard: FC<{ data: IDashboardStats['topLate']; period: DashboardPeriod }> = ({ data, period }) => (
   <div className={styles.card}>
     <div className={styles.cardTitle}>Топ опаздывающих</div>
     {data.length === 0 ? (
-      <div className={styles.empty}>Нет опозданий за неделю</div>
+      <div className={styles.empty}>Нет опозданий за {getPeriodLabel(period)}</div>
     ) : (
       data.map((item, i) => (
         <div key={item.employee_id} className={styles.lateItem}>
@@ -138,10 +146,10 @@ function compareTimes(a: string, b: string): number {
   return toMin(a) - toMin(b);
 }
 
-export const DashboardSidebar: FC<IDashboardSidebarProps> = ({ stats }) => (
+export const DashboardSidebar: FC<IDashboardSidebarProps> = ({ stats, period }) => (
   <div className={styles.sidebar}>
-    <HourlyActivityCard data={stats.hourlyActivity} />
-    <WeekComparisonCard comparison={stats.weekComparison} />
-    <TopLateCard data={stats.topLate} />
+    <HourlyActivityCard data={stats.hourlyActivity} period={period} />
+    <ComparisonCard comparison={stats.weekComparison} period={period} />
+    <TopLateCard data={stats.topLate} period={period} />
   </div>
 );

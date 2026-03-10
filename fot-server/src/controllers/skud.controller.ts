@@ -282,7 +282,7 @@ export const skudController = {
 
       const { data: employees } = await empQuery;
       if (!employees || employees.length === 0) {
-        res.json({ success: true, data: { lateToday: 0, lateYesterday: 0, punctuality: { onTime: 0, slightlyLate: 0, veryLate: 0 }, avgArrivalByDay: [], risks: [], hourlyActivity: [], weekComparison: null, topLate: [], periodStats: null } });
+        res.json({ success: true, data: { lateToday: 0, lateYesterday: 0, punctuality: { onTime: 0, slightlyLate: 0, veryLate: 0, absent: 0 }, avgArrivalByDay: [], risks: [], hourlyActivity: [], weekComparison: null, topLate: [], periodStats: null, earlyLeaveToday: 0, recentEvents: [], anomalies: { refusals: 0, multipleEntry: 0 }, todayEntriesCount: 0, todayExitsCount: 0 } });
         return;
       }
 
@@ -313,9 +313,6 @@ export const skudController = {
       const prevMonthStartStr = formatDateToISO(prevMonthStart);
       const prevMonthEndStr = formatDateToISO(prevMonthEnd);
 
-      // Определяем начало запроса summaries в зависимости от периода
-      const summaryStartDate = period === 'month' ? prevMonthStartStr : lastMondayStr;
-
       // Вчера (рабочий день — пропускаем выходные)
       const yesterday = new Date(today);
       yesterday.setDate(yesterday.getDate() - 1);
@@ -323,6 +320,33 @@ export const skudController = {
         yesterday.setDate(yesterday.getDate() - 1);
       }
       const yesterdayStr = formatDateToISO(yesterday);
+
+      // Period-aware диапазоны
+      let periodStartStr: string;
+      let periodEndStr: string;
+      let prevPeriodStartStr: string;
+      let prevPeriodEndStr: string;
+
+      if (period === 'month') {
+        periodStartStr = monthStartStr;
+        periodEndStr = todayStr;
+        prevPeriodStartStr = prevMonthStartStr;
+        prevPeriodEndStr = prevMonthEndStr;
+      } else if (period === 'week') {
+        periodStartStr = mondayStr;
+        periodEndStr = todayStr;
+        prevPeriodStartStr = lastMondayStr;
+        prevPeriodEndStr = lastFridayStr;
+      } else {
+        // today
+        periodStartStr = todayStr;
+        periodEndStr = todayStr;
+        prevPeriodStartStr = yesterdayStr;
+        prevPeriodEndStr = yesterdayStr;
+      }
+
+      // Определяем начало запроса summaries — покрывает и текущий, и предыдущий периоды
+      const summaryStartDate = period === 'month' ? prevMonthStartStr : period === 'week' ? lastMondayStr : yesterdayStr;
 
       // 4 недели назад (для среднего времени прихода)
       const fourWeeksAgo = new Date(monday);
@@ -347,6 +371,36 @@ export const skudController = {
       if (organizationId) eventsQuery = eventsQuery.eq('organization_id', organizationId);
       const { data: todayEvents } = await eventsQuery;
 
+      // Запрос exit-событий за сегодня
+      let exitEventsQuery = supabase
+        .from('skud_events')
+        .select('event_time, employee_id')
+        .eq('event_date', todayStr)
+        .eq('direction', 'exit')
+        .in('employee_id', empIds);
+      if (organizationId) exitEventsQuery = exitEventsQuery.eq('organization_id', organizationId);
+      const { data: todayExitEvents } = await exitEventsQuery;
+
+      // Запрос последних событий для «События в эфире»
+      let recentEvQuery = supabase
+        .from('skud_events')
+        .select('event_time, employee_id, physical_person, access_point, direction')
+        .eq('event_date', todayStr)
+        .in('employee_id', empIds)
+        .order('event_time', { ascending: false })
+        .limit(10);
+      if (organizationId) recentEvQuery = recentEvQuery.eq('organization_id', organizationId);
+      const { data: recentEventsRaw } = await recentEvQuery;
+
+      // Запрос аномалий: события без employee_id (неопознанные)
+      let anomalyQuery = supabase
+        .from('skud_events')
+        .select('id, employee_id, physical_person, direction')
+        .eq('event_date', todayStr)
+        .is('employee_id', null);
+      if (organizationId) anomalyQuery = anomalyQuery.eq('organization_id', organizationId);
+      const { data: unknownEvents } = await anomalyQuery;
+
       // --- Агрегация ---
       const LATE_THRESHOLD = '09:00:00';
       const SLIGHTLY_LATE_THRESHOLD = '09:15:00';
@@ -360,21 +414,24 @@ export const skudController = {
         if (s.date === yesterdayStr && s.first_entry > LATE_THRESHOLD) lateYesterday++;
       }
 
-      // Punctuality (this week only)
-      const thisWeekAllSummaries = (summaries || []).filter(s => s.date >= mondayStr && s.date <= todayStr);
-      const thisWeekWithEntry = thisWeekAllSummaries.filter(s => s.first_entry);
+      // Period summaries (для всех period-aware блоков)
+      const periodSummaries = (summaries || []).filter(s => s.date >= periodStartStr && s.date <= periodEndStr);
+      const prevPeriodSummaries = (summaries || []).filter(s => s.date >= prevPeriodStartStr && s.date <= prevPeriodEndStr);
+
+      // Punctuality (period-aware)
+      const periodWithEntry = periodSummaries.filter(s => s.first_entry);
       let onTimeCount = 0;
       let slightlyLateCount = 0;
       let veryLateCount = 0;
-      for (const s of thisWeekWithEntry) {
+      for (const s of periodWithEntry) {
         if (s.first_entry! <= LATE_THRESHOLD) onTimeCount++;
         else if (s.first_entry! <= SLIGHTLY_LATE_THRESHOLD) slightlyLateCount++;
         else veryLateCount++;
       }
-      const daysWithPresence = new Set(thisWeekWithEntry.map(s => s.date));
+      const daysWithPresence = new Set(periodWithEntry.map(s => s.date));
       const actualWorkDays = daysWithPresence.size;
-      const expectedTotal = empIds.length * actualWorkDays || 1;
-      const absentCount = Math.max(0, expectedTotal - thisWeekWithEntry.length);
+      const expectedTotal = empIds.length * (actualWorkDays || 1);
+      const absentCount = Math.max(0, expectedTotal - periodWithEntry.length);
       const punctuality = {
         onTime: Math.round((onTimeCount / expectedTotal) * 100),
         slightlyLate: Math.round((slightlyLateCount / expectedTotal) * 100),
@@ -382,18 +439,22 @@ export const skudController = {
         absent: Math.round((absentCount / expectedTotal) * 100),
       };
 
-      // Average arrival by weekday (из skud_events за 4 недели)
+      // Average arrival by weekday (period-aware)
+      // today: текущая неделя (Mon-today), будущие дни пусты
+      // week: 4 недели (текущее поведение)
+      // month: текущий месяц
+      const arrivalRangeStart = period === 'today' ? mondayStr : period === 'month' ? monthStartStr : fourWeeksAgoStr;
+      const arrivalRangeEnd = todayStr;
       let arrivalEventsQuery = supabase
         .from('skud_events')
         .select('event_date, event_time, employee_id')
         .eq('direction', 'entry')
         .in('employee_id', empIds)
-        .gte('event_date', fourWeeksAgoStr)
-        .lte('event_date', todayStr)
+        .gte('event_date', arrivalRangeStart)
+        .lte('event_date', arrivalRangeEnd)
         .order('event_time', { ascending: true });
       if (organizationId) arrivalEventsQuery = arrivalEventsQuery.eq('organization_id', organizationId);
-      const { data: arrivalEvents, error: arrivalErr } = await arrivalEventsQuery;
-      console.log('[avgArrival] dept:', departmentId, 'empIds:', empIds.length, 'events:', (arrivalEvents || []).length, 'range:', fourWeeksAgoStr, '-', todayStr, 'err:', arrivalErr?.message || 'none');
+      const { data: arrivalEvents } = await arrivalEventsQuery;
 
       // Находим первый entry за каждый день для каждого сотрудника
       const firstEntryMap = new Map<string, string>(); // "empId:date" -> event_time
@@ -404,28 +465,35 @@ export const skudController = {
 
       // Группируем по дню недели
       const arrivalByDow: number[][] = [[], [], [], [], []];
+      // Для today — определяем текущий день недели (0=Пн..4=Пт), дни после сегодня будут пустыми
+      const todayDowIdx = today.getDay() === 0 ? 6 : today.getDay() - 1;
       for (const [key, time] of firstEntryMap) {
         const date = key.split(':').slice(1).join(':');
         const d = new Date(date + 'T00:00:00');
         const dow = d.getDay();
         const dowIdx = dow === 0 ? 6 : dow - 1;
         if (dowIdx >= 5) continue;
+        // Для today — не включаем дни после сегодня
+        if (period === 'today' && dowIdx > todayDowIdx) continue;
         const [h, m] = time.split(':').map(Number);
         arrivalByDow[dowIdx].push(h * 60 + m);
       }
       const avgArrivalByDay = DAY_NAMES.map((name, i) => {
+        // Для today — дни после сегодня пусты
+        if (period === 'today' && i > todayDowIdx) return { day: name, avgTime: null, date: '', isToday: i === todayDowIdx };
         const times = arrivalByDow[i];
-        if (times.length === 0) return { day: name, avgTime: null, date: '' };
+        if (times.length === 0) return { day: name, avgTime: null, date: '', isToday: period === 'today' && i === todayDowIdx };
         const avg = Math.round(times.reduce((a, b) => a + b, 0) / times.length);
         const avgH = String(Math.floor(avg / 60)).padStart(2, '0');
         const avgM = String(avg % 60).padStart(2, '0');
-        return { day: name, avgTime: `${avgH}:${avgM}`, date: '' };
+        return { day: name, avgTime: `${avgH}:${avgM}`, date: '', isToday: period === 'today' && i === todayDowIdx };
       });
 
-      // Risks (employees with most lates this week)
+      // Risks (period-aware)
+      const periodLabel = period === 'today' ? 'сегодня' : period === 'week' ? 'неделю' : 'месяц';
       const lateCountByEmp = new Map<number, number>();
       const earlyLeaveByEmp = new Map<number, number>();
-      for (const s of thisWeekAllSummaries) {
+      for (const s of periodSummaries) {
         if (s.first_entry && s.first_entry > LATE_THRESHOLD) {
           lateCountByEmp.set(s.employee_id, (lateCountByEmp.get(s.employee_id) || 0) + 1);
         }
@@ -434,35 +502,63 @@ export const skudController = {
         }
       }
 
+      const lateThreshold = period === 'today' ? 1 : 3;
+      const earlyThreshold = period === 'today' ? 1 : 2;
+      const highThreshold = period === 'today' ? 1 : period === 'week' ? 4 : 8;
       const risks: { employee_id: number; full_name: string; reason: string; severity: 'high' | 'medium' }[] = [];
       for (const [empId, count] of lateCountByEmp) {
-        if (count >= 3) {
-          risks.push({ employee_id: empId, full_name: empNameMap.get(empId) || '', reason: `${count} опозданий за неделю`, severity: count >= 4 ? 'high' : 'medium' });
+        if (count >= lateThreshold) {
+          risks.push({ employee_id: empId, full_name: empNameMap.get(empId) || '', reason: `${count} опозданий за ${periodLabel}`, severity: count >= highThreshold ? 'high' : 'medium' });
         }
       }
       for (const [empId, count] of earlyLeaveByEmp) {
-        if (count >= 2 && !risks.find(r => r.employee_id === empId)) {
+        if (count >= earlyThreshold && !risks.find(r => r.employee_id === empId)) {
           risks.push({ employee_id: empId, full_name: empNameMap.get(empId) || '', reason: `Ранние уходы ${count} дня`, severity: 'medium' });
         }
       }
       risks.sort((a, b) => (a.severity === 'high' ? -1 : 1) - (b.severity === 'high' ? -1 : 1));
 
-      // Hourly activity
+      // Hourly activity (period-aware)
       const hourlyMap = new Map<number, number>();
       for (let h = 7; h <= 19; h++) hourlyMap.set(h, 0);
-      for (const evt of todayEvents || []) {
-        if (!evt.event_time) continue;
-        const hour = parseInt(evt.event_time.split(':')[0], 10);
-        if (hour >= 7 && hour <= 19) {
-          hourlyMap.set(hour, (hourlyMap.get(hour) || 0) + 1);
+
+      if (period === 'today') {
+        for (const evt of todayEvents || []) {
+          if (!evt.event_time) continue;
+          const hour = parseInt(evt.event_time.split(':')[0], 10);
+          if (hour >= 7 && hour <= 19) {
+            hourlyMap.set(hour, (hourlyMap.get(hour) || 0) + 1);
+          }
+        }
+      } else {
+        // Для week/month — запрос entry-событий за весь период
+        let periodEventsQuery = supabase
+          .from('skud_events')
+          .select('event_time, event_date')
+          .eq('direction', 'entry')
+          .in('employee_id', empIds)
+          .gte('event_date', periodStartStr)
+          .lte('event_date', periodEndStr);
+        if (organizationId) periodEventsQuery = periodEventsQuery.eq('organization_id', organizationId);
+        const { data: periodEvents } = await periodEventsQuery;
+
+        for (const evt of periodEvents || []) {
+          if (!evt.event_time) continue;
+          const hour = parseInt(evt.event_time.split(':')[0], 10);
+          if (hour >= 7 && hour <= 19) {
+            hourlyMap.set(hour, (hourlyMap.get(hour) || 0) + 1);
+          }
+        }
+        // Усредняем по рабочим дням
+        const workDaysCount = actualWorkDays || 1;
+        for (const [h, count] of hourlyMap) {
+          hourlyMap.set(h, Math.round(count / workDaysCount));
         }
       }
       const hourlyActivity = [...hourlyMap.entries()].map(([hour, count]) => ({ hour, count }));
 
-      // Week comparison
-      const lastWeekSummaries = (summaries || []).filter(s => s.date >= lastMondayStr && s.date <= lastFridayStr);
-
-      const calcWeekMetrics = (weekData: typeof thisWeekAllSummaries, expectedRecords: number) => {
+      // Period comparison (period-aware)
+      const calcWeekMetrics = (weekData: typeof periodSummaries, expectedRecords: number) => {
         const withEntry = weekData.filter(s => s.first_entry);
         const presentDays = weekData.filter(s => s.is_present).length;
         const total = expectedRecords > 0 ? expectedRecords : 1;
@@ -490,17 +586,17 @@ export const skudController = {
         return { attendanceRate, avgArrival, avgHours, lateCount };
       };
 
-      const lastWeekWorkDays = countWorkingDays(lastMondayStr, lastFridayStr);
+      const prevWorkDays = countWorkingDays(prevPeriodStartStr, prevPeriodEndStr);
       const weekComparison = {
-        thisWeek: calcWeekMetrics(thisWeekAllSummaries, empIds.length * actualWorkDays),
-        lastWeek: calcWeekMetrics(lastWeekSummaries, empIds.length * lastWeekWorkDays),
+        thisWeek: calcWeekMetrics(periodSummaries, empIds.length * actualWorkDays),
+        lastWeek: calcWeekMetrics(prevPeriodSummaries, empIds.length * prevWorkDays),
       };
 
-      // Top late (только приходы после 09:15)
+      // Top late (period-aware, только приходы после 09:15)
       const topLateCountByEmp = new Map<number, number>();
       const avgArrivalByEmp = new Map<number, number>();
       const arrivalCountByEmp = new Map<number, number>();
-      for (const s of thisWeekAllSummaries) {
+      for (const s of periodSummaries) {
         if (s.first_entry) {
           const [h, m] = s.first_entry.split(':').map(Number);
           const min = h * 60 + m;
@@ -527,28 +623,17 @@ export const skudController = {
           };
         });
 
-      // Period stats (для карточек статистики по периодам)
+      // Period stats (period-aware, для карточек статистики по периодам)
       let periodStats: { avgPresent: number; avgAbsent: number; attendanceRate: number; lateCount: number; prevLateCount: number } | null = null;
 
       if (period === 'week' || period === 'month') {
-        let pSummaries: typeof summaries;
-        let prevSummaries: typeof summaries;
-
-        if (period === 'week') {
-          pSummaries = (summaries || []).filter(s => s.date >= mondayStr && s.date <= todayStr);
-          prevSummaries = (summaries || []).filter(s => s.date >= lastMondayStr && s.date < mondayStr);
-        } else {
-          pSummaries = (summaries || []).filter(s => s.date >= monthStartStr && s.date <= todayStr);
-          prevSummaries = (summaries || []).filter(s => s.date >= prevMonthStartStr && s.date <= prevMonthEndStr);
-        }
-
         // Рабочие дни с присутствием
-        const datesPresent = new Set((pSummaries || []).filter(s => s.first_entry).map(s => s.date));
+        const datesPresent = new Set(periodSummaries.filter(s => s.first_entry).map(s => s.date));
         const pWorkDays = datesPresent.size || 1;
 
         // Средняя явка
         const dailyPresent = new Map<string, number>();
-        for (const s of pSummaries || []) {
+        for (const s of periodSummaries) {
           if (s.is_present) dailyPresent.set(s.date, (dailyPresent.get(s.date) || 0) + 1);
         }
         const totalPresent = [...dailyPresent.values()].reduce((a, b) => a + b, 0);
@@ -560,15 +645,53 @@ export const skudController = {
         const attendanceRate = pExpectedTotal > 0 ? Math.round((totalPresent / pExpectedTotal) * 100) : 0;
 
         // Опоздания
-        const pLateCount = (pSummaries || []).filter(s => s.first_entry && s.first_entry > LATE_THRESHOLD).length;
-        const prevLateCount = (prevSummaries || []).filter(s => s.first_entry && s.first_entry > LATE_THRESHOLD).length;
+        const pLateCount = periodSummaries.filter(s => s.first_entry && s.first_entry > LATE_THRESHOLD).length;
+        const prevLateCount = prevPeriodSummaries.filter(s => s.first_entry && s.first_entry > LATE_THRESHOLD).length;
 
         periodStats = { avgPresent, avgAbsent, attendanceRate, lateCount: pLateCount, prevLateCount };
       }
 
+      // Early leave today
+      const todaySummaries = (summaries || []).filter(s => s.date === todayStr);
+      const earlyLeaveToday = todaySummaries.filter(
+        s => s.is_present && s.last_exit && s.last_exit < '17:00:00'
+      ).length;
+
+      // Today entries/exits count
+      const todayEntriesCount = (todayEvents || []).length;
+      const todayExitsCount = (todayExitEvents || []).length;
+
+      // Recent events (для «События в эфире»)
+      const recentEvents = (recentEventsRaw || []).map(ev => ({
+        time: ev.event_time ? ev.event_time.slice(0, 5) : '',
+        name: ev.employee_id ? (empNameMap.get(ev.employee_id) || ev.physical_person || 'Неизвестный') : (ev.physical_person || 'Неизвестный'),
+        accessPoint: ev.access_point || '',
+        direction: ev.direction as 'entry' | 'exit' | null,
+      }));
+
+      // Anomalies
+      const refusals = (unknownEvents || []).length;
+      // Multiple entry: сотрудники с >2 entry за сегодня без exit между
+      const entryCountByEmp = new Map<number, number>();
+      for (const ev of todayEvents || []) {
+        if (ev.employee_id) {
+          entryCountByEmp.set(ev.employee_id, (entryCountByEmp.get(ev.employee_id) || 0) + 1);
+        }
+      }
+      let multipleEntry = 0;
+      for (const [, count] of entryCountByEmp) {
+        if (count > 2) multipleEntry++;
+      }
+      const anomalies = { refusals, multipleEntry };
+
       res.json({
         success: true,
-        data: { lateToday, lateYesterday, punctuality, avgArrivalByDay, risks, hourlyActivity, weekComparison, topLate, periodStats },
+        data: {
+          lateToday, lateYesterday, punctuality, avgArrivalByDay, risks,
+          hourlyActivity, weekComparison, topLate, periodStats,
+          earlyLeaveToday, recentEvents, anomalies,
+          todayEntriesCount, todayExitsCount,
+        },
       });
     } catch (error) {
       console.error('getDashboardStats error:', error);
@@ -1102,50 +1225,20 @@ export const skudController = {
         posMap.set(p.id, p.name || '');
       }
 
-      // Загружаем настройки внутренних точек доступа (включая предков отделов)
-      const allDeptIdsForSettings = new Set<string>(deptIdSet);
-      for (const dId of deptIdSet) {
-        for (const ancestorId of getAncestorDeptIds(dId, allDepts)) {
-          allDeptIdsForSettings.add(ancestorId);
-        }
+      // Загружаем все внутренние точки доступа организации (глобально, без фильтра по отделу)
+      let settingsQuery = supabase
+        .from('skud_access_point_settings')
+        .select('access_point_name')
+        .eq('is_internal', true);
+
+      if (organizationId) {
+        settingsQuery = settingsQuery.eq('organization_id', organizationId);
       }
 
-      const internalPointsByDept = new Map<string, Set<string>>();
-      if (allDeptIdsForSettings.size > 0) {
-        let settingsQuery = supabase
-          .from('skud_access_point_settings')
-          .select('department_id, access_point_name')
-          .eq('is_internal', true)
-          .in('department_id', [...allDeptIdsForSettings]);
-
-        if (organizationId) {
-          settingsQuery = settingsQuery.eq('organization_id', organizationId);
-        }
-
-        const { data: apSettings } = await settingsQuery;
-        for (const s of apSettings || []) {
-          if (!internalPointsByDept.has(s.department_id)) {
-            internalPointsByDept.set(s.department_id, new Set());
-          }
-          internalPointsByDept.get(s.department_id)!.add(s.access_point_name.trim());
-        }
-      }
-
-      // Карта employee_id → Set<internal_access_point> (с наследованием от предков)
-      const empInternalPoints = new Map<number, Set<string>>();
-      for (const emp of employees) {
-        if (!emp.org_department_id) continue;
-        const combined = new Set<string>();
-        const ownPoints = internalPointsByDept.get(emp.org_department_id);
-        if (ownPoints) for (const p of ownPoints) combined.add(p);
-        for (const ancestorId of getAncestorDeptIds(emp.org_department_id, allDepts)) {
-          const ancestorPoints = internalPointsByDept.get(ancestorId);
-          if (ancestorPoints) for (const p of ancestorPoints) combined.add(p);
-        }
-        if (combined.size > 0) {
-          empInternalPoints.set(emp.id, combined);
-        }
-      }
+      const { data: apSettings } = await settingsQuery;
+      const orgInternalPoints = new Set<string>(
+        (apSettings || []).map(s => s.access_point_name.trim()),
+      );
 
       // Загружаем события за сегодня (локальная дата, не UTC)
       const today = formatDateToISO(new Date());
@@ -1172,8 +1265,7 @@ export const skudController = {
       for (const evt of eventsByEmpId || []) {
         if (!evt.employee_id) continue;
         // Пропускаем события от внутренних точек доступа
-        const internal = empInternalPoints.get(evt.employee_id);
-        if (internal && evt.access_point && internal.has(evt.access_point)) continue;
+        if (orgInternalPoints.size > 0 && evt.access_point && orgInternalPoints.has(evt.access_point)) continue;
 
         if (!latestEvent.has(evt.employee_id)) {
           latestEvent.set(evt.employee_id, { event_time: evt.event_time, direction: evt.direction });
@@ -1219,8 +1311,7 @@ export const skudController = {
           }
 
           // Пропускаем события от внутренних точек доступа
-          const internal = empInternalPoints.get(empId);
-          const isInternal = !!(internal && evt.access_point && internal.has(evt.access_point));
+          const isInternal = !!(orgInternalPoints.size > 0 && evt.access_point && orgInternalPoints.has(evt.access_point));
 
           if (!isInternal) {
             if (!latestEvent.has(empId)) {

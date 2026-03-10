@@ -177,6 +177,15 @@
   line-height: 24px;
 }
 
+.highlight .barLabel {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.highlight .barTrack {
+  box-shadow: 0 0 0 1px var(--primary-light, rgba(59, 130, 246, 0.3));
+}
+
 /* Risks */
 .risksList {
   display: flex;

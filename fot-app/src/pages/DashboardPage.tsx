@@ -5,12 +5,15 @@ import { StatCard } from '../components/ui/StatCard';
 import { ActivityList } from '../components/dashboard/ActivityList';
 import { AnalyticsRow } from '../components/dashboard/AnalyticsRow';
 import { DashboardSidebar } from '../components/dashboard/DashboardSidebar';
+import { PresenceTodayCard } from '../components/dashboard/stats/PresenceTodayCard';
+import { LatenessCard } from '../components/dashboard/stats/LatenessCard';
+import { AnomaliesCard } from '../components/dashboard/stats/AnomaliesCard';
+import { LiveEventsCard } from '../components/dashboard/stats/LiveEventsCard';
 import { usePresence } from '../hooks/usePresence';
 import { useDashboardStats } from '../hooks/useDashboardStats';
 import { apiClient } from '../api/client';
 import type { DashboardPeriod } from '../types';
 import {
-  UsersIcon,
   MapPinIcon,
   CheckCircleIcon,
   ClockIcon,
@@ -30,24 +33,24 @@ interface IDeptFlatOption {
   level: number;
 }
 
-const flattenDbTree = (nodes: IDbDepartment[], level = 0): IDeptFlatOption[] => {
+const flattenDbTree = (nodes: IDbDepartment[]): IDeptFlatOption[] => {
   const result: IDeptFlatOption[] = [];
   for (const node of nodes) {
-    result.push({ id: node.id, name: node.name, level });
-    result.push(...flattenDbTree(node.children, level + 1));
+    if (!node.children || node.children.length === 0) {
+      result.push({ id: node.id, name: node.name, level: 0 });
+    } else {
+      result.push(...flattenDbTree(node.children));
+    }
   }
   return result;
 };
 
-const getWeekInfo = (): { weekNumber: number; workDay: number } => {
+const formatClock = (): string => {
   const now = new Date();
-  const start = new Date(now.getFullYear(), 0, 1);
-  const diff = now.getTime() - start.getTime();
-  const weekNumber = Math.ceil((diff / 86400000 + start.getDay() + 1) / 7);
-  const day = now.getDay();
-  const workDay = day === 0 ? 0 : day === 6 ? 0 : day;
-  return { weekNumber, workDay };
+  return now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 };
+
+const ATTENDANCE_TARGET = 90;
 
 export const DashboardPage: React.FC = () => {
   const today = new Date().toLocaleDateString('ru-RU', {
@@ -56,7 +59,13 @@ export const DashboardPage: React.FC = () => {
     month: 'long',
     year: 'numeric',
   });
-  const { weekNumber, workDay } = useMemo(() => getWeekInfo(), []);
+
+  // Live clock (updates every second)
+  const [clock, setClock] = useState(formatClock);
+  useEffect(() => {
+    const id = setInterval(() => setClock(formatClock()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   // Department selector
   const [searchParams, setSearchParams] = useSearchParams();
@@ -108,11 +117,6 @@ export const DashboardPage: React.FC = () => {
     [employees],
   );
 
-  const offlineCount = useMemo(
-    () => employees.filter(e => e.status === 'offline').length,
-    [employees],
-  );
-
   const presencePercent = useMemo(
     () => employees.length > 0 ? Math.round((onlineCount / employees.length) * 100) : 0,
     [employees, onlineCount],
@@ -159,7 +163,6 @@ export const DashboardPage: React.FC = () => {
               <div
                 key={dept.id}
                 className={`dash-dept-item ${selectedDeptId === dept.id ? 'selected' : ''}`}
-                style={{ paddingLeft: 12 + dept.level * 16 }}
                 onClick={() => handleDeptSelect(dept.id)}
               >
                 {dept.name}
@@ -186,9 +189,15 @@ export const DashboardPage: React.FC = () => {
       ) : (
         <>
           <div className="content-header">
-            <div>
-              <div className="date-display">{today}</div>
-              <div className="date-subtitle">Неделя {weekNumber} · Рабочий день {workDay}/5</div>
+            <div className="content-header-left">
+              <div>
+                <div className="date-display">{today}</div>
+                <div className="live-clock">Время: {clock}</div>
+              </div>
+              <span className="live-badge">
+                <span className="live-dot" />
+                Прямой эфир
+              </span>
             </div>
             {deptSelector}
           </div>
@@ -205,90 +214,70 @@ export const DashboardPage: React.FC = () => {
                 </button>
               ))}
             </div>
-            <div className="stats-row">
-              <StatCard
-                label="Всего сотрудников"
-                value={employees.length > 0 ? String(employees.length) : '—'}
-                icon={<UsersIcon />}
-                iconType="blue"
-                change="Без изменений"
-                changeType="neutral"
-              />
-              {period === 'today' ? (
-                <>
-                  <StatCard
-                    label="В офисе"
-                    value={onlineCount > 0 ? String(onlineCount) : '—'}
-                    icon={<MapPinIcon />}
-                    iconType="green"
-                    change={`${onlineCount > 0 ? '+' : ''}${onlineCount} сегодня`}
-                    changeType="positive"
-                  />
-                  <StatCard
-                    label="Вышли"
-                    value={offlineCount > 0 ? String(offlineCount) : '—'}
-                    icon={<LogOut size={18} />}
-                    iconType="red"
-                    change={offlineCount === 0 ? 'Никто не ушёл' : undefined}
-                    changeType="neutral"
-                  />
-                  <StatCard
-                    label="Присутствие"
-                    value={employees.length > 0 ? `${presencePercent}%` : '—'}
-                    icon={<CheckCircleIcon />}
-                    iconType="green"
-                  />
-                  <StatCard
-                    label="Опоздания сегодня"
-                    value={stats ? String(stats.lateToday) : '—'}
-                    icon={<ClockIcon />}
-                    iconType="orange"
-                    change={stats ? `${stats.lateToday > stats.lateYesterday ? '+' : ''}${stats.lateToday - stats.lateYesterday} к вчера` : undefined}
-                    changeType={stats ? (stats.lateToday > stats.lateYesterday ? 'negative' : stats.lateToday < stats.lateYesterday ? 'positive' : 'neutral') : 'neutral'}
-                  />
-                </>
-              ) : (
-                <>
-                  <StatCard
-                    label="Ср. посещаемость"
-                    value={stats?.periodStats ? String(stats.periodStats.avgPresent) : '—'}
-                    icon={<MapPinIcon />}
-                    iconType="green"
-                    change={stats?.periodStats ? `из ${employees.length} в день` : undefined}
-                    changeType="neutral"
-                  />
-                  <StatCard
-                    label="Ср. отсутствие"
-                    value={stats?.periodStats ? String(stats.periodStats.avgAbsent) : '—'}
-                    icon={<LogOut size={18} />}
-                    iconType="red"
-                    change={stats?.periodStats ? `в среднем за день` : undefined}
-                    changeType="neutral"
-                  />
-                  <StatCard
-                    label="Посещаемость"
-                    value={stats?.periodStats ? `${stats.periodStats.attendanceRate}%` : '—'}
-                    icon={<CheckCircleIcon />}
-                    iconType="green"
-                  />
-                  <StatCard
-                    label={period === 'week' ? 'Опоздания за неделю' : 'Опоздания за месяц'}
-                    value={stats?.periodStats ? String(stats.periodStats.lateCount) : '—'}
-                    icon={<ClockIcon />}
-                    iconType="orange"
-                    change={stats?.periodStats ? `${stats.periodStats.lateCount > stats.periodStats.prevLateCount ? '+' : ''}${stats.periodStats.lateCount - stats.periodStats.prevLateCount} к пред. ${period === 'week' ? 'неделе' : 'месяцу'}` : undefined}
-                    changeType={stats?.periodStats ? (stats.periodStats.lateCount > stats.periodStats.prevLateCount ? 'negative' : stats.periodStats.lateCount < stats.periodStats.prevLateCount ? 'positive' : 'neutral') : 'neutral'}
-                  />
-                </>
-              )}
-            </div>
+            {period === 'today' ? (
+              <div className="stats-row">
+                <PresenceTodayCard
+                  online={onlineCount}
+                  total={employees.length}
+                  absent={employees.length - onlineCount}
+                  target={ATTENDANCE_TARGET}
+                  current={presencePercent}
+                />
+                <LatenessCard
+                  lateCount={stats?.lateToday ?? 0}
+                  earlyLeaveCount={stats?.earlyLeaveToday ?? 0}
+                  entries={stats?.todayEntriesCount ?? 0}
+                  exits={stats?.todayExitsCount ?? 0}
+                />
+                <AnomaliesCard
+                  refusals={stats?.anomalies?.refusals ?? 0}
+                />
+                <LiveEventsCard
+                  events={stats?.recentEvents ?? []}
+                  totalCount={(stats?.todayEntriesCount ?? 0) + (stats?.todayExitsCount ?? 0)}
+                />
+              </div>
+            ) : (
+              <div className="stats-row">
+                <StatCard
+                  label="Ср. посещаемость"
+                  value={stats?.periodStats ? String(stats.periodStats.avgPresent) : '—'}
+                  icon={<MapPinIcon />}
+                  iconType="green"
+                  change={stats?.periodStats ? `из ${employees.length} в день` : undefined}
+                  changeType="neutral"
+                />
+                <StatCard
+                  label="Ср. отсутствие"
+                  value={stats?.periodStats ? String(stats.periodStats.avgAbsent) : '—'}
+                  icon={<LogOut size={18} />}
+                  iconType="red"
+                  change={stats?.periodStats ? `в среднем за день` : undefined}
+                  changeType="neutral"
+                />
+                <StatCard
+                  label="Посещаемость"
+                  value={stats?.periodStats ? `${stats.periodStats.attendanceRate}%` : '—'}
+                  icon={<CheckCircleIcon />}
+                  iconType="green"
+                />
+                <StatCard
+                  label={period === 'week' ? 'Опоздания за неделю' : 'Опоздания за месяц'}
+                  value={stats?.periodStats ? String(stats.periodStats.lateCount) : '—'}
+                  icon={<ClockIcon />}
+                  iconType="orange"
+                  change={stats?.periodStats ? `${stats.periodStats.lateCount > stats.periodStats.prevLateCount ? '+' : ''}${stats.periodStats.lateCount - stats.periodStats.prevLateCount} к пред. ${period === 'week' ? 'неделе' : 'месяцу'}` : undefined}
+                  changeType={stats?.periodStats ? (stats.periodStats.lateCount > stats.periodStats.prevLateCount ? 'negative' : stats.periodStats.lateCount < stats.periodStats.prevLateCount ? 'positive' : 'neutral') : 'neutral'}
+                />
+              </div>
+            )}
           </div>
 
-          {stats && !statsLoading && <AnalyticsRow stats={stats} />}
+          {stats && !statsLoading && <AnalyticsRow stats={stats} period={period} />}
 
           <div className="main-grid">
             <ActivityList employees={employees} loading={loading} />
-            {stats && !statsLoading && <DashboardSidebar stats={stats} />}
+            {stats && !statsLoading && <DashboardSidebar stats={stats} period={period} />}
           </div>
         </>
       )}

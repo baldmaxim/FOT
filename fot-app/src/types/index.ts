@@ -126,12 +126,38 @@ export interface Employee {
   email: string | null;
   department: string | null;
   org_department_id: string | null;
+  tab_number: string | null;
+  current_status: string | null;
+  permit_expiry_date: string | null;
+  registration_cat1: string | null;
+  registration_cat4: string | null;
+  doc_receipt_date: string | null;
+  work_object: string | null;
   employment_status: 'active' | 'fired';
   department_locked: boolean;
   is_archived: boolean;
   archived_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// Типы для обогащения сотрудников из Excel
+export interface EnrichPreviewItem {
+  id: number;
+  fullName: string;
+  updates: Record<string, { old: string | null; new: string | null }>;
+}
+
+export interface EnrichPreview {
+  matched: EnrichPreviewItem[];
+  unmatched: Array<{ fullName: string; department: string | null }>;
+  ambiguous: Array<{ fullName: string; count: number }>;
+  stats: { total: number; matched: number; unmatched: number; ambiguous: number };
+}
+
+export interface EnrichResult {
+  updated: number;
+  errors: string[];
 }
 
 export interface EmployeeInput {
@@ -413,11 +439,18 @@ export interface IPeriodStats {
 
 export type DashboardPeriod = 'today' | 'week' | 'month';
 
+export interface IRecentEvent {
+  time: string;
+  name: string;
+  accessPoint: string;
+  direction: 'entry' | 'exit' | null;
+}
+
 export interface IDashboardStats {
   lateToday: number;
   lateYesterday: number;
   punctuality: { onTime: number; slightlyLate: number; veryLate: number; absent: number };
-  avgArrivalByDay: Array<{ day: string; avgTime: string | null; date: string }>;
+  avgArrivalByDay: Array<{ day: string; avgTime: string | null; date: string; isToday?: boolean }>;
   risks: Array<{ employee_id: number; full_name: string; reason: string; severity: 'high' | 'medium' }>;
   hourlyActivity: Array<{ hour: number; count: number }>;
   weekComparison: {
@@ -426,6 +459,11 @@ export interface IDashboardStats {
   } | null;
   topLate: Array<{ employee_id: number; full_name: string; lateCount: number; avgArrival: string }>;
   periodStats: IPeriodStats | null;
+  earlyLeaveToday: number;
+  recentEvents: IRecentEvent[];
+  anomalies: { refusals: number; multipleEntry: number };
+  todayEntriesCount: number;
+  todayExitsCount: number;
 }
 
 // Элемент дерева организационной структуры

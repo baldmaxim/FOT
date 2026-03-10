@@ -17,6 +17,12 @@
   margin-bottom: 16px;
 }
 
+.cardSubtitle {
+  font-weight: 400;
+  color: var(--text-tertiary);
+  margin-left: 4px;
+}
+
 /* Hourly activity */
 .hourlyBars {
   display: flex;
