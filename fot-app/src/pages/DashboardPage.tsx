@@ -79,7 +79,8 @@ export const DashboardPage: React.FC = () => {
     apiClient.get<{ success: boolean; data: { departments: IDbDepartment[] } }>('/structure')
       .then(res => {
         const departments = res.data?.departments || [];
-        setDeptOptions(flattenDbTree(departments));
+        const collator = new Intl.Collator('ru', { sensitivity: 'base', ignorePunctuation: true });
+        setDeptOptions(flattenDbTree(departments).sort((a, b) => collator.compare(a.name.trim(), b.name.trim())));
       })
       .catch(() => {});
   }, []);
