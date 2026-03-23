@@ -113,6 +113,11 @@ export const employeeEnrichController = {
       const preview = req.query.preview !== 'false';
       const parsedRows = parseEnrichExcel(req.file.buffer);
 
+      console.log('[enrich] Parsed rows:', parsedRows.length);
+      if (parsedRows.length > 0) {
+        console.log('[enrich] First 3 rows:', parsedRows.slice(0, 3).map(r => ({ fullName: r.fullName, dept: r.departmentName })));
+      }
+
       if (parsedRows.length === 0) {
         res.status(400).json({ success: false, error: 'Нет данных в файле' });
         return;
@@ -132,18 +137,31 @@ export const employeeEnrichController = {
         }
       }
 
-      // Загружаем всех сотрудников организации
-      const { data: dbEmployees, error: empError } = await supabase
-        .from('employees')
-        .select('id, full_name, country, hire_date, position_id, org_department_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object')
-        .eq('organization_id', organizationId)
-        .eq('is_archived', false);
+      // Загружаем всех сотрудников организации (пагинация для >1000)
+      const dbEmployees: Record<string, unknown>[] = [];
+      const PAGE_SIZE = 1000;
+      let from = 0;
+      while (true) {
+        const { data, error: empError } = await supabase
+          .from('employees')
+          .select('id, full_name, country, hire_date, position_id, org_department_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object')
+          .eq('organization_id', organizationId)
+          .eq('is_archived', false)
+          .range(from, from + PAGE_SIZE - 1);
 
-      if (empError) {
-        console.error('Enrich: load employees error:', empError);
-        res.status(500).json({ success: false, error: 'Ошибка загрузки сотрудников' });
-        return;
+        if (empError) {
+          console.error('Enrich: load employees error:', empError);
+          res.status(500).json({ success: false, error: 'Ошибка загрузки сотрудников' });
+          return;
+        }
+
+        if (!data || data.length === 0) break;
+        dbEmployees.push(...data);
+        if (data.length < PAGE_SIZE) break;
+        from += PAGE_SIZE;
       }
+
+      console.log('[enrich] DB employees loaded:', dbEmployees?.length);
 
       // Строим Map по нормализованному имени
       const nameToEmp = new Map<string, { id: number; count: number; data: Record<string, unknown> }>();

@@ -32,7 +32,7 @@ export async function getDisciplineViolations(
 
   // --- Параллельные запросы ---
   const fetchSummaryPages = async (): Promise<IDailySummaryRow[]> => {
-    const PAGE_SIZE = 10000;
+    const PAGE_SIZE = 1000;
     const rows: IDailySummaryRow[] = [];
     let off = 0;
     while (true) {
@@ -43,6 +43,7 @@ export async function getDisciplineViolations(
         .gte('date', startDate)
         .lte('date', endDate)
         .or('first_entry.gt.09:00:00,total_hours.lt.9')
+        .order('date', { ascending: true })
         .range(off, off + PAGE_SIZE - 1);
       if (organizationId) q = q.eq('organization_id', organizationId);
       const { data: page, error } = await q;
