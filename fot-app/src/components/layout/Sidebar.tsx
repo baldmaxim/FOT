@@ -52,6 +52,7 @@ const navGroups: INavGroup[] = [
   {
     label: 'Система',
     items: [
+      { id: 'admin-orgs', path: '/admin/organizations', label: 'Организации', icon: BuildingIcon, requiredPosition: 'super_admin' },
       { id: 'sigur-settings', path: '/skud-settings', label: 'Настройки СКУД', icon: SettingsIcon, requiredPosition: 'super_admin' },
       { id: 'admin-users', path: '/admin/users', label: 'Пользователи', icon: SettingsIcon, requiredPosition: 'super_admin' },
       { id: 'admin-audit', path: '/admin/audit', label: 'Аудит данных', icon: ClipboardCheckIcon, requiredPosition: 'super_admin' },

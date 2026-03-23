@@ -56,7 +56,6 @@ export const SigurRawDataPage: React.FC = () => {
     if (!skipCache) {
       const cached = getCached(tabId);
       if (cached) {
-        console.log(`[sigur-raw] ${tabId}: из кэша (${cached.length} записей)`);
         setData(cached);
         setFromCache(true);
         setLoading(false);
@@ -79,9 +78,6 @@ export const SigurRawDataPage: React.FC = () => {
 
     const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
     const token = localStorage.getItem('access_token');
-
-    console.log(`[sigur-raw] Загрузка: ${tabId}...`);
-    const t0 = performance.now();
 
     try {
       const response = await fetch(`${apiUrl}/sigur/stream?type=${tabId}`, {
@@ -124,8 +120,6 @@ export const SigurRawDataPage: React.FC = () => {
         }
       }
 
-      const ms = Math.round(performance.now() - t0);
-      console.log(`[sigur-raw] ${tabId}: ${result.length} записей за ${ms}ms`);
       setData(result as Record<string, unknown>[]);
       setCache(tabId, result as Record<string, unknown>[]);
     } catch (err) {

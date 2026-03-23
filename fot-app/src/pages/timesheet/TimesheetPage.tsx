@@ -1,4 +1,4 @@
-import { FC, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { type FC, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ChevronLeft, ChevronRight, ChevronDown, Download } from 'lucide-react';
 import { TimesheetStats } from '../../components/timesheet/TimesheetStats';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';

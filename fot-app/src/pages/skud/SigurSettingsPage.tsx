@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Settings, Wifi, WifiOff, RefreshCw, Eye, Download, Search, Save, Check, MapPin, Filter, Trash2 } from 'lucide-react';
+import { Settings, Wifi, WifiOff, RefreshCw, Eye, Download, Search, Save, Check, MapPin, Filter, Trash2, Database } from 'lucide-react';
 import { SyncFilterTab } from '../../components/skud/SyncFilterTab';
 import { sigurService } from '../../services/sigurService';
 import { skudService } from '../../services/skudService';
@@ -26,13 +26,38 @@ interface IPreviewData {
   mappedCount?: number;
 }
 
+type SyncStepName = 'organizations' | 'clean-duplicates' | 'departments' | 'positions' | 'employees';
+
 interface ISyncAllStep {
   id: number;
-  name: string;
+  name: SyncStepName;
   label: string;
   status: 'pending' | 'running' | 'done' | 'error';
   result?: Record<string, unknown>;
   error?: string;
+}
+
+interface IEventsProgressState {
+  percent: number;
+  day: string;
+  dayIndex: number;
+  totalDays: number;
+}
+
+interface IEmployeesProgressState {
+  percent: number;
+  current: number;
+  total: number;
+}
+
+interface ISyncAllSummary {
+  hasErrors: boolean;
+  failedSteps: SyncStepName[];
+  completedSteps: number;
+}
+
+interface ISseMessage extends Record<string, unknown> {
+  type?: string;
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -51,14 +76,32 @@ const DIRECTION_LABELS: Record<string, string> = {
   exit: 'Выход',
 };
 
-const INITIAL_STEPS: ISyncAllStep[] = [
+const ALL_SYNC_STEPS: ISyncAllStep[] = [
   { id: 1, name: 'organizations', label: 'Организации', status: 'pending' },
   { id: 2, name: 'clean-duplicates', label: 'Очистка дублей', status: 'pending' },
   { id: 3, name: 'departments', label: 'Отделы (иерархия)', status: 'pending' },
   { id: 4, name: 'positions', label: 'Должности', status: 'pending' },
   { id: 5, name: 'employees', label: 'Сотрудники', status: 'pending' },
-  { id: 6, name: 'events', label: 'События', status: 'pending' },
 ];
+
+const DEFAULT_SYNC_ALL_STEPS: SyncStepName[] = ['departments', 'positions', 'employees'];
+
+const STRUCTURE_SYNC_STEPS = ALL_SYNC_STEPS;
+
+const buildStepState = (selectedSteps: SyncStepName[]): ISyncAllStep[] =>
+  STRUCTURE_SYNC_STEPS
+    .filter(step => selectedSteps.includes(step.name))
+    .map(step => ({ ...step, status: 'pending', result: undefined, error: undefined }));
+
+const getSyncStepLabel = (name: SyncStepName) =>
+  STRUCTURE_SYNC_STEPS.find(step => step.name === name)?.label ?? name;
+
+const formatDuration = (durationMs?: unknown) => {
+  if (typeof durationMs !== 'number' || Number.isNaN(durationMs)) return '';
+  return durationMs >= 10_000
+    ? `${Math.round(durationMs / 1000)}с`
+    : `${(durationMs / 1000).toFixed(1)}с`;
+};
 
 const renderStepResult = (name: string, result: Record<string, unknown>) => {
   let text = '';
@@ -79,10 +122,6 @@ const renderStepResult = (name: string, result: Record<string, unknown>) => {
     case 'employees':
       text = `Импорт: ${result.imported}, обновлено: ${result.updated}, пропущено: ${result.skipped}`;
       break;
-    case 'events':
-      text = `Импорт: ${result.imported}, пропущено: ${result.skipped}`;
-      if (result.filteredByDept) text += `, отфильтровано: ${result.filteredByDept}`;
-      break;
     default:
       text = JSON.stringify(result);
   }
@@ -90,14 +129,181 @@ const renderStepResult = (name: string, result: Record<string, unknown>) => {
   if (errors && errors.length > 0) {
     text += ` | Ошибки: ${errors.length}`;
   }
+  const duration = formatDuration(result.durationMs);
+  if (duration) {
+    text += ` | ${duration}`;
+  }
   return text;
+};
+
+const readResponseError = async (response: Response) => {
+  try {
+    const contentType = response.headers.get('content-type') || '';
+
+    if (contentType.includes('application/json')) {
+      const payload = await response.json() as { error?: string; message?: string };
+      if (payload.error) return payload.error;
+      if (payload.message) return payload.message;
+    }
+
+    const text = (await response.text()).trim();
+    if (text) return text;
+  } catch {
+    // ignore body parsing issues and fall back to a generic message
+  }
+
+  return 'Ошибка синхронизации';
+};
+
+const readSseResponse = async (
+  response: Response,
+  onData: (data: ISseMessage) => void,
+) => {
+  /*
+      await readSseResponse(response, data => {
+        if (data.type === 'step' && typeof data.step === 'number') {
+          setSyncAllSteps(prev => prev.map(step =>
+            step.id === data.step
+              ? {
+                  ...step,
+                  status: (data.status as ISyncAllStep['status']) || step.status,
+                  result: (data.result as Record<string, unknown> | undefined) ?? step.result,
+                  error: (data.error as string | undefined) ?? undefined,
+                }
+              : step,
+          ));
+
+          if (data.status === 'done' || data.status === 'error') {
+            setEventsProgress(null);
+            setEmployeesProgress(null);
+          }
+          return;
+        }
+
+        if (data.type === 'employees_progress') {
+          setEmployeesProgress({
+            percent: Number(data.percent || 0),
+            current: Number(data.current || 0),
+            total: Number(data.total || 0),
+          });
+          return;
+        }
+
+        if (data.type === 'done') {
+          const failedSteps = Array.isArray(data.failedSteps)
+            ? data.failedSteps.filter((step): step is SyncStepName =>
+                typeof step === 'string' && STRUCTURE_SYNC_STEPS.some(candidate => candidate.name === step),
+              )
+            : [];
+
+          setSyncAllSummary({
+            hasErrors: Boolean(data.hasErrors),
+            failedSteps,
+            completedSteps: typeof data.completedSteps === 'number'
+              ? data.completedSteps
+              : Math.max(selectedSyncAllSteps.length - failedSteps.length, 0),
+          });
+          setSyncAllDone(true);
+          setEventsProgress(null);
+          setEmployeesProgress(null);
+          return;
+        }
+
+        if (data.type === 'error') {
+          setError(String(data.message || 'РћС€РёР±РєР° СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёРё'));
+        }
+      });
+      return;
+
+      await readSseResponse(response, data => {
+        if (data.type === 'events_start') {
+          setEventsProgress({
+            percent: 0,
+            day: '',
+            dayIndex: 0,
+            totalDays: Number(data.totalDays || 0),
+          });
+          return;
+        }
+
+        if (data.type === 'events_day') {
+          setEventsProgress({
+            percent: Number(data.percent || 0),
+            day: String(data.day || ''),
+            dayIndex: Number(data.dayIndex || 0),
+            totalDays: Number(data.totalDays || 0),
+          });
+          return;
+        }
+
+        if (data.type === 'events_summaries') {
+          setEventsProgress(prev => prev
+            ? { ...prev, percent: 100, day: 'РџРµСЂРµСЃС‡С‘С‚ СЃРІРѕРґРѕРє...' }
+            : {
+                percent: 100,
+                day: 'РџРµСЂРµСЃС‡С‘С‚ СЃРІРѕРґРѕРє...',
+                dayIndex: 0,
+                totalDays: 0,
+              });
+          return;
+        }
+
+        if (data.type === 'done') {
+          setSyncResult(data as unknown as ISyncResult);
+          setEventsProgress(null);
+          return;
+        }
+
+        if (data.type === 'error') {
+          setError(String(data.message || 'РћС€РёР±РєР° СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёРё'));
+        }
+      });
+      return;
+
+  if (!response.ok || !response.body) {
+    throw new Error(await readResponseError(response));
+  }
+
+  */
+
+  if (!response.ok || !response.body) {
+    throw new Error(await readResponseError(response));
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  const processChunk = (chunk: string) => {
+    for (const line of chunk.split('\n')) {
+      if (!line.startsWith('data: ')) continue;
+      try {
+        onData(JSON.parse(line.slice(6)) as ISseMessage);
+      } catch {
+        // ignore malformed SSE payloads
+      }
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    processChunk(lines.join('\n'));
+  }
+
+  buffer += decoder.decode();
+  processChunk(buffer);
 };
 
 type SettingsTab = 'settings' | 'access-points' | 'sync-filter';
 
 export const SigurSettingsPage = () => {
   const { hasPosition, profile } = useAuth();
-  const canEdit = hasPosition('manager') || hasPosition('owner') || hasPosition('super_admin');
+  const canEdit = hasPosition(['header', 'admin', 'super_admin']);
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('settings');
 
@@ -105,12 +311,17 @@ export const SigurSettingsPage = () => {
   const [connected, setConnected] = useState<boolean | null>(null);
   const [checking, setChecking] = useState(false);
   const [connectionType, setConnectionType] = useState('');
+  const [selectedConnection, setSelectedConnection] = useState<'internal' | 'external'>('internal');
+  const [availableConnections, setAvailableConnections] = useState<{ internal: boolean; external: boolean }>({ internal: false, external: false });
   const [error, setError] = useState('');
 
   // Полная синхронизация структуры
   const [syncAllRunning, setSyncAllRunning] = useState(false);
-  const [syncAllSteps, setSyncAllSteps] = useState<ISyncAllStep[]>(INITIAL_STEPS);
+  const [selectedSyncAllSteps, setSelectedSyncAllSteps] = useState<SyncStepName[]>(DEFAULT_SYNC_ALL_STEPS);
+  const [syncAllSteps, setSyncAllSteps] = useState<ISyncAllStep[]>(buildStepState(DEFAULT_SYNC_ALL_STEPS));
   const [syncAllDone, setSyncAllDone] = useState(false);
+  const [syncAllSummary, setSyncAllSummary] = useState<ISyncAllSummary | null>(null);
+  const [syncFilterCount, setSyncFilterCount] = useState<number | null>(null);
 
   // Предпросмотр
   const [previewData, setPreviewData] = useState<IPreviewData | null>(null);
@@ -127,9 +338,8 @@ export const SigurSettingsPage = () => {
   const [syncEndDate, setSyncEndDate] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<ISyncResult | null>(null);
-  const [syncProgress, setSyncProgress] = useState<{ percent: number; day: string; message: string } | null>(null);
-  const [eventsProgress, setEventsProgress] = useState<{ percent: number; day: string; dayIndex: number; totalDays: number } | null>(null);
-  const [employeesProgress, setEmployeesProgress] = useState<{ percent: number; current: number; total: number } | null>(null);
+  const [eventsProgress, setEventsProgress] = useState<IEventsProgressState | null>(null);
+  const [employeesProgress, setEmployeesProgress] = useState<IEmployeesProgressState | null>(null);
   const [clearing, setClearing] = useState(false);
   const [clearResult, setClearResult] = useState<{ deleted: number } | null>(null);
 
@@ -181,11 +391,32 @@ export const SigurSettingsPage = () => {
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    sigurService.getSyncFilter()
+      .then(filter => setSyncFilterCount(filter.length))
+      .catch(() => setSyncFilterCount(null));
+  }, []);
+
   const filteredAccessPoints = useMemo(() => {
     if (!apSearch.trim()) return accessPoints;
     const q = apSearch.toLowerCase();
     return accessPoints.filter(ap => ap.toLowerCase().includes(q));
   }, [accessPoints, apSearch]);
+
+  const toggleSyncAllStep = (stepName: SyncStepName) => {
+    if (manualSyncBusy) return;
+
+    setSelectedSyncAllSteps(prev => {
+      const hasStep = prev.includes(stepName);
+      const next = STRUCTURE_SYNC_STEPS
+        .map(step => step.name)
+        .filter(name => (name === stepName ? !hasStep : prev.includes(name)));
+
+      setSyncAllSteps(buildStepState(next));
+      setSyncAllDone(false);
+      return next;
+    });
+  };
 
   const toggleApInternal = (apName: string) => {
     const key = apName.trim();
@@ -239,32 +470,41 @@ export const SigurSettingsPage = () => {
     }
   };
 
-  const checkConnection = useCallback(async () => {
+  const checkConnection = useCallback(async (connType?: 'internal' | 'external') => {
     setChecking(true);
     setError('');
     try {
-      const result = await sigurService.testConnection();
+      const result = await sigurService.testConnection(connType ?? selectedConnection);
       setConnected(result.success);
       setConnectionType(result.connection || '');
+      if (result.connections) {
+        setAvailableConnections(result.connections);
+      }
     } catch {
       setConnected(false);
       setError('Не удалось проверить подключение');
     } finally {
       setChecking(false);
     }
-  }, []);
+  }, [selectedConnection]);
 
   useEffect(() => {
     checkConnection();
   }, [checkConnection]);
 
   const handleSyncAll = async () => {
+    if (selectedSyncAllSteps.length === 0) {
+      setError('Выберите хотя бы один шаг синхронизации');
+      return;
+    }
+
     setSyncAllRunning(true);
     setSyncAllDone(false);
+    setSyncAllSummary(null);
     setEventsProgress(null);
     setEmployeesProgress(null);
     setError('');
-    setSyncAllSteps(INITIAL_STEPS.map(s => ({ ...s, status: 'pending', result: undefined, error: undefined })));
+    setSyncAllSteps(buildStepState(selectedSyncAllSteps));
 
     try {
       const token = localStorage.getItem('access_token');
@@ -275,14 +515,69 @@ export const SigurSettingsPage = () => {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ startDate: syncStartDate, endDate: syncEndDate }),
+        body: JSON.stringify({ steps: selectedSyncAllSteps }),
       });
+      await readSseResponse(response, data => {
+        if (data.type === 'step' && typeof data.step === 'number') {
+          setSyncAllSteps(prev => prev.map(step =>
+            step.id === data.step
+              ? {
+                  ...step,
+                  status: (data.status as ISyncAllStep['status']) || step.status,
+                  result: (data.result as Record<string, unknown> | undefined) ?? step.result,
+                  error: (data.error as string | undefined) ?? undefined,
+                }
+              : step,
+          ));
+
+          if (data.status === 'done' || data.status === 'error') {
+            setEventsProgress(null);
+            setEmployeesProgress(null);
+          }
+          return;
+        }
+
+        if (data.type === 'employees_progress') {
+          setEmployeesProgress({
+            percent: Number(data.percent || 0),
+            current: Number(data.current || 0),
+            total: Number(data.total || 0),
+          });
+          return;
+        }
+
+        if (data.type === 'done') {
+          const failedSteps = Array.isArray(data.failedSteps)
+            ? data.failedSteps.filter((step): step is SyncStepName =>
+                typeof step === 'string' && STRUCTURE_SYNC_STEPS.some(candidate => candidate.name === step),
+              )
+            : [];
+
+          setSyncAllSummary({
+            hasErrors: Boolean(data.hasErrors),
+            failedSteps,
+            completedSteps: typeof data.completedSteps === 'number'
+              ? data.completedSteps
+              : Math.max(selectedSyncAllSteps.length - failedSteps.length, 0),
+          });
+          setSyncAllDone(true);
+          setEventsProgress(null);
+          setEmployeesProgress(null);
+          return;
+        }
+
+        if (data.type === 'error') {
+          setError(String(data.message || 'Ошибка синхронизации'));
+        }
+      });
+      return;
+
 
       if (!response.ok || !response.body) {
         throw new Error('Ошибка синхронизации');
       }
 
-      const reader = response.body.getReader();
+      const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
 
@@ -323,6 +618,22 @@ export const SigurSettingsPage = () => {
             }
           } catch { /* skip parse errors */ }
         }
+      }
+
+      // Flush decoder и обработка остатка буфера
+      buffer += decoder.decode();
+      for (const line of buffer.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.type === 'done') {
+            setSyncAllDone(true);
+            setEventsProgress(null);
+            setEmployeesProgress(null);
+          } else if (data.type === 'error') {
+            setError(data.message);
+          }
+        } catch { /* skip */ }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка синхронизации');
@@ -365,20 +676,18 @@ export const SigurSettingsPage = () => {
 
   const handleSync = async () => {
     if (!syncStartDate || !syncEndDate) return;
-    // Запускаем полную синхронизацию (структура + сотрудники + события)
+    // Запускаем отдельную синхронизацию событий за выбранный период
     setSyncing(true);
     setSyncResult(null);
-    setSyncProgress(null);
     setEventsProgress(null);
-    setEmployeesProgress(null);
-    setSyncAllDone(false);
+    setClearResult(null);
     setError('');
-    setSyncAllSteps(INITIAL_STEPS.map(s => ({ ...s, status: 'pending', result: undefined, error: undefined })));
+    setEmployeesProgress(null);
 
     try {
       const token = localStorage.getItem('access_token');
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
-      const response = await fetch(`${apiUrl}/sigur/sync-all`, {
+      const response = await fetch(`${apiUrl}/sigur/sync`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -386,12 +695,57 @@ export const SigurSettingsPage = () => {
         },
         body: JSON.stringify({ startDate: syncStartDate, endDate: syncEndDate }),
       });
+      await readSseResponse(response, data => {
+        if (data.type === 'events_start') {
+          setEventsProgress({
+            percent: 0,
+            day: '',
+            dayIndex: 0,
+            totalDays: Number(data.totalDays || 0),
+          });
+          return;
+        }
+
+        if (data.type === 'events_day') {
+          setEventsProgress({
+            percent: Number(data.percent || 0),
+            day: String(data.day || ''),
+            dayIndex: Number(data.dayIndex || 0),
+            totalDays: Number(data.totalDays || 0),
+          });
+          return;
+        }
+
+        if (data.type === 'events_summaries') {
+          setEventsProgress(prev => prev
+            ? { ...prev, percent: 100, day: 'Пересчёт сводок...' }
+            : {
+                percent: 100,
+                day: 'Пересчёт сводок...',
+                dayIndex: 0,
+                totalDays: 0,
+              });
+          return;
+        }
+
+        if (data.type === 'done') {
+          setSyncResult(data as unknown as ISyncResult);
+          setEventsProgress(null);
+          return;
+        }
+
+        if (data.type === 'error') {
+          setError(String(data.message || 'Ошибка синхронизации'));
+        }
+      });
+      return;
+
 
       if (!response.ok || !response.body) {
         throw new Error('Ошибка синхронизации');
       }
 
-      const reader = response.body.getReader();
+      const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
 
@@ -428,7 +782,7 @@ export const SigurSettingsPage = () => {
               setEventsProgress(null);
               setEmployeesProgress(null);
               const eventsResult = data.results?.events;
-              if (eventsResult) {
+              if (eventsResult && 'imported' in eventsResult) {
                 setSyncResult(eventsResult as ISyncResult);
               }
             } else if (data.type === 'error') {
@@ -437,11 +791,30 @@ export const SigurSettingsPage = () => {
           } catch { /* skip parse errors */ }
         }
       }
+
+      // Flush decoder и обработка остатка буфера
+      buffer += decoder.decode();
+      for (const line of buffer.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.type === 'done') {
+            setSyncAllDone(true);
+            setEventsProgress(null);
+            setEmployeesProgress(null);
+            const eventsResult = data.results?.events;
+            if (eventsResult && 'imported' in eventsResult) {
+              setSyncResult(eventsResult as ISyncResult);
+            }
+          } else if (data.type === 'error') {
+            setError(data.message);
+          }
+        } catch { /* skip */ }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка синхронизации');
     } finally {
       setSyncing(false);
-      setSyncProgress(null);
       setEventsProgress(null);
       setEmployeesProgress(null);
     }
@@ -496,11 +869,28 @@ export const SigurSettingsPage = () => {
     return null;
   };
 
+  const syncFilterSummary = syncFilterCount === null
+    ? 'Фильтр отделов не загружен'
+    : syncFilterCount === 0
+      ? 'Фильтр не задан: синхронизация затронет все отделы'
+      : `Активен фильтр: ${syncFilterCount} отдел(ов)`;
+
+  const manualSyncBusy = syncAllRunning || syncing || clearing || clearingStructure;
+
   return (
     <div className="sigur-page">
       <div className="sigur-header">
         <Settings size={24} />
         <h1>Настройки СКУД (Sigur)</h1>
+        <a
+          href="http://127.0.0.1:54323"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="sigur-btn sigur-btn-supabase"
+        >
+          <Database size={14} />
+          Supabase
+        </a>
       </div>
 
       <div className="sigur-tabs">
@@ -543,12 +933,27 @@ export const SigurSettingsPage = () => {
         </h2>
         <div className="sigur-connection-row">
           {statusBadge()}
-          {connectionType && (
-            <span className="sigur-conn-type">{connectionType}</span>
-          )}
+          <div className="sigur-conn-toggle">
+            <button
+              className={`sigur-conn-toggle-btn ${selectedConnection === 'internal' ? 'active' : ''}`}
+              onClick={() => { setSelectedConnection('internal'); checkConnection('internal'); }}
+              disabled={checking || !availableConnections.internal}
+              title={availableConnections.internal ? 'Локальная сеть' : 'Не настроено в .env'}
+            >
+              Internal
+            </button>
+            <button
+              className={`sigur-conn-toggle-btn ${selectedConnection === 'external' ? 'active' : ''}`}
+              onClick={() => { setSelectedConnection('external'); checkConnection('external'); }}
+              disabled={checking || !availableConnections.external}
+              title={availableConnections.external ? 'Внешний доступ' : 'Не настроено в .env'}
+            >
+              External
+            </button>
+          </div>
           <button
             className="sigur-btn"
-            onClick={checkConnection}
+            onClick={() => checkConnection()}
             disabled={checking}
           >
             <RefreshCw size={14} />
@@ -563,20 +968,46 @@ export const SigurSettingsPage = () => {
           <RefreshCw size={18} />
           Полная синхронизация структуры
         </h2>
+        <div className="sigur-sync-summary">
+          <span className="sigur-sync-summary-pill">{syncFilterSummary}</span>
+          <button
+            type="button"
+            className="sigur-sync-summary-link"
+            onClick={() => setActiveTab('sync-filter')}
+          >
+            Настроить фильтр
+          </button>
+        </div>
+        <div className="sigur-sync-summary-note" style={{ marginBottom: '0.75rem' }}>
+          Этот блок синхронизирует только структуру: отделы, должности и сотрудников. События загружаются отдельно ниже.
+        </div>
+        <div className="sigur-sync-steps-selector">
+          {STRUCTURE_SYNC_STEPS.map(step => (
+            <label key={step.name} className="sigur-sync-step-option">
+              <input
+                type="checkbox"
+                checked={selectedSyncAllSteps.includes(step.name)}
+                onChange={() => toggleSyncAllStep(step.name)}
+                disabled={manualSyncBusy}
+              />
+              <span>{step.label}</span>
+            </label>
+          ))}
+        </div>
         <div className="sigur-connection-row">
           <button
             className="sigur-btn sigur-btn-primary"
             onClick={handleSyncAll}
-            disabled={syncAllRunning || !connected}
+            disabled={manualSyncBusy || !connected || selectedSyncAllSteps.length === 0}
           >
             <RefreshCw size={14} className={syncAllRunning ? 'sigur-spin' : ''} />
-            {syncAllRunning ? 'Синхронизация...' : 'Полная синхронизация'}
+            {syncAllRunning ? 'Синхронизация...' : 'Запустить выбранные шаги'}
           </button>
           {canEdit && (
             <button
               className="sigur-btn sigur-btn-danger"
               onClick={handleClearStructure}
-              disabled={clearingStructure || syncAllRunning}
+              disabled={manualSyncBusy}
             >
               <Trash2 size={14} />
               {clearingStructure ? 'Очистка...' : 'Очистить структуру'}
@@ -593,7 +1024,23 @@ export const SigurSettingsPage = () => {
           </div>
         )}
 
-        {(syncAllRunning || syncAllDone) && (
+        {syncAllSummary && (
+          <div className="sigur-sync-result">
+            <div className="sigur-sync-stats">
+              <span className={`sigur-sync-stat ${syncAllSummary.hasErrors ? 'skipped' : 'success'}`}>
+                {syncAllSummary.hasErrors ? 'Синхронизация структуры завершена с ошибками' : 'Синхронизация структуры завершена успешно'}
+              </span>
+              <span className="sigur-sync-stat">Выполнено: <strong>{syncAllSummary.completedSteps}/{syncAllSummary.completedSteps + syncAllSummary.failedSteps.length}</strong></span>
+              {syncAllSummary.hasErrors && (
+                <span className="sigur-sync-stat skipped">
+                  Шаги с ошибками: <strong>{syncAllSummary.failedSteps.map(getSyncStepLabel).join(', ')}</strong>
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {(syncAllRunning || syncAllDone) && syncAllSteps.length > 0 && (
           <div className="sigur-stepper">
             {syncAllSteps.map(step => (
               <div key={step.id} className={`sigur-step sigur-step--${step.status}`}>
@@ -612,15 +1059,6 @@ export const SigurSettingsPage = () => {
                       </div>
                       <span className="sigur-events-progress-text">
                         {employeesProgress.current}/{employeesProgress.total} — {employeesProgress.percent}%
-                      </span>
-                    </div>
-                  ) : step.status === 'running' && step.name === 'events' && eventsProgress ? (
-                    <div className="sigur-events-progress">
-                      <div className="sigur-events-progress-bar">
-                        <div className="sigur-events-progress-fill" style={{ width: `${eventsProgress.percent}%` }} />
-                      </div>
-                      <span className="sigur-events-progress-text">
-                        {eventsProgress.day === 'Пересчёт сводок...' ? eventsProgress.day : `${eventsProgress.day} — ${eventsProgress.percent}% (${eventsProgress.dayIndex + 1}/${eventsProgress.totalDays})`}
                       </span>
                     </div>
                   ) : step.status === 'running' && (
@@ -758,6 +1196,19 @@ export const SigurSettingsPage = () => {
           <Download size={18} />
           Синхронизация событий в базу
         </h2>
+        <div className="sigur-sync-summary-note" style={{ marginBottom: '0.75rem' }}>
+          Этот блок загружает только события за выбранный период.
+        </div>
+        <div className="sigur-sync-summary">
+          <span className="sigur-sync-summary-pill">{syncFilterSummary}</span>
+          <button
+            type="button"
+            className="sigur-sync-summary-link"
+            onClick={() => setActiveTab('sync-filter')}
+          >
+            Настроить фильтр
+          </button>
+        </div>
         <div className="sigur-sync-controls">
           <label>
             С:
@@ -778,7 +1229,7 @@ export const SigurSettingsPage = () => {
           <button
             className="sigur-btn sigur-btn-primary"
             onClick={handleSync}
-            disabled={syncing || clearing || !connected || !syncStartDate || !syncEndDate}
+            disabled={manualSyncBusy || !connected || !syncStartDate || !syncEndDate}
           >
             <RefreshCw size={14} className={syncing ? 'sigur-spin' : ''} />
             {syncing ? 'Синхронизация...' : 'Синхронизировать'}
@@ -786,14 +1237,34 @@ export const SigurSettingsPage = () => {
           <button
             className="sigur-btn sigur-btn-danger"
             onClick={handleClearEvents}
-            disabled={syncing || clearing || !syncStartDate || !syncEndDate}
+            disabled={manualSyncBusy || !connected || !syncStartDate || !syncEndDate}
           >
             <Trash2 size={14} />
             {clearing ? 'Удаление...' : 'Очистить события'}
           </button>
         </div>
 
-        {(syncing || syncAllDone) && (
+        {syncing && (
+          <div className="sigur-sync-result">
+            <div className="sigur-step-status">Выполняется синхронизация событий...</div>
+            {eventsProgress ? (
+              <div className="sigur-events-progress">
+                <div className="sigur-events-progress-bar">
+                  <div className="sigur-events-progress-fill" style={{ width: `${eventsProgress.percent}%` }} />
+                </div>
+                <span className="sigur-events-progress-text">
+                  {eventsProgress.day === 'Пересчёт сводок...'
+                    ? eventsProgress.day
+                    : `${eventsProgress.day || 'Подготовка...'} - ${eventsProgress.percent}% (${Math.min(eventsProgress.dayIndex + 1, Math.max(eventsProgress.totalDays, 1))}/${Math.max(eventsProgress.totalDays, 1)})`}
+                </span>
+              </div>
+            ) : (
+              <div className="sigur-events-progress-text">Подготовка данных...</div>
+            )}
+          </div>
+        )}
+
+        {false && (syncing || syncAllDone) && (
           <div className="sigur-stepper">
             {syncAllSteps.map(step => (
               <div key={step.id} className={`sigur-step sigur-step--${step.status}`}>
@@ -812,16 +1283,6 @@ export const SigurSettingsPage = () => {
                       </div>
                       <span className="sigur-events-progress-text">
                         {employeesProgress.current}/{employeesProgress.total} — {employeesProgress.percent}%
-                      </span>
-                    </div>
-                  )}
-                  {step.status === 'running' && step.name === 'events' && eventsProgress && (
-                    <div className="sigur-events-progress">
-                      <div className="sigur-events-progress-bar">
-                        <div className="sigur-events-progress-fill" style={{ width: `${eventsProgress.percent}%` }} />
-                      </div>
-                      <span className="sigur-events-progress-text">
-                        {eventsProgress.day === 'Пересчёт сводок...' ? eventsProgress.day : `${eventsProgress.day} — ${eventsProgress.percent}% (${eventsProgress.dayIndex + 1}/${eventsProgress.totalDays})`}
                       </span>
                     </div>
                   )}
@@ -851,12 +1312,11 @@ export const SigurSettingsPage = () => {
               {!!syncResult.droppedNoOrg && (
                 <span className="sigur-sync-stat skipped">Без организации: <strong>{syncResult.droppedNoOrg}</strong></span>
               )}
-              {!!syncResult.filteredByDept && (
-                <span className="sigur-sync-stat skipped">Отфильтровано (отдел): <strong>{syncResult.filteredByDept}</strong></span>
-              )}
               <span className="sigur-sync-stat">Сопоставлено: <strong>{syncResult.matched}</strong></span>
+              <span className="sigur-sync-stat skipped">Отфильтровано (отдел): <strong>{syncResult.filteredByDept ?? 0}</strong></span>
+              <span className="sigur-sync-stat">Ошибок: <strong>{syncResult.errors?.length ?? 0}</strong></span>
             </div>
-            {syncResult.errors.length > 0 && (
+            {syncResult.errors?.length > 0 && (
               <details className="sigur-sync-errors">
                 <summary>Ошибки ({syncResult.errors.length})</summary>
                 <ul>
@@ -878,7 +1338,11 @@ export const SigurSettingsPage = () => {
       </>}
 
       {activeTab === 'sync-filter' && (
-        <SyncFilterTab connected={connected} canEdit={canEdit} />
+        <SyncFilterTab
+          connected={connected}
+          canEdit={canEdit}
+          onFilterCountChange={setSyncFilterCount}
+        />
       )}
 
       {activeTab === 'access-points' && (

@@ -8,21 +8,124 @@
   align-items: center;
   gap: 12px;
   margin-bottom: 20px;
+  flex-wrap: wrap;
 }
 
-/* Stats row */
-.da-stats {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin-bottom: 24px;
+.da-period-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.da-stat-card {
+.da-period-sep {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.da-month-field {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  color: var(--text-secondary);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.da-month-field > span {
+  min-width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.da-month-field:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.da-period-select {
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  min-width: 112px;
+  text-align: center;
+  text-align-last: center;
+}
+
+.da-period-select-year {
+  min-width: 72px;
+}
+
+.da-period-select option {
+  background: var(--surface);
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.da-header-spacer {
+  flex: 1;
+}
+
+[data-theme="dark"] .da-period-select {
+  color-scheme: dark;
+}
+
+[data-theme="light"] .da-period-select {
+  color-scheme: light;
+}
+
+/* Stats bar — single compact block */
+.da-stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 18px;
+  padding: 10px 6px;
+  margin-bottom: 16px;
+}
+
+.da-stats-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  justify-content: center;
+  padding: 0 12px;
+}
+
+.da-stats-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.da-stats-item-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.da-stats-item-value {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.da-stats-divider {
+  width: 1px;
+  height: 28px;
+  background: var(--border);
+  flex-shrink: 0;
 }
 
 /* Toolbar: tabs left, filters right */
@@ -181,12 +284,19 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  overflow: auto;
+  overflow-y: auto;
+  max-height: calc(100vh - 280px);
 }
 
 .da-table {
   width: 100%;
   border-collapse: collapse;
+}
+
+.da-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .da-table thead th {
@@ -349,6 +459,26 @@
   padding: 20px;
 }
 
+.da-panel-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.da-panel-emp-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.da-panel-emp-position {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.da-panel-emp-dept {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 .da-panel-emp {
   display: flex;
   align-items: center;
@@ -434,6 +564,51 @@
   min-width: 0;
 }
 
+/* Mobile cards (условный рендер через JS, без CSS-скрытия) */
+.da-mobile-cards {
+}
+
+.da-mobile-card {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.da-mobile-card:last-child {
+  border-bottom: none;
+}
+
+.da-mobile-card:active {
+  background: var(--surface-hover);
+}
+
+.da-mobile-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.da-mobile-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.da-mobile-card-total {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.da-mobile-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-left: 40px;
+}
+
 /* Backdrop */
 .da-backdrop {
   position: fixed;
@@ -446,16 +621,26 @@
 }
 
 /* Responsive */
-@media (max-width: 1200px) {
-  .da-stats {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
 
 /* iPad */
 @media (max-width: 768px) {
-  .da-stats {
-    grid-template-columns: repeat(2, 1fr);
+  .da-header-row {
+    align-items: stretch;
+  }
+  .da-header-spacer {
+    display: none;
+  }
+  .da-stats-bar {
+    flex-wrap: wrap;
+    gap: 0;
+  }
+  .da-stats-divider {
+    display: none;
+  }
+  .da-stats-item {
+    flex: 0 0 50%;
+    justify-content: flex-start;
+    padding: 6px 12px;
   }
   .da-toolbar {
     flex-direction: column;
@@ -482,15 +667,40 @@
 @media (max-width: 430px) {
   .da-header-row {
     gap: 8px;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
+  }
+  .da-period-control {
+    width: 100%;
+  }
+  .da-period-control .da-month-field {
+    flex: 1;
+    justify-content: center;
+  }
+  .da-period-select {
+    min-width: 0;
+  }
+  .da-header-spacer {
+    display: none;
+  }
+  .da-btn-export {
+    width: 100%;
+    justify-content: center;
   }
 
-  .da-stats {
-    gap: 10px;
-    margin-bottom: 16px;
+  .da-stats-bar {
+    padding: 6px 4px;
+    margin-bottom: 12px;
   }
-  .da-stat-card {
-    padding: 14px;
+  .da-stats-item {
+    flex: 0 0 50%;
+    padding: 5px 8px;
+    gap: 6px;
+  }
+  .da-stats-item-label {
+    font-size: 11px;
+  }
+  .da-stats-item-value {
+    font-size: 15px;
   }
 
   .da-toolbar {
@@ -521,27 +731,19 @@
     max-width: none;
   }
 
-  .da-table thead th {
-    padding: 10px 12px;
-    font-size: 10px;
-  }
-  .da-table tbody td {
-    padding: 10px 12px;
-  }
+  /* Условный рендер через JS — CSS-скрытие не нужно */
+
   .da-emp-avatar {
-    width: 30px;
-    height: 30px;
+    width: 32px;
+    height: 32px;
     border-radius: 8px;
     font-size: 10px;
   }
-  .da-emp-cell {
-    gap: 8px;
-  }
   .da-emp-name {
-    font-size: 12px;
+    font-size: 13px;
   }
   .da-emp-meta {
-    font-size: 10px;
+    font-size: 11px;
   }
   .da-count-badge {
     min-width: 24px;
@@ -556,9 +758,15 @@
   .da-panel-body {
     padding: 16px;
   }
+  .da-panel-title {
+    font-size: 15px;
+  }
   .da-panel-emp {
     padding: 12px;
     gap: 10px;
+  }
+  .da-panel-emp-name {
+    font-size: 14px;
   }
   .da-panel-avatar {
     width: 40px;
@@ -592,15 +800,34 @@
 @media (max-width: 390px) {
   .da-header-row {
     gap: 6px;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
+  }
+  .da-month-field {
+    height: 32px;
+    padding: 0 8px;
+    gap: 4px;
+  }
+  .da-period-select {
+    font-size: 12px;
   }
 
-  .da-stats {
-    gap: 8px;
-    margin-bottom: 12px;
+  .da-stats-bar {
+    padding: 4px 2px;
+    margin-bottom: 10px;
   }
-  .da-stat-card {
-    padding: 10px;
+  .da-stats-item {
+    padding: 4px 6px;
+    gap: 5px;
+  }
+  .da-stats-item-label {
+    font-size: 10px;
+  }
+  .da-stats-item-value {
+    font-size: 14px;
+  }
+  .da-stats-dot {
+    width: 6px;
+    height: 6px;
   }
 
   .da-toolbar {
@@ -622,23 +849,25 @@
     gap: 6px;
   }
 
-  .da-table thead th {
-    padding: 8px 10px;
-    font-size: 9px;
-  }
-  .da-table tbody td {
-    padding: 8px 10px;
-  }
   .da-emp-avatar {
     width: 28px;
     height: 28px;
     font-size: 9px;
   }
   .da-emp-name {
-    font-size: 11px;
+    font-size: 12px;
   }
   .da-emp-meta {
-    font-size: 9px;
+    font-size: 10px;
+  }
+  .da-mobile-card {
+    padding: 10px;
+  }
+  .da-mobile-card-badges {
+    padding-left: 38px;
+  }
+  .da-mobile-card-total {
+    font-size: 16px;
   }
 
   .da-panel-header {

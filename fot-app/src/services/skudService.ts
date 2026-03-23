@@ -163,7 +163,7 @@ export const skudService = {
     return response.data;
   },
 
-  async getDisciplineViolations(month: string, signal?: AbortSignal): Promise<{
+  async getDisciplineViolations(period: { startMonth: string; endMonth?: string }, signal?: AbortSignal): Promise<{
     violations: Array<{
       employee_id: number;
       date: string;
@@ -176,7 +176,9 @@ export const skudService = {
     employees: Record<number, { full_name: string; position: string | null; department_id: string | null }>;
     departments: Record<string, string>;
   }> {
-    const response = await apiClient.get<ApiResponse<any>>(`/skud/discipline?month=${month}`, { signal });
+    const params = new URLSearchParams({ startMonth: period.startMonth });
+    if (period.endMonth) params.append('endMonth', period.endMonth);
+    const response = await apiClient.get<ApiResponse<any>>(`/skud/discipline?${params.toString()}`, { signal });
     return response.data;
   },
 

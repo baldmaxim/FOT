@@ -2,6 +2,7 @@ import { sigurService } from './sigur.service.js';
 import { supabase } from '../config/database.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
 import { computeDedupHash } from '../utils/dedup.utils.js';
+import { backfillUnmatchedEvents } from './skud-backfill.service.js';
 
 const POLL_INTERVAL = 60_000; // 1 минута
 const EVENT_WINDOW_MINUTES = 5; // окно опроса — последние 5 минут
@@ -9,8 +10,21 @@ const EMPLOYEE_CACHE_TTL = 5 * 60_000; // 5 минут
 const BATCH_SIZE = 500;
 
 let pollingTimer: ReturnType<typeof setInterval> | null = null;
+let startupTimeout: ReturnType<typeof setTimeout> | null = null;
 let fullDaySynced = false;
 let lastSyncedDay = '';
+let manualSyncLocks = 0;
+let pollInFlight: Promise<void> | null = null;
+
+export class ManualSyncInProgressError extends Error {
+  readonly code = 'SYNC_IN_PROGRESS';
+  readonly status = 409;
+
+  constructor(message = 'Ручная синхронизация уже выполняется. Дождитесь завершения текущего запуска.') {
+    super(message);
+    this.name = 'ManualSyncInProgressError';
+  }
+}
 
 // Кэш сотрудников: по имени (name|org_id) и по sigur_employee_id
 let employeeCache: {
@@ -183,22 +197,80 @@ async function pollEvents(): Promise<void> {
   }
 }
 
+async function runPollCycle(): Promise<void> {
+  if (manualSyncLocks > 0) {
+    return;
+  }
+  if (pollInFlight) {
+    return pollInFlight;
+  }
+
+  pollInFlight = (async () => {
+    try {
+      await pollEvents();
+      await backfillUnmatchedEvents();
+    } catch (err) {
+      console.error('[presence-polling] cycle error:', (err as Error).message);
+    } finally {
+      pollInFlight = null;
+    }
+  })();
+
+  return pollInFlight;
+}
+
 export function startPresencePolling(): void {
-  if (pollingTimer) return;
+  if (pollingTimer || startupTimeout) return;
   if (!sigurService.isConfigured()) {
     console.log('[presence-polling] Sigur not configured, skipping');
     return;
   }
+  if (manualSyncLocks > 0) {
+    console.log(`[presence-polling] start skipped, locked by manual sync (${manualSyncLocks})`);
+    return;
+  }
   console.log('[presence-polling] started (interval: 60s)');
   // Первый опрос через 10 сек после старта (дать время на warmup кэша)
-  setTimeout(() => pollEvents(), 10_000);
-  pollingTimer = setInterval(pollEvents, POLL_INTERVAL);
+  startupTimeout = setTimeout(() => {
+    startupTimeout = null;
+    void runPollCycle();
+  }, 10_000);
+  pollingTimer = setInterval(() => {
+    void runPollCycle();
+  }, POLL_INTERVAL);
 }
 
 export function stopPresencePolling(): void {
+  if (startupTimeout) {
+    clearTimeout(startupTimeout);
+    startupTimeout = null;
+  }
   if (pollingTimer) {
     clearInterval(pollingTimer);
     pollingTimer = null;
     console.log('[presence-polling] stopped');
+  }
+}
+
+export async function acquirePresencePollingLock(): Promise<void> {
+  if (manualSyncLocks > 0) {
+    throw new ManualSyncInProgressError();
+  }
+
+  manualSyncLocks = 1;
+  stopPresencePolling();
+  if (pollInFlight) {
+    await pollInFlight;
+  }
+}
+
+export function releasePresencePollingLock(): void {
+  if (manualSyncLocks === 0) {
+    return;
+  }
+
+  manualSyncLocks = 0;
+  if (manualSyncLocks === 0) {
+    startPresencePolling();
   }
 }

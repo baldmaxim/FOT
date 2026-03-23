@@ -1,4 +1,4 @@
-import { type FC, useState, useEffect, useMemo } from 'react';
+import { type FC, useState, useEffect, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Star, Search, X } from 'lucide-react';
 import { Card, CardContent } from '../ui/Card';
@@ -94,29 +94,19 @@ const getWorkElapsed = (employee: IEmployeePresence): string => {
   return '';
 };
 
-const EmployeeRow: FC<{
+const EmployeeRow = memo<{
   employee: IEmployeePresence;
   isFavorite: boolean;
   onToggleFavorite: (id: number) => void;
-}> = ({ employee, isFavorite, onToggleFavorite }) => {
+  tick: number;
+}>(({ employee, isFavorite, onToggleFavorite, tick }) => {
   const navigate = useNavigate();
 
-  // Время присутствия (обновляем каждую минуту для online)
-  const [workTime, setWorkTime] = useState(() => getWorkElapsed(employee));
-  // Время отсутствия для offline (с момента выхода)
-  const [absentTime, setAbsentTime] = useState(() =>
-    employee.status === 'offline' ? formatElapsed(employee.since) : '',
+  const workTime = useMemo(() => getWorkElapsed(employee), [employee, tick]);
+  const absentTime = useMemo(
+    () => (employee.status === 'offline' ? formatElapsed(employee.since) : ''),
+    [employee.status, employee.since, tick],
   );
-
-  useEffect(() => {
-    setWorkTime(getWorkElapsed(employee));
-    setAbsentTime(employee.status === 'offline' ? formatElapsed(employee.since) : '');
-    const timer = setInterval(() => {
-      setWorkTime(getWorkElapsed(employee));
-      setAbsentTime(employee.status === 'offline' ? formatElapsed(employee.since) : '');
-    }, 60_000);
-    return () => clearInterval(timer);
-  }, [employee.since, employee.status, employee.first_entry, employee.total_hours]);
 
   const isOnline = employee.status === 'online';
   const isOffline = employee.status === 'offline';
@@ -189,12 +179,19 @@ const EmployeeRow: FC<{
       </div>
     </div>
   );
-};
+});
 
 export const ActivityList: FC<IActivityListProps> = ({ employees, loading }) => {
   const [tab, setTab] = useState<TabFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const { favorites, toggle, isFavorite } = useFavorites();
+
+  // Единый таймер для обновления времени (вместо per-row intervals)
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const onlineCount = useMemo(() => employees.filter(e => e.status === 'online').length, [employees]);
   const offlineCount = useMemo(() => employees.filter(e => e.status === 'offline').length, [employees]);
@@ -309,6 +306,7 @@ export const ActivityList: FC<IActivityListProps> = ({ employees, loading }) => 
                 employee={emp}
                 isFavorite={isFavorite(emp.employee_id)}
                 onToggleFavorite={toggle}
+                tick={tick}
               />
             ))
           )}

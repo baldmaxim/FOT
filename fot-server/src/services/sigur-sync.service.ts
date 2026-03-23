@@ -3,6 +3,7 @@ import { supabase } from '../config/database.js';
 import { parseFIO } from '../utils/fio.utils.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
 import { computeDedupHash } from '../utils/dedup.utils.js';
+import { buildInclusiveDateRange } from '../utils/date.utils.js';
 
 /** Системные папки Sigur — больше не фильтруем, синхронизируем все */
 const SIGUR_SYSTEM_DEPARTMENTS: string[] = [];
@@ -86,6 +87,214 @@ export async function getWhitelistedDepartmentIds(organizationId: string): Promi
   return new Set(data.map(d => d.sigur_department_id));
 }
 
+export const SYNC_ALL_STEP_ORDER = [
+  'organizations',
+  'clean-duplicates',
+  'departments',
+  'positions',
+  'employees',
+] as const;
+
+export type SyncAllStepName = typeof SYNC_ALL_STEP_ORDER[number];
+
+interface IWhitelistedEmployeesCache {
+  data: Record<string, unknown>[];
+  allowedNames: Set<string>;
+  allowedSigurIds: Set<number>;
+}
+
+export interface ISyncContext {
+  departmentsRaw?: Record<string, unknown>[];
+  positionsRaw?: Record<string, unknown>[] | null;
+  whitelistDepartmentIds?: Set<number> | null;
+  whitelistedSigurEmployees?: IWhitelistedEmployeesCache | null;
+}
+
+async function getDepartmentsRaw(
+  connection?: 'external' | 'internal',
+  context?: ISyncContext,
+): Promise<Record<string, unknown>[]> {
+  if (context?.departmentsRaw) {
+    return context.departmentsRaw;
+  }
+
+  const departments = await sigurService.getDepartments(connection) as Record<string, unknown>[];
+  if (context) {
+    context.departmentsRaw = departments;
+  }
+  return departments;
+}
+
+async function getPositionsRaw(
+  connection?: 'external' | 'internal',
+  context?: ISyncContext,
+): Promise<Record<string, unknown>[] | null> {
+  if (context && context.positionsRaw !== undefined) {
+    return context.positionsRaw;
+  }
+
+  const positions = await sigurService.getPositions(connection);
+  if (context) {
+    context.positionsRaw = positions;
+  }
+  return positions;
+}
+
+async function getWhitelistedDepartmentIdsCached(
+  organizationId: string,
+  context?: ISyncContext,
+): Promise<Set<number> | null> {
+  if (context && context.whitelistDepartmentIds !== undefined) {
+    return context.whitelistDepartmentIds;
+  }
+
+  const whitelist = await getWhitelistedDepartmentIds(organizationId);
+  if (context) {
+    context.whitelistDepartmentIds = whitelist;
+  }
+  return whitelist;
+}
+
+function buildWhitelistedEmployeesCache(data: Record<string, unknown>[]): IWhitelistedEmployeesCache {
+  const allowedNames = new Set<string>();
+  const allowedSigurIds = new Set<number>();
+
+  for (const emp of data) {
+    const name = ((emp.name as string) || '').toLowerCase().trim();
+    if (name) {
+      allowedNames.add(name);
+    }
+    if (typeof emp.id === 'number') {
+      allowedSigurIds.add(emp.id);
+    }
+  }
+
+  return { data, allowedNames, allowedSigurIds };
+}
+
+async function getWhitelistedDbEmployeeSets(
+  organizationId: string,
+  whitelist: Set<number>,
+): Promise<{ allowedNames: Set<string>; allowedSigurIds: Set<number> } | null> {
+  const { data: dbDepartments } = await supabase
+    .from('org_departments')
+    .select('id, sigur_department_id')
+    .eq('organization_id', organizationId)
+    .in('sigur_department_id', [...whitelist]);
+
+  const allowedDepartmentIds = (dbDepartments || []).map(dept => dept.id);
+  if (allowedDepartmentIds.length === 0) {
+    return null;
+  }
+
+  const { data: employees } = await supabase
+    .from('employees')
+    .select('full_name, sigur_employee_id')
+    .eq('organization_id', organizationId)
+    .eq('is_archived', false)
+    .in('org_department_id', allowedDepartmentIds);
+
+  const allowedNames = new Set<string>();
+  const allowedSigurIds = new Set<number>();
+
+  for (const employee of employees || []) {
+    const name = (employee.full_name || '').toLowerCase().trim();
+    if (name) {
+      allowedNames.add(name);
+    }
+    if (employee.sigur_employee_id != null) {
+      allowedSigurIds.add(employee.sigur_employee_id);
+    }
+  }
+
+  return { allowedNames, allowedSigurIds };
+}
+
+async function getWhitelistedSigurEmployees(
+  organizationId: string,
+  connection: 'external' | 'internal' | undefined,
+  context?: ISyncContext,
+  onProgress?: (data: Record<string, unknown>) => void,
+): Promise<Record<string, unknown>[]> {
+  const send = onProgress || (() => {});
+  const whitelist = await getWhitelistedDepartmentIdsCached(organizationId, context);
+
+  if (!whitelist || whitelist.size === 0) {
+    return sigurService.getEmployeesCached(connection);
+  }
+
+  if (context?.whitelistedSigurEmployees?.data) {
+    send({
+      type: 'employees_progress',
+      current: whitelist.size,
+      total: whitelist.size,
+      percent: 100,
+      status: `Using whitelist cache: ${context.whitelistedSigurEmployees.data.length} employees`,
+    });
+    return context.whitelistedSigurEmployees.data;
+  }
+
+  try {
+    send({
+      type: 'employees_progress',
+      current: 0,
+      total: whitelist.size,
+      percent: 5,
+      status: 'Loading all employees once and filtering locally...',
+    });
+
+    const allEmployees = await sigurService.getEmployeesCached(connection);
+    const filteredEmployees = allEmployees.filter(emp => {
+      const normalized = normalizeEmployee(emp);
+      return normalized.departmentId != null && whitelist.has(normalized.departmentId);
+    });
+
+    if (filteredEmployees.length > 0 || allEmployees.length === 0) {
+      if (context) {
+        context.whitelistedSigurEmployees = buildWhitelistedEmployeesCache(filteredEmployees);
+      }
+      send({
+        type: 'employees_progress',
+        current: whitelist.size,
+        total: whitelist.size,
+        percent: 100,
+        status: `Filtered ${filteredEmployees.length} employees from ${allEmployees.length}`,
+      });
+      return filteredEmployees;
+    }
+  } catch (error) {
+    console.warn('[syncEmployees] full employee fetch failed, falling back to department scan:', (error as Error).message);
+  }
+
+  send({
+    type: 'employees_progress',
+    current: 0,
+    total: whitelist.size,
+    percent: 0,
+    status: `Loading by ${whitelist.size} departments...`,
+  });
+
+  const sigurEmployeesRaw = await sigurService.getEmployeesByDepartments(
+    [...whitelist],
+    connection,
+    (loaded, deptIdx, totalDepts) => {
+      send({
+        type: 'employees_progress',
+        current: deptIdx,
+        total: totalDepts,
+        percent: Math.round((deptIdx / totalDepts) * 100),
+        status: `Departments loaded: ${deptIdx}/${totalDepts} (${loaded} employees)`,
+      });
+    },
+  );
+
+  if (context) {
+    context.whitelistedSigurEmployees = buildWhitelistedEmployeesCache(sigurEmployeesRaw);
+  }
+
+  return sigurEmployeesRaw;
+}
+
 // ─── Типы результатов ───
 
 export interface ISyncOrganizationsResult {
@@ -137,10 +346,11 @@ export interface ISyncEmployeesResult {
 
 export async function syncOrganizationsLogic(
   connection?: 'external' | 'internal',
+  context?: ISyncContext,
 ): Promise<ISyncOrganizationsResult> {
   if (!sigurService.isConfigured()) throw new Error('Sigur не настроен');
 
-  const departments = await sigurService.getDepartments(connection) as Record<string, unknown>[];
+  const departments = await getDepartmentsRaw(connection, context);
   if (!departments || departments.length === 0) {
     return { imported: 0, skipped: 0, total: 0 };
   }
@@ -274,10 +484,11 @@ export async function cleanDuplicateOrganizationsLogic(): Promise<ICleanDuplicat
 export async function syncDepartmentsLogic(
   organizationId: string,
   connection?: 'external' | 'internal',
+  context?: ISyncContext,
 ): Promise<ISyncDepartmentsResult> {
   if (!sigurService.isConfigured()) throw new Error('Sigur не настроен');
 
-  const rawDepartments = await sigurService.getDepartments(connection) as Record<string, unknown>[];
+  const rawDepartments = await getDepartmentsRaw(connection, context);
   if (!rawDepartments || rawDepartments.length === 0) {
     return { imported: 0, updated: 0, skipped: 0, filtered: 0, total: 0, parentLinksSet: 0, errors: [] };
   }
@@ -359,7 +570,7 @@ export async function syncDepartmentsLogic(
   }
 
   // Whitelist: если задан фильтр, пропускаем отделы вне whitelist
-  const whitelist = await getWhitelistedDepartmentIds(organizationId);
+  const whitelist = await getWhitelistedDepartmentIdsCached(organizationId, context);
   if (whitelist) {
     // Расширяем whitelist родительскими отделами для сохранения иерархии
     const parentMap = new Map<number, number>();
@@ -460,10 +671,11 @@ export async function syncDepartmentsLogic(
 export async function syncPositionsFromSigurLogic(
   organizationId: string,
   connection?: 'external' | 'internal',
+  context?: ISyncContext,
 ): Promise<ISyncPositionsFromSigurResult> {
   if (!sigurService.isConfigured()) throw new Error('Sigur не настроен');
 
-  const sigurPositions = await sigurService.getPositions(connection);
+  const sigurPositions = await getPositionsRaw(connection, context);
   if (!sigurPositions || sigurPositions.length === 0) {
     return { imported: 0, updated: 0, skipped: 0, total: 0, errors: [] };
   }
@@ -584,25 +796,18 @@ export async function syncEmployeesLogic(
   organizationId: string,
   connection?: 'external' | 'internal',
   onProgress?: (data: Record<string, unknown>) => void,
+  context?: ISyncContext,
 ): Promise<ISyncEmployeesResult> {
   if (!sigurService.isConfigured()) throw new Error('Sigur не настроен');
 
   const send = onProgress || (() => {});
   send({ type: 'employees_progress', current: 0, total: 0, percent: 0 });
 
-  // Whitelist отделов: загружаем ДО получения сотрудников
-  const whitelist = await getWhitelistedDepartmentIds(organizationId);
+  let sigurEmployeesRaw: Record<string, unknown>[];
+  const whitelist = await getWhitelistedDepartmentIdsCached(organizationId, context);
   if (whitelist) {
     console.log(`[syncEmployees] whitelist active: ${whitelist.size} departments`);
-  }
-
-  // Загружаем сотрудников: по отделам из whitelist (избегает проблему с большим offset в Sigur API)
-  let sigurEmployeesRaw: Record<string, unknown>[];
-  if (whitelist && whitelist.size > 0) {
-    send({ type: 'employees_progress', current: 0, total: whitelist.size, percent: 0, status: `Загрузка по ${whitelist.size} отделам...` });
-    sigurEmployeesRaw = await sigurService.getEmployeesByDepartments([...whitelist], connection, (loaded, deptIdx, totalDepts) => {
-      send({ type: 'employees_progress', current: deptIdx, total: totalDepts, percent: Math.round((deptIdx / totalDepts) * 100), status: `Загрузка отделов: ${deptIdx}/${totalDepts} (${loaded} сотр.)` });
-    });
+    sigurEmployeesRaw = await getWhitelistedSigurEmployees(organizationId, connection, context, send);
   } else {
     sigurEmployeesRaw = await sigurService.getEmployeesCached(connection);
   }
@@ -840,10 +1045,14 @@ export async function syncEventsLogic(
   endDate: string,
   connection?: 'external' | 'internal',
   onProgress?: (data: Record<string, unknown>) => void,
+  context?: ISyncContext,
 ): Promise<ISyncEventsResult> {
   if (!sigurService.isConfigured()) throw new Error('Sigur не настроен');
 
   const send = onProgress || (() => {});
+  const days = buildInclusiveDateRange(startDate, endDate);
+
+  send({ type: 'events_start', totalDays: days.length });
 
   // 1. Загружаем сотрудников
   const { data: employeesData } = await supabase
@@ -862,28 +1071,31 @@ export async function syncEventsLogic(
   }
 
   // 2. Whitelist
-  const whitelist = await getWhitelistedDepartmentIds(organizationId);
+  const whitelist = await getWhitelistedDepartmentIdsCached(organizationId, context);
   let allowedNames: Set<string> | null = null;
   let allowedSigurIds: Set<number> | null = null;
 
   if (whitelist) {
-    const sigurEmployees = await sigurService.getEmployeesByDepartments([...whitelist], connection);
-    allowedNames = new Set<string>();
-    allowedSigurIds = new Set<number>();
-    for (const emp of sigurEmployees) {
-      const name = ((emp.name as string) || '').toLowerCase().trim();
-      if (name) allowedNames.add(name);
-      if (typeof emp.id === 'number') allowedSigurIds.add(emp.id);
+    const dbWhitelistSets = await getWhitelistedDbEmployeeSets(organizationId, whitelist);
+    if (dbWhitelistSets && (dbWhitelistSets.allowedNames.size > 0 || dbWhitelistSets.allowedSigurIds.size > 0)) {
+      allowedNames = dbWhitelistSets.allowedNames;
+      allowedSigurIds = dbWhitelistSets.allowedSigurIds;
+      console.log(
+        `[syncEvents] whitelist resolved from DB employees: ${allowedNames.size} names, ${allowedSigurIds.size} sigur ids`,
+      );
+    } else {
+      console.log('[syncEvents] whitelist DB cache is empty, falling back to Sigur employees');
+      let whitelistCache = context?.whitelistedSigurEmployees || null;
+      if (!whitelistCache) {
+        const sigurEmployees = await getWhitelistedSigurEmployees(organizationId, connection, context, send);
+        whitelistCache = buildWhitelistedEmployeesCache(sigurEmployees);
+        if (context) {
+          context.whitelistedSigurEmployees = whitelistCache;
+        }
+      }
+      allowedNames = whitelistCache.allowedNames;
+      allowedSigurIds = whitelistCache.allowedSigurIds;
     }
-  }
-
-  // 3. Дни
-  const days: string[] = [];
-  const cur = new Date(startDate);
-  const end = new Date(endDate);
-  while (cur <= end) {
-    days.push(cur.toISOString().slice(0, 10));
-    cur.setDate(cur.getDate() + 1);
   }
 
   const errors: string[] = [];
@@ -894,8 +1106,6 @@ export async function syncEventsLogic(
   let totalNoOrg = 0;
   let totalFilteredDept = 0;
   const summariesToUpdate = new Set<string>();
-
-  send({ type: 'events_start', totalDays: days.length });
 
   for (let dayIdx = 0; dayIdx < days.length; dayIdx++) {
     const day = days[dayIdx];

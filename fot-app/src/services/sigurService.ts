@@ -29,16 +29,15 @@ interface ISigurSyncResult {
 }
 
 export const sigurService = {
-  async testConnection(): Promise<ISigurTestResult> {
-    return apiClient.get<ISigurTestResult>('/sigur/test');
+  async testConnection(connection?: 'internal' | 'external'): Promise<ISigurTestResult> {
+    const params = connection ? `?connection=${connection}` : '';
+    return apiClient.get<ISigurTestResult>(`/sigur/test${params}`);
   },
 
   async preview(startTime: string, endTime: string): Promise<ISigurPreviewResult> {
-    console.log('[sigur] preview request:', { startTime, endTime });
     const result = await apiClient.get<ISigurPreviewResult>(
       `/sigur/preview?startTime=${encodeURIComponent(startTime)}&endTime=${encodeURIComponent(endTime)}`
     );
-    console.log('[sigur] preview response:', result);
     return result;
   },
 

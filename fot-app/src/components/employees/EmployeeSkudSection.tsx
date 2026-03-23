@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, type FC } from 'react';
 import {
   LogIn, LogOut, ChevronDown, ChevronRight, ChevronLeft,
-  Clock, RefreshCw, Timer, X,
+  Clock, RefreshCw, Timer,
 } from 'lucide-react';
 import { skudService } from '../../services/skudService';
 import type { SkudEvent } from '../../types';

@@ -1,12 +1,14 @@
 import type { SkudEvent } from '../types';
 
 const WORK_START_MINUTES = 9 * 60; // 09:00
+const WORKDAY_TARGET_SECONDS = 8 * 3600; // 8 часов фактического присутствия
 
 export interface IDayAttendance {
   day: number;
-  status: 'present' | 'late' | 'absent' | 'weekend' | 'future';
+  status: 'present' | 'underwork' | 'absent' | 'weekend' | 'future';
   arrivalTime?: string;
   totalSeconds: number;
+  isLate?: boolean;
 }
 
 export interface IMonthStats {
@@ -155,9 +157,11 @@ export const calculateAttendance = (
     const workSecs = calcWorkSeconds(dayEvs, internalPoints, isTodayDay);
     totalWorkSecs += workSecs;
 
+    const status = workSecs < WORKDAY_TARGET_SECONDS ? 'underwork' : 'present';
+
     if (late) lateCount++;
     presentCount++;
-    days.push({ day: d, status: late ? 'late' : 'present', arrivalTime, totalSeconds: workSecs });
+    days.push({ day: d, status, arrivalTime, totalSeconds: workSecs, isLate: late });
   }
 
   const attendancePercent = totalWorkdays > 0
@@ -237,8 +241,8 @@ export const computePeriodData = (
   month: number,
 ): { stats: IMonthStats; weeklyPattern: IWeekdayPattern[] } => {
   const workDays = days.filter(d => d.status !== 'weekend' && d.status !== 'future');
-  const presentDays = workDays.filter(d => d.status === 'present' || d.status === 'late');
-  const lateDays = workDays.filter(d => d.status === 'late');
+  const presentDays = workDays.filter(d => d.status === 'present' || d.status === 'underwork');
+  const lateDays = workDays.filter(d => d.isLate);
 
   const attendancePercent = workDays.length > 0
     ? Math.round((presentDays.length / workDays.length) * 100)

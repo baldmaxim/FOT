@@ -29,6 +29,7 @@ class SigurService {
   private employeeCache: { data: Record<string, unknown>[]; fetchedAt: number } | null = null;
   private employeeFetchPromise: Promise<Record<string, unknown>[]> | null = null;
   private departmentCache: { map: Map<number, string>; fetchedAt: number } | null = null;
+  private accessPointCache: { map: Map<number, string>; fetchedAt: number } | null = null;
   private readonly CACHE_TTL = 5 * 60 * 1000; // 5 минут
 
   /**
@@ -64,8 +65,8 @@ class SigurService {
       const config = this.getConnectionConfig(preferred);
       if (config) return preferred;
     }
-    if (this.getConnectionConfig('external')) return 'external';
     if (this.getConnectionConfig('internal')) return 'internal';
+    if (this.getConnectionConfig('external')) return 'external';
     throw new Error('Sigur не настроен. Укажите SIGUR_INTERNAL_* или SIGUR_EXTERNAL_* в .env');
   }
 
@@ -336,23 +337,41 @@ class SigurService {
     const allEmployees: Record<string, unknown>[] = [];
     const seen = new Set<number>();
     const total = departmentIds.length;
-    for (let i = 0; i < total; i++) {
-      const deptId = departmentIds[i];
-      const items = await this.fetchAllPaginated<Record<string, unknown>>(
-        '/api/v1/employees',
-        { departmentId: deptId },
-        connection,
-        1000,
-      );
-      for (const emp of items) {
-        const id = emp.id as number;
-        if (id && !seen.has(id)) {
-          seen.add(id);
-          allEmployees.push(emp);
-        }
-      }
-      if (onProgress) onProgress(allEmployees.length, i + 1, total);
+    if (total === 0) {
+      return allEmployees;
     }
+
+    const CONCURRENCY = Math.min(8, total);
+    let nextIndex = 0;
+    let completed = 0;
+
+    const worker = async () => {
+      while (true) {
+        const currentIndex = nextIndex++;
+        if (currentIndex >= total) return;
+
+        const deptId = departmentIds[currentIndex];
+        const items = await this.fetchAllPaginated<Record<string, unknown>>(
+          '/api/v1/employees',
+          { departmentId: deptId },
+          connection,
+          1000,
+        );
+
+        for (const emp of items) {
+          const id = emp.id as number;
+          if (id && !seen.has(id)) {
+            seen.add(id);
+            allEmployees.push(emp);
+          }
+        }
+
+        completed++;
+        if (onProgress) onProgress(allEmployees.length, completed, total);
+      }
+    };
+
+    await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
     console.log(`[sigur] fetched ${allEmployees.length} employees from ${total} departments`);
     return allEmployees;
   }
@@ -377,9 +396,10 @@ class SigurService {
     console.log('[sigur] fetching employees (no cache)...');
     this.employeeFetchPromise = this.getEmployees(undefined, connection)
       .then(data => {
-        this.employeeCache = { data, fetchedAt: Date.now() };
-        console.log('[sigur] cached', data.length, 'employees');
-        return data;
+        const employees = data as Record<string, unknown>[];
+        this.employeeCache = { data: employees, fetchedAt: Date.now() };
+        console.log('[sigur] cached', employees.length, 'employees');
+        return employees;
       })
       .finally(() => {
         this.employeeFetchPromise = null;
@@ -423,6 +443,26 @@ class SigurService {
     return this.fetchAllPaginated('/api/v1/accesspoints', undefined, connection);
   }
 
+  async getAccessPointMapCached(connection?: ConnectionType): Promise<Map<number, string>> {
+    if (this.accessPointCache && (Date.now() - this.accessPointCache.fetchedAt) < this.CACHE_TTL) {
+      return this.accessPointCache.map;
+    }
+
+    console.log('[sigur] fetching access points for cache...');
+    const accessPoints = await this.getAccessPoints(connection) as Record<string, unknown>[];
+    const map = new Map<number, string>();
+
+    for (const point of accessPoints) {
+      if (typeof point.id === 'number' && typeof point.name === 'string') {
+        map.set(point.id, point.name);
+      }
+    }
+
+    this.accessPointCache = { map, fetchedAt: Date.now() };
+    console.log('[sigur] cached', map.size, 'access points');
+    return map;
+  }
+
   /** Получить список режимов доступа */
   async getAccessRules(connection?: ConnectionType) {
     return this.fetchAllPaginated('/api/v1/accessrules', undefined, connection);
@@ -442,6 +482,82 @@ class SigurService {
     return `${time}+03:00`;
   }
 
+  private isRawPassEvent(raw: Record<string, unknown>): boolean {
+    const direction = raw.direction;
+    const accessObjectId = raw.accessObjectId;
+    const timestamp = raw.timestamp;
+
+    return (
+      (direction === 'IN' || direction === 'OUT') &&
+      typeof accessObjectId === 'number' &&
+      typeof timestamp === 'string'
+    );
+  }
+
+  private async enrichRawEvents(
+    rawEvents: Record<string, unknown>[],
+    connection?: ConnectionType,
+  ): Promise<Record<string, unknown>[]> {
+    if (rawEvents.length === 0) return [];
+
+    const [employees, accessPointMap] = await Promise.all([
+      this.getEmployeesCached(connection),
+      this.getAccessPointMapCached(connection),
+    ]);
+
+    const employeeById = new Map<number, Record<string, unknown>>();
+    for (const employee of employees) {
+      if (typeof employee.id === 'number') {
+        employeeById.set(employee.id, employee);
+      }
+    }
+
+    return rawEvents
+      .filter(raw => this.isRawPassEvent(raw))
+      .map(raw => {
+        const employeeId = raw.accessObjectId as number;
+        const employee = employeeById.get(employeeId);
+        const accessPointId = typeof raw.accessPointId === 'number' ? raw.accessPointId : null;
+
+        return {
+          eventType: 'PASS_DETECTED',
+          timestamp: raw.timestamp,
+          data: {
+            direction: raw.direction,
+            employeeId,
+            accessPointId,
+            cardKey: null,
+          },
+          additionalData: {
+            accessObject: {
+              type: 'EMPLOYEE',
+              data: {
+                id: employeeId,
+                name: typeof employee?.name === 'string' ? employee.name : '',
+                position: typeof employee?.position === 'string' ? employee.position : undefined,
+              },
+            },
+            accessPoint: accessPointId != null ? {
+              id: accessPointId,
+              name: accessPointMap.get(accessPointId) || null,
+            } : undefined,
+          },
+        };
+      });
+  }
+
+  async getRawEvents(startTime?: string, endTime?: string, connection?: ConnectionType, extraParams?: Record<string, any>) {
+    const pageSize = extraParams?.pageSize || 1000;
+    const params: Record<string, any> = {};
+    if (startTime) params.startTime = this.ensureTimezone(startTime);
+    if (endTime) params.endTime = this.ensureTimezone(endTime);
+    if (extraParams) {
+      const { pageSize: _, ...rest } = extraParams;
+      if (Object.keys(rest).length > 0) Object.assign(params, rest);
+    }
+    return this.fetchAllPaginated('/api/v1/events', params, connection, pageSize);
+  }
+
   /** Получить события (расширенные) с фильтрами по времени */
   async getEvents(startTime?: string, endTime?: string, connection?: ConnectionType, eventType?: string, extraParams?: Record<string, any>) {
     const pageSize = extraParams?.pageSize || 1000;
@@ -453,7 +569,14 @@ class SigurService {
       const { pageSize: _, ...rest } = extraParams;
       if (Object.keys(rest).length > 0) Object.assign(params, rest);
     }
-    return this.fetchAllPaginated('/api/v1/events/parsed', params, connection, pageSize);
+    const parsedEvents = await this.fetchAllPaginated('/api/v1/events/parsed', params, connection, pageSize);
+    if (parsedEvents.length > 0) {
+      return parsedEvents;
+    }
+
+    console.warn('[sigur] /events/parsed returned 0 items, falling back to raw /events');
+    const rawEvents = await this.getRawEvents(startTime, endTime, connection, extraParams);
+    return this.enrichRawEvents(rawEvents as Record<string, unknown>[], connection);
   }
 
   /** Получить ограниченное кол-во событий (для preview) */
@@ -474,7 +597,7 @@ class SigurService {
   /** Попытка получить должности из Sigur (эндпоинт может не существовать) */
   async getPositions(connection?: ConnectionType): Promise<Record<string, unknown>[] | null> {
     try {
-      return await this.fetchAllPaginated('/api/v1/positions', undefined, connection);
+      return await this.fetchAllPaginated('/api/v1/positions', undefined, connection) as Record<string, unknown>[];
     } catch {
       console.warn('[sigur] /api/v1/positions not available');
       return null;

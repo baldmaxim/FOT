@@ -1,4 +1,4 @@
-import { FC, useMemo } from 'react';
+import { type FC, useMemo } from 'react';
 import type { TimesheetEntry, TimesheetEmployee, TimesheetStatus } from '../../types';
 import {
   getDaysInMonth,
@@ -95,11 +95,6 @@ const getDayCellText = (entry: TimesheetEntry | null, weekend: boolean): string 
   if (special) return special;
   if (entry.hours_worked != null) return formatCellHM(entry.hours_worked);
   return '';
-};
-
-const getInitials = (name: string): string => {
-  const parts = name.split(' ');
-  return parts.length >= 2 ? parts[0][0] + parts[1][0] : name.substring(0, 2);
 };
 
 export const TimesheetGrid: FC<ITimesheetGridProps> = ({

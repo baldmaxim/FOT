@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, memo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ChevronDown, Search, Building2, LogOut } from 'lucide-react';
 import { StatCard } from '../components/ui/StatCard';
@@ -53,6 +53,15 @@ const formatClock = (): string => {
 
 const ATTENDANCE_TARGET = 90;
 
+const LiveClock = memo(() => {
+  const [clock, setClock] = useState(formatClock);
+  useEffect(() => {
+    const id = setInterval(() => setClock(formatClock()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <div className="live-clock">Время: {clock}</div>;
+});
+
 export const DashboardPage: React.FC = () => {
   const { positionType, profile } = useAuth();
   const isHeaderOnly = positionType === 'header';
@@ -63,13 +72,6 @@ export const DashboardPage: React.FC = () => {
     month: 'long',
     year: 'numeric',
   });
-
-  // Live clock (updates every second)
-  const [clock, setClock] = useState(formatClock);
-  useEffect(() => {
-    const id = setInterval(() => setClock(formatClock()), 1000);
-    return () => clearInterval(id);
-  }, []);
 
   // Department selector
   const [searchParams, setSearchParams] = useSearchParams();
@@ -212,7 +214,7 @@ export const DashboardPage: React.FC = () => {
             <div className="content-header-left">
               <div>
                 <div className="date-display">{today}</div>
-                <div className="live-clock">Время: {clock}</div>
+                <LiveClock />
               </div>
               <span className="live-badge">
                 <span className="live-dot" />

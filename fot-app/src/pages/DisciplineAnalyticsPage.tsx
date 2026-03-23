@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, type FC } from 'react';
 import { skudService } from '../services/skudService';
+import { useIsMobile } from '../hooks/useIsMobile';
 import '../styles/DisciplineAnalyticsPage.css';
 
 type ViolationType = 'late' | 'underwork' | 'early' | 'absence';
@@ -112,8 +113,13 @@ const getSummary = (v: IViolationRaw): string => {
 };
 
 export const DisciplineAnalyticsPage: FC = () => {
+  const isMobile = useIsMobile(430);
+
   const now = new Date();
-  const [month, setMonth] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
+  const currentYear = now.getFullYear();
+  const initialMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const [startMonth, setStartMonth] = useState(initialMonth);
+  const [endMonth, setEndMonth] = useState(initialMonth);
   const [rawViolations, setRawViolations] = useState<IViolationMapped[]>([]);
   const [empData, setEmpData] = useState<Record<number, { full_name: string; position: string | null; department_id: string | null }>>({});
   const [deptData, setDeptData] = useState<Record<string, string>>({});
@@ -124,22 +130,43 @@ export const DisciplineAnalyticsPage: FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDept, setSelectedDept] = useState<string>('');
 
-  const monthLabel = useMemo(() => {
-    const [y, m] = month.split('-').map(Number);
+  const normalizedPeriod = useMemo(() => {
+    if (startMonth <= endMonth) return { startMonth, endMonth };
+    return { startMonth: endMonth, endMonth: startMonth };
+  }, [startMonth, endMonth]);
+
+  const formatMonthLabel = useCallback((value: string) => {
+    const [y, m] = value.split('-').map(Number);
     return `${MONTH_NAMES[m - 1]} ${y}`;
-  }, [month]);
+  }, []);
 
-  const changeMonth = (delta: number) => {
-    const [y, m] = month.split('-').map(Number);
-    const d = new Date(y, m - 1 + delta, 1);
-    setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-  };
+  const monthLabel = useMemo(() => {
+    if (normalizedPeriod.startMonth === normalizedPeriod.endMonth) {
+      return formatMonthLabel(normalizedPeriod.startMonth);
+    }
+    return `${formatMonthLabel(normalizedPeriod.startMonth)} - ${formatMonthLabel(normalizedPeriod.endMonth)}`;
+  }, [formatMonthLabel, normalizedPeriod]);
 
-  const fetchData = useCallback(async () => {
+  const yearOptions = useMemo(() => {
+    const selectedYears = [startMonth, endMonth].map(value => Number(value.slice(0, 4)));
+    const minYear = Math.min(currentYear, ...selectedYears) - 2;
+    const maxYear = Math.max(currentYear, ...selectedYears) + 2;
+    return Array.from({ length: maxYear - minYear + 1 }, (_, index) => minYear + index);
+  }, [currentYear, endMonth, startMonth]);
+
+  const getMonthParts = useCallback((value: string) => {
+    const [year, month] = value.split('-').map(Number);
+    return { year, month };
+  }, []);
+
+  const buildMonthValue = useCallback((year: number, month: number) => `${year}-${String(month).padStart(2, '0')}`, []);
+
+  const fetchData = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await skudService.getDisciplineViolations(month);
+      const data = await skudService.getDisciplineViolations(normalizedPeriod, signal);
+      if (signal?.aborted) return;
       setEmpData(data.employees);
       setDeptData(data.departments);
       setRawViolations(data.violations.map(v => {
@@ -152,13 +179,19 @@ export const DisciplineAnalyticsPage: FC = () => {
         };
       }));
     } catch (e) {
+      if (signal?.aborted) return;
       setError(e instanceof Error ? e.message : 'Ошибка загрузки');
     } finally {
+      if (signal?.aborted) return;
       setLoading(false);
     }
-  }, [month]);
+  }, [normalizedPeriod]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchData(controller.signal);
+    return () => controller.abort();
+  }, [fetchData]);
 
   // Список отделов для фильтра
   const departmentOptions = useMemo(() => {
@@ -252,13 +285,15 @@ export const DisciplineAnalyticsPage: FC = () => {
     const wb = new ExcelJS.Workbook();
     const source = filtered.length > 0 ? filtered : employees;
 
-    const thinBorder: Partial<ExcelJS.Borders> = {
+    const thinBorder: any = {
       top: { style: 'thin' }, left: { style: 'thin' },
       bottom: { style: 'thin' }, right: { style: 'thin' },
     };
     const detailStyles: Record<string, { font: string; bg: string }> = {
       late: { font: 'FFDC2626', bg: 'FFFFF7ED' },
       underwork: { font: 'FF7C3AED', bg: 'FFF5F3FF' },
+      early: { font: 'FF2563EB', bg: 'FFEFF6FF' },
+      absence: { font: 'FFDC2626', bg: 'FFFEF2F2' },
     };
 
     const buildRating = (type: ViolationType, sheetName: string, countLabel: string) => {
@@ -288,11 +323,25 @@ export const DisciplineAnalyticsPage: FC = () => {
         const details = e.violations
           .filter(v => v.type === type)
           .map(v => {
+            const entry = v.first_entry ? v.first_entry.slice(0, 5) : '—';
+            const exit = v.last_exit ? v.last_exit.slice(0, 5) : '—';
             if (type === 'late') {
-              const time = v.first_entry ? v.first_entry.slice(0, 5) : '—';
-              return `${v.dateFormatted} — приход в ${time} (опоздание ${v.deviation.replace('+', '')})`;
+              return `${v.dateFormatted} — приход в ${entry} (опоздание ${v.deviation.replace('+', '')})`;
             }
-            return `${v.dateFormatted}: ${v.deviation}`;
+            if (type === 'early') {
+              const dev = v.deviation.replace('-', '');
+              const [eh, em] = (v.first_entry || '09:00').split(':').map(Number);
+              const expMin = eh * 60 + em + 9 * 60;
+              const expH = String(Math.floor(expMin / 60)).padStart(2, '0');
+              const expM = String(expMin % 60).padStart(2, '0');
+              return `${v.dateFormatted} — ${entry}→${exit}, норма ${expH}:${expM} (${dev} раньше)`;
+            }
+            if (type === 'absence') {
+              const dev = v.deviation.replace('Отсутствие ', '');
+              const worked = v.total_hours !== null ? `${Math.floor(v.total_hours)}ч ${Math.round((v.total_hours % 1) * 60)}м` : '—';
+              return `${v.dateFormatted} — ${entry}→${exit}, присутствие ${worked} (отсутствие ${dev})`;
+            }
+            return `${v.dateFormatted} — ${entry}→${exit}, недоработка ${v.deviation}`;
           })
           .join('\n');
 
@@ -310,7 +359,7 @@ export const DisciplineAnalyticsPage: FC = () => {
         if (i % 2 === 1) {
           ['num', 'name', 'position', 'department', 'count'].forEach(key => {
             const cell = row.getCell(key);
-            if (!cell.fill || !(cell.fill as ExcelJS.FillPattern).fgColor) {
+            if (!cell.fill || !(cell.fill as { fgColor?: unknown }).fgColor) {
               cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
             }
           });
@@ -322,41 +371,122 @@ export const DisciplineAnalyticsPage: FC = () => {
 
     buildRating('late', 'Рейтинг опозданий', 'Кол-во опозданий');
     buildRating('underwork', 'Рейтинг недоработок', 'Кол-во недоработок');
+    buildRating('early', 'Рейтинг ранних уходов', 'Кол-во ранних уходов');
+    buildRating('absence', 'Отсутствия более 3ч', 'Кол-во отсутствий');
 
     const buffer = await wb.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Аналитика_дисциплины_${monthLabel.replace(' ', '_')}.xlsx`;
+    a.download = `Аналитика_дисциплины_${monthLabel.replace(/\s+/g, '_')}.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
   return (
     <div className="da-page">
-      {/* Header: month + export */}
+      {/* Header: period picker + export */}
       <div className="da-header-row">
-        <button className="da-btn" onClick={() => changeMonth(-1)}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
-        </button>
-        <span style={{ fontSize: 15, fontWeight: 600, minWidth: 140, textAlign: 'center' }}>{monthLabel}</span>
-        <button className="da-btn" onClick={() => changeMonth(1)}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
-        </button>
-        <div style={{ flex: 1 }} />
-        <button className="da-btn" onClick={exportToExcel}>
+        <div className="da-period-control">
+          <label className="da-month-field">
+            <select
+              className="da-period-select"
+              value={getMonthParts(startMonth).month}
+              onChange={e => {
+                const m = Number(e.target.value);
+                const y = getMonthParts(startMonth).year;
+                const v = buildMonthValue(y, m);
+                setStartMonth(v);
+                if (v > endMonth) setEndMonth(v);
+              }}
+            >
+              {MONTH_NAMES.map((name, index) => (
+                <option key={`start-month-${index + 1}`} value={index + 1}>{name}</option>
+              ))}
+            </select>
+            <select
+              className="da-period-select da-period-select-year"
+              value={getMonthParts(startMonth).year}
+              onChange={e => {
+                const y = Number(e.target.value);
+                const m = getMonthParts(startMonth).month;
+                const v = buildMonthValue(y, m);
+                setStartMonth(v);
+                if (v > endMonth) setEndMonth(v);
+              }}
+            >
+              {yearOptions.map(year => (
+                <option key={`start-year-${year}`} value={year}>{year}</option>
+              ))}
+            </select>
+          </label>
+          <span className="da-period-sep">—</span>
+          <label className="da-month-field">
+            <select
+              className="da-period-select"
+              value={getMonthParts(endMonth).month}
+              onChange={e => {
+                const m = Number(e.target.value);
+                const y = getMonthParts(endMonth).year;
+                const v = buildMonthValue(y, m);
+                setEndMonth(v);
+                if (v < startMonth) setStartMonth(v);
+              }}
+            >
+              {MONTH_NAMES.map((name, index) => (
+                <option key={`end-month-${index + 1}`} value={index + 1}>{name}</option>
+              ))}
+            </select>
+            <select
+              className="da-period-select da-period-select-year"
+              value={getMonthParts(endMonth).year}
+              onChange={e => {
+                const y = Number(e.target.value);
+                const m = getMonthParts(endMonth).month;
+                const v = buildMonthValue(y, m);
+                setEndMonth(v);
+                if (v < startMonth) setStartMonth(v);
+              }}
+            >
+              {yearOptions.map(year => (
+                <option key={`end-year-${year}`} value={year}>{year}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="da-header-spacer" />
+        <button className="da-btn da-btn-export" onClick={exportToExcel}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           Экспорт в Excel
         </button>
       </div>
 
-      {/* Stats */}
-      <div className="da-stats">
-        <DaStatCard color="warning" label="Опоздания" value={peopleCounts.late} suffix="чел." />
-        <DaStatCard color="purple" label="Недоработки" value={peopleCounts.underwork} suffix="чел." />
-        <DaStatCard color="primary" label="Ранние уходы" value={peopleCounts.early} suffix="чел." />
-        <DaStatCard color="error" label="Отсутствия >3ч" value={peopleCounts.absence} suffix="чел." />
+      {/* Stats — single compact bar */}
+      <div className="da-stats-bar">
+        <div className="da-stats-item">
+          <span className="da-stats-dot" style={{ background: 'var(--warning)' }} />
+          <span className="da-stats-item-label">Опоздания</span>
+          <span className="da-stats-item-value" style={{ color: 'var(--warning)' }}>{peopleCounts.late}</span>
+        </div>
+        <div className="da-stats-divider" />
+        <div className="da-stats-item">
+          <span className="da-stats-dot" style={{ background: '#8b5cf6' }} />
+          <span className="da-stats-item-label">Недоработки</span>
+          <span className="da-stats-item-value" style={{ color: '#8b5cf6' }}>{peopleCounts.underwork}</span>
+        </div>
+        <div className="da-stats-divider" />
+        <div className="da-stats-item">
+          <span className="da-stats-dot" style={{ background: 'var(--primary)' }} />
+          <span className="da-stats-item-label">Ранние уходы</span>
+          <span className="da-stats-item-value" style={{ color: 'var(--primary)' }}>{peopleCounts.early}</span>
+        </div>
+        <div className="da-stats-divider" />
+        <div className="da-stats-item">
+          <span className="da-stats-dot" style={{ background: 'var(--error)' }} />
+          <span className="da-stats-item-label">Отсутствия &gt;3ч</span>
+          <span className="da-stats-item-value" style={{ color: 'var(--error)' }}>{peopleCounts.absence}</span>
+        </div>
       </div>
 
       {loading && <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>Загрузка...</div>}
@@ -409,6 +539,27 @@ export const DisciplineAnalyticsPage: FC = () => {
           <div className="da-table-wrap">
             {filtered.length === 0 ? (
               <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>Нарушений не найдено</div>
+            ) : isMobile ? (
+              <div className="da-mobile-cards">
+                {filtered.map(emp => (
+                  <div key={emp.employee_id} className="da-mobile-card" onClick={() => setPanelEmpId(emp.employee_id)}>
+                    <div className="da-mobile-card-header">
+                      <div className="da-emp-avatar">{emp.initials}</div>
+                      <div className="da-mobile-card-info">
+                        <div className="da-emp-name">{emp.name}</div>
+                        <div className="da-emp-meta">{emp.position}</div>
+                      </div>
+                      <div className="da-mobile-card-total">{emp.total}</div>
+                    </div>
+                    <div className="da-mobile-card-badges">
+                      {emp.late > 0 && <CountBadge count={emp.late} type="late" />}
+                      {emp.underwork > 0 && <CountBadge count={emp.underwork} type="underwork" />}
+                      {emp.early > 0 && <CountBadge count={emp.early} type="early" />}
+                      {emp.absence > 0 && <CountBadge count={emp.absence} type="absence" />}
+                    </div>
+                  </div>
+                ))}
+              </div>
             ) : (
               <table className="da-table">
                 <thead>
@@ -455,7 +606,7 @@ export const DisciplineAnalyticsPage: FC = () => {
         {panelEmployee && (
           <>
             <div className="da-panel-header">
-              <span style={{ fontSize: 16, fontWeight: 600 }}>Нарушения сотрудника</span>
+              <span className="da-panel-title">Нарушения сотрудника</span>
               <button className="da-panel-close" onClick={() => setPanelEmpId(null)}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
@@ -464,9 +615,9 @@ export const DisciplineAnalyticsPage: FC = () => {
               <div className="da-panel-emp">
                 <div className="da-panel-avatar">{panelEmployee.initials}</div>
                 <div>
-                  <div style={{ fontSize: 15, fontWeight: 600 }}>{panelEmployee.name}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{panelEmployee.position}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{panelEmployee.department}</div>
+                  <div className="da-panel-emp-name">{panelEmployee.name}</div>
+                  <div className="da-panel-emp-position">{panelEmployee.position}</div>
+                  <div className="da-panel-emp-dept">{panelEmployee.department}</div>
                 </div>
               </div>
 
@@ -478,7 +629,7 @@ export const DisciplineAnalyticsPage: FC = () => {
               </div>
 
               <div className="da-panel-section">
-                <div className="da-panel-section-title">Нарушения за месяц ({panelEmployee.total})</div>
+                <div className="da-panel-section-title">Нарушения за период ({panelEmployee.total})</div>
                 {panelEmployee.violations.map((v, i) => (
                   <a
                     key={i}
@@ -512,22 +663,3 @@ const CountBadge: FC<{ count: number; type: ViolationType }> = ({ count, type })
   );
 };
 
-const DaStatCard: FC<{ color: string; label: string; value: number; suffix?: string }> = ({ color, label, value, suffix }) => {
-  const colorVar = color === 'purple' ? '#8b5cf6' : `var(--${color})`;
-  const bgVar = color === 'purple' ? 'rgba(139, 92, 246, 0.1)' : `var(--${color === 'primary' ? 'primary-light' : color + '-muted'})`;
-
-  return (
-    <div className="da-stat-card">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-        <div style={{ width: 32, height: 32, borderRadius: 8, background: bgVar, color: colorVar, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ width: 8, height: 8, borderRadius: '50%', background: colorVar }} />
-        </div>
-        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{label}</span>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-        <span style={{ fontSize: 28, fontWeight: 700, color: colorVar }}>{value}</span>
-        {suffix && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{suffix}</span>}
-      </div>
-    </div>
-  );
-};

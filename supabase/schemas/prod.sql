@@ -1981,19 +1981,19 @@ CREATE OR REPLACE FUNCTION public.batch_recalculate_skud_daily_summary(p_pairs j
  RETURNS void
  LANGUAGE plpgsql
  SECURITY DEFINER
-AS $function$
-DECLARE
-  v_pair jsonb;
-BEGIN
-  FOR v_pair IN SELECT * FROM jsonb_array_elements(p_pairs)
-  LOOP
-    PERFORM recalculate_skud_daily_summary(
-      (v_pair->>'org_id')::uuid,
-      (v_pair->>'emp_id')::bigint,
-      (v_pair->>'date')::date
-    );
-  END LOOP;
-END;
+AS $function$
+DECLARE
+  v_pair jsonb;
+BEGIN
+  FOR v_pair IN SELECT * FROM jsonb_array_elements(p_pairs)
+  LOOP
+    PERFORM recalculate_skud_daily_summary(
+      (v_pair->>'org_id')::uuid,
+      (v_pair->>'emp_id')::bigint,
+      (v_pair->>'date')::date
+    );
+  END LOOP;
+END;
 $function$
 
 
@@ -2002,17 +2002,17 @@ CREATE OR REPLACE FUNCTION public.bulk_update_employee_ids(p_event_ids bigint[],
  RETURNS void
  LANGUAGE plpgsql
  SECURITY DEFINER
-AS $function$
-BEGIN
-  UPDATE skud_events
-  SET employee_id = updates.emp_id
-  FROM (
-    SELECT unnest(p_event_ids) AS evt_id,
-           unnest(p_employee_ids) AS emp_id
-  ) AS updates
-  WHERE skud_events.id = updates.evt_id
-    AND skud_events.employee_id IS NULL;
-END;
+AS $function$
+BEGIN
+  UPDATE skud_events
+  SET employee_id = updates.emp_id
+  FROM (
+    SELECT unnest(p_event_ids) AS evt_id,
+           unnest(p_employee_ids) AS emp_id
+  ) AS updates
+  WHERE skud_events.id = updates.evt_id
+    AND skud_events.employee_id IS NULL;
+END;
 $function$
 
 
@@ -2021,16 +2021,16 @@ CREATE OR REPLACE FUNCTION public.find_skud_duplicate_ids()
  RETURNS TABLE(id bigint)
  LANGUAGE sql
  STABLE
-AS $function$
-  SELECT se.id
-  FROM public.skud_events se
-  INNER JOIN (
-    SELECT dedup_hash, MIN(se2.id) AS keep_id
-    FROM public.skud_events se2
-    WHERE se2.dedup_hash IS NOT NULL
-    GROUP BY se2.dedup_hash
-    HAVING COUNT(*) > 1
-  ) dupes ON se.dedup_hash = dupes.dedup_hash AND se.id <> dupes.keep_id;
+AS $function$
+  SELECT se.id
+  FROM public.skud_events se
+  INNER JOIN (
+    SELECT dedup_hash, MIN(se2.id) AS keep_id
+    FROM public.skud_events se2
+    WHERE se2.dedup_hash IS NOT NULL
+    GROUP BY se2.dedup_hash
+    HAVING COUNT(*) > 1
+  ) dupes ON se.dedup_hash = dupes.dedup_hash AND se.id <> dupes.keep_id;
 $function$
 
 
@@ -2084,99 +2084,91 @@ CREATE OR REPLACE FUNCTION public.recalculate_skud_daily_summary(p_organization_
  RETURNS void
  LANGUAGE plpgsql
  SECURITY DEFINER
-AS $function$
-DECLARE
-    v_first_entry TIME;
-    v_last_exit TIME;
-    v_total_seconds DECIMAL := 0;
-    v_break_seconds DECIMAL := 0;
-    v_total_hours DECIMAL(5,2);
-    v_break_hours DECIMAL(5,2);
-    v_prev_exit TIME := NULL;
-    v_rec RECORD;
-    v_dept_id uuid;
-BEGIN
-    SELECT org_department_id INTO v_dept_id
-    FROM employees
-    WHERE id = p_employee_id;
-
-    SELECT event_time INTO v_first_entry
-    FROM skud_events e
-    WHERE e.organization_id = p_organization_id
-      AND e.employee_id = p_employee_id
-      AND e.event_date = p_date
-      AND e.direction = 'entry'
-      AND NOT EXISTS (
-        SELECT 1 FROM skud_access_point_settings s
-        WHERE s.organization_id = p_organization_id
-          AND s.department_id = v_dept_id
-          AND s.access_point_name = e.access_point
-          AND s.is_internal = true
-      )
-    ORDER BY event_time ASC
-    LIMIT 1;
-
-    SELECT event_time INTO v_last_exit
-    FROM skud_events e
-    WHERE e.organization_id = p_organization_id
-      AND e.employee_id = p_employee_id
-      AND e.event_date = p_date
-      AND e.direction = 'exit'
-      AND NOT EXISTS (
-        SELECT 1 FROM skud_access_point_settings s
-        WHERE s.organization_id = p_organization_id
-          AND s.department_id = v_dept_id
-          AND s.access_point_name = e.access_point
-          AND s.is_internal = true
-      )
-    ORDER BY event_time DESC
-    LIMIT 1;
-
-    FOR v_rec IN
-        SELECT event_time, direction
-        FROM skud_events e
-        WHERE e.organization_id = p_organization_id
-          AND e.employee_id = p_employee_id
-          AND e.event_date = p_date
-          AND NOT EXISTS (
-            SELECT 1 FROM skud_access_point_settings s
-            WHERE s.organization_id = p_organization_id
-              AND s.department_id = v_dept_id
-              AND s.access_point_name = e.access_point
-              AND s.is_internal = true
-          )
-        ORDER BY event_time ASC
-    LOOP
-        IF v_rec.direction = 'entry' THEN
-            IF v_prev_exit IS NOT NULL THEN
-                v_break_seconds := v_break_seconds + EXTRACT(EPOCH FROM (v_rec.event_time - v_prev_exit));
-            END IF;
-            v_prev_exit := NULL;
-        ELSIF v_rec.direction = 'exit' THEN
-            v_prev_exit := v_rec.event_time;
-        END IF;
-    END LOOP;
-
-    IF v_first_entry IS NOT NULL AND v_last_exit IS NOT NULL AND v_last_exit > v_first_entry THEN
-        v_total_seconds := EXTRACT(EPOCH FROM (v_last_exit - v_first_entry)) - v_break_seconds;
-        v_total_hours := GREATEST(v_total_seconds / 3600, 0);
-        v_break_hours := v_break_seconds / 3600;
-    ELSE
-        v_total_hours := NULL;
-        v_break_hours := 0;
-    END IF;
-
-    INSERT INTO skud_daily_summary (organization_id, employee_id, date, first_entry, last_exit, total_hours, break_hours, is_present)
-    VALUES (p_organization_id, p_employee_id, p_date, v_first_entry, v_last_exit, v_total_hours, v_break_hours, v_first_entry IS NOT NULL)
-    ON CONFLICT (organization_id, employee_id, date)
-    DO UPDATE SET
-        first_entry = EXCLUDED.first_entry,
-        last_exit = EXCLUDED.last_exit,
-        total_hours = EXCLUDED.total_hours,
-        break_hours = EXCLUDED.break_hours,
-        is_present = EXCLUDED.is_present,
-        updated_at = NOW();
-END;
+AS $function$
+DECLARE
+    v_first_entry TIME;
+    v_last_exit TIME;
+    v_total_seconds DECIMAL := 0;
+    v_break_seconds DECIMAL := 0;
+    v_total_hours DECIMAL(5,2);
+    v_break_hours DECIMAL(5,2);
+    v_prev_exit TIME := NULL;
+    v_rec RECORD;
+BEGIN
+    SELECT event_time INTO v_first_entry
+    FROM skud_events e
+    WHERE e.organization_id = p_organization_id
+      AND e.employee_id = p_employee_id
+      AND e.event_date = p_date
+      AND e.direction = 'entry'
+      AND NOT EXISTS (
+        SELECT 1 FROM skud_access_point_settings s
+        WHERE s.organization_id = p_organization_id
+          AND s.access_point_name = e.access_point
+          AND s.is_internal = true
+      )
+    ORDER BY event_time ASC
+    LIMIT 1;
+
+    SELECT event_time INTO v_last_exit
+    FROM skud_events e
+    WHERE e.organization_id = p_organization_id
+      AND e.employee_id = p_employee_id
+      AND e.event_date = p_date
+      AND e.direction = 'exit'
+      AND NOT EXISTS (
+        SELECT 1 FROM skud_access_point_settings s
+        WHERE s.organization_id = p_organization_id
+          AND s.access_point_name = e.access_point
+          AND s.is_internal = true
+      )
+    ORDER BY event_time DESC
+    LIMIT 1;
+
+    FOR v_rec IN
+        SELECT event_time, direction
+        FROM skud_events e
+        WHERE e.organization_id = p_organization_id
+          AND e.employee_id = p_employee_id
+          AND e.event_date = p_date
+          AND NOT EXISTS (
+            SELECT 1 FROM skud_access_point_settings s
+            WHERE s.organization_id = p_organization_id
+              AND s.access_point_name = e.access_point
+              AND s.is_internal = true
+          )
+        ORDER BY event_time ASC
+    LOOP
+        IF v_rec.direction = 'entry' THEN
+            IF v_prev_exit IS NOT NULL THEN
+                v_break_seconds := v_break_seconds + EXTRACT(EPOCH FROM (v_rec.event_time - v_prev_exit));
+            END IF;
+            v_prev_exit := NULL;
+        ELSIF v_rec.direction = 'exit' THEN
+            v_prev_exit := v_rec.event_time;
+        END IF;
+    END LOOP;
+
+    IF v_first_entry IS NOT NULL AND v_last_exit IS NOT NULL AND v_last_exit > v_first_entry THEN
+        v_total_seconds := EXTRACT(EPOCH FROM (v_last_exit - v_first_entry)) - v_break_seconds;
+        v_total_hours := GREATEST(v_total_seconds / 3600, 0);
+        v_break_hours := v_break_seconds / 3600;
+    ELSE
+        v_total_hours := NULL;
+        v_break_hours := 0;
+    END IF;
+
+    INSERT INTO skud_daily_summary (organization_id, employee_id, date, first_entry, last_exit, total_hours, break_hours, is_present)
+    VALUES (p_organization_id, p_employee_id, p_date, v_first_entry, v_last_exit, v_total_hours, v_break_hours, v_first_entry IS NOT NULL)
+    ON CONFLICT (organization_id, employee_id, date)
+    DO UPDATE SET
+        first_entry = EXCLUDED.first_entry,
+        last_exit = EXCLUDED.last_exit,
+        total_hours = EXCLUDED.total_hours,
+        break_hours = EXCLUDED.break_hours,
+        is_present = EXCLUDED.is_present,
+        updated_at = NOW();
+END;
 $function$
 
 

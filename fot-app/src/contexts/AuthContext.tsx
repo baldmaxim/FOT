@@ -134,13 +134,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       loading: false,
     });
 
-    // DEBUG: выводим роль пользователя
-    console.log('[AuthContext] Login successful:', {
-      email: response.user.email,
-      position_type: response.profile.position_type,
-      full_name: response.profile.full_name,
-    });
-
     return { requires2FA: false };
   }, []);
 

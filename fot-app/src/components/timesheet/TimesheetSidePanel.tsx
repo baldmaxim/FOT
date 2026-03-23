@@ -1,4 +1,4 @@
-import { FC, useMemo } from 'react';
+import { type FC, useMemo } from 'react';
 import { X } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee } from '../../types';
 import {
@@ -25,16 +25,6 @@ const getInitials = (name: string): string => {
   return name.substring(0, 2).toUpperCase();
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  work: 'Работа',
-  absent: 'Неявка',
-  sick: 'Больничный',
-  vacation: 'Отпуск',
-  business_trip: 'Командировка',
-  dayoff: 'Выходной',
-  remote: 'Удалённо',
-  manual: 'Ручная корр.',
-};
 
 export const TimesheetSidePanel: FC<ISidePanelProps> = ({
   open,

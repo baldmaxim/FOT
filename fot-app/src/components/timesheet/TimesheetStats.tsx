@@ -1,4 +1,4 @@
-import { FC } from 'react';
+import type { FC } from 'react';
 import type { TimesheetStats as ITimesheetStats } from '../../types';
 
 interface ITimesheetStatsProps {

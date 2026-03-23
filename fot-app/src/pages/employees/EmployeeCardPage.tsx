@@ -72,7 +72,7 @@ export const EmployeeCardPage: FC = () => {
 
   const [employee, setEmployee] = useState<Employee | null>(null);
   const [history, setHistory] = useState<EmployeeHistoryEvent[]>([]);
-  const [departments, setDepartments] = useState<OrgDepartmentNode[]>([]);
+  const [, setDepartments] = useState<OrgDepartmentNode[]>([]);
   const [skudEvents, setSkudEvents] = useState<SkudEvent[]>([]);
   const [internalPoints, setInternalPoints] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -136,8 +136,8 @@ export const EmployeeCardPage: FC = () => {
 
   useEffect(() => {
     if (!id) return;
-    const startDate = new Date(calYear, calMonth, 1).toISOString().slice(0, 10);
-    const endDate = new Date(calYear, calMonth + 1, 0).toISOString().slice(0, 10);
+    const startDate = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-01`;
+    const endDate = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(new Date(calYear, calMonth + 1, 0).getDate()).padStart(2, '0')}`;
     skudService.getEmployeeEvents(Number(id), startDate, endDate)
       .then(setSkudEvents)
       .catch(() => setSkudEvents([]));
@@ -209,12 +209,6 @@ export const EmployeeCardPage: FC = () => {
     if (!employee || !confirm('Удалить сотрудника? Это действие необратимо.')) return;
     try { await employeeService.delete(employee.id); navigate(-1); }
     catch { setError('Ошибка удаления'); }
-  };
-
-  const handleMoveDepartment = async (departmentId: string) => {
-    if (!employee) return;
-    try { await employeeService.moveDepartment(employee.id, departmentId); loadData(); }
-    catch { setError('Ошибка перемещения в отдел'); }
   };
 
   // Loading / Error states

@@ -17,6 +17,7 @@ interface ITreeNode {
 interface ISyncFilterTabProps {
   connected: boolean | null;
   canEdit: boolean;
+  onFilterCountChange?: (count: number) => void;
 }
 
 type SortMode = 'alpha' | 'id';
@@ -169,7 +170,7 @@ const TreeNodeRow = ({ node, depth, selectedIds, expandedIds, canEdit, visibleId
   );
 };
 
-export const SyncFilterTab = ({ connected, canEdit }: ISyncFilterTabProps) => {
+export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISyncFilterTabProps) => {
   const [sigurDepts, setSigurDepts] = useState<ISigurDepartment[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [initialIds, setInitialIds] = useState<Set<number>>(new Set());
@@ -210,12 +211,13 @@ export const SyncFilterTab = ({ connected, canEdit }: ISyncFilterTabProps) => {
       );
       setSelectedIds(filterIds);
       setInitialIds(filterIds);
+      onFilterCountChange?.(filterIds.size);
     } catch {
       setError('Ошибка загрузки данных');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [onFilterCountChange]);
 
   useEffect(() => {
     if (connected) loadData();
@@ -304,6 +306,7 @@ export const SyncFilterTab = ({ connected, canEdit }: ISyncFilterTabProps) => {
         .map(d => ({ sigur_department_id: d.id, sigur_department_name: d.name }));
       await sigurService.updateSyncFilter(departments);
       setInitialIds(new Set(selectedIds));
+      onFilterCountChange?.(selectedIds.size);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch {

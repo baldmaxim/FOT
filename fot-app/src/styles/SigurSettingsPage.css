@@ -16,6 +16,20 @@
 .sigur-header h1 {
   margin: 0;
   font-size: 1.25rem;
+  flex: 1;
+}
+
+.sigur-btn-supabase {
+  margin-left: auto;
+  text-decoration: none;
+  background: #3ecf8e;
+  color: #fff;
+  border-color: #3ecf8e;
+}
+
+.sigur-btn-supabase:hover {
+  background: #38b87f;
+  border-color: #38b87f;
 }
 
 /* Tabs */
@@ -115,6 +129,37 @@
   background: var(--surface-hover);
   padding: 0.25rem 0.5rem;
   border-radius: 4px;
+}
+
+.sigur-conn-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.sigur-conn-toggle-btn {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.75rem;
+  border: none;
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.sigur-conn-toggle-btn:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+
+.sigur-conn-toggle-btn.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.sigur-conn-toggle-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .sigur-btn {
@@ -272,6 +317,100 @@
   background: var(--surface-hover);
   color: var(--text-primary);
   font-size: 0.8125rem;
+}
+
+.sigur-sync-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.sigur-sync-summary-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0.375rem 0.75rem;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.sigur-sync-summary-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--primary);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.sigur-sync-summary-link:hover {
+  text-decoration: underline;
+}
+
+.sigur-sync-summary-note {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+
+.sigur-sync-all-events-range {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+  margin-bottom: 0.75rem;
+}
+
+.sigur-sync-all-events-range label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.sigur-sync-all-events-range input[type="date"] {
+  min-height: 38px;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.sigur-sync-steps-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.sigur-sync-step-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 36px;
+  padding: 0.375rem 0.625rem;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.sigur-sync-step-option input {
+  margin: 0;
+}
+
+.sigur-sync-step-option:has(input:disabled) {
+  opacity: 0.7;
+  cursor: not-allowed;
 }
 
 .sigur-sync-result {
@@ -539,6 +678,20 @@
     align-items: stretch;
   }
 
+  .sigur-sync-summary {
+    align-items: flex-start;
+  }
+
+  .sigur-sync-steps-selector {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .sigur-sync-step-option {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .sigur-sync-stats {
     flex-direction: column;
     gap: 0.375rem;
@@ -619,12 +772,14 @@
   }
 
   .sigur-preview-controls label,
-  .sigur-sync-controls label {
+  .sigur-sync-controls label,
+  .sigur-sync-all-events-range label {
     width: 100%;
   }
 
   .sigur-preview-controls input[type="date"],
-  .sigur-sync-controls input[type="date"] {
+  .sigur-sync-controls input[type="date"],
+  .sigur-sync-all-events-range input[type="date"] {
     width: 100%;
     min-height: 44px;
     font-size: 1rem;

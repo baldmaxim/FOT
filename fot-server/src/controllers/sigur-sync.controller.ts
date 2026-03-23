@@ -2,27 +2,72 @@ import { Response } from 'express';
 import { sigurService } from '../services/sigur.service.js';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
-import { mapSigurEvent } from '../utils/sigur.mapper.js';
-import { computeDedupHash } from '../utils/dedup.utils.js';
-import { stopPresencePolling, startPresencePolling } from '../services/presence-polling.service.js';
+import { buildInclusiveDateRange } from '../utils/date.utils.js';
 import {
-  syncOrganizationsLogic,
+  acquirePresencePollingLock,
+  ManualSyncInProgressError,
+  releasePresencePollingLock,
+} from '../services/presence-polling.service.js';
+import {
+  SYNC_ALL_STEP_ORDER,
   cleanDuplicateOrganizationsLogic,
-  syncDepartmentsLogic,
-  syncPositionsFromSigurLogic,
   seedPositionsLogic,
+  syncDepartmentsLogic,
   syncEmployeesLogic,
   syncEventsLogic,
-  getWhitelistedDepartmentIds,
+  syncOrganizationsLogic,
+  syncPositionsFromSigurLogic,
+  type ISyncContext,
+  type SyncAllStepName,
 } from '../services/sigur-sync.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
+type ConnectionType = 'external' | 'internal';
+
+async function resolveOrganizationId(req: AuthenticatedRequest): Promise<string | null> {
+  const requestedOrgId = req.body.organization_id || req.query.organization_id || req.user.organization_id;
+  if (requestedOrgId) {
+    return requestedOrgId;
+  }
+
+  const { data: orgs } = await supabase.from('organizations').select('id').limit(1);
+  return orgs?.[0]?.id || null;
+}
+
+function createSseSender(res: Response) {
+  return (data: Record<string, unknown>) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+}
+
+function normalizeSelectedSteps(rawSteps: unknown): SyncAllStepName[] {
+  if (!Array.isArray(rawSteps) || rawSteps.length === 0) {
+    return ['departments', 'positions', 'employees'];
+  }
+
+  const selected = rawSteps.filter((step): step is SyncAllStepName =>
+    typeof step === 'string' && SYNC_ALL_STEP_ORDER.includes(step as SyncAllStepName),
+  );
+
+  return SYNC_ALL_STEP_ORDER.filter(step => selected.includes(step));
+}
+
+function isManualSyncConflict(error: unknown): error is ManualSyncInProgressError {
+  return error instanceof ManualSyncInProgressError;
+}
+
+function sendManualSyncConflict(res: Response): void {
+  res.status(409).json({
+    success: false,
+    error: 'Ручная синхронизация уже выполняется. Дождитесь завершения текущего запуска.',
+    code: 'SYNC_IN_PROGRESS',
+  });
+}
+
 export const sigurSyncController = {
-  /**
-   * POST /api/sigur/sync
-   * Синхронизация событий из Sigur в skud_events (SSE)
-   */
   async sync(req: AuthenticatedRequest, res: Response): Promise<void> {
+    let lockAcquired = false;
+
     try {
       if (!sigurService.isConfigured()) {
         res.status(503).json({ success: false, error: 'Sigur не настроен' });
@@ -35,322 +80,166 @@ export const sigurSyncController = {
         return;
       }
 
+      const organizationId = await resolveOrganizationId(req);
+      if (!organizationId) {
+        res.status(400).json({ success: false, error: 'organization_id обязателен' });
+        return;
+      }
+
+      await acquirePresencePollingLock();
+      lockAcquired = true;
+
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
       res.flushHeaders();
 
-      const sendProgress = (data: Record<string, unknown>) => {
-        res.write(`data: ${JSON.stringify(data)}\n\n`);
-      };
+      const sendProgress = createSseSender(res);
+      const connection = (req.body.connection as ConnectionType) || undefined;
+      const context: ISyncContext = {};
 
-      const connection = (req.body.connection as 'external' | 'internal') || undefined;
+      const result = await syncEventsLogic(
+        organizationId,
+        startDate,
+        endDate,
+        connection,
+        sendProgress,
+        context,
+      );
 
-      sendProgress({ type: 'status', message: 'Загрузка сотрудников...' });
-
-      // 1. Загружаем ВСЕХ сотрудников (маппинг по name|org + по sigur_employee_id)
-      const { data: employeesData } = await supabase
-        .from('employees')
-        .select('id, organization_id, full_name, sigur_employee_id')
-        .eq('is_archived', false);
-
-      // name|org_id → emp (исключает конфликты при одинаковых ФИО в разных org)
-      const employeeByNameOrg = new Map<string, { id: number; organization_id: string }>();
-      const sigurIdMap = new Map<number, { id: number; organization_id: string }>();
-      for (const emp of employeesData || []) {
-        const name = (emp.full_name || '').toLowerCase().trim();
-        const empRef = { id: emp.id, organization_id: emp.organization_id };
-        const key = `${name}|${emp.organization_id}`;
-        if (!employeeByNameOrg.has(key)) {
-          employeeByNameOrg.set(key, empRef);
-        }
-        if (emp.sigur_employee_id != null) {
-          sigurIdMap.set(emp.sigur_employee_id, empRef);
-        }
-      }
-
-      // Fallback org_id
-      const userOrgId = req.user.organization_id || req.body.organization_id || null;
-      let fallbackOrgId = userOrgId;
-      if (!fallbackOrgId) {
-        const { data: orgs } = await supabase.from('organizations').select('id').limit(1);
-        fallbackOrgId = orgs?.[0]?.id || null;
-      }
-
-      // 1b. Проверяем whitelist отделов → фильтруем по Sigur-сотрудникам
-      const whitelist = await getWhitelistedDepartmentIds(fallbackOrgId || '');
-      let allowedNames: Set<string> | null = null;
-      let allowedSigurIds: Set<number> | null = null;
-
-      if (whitelist) {
-        sendProgress({ type: 'status', message: `Загрузка фильтра: ${whitelist.size} отделов...` });
-        const sigurEmployees = await sigurService.getEmployeesByDepartments([...whitelist], connection);
-        allowedNames = new Set<string>();
-        allowedSigurIds = new Set<number>();
-        for (const emp of sigurEmployees) {
-          const name = ((emp.name as string) || '').toLowerCase().trim();
-          if (name) allowedNames.add(name);
-          if (typeof emp.id === 'number') allowedSigurIds.add(emp.id);
-        }
-        sendProgress({ type: 'status', message: `Фильтр: ${whitelist.size} отделов, ${allowedNames.size} сотрудников` });
-      }
-
-      // 2. Генерируем список дней
-      const days: string[] = [];
-      const cur = new Date(startDate);
-      const end = new Date(endDate);
-      while (cur <= end) {
-        days.push(cur.toISOString().slice(0, 10));
-        cur.setDate(cur.getDate() + 1);
-      }
-
-      const errors: string[] = [];
-      let totalSigur = 0;
-      let totalInserted = 0;
-      let totalSkipped = 0;
-      let totalNoName = 0;
-      let totalNoOrg = 0;
-      let totalFilteredDept = 0;
-      const summariesToUpdate = new Set<string>();
-
-      sendProgress({ type: 'start', totalDays: days.length, employees: employeeByNameOrg.size, filtered: !!whitelist });
-
-      // 3. Обрабатываем по одному дню
-      for (let dayIdx = 0; dayIdx < days.length; dayIdx++) {
-        const day = days[dayIdx];
-        const dayStart = `${day}T00:00:00`;
-        const dayEnd = `${day}T23:59:59`;
-
-        sendProgress({
-          type: 'day_start',
-          day,
-          dayIndex: dayIdx,
-          totalDays: days.length,
-          percent: Math.round((dayIdx / days.length) * 100),
-        });
-
-        const rawEvents = await sigurService.getEvents(dayStart, dayEnd, connection, 'PASS_DETECTED', { pageSize: 3000 });
-        totalSigur += rawEvents.length;
-
-        if (rawEvents.length === 0) {
-          sendProgress({ type: 'day_done', day, dayIndex: dayIdx, events: 0, inserted: 0, skipped: 0 });
-          continue;
-        }
-
-        // Дедупликация: загружаем существующие хэши за день
-        const { data: existingEvents } = await supabase
-          .from('skud_events')
-          .select('dedup_hash')
-          .eq('event_date', day)
-          .not('dedup_hash', 'is', null);
-
-        const existingSet = new Set<string>();
-        for (const evt of existingEvents || []) {
-          if (evt.dedup_hash) existingSet.add(evt.dedup_hash);
-        }
-
-        const dayInserts: {
-          organization_id: string;
-          physical_person: string;
-          card_number: string | null;
-          event_date: string;
-          event_time: string;
-          access_point: string | null;
-          direction: 'entry' | 'exit' | null;
-          employee_id: number | null;
-          dedup_hash: string;
-        }[] = [];
-        let daySkipped = 0;
-
-        for (const raw of rawEvents) {
-          const mapped = mapSigurEvent(raw as Record<string, unknown>);
-          if (!mapped) { totalNoName++; continue; }
-
-          // Фильтр по отделам: пропускаем сотрудников не из whitelisted отделов
-          if (allowedNames) {
-            const nameKey = mapped.physicalPerson.toLowerCase().trim();
-            const sigurEmpId = mapped.employeeId;
-            if (!allowedNames.has(nameKey) && !(sigurEmpId && allowedSigurIds?.has(sigurEmpId))) {
-              totalFilteredDept++;
-              continue;
-            }
-          }
-
-          const dedupHash = computeDedupHash(
-            mapped.physicalPerson, mapped.eventDate, mapped.eventTime,
-            mapped.accessPoint, mapped.direction,
-          );
-          if (existingSet.has(dedupHash)) {
-            totalSkipped++;
-            daySkipped++;
-            continue;
-          }
-          existingSet.add(dedupHash);
-
-          const nameKey = mapped.physicalPerson.toLowerCase().trim();
-          let emp = mapped.employeeId != null ? sigurIdMap.get(mapped.employeeId) : undefined;
-          if (!emp && fallbackOrgId) {
-            emp = employeeByNameOrg.get(`${nameKey}|${fallbackOrgId}`);
-          }
-          const orgId = emp?.organization_id || fallbackOrgId;
-          if (!orgId) { totalNoOrg++; continue; }
-
-          dayInserts.push({
-            organization_id: orgId,
-            physical_person: mapped.physicalPerson,
-            card_number: mapped.cardNumber || null,
-            event_date: mapped.eventDate,
-            event_time: mapped.eventTime,
-            access_point: mapped.accessPoint,
-            direction: mapped.direction,
-            employee_id: emp?.id || null,
-            dedup_hash: dedupHash,
-          });
-
-          if (emp) {
-            summariesToUpdate.add(`${emp.id}:${orgId}:${mapped.eventDate}`);
-          }
-        }
-
-        // Вставляем батчами
-        const BATCH_SIZE = 500;
-        let dayInserted = 0;
-        for (let i = 0; i < dayInserts.length; i += BATCH_SIZE) {
-          const batch = dayInserts.slice(i, i + BATCH_SIZE);
-          const { error: insertError } = await supabase.from('skud_events').upsert(batch, { onConflict: 'dedup_hash', ignoreDuplicates: true });
-          if (insertError) {
-            errors.push(`[${day}] Ошибка вставки: ${insertError.message}`);
-          } else {
-            dayInserted += batch.length;
-            totalInserted += batch.length;
-          }
-        }
-
-        sendProgress({
-          type: 'day_done',
-          day,
-          dayIndex: dayIdx,
-          events: rawEvents.length,
-          inserted: dayInserted,
-          skipped: daySkipped,
-          totalInserted,
-          totalSkipped,
-          percent: Math.round(((dayIdx + 1) / days.length) * 100),
-        });
-      }
-
-      // 4. Пересчитываем сводки (пакетный RPC)
-      if (summariesToUpdate.size > 0) {
-        sendProgress({ type: 'status', message: 'Пересчёт сводок...' });
-        const pairs = [...summariesToUpdate].map(key => {
-          const [empId, orgId, date] = key.split(':');
-          return { org_id: orgId, emp_id: parseInt(empId, 10), date };
-        });
-        await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: pairs });
-      }
-
-      // 5. Аудит
       await auditService.logFromRequest(req, req.user.id, 'SYNC_SIGUR', {
         details: {
-          sigurTotal: totalSigur,
-          imported: totalInserted,
-          skipped: totalSkipped,
-          droppedNoName: totalNoName,
-          droppedNoOrg: totalNoOrg,
-          filteredByDept: totalFilteredDept,
-          errors: errors.length,
-          matchedEmployees: summariesToUpdate.size,
+          organizationId,
           dateRange: { startDate, endDate },
+          ...result,
         },
       });
 
-      sendProgress({
-        type: 'done',
-        imported: totalInserted,
-        skipped: totalSkipped,
-        droppedNoName: totalNoName,
-        droppedNoOrg: totalNoOrg,
-        filteredByDept: totalFilteredDept,
-        matched: summariesToUpdate.size,
-        errors,
-        sigurTotal: totalSigur,
-      });
-
+      sendProgress({ type: 'done', ...result });
       res.end();
     } catch (error) {
+      if (isManualSyncConflict(error)) {
+        sendManualSyncConflict(res);
+        return;
+      }
+
       console.error('Sigur sync error:', error);
-      try {
-        res.write(`data: ${JSON.stringify({ type: 'error', message: 'Ошибка синхронизации данных из Sigur' })}\n\n`);
-        res.end();
-      } catch { /* headers already sent */ }
+      if (res.headersSent) {
+        try {
+          res.write(`data: ${JSON.stringify({ type: 'error', message: 'Ошибка синхронизации данных из Sigur' })}\n\n`);
+          res.end();
+        } catch {
+          // Ignore SSE write failures after disconnect
+        }
+      } else {
+        res.status(500).json({ success: false, error: 'Ошибка синхронизации данных из Sigur' });
+      }
+    } finally {
+      if (lockAcquired) {
+        releasePresencePollingLock();
+      }
     }
   },
 
-  /**
-   * POST /api/sigur/sync-employees
-   * Импорт сотрудников из Sigur в БД с привязкой к подразделениям и должностям
-   */
   async syncEmployees(req: AuthenticatedRequest, res: Response): Promise<void> {
+    let lockAcquired = false;
+
     try {
-      const organizationId = req.body.organization_id || req.user.organization_id;
+      const organizationId = await resolveOrganizationId(req);
       if (!organizationId) {
         res.status(400).json({ success: false, error: 'organization_id обязателен' });
         return;
       }
-      const connection = (req.body.connection as 'external' | 'internal') || undefined;
-      const result = await syncEmployeesLogic(organizationId, connection);
+
+      const connection = (req.body.connection as ConnectionType) || undefined;
+
+      await acquirePresencePollingLock();
+      lockAcquired = true;
+
+      const result = await syncEmployeesLogic(organizationId, connection, undefined, {});
       res.json({ success: true, data: result });
     } catch (error) {
+      if (isManualSyncConflict(error)) {
+        sendManualSyncConflict(res);
+        return;
+      }
+
       console.error('Sigur syncEmployees error:', error);
       res.status(500).json({ success: false, error: 'Ошибка импорта сотрудников из Sigur' });
+    } finally {
+      if (lockAcquired) {
+        releasePresencePollingLock();
+      }
     }
   },
 
-  /**
-   * POST /api/sigur/sync-departments
-   * Импорт отделов из Sigur в org_departments с иерархией (parent_id)
-   */
   async syncDepartments(req: AuthenticatedRequest, res: Response): Promise<void> {
+    let lockAcquired = false;
+
     try {
-      const organizationId = req.body.organization_id || req.user.organization_id;
+      const organizationId = await resolveOrganizationId(req);
       if (!organizationId) {
         res.status(400).json({ success: false, error: 'organization_id обязателен' });
         return;
       }
-      const connection = (req.body.connection as 'external' | 'internal') || undefined;
-      const result = await syncDepartmentsLogic(organizationId, connection);
+
+      const connection = (req.body.connection as ConnectionType) || undefined;
+
+      await acquirePresencePollingLock();
+      lockAcquired = true;
+
+      const result = await syncDepartmentsLogic(organizationId, connection, {});
       res.json({ success: true, data: result });
     } catch (error) {
+      if (isManualSyncConflict(error)) {
+        sendManualSyncConflict(res);
+        return;
+      }
+
       console.error('Sigur syncDepartments error:', error);
       res.status(500).json({ success: false, error: 'Ошибка импорта отделов из Sigur' });
+    } finally {
+      if (lockAcquired) {
+        releasePresencePollingLock();
+      }
     }
   },
 
-  /**
-   * POST /api/sigur/sync-positions
-   * Импорт должностей из Sigur в positions таблицу
-   */
   async syncPositions(req: AuthenticatedRequest, res: Response): Promise<void> {
+    let lockAcquired = false;
+
     try {
-      const organizationId = req.body.organization_id || req.user.organization_id;
+      const organizationId = await resolveOrganizationId(req);
       if (!organizationId) {
         res.status(400).json({ success: false, error: 'organization_id обязателен' });
         return;
       }
-      const connection = (req.body.connection as 'external' | 'internal') || undefined;
-      const result = await syncPositionsFromSigurLogic(organizationId, connection);
+
+      const connection = (req.body.connection as ConnectionType) || undefined;
+
+      await acquirePresencePollingLock();
+      lockAcquired = true;
+
+      const result = await syncPositionsFromSigurLogic(organizationId, connection, {});
       res.json({ success: true, data: result });
     } catch (error) {
+      if (isManualSyncConflict(error)) {
+        sendManualSyncConflict(res);
+        return;
+      }
+
       console.error('Sigur syncPositions error:', error);
       res.status(500).json({ success: false, error: 'Ошибка импорта должностей из Sigur' });
+    } finally {
+      if (lockAcquired) {
+        releasePresencePollingLock();
+      }
     }
   },
 
-  /**
-   * POST /api/sigur/clear-events
-   * Удаление событий из skud_events за указанный период (по дням, чтобы не таймаутить)
-   */
   async clearEvents(req: AuthenticatedRequest, res: Response): Promise<void> {
+    let lockAcquired = false;
+
     try {
       const { startDate, endDate } = req.body;
       if (!startDate || !endDate) {
@@ -358,19 +247,13 @@ export const sigurSyncController = {
         return;
       }
 
-      // Генерируем список дней
-      const days: string[] = [];
-      const cur = new Date(startDate);
-      const end = new Date(endDate);
-      while (cur <= end) {
-        days.push(cur.toISOString().slice(0, 10));
-        cur.setDate(cur.getDate() + 1);
-      }
+      await acquirePresencePollingLock();
+      lockAcquired = true;
 
+      const days = buildInclusiveDateRange(startDate, endDate);
       let totalDeleted = 0;
       const errors: string[] = [];
 
-      // Удаляем по дням чтобы не таймаутить
       for (const day of days) {
         const { count, error: deleteError } = await supabase
           .from('skud_events')
@@ -384,113 +267,176 @@ export const sigurSyncController = {
         }
       }
 
-      // Удаляем сводки за этот период
       await supabase
         .from('skud_daily_summary')
         .delete()
         .gte('date', startDate)
         .lte('date', endDate);
 
-      await auditService.logFromRequest(req, req.user.id, 'CLEAR_SKUD_EVENTS', {
+      await auditService.logFromRequest(req, req.user.id, 'CLEAR_SKUD', {
         details: { startDate, endDate, deletedCount: totalDeleted, errors },
       });
 
       res.json({ success: true, data: { deleted: totalDeleted, errors } });
     } catch (error) {
+      if (isManualSyncConflict(error)) {
+        sendManualSyncConflict(res);
+        return;
+      }
+
       console.error('Clear events error:', error);
       res.status(500).json({ success: false, error: 'Ошибка удаления событий' });
+    } finally {
+      if (lockAcquired) {
+        releasePresencePollingLock();
+      }
     }
   },
 
-  /**
-   * POST /api/sigur/sync-all
-   * Полная синхронизация структуры из Sigur (SSE)
-   * Последовательность: организации → дубли → отделы → должности → сотрудники
-   */
   async syncAll(req: AuthenticatedRequest, res: Response): Promise<void> {
+    let lockAcquired = false;
+
     try {
       if (!sigurService.isConfigured()) {
         res.status(503).json({ success: false, error: 'Sigur не настроен' });
         return;
       }
 
-      let organizationId = req.body.organization_id || req.user.organization_id;
-      if (!organizationId) {
-        const { data: orgs } = await supabase.from('organizations').select('id').limit(1);
-        organizationId = orgs?.[0]?.id || null;
-      }
+      const organizationId = await resolveOrganizationId(req);
       if (!organizationId) {
         res.status(400).json({ success: false, error: 'organization_id обязателен' });
         return;
       }
 
-      console.log(`[syncAll] resolved organizationId: ${organizationId}, user.organization_id: ${req.user.organization_id}`);
+      const steps = normalizeSelectedSteps(req.body.steps);
+      if (steps.length === 0) {
+        res.status(400).json({ success: false, error: 'Не выбраны шаги синхронизации' });
+        return;
+      }
+
+      await acquirePresencePollingLock();
+      lockAcquired = true;
 
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
       res.flushHeaders();
 
-      const sendProgress = (data: Record<string, unknown>) => {
-        res.write(`data: ${JSON.stringify(data)}\n\n`);
-      };
+      const sendProgress = createSseSender(res);
+      const connection = (req.body.connection as ConnectionType) || undefined;
+      const context: ISyncContext = {};
 
-      const connection = (req.body.connection as 'external' | 'internal') || undefined;
+      console.log(`[syncAll] resolved organizationId: ${organizationId}, user.organization_id: ${req.user.organization_id}`);
 
-      // Даты для синхронизации событий (если не указаны — текущий месяц)
-      const now = new Date();
-      const y = now.getFullYear();
-      const m = String(now.getMonth() + 1).padStart(2, '0');
-      const d = String(now.getDate()).padStart(2, '0');
-      const eventsStartDate = req.body.startDate || `${y}-${m}-01`;
-      const eventsEndDate = req.body.endDate || `${y}-${m}-${d}`;
-
-      // Приостанавливаем polling чтобы не конкурировать за Sigur API
-      stopPresencePolling();
-
-      const steps = [
-        { id: 1, name: 'organizations', label: 'Импорт организаций', fn: () => syncOrganizationsLogic(connection) },
-        { id: 2, name: 'clean-duplicates', label: 'Очистка дублей', fn: () => cleanDuplicateOrganizationsLogic() },
-        { id: 3, name: 'departments', label: 'Импорт отделов (иерархия)', fn: () => syncDepartmentsLogic(organizationId, connection) },
-        { id: 4, name: 'positions', label: 'Импорт должностей', fn: async () => {
-          const fromSigur = await syncPositionsFromSigurLogic(organizationId, connection);
-          const seeded = await seedPositionsLogic(organizationId);
-          return { ...fromSigur, seeded: seeded.created };
-        }},
-        { id: 5, name: 'employees', label: 'Импорт сотрудников', fn: () => syncEmployeesLogic(organizationId, connection, sendProgress) },
-        { id: 6, name: 'events', label: `Синхронизация событий (${eventsStartDate} — ${eventsEndDate})`, fn: () => syncEventsLogic(organizationId, eventsStartDate, eventsEndDate, connection, sendProgress) },
-      ];
+      const stepDefinitions: Array<{
+        id: number;
+        name: SyncAllStepName;
+        label: string;
+        fn: () => Promise<Record<string, unknown>>;
+      }> = [
+        {
+          id: 1,
+          name: 'organizations' as SyncAllStepName,
+          label: 'Импорт организаций',
+          fn: async () => syncOrganizationsLogic(connection, context) as unknown as Record<string, unknown>,
+        },
+        {
+          id: 2,
+          name: 'clean-duplicates' as SyncAllStepName,
+          label: 'Очистка дублей',
+          fn: async () => cleanDuplicateOrganizationsLogic() as unknown as Record<string, unknown>,
+        },
+        {
+          id: 3,
+          name: 'departments' as SyncAllStepName,
+          label: 'Импорт отделов (иерархия)',
+          fn: async () => syncDepartmentsLogic(organizationId, connection, context) as unknown as Record<string, unknown>,
+        },
+        {
+          id: 4,
+          name: 'positions' as SyncAllStepName,
+          label: 'Импорт должностей',
+          fn: async () => {
+            const fromSigur = await syncPositionsFromSigurLogic(organizationId, connection, context);
+            const seeded = await seedPositionsLogic(organizationId);
+            return { ...fromSigur, seeded: seeded.created };
+          },
+        },
+        {
+          id: 5,
+          name: 'employees' as SyncAllStepName,
+          label: 'Импорт сотрудников',
+          fn: async () => syncEmployeesLogic(organizationId, connection, sendProgress, context) as unknown as Record<string, unknown>,
+        },
+      ].filter(step => steps.includes(step.name));
 
       const results: Record<string, unknown> = {};
+      const failedSteps: SyncAllStepName[] = [];
+      sendProgress({ type: 'start', steps });
 
-      for (const step of steps) {
+      for (const step of stepDefinitions) {
+        const startedAt = Date.now();
         sendProgress({ type: 'step', step: step.id, name: step.name, label: step.label, status: 'running' });
+
         try {
           const result = await step.fn();
-          results[step.name] = result;
-          sendProgress({ type: 'step', step: step.id, name: step.name, label: step.label, status: 'done', result });
+          const durationMs = Date.now() - startedAt;
+          const resultWithDuration = { ...result, durationMs };
+          results[step.name] = resultWithDuration;
+          console.log(`[syncAll] step ${step.name} done in ${durationMs}ms`);
+          sendProgress({ type: 'step', step: step.id, name: step.name, label: step.label, status: 'done', result: resultWithDuration });
         } catch (error) {
           const message = (error as Error).message;
-          results[step.name] = { error: message };
-          sendProgress({ type: 'step', step: step.id, name: step.name, label: step.label, status: 'error', error: message });
+          const durationMs = Date.now() - startedAt;
+          results[step.name] = { error: message, durationMs };
+          failedSteps.push(step.name);
+          console.error(`[syncAll] step ${step.name} failed in ${durationMs}ms: ${message}`);
+          sendProgress({ type: 'step', step: step.id, name: step.name, label: step.label, status: 'error', error: message, durationMs });
         }
       }
 
-      // Аудит
-      await auditService.logFromRequest(req, req.user.id, 'SYNC_ALL_SIGUR', {
-        details: { results },
+      const hasErrors = failedSteps.length > 0;
+
+      await auditService.logFromRequest(req, req.user.id, 'SYNC_SIGUR', {
+        details: {
+          organizationId,
+          steps,
+          hasErrors,
+          failedSteps,
+          results,
+        },
       });
 
-      sendProgress({ type: 'done', results });
-      startPresencePolling();
+      sendProgress({
+        type: 'done',
+        results,
+        steps,
+        hasErrors,
+        failedSteps,
+        completedSteps: stepDefinitions.length - failedSteps.length,
+      });
       res.end();
     } catch (error) {
+      if (isManualSyncConflict(error)) {
+        sendManualSyncConflict(res);
+        return;
+      }
+
       console.error('Sigur syncAll error:', error);
-      startPresencePolling();
-      try {
-        res.write(`data: ${JSON.stringify({ type: 'error', message: 'Ошибка полной синхронизации' })}\n\n`);
-        res.end();
-      } catch { /* headers already sent */ }
+      if (res.headersSent) {
+        try {
+          res.write(`data: ${JSON.stringify({ type: 'error', message: 'Ошибка полной синхронизации' })}\n\n`);
+          res.end();
+        } catch {
+          // Ignore SSE write failures after disconnect
+        }
+      } else {
+        res.status(500).json({ success: false, error: 'Ошибка полной синхронизации' });
+      }
+    } finally {
+      if (lockAcquired) {
+        releasePresencePollingLock();
+      }
     }
   },
 };

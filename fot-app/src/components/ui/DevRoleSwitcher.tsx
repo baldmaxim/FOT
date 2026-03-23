@@ -1,4 +1,4 @@
-import { FC, useState, useRef, useEffect } from 'react';
+import { type FC, useState, useRef, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import type { EmployeePositionType } from '../../types';
 import styles from './DevRoleSwitcher.module.css';

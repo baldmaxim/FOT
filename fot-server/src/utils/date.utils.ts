@@ -70,3 +70,56 @@ export function parseDate(value: string | number | Date | null | undefined): str
 
   return null;
 }
+
+/**
+ * Парсит календарную дату YYYY-MM-DD без перехода в UTC.
+ * Возвращает local Date на полуночи, либо null для невалидного ввода.
+ */
+export function parseIsoDateOnly(value: string): Date | null {
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+
+  const [, yearRaw, monthRaw, dayRaw] = match;
+  const year = Number(yearRaw);
+  const month = Number(monthRaw);
+  const day = Number(dayRaw);
+  const date = new Date(year, month - 1, day);
+
+  if (
+    !isValidDate(date) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
+/**
+ * Строит включительный диапазон календарных дат YYYY-MM-DD.
+ * Не использует UTC-преобразования, чтобы избежать сдвигов на границах месяца/года.
+ */
+export function buildInclusiveDateRange(startDate: string, endDate: string): string[] {
+  const start = parseIsoDateOnly(startDate);
+  const end = parseIsoDateOnly(endDate);
+
+  if (!start || !end) {
+    throw new Error('Некорректный формат даты. Ожидается YYYY-MM-DD');
+  }
+
+  if (start > end) {
+    throw new Error('startDate не может быть позже endDate');
+  }
+
+  const days: string[] = [];
+  const cursor = new Date(start);
+
+  while (cursor <= end) {
+    days.push(formatDateToISO(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return days;
+}
