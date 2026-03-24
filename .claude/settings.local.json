@@ -39,7 +39,8 @@
       "Bash(node:*)",
       "Bash(npx kill-port:*)",
       "Bash(timeout:*)",
-      "Bash(wmic process:*)"
+      "Bash(wmic process:*)",
+      "Bash(npm.cmd run:*)"
     ]
   }
 }

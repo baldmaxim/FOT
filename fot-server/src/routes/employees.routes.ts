@@ -12,7 +12,7 @@ const upload = multer({
   limits: {
     fileSize: 5 * 1024 * 1024, // 5MB max
   },
-  fileFilter: (req, file, cb) => {
+  fileFilter: (_req, file, cb) => {
     const allowedMimes = [
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // xlsx
       'application/vnd.ms-excel', // xls

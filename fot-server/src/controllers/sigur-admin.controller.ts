@@ -46,7 +46,7 @@ export const sigurAdminController = {
    * POST /api/sigur/clean-duplicate-organizations
    * Удаление дублей организаций
    */
-  async cleanDuplicateOrganizations(req: AuthenticatedRequest, res: Response): Promise<void> {
+  async cleanDuplicateOrganizations(_req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const result = await cleanDuplicateOrganizationsLogic();
       res.json({ success: true, data: result });

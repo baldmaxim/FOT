@@ -138,7 +138,7 @@ export const employeeEnrichController = {
       }
 
       // Загружаем всех сотрудников организации (пагинация для >1000)
-      const dbEmployees: Record<string, unknown>[] = [];
+      const dbEmployees: Array<{ id: number; full_name: string; [k: string]: unknown }> = [];
       const PAGE_SIZE = 1000;
       let from = 0;
       while (true) {

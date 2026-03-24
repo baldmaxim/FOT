@@ -237,7 +237,7 @@ async function checkOrphanedAssignments(organizationId: string): Promise<AuditCh
       );
 
       if (hasOrphanedRefs) {
-        const emp = assignment.employees as { full_name: string };
+        const emp = assignment.employees as unknown as { full_name: string };
         issues.push({
           employee_id: assignment.employee_id,
           full_name: emp.full_name || 'Неизвестно',

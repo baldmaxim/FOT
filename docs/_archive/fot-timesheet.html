@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FOT by SU_10 — Табель</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --white: #ffffff;
+            --bg: #f8fafc;
+            --dark: #1e293b;
+            --green: #22c55e;
+            --orange: #f59e0b;
+            --red: #ef4444;
+            --blue: #3b82f6;
+            --purple: #8b5cf6;
+            
+            --border: #e2e8f0;
+            --text: #0f172a;
+            --text-secondary: #64748b;
+            --text-muted: #94a3b8;
+            --green-bg: rgba(34, 197, 94, 0.12);
+            --orange-bg: rgba(245, 158, 11, 0.12);
+            --red-bg: rgba(239, 68, 68, 0.12);
+            --blue-bg: rgba(59, 130, 246, 0.12);
+            --purple-bg: rgba(139, 92, 246, 0.12);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            font-size: 14px;
+        }
+
+        .app { display: flex; min-height: 100vh; }
+
+        /* Сайдбар */
+        .sidebar {
+            width: 200px;
+            background: var(--white);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            height: 100vh;
+            z-index: 100;
+        }
+
+        .logo {
+            padding: 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .logo-mark { font-size: 22px; font-weight: 800; color: var(--dark); }
+        .logo-sub { font-family: 'Space Mono', monospace; font-size: 10px; color: var(--text-muted); }
+
+        .nav { flex: 1; padding: 12px 8px; }
+        .nav-group { margin-bottom: 20px; }
+        .nav-label { font-size: 9px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; padding: 0 10px; margin-bottom: 6px; }
+
+        .nav-item {
+            display: flex; align-items: center; gap: 8px;
+            padding: 9px 10px; border-radius: 8px; cursor: pointer;
+            color: var(--text-secondary); font-size: 13px; font-weight: 500;
+            margin-bottom: 2px; transition: all 0.15s;
+        }
+        .nav-item:hover { background: var(--bg); color: var(--text); }
+        .nav-item.active { background: var(--green-bg); color: var(--green); }
+        .nav-item svg { width: 18px; height: 18px; }
+
+        .sidebar-footer { padding: 12px; border-top: 1px solid var(--border); }
+        .user-mini { display: flex; align-items: center; gap: 10px; }
+        .user-avatar { width: 36px; height: 36px; border-radius: 10px; background: var(--green); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: white; }
+        .user-name { font-size: 13px; font-weight: 600; }
+        .user-role { font-size: 11px; color: var(--text-muted); }
+
+        /* Main */
+        .main { flex: 1; margin-left: 200px; display: flex; flex-direction: column; }
+
+        .header {
+            height: 56px; background: var(--white);
+            border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 24px; position: sticky; top: 0; z-index: 50;
+        }
+
+        .header-left { display: flex; align-items: center; gap: 20px; }
+        .page-title { font-size: 16px; font-weight: 600; }
+
+        .month-nav { display: flex; align-items: center; gap: 12px; }
+        .month-btn {
+            width: 32px; height: 32px; border-radius: 8px;
+            border: 1px solid var(--border); background: var(--white);
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+        }
+        .month-btn:hover { background: var(--bg); }
+        .month-btn svg { width: 16px; height: 16px; color: var(--text-secondary); }
+        .month-label { font-size: 15px; font-weight: 600; min-width: 140px; text-align: center; }
+
+        .header-right { display: flex; align-items: center; gap: 12px; }
+
+        .dept-select {
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 14px; border-radius: 8px;
+            border: 1px solid var(--border); background: var(--white);
+            font-size: 13px; font-weight: 500; cursor: pointer;
+        }
+        .dept-select:hover { border-color: var(--text-muted); }
+        .dept-select svg { width: 16px; height: 16px; color: var(--text-muted); }
+
+        .status-badge {
+            display: flex; align-items: center; gap: 6px;
+            padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600;
+        }
+        .status-badge.draft { background: var(--orange-bg); color: var(--orange); }
+        .status-badge.approved { background: var(--green-bg); color: var(--green); }
+        .status-badge::before {
+            content: ''; width: 8px; height: 8px; border-radius: 50%;
+            background: currentColor;
+        }
+
+        .btn {
+            height: 36px; padding: 0 16px; border-radius: 8px;
+            border: 1px solid var(--border); background: var(--white);
+            color: var(--text); font-size: 13px; font-weight: 500;
+            cursor: pointer; display: flex; align-items: center; gap: 6px;
+            transition: all 0.15s;
+        }
+        .btn:hover { background: var(--bg); }
+        .btn.primary { background: var(--green); border-color: var(--green); color: white; }
+        .btn.primary:hover { background: #16a34a; }
+        .btn svg { width: 16px; height: 16px; }
+
+        .content { flex: 1; padding: 24px; overflow: hidden; display: flex; flex-direction: column; }
+
+        /* Stats */
+        .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+        .stat-card {
+            background: var(--white); border: 1px solid var(--border);
+            border-radius: 12px; padding: 18px;
+        }
+        .stat-label { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+        .stat-value { font-size: 28px; font-weight: 700; }
+        .stat-value.green { color: var(--green); }
+        .stat-value.orange { color: var(--orange); }
+        .stat-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+        .stat-hint.green { color: var(--green); }
+
+        /* Table Container */
+        .table-container {
+            flex: 1; background: var(--white); border: 1px solid var(--border);
+            border-radius: 14px; overflow: hidden; display: flex; flex-direction: column;
+        }
+
+        .table-header-bar {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 14px 20px; border-bottom: 1px solid var(--border);
+        }
+        .table-title { font-size: 14px; font-weight: 600; }
+
+        .legend { display: flex; gap: 16px; }
+        .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); }
+        .legend-dot { width: 20px; height: 20px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; }
+        .legend-dot.full { background: var(--green-bg); color: var(--green); }
+        .legend-dot.partial { background: var(--orange-bg); color: var(--orange); }
+        .legend-dot.sick { background: var(--blue-bg); color: var(--blue); }
+        .legend-dot.vacation { background: var(--purple-bg); color: var(--purple); }
+        .legend-dot.absent { background: var(--red-bg); color: var(--red); }
+        .legend-dot.weekend { background: var(--bg); color: var(--text-muted); }
+
+        /* Table */
+        .table-scroll { flex: 1; overflow: auto; }
+
+        .timesheet-table {
+            width: 100%; border-collapse: collapse; min-width: 1400px;
+        }
+
+        .timesheet-table th,
+        .timesheet-table td {
+            border: 1px solid var(--border);
+            text-align: center;
+            vertical-align: middle;
+        }
+
+        .timesheet-table thead th {
+            background: var(--bg);
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            padding: 10px 4px;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .timesheet-table thead th.weekend { background: #f1f5f9; }
+        .timesheet-table thead th.today { background: var(--green-bg); color: var(--green); }
+
+        .timesheet-table th.sticky-col,
+        .timesheet-table td.sticky-col {
+            position: sticky;
+            left: 0;
+            z-index: 20;
+            background: var(--white);
+        }
+
+        .timesheet-table thead th.sticky-col { z-index: 30; background: var(--bg); }
+
+        .employee-cell {
+            text-align: left;
+            padding: 10px 14px;
+            min-width: 200px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .employee-cell:hover { background: var(--bg); }
+        .employee-name { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+        .employee-role { font-size: 11px; color: var(--text-muted); }
+
+        .day-cell {
+            width: 38px; height: 44px; padding: 4px;
+            font-family: 'Space Mono', monospace;
+            font-size: 12px; font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .day-cell:hover { transform: scale(1.1); z-index: 5; position: relative; }
+
+        .day-cell.full { background: var(--green-bg); color: var(--green); }
+        .day-cell.partial { background: var(--orange-bg); color: var(--orange); }
+        .day-cell.sick { background: var(--blue-bg); color: var(--blue); }
+        .day-cell.vacation { background: var(--purple-bg); color: var(--purple); }
+        .day-cell.absent { background: var(--red-bg); color: var(--red); }
+        .day-cell.weekend { background: var(--bg); color: var(--text-muted); }
+        .day-cell.today { box-shadow: inset 0 0 0 2px var(--green); }
+
+        .summary-cell {
+            padding: 10px 8px;
+            font-family: 'Space Mono', monospace;
+            font-size: 12px;
+            font-weight: 600;
+            min-width: 60px;
+        }
+        .summary-cell.total { background: var(--bg); }
+        .summary-cell.diff { }
+        .summary-cell.diff.positive { color: var(--green); }
+        .summary-cell.diff.negative { color: var(--red); }
+
+        /* Side Panel */
+        .side-panel {
+            position: fixed;
+            right: -420px;
+            top: 0;
+            width: 420px;
+            height: 100vh;
+            background: var(--white);
+            border-left: 1px solid var(--border);
+            box-shadow: -4px 0 20px rgba(0,0,0,0.08);
+            z-index: 200;
+            transition: right 0.3s ease;
+            display: flex;
+            flex-direction: column;
+        }
+        .side-panel.open { right: 0; }
+
+        .panel-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 20px; border-bottom: 1px solid var(--border);
+        }
+        .panel-title { font-size: 16px; font-weight: 600; }
+        .panel-close {
+            width: 36px; height: 36px; border-radius: 8px;
+            border: 1px solid var(--border); background: var(--white);
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+        }
+        .panel-close:hover { background: var(--bg); }
+        .panel-close svg { width: 18px; height: 18px; color: var(--text-secondary); }
+
+        .panel-content { flex: 1; overflow-y: auto; padding: 20px; }
+
+        .panel-employee {
+            display: flex; align-items: center; gap: 14px;
+            padding: 16px; background: var(--bg); border-radius: 12px; margin-bottom: 20px;
+        }
+        .panel-avatar {
+            width: 48px; height: 48px; border-radius: 12px;
+            background: var(--green); display: flex; align-items: center;
+            justify-content: center; font-size: 16px; font-weight: 700; color: white;
+        }
+        .panel-emp-name { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
+        .panel-emp-role { font-size: 12px; color: var(--text-muted); }
+
+        .panel-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 20px; }
+        .panel-stat {
+            background: var(--bg); border-radius: 10px; padding: 14px; text-align: center;
+        }
+        .panel-stat-value { font-size: 22px; font-weight: 700; margin-bottom: 2px; }
+        .panel-stat-label { font-size: 11px; color: var(--text-muted); }
+
+        .panel-section { margin-bottom: 20px; }
+        .panel-section-title { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-bottom: 12px; }
+
+        .day-detail {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px; background: var(--bg); border-radius: 10px; margin-bottom: 8px;
+        }
+        .day-detail-left { display: flex; align-items: center; gap: 12px; }
+        .day-detail-date { font-size: 13px; font-weight: 500; }
+        .day-detail-day { font-size: 11px; color: var(--text-muted); }
+        .day-detail-times { display: flex; gap: 12px; }
+        .day-detail-time { font-family: 'Space Mono', monospace; font-size: 12px; }
+        .day-detail-time span { color: var(--text-muted); margin-right: 4px; }
+        .day-detail-hours {
+            font-family: 'Space Mono', monospace; font-size: 13px;
+            font-weight: 600; padding: 4px 10px; border-radius: 6px;
+        }
+        .day-detail-hours.full { background: var(--green-bg); color: var(--green); }
+        .day-detail-hours.partial { background: var(--orange-bg); color: var(--orange); }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.4); z-index: 300;
+            display: none; align-items: center; justify-content: center;
+        }
+        .modal-overlay.open { display: flex; }
+
+        .modal {
+            background: var(--white); border-radius: 16px;
+            width: 440px; max-height: 90vh; overflow: hidden;
+        }
+        .modal-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 20px; border-bottom: 1px solid var(--border);
+        }
+        .modal-title { font-size: 16px; font-weight: 600; }
+        .modal-body { padding: 20px; }
+        .modal-footer {
+            display: flex; justify-content: flex-end; gap: 10px;
+            padding: 16px 20px; border-top: 1px solid var(--border);
+        }
+
+        .form-group { margin-bottom: 16px; }
+        .form-label { display: block; font-size: 12px; font-weight: 500; color: var(--text-secondary); margin-bottom: 6px; }
+        .form-select, .form-input {
+            width: 100%; padding: 12px 14px; border-radius: 10px;
+            border: 1px solid var(--border); font-size: 14px;
+            background: var(--white); color: var(--text);
+        }
+        .form-select:focus, .form-input:focus { outline: none; border-color: var(--green); }
+
+        .type-options { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        .type-option {
+            padding: 14px; border-radius: 10px; border: 2px solid var(--border);
+            cursor: pointer; text-align: center; transition: all 0.15s;
+        }
+        .type-option:hover { border-color: var(--text-muted); }
+        .type-option.selected { border-color: var(--green); background: var(--green-bg); }
+        .type-option-icon { font-size: 20px; margin-bottom: 6px; }
+        .type-option-label { font-size: 12px; font-weight: 500; }
+
+        /* Overlay backdrop */
+        .backdrop {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.3); z-index: 150;
+            display: none;
+        }
+        .backdrop.open { display: block; }
+
+        @media (max-width: 1200px) {
+            .stats-row { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 768px) {
+            .sidebar { display: none; }
+            .main { margin-left: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="logo">
+                <span class="logo-mark">FOT</span>
+                <span class="logo-sub">by SU_10</span>
+            </div>
+            <nav class="nav">
+                <div class="nav-group">
+                    <div class="nav-label">Основное</div>
+                    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Обзор</div>
+                    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>Сотрудники</div>
+                    <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Табель</div>
+                </div>
+                <div class="nav-group">
+                    <div class="nav-label">Контроль</div>
+                    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Просмотр СКУД</div>
+                    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>СКУД (база)</div>
+                    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09c0 .66.39 1.25 1 1.51a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1.08H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Настройки</div>
+                </div>
+                <div class="nav-group">
+                    <div class="nav-label">Система</div>
+                    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Пользователи</div>
+                    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>Управление</div>
+                </div>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="user-mini">
+                    <div class="user-avatar">ОА</div>
+                    <div><div class="user-name">Одинцов Артём</div><div class="user-role">Супер-админ</div></div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="main">
+            <header class="header">
+                <div class="header-left">
+                    <h1 class="page-title">Табель</h1>
+                    <div class="month-nav">
+                        <button class="month-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg></button>
+                        <span class="month-label">Март 2026</span>
+                        <button class="month-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button>
+                    </div>
+                </div>
+                <div class="header-right">
+                    <div class="dept-select">
+                        Тендерный отдел
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                    <div class="status-badge draft">Черновик</div>
+                    <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Экспорт</button>
+                    <button class="btn primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>Утвердить</button>
+                </div>
+            </header>
+
+            <div class="content">
+                <!-- Stats -->
+                <div class="stats-row">
+                    <div class="stat-card">
+                        <div class="stat-label">Сотрудников в отделе</div>
+                        <div class="stat-value">8</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Норма часов</div>
+                        <div class="stat-value">168ч</div>
+                        <div class="stat-hint">21 рабочий день</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Фактически отработано</div>
+                        <div class="stat-value green">312ч</div>
+                        <div class="stat-hint green">на текущий момент</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Отклонения</div>
+                        <div class="stat-value orange">5</div>
+                        <div class="stat-hint">2 опоздания, 2 отсутствия, 1 больничный</div>
+                    </div>
+                </div>
+
+                <!-- Table -->
+                <div class="table-container">
+                    <div class="table-header-bar">
+                        <h3 class="table-title">Табель учёта рабочего времени</h3>
+                        <div class="legend">
+                            <div class="legend-item"><span class="legend-dot full">8</span>Полный день</div>
+                            <div class="legend-item"><span class="legend-dot partial">7</span>Неполный</div>
+                            <div class="legend-item"><span class="legend-dot sick">Б</span>Больничный</div>
+                            <div class="legend-item"><span class="legend-dot vacation">О</span>Отпуск</div>
+                            <div class="legend-item"><span class="legend-dot absent">Н</span>Неявка</div>
+                            <div class="legend-item"><span class="legend-dot weekend">—</span>Выходной</div>
+                        </div>
+                    </div>
+                    <div class="table-scroll">
+                        <table class="timesheet-table">
+                            <thead>
+                                <tr>
+                                    <th class="sticky-col">Сотрудник</th>
+                                    <th class="weekend">1<br><span style="font-weight:400">Вс</span></th>
+                                    <th>2<br><span style="font-weight:400">Пн</span></th>
+                                    <th>3<br><span style="font-weight:400">Вт</span></th>
+                                    <th>4<br><span style="font-weight:400">Ср</span></th>
+                                    <th>5<br><span style="font-weight:400">Чт</span></th>
+                                    <th>6<br><span style="font-weight:400">Пт</span></th>
+                                    <th class="weekend">7<br><span style="font-weight:400">Сб</span></th>
+                                    <th class="weekend">8<br><span style="font-weight:400">Вс</span></th>
+                                    <th>9<br><span style="font-weight:400">Пн</span></th>
+                                    <th class="today">10<br><span style="font-weight:400">Вт</span></th>
+                                    <th>11<br><span style="font-weight:400">Ср</span></th>
+                                    <th>12<br><span style="font-weight:400">Чт</span></th>
+                                    <th>13<br><span style="font-weight:400">Пт</span></th>
+                                    <th class="weekend">14<br><span style="font-weight:400">Сб</span></th>
+                                    <th class="weekend">15<br><span style="font-weight:400">Вс</span></th>
+                                    <th>Факт</th>
+                                    <th>Норма</th>
+                                    <th>+/−</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="sticky-col employee-cell" onclick="openPanel('am')">
+                                        <div class="employee-name">Артамонов Максим Алексеевич</div>
+                                        <div class="employee-role">Инженер</div>
+                                    </td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell partial" onclick="openModal(this)">7</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full today" onclick="openModal(this)">6</td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="summary-cell total">53ч</td>
+                                    <td class="summary-cell">64ч</td>
+                                    <td class="summary-cell diff negative">−11</td>
+                                </tr>
+                                <tr>
+                                    <td class="sticky-col employee-cell" onclick="openPanel('ke')">
+                                        <div class="employee-name">Казаков Евгений Игоревич</div>
+                                        <div class="employee-role">Инженер</div>
+                                    </td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell partial" onclick="openModal(this)">7</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell absent" onclick="openModal(this)">Н</td>
+                                    <td class="day-cell partial today" onclick="openModal(this)">5</td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="summary-cell total">44ч</td>
+                                    <td class="summary-cell">64ч</td>
+                                    <td class="summary-cell diff negative">−20</td>
+                                </tr>
+                                <tr>
+                                    <td class="sticky-col employee-cell" onclick="openPanel('aa')">
+                                        <div class="employee-name">Андрусевич Алина Романовна</div>
+                                        <div class="employee-role">Секретарь</div>
+                                    </td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full today" onclick="openModal(this)">8</td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="summary-cell total">56ч</td>
+                                    <td class="summary-cell">64ч</td>
+                                    <td class="summary-cell diff negative">−8</td>
+                                </tr>
+                                <tr>
+                                    <td class="sticky-col employee-cell" onclick="openPanel('gd')">
+                                        <div class="employee-name">Голотин Дмитрий Сергеевич</div>
+                                        <div class="employee-role">Специалист</div>
+                                    </td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell sick" onclick="openModal(this)">Б</td>
+                                    <td class="day-cell sick" onclick="openModal(this)">Б</td>
+                                    <td class="day-cell sick" onclick="openModal(this)">Б</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full today" onclick="openModal(this)">8</td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="summary-cell total">32ч</td>
+                                    <td class="summary-cell">64ч</td>
+                                    <td class="summary-cell diff negative">−32</td>
+                                </tr>
+                                <tr>
+                                    <td class="sticky-col employee-cell" onclick="openPanel('zv')">
+                                        <div class="employee-name">Зинин Вячеслав Александрович</div>
+                                        <div class="employee-role">Инженер ПТО</div>
+                                    </td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full today" onclick="openModal(this)">7</td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="summary-cell total">55ч</td>
+                                    <td class="summary-cell">64ч</td>
+                                    <td class="summary-cell diff negative">−9</td>
+                                </tr>
+                                <tr>
+                                    <td class="sticky-col employee-cell" onclick="openPanel('kn')">
+                                        <div class="employee-name">Кузнецов Никита Сергеевич</div>
+                                        <div class="employee-role">Специалист</div>
+                                    </td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell vacation" onclick="openModal(this)">О</td>
+                                    <td class="day-cell vacation" onclick="openModal(this)">О</td>
+                                    <td class="day-cell vacation" onclick="openModal(this)">О</td>
+                                    <td class="day-cell vacation" onclick="openModal(this)">О</td>
+                                    <td class="day-cell vacation" onclick="openModal(this)">О</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell vacation" onclick="openModal(this)">О</td>
+                                    <td class="day-cell vacation today" onclick="openModal(this)">О</td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="summary-cell total">0ч</td>
+                                    <td class="summary-cell">64ч</td>
+                                    <td class="summary-cell diff">отпуск</td>
+                                </tr>
+                                <tr>
+                                    <td class="sticky-col employee-cell" onclick="openPanel('ps')">
+                                        <div class="employee-name">Петров Сергей Владимирович</div>
+                                        <div class="employee-role">Инженер</div>
+                                    </td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell absent" onclick="openModal(this)">Н</td>
+                                    <td class="day-cell full today" onclick="openModal(this)">8</td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="summary-cell total">48ч</td>
+                                    <td class="summary-cell">64ч</td>
+                                    <td class="summary-cell diff negative">−16</td>
+                                </tr>
+                                <tr>
+                                    <td class="sticky-col employee-cell" onclick="openPanel('sm')">
+                                        <div class="employee-name">Сидорова Мария Ивановна</div>
+                                        <div class="employee-role">Экономист</div>
+                                    </td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell full" onclick="openModal(this)">8</td>
+                                    <td class="day-cell full today" onclick="openModal(this)">8</td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell"></td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="day-cell weekend">—</td>
+                                    <td class="summary-cell total">56ч</td>
+                                    <td class="summary-cell">64ч</td>
+                                    <td class="summary-cell diff negative">−8</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Backdrop -->
+        <div class="backdrop" id="backdrop" onclick="closePanel()"></div>
+
+        <!-- Side Panel -->
+        <div class="side-panel" id="sidePanel">
+            <div class="panel-header">
+                <h3 class="panel-title">Детализация</h3>
+                <button class="panel-close" onclick="closePanel()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="panel-content">
+                <div class="panel-employee">
+                    <div class="panel-avatar" id="panelAvatar">КЕ</div>
+                    <div>
+                        <div class="panel-emp-name" id="panelName">Казаков Евгений Игоревич</div>
+                        <div class="panel-emp-role" id="panelRole">Инженер</div>
+                    </div>
+                </div>
+
+                <div class="panel-stats">
+                    <div class="panel-stat">
+                        <div class="panel-stat-value" style="color:var(--green);">44ч</div>
+                        <div class="panel-stat-label">Отработано</div>
+                    </div>
+                    <div class="panel-stat">
+                        <div class="panel-stat-value">64ч</div>
+                        <div class="panel-stat-label">Норма</div>
+                    </div>
+                    <div class="panel-stat">
+                        <div class="panel-stat-value" style="color:var(--orange);">1</div>
+                        <div class="panel-stat-label">Опозданий</div>
+                    </div>
+                    <div class="panel-stat">
+                        <div class="panel-stat-value" style="color:var(--red);">1</div>
+                        <div class="panel-stat-label">Неявок</div>
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <div class="panel-section-title">Детализация по дням</div>
+                    
+                    <div class="day-detail">
+                        <div class="day-detail-left">
+                            <div>
+                                <div class="day-detail-date">2 марта</div>
+                                <div class="day-detail-day">Понедельник</div>
+                            </div>
+                            <div class="day-detail-times">
+                                <div class="day-detail-time"><span>→</span>08:26</div>
+                                <div class="day-detail-time"><span>←</span>17:30</div>
+                            </div>
+                        </div>
+                        <div class="day-detail-hours full">8ч</div>
+                    </div>
+
+                    <div class="day-detail">
+                        <div class="day-detail-left">
+                            <div>
+                                <div class="day-detail-date">3 марта</div>
+                                <div class="day-detail-day">Вторник</div>
+                            </div>
+                            <div class="day-detail-times">
+                                <div class="day-detail-time"><span>→</span>08:40</div>
+                                <div class="day-detail-time"><span>←</span>17:45</div>
+                            </div>
+                        </div>
+                        <div class="day-detail-hours full">8ч</div>
+                    </div>
+
+                    <div class="day-detail">
+                        <div class="day-detail-left">
+                            <div>
+                                <div class="day-detail-date">4 марта</div>
+                                <div class="day-detail-day">Среда</div>
+                            </div>
+                            <div class="day-detail-times">
+                                <div class="day-detail-time"><span>→</span>08:11</div>
+                                <div class="day-detail-time"><span>←</span>17:20</div>
+                            </div>
+                        </div>
+                        <div class="day-detail-hours full">8ч</div>
+                    </div>
+
+                    <div class="day-detail">
+                        <div class="day-detail-left">
+                            <div>
+                                <div class="day-detail-date">5 марта</div>
+                                <div class="day-detail-day">Четверг</div>
+                            </div>
+                            <div class="day-detail-times">
+                                <div class="day-detail-time"><span>→</span>08:23</div>
+                                <div class="day-detail-time"><span>←</span>17:30</div>
+                            </div>
+                        </div>
+                        <div class="day-detail-hours full">8ч</div>
+                    </div>
+
+                    <div class="day-detail">
+                        <div class="day-detail-left">
+                            <div>
+                                <div class="day-detail-date">6 марта</div>
+                                <div class="day-detail-day">Пятница</div>
+                            </div>
+                            <div class="day-detail-times">
+                                <div class="day-detail-time"><span>→</span>09:09</div>
+                                <div class="day-detail-time"><span>←</span>17:15</div>
+                            </div>
+                        </div>
+                        <div class="day-detail-hours partial">7ч</div>
+                    </div>
+
+                    <div class="day-detail" style="background:var(--red-bg);">
+                        <div class="day-detail-left">
+                            <div>
+                                <div class="day-detail-date">9 марта</div>
+                                <div class="day-detail-day">Понедельник</div>
+                            </div>
+                        </div>
+                        <div class="day-detail-hours" style="background:var(--red-bg);color:var(--red);">Неявка</div>
+                    </div>
+
+                    <div class="day-detail">
+                        <div class="day-detail-left">
+                            <div>
+                                <div class="day-detail-date">10 марта</div>
+                                <div class="day-detail-day">Вторник (сегодня)</div>
+                            </div>
+                            <div class="day-detail-times">
+                                <div class="day-detail-time"><span>→</span>10:01</div>
+                                <div class="day-detail-time"><span>←</span>—</div>
+                            </div>
+                        </div>
+                        <div class="day-detail-hours partial">5ч</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal -->
+        <div class="modal-overlay" id="modalOverlay">
+            <div class="modal">
+                <div class="modal-header">
+                    <h3 class="modal-title">Корректировка</h3>
+                    <button class="panel-close" onclick="closeModal()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label class="form-label">Тип записи</label>
+                        <div class="type-options">
+                            <div class="type-option selected" onclick="selectType(this)">
+                                <div class="type-option-icon">✓</div>
+                                <div class="type-option-label">Присутствие</div>
+                            </div>
+                            <div class="type-option" onclick="selectType(this)">
+                                <div class="type-option-icon">🏥</div>
+                                <div class="type-option-label">Больничный</div>
+                            </div>
+                            <div class="type-option" onclick="selectType(this)">
+                                <div class="type-option-icon">🏖</div>
+                                <div class="type-option-label">Отпуск</div>
+                            </div>
+                            <div class="type-option" onclick="selectType(this)">
+                                <div class="type-option-icon">✈️</div>
+                                <div class="type-option-label">Командировка</div>
+                            </div>
+                            <div class="type-option" onclick="selectType(this)">
+                                <div class="type-option-icon">❌</div>
+                                <div class="type-option-label">Прогул</div>
+                            </div>
+                            <div class="type-option" onclick="selectType(this)">
+                                <div class="type-option-icon">✏️</div>
+                                <div class="type-option-label">Ручная корр.</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Часы</label>
+                        <input type="number" class="form-input" value="8" min="0" max="24" step="0.5">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Комментарий</label>
+                        <input type="text" class="form-input" placeholder="Причина корректировки...">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Документ (опционально)</label>
+                        <input type="file" class="form-input" style="padding: 10px;">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn" onclick="closeModal()">Отмена</button>
+                    <button class="btn primary" onclick="closeModal()">Сохранить</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function openPanel(id) {
+            document.getElementById('sidePanel').classList.add('open');
+            document.getElementById('backdrop').classList.add('open');
+            
+            // Demo data for different employees
+            const employees = {
+                'am': { name: 'Артамонов Максим Алексеевич', role: 'Инженер', initials: 'АМ' },
+                'ke': { name: 'Казаков Евгений Игоревич', role: 'Инженер', initials: 'КЕ' },
+                'aa': { name: 'Андрусевич Алина Романовна', role: 'Секретарь', initials: 'АА' },
+                'gd': { name: 'Голотин Дмитрий Сергеевич', role: 'Специалист', initials: 'ГД' },
+                'zv': { name: 'Зинин Вячеслав Александрович', role: 'Инженер ПТО', initials: 'ЗВ' },
+                'kn': { name: 'Кузнецов Никита Сергеевич', role: 'Специалист', initials: 'КН' },
+                'ps': { name: 'Петров Сергей Владимирович', role: 'Инженер', initials: 'ПС' },
+                'sm': { name: 'Сидорова Мария Ивановна', role: 'Экономист', initials: 'СМ' }
+            };
+            
+            const emp = employees[id];
+            if (emp) {
+                document.getElementById('panelName').textContent = emp.name;
+                document.getElementById('panelRole').textContent = emp.role;
+                document.getElementById('panelAvatar').textContent = emp.initials;
+            }
+        }
+
+        function closePanel() {
+            document.getElementById('sidePanel').classList.remove('open');
+            document.getElementById('backdrop').classList.remove('open');
+        }
+
+        function openModal(cell) {
+            event.stopPropagation();
+            document.getElementById('modalOverlay').classList.add('open');
+        }
+
+        function closeModal() {
+            document.getElementById('modalOverlay').classList.remove('open');
+        }
+
+        function selectType(el) {
+            document.querySelectorAll('.type-option').forEach(opt => opt.classList.remove('selected'));
+            el.classList.add('selected');
+        }
+    </script>
+</body>
+</html>

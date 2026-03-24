@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FOT by SU_10 — Казаков Евгений Игоревич</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            /* Светлая тема - 5 цветов */
+            --white: #ffffff;
+            --bg: #f8fafc;
+            --dark: #1e293b;
+            --green: #22c55e;
+            --orange: #f59e0b;
+            --red: #ef4444;
+            
+            --border: #e2e8f0;
+            --text: #0f172a;
+            --text-secondary: #64748b;
+            --text-muted: #94a3b8;
+            --green-bg: rgba(34, 197, 94, 0.1);
+            --orange-bg: rgba(245, 158, 11, 0.1);
+            --red-bg: rgba(239, 68, 68, 0.1);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            font-size: 14px;
+        }
+
+        .app { display: flex; min-height: 100vh; }
+
+        /* Сайдбар */
+        .sidebar {
+            width: 200px;
+            background: var(--white);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            height: 100vh;
+        }
+
+        .logo {
+            padding: 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .logo-mark { font-size: 22px; font-weight: 800; color: var(--dark); }
+        .logo-sub { font-family: 'Space Mono', monospace; font-size: 10px; color: var(--text-muted); }
+
+        .nav { flex: 1; padding: 12px 8px; }
+        .nav-group { margin-bottom: 20px; }
+        .nav-label { font-size: 9px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; padding: 0 10px; margin-bottom: 6px; }
+
+        .nav-item {
+            display: flex; align-items: center; gap: 8px;
+            padding: 9px 10px; border-radius: 8px; cursor: pointer;
+            color: var(--text-secondary); font-size: 13px; font-weight: 500;
+            margin-bottom: 2px; transition: all 0.15s;
+        }
+        .nav-item:hover { background: var(--bg); color: var(--text); }
+        .nav-item.active { background: var(--green-bg); color: var(--green); }
+        .nav-item svg { width: 18px; height: 18px; }
+
+        .sidebar-footer { padding: 12px; border-top: 1px solid var(--border); }
+        .user-mini { display: flex; align-items: center; gap: 10px; }
+        .user-avatar { width: 36px; height: 36px; border-radius: 10px; background: var(--green); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: white; }
+        .user-name { font-size: 13px; font-weight: 600; }
+        .user-role { font-size: 11px; color: var(--text-muted); }
+
+        /* Main */
+        .main { flex: 1; margin-left: 200px; }
+
+        .header {
+            height: 56px; background: var(--white);
+            border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 24px; position: sticky; top: 0; z-index: 50;
+        }
+
+        .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+        .breadcrumb a { color: var(--text-muted); text-decoration: none; }
+        .breadcrumb a:hover { color: var(--green); }
+        .breadcrumb-current { color: var(--text); font-weight: 500; }
+
+        .header-actions { display: flex; gap: 8px; }
+        .btn {
+            height: 36px; padding: 0 14px; border-radius: 8px;
+            border: 1px solid var(--border); background: var(--white);
+            color: var(--text); font-size: 12px; font-weight: 500;
+            cursor: pointer; display: flex; align-items: center; gap: 6px;
+            transition: all 0.15s;
+        }
+        .btn:hover { background: var(--bg); border-color: var(--text-muted); }
+        .btn.primary { background: var(--green); border-color: var(--green); color: white; }
+        .btn.primary:hover { background: #16a34a; }
+        .btn.danger { background: var(--red-bg); border-color: transparent; color: var(--red); }
+        .btn.danger:hover { background: rgba(239,68,68,0.15); }
+        .btn svg { width: 14px; height: 14px; }
+
+        .content { padding: 24px; }
+
+        /* Профиль */
+        .profile-card {
+            background: var(--white); border: 1px solid var(--border);
+            border-radius: 16px; padding: 24px; margin-bottom: 20px;
+        }
+
+        .profile-top { display: flex; gap: 20px; align-items: flex-start; margin-bottom: 20px; }
+
+        .profile-avatar {
+            width: 88px; height: 88px; border-radius: 18px;
+            background: linear-gradient(135deg, var(--green), #15803d);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 32px; font-weight: 800; color: white;
+            position: relative; flex-shrink: 0;
+        }
+        .profile-avatar .status {
+            position: absolute; bottom: -2px; right: -2px;
+            width: 20px; height: 20px; border-radius: 50%;
+            background: var(--green); border: 3px solid var(--white);
+        }
+
+        .profile-info { flex: 1; }
+        .profile-name { font-size: 26px; font-weight: 700; margin-bottom: 10px; color: var(--text); }
+
+        .profile-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .badge {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 500;
+            background: var(--bg); color: var(--text-secondary);
+        }
+        .badge.green { background: var(--green-bg); color: var(--green); }
+        .badge svg { width: 14px; height: 14px; }
+
+        .profile-meta { display: flex; gap: 20px; flex-wrap: wrap; }
+        .meta-item { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); }
+        .meta-item svg { width: 16px; height: 16px; }
+        .profile-id { font-family: 'Space Mono', monospace; font-size: 11px; background: var(--bg); padding: 4px 10px; border-radius: 6px; color: var(--text-muted); }
+
+        /* Статистика */
+        .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding-top: 20px; border-top: 1px solid var(--border); }
+        .stat-box { text-align: center; padding: 16px; background: var(--bg); border-radius: 12px; }
+        .stat-value { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+        .stat-value.green { color: var(--green); }
+        .stat-value.orange { color: var(--orange); }
+        .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 500; }
+        .stat-hint { font-size: 11px; color: var(--green); margin-top: 4px; }
+
+        /* Табы */
+        .tabs-wrapper { margin-bottom: 20px; }
+        .tabs {
+            display: inline-flex; background: var(--white);
+            border: 1px solid var(--border); border-radius: 10px; padding: 4px;
+        }
+        .tab {
+            padding: 10px 20px; font-size: 13px; font-weight: 500;
+            color: var(--text-muted); border-radius: 8px; cursor: pointer;
+            transition: all 0.15s;
+        }
+        .tab:hover { color: var(--text-secondary); }
+        .tab.active { background: var(--green); color: white; }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .grid-2 { display: grid; grid-template-columns: 1fr 380px; gap: 16px; }
+
+        .card { background: var(--white); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+        .card-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+        .card-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; color: var(--text); }
+        .card-title svg { width: 18px; height: 18px; color: var(--text-muted); }
+
+        /* Календарь */
+        .calendar { padding: 16px; }
+        .calendar-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+        .calendar-nav { display: flex; align-items: center; gap: 12px; }
+        .calendar-btn { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border); background: var(--white); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+        .calendar-btn:hover { background: var(--bg); }
+        .calendar-btn svg { width: 16px; height: 16px; color: var(--text-secondary); }
+        .calendar-month { font-size: 15px; font-weight: 600; }
+
+        .calendar-legend { display: flex; gap: 16px; }
+        .legend { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); }
+        .legend-dot { width: 10px; height: 10px; border-radius: 3px; }
+        .legend-dot.green { background: var(--green); }
+        .legend-dot.orange { background: var(--orange); }
+        .legend-dot.red { background: var(--red); }
+        .legend-dot.gray { background: var(--border); }
+
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+        .cal-header { text-align: center; font-size: 11px; color: var(--text-muted); padding: 8px 0; font-weight: 500; }
+        .cal-day {
+            aspect-ratio: 1; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; border-radius: 10px;
+            font-size: 13px; font-weight: 500; background: var(--bg);
+            cursor: pointer; transition: all 0.15s; border: 2px solid transparent;
+        }
+        .cal-day:hover { background: #e2e8f0; }
+        .cal-day.empty { background: transparent; pointer-events: none; }
+        .cal-day.weekend { background: var(--white); color: var(--text-muted); border: 1px solid var(--border); }
+        .cal-day.present { background: var(--green-bg); color: var(--green); border-color: rgba(34,197,94,0.3); }
+        .cal-day.late { background: var(--orange-bg); color: var(--orange); border-color: rgba(245,158,11,0.3); }
+        .cal-day.absent { background: var(--red-bg); color: var(--red); border-color: rgba(239,68,68,0.3); }
+        .cal-day.today { border-color: var(--green); box-shadow: 0 0 0 2px var(--green-bg); }
+        .cal-day .time { font-family: 'Space Mono', monospace; font-size: 9px; opacity: 0.8; margin-top: 2px; }
+
+        /* Правая колонка */
+        .right-col { display: flex; flex-direction: column; gap: 16px; }
+
+        .pattern { padding: 16px; }
+        .pattern-title { font-size: 12px; color: var(--text-muted); margin-bottom: 14px; }
+        .pattern-bars { display: flex; gap: 10px; align-items: flex-end; height: 70px; margin-bottom: 8px; }
+        .pattern-bar { flex: 1; background: var(--green-bg); border-radius: 6px; transition: all 0.2s; cursor: pointer; position: relative; }
+        .pattern-bar:hover { background: var(--green); }
+        .pattern-bar::after { content: attr(data-time); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); font-family: 'Space Mono', monospace; font-size: 10px; color: var(--text-muted); opacity: 0; padding-bottom: 4px; }
+        .pattern-bar:hover::after { opacity: 1; }
+        .pattern-labels { display: flex; gap: 10px; }
+        .pattern-labels span { flex: 1; text-align: center; font-size: 11px; color: var(--text-muted); }
+
+        .alerts { padding: 14px; }
+        .alert { display: flex; align-items: center; gap: 12px; padding: 14px; border-radius: 12px; margin-bottom: 10px; }
+        .alert:last-child { margin-bottom: 0; }
+        .alert.red { background: var(--red-bg); }
+        .alert.orange { background: var(--orange-bg); }
+        .alert-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .alert.red .alert-icon { background: rgba(239,68,68,0.15); }
+        .alert.red .alert-icon svg { color: var(--red); }
+        .alert.orange .alert-icon { background: rgba(245,158,11,0.15); }
+        .alert.orange .alert-icon svg { color: var(--orange); }
+        .alert-icon svg { width: 18px; height: 18px; }
+        .alert-text { flex: 1; }
+        .alert-title { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+        .alert.red .alert-title { color: var(--red); }
+        .alert.orange .alert-title { color: var(--orange); }
+        .alert-desc { font-size: 11px; color: var(--text-muted); }
+
+        /* Информация */
+        .info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; padding: 16px; }
+        .info-section { background: var(--bg); border-radius: 12px; padding: 16px; }
+        .info-section-title { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-bottom: 14px; letter-spacing: 0.5px; }
+        .info-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); }
+        .info-row:last-child { border-bottom: none; }
+        .info-label { font-size: 13px; color: var(--text-muted); }
+        .info-value { font-size: 13px; font-weight: 500; color: var(--text); }
+        .info-value.green { color: var(--green); }
+
+        .docs-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; padding: 16px; }
+        .doc-item { display: flex; align-items: center; gap: 12px; padding: 14px; background: var(--bg); border-radius: 12px; cursor: pointer; transition: all 0.15s; }
+        .doc-item:hover { background: #e2e8f0; }
+        .doc-icon { width: 44px; height: 44px; border-radius: 12px; background: var(--white); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; }
+        .doc-icon svg { width: 22px; height: 22px; color: var(--red); }
+        .doc-name { font-size: 13px; font-weight: 500; margin-bottom: 2px; }
+        .doc-meta { font-size: 11px; color: var(--text-muted); }
+
+        /* История */
+        .timeline { padding: 16px; }
+        .timeline-item { display: flex; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+        .timeline-item:last-child { border-bottom: none; }
+        .timeline-icon { width: 40px; height: 40px; border-radius: 12px; background: var(--bg); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .timeline-icon svg { width: 18px; height: 18px; color: var(--text-muted); }
+        .timeline-icon.green { background: var(--green-bg); }
+        .timeline-icon.green svg { color: var(--green); }
+        .timeline-icon.orange { background: var(--orange-bg); }
+        .timeline-icon.orange svg { color: var(--orange); }
+        .timeline-icon.red { background: var(--red-bg); }
+        .timeline-icon.red svg { color: var(--red); }
+        .timeline-content { flex: 1; }
+        .timeline-title { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+        .timeline-desc { font-size: 12px; color: var(--text-muted); }
+        .timeline-date { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+
+        /* СКУД */
+        .skud-table { width: 100%; }
+        .skud-header { display: grid; grid-template-columns: 100px 1fr 140px 100px 90px; padding: 12px 20px; background: var(--bg); font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; }
+        .skud-row { display: grid; grid-template-columns: 100px 1fr 140px 100px 90px; padding: 14px 20px; border-bottom: 1px solid var(--border); font-size: 13px; align-items: center; }
+        .skud-row:hover { background: var(--bg); }
+        .skud-row:last-child { border-bottom: none; }
+        .skud-date { font-family: 'Space Mono', monospace; color: var(--text-muted); font-size: 12px; }
+        .skud-event { display: flex; align-items: center; gap: 10px; }
+        .skud-event-icon { width: 28px; height: 28px; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+        .skud-event-icon.in { background: var(--green-bg); }
+        .skud-event-icon.in svg { color: var(--green); }
+        .skud-event-icon.out { background: var(--orange-bg); }
+        .skud-event-icon.out svg { color: var(--orange); }
+        .skud-event-icon svg { width: 14px; height: 14px; }
+        .skud-time { font-family: 'Space Mono', monospace; font-weight: 600; }
+        .skud-point { color: var(--text-secondary); }
+        .skud-status { font-size: 12px; font-weight: 500; }
+        .skud-status.ok { color: var(--green); }
+        .skud-status.late { color: var(--orange); }
+
+        @media (max-width: 1200px) { .grid-2 { grid-template-columns: 1fr; } }
+        @media (max-width: 768px) { .sidebar { display: none; } .main { margin-left: 0; } .stats-row { grid-template-columns: repeat(2, 1fr); } }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="logo">
+                <span class="logo-mark">FOT</span>
+                <span class="logo-sub">by SU_10</span>
+            </div>
+            <nav class="nav">
+                <div class="nav-group">
+                    <div class="nav-label">Основное</div>
+                    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Обзор</div>
+                    <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>Сотрудники</div>
+                    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Табель</div>
+                </div>
+                <div class="nav-group">
+                    <div class="nav-label">Контроль</div>
+                    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Просмотр СКУД</div>
+                    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>СКУД (база)</div>
+                    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1.08H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Настройки</div>
+                </div>
+                <div class="nav-group">
+                    <div class="nav-label">Система</div>
+                    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Пользователи</div>
+                    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>Управление</div>
+                </div>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="user-mini">
+                    <div class="user-avatar">ОА</div>
+                    <div><div class="user-name">Одинцов Артём</div><div class="user-role">Супер-админ</div></div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="main">
+            <header class="header">
+                <div class="breadcrumb">
+                    <a href="#">Сотрудники</a>
+                    <span>→</span>
+                    <span class="breadcrumb-current">Казаков Евгений Игоревич</span>
+                </div>
+                <div class="header-actions">
+                    <button class="btn primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Редактировать</button>
+                    <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/></svg>В архив</button>
+                    <button class="btn danger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>Удалить</button>
+                </div>
+            </header>
+
+            <div class="content">
+                <!-- Профиль -->
+                <div class="profile-card">
+                    <div class="profile-top">
+                        <div class="profile-avatar">КЕ<div class="status"></div></div>
+                        <div class="profile-info">
+                            <h1 class="profile-name">Казаков Евгений Игоревич</h1>
+                            <div class="profile-badges">
+                                <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>Инженер</span>
+                                <span class="badge green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>Тендерный отдел</span>
+                                <span class="badge green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>Активен</span>
+                            </div>
+                            <div class="profile-meta">
+                                <span class="meta-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>В компании с 05.03.2026</span>
+                                <span class="meta-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>e.kazakov@company.ru</span>
+                                <span class="meta-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg>+7 (912) 345-67-89</span>
+                                <span class="profile-id">ID: 37157</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="stats-row">
+                        <div class="stat-box"><div class="stat-value green">86%</div><div class="stat-label">Посещаемость</div><div class="stat-hint">за текущий месяц</div></div>
+                        <div class="stat-box"><div class="stat-value orange">1</div><div class="stat-label">Опозданий</div><div class="stat-hint" style="color:var(--green);">в пределах нормы</div></div>
+                        <div class="stat-box"><div class="stat-value">46ч</div><div class="stat-label">Отработано</div><div class="stat-hint" style="color:var(--text-muted);">из 56ч по плану</div></div>
+                        <div class="stat-box"><div class="stat-value">08:37</div><div class="stat-label">Ср. приход</div><div class="stat-hint">−23 мин к норме</div></div>
+                    </div>
+                </div>
+
+                <!-- Табы -->
+                <div class="tabs-wrapper">
+                    <div class="tabs">
+                        <div class="tab active" data-tab="attendance">Посещаемость</div>
+                        <div class="tab" data-tab="info">Информация</div>
+                        <div class="tab" data-tab="history">История</div>
+                        <div class="tab" data-tab="skud">СКУД</div>
+                    </div>
+                </div>
+
+                <!-- Посещаемость -->
+                <div class="tab-content active" id="attendance">
+                    <div class="grid-2">
+                        <div class="card">
+                            <div class="card-header"><h3 class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Календарь посещаемости</h3></div>
+                            <div class="calendar">
+                                <div class="calendar-header">
+                                    <div class="calendar-nav">
+                                        <button class="calendar-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg></button>
+                                        <span class="calendar-month">Март 2026</span>
+                                        <button class="calendar-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button>
+                                    </div>
+                                    <div class="calendar-legend">
+                                        <span class="legend"><span class="legend-dot green"></span>Присутствие</span>
+                                        <span class="legend"><span class="legend-dot orange"></span>Опоздание</span>
+                                        <span class="legend"><span class="legend-dot red"></span>Отсутствие</span>
+                                        <span class="legend"><span class="legend-dot gray"></span>Выходной</span>
+                                    </div>
+                                </div>
+                                <div class="calendar-grid">
+                                    <div class="cal-header">Пн</div><div class="cal-header">Вт</div><div class="cal-header">Ср</div><div class="cal-header">Чт</div><div class="cal-header">Пт</div><div class="cal-header">Сб</div><div class="cal-header">Вс</div>
+                                    <div class="cal-day empty"></div><div class="cal-day empty"></div><div class="cal-day empty"></div><div class="cal-day empty"></div><div class="cal-day empty"></div><div class="cal-day empty"></div><div class="cal-day weekend">1</div>
+                                    <div class="cal-day present">2<span class="time">08:26</span></div><div class="cal-day present">3<span class="time">08:40</span></div><div class="cal-day present">4<span class="time">08:11</span></div><div class="cal-day present">5<span class="time">08:23</span></div><div class="cal-day late">6<span class="time">09:09</span></div><div class="cal-day weekend">7</div><div class="cal-day weekend">8</div>
+                                    <div class="cal-day absent">9</div><div class="cal-day today present">10<span class="time">10:01</span></div><div class="cal-day">11</div><div class="cal-day">12</div><div class="cal-day">13</div><div class="cal-day weekend">14</div><div class="cal-day weekend">15</div>
+                                    <div class="cal-day">16</div><div class="cal-day">17</div><div class="cal-day">18</div><div class="cal-day">19</div><div class="cal-day">20</div><div class="cal-day weekend">21</div><div class="cal-day weekend">22</div>
+                                    <div class="cal-day">23</div><div class="cal-day">24</div><div class="cal-day">25</div><div class="cal-day">26</div><div class="cal-day">27</div><div class="cal-day weekend">28</div><div class="cal-day weekend">29</div>
+                                    <div class="cal-day">30</div><div class="cal-day">31</div><div class="cal-day empty"></div><div class="cal-day empty"></div><div class="cal-day empty"></div><div class="cal-day empty"></div><div class="cal-day empty"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="right-col">
+                            <div class="card">
+                                <div class="card-header"><h3 class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>Паттерн приходов</h3></div>
+                                <div class="pattern">
+                                    <div class="pattern-title">Среднее время прихода по дням недели</div>
+                                    <div class="pattern-bars">
+                                        <div class="pattern-bar" style="height:55%;" data-time="08:35"></div>
+                                        <div class="pattern-bar" style="height:100%;" data-time="09:05"></div>
+                                        <div class="pattern-bar" style="height:45%;" data-time="08:28"></div>
+                                        <div class="pattern-bar" style="height:50%;" data-time="08:31"></div>
+                                        <div class="pattern-bar" style="height:60%;" data-time="08:42"></div>
+                                    </div>
+                                    <div class="pattern-labels"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span></div>
+                                </div>
+                            </div>
+                            <div class="card">
+                                <div class="card-header"><h3 class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Внимание</h3></div>
+                                <div class="alerts">
+                                    <div class="alert red">
+                                        <div class="alert-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg></div>
+                                        <div class="alert-text"><div class="alert-title">1 день отсутствия</div><div class="alert-desc">9 марта без объяснения</div></div>
+                                    </div>
+                                    <div class="alert orange">
+                                        <div class="alert-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+                                        <div class="alert-text"><div class="alert-title">1 опоздание</div><div class="alert-desc">6 марта — приход в 09:09</div></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Информация -->
+                <div class="tab-content" id="info">
+                    <div class="card">
+                        <div class="card-header"><h3 class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>Полная информация о сотруднике</h3></div>
+                        <div class="info-grid">
+                            <div class="info-section">
+                                <div class="info-section-title">Личные данные</div>
+                                <div class="info-row"><span class="info-label">ФИО</span><span class="info-value">Казаков Евгений Игоревич</span></div>
+                                <div class="info-row"><span class="info-label">Дата рождения</span><span class="info-value">15.08.1992 (33 года)</span></div>
+                                <div class="info-row"><span class="info-label">Пол</span><span class="info-value">Мужской</span></div>
+                                <div class="info-row"><span class="info-label">Гражданство</span><span class="info-value">Российская Федерация</span></div>
+                                <div class="info-row"><span class="info-label">Паспорт</span><span class="info-value">45 12 ••••56</span></div>
+                                <div class="info-row"><span class="info-label">ИНН</span><span class="info-value">7707••••••12</span></div>
+                                <div class="info-row"><span class="info-label">СНИЛС</span><span class="info-value">123-456-789 ••</span></div>
+                            </div>
+                            <div class="info-section">
+                                <div class="info-section-title">Контакты</div>
+                                <div class="info-row"><span class="info-label">Телефон</span><span class="info-value">+7 (912) 345-67-89</span></div>
+                                <div class="info-row"><span class="info-label">Email рабочий</span><span class="info-value">e.kazakov@company.ru</span></div>
+                                <div class="info-row"><span class="info-label">Email личный</span><span class="info-value">evgeny.kazakov@gmail.com</span></div>
+                                <div class="info-row"><span class="info-label">Telegram</span><span class="info-value">@ekazakov</span></div>
+                                <div class="info-row"><span class="info-label">Адрес</span><span class="info-value">г. Москва, ул. Примерная, д. 10, кв. 25</span></div>
+                                <div class="info-row"><span class="info-label">Экстренный контакт</span><span class="info-value">Казакова Мария (жена) +7 912 345 67 90</span></div>
+                            </div>
+                            <div class="info-section">
+                                <div class="info-section-title">Трудоустройство</div>
+                                <div class="info-row"><span class="info-label">Дата найма</span><span class="info-value">05.03.2026</span></div>
+                                <div class="info-row"><span class="info-label">Статус</span><span class="info-value green">Активен</span></div>
+                                <div class="info-row"><span class="info-label">Тип договора</span><span class="info-value">Бессрочный</span></div>
+                                <div class="info-row"><span class="info-label">Должность</span><span class="info-value">Инженер</span></div>
+                                <div class="info-row"><span class="info-label">Отдел</span><span class="info-value">Тендерный отдел</span></div>
+                                <div class="info-row"><span class="info-label">Руководитель</span><span class="info-value">Иванов Пётр Сергеевич</span></div>
+                                <div class="info-row"><span class="info-label">Испытательный срок</span><span class="info-value">до 05.06.2026</span></div>
+                            </div>
+                            <div class="info-section">
+                                <div class="info-section-title">Рабочий график</div>
+                                <div class="info-row"><span class="info-label">Тип графика</span><span class="info-value">5/2</span></div>
+                                <div class="info-row"><span class="info-label">Рабочие часы</span><span class="info-value">09:00 — 18:00</span></div>
+                                <div class="info-row"><span class="info-label">Обед</span><span class="info-value">13:00 — 14:00</span></div>
+                                <div class="info-row"><span class="info-label">Рабочее место</span><span class="info-value">Офис, этаж 3, место 312</span></div>
+                                <div class="info-row"><span class="info-label">Карта СКУД</span><span class="info-value">A1B2C3D4</span></div>
+                                <div class="info-row"><span class="info-label">Остаток отпуска</span><span class="info-value green">28 дней</span></div>
+                            </div>
+                        </div>
+                        <div class="card-header" style="border-top:1px solid var(--border);"><h3 class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Документы</h3></div>
+                        <div class="docs-grid">
+                            <div class="doc-item"><div class="doc-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><div><div class="doc-name">Трудовой договор №ТД-2026-0147</div><div class="doc-meta">PDF · 05.03.2026 · 2.4 MB</div></div></div>
+                            <div class="doc-item"><div class="doc-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><div><div class="doc-name">NDA (соглашение о неразглашении)</div><div class="doc-meta">PDF · 05.03.2026 · 1.1 MB</div></div></div>
+                            <div class="doc-item"><div class="doc-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><div><div class="doc-name">Копия паспорта</div><div class="doc-meta">PDF · 05.03.2026 · 3.8 MB</div></div></div>
+                            <div class="doc-item"><div class="doc-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><div><div class="doc-name">Диплом о высшем образовании</div><div class="doc-meta">PDF · 05.03.2026 · 5.2 MB</div></div></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- История -->
+                <div class="tab-content" id="history">
+                    <div class="card">
+                        <div class="card-header"><h3 class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>История изменений</h3></div>
+                        <div class="timeline">
+                            <div class="timeline-item">
+                                <div class="timeline-icon green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg></div>
+                                <div class="timeline-content"><div class="timeline-title">Сотрудник принят на работу</div><div class="timeline-desc">Должность: Инженер · Отдел: Тендерный отдел · Оклад: 85 000 ₽</div></div>
+                                <div class="timeline-date">05.03.2026</div>
+                            </div>
+                            <div class="timeline-item">
+                                <div class="timeline-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+                                <div class="timeline-content"><div class="timeline-title">Подписан трудовой договор</div><div class="timeline-desc">Договор №ТД-2026-0147 · Тип: Бессрочный</div></div>
+                                <div class="timeline-date">05.03.2026</div>
+                            </div>
+                            <div class="timeline-item">
+                                <div class="timeline-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+                                <div class="timeline-content"><div class="timeline-title">Подписано NDA</div><div class="timeline-desc">Соглашение о неразглашении конфиденциальной информации</div></div>
+                                <div class="timeline-date">05.03.2026</div>
+                            </div>
+                            <div class="timeline-item">
+                                <div class="timeline-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+                                <div class="timeline-content"><div class="timeline-title">Выдана карта СКУД</div><div class="timeline-desc">Номер карты: A1B2C3D4 · Зоны доступа: Офис, этаж 3</div></div>
+                                <div class="timeline-date">05.03.2026</div>
+                            </div>
+                            <div class="timeline-item">
+                                <div class="timeline-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>
+                                <div class="timeline-content"><div class="timeline-title">Выдано оборудование</div><div class="timeline-desc">MacBook Pro 14" (SN: C02X...) · iPhone 14 · Монитор Dell 27"</div></div>
+                                <div class="timeline-date">05.03.2026</div>
+                            </div>
+                            <div class="timeline-item">
+                                <div class="timeline-icon orange"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+                                <div class="timeline-content"><div class="timeline-title">Зафиксировано опоздание</div><div class="timeline-desc">Время прихода: 09:09 (норма 09:00) · Опоздание: 9 минут</div></div>
+                                <div class="timeline-date">06.03.2026</div>
+                            </div>
+                            <div class="timeline-item">
+                                <div class="timeline-icon red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg></div>
+                                <div class="timeline-content"><div class="timeline-title">Отсутствие без объяснения</div><div class="timeline-desc">Сотрудник не явился на рабочее место · Требуется объяснительная</div></div>
+                                <div class="timeline-date">09.03.2026</div>
+                            </div>
+                            <div class="timeline-item">
+                                <div class="timeline-icon green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
+                                <div class="timeline-content"><div class="timeline-title">Вышел на работу</div><div class="timeline-desc">Время прихода: 10:01 · Отметка СКУД на КПП-1</div></div>
+                                <div class="timeline-date">10.03.2026</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- СКУД -->
+                <div class="tab-content" id="skud">
+                    <div class="card">
+                        <div class="card-header"><h3 class="card-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>События СКУД</h3></div>
+                        <div class="skud-table">
+                            <div class="skud-header"><div>Дата</div><div>Событие</div><div>Точка прохода</div><div>Время</div><div>Статус</div></div>
+                            <div class="skud-row"><div class="skud-date">10.03.2026</div><div class="skud-event"><div class="skud-event-icon in"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg></div>Вход</div><div class="skud-point">КПП-1 Главный</div><div class="skud-time">10:01</div><div class="skud-status late">Опоздание</div></div>
+                            <div class="skud-row"><div class="skud-date">06.03.2026</div><div class="skud-event"><div class="skud-event-icon out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>Выход</div><div class="skud-point">КПП-1 Главный</div><div class="skud-time">18:32</div><div class="skud-status ok">Норма</div></div>
+                            <div class="skud-row"><div class="skud-date">06.03.2026</div><div class="skud-event"><div class="skud-event-icon in"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg></div>Вход</div><div class="skud-point">КПП-1 Главный</div><div class="skud-time">09:09</div><div class="skud-status late">Опоздание</div></div>
+                            <div class="skud-row"><div class="skud-date">05.03.2026</div><div class="skud-event"><div class="skud-event-icon out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>Выход</div><div class="skud-point">КПП-1 Главный</div><div class="skud-time">18:15</div><div class="skud-status ok">Норма</div></div>
+                            <div class="skud-row"><div class="skud-date">05.03.2026</div><div class="skud-event"><div class="skud-event-icon in"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg></div>Вход</div><div class="skud-point">КПП-1 Главный</div><div class="skud-time">08:23</div><div class="skud-status ok">Норма</div></div>
+                            <div class="skud-row"><div class="skud-date">04.03.2026</div><div class="skud-event"><div class="skud-event-icon out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>Выход</div><div class="skud-point">КПП-1 Главный</div><div class="skud-time">18:45</div><div class="skud-status ok">Норма</div></div>
+                            <div class="skud-row"><div class="skud-date">04.03.2026</div><div class="skud-event"><div class="skud-event-icon in"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg></div>Вход</div><div class="skud-point">КПП-1 Главный</div><div class="skud-time">08:11</div><div class="skud-status ok">Норма</div></div>
+                            <div class="skud-row"><div class="skud-date">03.03.2026</div><div class="skud-event"><div class="skud-event-icon out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>Выход</div><div class="skud-point">КПП-1 Главный</div><div class="skud-time">18:20</div><div class="skud-status ok">Норма</div></div>
+                            <div class="skud-row"><div class="skud-date">03.03.2026</div><div class="skud-event"><div class="skud-event-icon in"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg></div>Вход</div><div class="skud-point">КПП-1 Главный</div><div class="skud-time">08:40</div><div class="skud-status ok">Норма</div></div>
+                            <div class="skud-row"><div class="skud-date">02.03.2026</div><div class="skud-event"><div class="skud-event-icon out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>Выход</div><div class="skud-point">КПП-1 Главный</div><div class="skud-time">18:05</div><div class="skud-status ok">Норма</div></div>
+                            <div class="skud-row"><div class="skud-date">02.03.2026</div><div class="skud-event"><div class="skud-event-icon in"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg></div>Вход</div><div class="skud-point">КПП-1 Главный</div><div class="skud-time">08:26</div><div class="skud-status ok">Норма</div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab).classList.add('active');
+            });
+        });
+    </script>
+</body>
+</html>

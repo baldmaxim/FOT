@@ -22,7 +22,7 @@ import type {
 // ─── Import from Excel ───
 
 export async function importFromExcel(params: IImportParams): Promise<IImportResult> {
-  const { organizationId, fileBuffer, userId } = params;
+  const { organizationId, fileBuffer } = params;
 
   // Загружаем сотрудников для сопоставления по ФИО
   const { data: employeesData } = await supabase

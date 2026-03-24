@@ -1,141 +1,20 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type FC } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useVirtualizer } from '@tanstack/react-virtual';
-import { Search, Upload, ChevronRight, Folder, Users, UserPlus, X, RefreshCw, FileSpreadsheet } from 'lucide-react';
+import { Search, Upload, UserPlus, X, FileSpreadsheet } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
 import { skudService } from '../../services/skudService';
 import { structureApi } from '../../api/structure';
 import { useAuth } from '../../contexts/AuthContext';
 import { EnrichPreviewModal } from '../../components/employees/EnrichPreviewModal';
+import { EmpVirtualList } from '../../components/employees/EmpVirtualList';
+import { DepartmentPanel } from '../../components/employees/DepartmentPanel';
 import type { Employee, EmployeeInput, OrgDepartmentNode, IEmployeePresence, EnrichPreview } from '../../types';
 import '../../styles/EmployeesPage.css';
-
-const getInitials = (name: string): string => {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-  return (parts[0]?.[0] || '?').toUpperCase();
-};
-
-const formatTime = (val: string): string => {
-  if (val.includes('T')) return val.slice(11, 16);
-  return val.slice(0, 5);
-};
 
 const collectChildIds = (node: OrgDepartmentNode): string[] => {
   const ids = [node.id];
   for (const child of node.children) ids.push(...collectChildIds(child));
   return ids;
-};
-
-const EmpVirtualList: FC<{
-  employees: Employee[];
-  loading: boolean;
-  selectedEmps: Set<number>;
-  presenceMap: Map<number, IEmployeePresence>;
-  canEdit: boolean;
-  onEmpClick: (emp: Employee) => void;
-  onToggleSelection: (id: number, e: React.MouseEvent) => void;
-  onFire: (emp: Employee, e: React.MouseEvent) => void;
-  onRehire: (emp: Employee, e: React.MouseEvent) => void;
-  onMove: (id: number, e: React.MouseEvent) => void;
-}> = ({ employees, loading, selectedEmps, presenceMap, canEdit, onEmpClick, onToggleSelection, onFire, onRehire, onMove }) => {
-  const listRef = useRef<HTMLDivElement>(null);
-  const virtualizer = useVirtualizer({
-    count: employees.length,
-    getScrollElement: () => listRef.current,
-    estimateSize: () => 72,
-    overscan: 10,
-  });
-
-  if (loading) return <div className="ep-emp-list"><div className="ep-loading">Загрузка...</div></div>;
-  if (employees.length === 0) {
-    return (
-      <div className="ep-emp-list">
-        <div className="ep-empty">
-          <div className="ep-empty-icon"><Users size={28} /></div>
-          <h3>Сотрудники не найдены</h3>
-          <p>Попробуйте изменить фильтры или выбрать другой отдел</p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="ep-emp-list" ref={listRef}>
-      <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
-        {virtualizer.getVirtualItems().map(vRow => {
-          const emp = employees[vRow.index];
-          return (
-            <div
-              key={emp.id}
-              className={`ep-emp-card ${selectedEmps.has(emp.id) ? 'selected' : ''}`}
-              onClick={() => onEmpClick(emp)}
-              style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vRow.start}px)` }}
-            >
-              <div
-                className={`ep-emp-checkbox ${selectedEmps.has(emp.id) ? 'checked' : ''}`}
-                onClick={e => onToggleSelection(emp.id, e)}
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              </div>
-              <div className="ep-emp-avatar">{getInitials(emp.full_name)}</div>
-              <div className="ep-emp-info">
-                <div className="ep-emp-name">
-                  {emp.full_name}
-                  {presenceMap.has(emp.id) && (
-                    <span
-                      className={`ep-emp-badge ${presenceMap.get(emp.id)!.status}`}
-                      title={presenceMap.get(emp.id)!.status === 'online' ? 'На месте' : 'Отсутствует'}
-                    />
-                  )}
-                </div>
-                <div className="ep-emp-position">{emp.position_name || '—'}</div>
-              </div>
-              {emp.employment_status !== 'fired' && presenceMap.has(emp.id) && (
-                <div className="ep-emp-meta">
-                  {presenceMap.get(emp.id)!.total_hours != null && (
-                    <div className="ep-emp-stat">
-                      <span className="ep-emp-stat-value">
-                        {presenceMap.get(emp.id)!.total_hours!.toFixed(1)}ч
-                      </span>
-                      <span className="ep-emp-stat-label">Сегодня</span>
-                    </div>
-                  )}
-                  {presenceMap.get(emp.id)!.first_entry && (
-                    <div className="ep-emp-stat">
-                      <span className="ep-emp-stat-value">
-                        {formatTime(presenceMap.get(emp.id)!.first_entry!)}
-                      </span>
-                      <span className="ep-emp-stat-label">Вход</span>
-                    </div>
-                  )}
-                </div>
-              )}
-              {canEdit && emp.employment_status !== 'fired' && (
-                <div className="ep-emp-actions">
-                  <button className="ep-action-btn dismiss" onClick={e => onFire(emp, e)}>
-                    Уволить
-                  </button>
-                  <button className="ep-action-btn move" onClick={e => onMove(emp.id, e)}>
-                    Переместить
-                  </button>
-                </div>
-              )}
-              {emp.employment_status === 'fired' && (
-                <div className="ep-emp-actions">
-                  <button className="ep-action-btn move" onClick={e => onRehire(emp, e)}>
-                    Восстановить
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
 };
 
 export const EmployeesPage: FC = () => {
@@ -156,7 +35,6 @@ export const EmployeesPage: FC = () => {
   // Filters
   const [selectedDeptId, setSelectedDeptId] = useState<string | null>(searchParams.get('dept'));
   const [expandedDepts, setExpandedDepts] = useState<Set<string>>(new Set());
-  const [deptSearch, setDeptSearch] = useState('');
   const [empSearch, setEmpSearch] = useState(searchParams.get('q') || '');
   const [activeTab, setActiveTab] = useState<'all' | 'fired'>('all');
 
@@ -303,21 +181,6 @@ export const EmployeesPage: FC = () => {
     return result;
   }, [departments]);
 
-  // Filtered department tree
-  const filteredDepts = useMemo(() => {
-    if (!deptSearch) return departments;
-    const q = deptSearch.toLowerCase();
-    const filterTree = (nodes: OrgDepartmentNode[]): OrgDepartmentNode[] =>
-      nodes.reduce<OrgDepartmentNode[]>((acc, node) => {
-        const children = filterTree(node.children);
-        if (node.name.toLowerCase().includes(q) || children.length > 0) {
-          acc.push({ ...node, children });
-        }
-        return acc;
-      }, []);
-    return filterTree(departments);
-  }, [departments, deptSearch]);
-
   // Handlers
   const toggleDept = (id: string) => {
     setExpandedDepts(prev => {
@@ -417,76 +280,20 @@ export const EmployeesPage: FC = () => {
     });
   };
 
-  // Render department tree node
-  const renderDeptNode = (node: OrgDepartmentNode, level = 0) => {
-    const hasChildren = node.children.length > 0;
-    const isExpanded = expandedDepts.has(node.id);
-    const isSelected = selectedDeptId === node.id;
-    const count = deptCounts.get(node.id) || 0;
-
-    return (
-      <div key={node.id} className="ep-dept-item">
-        <div
-          className={`ep-dept-header ${isSelected ? 'active' : ''}`}
-          style={{ paddingLeft: `${12 + level * 20}px` }}
-          onClick={() => setSelectedDeptId(isSelected ? null : node.id)}
-        >
-          <button
-            className={`ep-dept-toggle ${hasChildren ? (isExpanded ? 'expanded' : '') : 'empty'}`}
-            onClick={(e) => { e.stopPropagation(); toggleDept(node.id); }}
-          >
-            <ChevronRight size={14} />
-          </button>
-          <Folder size={16} className="ep-dept-icon" />
-          <span className="ep-dept-name">{node.name}</span>
-          {count > 0 && <span className="ep-dept-count">{count}</span>}
-        </div>
-        {hasChildren && isExpanded && (
-          <div className="ep-dept-children">
-            {node.children.map(child => renderDeptNode(child, level + 1))}
-          </div>
-        )}
-      </div>
-    );
-  };
-
   const totalActive = employees.filter(e => e.employment_status !== 'fired').length;
 
   return (
     <div className="employees-page">
-      {/* Department Panel */}
-      <div className="ep-dept-panel">
-        <div className="ep-dept-panel-header">
-          <div className="ep-panel-title">
-            <Folder size={16} />
-            <span>Отделы</span>
-          </div>
-          <div className="ep-panel-actions">
-            <button className="ep-panel-btn" onClick={loadDepartments} title="Обновить">
-              <RefreshCw size={15} />
-            </button>
-          </div>
-        </div>
-        <div className="ep-dept-search">
-          <input
-            type="text"
-            placeholder="Поиск отдела..."
-            value={deptSearch}
-            onChange={e => setDeptSearch(e.target.value)}
-          />
-        </div>
-        <div className="ep-dept-tree">
-          <div
-            className={`ep-dept-header ep-dept-all ${!selectedDeptId ? 'active' : ''}`}
-            onClick={() => setSelectedDeptId(null)}
-          >
-            <Users size={16} className="ep-dept-icon" />
-            <span className="ep-dept-name">Все сотрудники</span>
-            <span className="ep-dept-count">{totalActive}</span>
-          </div>
-          {filteredDepts.map(dept => renderDeptNode(dept))}
-        </div>
-      </div>
+      <DepartmentPanel
+        departments={departments}
+        selectedDeptId={selectedDeptId}
+        expandedDepts={expandedDepts}
+        deptCounts={deptCounts}
+        totalActive={totalActive}
+        onSelectDept={setSelectedDeptId}
+        onToggleDept={toggleDept}
+        onRefresh={loadDepartments}
+      />
 
       {/* Employees Panel */}
       <div className="ep-emp-panel">

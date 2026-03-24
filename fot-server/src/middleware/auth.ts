@@ -1,7 +1,6 @@
 import { Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
-import { supabaseAuth } from '../config/database.js';
 import type { AuthenticatedRequest, JWTPayload, EmployeePositionType } from '../types/index.js';
 
 /**
@@ -100,8 +99,6 @@ export const requirePosition = (...allowedPositions: EmployeePositionType[]) => 
   };
 };
 
-// Alias для обратной совместимости
-export const requireRole = requirePosition;
 
 /**
  * Middleware для проверки должности пользователя по иерархии

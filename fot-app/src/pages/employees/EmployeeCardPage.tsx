@@ -143,13 +143,23 @@ export const EmployeeCardPage: FC = () => {
       .catch(() => setSkudEvents([]));
   }, [id, calMonth, calYear, skudRefresh]);
 
+  // Отдельная загрузка событий сегодняшнего дня для статуса (не зависит от выбранного месяца)
+  const [todayEvents, setTodayEvents] = useState<SkudEvent[]>([]);
+  useEffect(() => {
+    if (!id) return;
+    const today = new Date().toISOString().slice(0, 10);
+    skudService.getEmployeeEvents(Number(id), today, today)
+      .then(setTodayEvents)
+      .catch(() => setTodayEvents([]));
+  }, [id, skudRefresh]);
+
   // Calculated attendance data
   const attendance = useMemo(
     () => calculateAttendance(skudEvents, internalPoints, calYear, calMonth),
     [skudEvents, internalPoints, calYear, calMonth],
   );
-  const todayTimeline = useMemo(() => getTodayTimeline(skudEvents), [skudEvents]);
-  const onSite = useMemo(() => isEmployeeOnSite(skudEvents, internalPoints), [skudEvents, internalPoints]);
+  const todayTimeline = useMemo(() => getTodayTimeline(todayEvents), [todayEvents]);
+  const onSite = useMemo(() => isEmployeeOnSite(todayEvents, internalPoints), [todayEvents, internalPoints]);
 
   // Period-filtered stats + weekly pattern
   const periodData = useMemo(() => {

@@ -11,7 +11,7 @@ export const totpService = {
   /**
    * Генерирует новый TOTP секрет для пользователя
    */
-  generateSecret(userEmail: string): { secret: string; encryptedSecret: string } {
+  generateSecret(_userEmail: string): { secret: string; encryptedSecret: string } {
     const secret = new Secret({ size: 20 });
     const secretBase32 = secret.base32;
 

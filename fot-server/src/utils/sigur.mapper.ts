@@ -71,7 +71,11 @@ export const mapSigurEvent = (raw: Record<string, unknown>): IMappedSigurEvent |
     eventTime: time,
     accessPoint,
     direction,
-    employeeId: typeof employeeId === 'number' ? employeeId : null,
+    employeeId: typeof employeeId === 'number'
+      ? employeeId
+      : (typeof employeeId === 'string' && /^\d+$/.test(employeeId)
+        ? parseInt(employeeId, 10)
+        : null),
     blocked: null, // обогащается из кэша сотрудников (поле isBlocked)
     department: null,
   };

@@ -2,7 +2,6 @@ import { Router } from 'express';
 import { authController } from '../controllers/auth.controller.js';
 import { authenticate } from '../middleware/auth.js';
 import { authLimiter, twoFactorLimiter } from '../middleware/rateLimit.js';
-import type { AuthenticatedRequest } from '../types/index.js';
 
 const router = Router();
 

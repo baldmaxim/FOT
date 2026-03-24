@@ -3,13 +3,13 @@ import { sigurController } from '../controllers/sigur.controller.js';
 import { sigurSyncController } from '../controllers/sigur-sync.controller.js';
 import { sigurAdminController } from '../controllers/sigur-admin.controller.js';
 import { sigurFilterController } from '../controllers/sigur-filter.controller.js';
-import { authenticate, requireRole } from '../middleware/auth.js';
+import { authenticate, requireMinPosition } from '../middleware/auth.js';
 
 const router = Router();
 
 // Все роуты требуют аутентификации и роли admin/super_admin
 router.use(authenticate as any);
-router.use(requireRole('header', 'admin', 'owner', 'super_admin') as any);
+router.use(requireMinPosition('header') as any);
 
 // === Read-only эндпоинты ===
 
