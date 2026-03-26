@@ -84,12 +84,44 @@ export async function exportTimesheet(req: AuthenticatedRequest, res: Response) 
       expRawEvents.push(...(sd || []));
     }
 
-    // Filter internal access points
-    if (expInternalPoints.size > 0) {
-      expRawEvents = expRawEvents.filter(e => !e.access_point || !expInternalPoints.has(e.access_point));
+    // Also find unmatched events by full_name
+    const expNameMap = new Map<string, number>();
+    for (const emp of employees || []) {
+      if (emp.full_name) expNameMap.set(emp.full_name.toLowerCase().trim(), emp.id);
+    }
+    const expSeenKeys = new Set(expRawEvents.map(e => `${e.employee_id}_${e.event_date}_${e.event_time}`));
+
+    if (expNameMap.size > 0 && organizationId) {
+      const { data: unmatchedExp } = await supabase
+        .from('skud_events')
+        .select('id, physical_person, employee_id, event_date, event_time, direction, access_point')
+        .eq('organization_id', organizationId)
+        .is('employee_id', null)
+        .gte('event_date', startDate)
+        .lte('event_date', endDate)
+        .order('event_time', { ascending: true })
+        .limit(5000);
+
+      for (const ev of unmatchedExp || []) {
+        const name = ((ev.physical_person as string) || '').toLowerCase().trim();
+        const empId = expNameMap.get(name);
+        if (empId) {
+          const dedupKey = `${empId}_${ev.event_date}_${ev.event_time}`;
+          if (!expSeenKeys.has(dedupKey)) {
+            expRawEvents.push({
+              employee_id: empId,
+              event_date: ev.event_date as string,
+              event_time: ev.event_time as string,
+              direction: ev.direction as string | null,
+              access_point: ev.access_point as string | null,
+            });
+            expSeenKeys.add(dedupKey);
+          }
+        }
+      }
     }
 
-    // Group and calculate hours
+    // Group events (keep all for fallback)
     const expEventsByKey = new Map<string, IExpRawEvent[]>();
     for (const evt of expRawEvents) {
       const key = `${evt.employee_id}_${evt.event_date}`;
@@ -113,19 +145,30 @@ export async function exportTimesheet(req: AuthenticatedRequest, res: Response) 
     // Merge into map: employee_id -> date -> { status, hours }
     const dataMap = new Map<number, Map<string, { status: string; hours: number }>>();
 
-    // SKUD events first
-    for (const [_key, events] of expEventsByKey) {
-      let totalMs = 0;
-      let lastEntryTime: number | null = null;
-      for (const evt of events) {
+    // Helper: calc pair ms
+    const calcExpPairMs = (evts: IExpRawEvent[]): number => {
+      let total = 0;
+      let entry: number | null = null;
+      for (const evt of evts) {
         const [h, m, s] = evt.event_time.split(':').map(Number);
         const ms = (h * 3600 + m * 60 + (s || 0)) * 1000;
         if (evt.direction === 'entry') {
-          lastEntryTime = ms;
-        } else if (evt.direction === 'exit' && lastEntryTime !== null) {
-          totalMs += ms - lastEntryTime;
-          lastEntryTime = null;
+          if (entry === null) entry = ms;
+        } else if (evt.direction === 'exit' && entry !== null) {
+          total += ms - entry;
+          entry = null;
         }
+      }
+      return total;
+    };
+
+    // SKUD events first
+    for (const [_key, events] of expEventsByKey) {
+      // Filter internal; fallback to all if external gives 0
+      const extEvents = events.filter(e => !e.access_point || !expInternalPoints.has(e.access_point));
+      let totalMs = calcExpPairMs(extEvents);
+      if (totalMs === 0 && events.length > 0) {
+        totalMs = calcExpPairMs(events);
       }
       const totalHours = Math.round((totalMs / 3600000) * 100) / 100;
       const empId = events[0].employee_id;

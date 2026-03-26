@@ -120,6 +120,19 @@ export const timesheetController = {
 
       const BATCH_SIZE = 200;
 
+      // Load internal access points for filtering
+      let internalPointsQuery = supabase
+        .from('skud_access_point_settings')
+        .select('access_point_name')
+        .eq('is_internal', true);
+      if (organizationId) {
+        internalPointsQuery = internalPointsQuery.eq('organization_id', organizationId);
+      }
+      const { data: apSettings } = await internalPointsQuery;
+      const internalPoints = new Set<string>(
+        (apSettings || []).map((s: { access_point_name: string }) => s.access_point_name.trim()),
+      );
+
       // Fetch raw SKUD events
       interface IRawEvent {
         employee_id: number;
@@ -142,6 +155,59 @@ export const timesheetController = {
         rawEvents.push(...(data || []));
       }
 
+      // Also find unmatched events (employee_id IS NULL) by full_name
+      const empNameMap = new Map<string, number>();
+      for (const emp of employees || []) {
+        if (emp.full_name) empNameMap.set(emp.full_name.toLowerCase().trim(), emp.id);
+      }
+      const seenEventIds = new Set(rawEvents.map(e => `${e.employee_id}_${e.event_date}_${e.event_time}`));
+
+      if (empNameMap.size > 0 && organizationId) {
+        const unmatchedQuery = supabase
+          .from('skud_events')
+          .select('id, physical_person, employee_id, event_date, event_time, direction, access_point')
+          .eq('organization_id', organizationId)
+          .is('employee_id', null)
+          .gte('event_date', startDate)
+          .lte('event_date', endDate)
+          .order('event_time', { ascending: true })
+          .limit(5000);
+
+        const { data: unmatchedEvents } = await unmatchedQuery;
+        const idsToBackfill: { id: number; empId: number }[] = [];
+
+        for (const ev of unmatchedEvents || []) {
+          const name = ((ev.physical_person as string) || '').toLowerCase().trim();
+          const empId = empNameMap.get(name);
+          if (empId) {
+            const dedupKey = `${empId}_${ev.event_date}_${ev.event_time}`;
+            if (!seenEventIds.has(dedupKey)) {
+              rawEvents.push({
+                employee_id: empId,
+                event_date: ev.event_date as string,
+                event_time: ev.event_time as string,
+                direction: ev.direction as string | null,
+                access_point: ev.access_point as string | null,
+              });
+              seenEventIds.add(dedupKey);
+            }
+            idsToBackfill.push({ id: ev.id as number, empId });
+          }
+        }
+
+        // Backfill employee_id in background
+        if (idsToBackfill.length > 0) {
+          const ids = idsToBackfill.map(x => x.id);
+          const empIds = idsToBackfill.map(x => x.empId);
+          Promise.resolve(supabase.rpc('bulk_update_employee_ids', {
+            p_event_ids: ids,
+            p_employee_ids: empIds,
+          })).then(() => {
+            console.log(`[timesheet] backfilled employee_id on ${idsToBackfill.length} events`);
+          }).catch(() => {});
+        }
+      }
+
       // Group events by employee_id + date and compute first_entry, last_exit, total_hours
       const skudMap = new Map<string, { employee_id: number; date: string; first_entry: string | null; last_exit: string | null; total_hours: number }>();
 
@@ -153,32 +219,42 @@ export const timesheetController = {
         eventsByKey.get(key)!.push(evt);
       }
 
-      for (const [key, events] of eventsByKey) {
-        // events already sorted by event_time ASC
-        const firstEntry = events.find(e => e.direction === 'entry');
-        const lastExit = [...events].reverse().find(e => e.direction === 'exit');
-
-        // Calculate total hours using ALL events (not just external)
-        // Internal access points still show entry/exit pairs that count as work time
-        let totalMs = 0;
-        let lastEntryTime: number | null = null;
-
-        for (const evt of events) {
+      // Helper: calculate total ms from entry/exit pairs
+      const calcPairMs = (evts: IRawEvent[]): number => {
+        let total = 0;
+        let entry: number | null = null;
+        for (const evt of evts) {
           const [h, m, s] = evt.event_time.split(':').map(Number);
           const ms = (h * 3600 + m * 60 + (s || 0)) * 1000;
-
           if (evt.direction === 'entry') {
-            lastEntryTime = ms;
-          } else if (evt.direction === 'exit' && lastEntryTime !== null) {
-            totalMs += ms - lastEntryTime;
-            lastEntryTime = null;
+            if (entry === null) entry = ms;
+          } else if (evt.direction === 'exit' && entry !== null) {
+            total += ms - entry;
+            entry = null;
           }
         }
+        return total;
+      };
 
-        // If still inside (last event is entry), don't count open interval
+      for (const [key, events] of eventsByKey) {
+        // Filter out internal access points (like EmployeeSkudSection does)
+        const extEvents = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
+
+        // Calculate hours from external events; fallback to all if external gives 0
+        let totalMs = calcPairMs(extEvents);
+        if (totalMs === 0 && events.length > 0) {
+          totalMs = calcPairMs(events);
+        }
+
         const totalHours = Math.round((totalMs / 3600000) * 100) / 100;
         const empId = events[0].employee_id;
         const date = events[0].event_date;
+
+        // first_entry/last_exit: use external if they gave hours, otherwise all
+        const usedFallback = calcPairMs(extEvents) === 0 && events.length > 0;
+        const srcEvents = usedFallback ? events : (extEvents.length > 0 ? extEvents : events);
+        const firstEntry = srcEvents.find(e => e.direction === 'entry');
+        const lastExit = [...srcEvents].reverse().find(e => e.direction === 'exit');
 
         skudMap.set(key, {
           employee_id: empId,

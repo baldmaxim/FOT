@@ -867,6 +867,10 @@
   white-space: nowrap;
 }
 
+.ts-day-event-row.internal {
+  opacity: 0.45;
+}
+
 .ts-day-events-summary {
   display: flex;
   gap: 6px;
@@ -902,7 +906,7 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 16px;
-  width: 440px;
+  width: 480px;
   max-height: 90vh;
   overflow: hidden;
 }
@@ -921,9 +925,153 @@
   color: var(--text-primary);
 }
 
-.ts-modal-body {
-  padding: 20px;
+/* Modal tabs */
+.ts-modal-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  padding: 0 20px;
+}
+
+.ts-modal-tab {
+  flex: 1;
+  padding: 10px 0;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: center;
+}
+
+.ts-modal-tab:hover {
+  color: var(--text-primary);
+}
+
+.ts-modal-tab--active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+/* Modal events */
+.ts-modal-events {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ts-modal-events-list {
+  max-height: 320px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ts-modal-event-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.ts-modal-event-row:last-child {
+  border-bottom: none;
+}
+
+.ts-modal-event-icon {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.ts-modal-event-row.entry .ts-modal-event-icon {
+  color: #16a34a;
+}
+
+.ts-modal-event-row.exit .ts-modal-event-icon {
+  color: #dc2626;
+}
+
+.ts-modal-event-row.internal {
+  opacity: 0.45;
+}
+
+.ts-modal-event-time {
+  font-family: 'Space Mono', monospace;
+  font-weight: 600;
+  font-size: 13px;
+  min-width: 42px;
+}
+
+.ts-modal-event-dir {
+  min-width: 44px;
+  font-size: 12px;
+}
+
+.ts-modal-event-point {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-modal-events-summary {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.ts-modal-events-empty {
+  padding: 30px 0;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+/* SKUD time badges (reused from EmployeeCardPage) */
+.ts-modal-events-summary .skud-time-badge,
+.ts-day-events-summary .skud-time-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: 'Space Mono', monospace;
+}
+
+.ts-modal-events-summary .skud-time-badge.entry,
+.ts-day-events-summary .skud-time-badge.entry {
+  background: rgba(34, 197, 94, 0.12);
+  color: #16a34a;
+}
+
+.ts-modal-events-summary .skud-time-badge.exit,
+.ts-day-events-summary .skud-time-badge.exit {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+
+.ts-modal-events-summary .skud-time-badge.duration,
+.ts-day-events-summary .skud-time-badge.duration {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+
+.ts-modal-body {
+  padding: 16px 20px;
+  overflow-y: auto;
+  max-height: 60vh;
 }
 
 .ts-modal-footer {

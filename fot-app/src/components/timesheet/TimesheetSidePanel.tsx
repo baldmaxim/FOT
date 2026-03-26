@@ -50,7 +50,21 @@ const formatDuration = (seconds: number): string => {
   return `${h}ч ${m}м`;
 };
 
-const groupEventsByDay = (events: SkudEvent[]): Map<string, IDayEvents> => {
+const calcPairSeconds = (evts: SkudEvent[]): number => {
+  let total = 0;
+  let entry: number | null = null;
+  for (const ev of evts) {
+    if (ev.direction === 'entry') {
+      if (entry === null) entry = timeToSeconds(ev.event_time);
+    } else if (ev.direction === 'exit' && entry !== null) {
+      total += timeToSeconds(ev.event_time) - entry;
+      entry = null;
+    }
+  }
+  return total;
+};
+
+const groupEventsByDay = (events: SkudEvent[], internalPoints: Set<string>): Map<string, IDayEvents> => {
   const map = new Map<string, SkudEvent[]>();
   for (const ev of events) {
     const key = ev.event_date;
@@ -61,26 +75,25 @@ const groupEventsByDay = (events: SkudEvent[]): Map<string, IDayEvents> => {
   const result = new Map<string, IDayEvents>();
   for (const [date, dayEvents] of map) {
     dayEvents.sort((a, b) => a.event_time.localeCompare(b.event_time));
-    const allEntries = dayEvents.filter(e => e.direction === 'entry');
-    const allExits = dayEvents.filter(e => e.direction === 'exit');
 
-    // Calculate hours using ALL events (internal points are still valid entry/exit pairs)
-    let totalSeconds = 0;
-    let entryTime: number | null = null;
-    for (const ev of dayEvents) {
-      if (ev.direction === 'entry') {
-        if (entryTime === null) entryTime = timeToSeconds(ev.event_time);
-      } else if (ev.direction === 'exit' && entryTime !== null) {
-        totalSeconds += timeToSeconds(ev.event_time) - entryTime;
-        entryTime = null;
-      }
+    // Filter out internal access points (same as EmployeeSkudSection)
+    const extEvents = dayEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point));
+
+    // Calculate from external events; fallback to all if external gives 0
+    let totalSeconds = calcPairSeconds(extEvents);
+    if (totalSeconds === 0 && dayEvents.length > 0) {
+      totalSeconds = calcPairSeconds(dayEvents);
     }
+
+    const srcEvents = extEvents.length > 0 ? extEvents : dayEvents;
+    const srcEntries = srcEvents.filter(e => e.direction === 'entry');
+    const srcExits = srcEvents.filter(e => e.direction === 'exit');
 
     result.set(date, {
       date,
       events: dayEvents,
-      firstEntry: allEntries.length > 0 ? allEntries[0].event_time : null,
-      lastExit: allExits.length > 0 ? allExits[allExits.length - 1].event_time : null,
+      firstEntry: srcEntries.length > 0 ? srcEntries[0].event_time : null,
+      lastExit: srcExits.length > 0 ? srcExits[srcExits.length - 1].event_time : null,
       totalSeconds,
     });
   }
@@ -100,6 +113,13 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
   const [expandedDays, setExpandedDays] = useState<Set<number>>(new Set());
   const [skudEvents, setSkudEvents] = useState<Map<string, IDayEvents>>(new Map());
   const [loadingSkud, setLoadingSkud] = useState(false);
+  const [internalPoints, setInternalPoints] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    skudService.getAccessPointSettings().then(settings => {
+      setInternalPoints(new Set(settings.filter(s => s.is_internal).map(s => s.access_point_name.trim())));
+    }).catch(() => {});
+  }, []);
 
   // Load SKUD events when panel opens
   const loadSkudEvents = useCallback(async () => {
@@ -110,13 +130,13 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
       const lastDay = getDaysInMonth(year, month);
       const endDate = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
       const events = await skudService.getEmployeeEvents(employee.id, startDate, endDate);
-      setSkudEvents(groupEventsByDay(events));
+      setSkudEvents(groupEventsByDay(events, internalPoints));
     } catch {
       setSkudEvents(new Map());
     } finally {
       setLoadingSkud(false);
     }
-  }, [employee, open, year, month]);
+  }, [employee, open, year, month, internalPoints]);
 
   useEffect(() => {
     if (open && employee) {
@@ -302,10 +322,12 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                         <div className="ts-day-events-empty">Нет событий СКУД</div>
                       ) : (
                         <>
-                          {dayEventsData.events.map(ev => (
+                          {dayEventsData.events.map(ev => {
+                            const isInternal = ev.access_point ? internalPoints.has(ev.access_point) : false;
+                            return (
                             <div
                               key={ev.id}
-                              className={`ts-day-event-row ${ev.direction || ''}`}
+                              className={`ts-day-event-row ${ev.direction || ''} ${isInternal ? 'internal' : ''}`}
                             >
                               <span className="ts-day-event-icon">
                                 {ev.direction === 'entry' ? <LogIn size={13} /> : <LogOut size={13} />}
@@ -320,7 +342,8 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                                 <span className="ts-day-event-point">{ev.access_point}</span>
                               )}
                             </div>
-                          ))}
+                            );
+                          })}
                           {dayEventsData.totalSeconds > 0 && (
                             <div className="ts-day-events-summary">
                               {dayEventsData.firstEntry && (
