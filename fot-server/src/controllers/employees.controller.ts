@@ -2,9 +2,10 @@ import { Response } from 'express';
 import { z } from 'zod';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
+import { loadStructureCache, decryptEmployee, decryptEmployeeList } from '../services/employee-mapper.service.js';
 import { parseFIO } from '../utils/fio.utils.js';
 import { getOrgId } from '../utils/org.utils.js';
-import type { AuthenticatedRequest, Employee, EmployeeEncrypted } from '../types/index.js';
+import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 
 // Импорт методов из подконтроллеров
 import { archive, restore, fire, rehire, moveDepartment, getHistory } from './employee-lifecycle.controller.js';
@@ -27,166 +28,108 @@ const createEmployeeSchema = z.object({
 
 const updateEmployeeSchema = createEmployeeSchema.partial();
 
-// Кэш для расшифрованных названий структуры
-export interface StructureCache {
-  departments: Map<string, string>;
-  positions: Map<string, string>;
-}
-
-/**
- * Загружает кэш структуры организации (отделы, должности)
- * Кэшируется в памяти на 60 секунд для избежания повторных запросов
- */
-const structureCacheStore = new Map<string, { data: StructureCache; expiresAt: number }>();
-const STRUCTURE_CACHE_TTL_MS = 60_000;
-
-export async function loadStructureCache(organizationId?: string): Promise<StructureCache> {
-  const cacheKey = organizationId || '__global__';
-  const now = Date.now();
-  const cached = structureCacheStore.get(cacheKey);
-
-  if (cached && cached.expiresAt > now) {
-    return cached.data;
-  }
-
-  const cache: StructureCache = {
-    departments: new Map(),
-    positions: new Map(),
-  };
-
-  let deptQuery = supabase.from('org_departments').select('id, name');
-  let posQuery = supabase.from('positions').select('id, name');
-  if (organizationId) {
-    deptQuery = deptQuery.eq('organization_id', organizationId);
-    posQuery = posQuery.eq('organization_id', organizationId);
-  }
-
-  const [departmentsRes, positionsRes] = await Promise.all([deptQuery, posQuery]);
-
-  (departmentsRes.data || []).forEach((d: { id: string; name: string }) => {
-    cache.departments.set(d.id, d.name || '');
-  });
-
-  (positionsRes.data || []).forEach((p: { id: string; name: string }) => {
-    cache.positions.set(p.id, p.name || '');
-  });
-
-  structureCacheStore.set(cacheKey, { data: cache, expiresAt: now + STRUCTURE_CACHE_TTL_MS });
-  return cache;
-}
-
-/**
- * Лёгкая расшифровка для списка — только full_name + lookup из кэша
- */
-function decryptEmployeeList(encrypted: EmployeeEncrypted, structureCache: StructureCache): Employee {
-  return {
-    id: encrypted.id,
-    organization_id: encrypted.organization_id,
-    full_name: encrypted.full_name || '',
-    last_name: null,
-    first_name: null,
-    middle_name: null,
-    position_name: encrypted.position_id ? structureCache.positions.get(encrypted.position_id) || null : null,
-    position_id: encrypted.position_id,
-    current_salary: null,
-    birth_date: null,
-    hire_date: '',
-    country: null,
-    pension_number: null,
-    patent_issue_date: null,
-    patent_expiry_date: null,
-    email: encrypted.email || null,
-    department: encrypted.org_department_id ? structureCache.departments.get(encrypted.org_department_id) || null : null,
-    org_department_id: encrypted.org_department_id,
-    tab_number: null,
-    current_status: null,
-    permit_expiry_date: null,
-    registration_cat1: null,
-    registration_cat4: null,
-    doc_receipt_date: null,
-    work_object: null,
-    employment_status: encrypted.employment_status,
-    department_locked: encrypted.department_locked,
-    is_archived: encrypted.is_archived,
-    archived_at: encrypted.archived_at,
-    created_at: encrypted.created_at,
-    updated_at: encrypted.updated_at,
-  };
-}
-
-/**
- * Расшифровывает сотрудника из БД формата в API формат
- */
-export function decryptEmployee(encrypted: EmployeeEncrypted, structureCache: StructureCache): Employee {
-  return {
-    id: encrypted.id,
-    organization_id: encrypted.organization_id,
-    full_name: encrypted.full_name || '',
-    last_name: encrypted.last_name || null,
-    first_name: encrypted.first_name || null,
-    middle_name: encrypted.middle_name || null,
-    position_name: encrypted.position_id ? structureCache.positions.get(encrypted.position_id) || null : null,
-    position_id: encrypted.position_id,
-    current_salary: encrypted.current_salary ? parseFloat(encrypted.current_salary) : null,
-    birth_date: encrypted.birth_date || null,
-    hire_date: encrypted.hire_date || '',
-    country: encrypted.country || null,
-    pension_number: encrypted.pension_number || null,
-    patent_issue_date: encrypted.patent_issue_date || null,
-    patent_expiry_date: encrypted.patent_expiry_date || null,
-    email: encrypted.email || null,
-    department: encrypted.org_department_id ? structureCache.departments.get(encrypted.org_department_id) || null : null,
-    org_department_id: encrypted.org_department_id,
-    tab_number: encrypted.tab_number || null,
-    current_status: encrypted.current_status || null,
-    permit_expiry_date: encrypted.permit_expiry_date || null,
-    registration_cat1: encrypted.registration_cat1 || null,
-    registration_cat4: encrypted.registration_cat4 || null,
-    doc_receipt_date: encrypted.doc_receipt_date || null,
-    work_object: encrypted.work_object || null,
-    employment_status: encrypted.employment_status,
-    department_locked: encrypted.department_locked,
-    is_archived: encrypted.is_archived,
-    archived_at: encrypted.archived_at,
-    created_at: encrypted.created_at,
-    updated_at: encrypted.updated_at,
-  };
-}
-
 export const employeesController = {
   /**
    * GET /api/employees
+   * Поддерживает два режима:
+   * 1) Legacy (без page) — грузит всё целиком
+   * 2) Paginated (page=1&pageSize=50) — серверная пагинация с counts
    */
   async getAll(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const t0 = Date.now();
       const showArchived = req.query.archived === 'true';
       const organizationId = req.user.organization_id;
-      // Для header: принудительно фильтруем по его отделу
       const departmentId = req.user.position_type === 'header' && req.user.department_id
         ? req.user.department_id
         : req.query.department_id as string | undefined;
       const isListView = req.query.view === 'list';
-      console.log(`[getAll] Start | archived=${showArchived} org=${organizationId} dept=${departmentId} list=${isListView}`);
+      const listColumns = 'id, organization_id, full_name, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at';
 
-      // Пагинация Supabase (дефолт max-rows = 1000)
-      const PAGE_SIZE = 1000;
+      // --- Paginated mode ---
+      const pageParam = req.query.page as string | undefined;
+      if (pageParam) {
+        const page = Math.max(1, parseInt(pageParam) || 1);
+        const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize as string) || 50));
+        const search = (req.query.search as string || '').trim();
+        const status = req.query.status as string | undefined; // 'active' | 'fired'
+        const offset = (page - 1) * pageSize;
+
+        // Main query with exact count
+        let q = supabase
+          .from('employees')
+          .select(listColumns, { count: 'exact' })
+          .eq('is_archived', showArchived)
+          .order('full_name')
+          .range(offset, offset + pageSize - 1);
+
+        if (organizationId) q = q.eq('organization_id', organizationId);
+        if (departmentId) q = q.eq('org_department_id', departmentId);
+        if (search) q = q.ilike('full_name', `%${search}%`);
+        if (status === 'fired') q = q.eq('employment_status', 'fired');
+        else if (status === 'active' || !status) q = q.neq('employment_status', 'fired');
+
+        const { data, error, count } = await q;
+        if (error) {
+          console.error('Get employees paginated error:', error);
+          res.status(500).json({ success: false, error: 'Failed to fetch employees' });
+          return;
+        }
+
+        const structureCache = await loadStructureCache(organizationId || undefined);
+        const employees = (data || []).map(emp => decryptEmployeeList(emp as unknown as EmployeeEncrypted, structureCache));
+        const total = count ?? 0;
+
+        // Counts query: dept counts + status counts (lightweight, без search/dept/status фильтров)
+        let countsQuery = supabase
+          .from('employees')
+          .select('org_department_id, employment_status')
+          .eq('is_archived', showArchived);
+        if (organizationId) countsQuery = countsQuery.eq('organization_id', organizationId);
+
+        const { data: countRows } = await countsQuery;
+        const byDepartment: Record<string, number> = {};
+        const byStatus = { active: 0, fired: 0 };
+        for (const row of countRows || []) {
+          const r = row as { org_department_id: string | null; employment_status: string };
+          if (r.employment_status === 'fired') {
+            byStatus.fired++;
+          } else {
+            byStatus.active++;
+            if (r.org_department_id) {
+              byDepartment[r.org_department_id] = (byDepartment[r.org_department_id] || 0) + 1;
+            }
+          }
+        }
+
+        auditService.logFromRequest(req, req.user.id, 'VIEW_EMPLOYEES', {
+          details: { count: employees.length, page, archived: showArchived },
+        }).catch(() => {});
+
+        console.log(`[getAll] Paginated page=${page} size=${pageSize} total=${total} in ${Date.now() - t0}ms`);
+        res.json({
+          success: true,
+          data: employees,
+          meta: { page, pageSize, total, totalPages: Math.ceil(total / pageSize) },
+          counts: { byDepartment, byStatus },
+        });
+        return;
+      }
+
+      // --- Legacy mode (без page) ---
+      console.log(`[getAll] Legacy | archived=${showArchived} org=${organizationId} dept=${departmentId} list=${isListView}`);
+      const INTERNAL_PAGE = 1000;
       let allRows: EmployeeEncrypted[] = [];
       let from = 0;
       let hasMore = true;
-      let pageNum = 0;
-
-      // Для list view выбираем только колонки, используемые decryptEmployeeList
-      const listColumns = 'id, organization_id, full_name, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at';
 
       while (hasMore) {
-        const tPage = Date.now();
         let q = supabase
           .from('employees')
           .select(isListView ? listColumns : '*')
           .eq('is_archived', showArchived)
           .order('id')
-          .range(from, from + PAGE_SIZE - 1);
+          .range(from, from + INTERNAL_PAGE - 1);
 
         if (organizationId) q = q.eq('organization_id', organizationId);
         if (departmentId) q = q.eq('org_department_id', departmentId);
@@ -198,29 +141,19 @@ export const employeesController = {
           return;
         }
 
-        console.log(`[getAll] Page ${pageNum}: ${data?.length || 0} rows in ${Date.now() - tPage}ms`);
         allRows = allRows.concat((data || []) as unknown as EmployeeEncrypted[]);
-        hasMore = (data?.length || 0) === PAGE_SIZE;
-        from += PAGE_SIZE;
-        pageNum++;
+        hasMore = (data?.length || 0) === INTERNAL_PAGE;
+        from += INTERNAL_PAGE;
       }
 
-      const tDb = Date.now() - t0;
-      console.log(`[getAll] DB total: ${allRows.length} rows in ${tDb}ms`);
-
-      const tCache = Date.now();
       const structureCache = await loadStructureCache(organizationId || undefined);
-      console.log(`[getAll] Structure cache: depts=${structureCache.departments.size} pos=${structureCache.positions.size} in ${Date.now() - tCache}ms`);
-
-      const tDecrypt = Date.now();
       const decryptFn = isListView ? decryptEmployeeList : decryptEmployee;
       const employees = allRows.map(emp => decryptFn(emp, structureCache));
-      console.log(`[getAll] Decrypt(${isListView ? 'light' : 'full'}) ${employees.length} employees in ${Date.now() - tDecrypt}ms`);
 
       auditService.logFromRequest(req, req.user.id, 'VIEW_EMPLOYEES', {
         details: { count: employees.length, archived: showArchived },
       }).catch(() => {});
-      console.log(`[getAll] TOTAL: ${Date.now() - t0}ms`);
+      console.log(`[getAll] Legacy total=${employees.length} in ${Date.now() - t0}ms`);
 
       res.json({ success: true, data: employees });
     } catch (error) {

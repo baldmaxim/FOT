@@ -156,7 +156,7 @@ export const DashboardPage: React.FC = () => {
 
   const deptSelector = isHeaderOnly ? (
     <div className="dash-dept-dropdown">
-      <div className="dash-dept-trigger has-value" style={{ cursor: 'default', opacity: 0.8 }}>
+      <div className="dash-dept-trigger has-value" style={{ cursor: 'default' }}>
         <Building2 size={14} className="dash-dept-search-icon" />
         <span className="dash-dept-input" style={{ cursor: 'default' }}>
           {selectedDept?.name ?? 'Мой отдел'}

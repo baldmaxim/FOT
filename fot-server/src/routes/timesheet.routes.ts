@@ -4,36 +4,36 @@ import { authenticate, requirePosition, requireOrganization, injectOrganizationF
 
 const router = Router();
 
-router.use(authenticate as any);
-router.use(injectOrganizationFromQuery as any);
-router.use(requireOrganization as any);
+router.use(authenticate);
+router.use(injectOrganizationFromQuery);
+router.use(requireOrganization);
 
 // GET /api/timesheet?month=YYYY-MM&department_id=...
 router.get(
   '/',
-  requirePosition('worker', 'header', 'admin', 'super_admin') as any,
-  timesheetController.getAll as any
+  requirePosition('worker', 'header', 'hr', 'admin', 'super_admin'),
+  timesheetController.getAll
 );
 
 // GET /api/timesheet/export?month=YYYY-MM&department_id=...
 router.get(
   '/export',
-  requirePosition('header', 'admin', 'super_admin') as any,
-  timesheetController.export as any
+  requirePosition('header', 'hr', 'admin', 'super_admin'),
+  timesheetController.export
 );
 
 // POST /api/timesheet
 router.post(
   '/',
-  requirePosition('header', 'admin', 'super_admin') as any,
-  timesheetController.create as any
+  requirePosition('header', 'hr', 'admin', 'super_admin'),
+  timesheetController.create
 );
 
 // PUT /api/timesheet/:id
 router.put(
   '/:id',
-  requirePosition('header', 'admin', 'super_admin') as any,
-  timesheetController.update as any
+  requirePosition('header', 'hr', 'admin', 'super_admin'),
+  timesheetController.update
 );
 
 export default router;

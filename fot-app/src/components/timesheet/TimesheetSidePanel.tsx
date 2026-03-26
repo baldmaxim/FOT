@@ -1,13 +1,14 @@
-import { type FC, useMemo } from 'react';
-import { X } from 'lucide-react';
-import type { TimesheetEntry, TimesheetEmployee } from '../../types';
+import { type FC, useMemo, useState, useEffect, useCallback } from 'react';
+import { X, ChevronDown, ChevronRight, LogIn, LogOut, Clock, Timer } from 'lucide-react';
+import type { TimesheetEntry, TimesheetEmployee, SkudEvent } from '../../types';
+import { skudService } from '../../services/skudService';
 import {
   getDaysInMonth,
   isWeekend,
   formatDateRu,
   getWeekdayFull,
   isToday,
-  getWorkingDaysCount,
+  getWorkingDaysUpToToday,
 } from '../../utils/calendarUtils';
 
 interface ISidePanelProps {
@@ -19,10 +20,72 @@ interface ISidePanelProps {
   month: number;
 }
 
+interface IDayEvents {
+  date: string;
+  events: SkudEvent[];
+  firstEntry: string | null;
+  lastExit: string | null;
+  totalSeconds: number;
+}
+
 const getInitials = (name: string): string => {
   const parts = name.split(' ');
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
   return name.substring(0, 2).toUpperCase();
+};
+
+const timeToSeconds = (time: string): number => {
+  const [h, m, s = 0] = time.split(':').map(Number);
+  return h * 3600 + m * 60 + s;
+};
+
+const formatTime = (time: string): string => time.slice(0, 5);
+
+const formatDuration = (seconds: number): string => {
+  if (seconds <= 0) return '';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h === 0) return `${m}м`;
+  if (m === 0) return `${h}ч`;
+  return `${h}ч ${m}м`;
+};
+
+const groupEventsByDay = (events: SkudEvent[]): Map<string, IDayEvents> => {
+  const map = new Map<string, SkudEvent[]>();
+  for (const ev of events) {
+    const key = ev.event_date;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(ev);
+  }
+
+  const result = new Map<string, IDayEvents>();
+  for (const [date, dayEvents] of map) {
+    dayEvents.sort((a, b) => a.event_time.localeCompare(b.event_time));
+    const allEntries = dayEvents.filter(e => e.direction === 'entry');
+    const allExits = dayEvents.filter(e => e.direction === 'exit');
+
+    // Calculate hours using ALL events (internal points are still valid entry/exit pairs)
+    let totalSeconds = 0;
+    let entryTime: number | null = null;
+    for (const ev of dayEvents) {
+      if (ev.direction === 'entry') {
+        if (entryTime === null) entryTime = timeToSeconds(ev.event_time);
+      } else if (ev.direction === 'exit' && entryTime !== null) {
+        totalSeconds += timeToSeconds(ev.event_time) - entryTime;
+        entryTime = null;
+      }
+    }
+
+    result.set(date, {
+      date,
+      events: dayEvents,
+      firstEntry: allEntries.length > 0 ? allEntries[0].event_time : null,
+      lastExit: allExits.length > 0 ? allExits[allExits.length - 1].event_time : null,
+      totalSeconds,
+    });
+  }
+
+  return result;
 };
 
 
@@ -34,6 +97,43 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
   year,
   month,
 }) => {
+  const [expandedDays, setExpandedDays] = useState<Set<number>>(new Set());
+  const [skudEvents, setSkudEvents] = useState<Map<string, IDayEvents>>(new Map());
+  const [loadingSkud, setLoadingSkud] = useState(false);
+
+  // Load SKUD events when panel opens
+  const loadSkudEvents = useCallback(async () => {
+    if (!employee || !open) return;
+    setLoadingSkud(true);
+    try {
+      const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+      const lastDay = getDaysInMonth(year, month);
+      const endDate = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      const events = await skudService.getEmployeeEvents(employee.id, startDate, endDate);
+      setSkudEvents(groupEventsByDay(events));
+    } catch {
+      setSkudEvents(new Map());
+    } finally {
+      setLoadingSkud(false);
+    }
+  }, [employee, open, year, month]);
+
+  useEffect(() => {
+    if (open && employee) {
+      loadSkudEvents();
+      setExpandedDays(new Set());
+    }
+  }, [open, employee, loadSkudEvents]);
+
+  const toggleDay = (day: number) => {
+    setExpandedDays(prev => {
+      const next = new Set(prev);
+      if (next.has(day)) next.delete(day);
+      else next.add(day);
+      return next;
+    });
+  };
+
   const dayDetails = useMemo(() => {
     if (!employee) return [];
     const daysCount = getDaysInMonth(year, month);
@@ -50,7 +150,6 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
       const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
       const entry = entries.find(e => e.work_date === dateStr) || null;
 
-      // Only show days up to today
       const dayDate = new Date(year, month - 1, d);
       const today = new Date();
       today.setHours(23, 59, 59, 999);
@@ -63,7 +162,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
   }, [employee, entries, year, month]);
 
   const stats = useMemo(() => {
-    const normHours = getWorkingDaysCount(year, month) * 8;
+    const normHours = getWorkingDaysUpToToday(year, month) * 8;
     let factHours = 0;
     let lateCount = 0;
     let absentCount = 0;
@@ -86,13 +185,20 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
     return 'ts-day-detail-hours--partial';
   };
 
+  const formatHM = (decimal: number): string => {
+    const h = Math.floor(decimal);
+    const m = Math.round((decimal - h) * 60);
+    if (m === 0) return `${h}ч`;
+    return `${h}ч ${m}м`;
+  };
+
   const getHoursLabel = (entry: TimesheetEntry | null): string => {
     if (!entry) return '—';
     if (entry.status === 'absent') return 'Неявка';
     if (entry.status === 'sick') return 'Б/л';
     if (entry.status === 'vacation') return 'Отпуск';
     if (entry.status === 'business_trip') return 'Ком-ка';
-    if (entry.hours_worked != null) return `${entry.hours_worked}ч`;
+    if (entry.hours_worked != null) return formatHM(entry.hours_worked);
     return '—';
   };
 
@@ -123,7 +229,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
           <div className="ts-panel-stats">
             <div className="ts-panel-stat">
               <div className="ts-panel-stat-value" style={{ color: 'var(--success)' }}>
-                {Math.round(stats.factHours)}ч
+                {formatHM(stats.factHours)}
               </div>
               <div className="ts-panel-stat-label">Отработано</div>
             </div>
@@ -147,25 +253,98 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
 
           <div className="ts-panel-section">
             <div className="ts-panel-section-title">Детализация по дням</div>
-            {dayDetails.map(({ day, entry }) => (
-              <div
-                key={day}
-                className={`ts-day-detail ${entry?.status === 'absent' ? 'ts-day-detail--absent' : ''}`}
-              >
-                <div className="ts-day-detail-left">
-                  <div>
-                    <div className="ts-day-detail-date">{formatDateRu(day, month)}</div>
-                    <div className="ts-day-detail-day">
-                      {getWeekdayFull(year, month, day)}
-                      {isToday(year, month, day) ? ' (сегодня)' : ''}
+            {dayDetails.map(({ day, entry }) => {
+              const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+              const dayEventsData = skudEvents.get(dateStr);
+              const expanded = expandedDays.has(day);
+              const hasEvents = dayEventsData && dayEventsData.events.length > 0;
+
+              return (
+                <div key={day} className="ts-day-detail-wrap">
+                  <div
+                    className={`ts-day-detail ts-day-detail--clickable ${entry?.status === 'absent' ? 'ts-day-detail--absent' : ''}`}
+                    onClick={() => toggleDay(day)}
+                  >
+                    <div className="ts-day-detail-left">
+                      <span className="ts-day-detail-chevron">
+                        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </span>
+                      <div>
+                        <div className="ts-day-detail-date">{formatDateRu(day, month)}</div>
+                        <div className="ts-day-detail-day">
+                          {getWeekdayFull(year, month, day)}
+                          {isToday(year, month, day) ? ' (сегодня)' : ''}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="ts-day-detail-right">
+                      {entry?.first_entry && (
+                        <span className="ts-day-detail-time-badge entry">
+                          {formatTime(entry.first_entry)}
+                        </span>
+                      )}
+                      {entry?.last_exit && (
+                        <span className="ts-day-detail-time-badge exit">
+                          {formatTime(entry.last_exit)}
+                        </span>
+                      )}
+                      <div className={`ts-day-detail-hours ${getHoursClass(entry)}`}>
+                        {getHoursLabel(entry)}
+                      </div>
                     </div>
                   </div>
+
+                  {expanded && (
+                    <div className="ts-day-events-panel">
+                      {loadingSkud ? (
+                        <div className="ts-day-events-loading">Загрузка...</div>
+                      ) : !hasEvents ? (
+                        <div className="ts-day-events-empty">Нет событий СКУД</div>
+                      ) : (
+                        <>
+                          {dayEventsData.events.map(ev => (
+                            <div
+                              key={ev.id}
+                              className={`ts-day-event-row ${ev.direction || ''}`}
+                            >
+                              <span className="ts-day-event-icon">
+                                {ev.direction === 'entry' ? <LogIn size={13} /> : <LogOut size={13} />}
+                              </span>
+                              <span className="ts-day-event-time">
+                                {formatTime(ev.event_time)}
+                              </span>
+                              <span className="ts-day-event-dir">
+                                {ev.direction === 'entry' ? 'Вход' : 'Выход'}
+                              </span>
+                              {ev.access_point && (
+                                <span className="ts-day-event-point">{ev.access_point}</span>
+                              )}
+                            </div>
+                          ))}
+                          {dayEventsData.totalSeconds > 0 && (
+                            <div className="ts-day-events-summary">
+                              {dayEventsData.firstEntry && (
+                                <span className="skud-time-badge entry">
+                                  <LogIn size={11} /> {formatTime(dayEventsData.firstEntry)}
+                                </span>
+                              )}
+                              {dayEventsData.lastExit && (
+                                <span className="skud-time-badge exit">
+                                  <LogOut size={11} /> {formatTime(dayEventsData.lastExit)}
+                                </span>
+                              )}
+                              <span className="skud-time-badge duration">
+                                <Timer size={11} /> {formatDuration(dayEventsData.totalSeconds)}
+                              </span>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <div className={`ts-day-detail-hours ${getHoursClass(entry)}`}>
-                  {getHoursLabel(entry)}
-                </div>
-              </div>
-            ))}
+              );
+            })}
             {dayDetails.length === 0 && (
               <div className="ts-loading">Нет данных за этот период</div>
             )}

@@ -2,7 +2,8 @@ import { Router } from 'express';
 import multer from 'multer';
 import { employeesController } from '../controllers/employees.controller.js';
 import { employeeEnrichController } from '../controllers/employee-enrich.controller.js';
-import { authenticate, requirePosition, requireOrganization, require2FA, injectOrganizationFromQuery } from '../middleware/auth.js';
+import { authenticate, requirePosition, requireOrganization, requireCritical2FA, injectOrganizationFromQuery } from '../middleware/auth.js';
+import { importLimiter } from '../middleware/rateLimit.js';
 
 const router = Router();
 
@@ -26,114 +27,116 @@ const upload = multer({
 });
 
 // Все роуты требуют аутентификации и организации
-router.use(authenticate as any);
-router.use(injectOrganizationFromQuery as any);
-router.use(requireOrganization as any);
+router.use(authenticate);
+router.use(injectOrganizationFromQuery);
+router.use(requireOrganization);
 
 // GET /api/employees - получение списка (worker+)
 router.get(
   '/',
-  requirePosition('worker', 'header', 'admin', 'super_admin') as any,
-  employeesController.getAll as any
+  requirePosition('worker', 'header', 'hr', 'admin', 'super_admin'),
+  employeesController.getAll
 );
 
 // POST /api/employees/import - импорт из Excel (header+, требуется 2FA)
 router.post(
   '/import',
-  requirePosition('header', 'admin', 'super_admin') as any,
-  require2FA as any,
+  requirePosition('header', 'hr', 'admin', 'super_admin'),
+  requireCritical2FA,
+  importLimiter,
   upload.single('file'),
-  employeesController.import as any
+  employeesController.import
 );
 
 // POST /api/employees/enrich - обогащение данных из Excel (header+, требуется 2FA)
 router.post(
   '/enrich',
-  requirePosition('header', 'admin', 'super_admin') as any,
-  require2FA as any,
+  requirePosition('header', 'hr', 'admin', 'super_admin'),
+  requireCritical2FA,
+  importLimiter,
   upload.single('file'),
-  employeeEnrichController.enrich as any
+  employeeEnrichController.enrich
 );
 
 // DELETE /api/employees/all - удаление ВСЕХ (super_admin, только для разработки)
 router.delete(
   '/all',
-  requirePosition('super_admin') as any,
-  require2FA as any,
-  employeesController.deleteAll as any
+  requirePosition('super_admin'),
+  requireCritical2FA,
+  employeesController.deleteAll
 );
 
 // GET /api/employees/:id/history - история событий сотрудника (worker+)
 router.get(
   '/:id/history',
-  requirePosition('worker', 'header', 'admin', 'super_admin') as any,
-  employeesController.getHistory as any
+  requirePosition('worker', 'header', 'hr', 'admin', 'super_admin'),
+  employeesController.getHistory
 );
 
 // GET /api/employees/:id - получение одного (worker+)
 router.get(
   '/:id',
-  requirePosition('worker', 'header', 'admin', 'super_admin') as any,
-  employeesController.getById as any
+  requirePosition('worker', 'header', 'hr', 'admin', 'super_admin'),
+  employeesController.getById
 );
 
 // POST /api/employees - создание (header+, требуется 2FA)
 router.post(
   '/',
-  requirePosition('header', 'admin', 'super_admin') as any,
-  require2FA as any,
-  employeesController.create as any
+  requirePosition('header', 'hr', 'admin', 'super_admin'),
+  requireCritical2FA,
+  employeesController.create
 );
 
 // PUT /api/employees/:id - обновление (header+, требуется 2FA)
 router.put(
   '/:id',
-  requirePosition('header', 'admin', 'super_admin') as any,
-  require2FA as any,
-  employeesController.update as any
+  requirePosition('header', 'hr', 'admin', 'super_admin'),
+  requireCritical2FA,
+  employeesController.update
 );
 
 // DELETE /api/employees/:id - удаление (admin+, требуется 2FA)
 router.delete(
   '/:id',
-  requirePosition('admin', 'super_admin') as any,
-  require2FA as any,
-  employeesController.delete as any
+  requirePosition('admin', 'super_admin'),
+  requireCritical2FA,
+  employeesController.delete
 );
 
 // POST /api/employees/:id/archive - архивация (header+)
 router.post(
   '/:id/archive',
-  requirePosition('header', 'admin', 'super_admin') as any,
-  employeesController.archive as any
+  requirePosition('header', 'hr', 'admin', 'super_admin'),
+  employeesController.archive
 );
 
 // POST /api/employees/:id/restore - восстановление (header+)
 router.post(
   '/:id/restore',
-  requirePosition('header', 'admin', 'super_admin') as any,
-  employeesController.restore as any
+  requirePosition('header', 'hr', 'admin', 'super_admin'),
+  employeesController.restore
 );
 
 // POST /api/employees/:id/fire - уволить (header+)
 router.post(
   '/:id/fire',
-  requirePosition('header', 'admin', 'super_admin') as any,
-  employeesController.fire as any
+  requirePosition('header', 'hr', 'admin', 'super_admin'),
+  employeesController.fire
 );
 
 // POST /api/employees/:id/rehire - восстановить на работу (header+)
 router.post(
   '/:id/rehire',
-  requirePosition('header', 'admin', 'super_admin') as any,
-  employeesController.rehire as any
+  requirePosition('header', 'hr', 'admin', 'super_admin'),
+  employeesController.rehire
 );
 
 // POST /api/employees/:id/move-department - переместить в отдел (header+)
 router.post(
   '/:id/move-department',
-  requirePosition('header', 'admin', 'super_admin') as any,
-  employeesController.moveDepartment as any
+  requirePosition('header', 'hr', 'admin', 'super_admin'),
+  employeesController.moveDepartment
 );
 
 export default router;

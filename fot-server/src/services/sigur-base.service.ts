@@ -276,4 +276,51 @@ export class SigurServiceBase {
     console.log(`[sigur paginate] done: ${allItems.length} total items in ${page} pages`);
     return allItems;
   }
+
+  /** Cursor-based пагинация через lastId (для events). */
+  async fetchAllByLastId<T extends Record<string, any>>(
+    endpoint: string,
+    params?: Record<string, any>,
+    connection?: ConnectionType,
+    pageSize = PAGE_SIZE,
+    idField: 'lastId' | 'lastLogId' = 'lastId',
+  ): Promise<T[]> {
+    const allItems: T[] = [];
+    let lastId: number | undefined;
+    let page = 0;
+
+    console.log(`[sigur cursor] start: ${endpoint} (pageSize=${pageSize}, idField=${idField})`, params);
+
+    while (true) {
+      page++;
+      const reqParams: Record<string, any> = { ...params, limit: pageSize };
+      if (lastId != null) reqParams[idField] = lastId;
+
+      console.log(`[sigur cursor] page ${page}, ${idField}=${lastId ?? 'none'}`);
+
+      const response = await this.request<any>(endpoint, reqParams, connection);
+      const items: T[] = response?.data || response || [];
+
+      console.log(`[sigur cursor] page ${page} got ${Array.isArray(items) ? items.length : 'non-array'} items`);
+
+      if (!Array.isArray(items) || items.length === 0) break;
+
+      allItems.push(...items);
+
+      // Извлекаем id последнего элемента для следующей страницы
+      const last = items[items.length - 1];
+      const nextId = typeof last.id === 'number' ? last.id : typeof last.logId === 'number' ? last.logId : undefined;
+
+      if (nextId == null) {
+        console.warn(`[sigur cursor] no id/logId in last item, stopping pagination`);
+        break;
+      }
+
+      if (items.length < pageSize) break;
+      lastId = nextId;
+    }
+
+    console.log(`[sigur cursor] done: ${allItems.length} total items in ${page} pages`);
+    return allItems;
+  }
 }

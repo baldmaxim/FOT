@@ -1,6 +1,7 @@
 import { Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
+import { CRITICAL_2FA_ENABLED } from '../config/features.js';
 import type { AuthenticatedRequest, JWTPayload, EmployeePositionType } from '../types/index.js';
 
 /**
@@ -81,6 +82,22 @@ export const require2FA = (
 };
 
 /**
+ * Middleware-обёртка: если CRITICAL_2FA_ENABLED=false — пропускает,
+ * иначе ведёт себя как require2FA.
+ */
+export const requireCritical2FA = (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): void => {
+  if (!CRITICAL_2FA_ENABLED) {
+    next();
+    return;
+  }
+  require2FA(req, res, next);
+};
+
+/**
  * Middleware для проверки должности пользователя
  */
 export const requirePosition = (...allowedPositions: EmployeePositionType[]) => {
@@ -107,6 +124,7 @@ export const requirePosition = (...allowedPositions: EmployeePositionType[]) => 
 const POSITION_HIERARCHY: Record<EmployeePositionType, number> = {
   worker: 1,
   header: 2,
+  hr: 3,
   admin: 3,
   super_admin: 4,
 };

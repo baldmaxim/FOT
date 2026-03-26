@@ -205,6 +205,19 @@ export async function searchAndBackfillByName(
   startDate: unknown,
   endDate: unknown,
 ): Promise<Record<string, unknown>[]> {
+  // Быстрая проверка: есть ли вообще unmatched события за период
+  let countQuery = supabase
+    .from('skud_events')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', orgId)
+    .is('employee_id', null);
+
+  if (startDate && typeof startDate === 'string') countQuery = countQuery.gte('event_date', startDate);
+  if (endDate && typeof endDate === 'string') countQuery = countQuery.lte('event_date', endDate);
+
+  const { count } = await countQuery;
+  if (!count || count === 0) return [];
+
   const PAGE_SIZE = 1000;
   const MAX_SCAN = 50000;
   let offset = 0;
@@ -217,6 +230,7 @@ export async function searchAndBackfillByName(
       .select('*')
       .eq('organization_id', orgId)
       .is('employee_id', null)
+      .order('event_date')
       .range(offset, offset + PAGE_SIZE - 1);
 
     if (startDate && typeof startDate === 'string') query = query.gte('event_date', startDate);

@@ -2,7 +2,7 @@ import { Response } from 'express';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import { getOrgId } from '../utils/org.utils.js';
-import { loadStructureCache, decryptEmployee } from './employees.controller.js';
+import { loadStructureCache, decryptEmployee } from '../services/employee-mapper.service.js';
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 
 /**
@@ -73,6 +73,12 @@ export async function restore(req: AuthenticatedRequest, res: Response): Promise
 
     const structureCache = await loadStructureCache(organizationId);
     const employee = decryptEmployee(data as EmployeeEncrypted, structureCache);
+
+    await auditService.logFromRequest(req, req.user.id, 'RESTORE_EMPLOYEE', {
+      entityType: 'employee',
+      entityId: id,
+    });
+
     res.json({ success: true, data: employee });
   } catch (error) {
     console.error('Restore employee error:', error);

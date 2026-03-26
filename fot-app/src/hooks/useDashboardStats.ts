@@ -28,7 +28,7 @@ export const useDashboardStats = (departmentId: string | null, period: Dashboard
         setStats(data);
         setError(null);
       }
-    } catch (e) {
+    } catch {
       if (!signal?.aborted) {
         setError('Ошибка загрузки аналитики');
       }

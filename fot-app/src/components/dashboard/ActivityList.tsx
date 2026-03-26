@@ -102,11 +102,10 @@ const EmployeeRow = memo<{
 }>(({ employee, isFavorite, onToggleFavorite, tick }) => {
   const navigate = useNavigate();
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- tick forces recalculation every minute
   const workTime = useMemo(() => getWorkElapsed(employee), [employee, tick]);
-  const absentTime = useMemo(
-    () => (employee.status === 'offline' ? formatElapsed(employee.since) : ''),
-    [employee.status, employee.since, tick],
-  );
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- tick forces recalculation every minute
+  const absentTime = useMemo(() => (employee.status === 'offline' ? formatElapsed(employee.since) : ''), [employee.status, employee.since, tick]);
 
   const isOnline = employee.status === 'online';
   const isOffline = employee.status === 'offline';

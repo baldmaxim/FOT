@@ -26,12 +26,22 @@ export interface ISyncPositionsFromSigurResult {
   errors: string[];
 }
 
+export interface IUnmatchedSigurEmployee {
+  sigurId: number | undefined;
+  name: string;
+  departmentName: string;
+  positionName: string;
+  orgDepartmentId: string | null;
+  positionId: string | null;
+}
+
 export interface ISyncEmployeesResult {
   imported: number;
   updated: number;
   skipped: number;
   total: number;
   errors: string[];
+  unmatched: IUnmatchedSigurEmployee[];
 }
 
 // ─── Чистые функции синхронизации ───
@@ -165,11 +175,12 @@ export async function syncEmployeesLogic(
   connection?: 'external' | 'internal',
   onProgress?: (data: Record<string, unknown>) => void,
   context?: ISyncContext,
+  autoInsert = true,
 ): Promise<ISyncEmployeesResult> {
   if (!sigurService.isConfigured()) throw new Error('Sigur не настроен');
 
   const send = onProgress || (() => {});
-  send({ type: 'employees_progress', current: 0, total: 0, percent: 0 });
+  send({ type: 'employees_progress', phase: 'loading', current: 0, total: 0, percent: 0 });
 
   let sigurEmployeesRaw: Record<string, unknown>[];
   const whitelist = await getWhitelistedDepartmentIdsCached(organizationId, context);
@@ -182,7 +193,7 @@ export async function syncEmployeesLogic(
   console.log('[syncEmployees] got', sigurEmployeesRaw.length, 'employees from Sigur');
 
   if (sigurEmployeesRaw.length === 0) {
-    return { imported: 0, updated: 0, skipped: 0, total: 0, errors: [] };
+    return { imported: 0, updated: 0, skipped: 0, total: 0, errors: [], unmatched: [] };
   }
 
   if (sigurEmployeesRaw.length > 0) {
@@ -196,10 +207,20 @@ export async function syncEmployeesLogic(
 
   // Глобальный поиск по sigur_employee_id (не только в целевой org)
   // чтобы не создавать дубли при синхронизации в другую организацию
-  const { data: existingEmps } = await supabase
-    .from('employees')
-    .select('id, sigur_employee_id, employment_status, department_locked, organization_id')
-    .not('sigur_employee_id', 'is', null);
+  const existingEmps: { id: number; sigur_employee_id: number; employment_status: string; department_locked: boolean; organization_id: string }[] = [];
+  const EMP_PAGE = 1000;
+  let empOffset = 0;
+  while (true) {
+    const { data: existingEmpsPage } = await supabase
+      .from('employees')
+      .select('id, sigur_employee_id, employment_status, department_locked, organization_id')
+      .not('sigur_employee_id', 'is', null)
+      .range(empOffset, empOffset + EMP_PAGE - 1);
+    if (!existingEmpsPage || existingEmpsPage.length === 0) break;
+    existingEmps.push(...existingEmpsPage);
+    if (existingEmpsPage.length < EMP_PAGE) break;
+    empOffset += EMP_PAGE;
+  }
 
   const sigurIdToDbId = new Map<number, number>();
   const firedSigurIds = new Set<number>();
@@ -217,14 +238,16 @@ export async function syncEmployeesLogic(
 
   const { data: dbDepartments } = await supabase
     .from('org_departments')
-    .select('id, sigur_department_id')
+    .select('id, sigur_department_id, name')
     .eq('organization_id', organizationId)
     .not('sigur_department_id', 'is', null);
 
   const sigurDeptToDbId = new Map<number, string>();
+  const sigurDeptToName = new Map<number, string>();
   for (const d of dbDepartments || []) {
     if (d.sigur_department_id != null) {
       sigurDeptToDbId.set(d.sigur_department_id, d.id);
+      if (d.name) sigurDeptToName.set(d.sigur_department_id, d.name);
     }
   }
 
@@ -260,6 +283,7 @@ export async function syncEmployeesLogic(
   let skipped = skippedByWhitelist;
   const errors: string[] = [];
   const inserts: Record<string, unknown>[] = [];
+  const unmatchedList: IUnmatchedSigurEmployee[] = [];
 
   const totalEmployees = sigurEmployees.length;
   send({ type: 'employees_start', total: totalEmployees });
@@ -279,7 +303,7 @@ export async function syncEmployeesLogic(
   }
 
   if (missingPositions.size > 0) {
-    send({ type: 'employees_progress', current: 0, total: totalEmployees, percent: 0 });
+    send({ type: 'employees_progress', phase: 'positions', current: 0, total: totalEmployees, percent: 0 });
     const posInserts = [...missingPositions].map(name => ({
       organization_id: organizationId,
       name,
@@ -300,8 +324,8 @@ export async function syncEmployeesLogic(
 
   for (let empIdx = 0; empIdx < sigurEmployees.length; empIdx++) {
     const emp = sigurEmployees[empIdx];
-    if (empIdx % 200 === 0) {
-      send({ type: 'employees_progress', current: empIdx, total: totalEmployees, percent: Math.round((empIdx / totalEmployees) * 100) });
+    if (empIdx % 50 === 0) {
+      send({ type: 'employees_progress', phase: 'matching', current: empIdx, total: totalEmployees, percent: Math.round((empIdx / totalEmployees) * 100) });
     }
     const fullName = emp.name;
     if (!fullName) { skipped++; continue; }
@@ -340,24 +364,35 @@ export async function syncEmployeesLogic(
       continue;
     }
 
-    const fio = parseFIO(fullName);
-
-    inserts.push({
-      organization_id: organizationId,
-      full_name: fullName.trim(),
-      last_name: fio.lastName,
-      first_name: fio.firstName || null,
-      middle_name: fio.middleName || null,
-      hire_date: new Date().toISOString().slice(0, 10),
-      sigur_employee_id: sigurEmpId || null,
-      org_department_id: orgDepartmentId,
-      position_id: positionId,
-    });
+    if (autoInsert) {
+      const fio = parseFIO(fullName);
+      inserts.push({
+        organization_id: organizationId,
+        full_name: fullName.trim(),
+        last_name: fio.lastName,
+        first_name: fio.firstName || null,
+        middle_name: fio.middleName || null,
+        hire_date: new Date().toISOString().slice(0, 10),
+        sigur_employee_id: sigurEmpId || null,
+        org_department_id: orgDepartmentId,
+        position_id: positionId,
+      });
+    } else {
+      const sigurDeptId = emp.departmentId;
+      unmatchedList.push({
+        sigurId: sigurEmpId,
+        name: fullName.trim(),
+        departmentName: (sigurDeptId ? sigurDeptToName.get(sigurDeptId) : null) || '',
+        positionName: emp.position || '',
+        orgDepartmentId: orgDepartmentId,
+        positionId: positionId,
+      });
+    }
   }
 
   // Батчим обновления (параллельно по 20)
-  console.log('[syncEmployees] prepared', updates.length, 'updates,', inserts.length, 'inserts');
-  send({ type: 'employees_progress', current: totalEmployees, total: totalEmployees, percent: 95 });
+  console.log('[syncEmployees] prepared', updates.length, 'updates,', inserts.length, 'inserts,', unmatchedList.length, 'unmatched');
+  send({ type: 'employees_progress', phase: 'saving', current: totalEmployees, total: totalEmployees, percent: 95 });
 
   const UPDATE_CONCURRENCY = 20;
   for (let i = 0; i < updates.length; i += UPDATE_CONCURRENCY) {
@@ -371,7 +406,7 @@ export async function syncEmployeesLogic(
     }
   }
 
-  send({ type: 'employees_progress', current: totalEmployees, total: totalEmployees, percent: 100 });
+  send({ type: 'employees_progress', phase: 'saving', current: totalEmployees, total: totalEmployees, percent: 100 });
 
   const BATCH_SIZE = 100;
   for (let i = 0; i < inserts.length; i += BATCH_SIZE) {
@@ -392,6 +427,6 @@ export async function syncEmployeesLogic(
     }
   }
 
-  console.log(`[syncEmployees] done: ${imported} imported, ${updated} updated, ${skipped} skipped`);
-  return { imported, updated, skipped, total: sigurEmployeesRaw.length, errors };
+  console.log(`[syncEmployees] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${unmatchedList.length} unmatched`);
+  return { imported, updated, skipped, total: sigurEmployeesRaw.length, errors, unmatched: unmatchedList };
 }

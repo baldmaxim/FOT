@@ -1,39 +1,37 @@
 import { Router } from 'express';
 import { adminController } from '../controllers/admin.controller.js';
-import { authenticate, requireSuperAdmin } from '../middleware/auth.js';
+import { authenticate, requireSuperAdmin, requireMinPosition } from '../middleware/auth.js';
 
 const router = Router();
 
-// Все роуты требуют аутентификации и super_admin роль
-router.use(authenticate as any);
-router.use(requireSuperAdmin as any);
+router.use(authenticate);
 
-// Пользователи
-router.get('/users', adminController.getAllUsers as any);
-router.get('/users/pending', adminController.getPendingUsers as any);
-router.post('/users/:id/approve', adminController.approveUser as any);
-router.post('/users/:id/reject', adminController.rejectUser as any);
-router.delete('/users/:id', adminController.deleteUser as any);
-router.post('/users/:id/confirm-email', adminController.confirmUserEmail as any);
-router.patch('/users/:id/position', adminController.updateUserPosition as any);
-router.patch('/users/:id/organization', adminController.assignOrganization as any);
-router.patch('/users/:id/name', adminController.updateUserName as any);
-router.patch('/users/:id/employee', adminController.updateUserEmployee as any);
+// Пользователи — доступно admin + super_admin
+router.get('/users', requireMinPosition('admin'), adminController.getAllUsers);
+router.get('/users/pending', requireMinPosition('admin'), adminController.getPendingUsers);
+router.post('/users/:id/approve', requireMinPosition('admin'), adminController.approveUser);
+router.post('/users/:id/reject', requireMinPosition('admin'), adminController.rejectUser);
+router.delete('/users/:id', requireSuperAdmin, adminController.deleteUser);
+router.post('/users/:id/confirm-email', requireMinPosition('admin'), adminController.confirmUserEmail);
+router.patch('/users/:id/position', requireMinPosition('admin'), adminController.updateUserPosition);
+router.patch('/users/:id/organization', requireSuperAdmin, adminController.assignOrganization);
+router.patch('/users/:id/name', requireMinPosition('admin'), adminController.updateUserName);
+router.patch('/users/:id/employee', requireMinPosition('admin'), adminController.updateUserEmployee);
 
 // 2FA управление
-router.post('/users/:id/generate-2fa', adminController.generate2FA as any);
-router.post('/users/:id/disable-2fa', adminController.disable2FA as any);
+router.post('/users/:id/generate-2fa', requireSuperAdmin, adminController.generate2FA);
+router.post('/users/:id/disable-2fa', requireSuperAdmin, adminController.disable2FA);
 
 // Поиск сотрудников (для привязки при одобрении)
-router.get('/employees/search', adminController.searchUnlinkedEmployees as any);
+router.get('/employees/search', requireMinPosition('admin'), adminController.searchUnlinkedEmployees);
 
-// Организации
-router.get('/organizations', adminController.getOrganizations as any);
-router.post('/organizations', adminController.createOrganization as any);
-router.patch('/organizations/:id', adminController.updateOrganization as any);
-router.delete('/organizations/:id', adminController.deleteOrganization as any);
+// Организации — только super_admin
+router.get('/organizations', requireSuperAdmin, adminController.getOrganizations);
+router.post('/organizations', requireSuperAdmin, adminController.createOrganization);
+router.patch('/organizations/:id', requireSuperAdmin, adminController.updateOrganization);
+router.delete('/organizations/:id', requireSuperAdmin, adminController.deleteOrganization);
 
 // Аудит логи
-router.get('/audit-logs', adminController.getAuditLogs as any);
+router.get('/audit-logs', requireSuperAdmin, adminController.getAuditLogs);
 
 export default router;

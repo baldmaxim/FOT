@@ -7,6 +7,14 @@ export interface ISyncResult {
   droppedNoName?: number;
   droppedNoOrg?: number;
   filteredByDept?: number;
+  // Расширенная диагностика
+  unmatchedEmployees?: number;
+  matchedEvents?: number;
+  unmatchedEvents?: number;
+  truncatedDays?: number;
+  paginatedDays?: number;
+  matchedBySigurId?: number;
+  matchedByName?: number;
 }
 
 export interface IPreviewData {
@@ -38,6 +46,16 @@ export interface IEmployeesProgressState {
   percent: number;
   current: number;
   total: number;
+  phase?: string;
+}
+
+export interface IUnmatchedSigurEmployee {
+  sigurId: number | undefined;
+  name: string;
+  departmentName: string;
+  positionName: string;
+  orgDepartmentId: string | null;
+  positionId: string | null;
 }
 
 export interface ISyncAllSummary {

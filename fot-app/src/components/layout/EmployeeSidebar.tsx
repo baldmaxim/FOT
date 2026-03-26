@@ -46,8 +46,6 @@ const navGroups: INavGroup[] = [
             <line x1="16" y1="17" x2="8" y2="17"/>
           </svg>
         ),
-        badge: 2,
-        badgeType: 'pending',
       },
       {
         id: 'chat',
@@ -88,8 +86,6 @@ const navGroups: INavGroup[] = [
             <path d="M6 12h.01M18 12h.01"/>
           </svg>
         ),
-        badge: 1,
-        badgeType: 'new',
       },
       {
         id: 'payments',

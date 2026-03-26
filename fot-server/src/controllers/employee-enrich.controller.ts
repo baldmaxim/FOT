@@ -265,6 +265,27 @@ export const employeeEnrichController = {
 
       // === Режим применения ===
 
+      // 0. Ручные сопоставления (из UI)
+      const manualMatches: Array<{ fullName: string; employeeId: number }> = [];
+      try {
+        const raw = req.body?.manualMatches;
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) manualMatches.push(...parsed);
+        }
+      } catch { /* ignore parse errors */ }
+
+      const manualMap = new Map<string, number>();
+      const dbById = new Map<number, Record<string, unknown>>();
+      for (const m of manualMatches) {
+        manualMap.set(normalizeFullName(m.fullName), m.employeeId);
+      }
+      if (manualMap.size > 0) {
+        for (const emp of dbEmployees) {
+          dbById.set(emp.id, emp);
+        }
+      }
+
       // 1. Создаём недостающие позиции
       if (newPositions.size > 0) {
         const posInserts = Array.from(newPositions).map(name => ({
@@ -289,7 +310,17 @@ export const employeeEnrichController = {
 
       for (const row of parsedRows) {
         const key = normalizeFullName(row.fullName);
-        const match = nameToEmp.get(key);
+        let match = nameToEmp.get(key);
+
+        // Ручное сопоставление — если автоматически не нашли
+        if ((!match || match.count > 1) && manualMap.has(key)) {
+          const manualId = manualMap.get(key)!;
+          const manualData = dbById.get(manualId);
+          if (manualData) {
+            match = { id: manualId, count: 1, data: manualData };
+          }
+        }
+
         if (!match || match.count > 1) continue;
 
         const updateData: Record<string, unknown> = {

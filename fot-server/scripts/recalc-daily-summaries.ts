@@ -2,7 +2,7 @@
  * Пересчёт skud_daily_summary для всех событий с employee_id.
  * Запуск: npx tsx src/scripts/recalc-daily-summaries.ts
  */
-import { supabase } from '../config/database.js';
+import { supabase } from '../src/config/database.js';
 
 const BATCH = 200;
 

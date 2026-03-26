@@ -6,7 +6,7 @@ import {
   getWeekdayShort,
   isToday,
   isFutureDay,
-  getWorkingDaysCount,
+  getWorkingDaysUpToToday,
 } from '../../utils/calendarUtils';
 
 interface ITimesheetGridProps {
@@ -107,9 +107,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
 }) => {
   const daysCount = getDaysInMonth(year, month);
   const days = Array.from({ length: daysCount }, (_, i) => i + 1);
-  const normHoursPerEmp = getWorkingDaysCount(year, month) * 8;
+  const normHoursPerEmp = getWorkingDaysUpToToday(year, month) * 8;
 
   const rows: IRowData[] = useMemo(() => {
+    const dc = getDaysInMonth(year, month);
     const entryMap = new Map<string, TimesheetEntry>();
     for (const entry of entries) {
       entryMap.set(`${entry.employee_id}_${entry.work_date}`, entry);
@@ -119,7 +120,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       const dayMap = new Map<number, TimesheetEntry>();
       let factHours = 0;
 
-      for (let d = 1; d <= daysCount; d++) {
+      for (let d = 1; d <= dc; d++) {
         const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
         const entry = entryMap.get(`${emp.id}_${dateStr}`);
         if (entry) {
@@ -130,7 +131,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
 
       return { employee: emp, days: dayMap, factHours, normHours: normHoursPerEmp };
     });
-  }, [employees, entries, year, month, daysCount, normHoursPerEmp]);
+  }, [employees, entries, year, month, normHoursPerEmp]);
 
   return (
     <div className="ts-table-container">

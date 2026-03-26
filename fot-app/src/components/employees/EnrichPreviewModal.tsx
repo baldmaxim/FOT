@@ -1,11 +1,14 @@
-import { useState, type FC } from 'react';
-import { X, CheckCircle, AlertCircle, Users, ChevronDown, ChevronUp } from 'lucide-react';
-import type { EnrichPreview } from '../../types';
+import { useState, useCallback, useRef, type FC } from 'react';
+import { X, CheckCircle, AlertCircle, Users, ChevronDown, ChevronUp, Search, Link2, SkipForward, Check } from 'lucide-react';
+import { employeeService } from '../../services/employeeService';
+import type { EnrichPreview, Employee } from '../../types';
+
+type Decision = { action: 'link'; employeeId: number; employeeName: string } | { action: 'skip' };
 
 interface IEnrichPreviewModalProps {
   preview: EnrichPreview;
   loading: boolean;
-  onApply: () => void;
+  onApply: (manualMatches: Array<{ fullName: string; employeeId: number }>) => void;
   onClose: () => void;
 }
 
@@ -17,8 +20,74 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
 }) => {
   const [showUnmatched, setShowUnmatched] = useState(false);
   const [showAmbiguous, setShowAmbiguous] = useState(false);
+  const [decisions, setDecisions] = useState<Map<number, Decision>>(new Map());
+  const [searchResults, setSearchResults] = useState<Map<number, Employee[]>>(new Map());
+  const [searchingIdx, setSearchingIdx] = useState<number | null>(null);
+  const searchTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
   const { matched, unmatched, ambiguous, stats } = preview;
+
+  const setDecision = (idx: number, decision: Decision) => {
+    setDecisions(prev => {
+      const next = new Map(prev);
+      next.set(idx, decision);
+      return next;
+    });
+  };
+
+  const clearDecision = (idx: number) => {
+    setDecisions(prev => {
+      const next = new Map(prev);
+      next.delete(idx);
+      return next;
+    });
+  };
+
+  const handleSearch = useCallback((idx: number, query: string) => {
+    const existing = searchTimers.current.get(idx);
+    if (existing) clearTimeout(existing);
+
+    if (!query.trim()) {
+      setSearchResults(prev => {
+        const next = new Map(prev);
+        next.delete(idx);
+        return next;
+      });
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setSearchingIdx(idx);
+      try {
+        const res = await employeeService.getPaginated({ page: 1, pageSize: 5, search: query.trim(), status: 'active' });
+        setSearchResults(prev => {
+          const next = new Map(prev);
+          next.set(idx, res.data);
+          return next;
+        });
+      } catch {
+        // ignore
+      } finally {
+        setSearchingIdx(null);
+      }
+    }, 300);
+    searchTimers.current.set(idx, timer);
+  }, []);
+
+  const linkedCount = [...decisions.values()].filter(d => d.action === 'link').length;
+  const skippedCount = [...decisions.values()].filter(d => d.action === 'skip').length;
+  const pendingCount = unmatched.length - decisions.size;
+  const totalApply = matched.length + linkedCount;
+
+  const handleApply = () => {
+    const manualMatches = [...decisions.entries()]
+      .filter(([, d]) => d.action === 'link')
+      .map(([idx, d]) => ({
+        fullName: unmatched[idx].fullName,
+        employeeId: (d as { action: 'link'; employeeId: number }).employeeId,
+      }));
+    onApply(manualMatches);
+  };
 
   return (
     <div className="ep-modal-overlay" onClick={onClose}>
@@ -39,11 +108,11 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
             </div>
             <div className="enrich-stat success">
               <CheckCircle size={16} />
-              <span>Совпало: <strong>{stats.matched}</strong></span>
+              <span>Совпало: <strong>{stats.matched}{linkedCount > 0 ? ` +${linkedCount}` : ''}</strong></span>
             </div>
             <div className="enrich-stat warning">
               <AlertCircle size={16} />
-              <span>Не найдено: <strong>{stats.unmatched}</strong></span>
+              <span>Не найдено: <strong>{stats.unmatched - linkedCount - skippedCount}</strong></span>
             </div>
             {stats.ambiguous > 0 && (
               <div className="enrich-stat warning">
@@ -86,7 +155,7 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
             </div>
           )}
 
-          {/* Несовпавшие */}
+          {/* Несовпавшие — с возможностью ручного сопоставления */}
           {unmatched.length > 0 && (
             <div className="enrich-section">
               <button
@@ -95,15 +164,77 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
               >
                 {showUnmatched ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 Не найдены в системе ({unmatched.length})
+                {linkedCount > 0 && <span className="enrich-toggle-linked"> — привязано: {linkedCount}</span>}
+                {pendingCount > 0 && <span className="enrich-toggle-pending"> — ожидает: {pendingCount}</span>}
               </button>
               {showUnmatched && (
-                <div className="enrich-list">
-                  {unmatched.map((item, i) => (
-                    <div key={i} className="enrich-list-item">
-                      <span>{item.fullName}</span>
-                      {item.department && <span className="enrich-dept">{item.department}</span>}
-                    </div>
-                  ))}
+                <div className="enrich-match-list">
+                  {unmatched.map((item, idx) => {
+                    const dec = decisions.get(idx);
+                    const results = searchResults.get(idx);
+
+                    return (
+                      <div key={idx} className={`enrich-match-row ${dec ? `enrich-match-row--${dec.action}` : ''}`}>
+                        <div className="enrich-match-info">
+                          <span className="enrich-match-name">{item.fullName}</span>
+                          {item.department && <span className="enrich-match-dept">{item.department}</span>}
+                        </div>
+
+                        {dec?.action === 'link' ? (
+                          <div className="enrich-match-decision">
+                            <Check size={14} className="enrich-match-check" />
+                            <span>→ {dec.employeeName}</span>
+                            <button className="enrich-match-undo" onClick={() => clearDecision(idx)}>Отмена</button>
+                          </div>
+                        ) : dec?.action === 'skip' ? (
+                          <div className="enrich-match-decision enrich-match-decision--skip">
+                            <SkipForward size={14} />
+                            <span>Пропущен</span>
+                            <button className="enrich-match-undo" onClick={() => clearDecision(idx)}>Отмена</button>
+                          </div>
+                        ) : (
+                          <div className="enrich-match-actions">
+                            <div className="enrich-match-search-wrap">
+                              <Search size={14} />
+                              <input
+                                type="text"
+                                placeholder="Поиск сотрудника..."
+                                defaultValue={item.fullName}
+                                onChange={e => handleSearch(idx, e.target.value)}
+                                onFocus={e => { if (e.target.value) handleSearch(idx, e.target.value); }}
+                              />
+                              {searchingIdx === idx && <span className="enrich-match-spinner" />}
+                            </div>
+
+                            {results && results.length > 0 && (
+                              <div className="enrich-match-dropdown">
+                                {results.map(r => (
+                                  <button
+                                    key={r.id}
+                                    className="enrich-match-dropdown-item"
+                                    onClick={() => {
+                                      setDecision(idx, { action: 'link', employeeId: r.id, employeeName: r.full_name });
+                                      setSearchResults(prev => { const next = new Map(prev); next.delete(idx); return next; });
+                                    }}
+                                  >
+                                    <span className="enrich-match-dropdown-name">{r.full_name}</span>
+                                    {r.position_name && <span className="enrich-match-dropdown-dept">{r.position_name}</span>}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {results && results.length === 0 && (
+                              <div className="enrich-match-no-results">Не найдено</div>
+                            )}
+
+                            <button className="enrich-match-btn-skip" onClick={() => setDecision(idx, { action: 'skip' })}>
+                              <SkipForward size={13} /> Пропустить
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -139,10 +270,10 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
           </button>
           <button
             className="ep-modal-btn primary"
-            onClick={onApply}
-            disabled={loading || matched.length === 0}
+            onClick={handleApply}
+            disabled={loading || totalApply === 0}
           >
-            {loading ? 'Применяется...' : `Применить (${matched.length})`}
+            {loading ? 'Применяется...' : `Применить (${totalApply})`}
           </button>
         </div>
       </div>

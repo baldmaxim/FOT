@@ -112,7 +112,7 @@ export const calculateAttendance = (
   }
 
   const days: IDayAttendance[] = [];
-  let presentCount = 0, lateCount = 0, absentCount = 0, totalWorkdays = 0, totalWorkSecs = 0;
+  let presentCount = 0, lateCount = 0, totalWorkdays = 0, totalWorkSecs = 0;
   const arrivalMins: number[] = [];
   const arrivalByDow: number[][] = [[], [], [], [], []];
 
@@ -130,7 +130,6 @@ export const calculateAttendance = (
     const dayEvs = eventsByDay.get(d) || [];
 
     if (dayEvs.length === 0) {
-      absentCount++;
       days.push({ day: d, status: 'absent', totalSeconds: 0 });
       continue;
     }

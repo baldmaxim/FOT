@@ -31,7 +31,7 @@ export const exportDisciplineExcel = async (
   const wb = new ExcelJS.Workbook();
   const source = filtered.length > 0 ? filtered : allEmployees;
 
-  const thinBorder: any = {
+  const thinBorder: Partial<import('exceljs').Borders> = {
     top: { style: 'thin' }, left: { style: 'thin' },
     bottom: { style: 'thin' }, right: { style: 'thin' },
   };

@@ -14,6 +14,13 @@ const formatTime = (val: string): string => {
   return val.slice(0, 5);
 };
 
+const formatHM = (decimal: number): string => {
+  const h = Math.floor(decimal);
+  const m = Math.round((decimal - h) * 60);
+  if (m === 0) return `${h}ч`;
+  return `${h}ч ${m}м`;
+};
+
 interface IEmpVirtualListProps {
   employees: Employee[];
   loading: boolean;
@@ -90,7 +97,7 @@ export const EmpVirtualList: FC<IEmpVirtualListProps> = ({
                   {presenceMap.get(emp.id)!.total_hours != null && (
                     <div className="ep-emp-stat">
                       <span className="ep-emp-stat-value">
-                        {presenceMap.get(emp.id)!.total_hours!.toFixed(1)}ч
+                        {formatHM(presenceMap.get(emp.id)!.total_hours!)}
                       </span>
                       <span className="ep-emp-stat-label">Сегодня</span>
                     </div>

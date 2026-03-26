@@ -7,7 +7,7 @@ import { logSupabaseError } from './admin-helpers.js';
 
 const approveUserSchema = z.object({
   organization_id: z.string().uuid().optional(),
-  position_type: z.enum(['worker', 'header', 'admin', 'super_admin']).optional(),
+  position_type: z.enum(['worker', 'header', 'hr', 'admin', 'super_admin']).optional(),
   employee_id: z.number().int().positive().optional(),
 });
 
@@ -308,7 +308,7 @@ export const adminUsersController = {
     try {
       const { id } = req.params;
       const { position_type } = z.object({
-        position_type: z.enum(['worker', 'header', 'admin', 'super_admin'])
+        position_type: z.enum(['worker', 'header', 'hr', 'admin', 'super_admin'])
       }).parse(req.body);
 
       const { data: profile } = await supabase
@@ -441,6 +441,55 @@ export const adminUsersController = {
       }
       console.error('Update employee error:', error);
       res.status(500).json({ success: false, error: 'Failed to update employee link' });
+    }
+  },
+
+  async searchUnlinkedEmployees(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const q = (req.query.q as string || '').trim();
+      const orgId = req.query.organization_id as string | undefined;
+
+      if (!q || q.length < 2) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+
+      const { data: linkedProfiles } = await supabase
+        .from('user_profiles')
+        .select('employee_id')
+        .not('employee_id', 'is', null);
+
+      const linkedIds = (linkedProfiles || [])
+        .map((p: { employee_id: number | null }) => p.employee_id)
+        .filter((id): id is number => id !== null);
+
+      let query = supabase
+        .from('employees')
+        .select('id, full_name, org_department_id')
+        .ilike('full_name', `%${q}%`)
+        .eq('employment_status', 'active')
+        .limit(20);
+
+      if (orgId) {
+        query = query.eq('organization_id', orgId);
+      }
+
+      if (linkedIds.length > 0) {
+        query = query.not('id', 'in', `(${linkedIds.join(',')})`);
+      }
+
+      const { data: employees, error } = await query;
+
+      if (error) {
+        logSupabaseError('SearchUnlinkedEmployees', error);
+        res.status(500).json({ success: false, error: 'Failed to search employees' });
+        return;
+      }
+
+      res.json({ success: true, data: employees || [] });
+    } catch (error) {
+      console.error('Search unlinked employees error:', error);
+      res.status(500).json({ success: false, error: 'Failed to search employees' });
     }
   },
 };

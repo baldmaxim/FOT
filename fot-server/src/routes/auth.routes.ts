@@ -16,17 +16,17 @@ router.get('/organizations', authController.getOrganizations);
 router.post(
   '/verify-2fa',
   twoFactorLimiter,
-  authenticate as any,
-  authController.verify2FA as any
+  authenticate,
+  authController.verify2FA
 );
 
 router.post(
   '/recovery',
   twoFactorLimiter,
-  authenticate as any,
-  authController.useRecoveryCode as any
+  authenticate,
+  authController.useRecoveryCode
 );
 
-router.get('/me', authenticate as any, authController.getMe as any);
+router.get('/me', authenticate, authController.getMe);
 
 export default router;

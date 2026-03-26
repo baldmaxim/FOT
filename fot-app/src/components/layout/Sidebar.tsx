@@ -23,6 +23,7 @@ interface INavItem {
   icon: FC<{ className?: string }>;
   badge?: number;
   requiredPosition?: EmployeePositionType;
+  exactPosition?: EmployeePositionType;  // точное совпадение роли (без иерархии)
 }
 
 interface INavGroup {
@@ -35,9 +36,10 @@ const navGroups: INavGroup[] = [
     label: 'Основное',
     items: [
       { id: 'overview', path: '/', label: 'Обзор', icon: GridIcon },
+      { id: 'header-employees', path: '/my-employees', label: 'Сотрудники', icon: UsersIcon, exactPosition: 'header' },
       { id: 'employees', path: '/tender', label: 'Сотрудники', icon: UsersIcon, requiredPosition: 'admin' },
       { id: 'timesheet', path: '/timesheet', label: 'Табель', icon: CalendarIcon },
-      { id: 'admin-structure', path: '/admin/structure', label: 'Управление', icon: BuildingIcon },
+      { id: 'leave-requests', path: '/leave-requests', label: 'Заявления', icon: ClipboardCheckIcon, requiredPosition: 'header' },
       { id: 'my-cabinet', path: '/employee', label: 'Личный кабинет', icon: UserIcon, requiredPosition: 'header' },
     ]
   },
@@ -47,12 +49,13 @@ const navGroups: INavGroup[] = [
       { id: 'skud-raw', path: '/skud-raw', label: 'Просмотр СКУД', icon: FileTextIcon, requiredPosition: 'admin' },
       { id: 'skud-db', path: '/skud-db', label: 'СКУД (база)', icon: DatabaseIcon, requiredPosition: 'admin' },
       { id: 'discipline', path: '/discipline', label: 'Аналитика', icon: BarChartIcon, requiredPosition: 'admin' },
+      { id: 'timesheet-review', path: '/timesheet-review', label: 'Проверка табелей', icon: CalendarIcon, requiredPosition: 'hr' },
     ]
   },
   {
     label: 'Система',
     items: [
-      { id: 'admin-orgs', path: '/admin/organizations', label: 'Организации', icon: BuildingIcon, requiredPosition: 'super_admin' },
+      { id: 'admin-manage', path: '/admin/manage', label: 'Управление', icon: BuildingIcon, requiredPosition: 'super_admin' },
       { id: 'sigur-settings', path: '/skud-settings', label: 'Настройки СКУД', icon: SettingsIcon, requiredPosition: 'super_admin' },
       { id: 'admin-users', path: '/admin/users', label: 'Пользователи', icon: SettingsIcon, requiredPosition: 'super_admin' },
       { id: 'admin-audit', path: '/admin/audit', label: 'Аудит данных', icon: ClipboardCheckIcon, requiredPosition: 'super_admin' },
@@ -69,7 +72,7 @@ interface ISidebarProps {
 export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { profile, logout, canAccess } = useAuth();
+  const { profile, logout, canAccess, positionType } = useAuth();
 
   const logoSrc = theme === 'dark' ? '/fot-logo-dark.svg' : '/fot-logo-light.svg';
 
@@ -127,6 +130,7 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose }) 
     switch (positionType) {
       case 'super_admin': return 'Супер-админ';
       case 'admin': return 'Администратор';
+      case 'hr': return 'Отдел кадров';
       case 'header': return 'Руководитель';
       case 'worker': return 'Сотрудник';
       default: return 'Пользователь';
@@ -143,6 +147,7 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose }) 
         {navGroups.map(group => {
           // Filter items based on position
           const visibleItems = group.items.filter(item => {
+            if (item.exactPosition) return positionType === item.exactPosition;
             if (!item.requiredPosition) return true;
             return canAccess(item.requiredPosition);
           });

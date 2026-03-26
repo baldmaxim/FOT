@@ -104,6 +104,7 @@ export const skudService = {
     const decoder = new TextDecoder();
     let result = { inserted: 0, skipped: 0, total: 0 };
     let buffer = '';
+    let sseError: string | null = null;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -122,13 +123,17 @@ export const skudService = {
           } else if (data.type === 'day_done' && onProgress && data.inserted > 0) {
             onProgress(`${data.day}: +${data.inserted} событий`);
           } else if (data.type === 'error') {
-            throw new Error(data.error || 'Ошибка синхронизации');
+            sseError = data.error || 'Ошибка синхронизации';
           } else if (data.type === 'done') {
             result = { inserted: data.inserted, skipped: data.skipped, total: data.total };
           }
-        } catch { /* skip */ }
+        } catch { /* JSON parse error — skip */ }
       }
+
+      if (sseError) break;
     }
+
+    if (sseError) throw new Error(sseError);
 
     return result;
   },
@@ -178,6 +183,7 @@ export const skudService = {
   }> {
     const params = new URLSearchParams({ startMonth: period.startMonth });
     if (period.endMonth) params.append('endMonth', period.endMonth);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- response shape validated by return type
     const response = await apiClient.get<ApiResponse<any>>(`/skud/discipline?${params.toString()}`, { signal });
     return response.data;
   },

@@ -138,6 +138,11 @@ export class SigurDataService extends SigurServiceBase {
     return this.fetchAllPaginated('/api/v1/cards', filters, connection);
   }
 
+  /** Получить привязки сотрудников к картам */
+  async getCardBindings(connection?: ConnectionType) {
+    return this.fetchAllPaginated('/api/v1/bindings/employees-cards', undefined, connection);
+  }
+
   /** Получить список точек доступа */
   async getAccessPoints(connection?: ConnectionType) {
     return this.fetchAllPaginated('/api/v1/accesspoints', undefined, connection);
@@ -209,8 +214,10 @@ export class SigurDataService extends SigurServiceBase {
         const employeeId = raw.accessObjectId as number;
         const employee = employeeById.get(employeeId);
         const accessPointId = typeof raw.accessPointId === 'number' ? raw.accessPointId : null;
+        const empName = typeof employee?.name === 'string' ? employee.name : '';
 
         return {
+          id: raw.id,
           eventType: 'PASS_DETECTED',
           timestamp: raw.timestamp,
           data: {
@@ -224,7 +231,7 @@ export class SigurDataService extends SigurServiceBase {
               type: 'EMPLOYEE',
               data: {
                 id: employeeId,
-                name: typeof employee?.name === 'string' ? employee.name : '',
+                name: empName,
                 position: typeof employee?.position === 'string' ? employee.position : undefined,
               },
             },
@@ -246,28 +253,33 @@ export class SigurDataService extends SigurServiceBase {
       const { pageSize: _, ...rest } = extraParams;
       if (Object.keys(rest).length > 0) Object.assign(params, rest);
     }
-    return this.fetchAllPaginated('/api/v1/events', params, connection, pageSize);
+    return this.fetchAllByLastId('/api/v1/events', params, connection, pageSize);
   }
 
-  /** Получить события (расширенные) с фильтрами по времени */
+  /** Маппинг строковых eventType → числовых eventTypeId для raw API */
+  private static readonly EVENT_TYPE_ID_MAP: Record<string, number> = {
+    'PASS_DETECTED': 6,
+    'PASS_DENY': 12,
+  };
+
+  /** Получить события с фильтрами по времени.
+   *  Использует raw /events + enrichment (parsed endpoint ненадёжен). */
   async getEvents(startTime?: string, endTime?: string, connection?: ConnectionType, eventType?: string, extraParams?: Record<string, any>) {
-    const pageSize = extraParams?.pageSize || 1000;
+    const pageSize = extraParams?.pageSize || 3000;
     const params: Record<string, any> = {};
     if (startTime) params.startTime = this.ensureTimezone(startTime);
     if (endTime) params.endTime = this.ensureTimezone(endTime);
-    if (eventType) params.eventType = eventType;
+    if (eventType) {
+      const typeId = SigurDataService.EVENT_TYPE_ID_MAP[eventType];
+      if (typeId) params.eventTypeId = typeId;
+    }
     if (extraParams) {
       const { pageSize: _, ...rest } = extraParams;
       if (Object.keys(rest).length > 0) Object.assign(params, rest);
     }
-    const parsedEvents = await this.fetchAllPaginated('/api/v1/events/parsed', params, connection, pageSize);
-    if (parsedEvents.length > 0) {
-      return parsedEvents;
-    }
-
-    console.warn('[sigur] /events/parsed returned 0 items, falling back to raw /events');
-    const rawEvents = await this.getRawEvents(startTime, endTime, connection, extraParams);
-    return this.enrichRawEvents(rawEvents as Record<string, unknown>[], connection);
+    const rawEvents = await this.fetchAllByLastId<Record<string, unknown>>('/api/v1/events', params, connection, pageSize);
+    console.log(`[sigur] getEvents raw: ${rawEvents.length} events`);
+    return this.enrichRawEvents(rawEvents, connection);
   }
 
   /** Получить ограниченное кол-во событий (для preview) */

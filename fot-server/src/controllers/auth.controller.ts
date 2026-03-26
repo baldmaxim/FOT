@@ -6,6 +6,7 @@ import { supabase, supabaseAuth } from '../config/database.js';
 import { env } from '../config/env.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest, JWTPayload, UserProfile } from '../types/index.js';
+import { LOGIN_2FA_ENABLED } from '../config/features.js';
 import { verify2FA, useRecoveryCode } from './auth-2fa.controller.js';
 
 // Схемы валидации
@@ -185,8 +186,7 @@ async function login(req: Request, res: Response): Promise<void> {
     }
 
     // Если 2FA включена, возвращаем промежуточный ответ
-    // TODO: Временно отключено для разработки
-    if (false && profile.two_factor_enabled) {
+    if (LOGIN_2FA_ENABLED && profile.two_factor_enabled) {
       const tempToken = generateToken(profile, email, false);
 
       res.json({

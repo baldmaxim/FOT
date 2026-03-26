@@ -30,7 +30,7 @@ export const EventsSyncSection: FC<IEventsSyncSectionProps> = ({
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<ISyncResult | null>(null);
   const [eventsProgress, setEventsProgress] = useState<IEventsProgressState | null>(null);
-  const [_employeesProgress, setEmployeesProgress] = useState<IEmployeesProgressState | null>(null);
+  const [, setEmployeesProgress] = useState<IEmployeesProgressState | null>(null);
   const [clearing, setClearing] = useState(false);
   const [clearResult, setClearResult] = useState<{ deleted: number } | null>(null);
 

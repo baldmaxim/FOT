@@ -18,7 +18,8 @@
 .ts-header-left {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .ts-title {
@@ -204,26 +205,28 @@
 
 /* --- Stats --- */
 .ts-stats-row {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .ts-stat-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 18px;
+  border-radius: var(--radius-md);
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .ts-stat-label {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-tertiary);
-  margin-bottom: 8px;
 }
 
 .ts-stat-value {
-  font-size: 28px;
+  font-size: 16px;
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -237,9 +240,8 @@
 }
 
 .ts-stat-hint {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-tertiary);
-  margin-top: 4px;
 }
 
 .ts-stat-hint--green {
@@ -683,10 +685,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px;
+  padding: 10px 12px;
   background: var(--bg-secondary);
-  border-radius: 10px;
-  margin-bottom: 8px;
 }
 
 .ts-day-detail--absent {
@@ -758,6 +758,122 @@
 .ts-day-detail-hours--vacation {
   background: rgba(139, 92, 246, 0.12);
   color: #8b5cf6;
+}
+
+/* --- Expandable day detail --- */
+.ts-day-detail-wrap {
+  margin-bottom: 6px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.ts-day-detail--clickable {
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s ease;
+  margin-bottom: 0;
+  border-radius: 0;
+}
+
+.ts-day-detail--clickable:hover {
+  background: var(--surface-hover, rgba(255, 255, 255, 0.04));
+}
+
+.ts-day-detail-chevron {
+  color: var(--text-tertiary);
+  display: flex;
+  flex-shrink: 0;
+}
+
+.ts-day-detail-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ts-day-detail-time-badge {
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.ts-day-detail-time-badge.entry {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+.ts-day-detail-time-badge.exit {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
+/* Expanded SKUD events panel */
+.ts-day-events-panel {
+  border-top: 1px solid var(--border);
+  padding: 8px 12px 10px 36px;
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ts-day-events-loading,
+.ts-day-events-empty {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  padding: 6px 0;
+}
+
+.ts-day-event-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ts-day-event-icon {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.ts-day-event-row.entry .ts-day-event-icon {
+  color: #16a34a;
+}
+
+.ts-day-event-row.exit .ts-day-event-icon {
+  color: #dc2626;
+}
+
+.ts-day-event-time {
+  font-family: 'Space Mono', monospace;
+  font-weight: 500;
+  min-width: 40px;
+}
+
+.ts-day-event-dir {
+  min-width: 40px;
+}
+
+.ts-day-event-point {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-day-events-summary {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
 }
 
 /* --- Modal --- */
@@ -845,6 +961,12 @@
   outline: none;
   border-color: var(--primary);
 }
+.ts-hours-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+  color: #8a8a8e;
+}
 
 /* Type options grid */
 .ts-type-options {
@@ -895,9 +1017,6 @@
 
 /* --- Responsive --- */
 @media (max-width: 1200px) {
-  .ts-stats-row {
-    grid-template-columns: repeat(2, 1fr);
-  }
   .ts-legend {
     display: none;
   }
@@ -912,12 +1031,8 @@
     width: 100%;
     overflow-x: auto;
   }
-  .ts-stats-row {
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
   .ts-stat-value {
-    font-size: 22px;
+    font-size: 14px;
   }
   .ts-side-panel {
     width: 100%;
@@ -933,22 +1048,15 @@
 }
 
 @media (max-width: 430px) {
-  .ts-stats-row {
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-  }
-  .ts-stat-card {
-    padding: 12px;
-  }
   .ts-stat-value {
-    font-size: 20px;
+    font-size: 13px;
   }
   .ts-month-label {
     font-size: 13px;
     min-width: 120px;
   }
   .ts-header-left {
-    gap: 12px;
+    gap: 8px;
   }
   .ts-title {
     font-size: 16px;

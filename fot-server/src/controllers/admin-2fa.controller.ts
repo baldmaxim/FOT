@@ -3,7 +3,6 @@ import { supabase } from '../config/database.js';
 import { totpService } from '../services/totp.service.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { logSupabaseError } from './admin-helpers.js';
 
 export const admin2faController = {
   async generate2FA(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -95,77 +94,6 @@ export const admin2faController = {
     } catch (error) {
       console.error('Disable 2FA error:', error);
       res.status(500).json({ success: false, error: 'Failed to disable 2FA' });
-    }
-  },
-
-  async searchUnlinkedEmployees(req: AuthenticatedRequest, res: Response): Promise<void> {
-    try {
-      const q = (req.query.q as string || '').trim();
-      const orgId = req.query.organization_id as string | undefined;
-
-      if (!q || q.length < 2) {
-        res.json({ success: true, data: [] });
-        return;
-      }
-
-      const { data: linkedProfiles } = await supabase
-        .from('user_profiles')
-        .select('employee_id')
-        .not('employee_id', 'is', null);
-
-      const linkedIds = (linkedProfiles || [])
-        .map((p: { employee_id: number | null }) => p.employee_id)
-        .filter((id): id is number => id !== null);
-
-      let query = supabase
-        .from('employees')
-        .select('id, full_name, org_department_id')
-        .ilike('full_name', `%${q}%`)
-        .eq('employment_status', 'active')
-        .limit(20);
-
-      if (orgId) {
-        query = query.eq('organization_id', orgId);
-      }
-
-      if (linkedIds.length > 0) {
-        query = query.not('id', 'in', `(${linkedIds.join(',')})`);
-      }
-
-      const { data: employees, error } = await query;
-
-      if (error) {
-        logSupabaseError('SearchUnlinkedEmployees', error);
-        res.status(500).json({ success: false, error: 'Failed to search employees' });
-        return;
-      }
-
-      res.json({ success: true, data: employees || [] });
-    } catch (error) {
-      console.error('Search unlinked employees error:', error);
-      res.status(500).json({ success: false, error: 'Failed to search employees' });
-    }
-  },
-
-  async getAuditLogs(req: AuthenticatedRequest, res: Response): Promise<void> {
-    try {
-      const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
-      const offset = parseInt(req.query.offset as string) || 0;
-
-      const { data, count } = await auditService.getAll(limit, offset);
-
-      res.json({
-        success: true,
-        data,
-        pagination: {
-          limit,
-          offset,
-          total: count,
-        },
-      });
-    } catch (error) {
-      console.error('Get audit logs error:', error);
-      res.status(500).json({ success: false, error: 'Failed to fetch audit logs' });
     }
   },
 };

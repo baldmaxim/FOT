@@ -87,7 +87,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           positionType: profile.position_type,
           loading: false,
         });
-      } catch (error) {
+      } catch {
         // Token invalid, clear storage
         localStorage.removeItem('access_token');
         localStorage.removeItem('refresh_token');
@@ -155,12 +155,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const register = useCallback(async (data: RegisterData): Promise<RegisterResponse | null> => {
-    try {
-      const response = await apiClient.post<RegisterResponse>('/auth/register', data, { skipAuth: true });
-      return response;
-    } catch (error) {
-      throw error;
-    }
+    const response = await apiClient.post<RegisterResponse>('/auth/register', data, { skipAuth: true });
+    return response;
   }, []);
 
   const logout = useCallback(() => {
@@ -215,6 +211,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const positionHierarchy: Record<EmployeePositionType, number> = {
       super_admin: 4,
       admin: 3,
+      hr: 3,
       header: 2,
       worker: 1,
     };

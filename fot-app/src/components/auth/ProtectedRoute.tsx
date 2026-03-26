@@ -42,14 +42,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     return <Navigate to="/pending-approval" replace />;
   }
 
-  // Approved but 2FA not enabled yet - admin needs to generate 2FA first
-  // User must wait until admin sets up their 2FA
-  if (!isTwoFactorEnabled) {
-    return <Navigate to="/pending-approval" replace />;
-  }
-
   // 2FA enabled but not verified in this session - need to enter code
-  if (!isTwoFactorVerified) {
+  if (isTwoFactorEnabled && !isTwoFactorVerified) {
     return <Navigate to="/verify-2fa" state={{ from: location }} replace />;
   }
 
@@ -80,9 +74,8 @@ export const PublicRoute: React.FC<PublicRouteProps> = ({ children }) => {
     );
   }
 
-  // Fully authenticated: approved + 2FA enabled + 2FA verified
-  // Only then redirect to dashboard
-  if (isAuthenticated && isApproved && isTwoFactorEnabled && isTwoFactorVerified) {
+  // Fully authenticated: approved + (2FA not required OR 2FA verified)
+  if (isAuthenticated && isApproved && (!isTwoFactorEnabled || isTwoFactorVerified)) {
     const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/';
     return <Navigate to={from} replace />;
   }

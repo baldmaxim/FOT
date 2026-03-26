@@ -34,10 +34,10 @@ export const sigurService = {
     return apiClient.get<ISigurTestResult>(`/sigur/test${params}`);
   },
 
-  async preview(startTime: string, endTime: string): Promise<ISigurPreviewResult> {
-    const result = await apiClient.get<ISigurPreviewResult>(
-      `/sigur/preview?startTime=${encodeURIComponent(startTime)}&endTime=${encodeURIComponent(endTime)}`
-    );
+  async preview(startTime: string, endTime: string, departmentId?: string): Promise<ISigurPreviewResult> {
+    const params = new URLSearchParams({ startTime, endTime });
+    if (departmentId) params.append('departmentId', departmentId);
+    const result = await apiClient.get<ISigurPreviewResult>(`/sigur/preview?${params.toString()}`);
     return result;
   },
 
@@ -136,6 +136,17 @@ export const sigurService = {
 
   async updateSyncFilter(departments: { sigur_department_id: number; sigur_department_name: string }[]): Promise<void> {
     await apiClient.put('/sigur/sync-filter', { departments });
+  },
+
+  async matchEmployees(
+    matches: Array<{ sigurId: number; employeeId: number }>,
+    createNew: Array<{ sigurId?: number; name: string; orgDepartmentId?: string; positionId?: string }>,
+  ): Promise<{ linked: number; created: number; errors: string[] }> {
+    const response = await apiClient.post<ApiResponse<{ linked: number; created: number; errors: string[] }>>(
+      '/sigur/match-employees',
+      { matches, createNew },
+    );
+    return response.data;
   },
 
   async clearEvents(startDate: string, endDate: string): Promise<{ deleted: number }> {

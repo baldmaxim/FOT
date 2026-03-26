@@ -16,25 +16,22 @@ export const TimesheetStats: FC<ITimesheetStatsProps> = ({ stats }) => {
   return (
     <div className="ts-stats-row">
       <div className="ts-stat-card">
-        <div className="ts-stat-label">Сотрудников в отделе</div>
         <div className="ts-stat-value">{stats.employeeCount}</div>
+        <div className="ts-stat-label">сотрудников</div>
       </div>
       <div className="ts-stat-card">
-        <div className="ts-stat-label">Норма часов</div>
-        <div className="ts-stat-value">{stats.normHours}ч</div>
-        <div className="ts-stat-hint">{stats.workingDays} рабочих дней</div>
+        <div className="ts-stat-value">{Math.round(stats.normHours)}ч</div>
+        <div className="ts-stat-label">норма ({stats.workingDays} дн.)</div>
       </div>
       <div className="ts-stat-card">
-        <div className="ts-stat-label">Фактически отработано</div>
         <div className="ts-stat-value ts-stat-value--green">{Math.round(stats.actualHours)}ч</div>
-        <div className="ts-stat-hint ts-stat-hint--green">на текущий момент</div>
+        <div className="ts-stat-label">факт</div>
       </div>
       <div className="ts-stat-card">
-        <div className="ts-stat-label">Отклонения</div>
         <div className="ts-stat-value ts-stat-value--orange">{totalDeviations}</div>
-        {deviationParts.length > 0 && (
-          <div className="ts-stat-hint">{deviationParts.join(', ')}</div>
-        )}
+        <div className="ts-stat-label">
+          {deviationParts.length > 0 ? deviationParts.join(', ') : 'отклонений'}
+        </div>
       </div>
     </div>
   );

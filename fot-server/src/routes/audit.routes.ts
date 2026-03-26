@@ -5,15 +5,15 @@ import { authenticate, requirePosition, injectOrganizationFromQuery, requireOrga
 const router = Router();
 
 // Все роуты требуют аутентификации и позиции admin или super_admin
-router.use(authenticate as any);
-router.use(injectOrganizationFromQuery as any);
-router.use(requireOrganization as any);
-router.use(requirePosition('admin', 'super_admin') as any);
+router.use(authenticate);
+router.use(injectOrganizationFromQuery);
+router.use(requireOrganization);
+router.use(requirePosition('admin', 'super_admin'));
 
 // Запуск полного аудита
-router.get('/run', auditController.runFullAudit as any);
+router.get('/run', auditController.runFullAudit);
 
 // Запуск конкретной проверки
-router.get('/check/:checkType', auditController.runSingleCheck as any);
+router.get('/check/:checkType', auditController.runSingleCheck);
 
 export default router;

@@ -14,6 +14,7 @@ import type {
   TimesheetStats as ITimesheetStats,
   TimesheetStatus,
 } from '../../types';
+import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
 import './TimesheetPage.css';
 
 interface IDeptOption {
@@ -226,8 +227,6 @@ export const TimesheetPage: FC = () => {
               <ChevronRight size={16} />
             </button>
           </div>
-        </div>
-        <div className="ts-header-right">
           <div className="ts-dept-wrap" ref={deptRef}>
             {isHeaderOnly ? (
               <button className="ts-dept-btn" style={{ cursor: 'default', opacity: 0.8 }}>
@@ -268,7 +267,12 @@ export const TimesheetPage: FC = () => {
               </>
             )}
           </div>
-          <div className="ts-status-badge ts-status-badge--draft">Черновик</div>
+        </div>
+        <div className="ts-header-right">
+          <TimesheetApprovalBar
+            departmentId={selectedDeptId}
+            period={`${year}-${String(month).padStart(2, '0')}`}
+          />
           <button className="ts-btn" onClick={handleExport}>
             <Download size={16} />
             Экспорт

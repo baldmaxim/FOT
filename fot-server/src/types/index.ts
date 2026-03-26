@@ -1,7 +1,7 @@
 import { Request } from 'express';
 
 // Типы должностей (новая система)
-export type EmployeePositionType = 'worker' | 'header' | 'admin' | 'super_admin';
+export type EmployeePositionType = 'worker' | 'header' | 'hr' | 'admin' | 'super_admin';
 
 // Для обратной совместимости
 export type UserRole = EmployeePositionType;
@@ -282,4 +282,90 @@ export interface OrgDepartmentNode extends OrgDepartment {
 // Полная структура для дерева
 export interface OrgStructureTree {
   departments: OrgDepartmentNode[];
+}
+
+// Типы заявлений
+export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'dayoff' | 'business_trip' | 'certificate';
+export type LeaveRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
+
+export interface LeaveRequest {
+  id: number;
+  organization_id: string;
+  employee_id: number;
+  request_type: LeaveRequestType;
+  status: LeaveRequestStatus;
+  start_date: string;
+  end_date: string;
+  reason: string | null;
+  reviewer_id: string | null;
+  reviewed_at: string | null;
+  review_comment: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Документы (R2)
+export type DocumentCategory = 'certificate' | 'scan' | 'approval' | 'payslip' | 'other';
+
+export interface Document {
+  id: number;
+  organization_id: string;
+  employee_id: number;
+  leave_request_id: number | null;
+  category: DocumentCategory;
+  file_name: string;
+  file_size: number;
+  mime_type: string;
+  r2_key: string;
+  uploaded_by: string;
+  created_at: string;
+}
+
+// Расчётные листки
+export interface Payslip {
+  id: number;
+  organization_id: string;
+  employee_id: number;
+  period: string;
+  gross_amount: number | null;
+  net_amount: number | null;
+  deductions: number | null;
+  details: Record<string, unknown> | null;
+  document_id: number | null;
+  created_by: string;
+  created_at: string;
+}
+
+// Выплаты
+export type PaymentType = 'salary' | 'advance' | 'bonus' | 'vacation_pay' | 'sick_pay' | 'other';
+
+export interface Payment {
+  id: number;
+  organization_id: string;
+  employee_id: number;
+  payment_date: string;
+  amount: number;
+  payment_type: PaymentType;
+  description: string | null;
+  period: string | null;
+  created_by: string;
+  created_at: string;
+}
+
+// Согласование табелей
+export type TimesheetApprovalStatus = 'draft' | 'submitted' | 'approved' | 'rejected';
+
+export interface TimesheetApproval {
+  id: number;
+  organization_id: string;
+  department_id: string;
+  period: string;
+  status: TimesheetApprovalStatus;
+  submitted_by: string | null;
+  submitted_at: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_comment: string | null;
+  created_at: string;
+  updated_at: string;
 }

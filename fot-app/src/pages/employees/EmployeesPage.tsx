@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type FC } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Upload, UserPlus, X, FileSpreadsheet } from 'lucide-react';
+import { Search, Upload, UserPlus, X, FileSpreadsheet, ChevronLeft, ChevronRight } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
+import type { PaginatedMeta, EmployeeCounts } from '../../services/employeeService';
 import { skudService } from '../../services/skudService';
 import { structureApi } from '../../api/structure';
 import { useAuth } from '../../contexts/AuthContext';
@@ -11,11 +12,7 @@ import { DepartmentPanel } from '../../components/employees/DepartmentPanel';
 import type { Employee, EmployeeInput, OrgDepartmentNode, IEmployeePresence, EnrichPreview } from '../../types';
 import '../../styles/EmployeesPage.css';
 
-const collectChildIds = (node: OrgDepartmentNode): string[] => {
-  const ids = [node.id];
-  for (const child of node.children) ids.push(...collectChildIds(child));
-  return ids;
-};
+const PAGE_SIZE = 50;
 
 export const EmployeesPage: FC = () => {
   const navigate = useNavigate();
@@ -32,10 +29,16 @@ export const EmployeesPage: FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // Pagination & server filters
+  const [page, setPage] = useState(1);
+  const [meta, setMeta] = useState<PaginatedMeta>({ page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 0 });
+  const [counts, setCounts] = useState<EmployeeCounts>({ byDepartment: {}, byStatus: { active: 0, fired: 0 } });
+
   // Filters
   const [selectedDeptId, setSelectedDeptId] = useState<string | null>(searchParams.get('dept'));
   const [expandedDepts, setExpandedDepts] = useState<Set<string>>(new Set());
   const [empSearch, setEmpSearch] = useState(searchParams.get('q') || '');
+  const [debouncedSearch, setDebouncedSearch] = useState(empSearch);
   const [activeTab, setActiveTab] = useState<'all' | 'fired'>('all');
 
   // Modals
@@ -55,6 +58,15 @@ export const EmployeesPage: FC = () => {
   // Selection
   const [selectedEmps, setSelectedEmps] = useState<Set<number>>(new Set());
 
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(empSearch);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [empSearch]);
+
   // URL sync
   useEffect(() => {
     const params = new URLSearchParams();
@@ -63,19 +75,37 @@ export const EmployeesPage: FC = () => {
     setSearchParams(params, { replace: true });
   }, [empSearch, selectedDeptId, setSearchParams]);
 
-  // Load data
-  const loadEmployees = useCallback(async () => {
+  // Reset page when filters change
+  useEffect(() => { setPage(1); }, [selectedDeptId, activeTab]);
+
+  // Resolve department_id for server (selected dept + children for header filtering)
+  const serverDeptId = useMemo(() => {
+    // Для серверной пагинации передаём только выбранный отдел
+    // Дочерние отделы будут включены, т.к. backend фильтрует по org_department_id
+    return selectedDeptId || undefined;
+  }, [selectedDeptId]);
+
+  // Load paginated data
+  const loadPage = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const data = await employeeService.getAll({ view: 'list' });
-      setEmployees(data);
+      const result = await employeeService.getPaginated({
+        page,
+        pageSize: PAGE_SIZE,
+        search: debouncedSearch || undefined,
+        status: activeTab === 'fired' ? 'fired' : 'active',
+        departmentId: serverDeptId,
+      });
+      setEmployees(result.data);
+      setMeta(result.meta);
+      setCounts(result.counts);
     } catch {
       setError('Ошибка загрузки сотрудников');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [page, debouncedSearch, activeTab, serverDeptId]);
 
   const loadDepartments = useCallback(async () => {
     try {
@@ -100,73 +130,30 @@ export const EmployeesPage: FC = () => {
     } catch { /* ignore */ }
   }, []);
 
-  useEffect(() => { loadEmployees(); loadDepartments(); }, [loadEmployees, loadDepartments]);
+  useEffect(() => { loadPage(); }, [loadPage]);
+  useEffect(() => { loadDepartments(); }, [loadDepartments]);
   useEffect(() => { loadPresence(selectedDeptId); }, [selectedDeptId, loadPresence]);
 
-  // Department employee counts
+  // Department employee counts from server
   const deptCounts = useMemo(() => {
-    const direct = new Map<string, number>();
-    employees
-      .filter(e => e.employment_status !== 'fired')
-      .forEach(emp => {
-        if (emp.org_department_id) {
-          direct.set(emp.org_department_id, (direct.get(emp.org_department_id) || 0) + 1);
-        }
-      });
+    const map = new Map<string, number>();
+    for (const [id, count] of Object.entries(counts.byDepartment)) {
+      map.set(id, count);
+    }
+    // Compute totals for parent departments (include children)
     const totals = new Map<string, number>();
     const compute = (node: OrgDepartmentNode): number => {
-      let count = direct.get(node.id) || 0;
+      let count = map.get(node.id) || 0;
       for (const child of node.children) count += compute(child);
       totals.set(node.id, count);
       return count;
     };
     departments.forEach(d => compute(d));
     return totals;
-  }, [employees, departments]);
+  }, [counts.byDepartment, departments]);
 
-  // Selected department
-  const selectedDeptInfo = useMemo(() => {
-    if (!selectedDeptId) return null;
-    const find = (nodes: OrgDepartmentNode[]): OrgDepartmentNode | null => {
-      for (const n of nodes) {
-        if (n.id === selectedDeptId) return n;
-        const f = find(n.children);
-        if (f) return f;
-      }
-      return null;
-    };
-    return find(departments);
-  }, [selectedDeptId, departments]);
-
-  const selectedDeptIds = useMemo(() => {
-    if (!selectedDeptInfo) return null;
-    return new Set(collectChildIds(selectedDeptInfo));
-  }, [selectedDeptInfo]);
-
-  // Filtered employees
-  const filteredEmployees = useMemo(() => {
-    return employees.filter(emp => {
-      const matchesDept = !selectedDeptIds || selectedDeptIds.has(emp.org_department_id || '');
-      const matchesSearch = !empSearch ||
-        emp.full_name.toLowerCase().includes(empSearch.toLowerCase()) ||
-        (emp.position_name || '').toLowerCase().includes(empSearch.toLowerCase());
-      const matchesTab = activeTab === 'all'
-        ? emp.employment_status !== 'fired'
-        : emp.employment_status === 'fired';
-      return matchesDept && matchesSearch && matchesTab;
-    });
-  }, [employees, selectedDeptIds, empSearch, activeTab]);
-
-  // Tab counts
-  const tabCounts = useMemo(() => {
-    const deptFiltered = employees.filter(emp =>
-      !selectedDeptIds || selectedDeptIds.has(emp.org_department_id || ''),
-    );
-    return {
-      all: deptFiltered.filter(e => e.employment_status !== 'fired').length,
-      fired: deptFiltered.filter(e => e.employment_status === 'fired').length,
-    };
-  }, [employees, selectedDeptIds]);
+  const tabCounts = useMemo(() => counts.byStatus, [counts.byStatus]);
+  const totalActive = counts.byStatus.active;
 
   // Flat departments for select
   const flatDepts = useMemo(() => {
@@ -181,11 +168,25 @@ export const EmployeesPage: FC = () => {
     return result;
   }, [departments]);
 
+  // Selected department info
+  const selectedDeptInfo = useMemo(() => {
+    if (!selectedDeptId) return null;
+    const find = (nodes: OrgDepartmentNode[]): OrgDepartmentNode | null => {
+      for (const n of nodes) {
+        if (n.id === selectedDeptId) return n;
+        const f = find(n.children);
+        if (f) return f;
+      }
+      return null;
+    };
+    return find(departments);
+  }, [selectedDeptId, departments]);
+
   // Handlers
   const toggleDept = (id: string) => {
     setExpandedDepts(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
   };
@@ -197,7 +198,7 @@ export const EmployeesPage: FC = () => {
     if (!confirm(`Уволить ${emp.full_name}?`)) return;
     try {
       await employeeService.fire(emp.id);
-      loadEmployees();
+      loadPage();
     } catch { setError('Ошибка увольнения'); }
   };
 
@@ -205,7 +206,7 @@ export const EmployeesPage: FC = () => {
     e.stopPropagation();
     try {
       await employeeService.rehire(emp.id);
-      loadEmployees();
+      loadPage();
     } catch { setError('Ошибка восстановления'); }
   };
 
@@ -214,7 +215,7 @@ export const EmployeesPage: FC = () => {
     try {
       await employeeService.moveDepartment(moveEmpId, moveDeptId);
       setMoveEmpId(null);
-      loadEmployees();
+      loadPage();
     } catch { setError('Ошибка перемещения'); }
   };
 
@@ -224,7 +225,7 @@ export const EmployeesPage: FC = () => {
       await employeeService.create(formData);
       setShowAddModal(false);
       setFormData({ full_name: '', hire_date: new Date().toISOString().split('T')[0] });
-      loadEmployees();
+      loadPage();
     } catch { setError('Ошибка добавления'); }
   };
 
@@ -234,7 +235,7 @@ export const EmployeesPage: FC = () => {
     try {
       const result = await employeeService.import(file);
       alert(`Импортировано: ${result.imported}`);
-      loadEmployees();
+      loadPage();
     } catch { setError('Ошибка импорта'); }
     finally { e.target.value = ''; }
   };
@@ -255,19 +256,19 @@ export const EmployeesPage: FC = () => {
     }
   };
 
-  const handleEnrichApply = async () => {
+  const handleEnrichApply = async (manualMatches: Array<{ fullName: string; employeeId: number }> = []) => {
     if (!enrichFile) return;
     try {
       setEnrichLoading(true);
-      const result = await employeeService.enrichApply(enrichFile);
-      setEnrichPreview(null);
-      setEnrichFile(null);
+      const result = await employeeService.enrichApply(enrichFile, manualMatches);
       alert(`Обновлено: ${result.updated} сотрудников`);
-      loadEmployees();
+      loadPage();
     } catch {
       setError('Ошибка обогащения данных');
     } finally {
       setEnrichLoading(false);
+      setEnrichPreview(null);
+      setEnrichFile(null);
     }
   };
 
@@ -275,12 +276,14 @@ export const EmployeesPage: FC = () => {
     e.stopPropagation();
     setSelectedEmps(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
   };
 
-  const totalActive = employees.filter(e => e.employment_status !== 'fired').length;
+  // Pagination helpers
+  const canPrev = page > 1;
+  const canNext = page < meta.totalPages;
 
   return (
     <div className="employees-page">
@@ -300,14 +303,14 @@ export const EmployeesPage: FC = () => {
         <div className="ep-emp-header">
           <div className="ep-emp-title">
             <h2>{selectedDeptInfo?.name || 'Все сотрудники'}</h2>
-            <span className="ep-emp-count">{filteredEmployees.length} чел.</span>
+            <span className="ep-emp-count">{meta.total} чел.</span>
           </div>
           <div className="ep-emp-tabs">
             <button
               className={`ep-tab ${activeTab === 'all' ? 'active' : ''}`}
               onClick={() => setActiveTab('all')}
             >
-              Все<span className="ep-tab-num">({tabCounts.all})</span>
+              Все<span className="ep-tab-num">({tabCounts.active})</span>
             </button>
             <button
               className={`ep-tab ${activeTab === 'fired' ? 'active' : ''}`}
@@ -356,7 +359,7 @@ export const EmployeesPage: FC = () => {
         )}
 
         <EmpVirtualList
-          employees={filteredEmployees}
+          employees={employees}
           loading={loading}
           selectedEmps={selectedEmps}
           presenceMap={presenceMap}
@@ -367,6 +370,29 @@ export const EmployeesPage: FC = () => {
           onRehire={handleRehire}
           onMove={(id, e) => { e.stopPropagation(); setMoveEmpId(id); setMoveDeptValue(''); }}
         />
+
+        {/* Pagination */}
+        {meta.totalPages > 1 && (
+          <div className="ep-pagination">
+            <button
+              className="ep-pagination-btn"
+              disabled={!canPrev}
+              onClick={() => setPage(p => p - 1)}
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <span className="ep-pagination-info">
+              {meta.page} / {meta.totalPages}
+            </span>
+            <button
+              className="ep-pagination-btn"
+              disabled={!canNext}
+              onClick={() => setPage(p => p + 1)}
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Move Department Modal */}

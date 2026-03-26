@@ -261,8 +261,8 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
         (msg) => setSyncResult(msg),
       );
       setSyncResult(`Загружено ${result.inserted} новых событий (пропущено ${result.skipped})`);
+      await loadEvents();
       if (result.inserted > 0) {
-        await loadEvents();
         onSync?.();
       }
     } catch {

@@ -54,3 +54,23 @@ export const isFutureDay = (year: number, month: number, day: number): boolean =
   today.setHours(0, 0, 0, 0);
   return d > today;
 };
+
+export const getWorkingDaysUpToToday = (year: number, month: number): number => {
+  const now = new Date();
+  const curYear = now.getFullYear();
+  const curMonth = now.getMonth() + 1;
+
+  if (year < curYear || (year === curYear && month < curMonth)) {
+    return getWorkingDaysCount(year, month);
+  }
+  if (year > curYear || (year === curYear && month > curMonth)) {
+    return 0;
+  }
+  // Current month — count working days up to today
+  const today = now.getDate();
+  let count = 0;
+  for (let d = 1; d <= today; d++) {
+    if (!isWeekend(year, month, d)) count++;
+  }
+  return count;
+};

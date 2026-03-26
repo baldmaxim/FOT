@@ -11,6 +11,33 @@ interface ImportResult {
   errors: string[];
 }
 
+export interface PaginatedParams {
+  page: number;
+  pageSize?: number;
+  search?: string;
+  status?: 'active' | 'fired';
+  departmentId?: string;
+  archived?: boolean;
+}
+
+export interface PaginatedMeta {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface EmployeeCounts {
+  byDepartment: Record<string, number>;
+  byStatus: { active: number; fired: number };
+}
+
+export interface PaginatedResponse {
+  data: Employee[];
+  meta: PaginatedMeta;
+  counts: EmployeeCounts;
+}
+
 export const employeeService = {
   async getAll(params?: { organizationId?: string; departmentId?: string; archived?: boolean; view?: 'list' }): Promise<Employee[]> {
     const qs = new URLSearchParams();
@@ -21,6 +48,19 @@ export const employeeService = {
     const query = qs.toString() ? `?${qs}` : '';
     const response = await apiClient.get<ApiResponse<Employee[]>>(`/employees${query}`);
     return response.data || [];
+  },
+
+  async getPaginated(params: PaginatedParams): Promise<PaginatedResponse> {
+    const qs = new URLSearchParams();
+    qs.set('page', String(params.page));
+    qs.set('view', 'list');
+    if (params.pageSize) qs.set('pageSize', String(params.pageSize));
+    if (params.search) qs.set('search', params.search);
+    if (params.status) qs.set('status', params.status);
+    if (params.departmentId) qs.set('department_id', params.departmentId);
+    if (params.archived) qs.set('archived', 'true');
+    const response = await apiClient.get<{ success: boolean; data: Employee[]; meta: PaginatedMeta; counts: EmployeeCounts }>(`/employees?${qs}`);
+    return { data: response.data || [], meta: response.meta || { page: 1, pageSize: 50, total: 0, totalPages: 0 }, counts: response.counts || { byDepartment: {}, byStatus: { active: 0, fired: 0 } } };
   },
 
   async getById(id: number): Promise<Employee> {
@@ -111,9 +151,12 @@ export const employeeService = {
     return response.data;
   },
 
-  async enrichApply(file: File): Promise<EnrichResult> {
+  async enrichApply(file: File, manualMatches?: Array<{ fullName: string; employeeId: number }>): Promise<EnrichResult> {
     const formData = new FormData();
     formData.append('file', file);
+    if (manualMatches?.length) {
+      formData.append('manualMatches', JSON.stringify(manualMatches));
+    }
     const response = await apiClient.post<ApiResponse<EnrichResult>>('/employees/enrich?preview=false', formData);
     return response.data;
   },

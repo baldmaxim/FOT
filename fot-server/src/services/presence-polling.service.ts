@@ -129,7 +129,7 @@ async function pollEvents(): Promise<void> {
 
     for (const raw of rawEvents) {
       const mapped = mapSigurEvent(raw as Record<string, unknown>);
-      if (!mapped) continue;
+      if (!mapped || !mapped.physicalPerson) continue;
 
       const dedupHash = computeDedupHash(
         mapped.physicalPerson, mapped.eventDate, mapped.eventTime,

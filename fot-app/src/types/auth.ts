@@ -1,5 +1,5 @@
 // Auth types - Новая система должностей
-export type EmployeePositionType = 'worker' | 'header' | 'admin' | 'super_admin';
+export type EmployeePositionType = 'worker' | 'header' | 'hr' | 'admin' | 'super_admin';
 
 // Для обратной совместимости (deprecated, использовать EmployeePositionType)
 export type UserRole = EmployeePositionType;
@@ -7,6 +7,7 @@ export type UserRole = EmployeePositionType;
 export const POSITION_LABELS: Record<EmployeePositionType, string> = {
   worker: 'Сотрудник',       // Отображается реальная должность из imported_position
   header: 'Руководитель',    // Начальник участка
+  hr: 'Отдел кадров',        // Проверка табелей, документы, расчётные листки
   admin: 'Администратор',    // Просмотр всех, без изменения прав
   super_admin: 'Супер-админ' // Полный доступ
 };

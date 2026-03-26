@@ -64,7 +64,7 @@ export const EmployeeCardPage: FC = () => {
   const [searchParams] = useSearchParams();
   const backLabel = (location.state as { label?: string })?.label || 'Сотрудники';
   const { canAccess } = useAuth();
-  const canEdit = canAccess('header');
+  const canEdit = canAccess('admin');
 
   // Deep-link: ?tab=skud&date=2026-03-18
   const urlTab = searchParams.get('tab') as Tab | null;

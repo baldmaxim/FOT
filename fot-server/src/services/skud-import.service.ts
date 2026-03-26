@@ -9,6 +9,7 @@ import { mapSigurEvent } from '../utils/sigur.mapper.js';
 import { buildInclusiveDateRange, parseDate } from '../utils/date.utils.js';
 import { computeDedupHash } from '../utils/dedup.utils.js';
 import { isHeaderRow, parseTimeFromDateTime } from './skud-shared.service.js';
+import { normalizePersonName } from './sigur-sync-shared.js';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../types/index.js';
 import type {
@@ -183,7 +184,7 @@ export async function syncEmployee(
 
   const sigurEmpId: number | null = empData.sigur_employee_id;
   const employeeOrgId: string = empData.organization_id;
-  const employeeName = (empData.full_name || '').toLowerCase().trim();
+  const employeeName = normalizePersonName(empData.full_name || '');
 
   console.log(`[sync-employee] id=${employeeId}, sigurId=${sigurEmpId}, name="${employeeName}"`);
 
@@ -224,7 +225,7 @@ export async function syncEmployee(
       continue;
     }
 
-    // Быстрая фильтрация по sigurEmpId
+    // Фильтрация по sigurEmpId или ФИО
     const filtered = rawEvents.filter(raw => {
       const r = raw as Record<string, unknown>;
       const data = r.data as Record<string, unknown> | undefined;
@@ -232,19 +233,32 @@ export async function syncEmployee(
       const accessObject = additionalData?.accessObject as Record<string, unknown> | undefined;
       const accessObjectData = accessObject?.data as Record<string, unknown> | undefined;
       const evtEmpId = data?.employeeId ?? accessObjectData?.id;
-      if (sigurEmpId != null && evtEmpId != null) return evtEmpId === sigurEmpId;
+      // Совпадение по Sigur ID
+      if (sigurEmpId != null && evtEmpId != null && Number(evtEmpId) === Number(sigurEmpId)) return true;
+      // Фолбэк на имя
       const name = accessObjectData?.name;
-      return typeof name === 'string' && name.toLowerCase().trim() === employeeName;
+      return typeof name === 'string' && normalizePersonName(name) === employeeName;
     });
 
     if (filtered.length === 0) {
+      if (rawEvents.length > 0) {
+        const samples = rawEvents.slice(0, 3).map(raw => {
+          const r = raw as Record<string, unknown>;
+          const data = r.data as Record<string, unknown> | undefined;
+          const ad = r.additionalData as Record<string, unknown> | undefined;
+          const ao = ad?.accessObject as Record<string, unknown> | undefined;
+          const aod = ao?.data as Record<string, unknown> | undefined;
+          return { evtEmpId: data?.employeeId ?? aod?.id, name: aod?.name };
+        });
+        console.warn(`[sync-employee] 0/${rawEvents.length} matched for sigurId=${sigurEmpId} name="${employeeName}". Samples:`, JSON.stringify(samples));
+      }
       send({ type: 'day_done', day, raw: rawEvents.length, matched: 0, inserted: 0 });
       continue;
     }
 
     const mapped = filtered
       .map(raw => mapSigurEvent(raw as Record<string, unknown>))
-      .filter((m): m is NonNullable<typeof m> => m !== null);
+      .filter((m): m is NonNullable<typeof m> & { physicalPerson: string } => m !== null && m.physicalPerson !== null);
 
     // Дедупликация
     const { data: existingHashes } = await supabase

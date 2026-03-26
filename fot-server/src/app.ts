@@ -14,6 +14,11 @@ import auditRoutes from './routes/audit.routes.js';
 import sigurRoutes from './routes/sigur.routes.js';
 import timesheetRoutes from './routes/timesheet.routes.js';
 import chatRoutes from './routes/chat.routes.js';
+import leaveRequestsRoutes from './routes/leave-requests.routes.js';
+import documentsRoutes from './routes/documents.routes.js';
+import payslipsRoutes from './routes/payslips.routes.js';
+import paymentsRoutes from './routes/payments.routes.js';
+import timesheetApprovalRoutes from './routes/timesheet-approval.routes.js';
 
 const app = express();
 
@@ -46,6 +51,11 @@ app.use('/api/audit', auditRoutes);
 app.use('/api/sigur', sigurRoutes);
 app.use('/api/timesheet', timesheetRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/leave-requests', leaveRequestsRoutes);
+app.use('/api/documents', documentsRoutes);
+app.use('/api/payslips', payslipsRoutes);
+app.use('/api/payments', paymentsRoutes);
+app.use('/api/timesheet-approvals', timesheetApprovalRoutes);
 
 // 404 handler
 app.use((_req, res) => {

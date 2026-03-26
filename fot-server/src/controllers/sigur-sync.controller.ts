@@ -3,6 +3,7 @@ import { sigurService } from '../services/sigur.service.js';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import { buildInclusiveDateRange } from '../utils/date.utils.js';
+import { parseFIO } from '../utils/fio.utils.js';
 import {
   acquirePresencePollingLock,
   ManualSyncInProgressError,
@@ -35,7 +36,12 @@ async function resolveOrganizationId(req: AuthenticatedRequest): Promise<string 
 }
 
 function createSseSender(res: Response) {
+  let msgCount = 0;
   return (data: Record<string, unknown>) => {
+    msgCount++;
+    if (data.type === 'events_day') {
+      console.log(`[SSE #${msgCount}] events_day: day=${data.day} percent=${data.percent}%`);
+    }
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 }
@@ -366,7 +372,7 @@ export const sigurSyncController = {
           id: 5,
           name: 'employees' as SyncAllStepName,
           label: 'Импорт сотрудников',
-          fn: async () => syncEmployeesLogic(organizationId, connection, sendProgress, context) as unknown as Record<string, unknown>,
+          fn: async () => syncEmployeesLogic(organizationId, connection, sendProgress, context, false) as unknown as Record<string, unknown>,
         },
       ].filter(step => steps.includes(step.name));
 
@@ -437,6 +443,75 @@ export const sigurSyncController = {
       if (lockAcquired) {
         releasePresencePollingLock();
       }
+    }
+  },
+
+  async matchEmployees(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const organizationId = await resolveOrganizationId(req);
+      if (!organizationId) {
+        res.status(400).json({ success: false, error: 'organization_id обязателен' });
+        return;
+      }
+
+      const { matches, createNew } = req.body as {
+        matches?: Array<{ sigurId: number; employeeId: number }>;
+        createNew?: Array<{ sigurId?: number; name: string; orgDepartmentId?: string; positionId?: string }>;
+      };
+
+      let linked = 0;
+      let created = 0;
+      const errors: string[] = [];
+
+      // Привязка существующих сотрудников к Sigur ID
+      if (matches && matches.length > 0) {
+        for (const m of matches) {
+          const { error } = await supabase
+            .from('employees')
+            .update({ sigur_employee_id: m.sigurId })
+            .eq('id', m.employeeId)
+            .eq('organization_id', organizationId);
+
+          if (error) {
+            errors.push(`Привязка #${m.employeeId}: ${error.message}`);
+          } else {
+            linked++;
+          }
+        }
+      }
+
+      // Создание новых сотрудников
+      if (createNew && createNew.length > 0) {
+        for (const emp of createNew) {
+          const fio = parseFIO(emp.name);
+          const { error } = await supabase.from('employees').insert({
+            organization_id: organizationId,
+            full_name: emp.name.trim(),
+            last_name: fio.lastName,
+            first_name: fio.firstName || null,
+            middle_name: fio.middleName || null,
+            hire_date: new Date().toISOString().slice(0, 10),
+            sigur_employee_id: emp.sigurId || null,
+            org_department_id: emp.orgDepartmentId || null,
+            position_id: emp.positionId || null,
+          });
+
+          if (error) {
+            errors.push(`Создание ${emp.name}: ${error.message}`);
+          } else {
+            created++;
+          }
+        }
+      }
+
+      await auditService.logFromRequest(req, req.user.id, 'MATCH_EMPLOYEES', {
+        details: { organizationId, linked, created, errors },
+      });
+
+      res.json({ success: true, data: { linked, created, errors } });
+    } catch (error) {
+      console.error('matchEmployees error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка сопоставления сотрудников' });
     }
   },
 };

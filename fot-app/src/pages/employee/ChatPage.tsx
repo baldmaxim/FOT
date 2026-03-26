@@ -32,10 +32,7 @@ export const ChatPage: React.FC = () => {
 
   // Search users for new conversation
   useEffect(() => {
-    if (!searchOpen) {
-      setSearchResults([]);
-      return;
-    }
+    if (!searchOpen) return;
     const timeout = setTimeout(async () => {
       try {
         const results = await chatService.searchUsers(searchQuery);

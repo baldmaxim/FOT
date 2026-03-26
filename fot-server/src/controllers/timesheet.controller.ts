@@ -32,6 +32,26 @@ function getWorkingDaysInMonth(year: number, month: number): number {
   return count;
 }
 
+function getWorkingDaysUpToToday(year: number, month: number): number {
+  const now = new Date();
+  const curYear = now.getFullYear();
+  const curMonth = now.getMonth() + 1;
+
+  if (year < curYear || (year === curYear && month < curMonth)) {
+    return getWorkingDaysInMonth(year, month);
+  }
+  if (year > curYear || (year === curYear && month > curMonth)) {
+    return 0;
+  }
+  const today = now.getDate();
+  let count = 0;
+  for (let d = 1; d <= today; d++) {
+    const day = new Date(year, month - 1, d).getDay();
+    if (day !== 0 && day !== 6) count++;
+  }
+  return count;
+}
+
 export const timesheetController = {
   /** GET /api/timesheet?month=YYYY-MM&department_id=... */
   async getAll(req: AuthenticatedRequest, res: Response) {
@@ -98,21 +118,9 @@ export const timesheetController = {
         (positions || []).forEach((p: { id: string; name: string }) => posMap.set(p.id, p.name));
       }
 
-      // Fetch internal access points to filter them out
       const BATCH_SIZE = 200;
-      let internalPointsQuery = supabase
-        .from('skud_access_point_settings')
-        .select('access_point_name')
-        .eq('is_internal', true);
-      if (organizationId) {
-        internalPointsQuery = internalPointsQuery.eq('organization_id', organizationId);
-      }
-      const { data: apSettings } = await internalPointsQuery;
-      const internalPoints = new Set<string>(
-        (apSettings || []).map((s: { access_point_name: string }) => s.access_point_name.trim()),
-      );
 
-      // Fetch raw SKUD events (filtering internal access points)
+      // Fetch raw SKUD events
       interface IRawEvent {
         employee_id: number;
         event_date: string;
@@ -134,11 +142,6 @@ export const timesheetController = {
         rawEvents.push(...(data || []));
       }
 
-      // Filter out internal access point events
-      if (internalPoints.size > 0) {
-        rawEvents = rawEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point));
-      }
-
       // Group events by employee_id + date and compute first_entry, last_exit, total_hours
       const skudMap = new Map<string, { employee_id: number; date: string; first_entry: string | null; last_exit: string | null; total_hours: number }>();
 
@@ -155,7 +158,8 @@ export const timesheetController = {
         const firstEntry = events.find(e => e.direction === 'entry');
         const lastExit = [...events].reverse().find(e => e.direction === 'exit');
 
-        // Calculate total hours: sum of (exit_time - entry_time) pairs
+        // Calculate total hours using ALL events (not just external)
+        // Internal access points still show entry/exit pairs that count as work time
         let totalMs = 0;
         let lastEntryTime: number | null = null;
 
@@ -227,8 +231,8 @@ export const timesheetController = {
       }
 
       // Compute stats
-      const workingDays = getWorkingDaysInMonth(year, mon);
-      const normHours = workingDays * 8;
+      const workingDays = getWorkingDaysUpToToday(year, mon);
+      const normHours = workingDays * 8 * employeeIds.length;
       let actualHours = 0;
       const deviations = { late: 0, absent: 0, sick: 0 };
 
@@ -287,7 +291,7 @@ export const timesheetController = {
 
       if (error) throw error;
 
-      await auditService.logFromRequest(req, req.user!.id, 'CREATE_TIMESHEET_ENTRY', {
+      await auditService.logFromRequest(req, req.user.id, 'CREATE_TIMESHEET_ENTRY', {
         entityType: 'timesheet',
         entityId: String(data.id),
         details: {
@@ -329,10 +333,10 @@ export const timesheetController = {
       if (error) throw error;
       if (!data) return res.status(404).json({ success: false, error: 'Запись не найдена' });
 
-      await auditService.logFromRequest(req, req.user!.id, 'UPDATE_TIMESHEET_ENTRY', {
+      await auditService.logFromRequest(req, req.user.id, 'UPDATE_TIMESHEET_ENTRY', {
         entityType: 'timesheet',
         entityId: String(id),
-        details: parsed as Record<string, unknown>,
+        details: { ...parsed },
       });
 
       res.json({ success: true, data });

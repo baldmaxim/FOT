@@ -175,8 +175,7 @@ export const DisciplineAnalyticsPage: FC = () => {
       if (signal?.aborted) return;
       setError(e instanceof Error ? e.message : 'Ошибка загрузки');
     } finally {
-      if (signal?.aborted) return;
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [normalizedPeriod]);
 

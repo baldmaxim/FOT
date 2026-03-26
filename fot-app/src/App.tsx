@@ -26,17 +26,20 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ de
 const UserManagementPage = lazy(() => import('./pages/super-admin/UserManagementPage').then(m => ({ default: m.UserManagementPage })));
 const OrganizationsPage = lazy(() => import('./pages/super-admin/OrganizationsPage').then(m => ({ default: m.OrganizationsPage })));
 const ManagePage = lazy(() => import('./pages/super-admin/ManagePage').then(m => ({ default: m.ManagePage })));
+const AdminManagePage = lazy(() => import('./pages/super-admin/AdminManagePage').then(m => ({ default: m.AdminManagePage })));
 const DataAuditPage = lazy(() => import('./pages/super-admin/DataAuditPage').then(m => ({ default: m.DataAuditPage })));
 
 // Employees & SKUD
 const EmployeesPage = lazy(() => import('./pages/employees/EmployeesPage').then(m => ({ default: m.EmployeesPage })));
 const EmployeeCardPage = lazy(() => import('./pages/employees/EmployeeCardPage').then(m => ({ default: m.EmployeeCardPage })));
+const HeaderEmployeesPage = lazy(() => import('./pages/employees/HeaderEmployeesPage').then(m => ({ default: m.HeaderEmployeesPage })));
 const SigurSettingsPage = lazy(() => import('./pages/skud/SigurSettingsPage').then(m => ({ default: m.SigurSettingsPage })));
 const SigurRawDataPage = lazy(() => import('./pages/skud/SigurRawDataPage').then(m => ({ default: m.SigurRawDataPage })));
 const SkudSupabasePage = lazy(() => import('./pages/skud/SkudSupabasePage').then(m => ({ default: m.SkudSupabasePage })));
 
 // Timesheet
 const TimesheetPage = lazy(() => import('./pages/timesheet/TimesheetPage').then(m => ({ default: m.TimesheetPage })));
+const TimesheetReviewPage = lazy(() => import('./pages/timesheet/TimesheetReviewPage').then(m => ({ default: m.TimesheetReviewPage })));
 
 // Discipline Analytics
 const DisciplineAnalyticsPage = lazy(() => import('./pages/DisciplineAnalyticsPage').then(m => ({ default: m.DisciplineAnalyticsPage })));
@@ -44,25 +47,31 @@ const DisciplineAnalyticsPage = lazy(() => import('./pages/DisciplineAnalyticsPa
 // Profile
 const ProfilePage = lazy(() => import('./pages/profile/ProfilePage').then(m => ({ default: m.ProfilePage })));
 
-// Employee
+// Employee portal
 const EmployeeDashboardPage = lazy(() => import('./pages/employee/EmployeeDashboardPage').then(m => ({ default: m.EmployeeDashboardPage })));
 const ChatPage = lazy(() => import('./pages/employee/ChatPage').then(m => ({ default: m.ChatPage })));
+const LeaveRequestsPage = lazy(() => import('./pages/employee/LeaveRequestsPage').then(m => ({ default: m.LeaveRequestsPage })));
+const PayslipsPage = lazy(() => import('./pages/employee/PayslipsPage').then(m => ({ default: m.PayslipsPage })));
+const PaymentsPage = lazy(() => import('./pages/employee/PaymentsPage').then(m => ({ default: m.PaymentsPage })));
+const DocumentsPage = lazy(() => import('./pages/employee/DocumentsPage').then(m => ({ default: m.DocumentsPage })));
+
+// Leave requests management (header/hr)
+const LeaveRequestsManagePage = lazy(() => import('./pages/LeaveRequestsManagePage').then(m => ({ default: m.LeaveRequestsManagePage })));
 
 // Компонент для умного редиректа на основе должности
 const PositionBasedRedirect = () => {
   const { positionType, canAccess } = useAuth();
 
-  // Если роль ещё не загружена — не редиректим в никуда
   if (!positionType) {
     return <Navigate to="/employee" replace />;
   }
 
-  // Header+ (руководитель, админ, супер-админ) → дашборд
+  // Header+ (руководитель, hr, админ, супер-админ) → дашборд
   if (canAccess('header')) {
     return <Navigate to="/dashboard" replace />;
   }
 
-  // Worker (Рабочий/Инженер) → личный кабинет сотрудника
+  // Worker → личный кабинет сотрудника
   return <Navigate to="/employee" replace />;
 };
 
@@ -113,7 +122,7 @@ const AppRoutes = () => {
           <Route path="/" element={<PositionBasedRedirect />} />
         </Route>
 
-        {/* Employee routes (for workers) */}
+        {/* Employee portal routes (worker+) */}
         <Route element={<ProtectedRoute />}>
           <Route
             path="/employee"
@@ -132,6 +141,38 @@ const AppRoutes = () => {
             }
           />
           <Route
+            path="/employee/requests"
+            element={
+              <EmployeeLayout title="Мои заявления">
+                <LeaveRequestsPage />
+              </EmployeeLayout>
+            }
+          />
+          <Route
+            path="/employee/payslips"
+            element={
+              <EmployeeLayout title="Расчётные листки">
+                <PayslipsPage />
+              </EmployeeLayout>
+            }
+          />
+          <Route
+            path="/employee/payments"
+            element={
+              <EmployeeLayout title="История выплат">
+                <PaymentsPage />
+              </EmployeeLayout>
+            }
+          />
+          <Route
+            path="/employee/documents"
+            element={
+              <EmployeeLayout title="Мои документы">
+                <DocumentsPage />
+              </EmployeeLayout>
+            }
+          />
+          <Route
             path="/employee/*"
             element={
               <EmployeeLayout title="Личный кабинет">
@@ -141,7 +182,7 @@ const AppRoutes = () => {
           />
         </Route>
 
-        {/* Header+ routes (dashboard, timesheet) */}
+        {/* Header+ routes (dashboard, timesheet, leave requests) */}
         <Route element={<ProtectedRoute requiredPosition="header" />}>
           <Route
             path="/dashboard"
@@ -160,10 +201,39 @@ const AppRoutes = () => {
             }
           />
           <Route
-            path="/admin/structure"
+            path="/my-employees"
             element={
-              <Layout title="Управление" theme={theme} onToggleTheme={toggleTheme}>
-                <ManagePage />
+              <Layout title="Сотрудники" theme={theme} onToggleTheme={toggleTheme}>
+                <HeaderEmployeesPage />
+              </Layout>
+            }
+          />
+          <Route
+            path="/leave-requests"
+            element={
+              <Layout title="Заявления" theme={theme} onToggleTheme={toggleTheme}>
+                <LeaveRequestsManagePage />
+              </Layout>
+            }
+          />
+          <Route
+            path="/tender/:id"
+            element={
+              <Layout title="Карточка сотрудника" theme={theme} onToggleTheme={toggleTheme}>
+                <EmployeeCardPage />
+              </Layout>
+            }
+          />
+          <Route path="/admin/structure" element={<Navigate to="/admin/manage" replace />} />
+        </Route>
+
+        {/* HR routes */}
+        <Route element={<ProtectedRoute requiredPosition="hr" />}>
+          <Route
+            path="/timesheet-review"
+            element={
+              <Layout title="Проверка табелей" theme={theme} onToggleTheme={toggleTheme}>
+                <TimesheetReviewPage />
               </Layout>
             }
           />
@@ -176,14 +246,6 @@ const AppRoutes = () => {
             element={
               <Layout title="Сотрудники" theme={theme} onToggleTheme={toggleTheme}>
                 <EmployeesPage />
-              </Layout>
-            }
-          />
-          <Route
-            path="/tender/:id"
-            element={
-              <Layout title="Карточка сотрудника" theme={theme} onToggleTheme={toggleTheme}>
-                <EmployeeCardPage />
               </Layout>
             }
           />
@@ -213,7 +275,7 @@ const AppRoutes = () => {
           />
         </Route>
 
-        {/* Profile - for header+ uses Layout, workers redirect to /employee */}
+        {/* Profile - for header+ */}
         <Route element={<ProtectedRoute requiredPosition="header" />}>
           <Route
             path="/profile"
@@ -244,13 +306,14 @@ const AppRoutes = () => {
             }
           />
           <Route
-            path="/admin/organizations"
+            path="/admin/manage"
             element={
-              <Layout title="Управление организациями" theme={theme} onToggleTheme={toggleTheme}>
-                <OrganizationsPage />
+              <Layout title="Управление" theme={theme} onToggleTheme={toggleTheme}>
+                <AdminManagePage />
               </Layout>
             }
           />
+          <Route path="/admin/organizations" element={<Navigate to="/admin/manage" replace />} />
           <Route
             path="/admin/audit"
             element={

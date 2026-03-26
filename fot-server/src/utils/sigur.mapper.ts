@@ -14,7 +14,7 @@
  */
 
 export interface IMappedSigurEvent {
-  physicalPerson: string;
+  physicalPerson: string | null;
   cardNumber: string | null;
   eventDate: string;     // YYYY-MM-DD
   eventTime: string;     // HH:MM:SS
@@ -37,7 +37,7 @@ export const mapSigurEvent = (raw: Record<string, unknown>): IMappedSigurEvent |
   // Данные сотрудника
   const personData = additional?.accessObject?.data;
   const personName = personData?.name;
-  if (typeof personName !== 'string' || !personName.trim()) return null;
+  const hasName = typeof personName === 'string' && personName.trim().length > 0;
 
   // Дата и время из timestamp
   const ts = raw.timestamp as string | undefined;
@@ -57,6 +57,9 @@ export const mapSigurEvent = (raw: Record<string, unknown>): IMappedSigurEvent |
   const cardKey = data?.cardKey;
   const cardNumber = typeof cardKey === 'string' && cardKey.trim() ? cardKey.trim() : null;
 
+  // Без имени и без карты — бесполезное событие
+  if (!hasName && !cardNumber) return null;
+
   // Точка доступа
   const apName = additional?.accessPoint?.name;
   const accessPoint = typeof apName === 'string' && apName.trim() ? apName.trim() : null;
@@ -65,7 +68,7 @@ export const mapSigurEvent = (raw: Record<string, unknown>): IMappedSigurEvent |
   const employeeId = data?.employeeId ?? personData?.id ?? null;
 
   return {
-    physicalPerson: personName.trim(),
+    physicalPerson: hasName ? personName!.trim() : null,
     cardNumber,
     eventDate: date,
     eventTime: time,

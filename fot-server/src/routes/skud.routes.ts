@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { skudController } from '../controllers/skud.controller.js';
-import { authenticate, requireMinPosition, requireOrganization, require2FA, injectOrganizationFromQuery } from '../middleware/auth.js';
+import { authenticate, requireMinPosition, requireOrganization, requireCritical2FA, injectOrganizationFromQuery } from '../middleware/auth.js';
+import { importLimiter } from '../middleware/rateLimit.js';
 
 const router = Router();
 
@@ -25,116 +26,118 @@ const upload = multer({
 });
 
 // Все роуты требуют аутентификации и организации
-router.use(authenticate as any);
-router.use(injectOrganizationFromQuery as any);
-router.use(requireOrganization as any);
+router.use(authenticate);
+router.use(injectOrganizationFromQuery);
+router.use(requireOrganization);
 
 // GET /api/skud/organizations - организации с событиями СКУД (super_admin)
 router.get(
   '/organizations',
-  requireMinPosition('super_admin') as any,
-  skudController.getOrganizations as any
+  requireMinPosition('super_admin'),
+  skudController.getOrganizations
 );
 
 // GET /api/skud/dashboard-stats - аналитика дашборда (header+)
 router.get(
   '/dashboard-stats',
-  requireMinPosition('header') as any,
-  skudController.getDashboardStats as any
+  requireMinPosition('header'),
+  skudController.getDashboardStats
 );
 
 // GET /api/skud/discipline - аналитика дисциплины по всей организации (admin+)
 router.get(
   '/discipline',
-  requireMinPosition('admin') as any,
-  skudController.getDisciplineViolations as any
+  requireMinPosition('admin'),
+  skudController.getDisciplineViolations
 );
 
 // GET /api/skud/daily-summary - дневные сводки (header+)
 router.get(
   '/daily-summary',
-  requireMinPosition('header') as any,
-  skudController.getDailySummary as any
+  requireMinPosition('header'),
+  skudController.getDailySummary
 );
 
 // GET /api/skud/employee-events/:employeeId - события конкретного сотрудника (worker+)
 router.get(
   '/employee-events/:employeeId',
-  requireMinPosition('worker') as any,
-  skudController.getEmployeeEvents as any
+  requireMinPosition('worker'),
+  skudController.getEmployeeEvents
 );
 
 // GET /api/skud/events - события СКУД (header+)
 router.get(
   '/events',
-  requireMinPosition('header') as any,
-  skudController.getEvents as any
+  requireMinPosition('header'),
+  skudController.getEvents
 );
 
 // GET /api/skud/access-points - точки доступа (header+)
 router.get(
   '/access-points',
-  requireMinPosition('header') as any,
-  skudController.getAccessPoints as any
+  requireMinPosition('header'),
+  skudController.getAccessPoints
 );
 
 // GET /api/skud/access-point-settings - настройки точек доступа для отдела (worker+)
 router.get(
   '/access-point-settings',
-  requireMinPosition('worker') as any,
-  skudController.getAccessPointSettings as any
+  requireMinPosition('worker'),
+  skudController.getAccessPointSettings
 );
 
 // PUT /api/skud/access-point-settings - сохранение настроек точек доступа (admin+)
 router.put(
   '/access-point-settings',
-  requireMinPosition('admin') as any,
-  skudController.saveAccessPointSettings as any
+  requireMinPosition('admin'),
+  skudController.saveAccessPointSettings
 );
 
 // POST /api/skud/sync-access-points - обновление точек доступа из Sigur (admin+)
 router.post(
   '/sync-access-points',
-  requireMinPosition('admin') as any,
-  skudController.syncAccessPoints as any
+  requireMinPosition('admin'),
+  skudController.syncAccessPoints
 );
 
 // GET /api/skud/presence - статус присутствия сотрудников (header+)
 router.get(
   '/presence',
-  requireMinPosition('header') as any,
-  skudController.getPresence as any
+  requireMinPosition('header'),
+  skudController.getPresence
 );
 
 // POST /api/skud/import - импорт (admin+, требуется 2FA)
 router.post(
   '/import',
-  requireMinPosition('admin') as any,
-  require2FA as any,
+  requireMinPosition('admin'),
+  requireCritical2FA,
+  importLimiter,
   upload.single('file'),
-  skudController.import as any
+  skudController.import
 );
 
 // POST /api/skud/sync-employee - синхронизация событий одного сотрудника из Sigur (admin+)
 router.post(
   '/sync-employee',
-  requireMinPosition('admin') as any,
-  skudController.syncEmployee as any
+  requireMinPosition('admin'),
+  skudController.syncEmployee
 );
 
-// POST /api/skud/clean-duplicates - бэкфилл хэшей + удаление дублей (super_admin)
+// POST /api/skud/clean-duplicates - бэкфилл хэшей + удаление дублей (super_admin, требуется 2FA)
 router.post(
   '/clean-duplicates',
-  requireMinPosition('super_admin') as any,
-  skudController.cleanDuplicates as any
+  requireMinPosition('super_admin'),
+  requireCritical2FA,
+  skudController.cleanDuplicates
 );
 
 // DELETE /api/skud/clear - очистка данных (super_admin, требуется 2FA)
 router.delete(
   '/clear',
-  requireMinPosition('super_admin') as any,
-  require2FA as any,
-  skudController.clear as any
+  requireMinPosition('super_admin'),
+  requireCritical2FA,
+  skudController.clear
 );
 
 export default router;

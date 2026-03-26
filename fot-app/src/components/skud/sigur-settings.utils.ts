@@ -16,6 +16,13 @@ export const DIRECTION_LABELS: Record<string, string> = {
   exit: 'Выход',
 };
 
+export const PHASE_LABELS: Record<string, string> = {
+  loading: 'Загрузка данных из Sigur...',
+  positions: 'Создание недостающих должностей...',
+  matching: 'Сопоставление сотрудников...',
+  saving: 'Сохранение в БД...',
+};
+
 export const ALL_SYNC_STEPS: ISyncAllStep[] = [
   { id: 1, name: 'organizations', label: 'Организации', status: 'pending' },
   { id: 2, name: 'clean-duplicates', label: 'Очистка дублей', status: 'pending' },
@@ -59,9 +66,13 @@ export const renderStepResult = (name: string, result: Record<string, unknown>) 
     case 'positions':
       text = `Из Sigur: ${result.imported}, обновлено: ${result.updated}, seed: ${result.seeded ?? 0}`;
       break;
-    case 'employees':
-      text = `Импорт: ${result.imported}, обновлено: ${result.updated}, пропущено: ${result.skipped}`;
+    case 'employees': {
+      text = `Обновлено: ${result.updated}, пропущено: ${result.skipped}`;
+      if (result.imported) text += `, создано: ${result.imported}`;
+      const unmatched = result.unmatched as unknown[] | undefined;
+      if (unmatched && unmatched.length > 0) text += `, не сопоставлено: ${unmatched.length}`;
       break;
+    }
     default:
       text = JSON.stringify(result);
   }

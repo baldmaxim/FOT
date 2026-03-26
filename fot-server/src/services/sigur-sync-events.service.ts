@@ -8,6 +8,7 @@ import {
   getWhitelistedDbEmployeeSets,
   getWhitelistedDepartmentIdsCached,
   getWhitelistedSigurEmployees,
+  normalizePersonName,
   type ISyncContext,
 } from './sigur-sync-shared.js';
 
@@ -24,6 +25,15 @@ export interface ISyncEventsResult {
   filteredEmployeeNames: string[];
   matched: number;
   errors: string[];
+  // Расширенная диагностика (optional, обратно совместимо)
+  matchedEvents?: number;
+  unmatchedEvents?: number;
+  /** @deprecated — пагинация работает, усечение невозможно. Используйте paginatedDays. */
+  truncatedDays?: number;
+  paginatedDays?: number;
+  noNameSamples?: unknown[];
+  matchedBySigurId?: number;
+  matchedByName?: number;
 }
 
 // ─── Чистая функция синхронизации ───
@@ -52,7 +62,7 @@ export async function syncEventsLogic(
   const employeeByNameOrg = new Map<string, { id: number; organization_id: string }>();
   const sigurIdMap = new Map<number, { id: number; organization_id: string }>();
   for (const emp of employeesData || []) {
-    const name = (emp.full_name || '').toLowerCase().trim();
+    const name = normalizePersonName(emp.full_name || '');
     const empRef = { id: emp.id, organization_id: emp.organization_id };
     const key = `${name}|${emp.organization_id}`;
     if (!employeeByNameOrg.has(key)) employeeByNameOrg.set(key, empRef);
@@ -94,6 +104,12 @@ export async function syncEventsLogic(
   let totalNoName = 0;
   let totalNoOrg = 0;
   let totalFilteredDept = 0;
+  let paginatedDays = 0;
+  let matchedBySigurId = 0;
+  let matchedByName = 0;
+  let matchedEvents = 0;
+  let unmatchedEvents = 0;
+  const noNameSamples: unknown[] = [];
   const filteredNames = new Map<string, number>();
   const unmatchedNames = new Map<string, number>();
   const summariesToUpdate = new Set<string>();
@@ -122,123 +138,140 @@ export async function syncEventsLogic(
     console.log(`[syncEvents] preloaded ${existingSet.size} existing hashes`);
   }
 
-  // ─── Параллельная обработка дней (по CONCURRENCY за раз) ───
-  const CONCURRENCY = 5;
-  const BATCH_SIZE = 500;
+  // ─── Последовательная обработка с прогрессом на каждый день ───
+  const BATCH_SIZE = 300;
+  const BATCH_DELAY_MS = 200;
+  const DAY_DELAY_MS = 300;
+  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-  for (let chunkStart = 0; chunkStart < days.length; chunkStart += CONCURRENCY) {
-    const chunk = days.slice(chunkStart, chunkStart + CONCURRENCY);
+  for (let dayIdx = 0; dayIdx < days.length; dayIdx++) {
+    const day = days[dayIdx];
+    const percent = Math.round((dayIdx / days.length) * 100);
 
-    const chunkEnd = Math.min(chunkStart + CONCURRENCY, days.length);
-    const donePercent = Math.round((chunkStart / days.length) * 100);
     send({
       type: 'events_day',
-      day: chunk[0],
-      dayIndex: chunkStart,
+      day,
+      dayIndex: dayIdx,
       totalDays: days.length,
-      percent: donePercent,
-      message: `${chunk[0]} .. ${chunk[chunk.length - 1]} (${donePercent}%, ${chunkStart}/${days.length})`,
+      percent,
     });
 
-    // Параллельно запрашиваем события из Sigur для всех дней в chunk
-    const dayResults = await Promise.all(
-      chunk.map(async (day) => {
-        const dayStart = `${day}T00:00:00`;
-        const dayEnd = `${day}T23:59:59`;
-        const rawEvents = await sigurService.getEvents(dayStart, dayEnd, connection, 'PASS_DETECTED', { pageSize: 3000 });
-        send({
-          type: 'events_day',
-          day,
-          dayIndex: chunkStart + chunk.indexOf(day),
-          totalDays: days.length,
-          percent: Math.round((chunkStart + chunk.indexOf(day) + 1) / days.length * 100),
-        });
-        return { day, rawEvents };
-      }),
-    );
+    const dayStart = `${day}T00:00:00`;
+    const dayEnd = `${day}T23:59:59`;
+    const rawEvents = await sigurService.getEvents(dayStart, dayEnd, connection, 'PASS_DETECTED', { pageSize: 3000 });
+    totalSigur += rawEvents.length;
 
-    // Обрабатываем результаты и собираем вставки
-    const allInserts: Record<string, unknown>[] = [];
-
-    for (const { rawEvents } of dayResults) {
-      totalSigur += rawEvents.length;
-      if (rawEvents.length === 0) continue;
-
-      for (const raw of rawEvents) {
-        const mapped = mapSigurEvent(raw as Record<string, unknown>);
-        if (!mapped) { totalNoName++; continue; }
-
-        if (allowedNames) {
-          const nameKey = mapped.physicalPerson.toLowerCase().trim();
-          const sigurEmpId = mapped.employeeId;
-          if (!allowedNames.has(nameKey) && !(sigurEmpId && allowedSigurIds?.has(sigurEmpId))) {
-            totalFilteredDept++;
-            filteredNames.set(mapped.physicalPerson, (filteredNames.get(mapped.physicalPerson) || 0) + 1);
-            continue;
-          }
-        }
-
-        const dedupHash = computeDedupHash(
-          mapped.physicalPerson, mapped.eventDate, mapped.eventTime,
-          mapped.accessPoint, mapped.direction,
-        );
-        if (existingSet.has(dedupHash)) { totalSkipped++; continue; }
-        existingSet.add(dedupHash);
-
-        const nameKey = mapped.physicalPerson.toLowerCase().trim();
-        let emp = mapped.employeeId != null ? sigurIdMap.get(mapped.employeeId) : undefined;
-        if (!emp) emp = employeeByNameOrg.get(`${nameKey}|${organizationId}`);
-        if (!emp) {
-          unmatchedNames.set(mapped.physicalPerson, (unmatchedNames.get(mapped.physicalPerson) || 0) + 1);
-        }
-        const orgId = emp?.organization_id || organizationId;
-        if (!orgId) { totalNoOrg++; continue; }
-
-        allInserts.push({
-          organization_id: orgId,
-          physical_person: mapped.physicalPerson,
-          card_number: mapped.cardNumber || null,
-          event_date: mapped.eventDate,
-          event_time: mapped.eventTime,
-          access_point: mapped.accessPoint,
-          direction: mapped.direction,
-          employee_id: emp?.id || null,
-          dedup_hash: dedupHash,
-        });
-
-        if (emp) summariesToUpdate.add(`${emp.id}:${orgId}:${mapped.eventDate}`);
-      }
+    if (rawEvents.length > 3000) {
+      console.log(`[syncEvents] day ${day}: ${rawEvents.length} events (pagination worked, ${Math.ceil(rawEvents.length / 3000)} pages)`);
+      paginatedDays++;
     }
 
-    // Параллельная вставка батчей
-    if (allInserts.length > 0) {
-      const batches: Record<string, unknown>[][] = [];
-      for (let i = 0; i < allInserts.length; i += BATCH_SIZE) {
-        batches.push(allInserts.slice(i, i + BATCH_SIZE));
+    if (rawEvents.length === 0) continue;
+
+    const dayInserts: Record<string, unknown>[] = [];
+
+    for (const raw of rawEvents) {
+      const mapped = mapSigurEvent(raw as Record<string, unknown>);
+      if (!mapped) {
+        totalNoName++;
+        if (noNameSamples.length < 3) {
+          const r = raw as Record<string, unknown>;
+          noNameSamples.push({ eventType: r.eventType, timestamp: r.timestamp, keys: Object.keys(r) });
+        }
+        continue;
       }
-      const results = await Promise.all(
-        batches.map(batch =>
-          supabase.from('skud_events').upsert(batch, { onConflict: 'dedup_hash', ignoreDuplicates: true }),
-        ),
+
+      const personName = mapped.physicalPerson;
+      if (!personName) {
+        totalNoName++;
+        continue;
+      }
+
+      if (allowedNames) {
+        const nameKey = normalizePersonName(personName);
+        const sigurEmpId = mapped.employeeId;
+        if (!allowedNames.has(nameKey) && !(sigurEmpId && allowedSigurIds?.has(sigurEmpId))) {
+          totalFilteredDept++;
+          filteredNames.set(personName, (filteredNames.get(personName) || 0) + 1);
+          continue;
+        }
+      }
+
+      const dedupHash = computeDedupHash(
+        personName, mapped.eventDate, mapped.eventTime,
+        mapped.accessPoint, mapped.direction,
       );
-      for (let i = 0; i < results.length; i++) {
-        if (results[i].error) {
-          errors.push(`[${chunk[0]}..] ${results[i].error!.message}`);
-        } else {
-          totalInserted += batches[i].length;
-        }
+      if (existingSet.has(dedupHash)) { totalSkipped++; continue; }
+      existingSet.add(dedupHash);
+
+      const nameKey = normalizePersonName(personName);
+      let emp = mapped.employeeId != null ? sigurIdMap.get(mapped.employeeId) : undefined;
+      if (emp) {
+        matchedBySigurId++;
+      } else {
+        emp = employeeByNameOrg.get(`${nameKey}|${organizationId}`);
+        if (emp) matchedByName++;
       }
+      if (emp) {
+        matchedEvents++;
+      } else {
+        unmatchedEvents++;
+        unmatchedNames.set(personName, (unmatchedNames.get(personName) || 0) + 1);
+      }
+      const orgId = emp?.organization_id || organizationId;
+      if (!orgId) { totalNoOrg++; continue; }
+
+      dayInserts.push({
+        organization_id: orgId,
+        physical_person: personName,
+        card_number: mapped.cardNumber || null,
+        event_date: mapped.eventDate,
+        event_time: mapped.eventTime,
+        access_point: mapped.accessPoint,
+        direction: mapped.direction,
+        employee_id: emp?.id || null,
+        dedup_hash: dedupHash,
+      });
+
+      if (emp) summariesToUpdate.add(`${emp.id}:${orgId}:${mapped.eventDate}`);
     }
+
+    // Вставка батчами с паузами (защита от 502 на облачном Supabase)
+    for (let i = 0; i < dayInserts.length; i += BATCH_SIZE) {
+      const batch = dayInserts.slice(i, i + BATCH_SIZE);
+      const { error: insertError } = await supabase.from('skud_events').upsert(batch, { onConflict: 'dedup_hash', ignoreDuplicates: true });
+      if (insertError) {
+        errors.push(`[${day}] ${insertError.message}`);
+      } else {
+        totalInserted += batch.length;
+      }
+      if (i + BATCH_SIZE < dayInserts.length) await sleep(BATCH_DELAY_MS);
+    }
+
+    // Детальный SSE-отчёт по дню
+    send({
+      type: 'events_day_done',
+      day,
+      sigurCount: rawEvents.length,
+      insertedCount: dayInserts.length,
+    });
+
+    if (dayIdx < days.length - 1) await sleep(DAY_DELAY_MS);
   }
 
-  // Пересчёт сводок
+  // Пересчёт сводок (батчами по 200 для защиты от 502)
   if (summariesToUpdate.size > 0) {
     send({ type: 'events_summaries', count: summariesToUpdate.size });
-    const pairs = [...summariesToUpdate].map(key => {
+    const allPairs = [...summariesToUpdate].map(key => {
       const [empId, orgId, date] = key.split(':');
       return { org_id: orgId, emp_id: parseInt(empId, 10), date };
     });
-    await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: pairs });
+    const SUMMARY_BATCH = 200;
+    for (let i = 0; i < allPairs.length; i += SUMMARY_BATCH) {
+      const chunk = allPairs.slice(i, i + SUMMARY_BATCH);
+      await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: chunk });
+      if (i + SUMMARY_BATCH < allPairs.length) await sleep(BATCH_DELAY_MS);
+    }
   }
 
   if (filteredNames.size > 0) {
@@ -264,5 +297,13 @@ export async function syncEventsLogic(
     filteredEmployeeNames: [...filteredNames.keys()].slice(0, 20),
     matched: summariesToUpdate.size,
     errors,
+    // Расширенная диагностика
+    matchedEvents,
+    unmatchedEvents,
+    truncatedDays: 0,
+    paginatedDays,
+    noNameSamples: noNameSamples.length > 0 ? noNameSamples : undefined,
+    matchedBySigurId,
+    matchedByName,
   };
 }

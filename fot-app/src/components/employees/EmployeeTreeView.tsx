@@ -73,7 +73,7 @@ export const EmployeeTreeView: FC<IEmployeeTreeViewProps> = ({
     const cache = new Map<string, number>();
     const count = (node: IDbDepartment): number => {
       if (cache.has(node.id)) return cache.get(node.id)!;
-      let total = getEmpsForNode(node).length;
+      let total = (employeesByDeptId.get(node.id) || []).length;
       node.children.forEach(child => { total += count(child); });
       cache.set(node.id, total);
       return total;
@@ -95,7 +95,7 @@ export const EmployeeTreeView: FC<IEmployeeTreeViewProps> = ({
     };
     const walkTree = (nodes: IDbDepartment[]) => {
       nodes.forEach(n => {
-        if (getEmpsForNode(n).length > 0) addAncestors(n.id);
+        if ((employeesByDeptId.get(n.id) || []).length > 0) addAncestors(n.id);
         walkTree(n.children);
       });
     };
@@ -106,7 +106,7 @@ export const EmployeeTreeView: FC<IEmployeeTreeViewProps> = ({
   const toggleNode = (id: string) => {
     setExpandedNodes(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
   };

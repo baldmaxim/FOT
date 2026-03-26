@@ -63,7 +63,7 @@ export const SigurSettingsPage = () => {
         <Settings size={24} />
         <h1>Настройки СКУД (Sigur)</h1>
         <a
-          href="http://127.0.0.1:54323"
+          href={import.meta.env.VITE_SUPABASE_URL || '#'}
           target="_blank"
           rel="noopener noreferrer"
           className="sigur-btn sigur-btn-supabase"

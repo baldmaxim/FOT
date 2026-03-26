@@ -4,13 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Архитектура
 
-Монорепо с тремя частями:
+Монорепо с двумя частями:
 
 - **fot-app/** — React 19 + Vite + TypeScript (фронтенд)
 - **fot-server/** — Express + TypeScript (бэкенд, порт 3000)
-- **supabase/** — локальный Supabase (PostgreSQL 17, миграции в `supabase/migrations/`)
 
-Связь: фронтенд → REST API (`/api/...`) с JWT Bearer → бэкенд → Supabase (service role key, без RLS). Реалтайм через Socket.IO (чат, присутствие).
+БД: Supabase Cloud (PostgreSQL). Связь: фронтенд → REST API (`/api/...`) с JWT Bearer → бэкенд → Supabase Cloud (service role key, без RLS). Реалтайм через Socket.IO (чат, присутствие).
 
 Внешняя интеграция: Sigur REST API (СКУД — система контроля доступа). Настройки подключения в `.env`.
 
@@ -32,10 +31,6 @@ cd fot-server && npm run build   # TypeScript compilation
 
 # Линтинг
 cd fot-app && npm run lint
-
-# Supabase локальный
-npx supabase start   # API :54321, DB :54322, Studio :54323
-npx supabase stop
 ```
 
 При изменении файлов в `fot-server/src/` — перезапустить сервер. Фронтенд перезапускать не нужно.
@@ -47,6 +42,13 @@ npx supabase stop
 - **Supabase**: используется service role key (RLS отключён), авторизация проверяется в middleware бэкенда.
 - **API роуты**: все под префиксом `/api/` — auth, employees, admin, skud, sigur, structure, timesheet, audit, chat.
 - **Фронтенд роуты**: по ролям — `worker` видит `/employee/*`, `header`+ видит `/dashboard`, `admin`+ видит `/tender`, `super_admin` видит `/skud-settings`, `/admin/*`.
+
+## Структура бэкенда
+
+- **Контроллеры** (22 файла в `fot-server/src/controllers/`): декомпозированы по доменам — `admin-*`, `auth-*`, `employee-*`, `sigur-*`, `skud-*`, `timesheet-*`.
+- **Сервисы** (20 файлов в `fot-server/src/services/`): `sigur-sync-*` (employees, events, structure, shared), `skud-*` (backfill, dashboard, discipline, import, presence, shared), `employee-mapper.service.ts` (кэш структуры + расшифровка).
+- **Feature flags**: `fot-server/src/config/features.ts` — `LOGIN_2FA_ENABLED`, `CRITICAL_2FA_ENABLED`, `IS_PRODUCTION`.
+- **Типы Express**: `fot-server/src/types/express.d.ts` — расширение `req.user` с типизацией.
 
 ## Общие правила
 

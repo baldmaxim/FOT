@@ -8,6 +8,7 @@ import type {
   ISyncAllSummary,
   SyncStepName,
   SettingsTab,
+  IUnmatchedSigurEmployee,
 } from './sigur-settings.types';
 import {
   STRUCTURE_SYNC_STEPS,
@@ -16,7 +17,9 @@ import {
   getSyncStepLabel,
   renderStepResult,
   readSseResponse,
+  PHASE_LABELS,
 } from './sigur-settings.utils';
+import { SigurMatchModal } from './SigurMatchModal';
 
 interface IStructureSyncSectionProps {
   connected: boolean | null;
@@ -43,6 +46,9 @@ export const StructureSyncSection: FC<IStructureSyncSectionProps> = ({
   const [syncAllDone, setSyncAllDone] = useState(false);
   const [syncAllSummary, setSyncAllSummary] = useState<ISyncAllSummary | null>(null);
   const [employeesProgress, setEmployeesProgress] = useState<IEmployeesProgressState | null>(null);
+
+  const [unmatchedEmployees, setUnmatchedEmployees] = useState<IUnmatchedSigurEmployee[]>([]);
+  const [showMatchModal, setShowMatchModal] = useState(false);
 
   const [clearingStructure, setClearingStructure] = useState(false);
   const [clearStructureResult, setClearStructureResult] = useState<{ employeesDeleted: number; departmentsDeleted: number } | null>(null);
@@ -112,6 +118,7 @@ export const StructureSyncSection: FC<IStructureSyncSectionProps> = ({
             percent: Number(data.percent || 0),
             current: Number(data.current || 0),
             total: Number(data.total || 0),
+            phase: (data.phase as string) || undefined,
           });
           return;
         }
@@ -122,6 +129,15 @@ export const StructureSyncSection: FC<IStructureSyncSectionProps> = ({
                 typeof step === 'string' && STRUCTURE_SYNC_STEPS.some(candidate => candidate.name === step),
               )
             : [];
+
+          // Извлекаем несопоставленных сотрудников
+          const results = data.results as Record<string, Record<string, unknown>> | undefined;
+          const empResult = results?.employees;
+          const unmatchedArr = empResult?.unmatched as IUnmatchedSigurEmployee[] | undefined;
+          if (unmatchedArr && unmatchedArr.length > 0) {
+            setUnmatchedEmployees(unmatchedArr);
+            setShowMatchModal(true);
+          }
 
           setSyncAllSummary({
             hasErrors: Boolean(data.hasErrors),
@@ -258,6 +274,9 @@ export const StructureSyncSection: FC<IStructureSyncSectionProps> = ({
                 <div className="sigur-step-label">{step.label}</div>
                 {step.status === 'running' && step.name === 'employees' && employeesProgress ? (
                   <div className="sigur-events-progress">
+                    {employeesProgress.phase && (
+                      <div className="sigur-step-phase">{PHASE_LABELS[employeesProgress.phase] || employeesProgress.phase}</div>
+                    )}
                     <div className="sigur-events-progress-bar">
                       <div className="sigur-events-progress-fill" style={{ width: `${employeesProgress.percent}%` }} />
                     </div>
@@ -289,6 +308,31 @@ export const StructureSyncSection: FC<IStructureSyncSectionProps> = ({
             </div>
           ))}
         </div>
+      )}
+
+      {showMatchModal && unmatchedEmployees.length > 0 && (
+        <SigurMatchModal
+          unmatched={unmatchedEmployees}
+          onClose={() => setShowMatchModal(false)}
+          onSaved={(result) => {
+            setShowMatchModal(false);
+            setUnmatchedEmployees([]);
+            // Обновляем результат шага employees
+            if (result.linked > 0 || result.created > 0) {
+              setSyncAllSteps(prev => prev.map(step => {
+                if (step.name !== 'employees' || !step.result) return step;
+                return {
+                  ...step,
+                  result: {
+                    ...step.result,
+                    imported: ((step.result.imported as number) || 0) + result.created,
+                    unmatched: [],
+                  },
+                };
+              }));
+            }
+          }}
+        />
       )}
     </div>
   );

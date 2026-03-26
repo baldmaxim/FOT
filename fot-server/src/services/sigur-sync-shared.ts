@@ -68,6 +68,11 @@ export function logSampleAndWarn(label: string, sample: Record<string, unknown>,
   }
 }
 
+/** Нормализация ФИО: lowercase + trim + схлопывание множественных пробелов */
+export function normalizePersonName(s: string): string {
+  return (s || '').toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
 export function isSystemDepartment(name: string): boolean {
   return SIGUR_SYSTEM_DEPARTMENTS.includes(name.toLowerCase().trim());
 }
@@ -156,7 +161,7 @@ export function buildWhitelistedEmployeesCache(data: Record<string, unknown>[]):
   const allowedSigurIds = new Set<number>();
 
   for (const emp of data) {
-    const name = ((emp.name as string) || '').toLowerCase().trim();
+    const name = normalizePersonName((emp.name as string) || '');
     if (name) {
       allowedNames.add(name);
     }
@@ -183,28 +188,47 @@ export async function getWhitelistedDbEmployeeSets(
     return null;
   }
 
-  const { data: employees } = await supabase
-    .from('employees')
-    .select('full_name, sigur_employee_id')
-    .eq('organization_id', organizationId)
-    .eq('is_archived', false)
-    .in('org_department_id', allowedDepartmentIds);
+  // Пагинация для обхода лимита Supabase (1000 строк)
+  const PAGE = 1000;
+  const allEmployees: Array<{ full_name: string; sigur_employee_id: number | null }> = [];
+
+  // Сотрудники в разрешённых отделах
+  let from = 0;
+  while (true) {
+    const { data } = await supabase
+      .from('employees')
+      .select('full_name, sigur_employee_id')
+      .eq('organization_id', organizationId)
+      .eq('is_archived', false)
+      .in('org_department_id', allowedDepartmentIds)
+      .range(from, from + PAGE - 1);
+    if (!data || data.length === 0) break;
+    allEmployees.push(...data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
 
   // Также включаем сотрудников без отдела — они не должны отсекаться whitelist'ом
-  const { data: noDeptEmployees } = await supabase
-    .from('employees')
-    .select('full_name, sigur_employee_id')
-    .eq('organization_id', organizationId)
-    .eq('is_archived', false)
-    .is('org_department_id', null);
-
-  const allEmployees = [...(employees || []), ...(noDeptEmployees || [])];
+  from = 0;
+  while (true) {
+    const { data } = await supabase
+      .from('employees')
+      .select('full_name, sigur_employee_id')
+      .eq('organization_id', organizationId)
+      .eq('is_archived', false)
+      .is('org_department_id', null)
+      .range(from, from + PAGE - 1);
+    if (!data || data.length === 0) break;
+    allEmployees.push(...data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
 
   const allowedNames = new Set<string>();
   const allowedSigurIds = new Set<number>();
 
   for (const employee of allEmployees) {
-    const name = (employee.full_name || '').toLowerCase().trim();
+    const name = normalizePersonName(employee.full_name || '');
     if (name) {
       allowedNames.add(name);
     }

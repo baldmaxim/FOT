@@ -372,7 +372,7 @@ export const sigurController = {
         return;
       }
 
-      const { startTime, endTime, connection: conn } = req.query;
+      const { startTime, endTime, connection: conn, departmentId: deptIdFilter } = req.query;
       const connection = (conn as 'external' | 'internal') || undefined;
 
       console.log('[sigur preview] fetching events (paginated):', { startTime, endTime, connection });
@@ -396,40 +396,51 @@ export const sigurController = {
       const endDateStr = (endTime as string)?.split('T')[0];
       console.log('[sigur preview] date filter:', { startDateStr, endDateStr });
 
-      const mapped = rawData
+      let mapped = rawData
         .map((raw: unknown) => mapSigurEvent(raw as Record<string, unknown>))
         .filter(Boolean)
         .filter(evt => {
           if (!startDateStr || !endDateStr) return true;
           return evt!.eventDate >= startDateStr && evt!.eventDate <= endDateStr;
-        })
-        .slice(0, 20) as import('../utils/sigur.mapper.js').IMappedSigurEvent[];
+        }) as import('../utils/sigur.mapper.js').IMappedSigurEvent[];
 
-      // Обогащаем данными из /employees (кэш предзагружен при старте)
-      if (mapped.length > 0) {
-        try {
-          const employees = await sigurService.getEmployeesCached(connection);
-          const empMap = new Map<number, { departmentName: string | null; isBlocked: boolean }>();
-          for (const emp of employees) {
-            const id = emp.id as number;
-            if (typeof id === 'number') {
-              empMap.set(id, {
-                departmentName: ((emp.departmentName as string) || '').trim() || null,
-                isBlocked: !!(emp.isBlocked),
-              });
-            }
+      // Фильтр по отделу + обогащение
+      const filterDeptId = typeof deptIdFilter === 'string' ? Number(deptIdFilter) : NaN;
+      try {
+        if (!isNaN(filterDeptId)) {
+          // Загружаем сотрудников конкретного отдела через Sigur API
+          const deptEmployees = await sigurService.fetchAllPaginated<Record<string, unknown>>(
+            '/api/v1/employees',
+            { departmentId: filterDeptId },
+            connection,
+            1000,
+          );
+          const allowedIds = new Set<number>();
+          for (const emp of deptEmployees) {
+            if (typeof emp.id === 'number') allowedIds.add(emp.id as number);
           }
+          console.log('[sigur preview] dept filter:', filterDeptId, 'employees found:', allowedIds.size);
+          if (deptEmployees.length > 0) {
+            console.log('[sigur preview] emp sample:', JSON.stringify(deptEmployees[0], null, 2));
+          }
+          console.log('[sigur preview] allowedIds sample:', [...allowedIds].slice(0, 5));
+          console.log('[sigur preview] mapped employeeIds sample:', mapped.slice(0, 5).map(e => e.employeeId));
+          mapped = mapped.filter(evt => evt.employeeId != null && allowedIds.has(evt.employeeId));
+          console.log('[sigur preview] after dept filter:', mapped.length);
+
+          // Ставим department name
+          const deptMap = await sigurService.getDepartmentMapCached(connection);
+          const deptName = deptMap.get(filterDeptId) || null;
           for (const evt of mapped) {
-            if (evt.employeeId && empMap.has(evt.employeeId)) {
-              const info = empMap.get(evt.employeeId)!;
-              evt.department = info.departmentName;
-              evt.blocked = info.isBlocked;
-            }
+            evt.department = deptName;
           }
-        } catch (e) {
-          console.warn('[sigur preview] enrichment failed:', (e as Error).message);
         }
+      } catch (e) {
+        console.warn('[sigur preview] enrichment failed:', (e as Error).message);
       }
+
+      const totalMapped = mapped.length;
+      mapped = mapped.slice(0, 20);
 
       const sampleFields = ['physicalPerson', 'eventDate', 'eventTime', 'direction', 'accessPoint', 'cardNumber', 'department', 'blocked'];
 
@@ -438,7 +449,7 @@ export const sigurController = {
         data: mapped,
         sampleFields,
         totalFetched: rawData.length,
-        mappedCount: mapped.length,
+        mappedCount: totalMapped,
       });
     } catch (error) {
       console.error('Sigur preview error:', error);

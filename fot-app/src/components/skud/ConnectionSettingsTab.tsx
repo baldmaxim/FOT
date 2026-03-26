@@ -29,7 +29,6 @@ export const ConnectionSettingsTab: FC<IConnectionSettingsTabProps> = ({
   availableConnections,
   canEdit,
   organizationId,
-  error: _error,
   setError,
   setSelectedConnection,
   checkConnection,
@@ -41,6 +40,8 @@ export const ConnectionSettingsTab: FC<IConnectionSettingsTabProps> = ({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewStart, setPreviewStart] = useState('');
   const [previewEnd, setPreviewEnd] = useState('');
+  const [previewDepartment, setPreviewDepartment] = useState('');
+  const [departments, setDepartments] = useState<{ id: number; name: string }[]>([]);
 
   // Discover
   const [discovering, setDiscovering] = useState(false);
@@ -57,6 +58,20 @@ export const ConnectionSettingsTab: FC<IConnectionSettingsTabProps> = ({
     setPreviewEnd(`${y}-${mStr}-${dStr}`);
   }, []);
 
+  // Загрузка отделов из whitelist синхронизации
+  useEffect(() => {
+    if (!connected) return;
+    sigurService.getSyncFilter()
+      .then(items => {
+        const depts = items.map(d => ({
+          id: d.sigur_department_id,
+          name: d.sigur_department_name,
+        })).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+        setDepartments(depts);
+      })
+      .catch(() => { /* ignore */ });
+  }, [connected]);
+
   const handlePreview = async () => {
     if (!previewStart || !previewEnd) return;
     setPreviewLoading(true);
@@ -64,7 +79,7 @@ export const ConnectionSettingsTab: FC<IConnectionSettingsTabProps> = ({
     try {
       const startTime = `${previewStart}T00:00:00`;
       const endTime = `${previewEnd}T23:59:59`;
-      const data = await sigurService.preview(startTime, endTime);
+      const data = await sigurService.preview(startTime, endTime, previewDepartment || undefined);
       setPreviewData(data);
     } catch {
       setError('Ошибка загрузки данных предпросмотра');
@@ -197,6 +212,18 @@ export const ConnectionSettingsTab: FC<IConnectionSettingsTabProps> = ({
               value={previewEnd}
               onChange={e => setPreviewEnd(e.target.value)}
             />
+          </label>
+          <label>
+            Отдел:
+            <select
+              value={previewDepartment}
+              onChange={e => setPreviewDepartment(e.target.value)}
+            >
+              <option value="">Все отделы</option>
+              {departments.map(d => (
+                <option key={d.id} value={String(d.id)}>{d.name}</option>
+              ))}
+            </select>
           </label>
           <button
             className="sigur-btn"
