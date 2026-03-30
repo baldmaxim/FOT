@@ -419,8 +419,9 @@ export const adminUsersController = {
   async updateUserEmployee(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const { employee_id } = z.object({
+      const { employee_id, department_id } = z.object({
         employee_id: z.number().int().positive().nullable(),
+        department_id: z.string().uuid().nullable().optional(),
       }).parse(req.body);
 
       const { error } = await supabase
@@ -433,6 +434,14 @@ export const adminUsersController = {
         return;
       }
 
+      // Если указан отдел и сотрудник — обновляем org_department_id сотрудника
+      if (employee_id && department_id) {
+        await supabase
+          .from('employees')
+          .update({ org_department_id: department_id })
+          .eq('id', employee_id);
+      }
+
       res.json({ success: true });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -441,6 +450,47 @@ export const adminUsersController = {
       }
       console.error('Update employee error:', error);
       res.status(500).json({ success: false, error: 'Failed to update employee link' });
+    }
+  },
+
+  /** Обновить отдел привязанного сотрудника */
+  async updateEmployeeDepartment(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { department_id } = z.object({
+        department_id: z.string().uuid(),
+      }).parse(req.body);
+
+      // Получаем employee_id пользователя
+      const { data: profile } = await supabase
+        .from('user_profiles')
+        .select('employee_id')
+        .eq('id', id)
+        .single();
+
+      if (!profile?.employee_id) {
+        res.status(400).json({ success: false, error: 'У пользователя нет привязки к сотруднику' });
+        return;
+      }
+
+      const { error } = await supabase
+        .from('employees')
+        .update({ org_department_id: department_id })
+        .eq('id', profile.employee_id);
+
+      if (error) {
+        res.status(500).json({ success: false, error: 'Failed to update department' });
+        return;
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Update employee department error:', error);
+      res.status(500).json({ success: false, error: 'Failed to update department' });
     }
   },
 

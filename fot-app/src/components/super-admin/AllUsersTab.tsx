@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { FC } from 'react';
 import { adminService } from '../../services/adminService';
+import { structureApi } from '../../api/structure';
 import { useToast } from '../../contexts/ToastContext';
-import type { EmployeePositionType, TwoFactorData, Organization } from '../../types';
+import type { EmployeePositionType, TwoFactorData, Organization, OrgDepartmentNode } from '../../types';
 import { POSITION_LABELS } from '../../types';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
 
@@ -43,11 +44,29 @@ interface IAllUsersTabProps {
   onReload: () => Promise<void>;
 }
 
+interface IDeptFlat {
+  id: string;
+  name: string;
+  level: number;
+}
+
+const flattenDepts = (nodes: OrgDepartmentNode[], level = 0): IDeptFlat[] => {
+  const result: IDeptFlat[] = [];
+  for (const node of nodes) {
+    result.push({ id: node.id, name: node.name, level });
+    if (node.children?.length) {
+      result.push(...flattenDepts(node.children, level + 1));
+    }
+  }
+  return result;
+};
+
 export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, organizations, onReload }) => {
   const toast = useToast();
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<{ userId: string; value: string } | null>(null);
   const [empSearch, setEmpSearch] = useState<IEmpSearch | null>(null);
+  const [flatDepts, setFlatDepts] = useState<IDeptFlat[]>([]);
   const [twoFactorModal, setTwoFactorModal] = useState<ITwoFactorModal>({
     visible: false,
     userId: '',
@@ -55,6 +74,14 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, organizations, on
     data: null,
     loading: false,
   });
+
+  useEffect(() => {
+    structureApi.getTree().then(res => {
+      if (res.data?.departments) {
+        setFlatDepts(flattenDepts(res.data.departments));
+      }
+    });
+  }, []);
 
   const toggleExpand = (userId: string) => {
     setExpandedUserId(prev => prev === userId ? null : userId);
@@ -135,6 +162,16 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, organizations, on
       await onReload();
     } catch {
       toast.error('Ошибка назначения организации');
+    }
+  };
+
+  const handleDeptChange = async (userId: string, deptId: string) => {
+    try {
+      await adminService.updateEmployeeDepartment(userId, deptId);
+      toast.success('Отдел назначен');
+      await onReload();
+    } catch {
+      toast.error('Ошибка назначения отдела');
     }
   };
 
@@ -283,6 +320,23 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, organizations, on
                           ))}
                         </select>
                       </div>
+
+                      {user.employee_id && (
+                        <div className={styles.controlGroup}>
+                          <label>Отдел:</label>
+                          <select
+                            defaultValue=""
+                            onChange={(e) => handleDeptChange(user.id, e.target.value)}
+                          >
+                            <option value="" disabled>Выберите отдел</option>
+                            {flatDepts.map(d => (
+                              <option key={d.id} value={d.id}>
+                                {'\u00A0\u00A0'.repeat(d.level)}{d.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
 
                       <div className={styles.controlGroup}>
                         <label>Сотрудник СКУД:</label>

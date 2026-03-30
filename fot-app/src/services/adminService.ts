@@ -72,8 +72,12 @@ export const adminService = {
     await apiClient.patch(`/admin/users/${userId}/name`, { full_name: fullName });
   },
 
-  async updateUserEmployee(userId: string, employeeId: number | null): Promise<void> {
-    await apiClient.patch(`/admin/users/${userId}/employee`, { employee_id: employeeId });
+  async updateUserEmployee(userId: string, employeeId: number | null, departmentId?: string): Promise<void> {
+    await apiClient.patch(`/admin/users/${userId}/employee`, { employee_id: employeeId, department_id: departmentId || null });
+  },
+
+  async updateEmployeeDepartment(userId: string, departmentId: string): Promise<void> {
+    await apiClient.patch(`/admin/users/${userId}/department`, { department_id: departmentId });
   },
 
   // 2FA management

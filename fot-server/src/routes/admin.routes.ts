@@ -17,6 +17,7 @@ router.patch('/users/:id/position', requireMinPosition('admin'), adminController
 router.patch('/users/:id/organization', requireSuperAdmin, adminController.assignOrganization);
 router.patch('/users/:id/name', requireMinPosition('admin'), adminController.updateUserName);
 router.patch('/users/:id/employee', requireMinPosition('admin'), adminController.updateUserEmployee);
+router.patch('/users/:id/department', requireMinPosition('admin'), adminController.updateEmployeeDepartment);
 
 // 2FA управление
 router.post('/users/:id/generate-2fa', requireSuperAdmin, adminController.generate2FA);
