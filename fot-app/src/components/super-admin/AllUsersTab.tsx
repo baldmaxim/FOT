@@ -63,7 +63,7 @@ const flattenDepts = (nodes: OrgDepartmentNode[], level = 0): IDeptFlat[] => {
   return result;
 };
 
-export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, organizations, onReload }) => {
+export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
   const toast = useToast();
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<{ userId: string; value: string } | null>(null);
