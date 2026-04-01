@@ -267,7 +267,6 @@ export const chatService = {
       .from('user_profiles')
       .select('id, full_name')
       .eq('organization_id', organizationId)
-      .eq('is_approved', true)
       .neq('id', currentUserId)
       .order('full_name', { ascending: true })
       .limit(50);
