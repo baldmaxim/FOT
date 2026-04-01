@@ -37,8 +37,12 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
     .eq('is_archived', false)
     .eq('employment_status', 'active');
 
-  if (organizationId) empQuery = empQuery.eq('organization_id', organizationId);
-  if (deptIds) empQuery = empQuery.in('org_department_id', deptIds);
+  // Если есть departmentId — фильтруем по отделам (org_department_id), иначе по организации
+  if (deptIds) {
+    empQuery = empQuery.in('org_department_id', deptIds);
+  } else if (organizationId) {
+    empQuery = empQuery.eq('organization_id', organizationId);
+  }
 
   const { data: employees } = await empQuery;
   if (!employees || employees.length === 0) {
