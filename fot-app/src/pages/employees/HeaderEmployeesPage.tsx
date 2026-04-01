@@ -92,8 +92,8 @@ export const HeaderEmployeesPage: FC = () => {
   const canNext = page < meta.totalPages;
 
   return (
-    <div className="employees-page" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div className="ep-emp-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+    <div className="employees-page">
+      <div className="ep-emp-panel">
         <div className="ep-emp-header">
           <div className="ep-emp-title">
             <h2>Сотрудники</h2>
