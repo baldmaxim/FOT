@@ -46,20 +46,60 @@ export const adminUsersController = {
         }
       }
 
-      const sanitizedUsers = users.map((u: UserProfile) => ({
-        id: u.id,
-        full_name: u.full_name,
-        organization_id: u.organization_id,
-        organization_name: u.organization_id ? (orgMap[u.organization_id] || null) : null,
-        position_type: u.position_type,
-        imported_position: u.imported_position,
-        employee_id: u.employee_id,
-        supervisor_id: u.supervisor_id,
-        is_approved: u.is_approved,
-        two_factor_enabled: u.two_factor_enabled,
-        approved_at: u.approved_at,
-        created_at: u.created_at,
-      }));
+      // Подгружаем department_id из employees для пользователей с employee_id
+      const empIds = users
+        .filter((u: UserProfile) => u.employee_id)
+        .map((u: UserProfile) => u.employee_id);
+
+      let empDeptMap: Record<number, string | null> = {};
+      if (empIds.length > 0) {
+        const { data: emps } = await supabase
+          .from('employees')
+          .select('id, org_department_id')
+          .in('id', empIds);
+        if (emps) {
+          empDeptMap = emps.reduce((acc, e) => {
+            acc[e.id] = e.org_department_id || null;
+            return acc;
+          }, {} as Record<number, string | null>);
+        }
+      }
+
+      // Подгружаем названия отделов
+      const deptIds = Object.values(empDeptMap).filter(Boolean) as string[];
+      let deptNameMap: Record<string, string> = {};
+      if (deptIds.length > 0) {
+        const { data: depts } = await supabase
+          .from('org_departments')
+          .select('id, name')
+          .in('id', deptIds);
+        if (depts) {
+          deptNameMap = depts.reduce((acc, d) => {
+            acc[d.id] = d.name;
+            return acc;
+          }, {} as Record<string, string>);
+        }
+      }
+
+      const sanitizedUsers = users.map((u: UserProfile) => {
+        const deptId = u.employee_id ? empDeptMap[u.employee_id] || null : null;
+        return {
+          id: u.id,
+          full_name: u.full_name,
+          organization_id: u.organization_id,
+          organization_name: u.organization_id ? (orgMap[u.organization_id] || null) : null,
+          department_id: deptId,
+          department_name: deptId ? (deptNameMap[deptId] || null) : null,
+          position_type: u.position_type,
+          imported_position: u.imported_position,
+          employee_id: u.employee_id,
+          supervisor_id: u.supervisor_id,
+          is_approved: u.is_approved,
+          two_factor_enabled: u.two_factor_enabled,
+          approved_at: u.approved_at,
+          created_at: u.created_at,
+        };
+      });
 
       res.json({ success: true, data: sanitizedUsers });
     } catch (error) {

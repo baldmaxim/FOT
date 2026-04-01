@@ -13,6 +13,8 @@ export interface IUserFromApi {
   full_name: string | null;
   organization_id: string | null;
   organization_name: string | null;
+  department_id: string | null;
+  department_name: string | null;
   position_type: EmployeePositionType;
   imported_position: string | null;
   employee_id: string | null;
@@ -93,6 +95,10 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, organizations, on
     if (!orgId) return 'Не назначена';
     const org = organizations.find(o => o.id === orgId);
     return org?.name || 'Неизвестная';
+  };
+
+  const getDeptName = (user: IUserFromApi) => {
+    return user.department_name || 'Не назначен';
   };
 
   const getPositionName = (positionType: EmployeePositionType) => {
@@ -235,7 +241,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, organizations, on
 
                 <div className={styles.userRowMeta}>
                   <span className={styles.userRowRole}>{getPositionName(user.position_type)}</span>
-                  <span className={styles.userRowOrg}>{getOrgName(user.organization_id)}</span>
+                  <span className={styles.userRowOrg}>{getDeptName(user)}</span>
                   {!user.is_approved ? (
                     <span className={styles.notApproved}>Не одобрен</span>
                   ) : !user.two_factor_enabled ? (
@@ -309,34 +315,22 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, organizations, on
                       </div>
 
                       <div className={styles.controlGroup}>
-                        <label>Организация:</label>
+                        <label>Отдел:</label>
                         <select
-                          value={user.organization_id || ''}
-                          onChange={(e) => handleOrgChange(user.id, e.target.value)}
+                          value={user.department_id || ''}
+                          onChange={(e) => handleDeptChange(user.id, e.target.value)}
+                          disabled={!user.employee_id}
                         >
-                          <option value="">Не назначена</option>
-                          {organizations.map(org => (
-                            <option key={org.id} value={org.id}>{org.name}</option>
+                          <option value="">
+                            {user.employee_id ? 'Выберите отдел' : 'Сначала привяжите СКУД'}
+                          </option>
+                          {flatDepts.map(d => (
+                            <option key={d.id} value={d.id}>
+                              {'\u00A0\u00A0'.repeat(d.level)}{d.name}
+                            </option>
                           ))}
                         </select>
                       </div>
-
-                      {user.employee_id && (
-                        <div className={styles.controlGroup}>
-                          <label>Отдел:</label>
-                          <select
-                            defaultValue=""
-                            onChange={(e) => handleDeptChange(user.id, e.target.value)}
-                          >
-                            <option value="" disabled>Выберите отдел</option>
-                            {flatDepts.map(d => (
-                              <option key={d.id} value={d.id}>
-                                {'\u00A0\u00A0'.repeat(d.level)}{d.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
 
                       <div className={styles.controlGroup}>
                         <label>Сотрудник СКУД:</label>
