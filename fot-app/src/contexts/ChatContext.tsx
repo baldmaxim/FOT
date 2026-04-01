@@ -74,16 +74,17 @@ export const ChatProvider: FC<{ children: ReactNode }> = ({ children }) => {
       const data = payload as { conversationId: string; message: IChatMessage };
       if (isOpenRef.current && activeConvRef.current === data.conversationId) return;
 
-      // Find sender name from conversations
       const conv = conversations.find(c => c.id === data.conversationId);
       const sender = conv?.participants.find(p => p.user_id === data.message.sender_id);
       const senderName = sender?.full_name || 'Новое сообщение';
-      const preview = data.message.content?.slice(0, 50) || '';
-      const text = preview ? `${senderName}: ${preview}${data.message.content.length > 50 ? '...' : ''}` : senderName;
+      const preview = data.message.content?.slice(0, 60) || '';
 
-      info(text, () => {
-        setIsOpen(true);
-        selectConversation(data.conversationId);
+      info(preview, {
+        title: senderName,
+        onClick: () => {
+          setIsOpen(true);
+          selectConversation(data.conversationId);
+        },
       });
     });
 

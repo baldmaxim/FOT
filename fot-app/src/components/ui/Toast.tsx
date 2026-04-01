@@ -7,6 +7,7 @@ export interface ToastProps {
   id: string;
   type: ToastType;
   message: string;
+  title?: string;
   onClose: (id: string) => void;
   onClick?: () => void;
   duration?: number;
@@ -16,6 +17,7 @@ export const Toast: React.FC<ToastProps> = ({
   id,
   type,
   message,
+  title,
   onClose,
   onClick,
   duration = 4000,
@@ -71,7 +73,10 @@ export const Toast: React.FC<ToastProps> = ({
       onClick={onClick ? () => { onClick(); onClose(id); } : undefined}
     >
       <div className={styles.icon}>{getIcon()}</div>
-      <span className={styles.message}>{message}</span>
+      <div className={styles.body}>
+        {title && <div className={styles.title}>{title}</div>}
+        <span className={styles.message}>{message}</span>
+      </div>
       <button className={styles.close} onClick={() => onClose(id)}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <line x1="18" y1="6" x2="6" y2="18"/>

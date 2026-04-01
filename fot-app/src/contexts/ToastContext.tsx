@@ -7,15 +7,16 @@ interface ToastItem {
   id: string;
   type: ToastType;
   message: string;
+  title?: string;
   onClick?: () => void;
 }
 
 interface ToastContextType {
-  showToast: (type: ToastType, message: string, onClick?: () => void) => void;
+  showToast: (type: ToastType, message: string, opts?: { title?: string; onClick?: () => void }) => void;
   success: (message: string) => void;
   error: (message: string) => void;
   warning: (message: string) => void;
-  info: (message: string, onClick?: () => void) => void;
+  info: (message: string, opts?: { title?: string; onClick?: () => void }) => void;
 }
 
 const ToastContext = createContext<ToastContextType | null>(null);
@@ -23,9 +24,9 @@ const ToastContext = createContext<ToastContextType | null>(null);
 export const ToastProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
-  const showToast = useCallback((type: ToastType, message: string, onClick?: () => void) => {
+  const showToast = useCallback((type: ToastType, message: string, opts?: { title?: string; onClick?: () => void }) => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    setToasts(prev => [...prev, { id, type, message, onClick }]);
+    setToasts(prev => [...prev, { id, type, message, title: opts?.title, onClick: opts?.onClick }]);
   }, []);
 
   const removeToast = useCallback((id: string) => {
@@ -35,7 +36,7 @@ export const ToastProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const success = useCallback((message: string) => showToast('success', message), [showToast]);
   const error = useCallback((message: string) => showToast('error', message), [showToast]);
   const warning = useCallback((message: string) => showToast('warning', message), [showToast]);
-  const info = useCallback((message: string, onClick?: () => void) => showToast('info', message, onClick), [showToast]);
+  const info = useCallback((message: string, opts?: { title?: string; onClick?: () => void }) => showToast('info', message, opts), [showToast]);
 
   return (
     <ToastContext.Provider value={{ showToast, success, error, warning, info }}>
@@ -47,6 +48,7 @@ export const ToastProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             id={toast.id}
             type={toast.type}
             message={toast.message}
+            title={toast.title}
             onClose={removeToast}
             onClick={toast.onClick}
           />
