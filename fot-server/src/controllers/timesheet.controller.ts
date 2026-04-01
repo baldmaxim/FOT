@@ -226,9 +226,17 @@ export const timesheetController = {
         eventsByKey.get(key)!.push(evt);
       }
 
+      // Helper: московское время (события СКУД в MSK)
+      const getMoscowNow = (): { dateStr: string; timeMs: number } => {
+        const msk = new Date().toLocaleString('en-US', { timeZone: 'Europe/Moscow' });
+        const d = new Date(msk);
+        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const timeMs = (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()) * 1000;
+        return { dateStr, timeMs };
+      };
+      const mskNow = getMoscowNow();
+
       // Helper: calculate total ms from entry/exit pairs
-      const nowLocal = new Date();
-      const calcTodayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
       const calcPairMs = (evts: IRawEvent[]): number => {
         let total = 0;
         let entry: number | null = null;
@@ -242,12 +250,10 @@ export const timesheetController = {
             entry = null;
           }
         }
-        // Если остался открытый вход (сотрудник на месте) и это сегодня — считаем до текущего времени
-        if (entry !== null && evts.length > 0 && evts[0].event_date === calcTodayStr) {
-          const now = new Date();
-          const nowMs = (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 1000;
-          if (nowMs > entry) {
-            total += nowMs - entry;
+        // Если остался открытый вход (сотрудник на месте) и это сегодня — считаем до текущего времени (MSK)
+        if (entry !== null && evts.length > 0 && evts[0].event_date === mskNow.dateStr) {
+          if (mskNow.timeMs > entry) {
+            total += mskNow.timeMs - entry;
           }
         }
         return total;
