@@ -8,6 +8,7 @@ export interface ToastProps {
   type: ToastType;
   message: string;
   onClose: (id: string) => void;
+  onClick?: () => void;
   duration?: number;
 }
 
@@ -16,6 +17,7 @@ export const Toast: React.FC<ToastProps> = ({
   type,
   message,
   onClose,
+  onClick,
   duration = 4000,
 }) => {
   useEffect(() => {
@@ -64,7 +66,10 @@ export const Toast: React.FC<ToastProps> = ({
   };
 
   return (
-    <div className={`${styles.toast} ${styles[type]}`}>
+    <div
+      className={`${styles.toast} ${styles[type]} ${onClick ? styles.clickable : ''}`}
+      onClick={onClick ? () => { onClick(); onClose(id); } : undefined}
+    >
       <div className={styles.icon}>{getIcon()}</div>
       <span className={styles.message}>{message}</span>
       <button className={styles.close} onClick={() => onClose(id)}>

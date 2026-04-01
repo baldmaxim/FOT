@@ -4,7 +4,7 @@ import { useAuth } from './AuthContext';
 import { useToast } from './ToastContext';
 import { wsService } from '../services/websocket';
 import { useChat } from '../hooks/useChat';
-import type { IChatConversation, IChatMessage } from '../services/chatService';
+import type { IChatMessage } from '../services/chatService';
 
 interface IChatContextType {
   isOpen: boolean;
@@ -72,15 +72,23 @@ export const ChatProvider: FC<{ children: ReactNode }> = ({ children }) => {
 
     const unsub = ws.on('message_notification', (payload: unknown) => {
       const data = payload as { conversationId: string; message: IChatMessage };
-      // Don't show toast if panel is open and viewing this conversation
       if (isOpenRef.current && activeConvRef.current === data.conversationId) return;
 
-      const preview = data.message.content?.slice(0, 60) || 'Новое сообщение';
-      info(preview);
+      // Find sender name from conversations
+      const conv = conversations.find(c => c.id === data.conversationId);
+      const sender = conv?.participants.find(p => p.user_id === data.message.sender_id);
+      const senderName = sender?.full_name || 'Новое сообщение';
+      const preview = data.message.content?.slice(0, 50) || '';
+      const text = preview ? `${senderName}: ${preview}${data.message.content.length > 50 ? '...' : ''}` : senderName;
+
+      info(text, () => {
+        setIsOpen(true);
+        selectConversation(data.conversationId);
+      });
     });
 
     return unsub;
-  }, [ws, info]);
+  }, [ws, info, conversations, selectConversation]);
 
   const openChat = useCallback(() => setIsOpen(true), []);
   const closeChat = useCallback(() => setIsOpen(false), []);

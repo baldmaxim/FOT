@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type FC } from 'react';
+import React, { useState, useRef, useEffect, type FC } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useChatContext } from '../../contexts/ChatContext';
 import { chatService, type IChatUser } from '../../services/chatService';
@@ -107,6 +107,17 @@ export const ChatSidePanel: FC = () => {
       ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
   };
 
+  const formatDateLabel = (dateStr: string) => {
+    const d = new Date(dateStr);
+    const now = new Date();
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    if (d.toDateString() === now.toDateString()) return 'Сегодня';
+    if (d.toDateString() === yesterday.toDateString()) return 'Вчера';
+    return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  };
+
   const activeConversation = conversations.find(c => c.id === activeConversationId);
 
   if (!isAuthenticated || !isApproved) return null;
@@ -158,15 +169,26 @@ export const ChatSidePanel: FC = () => {
               ) : messages.length === 0 ? (
                 <div className={styles.placeholder}>Начните диалог</div>
               ) : (
-                messages.map(msg => {
+                messages.map((msg, idx) => {
                   const isMine = msg.sender_id === profile?.id;
+                  const msgDate = new Date(msg.created_at).toDateString();
+                  const prevDate = idx > 0 ? new Date(messages[idx - 1].created_at).toDateString() : null;
+                  const showDate = idx === 0 || msgDate !== prevDate;
+
                   return (
-                    <div key={msg.id} className={`${styles.message} ${isMine ? styles.mine : styles.theirs}`}>
-                      <div className={styles.messageBubble}>
-                        <div className={styles.messageText}>{msg.content}</div>
-                        <div className={styles.messageTime}>{formatTime(msg.created_at)}</div>
+                    <React.Fragment key={msg.id}>
+                      {showDate && (
+                        <div className={styles.dateSeparator}>
+                          <span className={styles.dateLabel}>{formatDateLabel(msg.created_at)}</span>
+                        </div>
+                      )}
+                      <div className={`${styles.message} ${isMine ? styles.mine : styles.theirs}`}>
+                        <div className={styles.messageBubble}>
+                          <div className={styles.messageText}>{msg.content}</div>
+                          <div className={styles.messageTime}>{formatTime(msg.created_at)}</div>
+                        </div>
                       </div>
-                    </div>
+                    </React.Fragment>
                   );
                 })
               )}

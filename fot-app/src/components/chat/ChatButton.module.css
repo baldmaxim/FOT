@@ -7,19 +7,19 @@
   height: 56px;
   border-radius: 50%;
   border: none;
-  background: var(--color-primary, #6366f1);
+  background: var(--primary);
   color: white;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
+  box-shadow: var(--shadow-md);
   transition: transform 0.15s, box-shadow 0.15s;
 }
 
 .button:hover {
   transform: scale(1.05);
-  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
+  box-shadow: var(--shadow-lg);
 }
 
 .button:active {
@@ -30,7 +30,7 @@
   position: absolute;
   top: -2px;
   right: -2px;
-  background: var(--color-error, #ef4444);
+  background: var(--error);
   color: white;
   font-size: 11px;
   font-weight: 700;
@@ -41,7 +41,7 @@
   align-items: center;
   justify-content: center;
   padding: 0 5px;
-  border: 2px solid var(--bg-primary, #0a0a0f);
+  border: 2px solid var(--bg-primary);
 }
 
 /* Mobile */
