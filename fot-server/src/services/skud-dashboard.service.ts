@@ -12,7 +12,9 @@ import type {
   IDashboardWeekMetrics,
 } from '../types/skud.types.js';
 
-const LATE_THRESHOLD_DEFAULT = '09:00:00';
+const WORK_START = '09:00:00';
+const WORK_END = '18:00:00';
+const LATE_THRESHOLD_DEFAULT = WORK_START;
 const SLIGHTLY_LATE_THRESHOLD_DEFAULT = '09:15:00';
 
 export async function getDashboardStats(
@@ -286,7 +288,7 @@ export async function getDashboardStats(
     if (s.first_entry && s.first_entry > threshold) {
       lateCountByEmp.set(s.employee_id, (lateCountByEmp.get(s.employee_id) || 0) + 1);
     }
-    if (s.last_exit && s.last_exit < '17:00:00' && s.is_present) {
+    if (s.last_exit && s.last_exit < WORK_END && s.is_present) {
       earlyLeaveByEmp.set(s.employee_id, (earlyLeaveByEmp.get(s.employee_id) || 0) + 1);
     }
   }
@@ -435,18 +437,22 @@ export async function getDashboardStats(
   if (period === 'week' || period === 'month') {
     const pWorkDays = actualWorkDays; // календарные рабочие дни (countWorkingDays)
 
-    const dailyPresent = new Map<string, number>();
+    // Считаем уникальных сотрудников за каждый день (пришёл до 18:00 = присутствовал)
+    const dailyPresent = new Map<string, Set<number>>();
     for (const s of periodSummaries) {
-      if (s.first_entry && !remoteEmpIds.has(s.employee_id)) {
-        dailyPresent.set(s.date, (dailyPresent.get(s.date) || 0) + 1);
+      if (s.first_entry && s.first_entry <= WORK_END && !remoteEmpIds.has(s.employee_id)) {
+        if (!dailyPresent.has(s.date)) dailyPresent.set(s.date, new Set());
+        dailyPresent.get(s.date)!.add(s.employee_id);
       }
     }
-    const totalPresent = [...dailyPresent.values()].reduce((a, b) => a + b, 0);
+    const totalPresent = [...dailyPresent.values()].reduce((sum, set) => sum + set.size, 0);
     const avgPresent = Math.round(totalPresent / pWorkDays);
     const avgAbsent = Math.max(0, officeEmpIds.length - avgPresent);
 
     const pExpectedTotal = officeEmpIds.length * pWorkDays;
     const attendanceRate = pExpectedTotal > 0 ? Math.round((totalPresent / pExpectedTotal) * 100) : 0;
+
+    console.log('[dashboard-stats]', { period, periodStartStr, periodEndStr, pWorkDays, officeEmpCount: officeEmpIds.length, remoteCount: remoteEmpIds.size, totalEmp: empIds.length, totalPresent, avgPresent, dailyBreakdown: [...dailyPresent.entries()].map(([d, s]) => `${d}:${s.size}`) });
 
     const pLateCount = periodSummaries.filter(s => s.first_entry && !remoteEmpIds.has(s.employee_id) && s.first_entry > getLateThresholdFor(s.employee_id)).length;
     const prevLateCount = prevPeriodSummaries.filter(s => s.first_entry && !remoteEmpIds.has(s.employee_id) && s.first_entry > getLateThresholdFor(s.employee_id)).length;
