@@ -158,6 +158,14 @@
   color: var(--text-primary);
 }
 
+.desktopOnly {
+  display: flex;
+}
+
+.mobileOnly {
+  display: none;
+}
+
 .searchSection {
   padding: 8px;
   border-bottom: 1px solid var(--border);
@@ -467,6 +475,14 @@
   }
 
   .backBtn {
+    display: flex !important;
+  }
+
+  .desktopOnly {
+    display: none !important;
+  }
+
+  .mobileOnly {
     display: flex !important;
   }
 }
