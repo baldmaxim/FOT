@@ -11,7 +11,6 @@ import type {
   TimesheetEntry,
   TimesheetEmployee,
   TimesheetStats as ITimesheetStats,
-  TimesheetStatus,
 } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
 import '../../pages/timesheet/TimesheetPage.css';
@@ -87,7 +86,6 @@ export const EmployeeTimesheetPage: FC = () => {
   // Recalculate stats for single employee
   const myStats = useMemo((): ITimesheetStats => {
     if (employees.length === 0) return DEFAULT_STATS;
-    const workEntries = entries.filter(e => e.status === 'work');
     const actualHours = entries.reduce((s, e) => s + (e.hours_worked || 0), 0);
     return {
       employeeCount: 1,
@@ -98,7 +96,7 @@ export const EmployeeTimesheetPage: FC = () => {
         late: entries.filter(e => {
           if (e.status !== 'work' || !e.first_entry) return false;
           const empSched = schedules[employees[0]?.id];
-          const threshold = empSched?.start_time || '09:00:00';
+          const threshold = empSched?.work_start || '09:00:00';
           return e.first_entry > threshold;
         }).length,
         absent: entries.filter(e => e.status === 'absent').length,
