@@ -7,7 +7,6 @@ import { AnalyticsRow, PunctualityCard, AvgArrivalCard, RisksCard } from '../com
 import { DashboardSidebar } from '../components/dashboard/DashboardSidebar';
 import { PresenceTodayCard } from '../components/dashboard/stats/PresenceTodayCard';
 import { LatenessCard } from '../components/dashboard/stats/LatenessCard';
-import { AnomaliesCard } from '../components/dashboard/stats/AnomaliesCard';
 import { LiveEventsCard } from '../components/dashboard/stats/LiveEventsCard';
 import { usePresence } from '../hooks/usePresence';
 import { useDashboardStats } from '../hooks/useDashboardStats';
@@ -251,9 +250,6 @@ export const DashboardPage: React.FC = () => {
                   earlyLeaveCount={stats?.earlyLeaveToday ?? 0}
                   entries={stats?.todayEntriesCount ?? 0}
                   exits={stats?.todayExitsCount ?? 0}
-                />
-                <AnomaliesCard
-                  refusals={stats?.anomalies?.refusals ?? 0}
                 />
                 <div className="stats-events-tall">
                   <LiveEventsCard

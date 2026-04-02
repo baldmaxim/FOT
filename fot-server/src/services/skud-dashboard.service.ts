@@ -37,7 +37,7 @@ export async function getDashboardStats(
       punctuality: { onTime: 0, slightlyLate: 0, veryLate: 0, absent: 0 },
       avgArrivalByDay: [], risks: [], hourlyActivity: [],
       weekComparison: null, topLate: [], periodStats: null,
-      earlyLeaveToday: 0, recentEvents: [], anomalies: { refusals: 0, multipleEntry: 0 },
+      earlyLeaveToday: 0, recentEvents: [],
       todayEntriesCount: 0, todayExitsCount: 0,
     };
   }
@@ -161,13 +161,6 @@ export async function getDashboardStats(
     .limit(50);
   const { data: recentEventsRaw } = await recentEvQuery;
 
-  // Запрос аномалий
-  const anomalyQuery = supabase
-    .from('skud_events')
-    .select('id, employee_id, physical_person, direction')
-    .eq('event_date', todayStr)
-    .is('employee_id', null);
-  const { data: unknownEvents } = await anomalyQuery;
 
   // --- Агрегация ---
 
@@ -442,24 +435,10 @@ export async function getDashboardStats(
     direction: ev.direction as 'entry' | 'exit' | null,
   }));
 
-  // Anomalies
-  const refusals = (unknownEvents || []).length;
-  const entryCountByEmp = new Map<number, number>();
-  for (const ev of todayEvents || []) {
-    if (ev.employee_id) {
-      entryCountByEmp.set(ev.employee_id, (entryCountByEmp.get(ev.employee_id) || 0) + 1);
-    }
-  }
-  let multipleEntry = 0;
-  for (const [, count] of entryCountByEmp) {
-    if (count > 2) multipleEntry++;
-  }
-  const anomalies = { refusals, multipleEntry };
-
   return {
     lateToday, lateYesterday, punctuality, avgArrivalByDay, risks,
     hourlyActivity, weekComparison, topLate, periodStats,
-    earlyLeaveToday, recentEvents, anomalies,
+    earlyLeaveToday, recentEvents,
     todayEntriesCount, todayExitsCount,
   };
 }

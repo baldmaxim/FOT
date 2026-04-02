@@ -76,7 +76,6 @@ export interface IDashboardStats {
   periodStats: IPeriodStats | null;
   earlyLeaveToday: number;
   recentEvents: IRecentEvent[];
-  anomalies: { refusals: number; multipleEntry: number };
   todayEntriesCount: number;
   todayExitsCount: number;
 }

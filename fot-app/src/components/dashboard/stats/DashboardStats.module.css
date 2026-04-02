@@ -126,32 +126,6 @@
   color: var(--text-secondary);
 }
 
-/* Anomalies card */
-.anomalyRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.anomalyValue {
-  font-size: 1.2rem;
-  font-weight: 700;
-}
-
-.anomalyValue.red {
-  color: var(--error);
-}
-
-.anomalyValue.orange {
-  color: var(--warning);
-}
-
-.anomalyLabel {
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-}
-
 /* Live events card */
 .eventsHeader {
   font-size: 0.78rem;
