@@ -53,6 +53,7 @@ interface IComparisonItem {
   delta: number;
   suffix?: string;
   invertColors?: boolean;
+  formatDelta?: boolean;
 }
 
 const ComparisonCard: FC<{ comparison: IDashboardStats['weekComparison']; period: DashboardPeriod }> = ({ comparison, period }) => {
@@ -72,7 +73,7 @@ const ComparisonCard: FC<{ comparison: IDashboardStats['weekComparison']; period
       label: 'Ср. приход',
       current: thisWeek.avgArrival,
       delta: compareTimes(lastWeek.avgArrival, thisWeek.avgArrival),
-      suffix: 'м',
+      formatDelta: true,
     },
     {
       label: 'Ср. часов',
@@ -106,7 +107,7 @@ const ComparisonCard: FC<{ comparison: IDashboardStats['weekComparison']; period
               <span className={styles.compCurrent}>{item.current}</span>
               <span className={`${styles.compChange} ${colorClass}`}>
                 {!isNeutral && (isUp ? <TrendingUp size={12} /> : <TrendingDown size={12} />)}
-                {isNeutral ? '—' : `${isUp ? '+' : ''}${item.delta}${item.suffix || ''}`}
+                {isNeutral ? '—' : item.formatDelta ? formatMinutesDelta(item.delta) : `${isUp ? '+' : ''}${item.delta}${item.suffix || ''}`}
               </span>
             </div>
           </div>
@@ -143,7 +144,21 @@ function compareTimes(a: string, b: string): number {
     const [h, m] = t.split(':').map(Number);
     return (h || 0) * 60 + (m || 0);
   };
-  return toMin(a) - toMin(b);
+  const aMin = toMin(a);
+  const bMin = toMin(b);
+  // Если одно из значений отсутствует (00:00) — нет сравнения
+  if (aMin === 0 || bMin === 0) return 0;
+  return aMin - bMin;
+}
+
+/** Форматирование дельты минут в человекочитаемый вид */
+function formatMinutesDelta(minutes: number): string {
+  const abs = Math.abs(minutes);
+  if (abs < 60) return `${minutes > 0 ? '+' : ''}${minutes}м`;
+  const h = Math.floor(abs / 60);
+  const m = abs % 60;
+  const sign = minutes > 0 ? '+' : '−';
+  return m > 0 ? `${sign}${h}ч ${m}м` : `${sign}${h}ч`;
 }
 
 export const DashboardSidebar: FC<IDashboardSidebarProps> = ({ stats, period }) => (

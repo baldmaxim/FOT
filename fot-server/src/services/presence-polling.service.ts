@@ -138,10 +138,27 @@ export async function resolvePollingWindow(now = new Date()): Promise<PollingWin
     }
   }
 
+  // Если checkpoint старше 12 часов — начинаем от начала сегодня
+  const todayStart = startOfLocalDay(now);
+  if (checkpoint && (now.getTime() - checkpoint.getTime()) > 12 * 60 * 60 * 1000) {
+    const gapMinutes = Math.round((now.getTime() - checkpoint.getTime()) / 60_000);
+    console.log(`[presence-polling] catch-up: gap ${gapMinutes}m (>12h), starting from today`);
+    checkpoint = todayStart;
+    checkpointSource = 'fallback';
+  }
+
   const rawStart = checkpoint
     ? new Date(checkpoint.getTime() - POLL_OVERLAP_MS)
-    : startOfLocalDay(now);
+    : todayStart;
   const start = rawStart.getTime() > now.getTime() ? new Date(now) : rawStart;
+
+  // Лог catch-up при значительном gap
+  if (checkpoint && checkpointSource === 'db') {
+    const gapMinutes = Math.round((now.getTime() - checkpoint.getTime()) / 60_000);
+    if (gapMinutes > 5) {
+      console.log(`[presence-polling] catch-up: recovering ${gapMinutes}m gap from ${formatLocalDateTime(checkpoint)} to ${formatLocalDateTime(now)}`);
+    }
+  }
 
   return {
     startTime: formatLocalDateTime(start),

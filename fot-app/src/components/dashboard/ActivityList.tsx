@@ -2,7 +2,6 @@ import { type FC, useState, useEffect, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Star, Search, X } from 'lucide-react';
 import { Card, CardContent } from '../ui/Card';
-import { formatElapsed } from '../../utils/formatElapsed';
 import { useFavorites } from '../../hooks/useFavorites';
 import type { IEmployeePresence } from '../../types';
 import styles from './ActivityList.module.css';
@@ -20,7 +19,6 @@ const getInitials = (name: string): string => {
   return name.slice(0, 2).toUpperCase();
 };
 
-/** Прогресс рабочего дня (0-100%): online — от first_entry/since, offline — от total_hours */
 const getTimelinePercent = (employee: IEmployeePresence): number => {
   if (employee.status === 'unknown') return 0;
   if (employee.status === 'online') {
@@ -39,31 +37,6 @@ const getTimelinePercent = (employee: IEmployeePresence): number => {
   return 0;
 };
 
-/** Прогноз ухода: arrival + 9 часов (8ч работы + 1ч обед) */
-const getLeaveInfo = (firstEntry: string | null): { leaveTime: string; remaining: string } | null => {
-  if (!firstEntry) return null;
-  const [h, m] = firstEntry.split(':').map(Number);
-  const arrival = new Date();
-  arrival.setHours(h, m, 0, 0);
-  const leave = new Date(arrival.getTime() + 9 * 60 * 60 * 1000);
-  const leaveTime = `${String(leave.getHours()).padStart(2, '0')}:${String(leave.getMinutes()).padStart(2, '0')}`;
-  const now = new Date();
-  const diffMs = leave.getTime() - now.getTime();
-  if (diffMs <= 0) return { leaveTime, remaining: '' };
-  const remH = Math.floor(diffMs / (1000 * 60 * 60));
-  const remM = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-  return { leaveTime, remaining: `${remH}ч ${remM}м` };
-};
-
-/** Форматирование минут вне офиса */
-const formatOutsideTime = (minutes: number): string => {
-  if (minutes < 1) return '0м';
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return h > 0 ? `${h}ч ${m}м` : `${m}м`;
-};
-
-/** Форматирование часов/минут из total_hours (число) */
 const formatWorkTime = (hours: number): string => {
   const h = Math.floor(hours);
   const m = Math.round((hours - h) * 60);
@@ -71,7 +44,6 @@ const formatWorkTime = (hours: number): string => {
   return `${m}м`;
 };
 
-/** Время присутствия: для online считаем от first_entry (fallback на since), для offline берём total_hours */
 const getWorkElapsed = (employee: IEmployeePresence): string => {
   if (employee.status === 'online') {
     const timeStr = employee.first_entry || employee.since;
@@ -94,6 +66,13 @@ const getWorkElapsed = (employee: IEmployeePresence): string => {
   return '';
 };
 
+const formatOutsideTime = (minutes: number): string => {
+  if (minutes < 1) return '0м';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return h > 0 ? `${h}ч ${m}м` : `${m}м`;
+};
+
 const EmployeeRow = memo<{
   employee: IEmployeePresence;
   isFavorite: boolean;
@@ -102,19 +81,16 @@ const EmployeeRow = memo<{
 }>(({ employee, isFavorite, onToggleFavorite, tick }) => {
   const navigate = useNavigate();
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- tick forces recalculation every minute
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const workTime = useMemo(() => getWorkElapsed(employee), [employee, tick]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- tick forces recalculation every minute
-  const absentTime = useMemo(() => (employee.status === 'offline' ? formatElapsed(employee.since) : ''), [employee.status, employee.since, tick]);
 
   const isOnline = employee.status === 'online';
   const isOffline = employee.status === 'offline';
   const timelineWidth = getTimelinePercent(employee);
-
   const arrivalTime = employee.first_entry ? employee.first_entry.slice(0, 5) : null;
   const isLate = arrivalTime ? arrivalTime > '09:00' : false;
-  const leaveInfo = isOnline ? getLeaveInfo(employee.first_entry) : null;
-  const punct = employee.punctuality_percent;
+  const outsideMin = employee.time_outside_minutes || 0;
+  const outsideWarning = outsideMin > 60;
 
   return (
     <div className={styles.item} onClick={() => navigate(`/tender/${employee.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } })}>
@@ -125,25 +101,31 @@ const EmployeeRow = memo<{
       >
         <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />
       </button>
-      <div className={styles.avatar}>{getInitials(employee.full_name)}</div>
-      <div className={styles.arrivalBlock}>
-        {arrivalTime && (
-          <span className={`${styles.arrivalTime} ${isLate ? styles.arrivalLate : ''}`}>
-            → {arrivalTime}
-          </span>
-        )}
-        {leaveInfo && (
-          <span className={styles.leaveForecast}>
-            {leaveInfo.remaining ? `~ до конца ${leaveInfo.remaining}` : `~ уйдёт в ${leaveInfo.leaveTime}`}
-          </span>
-        )}
+
+      {/* Аватар + огонёк присутствия */}
+      <div className={styles.avatarWrap}>
+        <div className={styles.avatar}>{getInitials(employee.full_name)}</div>
+        <span className={`${styles.presenceDot} ${isOnline ? styles.dotOnline : isOffline ? styles.dotOffline : styles.dotUnknown}`} />
       </div>
+
+      {/* ФИО + должность */}
       <div className={styles.content}>
         <div className={styles.name}>{employee.full_name}</div>
         <div className={styles.meta}>
           {employee.position_name || employee.department_name || ''}
         </div>
       </div>
+
+      {/* Приход */}
+      <div className={styles.arrivalBlock}>
+        {arrivalTime && (
+          <span className={`${styles.arrivalTime} ${isLate ? styles.arrivalLate : ''}`}>
+            → {arrivalTime}
+          </span>
+        )}
+      </div>
+
+      {/* Таймлайн */}
       {timelineWidth > 0 && (
         <div className={styles.timeline}>
           <div
@@ -152,6 +134,27 @@ const EmployeeRow = memo<{
           />
         </div>
       )}
+
+      {/* Отработано / отсутствие */}
+      <div className={styles.times}>
+        {workTime && (
+          <span className={`${styles.time} ${isOffline ? styles.timeStopped : ''}`}>
+            {workTime}
+          </span>
+        )}
+        {outsideMin > 0 && (
+          <span className={`${styles.outsideTime} ${outsideWarning ? styles.outsideWarning : ''}`}>
+            {outsideWarning && '⚠ '}{formatOutsideTime(outsideMin)} вне
+          </span>
+        )}
+        {employee.exit_count > 0 && (
+          <span className={styles.exitInfo}>
+            {employee.exit_count} вых.
+          </span>
+        )}
+      </div>
+
+      {/* Статус + локация (выровнены) */}
       <div className={styles.badges}>
         <span className={`${styles.status} ${isOnline ? styles.in : isOffline ? styles.out : styles.unknown}`}>
           {isOnline ? 'В офисе' : isOffline ? 'Вышел' : '—'}
@@ -159,20 +162,6 @@ const EmployeeRow = memo<{
         {employee.last_access_point && (
           <span className={styles.locationBadge}>
             📍 {employee.last_access_point}
-          </span>
-        )}
-        {punct != null && (
-          <span className={`${styles.punctBadge} ${punct >= 90 ? styles.punctGood : styles.punctWarn}`}>
-            {punct}%
-          </span>
-        )}
-      </div>
-      <div className={styles.times}>
-        {workTime && <span className={`${styles.time} ${isOffline ? styles.timeStopped : ''}`}>{workTime}</span>}
-        {isOffline && absentTime && <span className={styles.absentTime}>−{absentTime}</span>}
-        {employee.exit_count > 0 && (
-          <span className={styles.exitInfo}>
-            {employee.exit_count} вых. · {formatOutsideTime(employee.time_outside_minutes)}
           </span>
         )}
       </div>
@@ -185,7 +174,6 @@ export const ActivityList: FC<IActivityListProps> = ({ employees, loading }) => 
   const [searchQuery, setSearchQuery] = useState('');
   const { favorites, toggle, isFavorite } = useFavorites();
 
-  // Единый таймер для обновления времени (вместо per-row intervals)
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick(t => t + 1), 60_000);
@@ -209,7 +197,6 @@ export const ActivityList: FC<IActivityListProps> = ({ employees, loading }) => 
       list = list.filter(e => e.full_name.toLowerCase().includes(q));
     }
 
-    // Избранные наверху
     return [...list].sort((a, b) => {
       const aFav = favorites.has(a.employee_id) ? 0 : 1;
       const bFav = favorites.has(b.employee_id) ? 0 : 1;
@@ -263,28 +250,16 @@ export const ActivityList: FC<IActivityListProps> = ({ employees, loading }) => 
               Избранные <span className={styles.tabCount}>{favCount}</span>
             </button>
           )}
-          <button
-            className={`${styles.tab} ${tab === 'all' ? styles.tabActive : ''}`}
-            onClick={() => setTab('all')}
-          >
+          <button className={`${styles.tab} ${tab === 'all' ? styles.tabActive : ''}`} onClick={() => setTab('all')}>
             Все <span className={styles.tabCount}>{employees.length}</span>
           </button>
-          <button
-            className={`${styles.tab} ${tab === 'online' ? styles.tabActive : ''}`}
-            onClick={() => setTab('online')}
-          >
+          <button className={`${styles.tab} ${tab === 'online' ? styles.tabActive : ''}`} onClick={() => setTab('online')}>
             В офисе <span className={styles.tabCount}>{onlineCount}</span>
           </button>
-          <button
-            className={`${styles.tab} ${tab === 'offline' ? styles.tabActive : ''}`}
-            onClick={() => setTab('offline')}
-          >
+          <button className={`${styles.tab} ${tab === 'offline' ? styles.tabActive : ''}`} onClick={() => setTab('offline')}>
             Вышли <span className={styles.tabCount}>{offlineCount}</span>
           </button>
-          <button
-            className={`${styles.tab} ${tab === 'absent' ? styles.tabActive : ''}`}
-            onClick={() => setTab('absent')}
-          >
+          <button className={`${styles.tab} ${tab === 'absent' ? styles.tabActive : ''}`} onClick={() => setTab('absent')}>
             Отсутствуют <span className={styles.tabCount}>{absentCount}</span>
           </button>
         </div>

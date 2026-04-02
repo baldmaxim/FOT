@@ -109,22 +109,6 @@
   color: var(--primary, #3b82f6);
 }
 
-.searchBar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 20px;
-  padding: 8px 12px;
-  background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  transition: border-color 0.15s ease;
-}
-
-.searchBar:focus-within {
-  border-color: var(--primary, #3b82f6);
-}
-
 .searchIcon {
   color: var(--text-tertiary);
   flex-shrink: 0;
@@ -176,6 +160,14 @@
   cursor: pointer;
 }
 
+.item:last-child {
+  border-bottom: none;
+}
+
+.item:hover {
+  background: var(--bg-tertiary);
+}
+
 .starBtn {
   display: flex;
   align-items: center;
@@ -200,12 +192,10 @@
   color: #f59e0b;
 }
 
-.item:last-child {
-  border-bottom: none;
-}
-
-.item:hover {
-  background: var(--bg-tertiary);
+/* Аватар + огонёк */
+.avatarWrap {
+  position: relative;
+  flex-shrink: 0;
 }
 
 .avatar {
@@ -219,9 +209,33 @@
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
-  flex-shrink: 0;
 }
 
+.presenceDot {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--bg-secondary, #fff);
+}
+
+.dotOnline {
+  background: #22c55e;
+  box-shadow: 0 0 5px rgba(34, 197, 94, 0.5);
+}
+
+.dotOffline {
+  background: #f59e0b;
+  box-shadow: 0 0 5px rgba(245, 158, 11, 0.4);
+}
+
+.dotUnknown {
+  background: #71717a;
+}
+
+/* ФИО */
 .content {
   flex: 1;
   min-width: 0;
@@ -241,13 +255,14 @@
   color: var(--text-tertiary);
 }
 
+/* Приход */
 .arrivalBlock {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   flex-shrink: 0;
   gap: 1px;
-  min-width: 56px;
+  min-width: 50px;
 }
 
 .arrivalTime {
@@ -262,49 +277,75 @@
   color: #f59e0b;
 }
 
-.leaveForecast {
-  font-size: 10px;
-  color: var(--text-tertiary);
+/* Таймлайн */
+.timeline {
+  width: 100px;
+  height: 6px;
+  background: var(--bg-elevated);
+  border-radius: 3px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.timelineFill {
+  height: 100%;
+  border-radius: 3px;
+}
+
+.timelineFill.full { background: var(--success); }
+.timelineFill.stopped { background: var(--error); }
+
+/* Отработано / отсутствие */
+.times {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-shrink: 0;
+  gap: 2px;
+  min-width: 70px;
+}
+
+.time {
+  font-size: 13px;
+  color: var(--success);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
+.timeStopped {
+  color: var(--text-tertiary);
+}
+
+.outsideTime {
+  font-size: 11px;
+  color: var(--error);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.outsideWarning {
+  background: rgba(239, 68, 68, 0.1);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.exitInfo {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Статус + локация (выровнены справа) */
 .badges {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-end;
   flex-shrink: 0;
   gap: 3px;
-}
-
-.locationBadge {
-  font-size: 10px;
-  color: var(--text-tertiary);
-  background: var(--bg-elevated);
-  padding: 2px 6px;
-  border-radius: 4px;
-  white-space: nowrap;
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.punctBadge {
-  font-family: 'Space Mono', monospace;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 4px;
-  white-space: nowrap;
-}
-
-.punctGood {
-  background: var(--success-muted, rgba(34, 197, 94, 0.1));
-  color: var(--success, #22c55e);
-}
-
-.punctWarn {
-  background: rgba(245, 158, 11, 0.1);
-  color: #f59e0b;
+  min-width: 80px;
 }
 
 .status {
@@ -332,61 +373,16 @@
   color: var(--text-tertiary);
 }
 
-.status.late {
-  background: var(--warning-muted);
-  color: var(--warning);
-}
-
-.timeline {
-  width: 100px;
-  height: 6px;
+.locationBadge {
+  font-size: 10px;
+  color: var(--text-tertiary);
   background: var(--bg-elevated);
-  border-radius: 3px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  max-width: 120px;
   overflow: hidden;
-  flex-shrink: 0;
-}
-
-.timelineFill {
-  height: 100%;
-  border-radius: 3px;
-}
-
-.timelineFill.full { background: var(--success); }
-.timelineFill.stopped { background: var(--error); }
-
-.times {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  flex-shrink: 0;
-  gap: 2px;
-  min-width: 64px;
-}
-
-.time {
-  font-size: 12px;
-  color: var(--success);
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.timeStopped {
-  color: var(--text-tertiary);
-}
-
-.absentTime {
-  font-size: 11px;
-  color: var(--error);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.exitInfo {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 @media (max-width: 768px) {
@@ -395,13 +391,11 @@
   .tabs { margin: 0 12px; overflow-x: auto; }
   .tab { padding: 8px 10px; font-size: 12px; white-space: nowrap; }
   .item { padding: 12px; gap: 8px; }
-  .searchBar { margin: 8px 12px; }
   .locationBadge { display: none; }
 }
 
 @media (max-width: 430px) {
   .timeline { display: none; }
-  .arrivalBlock { min-width: 48px; }
-  .leaveForecast { display: none; }
+  .arrivalBlock { min-width: 42px; }
   .locationBadge { display: none; }
 }
