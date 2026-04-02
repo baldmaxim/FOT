@@ -215,6 +215,11 @@ export const ChatSidePanel: FC = () => {
                 <span className={styles.headerName}>
                   {activeConversation ? getOtherName(activeConversation.participants) : ''}
                 </span>
+                <button className={styles.iconBtn} onClick={closeChat} style={{ marginLeft: 'auto' }}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
+                    <path d="M18 6L6 18M6 6l12 12"/>
+                  </svg>
+                </button>
               </div>
 
               <div className={styles.messagesContainer}>

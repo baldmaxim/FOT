@@ -6,6 +6,7 @@ import { employeeService } from '../../services/employeeService';
 import { skudService } from '../../services/skudService';
 import type { Employee, SkudEvent, IAccessPointSetting } from '../../types';
 import { AttendanceCard } from '../../components/dashboard/AttendanceCard';
+import type { IDayGroup, IEntryExitPair } from '../../components/dashboard/AttendanceCard';
 import { EmployeeInfoCards } from '../../components/dashboard/EmployeeInfoCards';
 import { RequestModal, TwoFAModal } from '../../components/dashboard/RequestModals';
 import styles from './EmployeeDashboard.module.css';
@@ -25,51 +26,49 @@ const toLocalISO = (d: Date): string => {
   return `${y}-${m}-${day}`;
 };
 
-/** Парный расчёт entry/exit с фильтром внутренних точек и учётом «на работе сейчас» */
-const calcPairMinutes = (events: SkudEvent[], internalPoints: Set<string>, isToday: boolean): number => {
-  const ext = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
-  const sorted = ext.length > 0 ? ext : events;
-  let total = 0;
-  let entry: number | null = null;
-  for (const ev of sorted) {
-    if (ev.direction === 'entry') {
-      if (entry === null) entry = timeToSeconds(ev.event_time);
-    } else if (ev.direction === 'exit' && entry !== null) {
-      total += timeToSeconds(ev.event_time) - entry;
-      entry = null;
-    }
-  }
-  if (entry !== null && isToday) {
-    const now = new Date();
-    const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-    if (nowSec > entry) total += nowSec - entry;
-  }
-  return Math.round(total / 60);
-};
-
 const DAY_NAMES = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
-interface DayAttendance {
-  date: string;
-  dayName: string;
-  firstEntry: string | null;
-  lastExit: string | null;
-  totalMinutes: number;
-  isToday: boolean;
-  isWeekend: boolean;
-}
+const buildPairs = (events: SkudEvent[], internalPoints: Set<string>, isToday: boolean): IEntryExitPair[] => {
+  const ext = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
+  const sorted = ext.length > 0 ? ext : events;
+  const pairs: IEntryExitPair[] = [];
+  let currentEntry: SkudEvent | null = null;
 
-const buildWeekAttendance = (events: SkudEvent[], startDate: string, internalPoints: Set<string>): DayAttendance[] => {
+  for (const ev of sorted) {
+    if (ev.direction === 'entry') {
+      if (currentEntry === null) currentEntry = ev;
+    } else if (ev.direction === 'exit' && currentEntry !== null) {
+      const dur = timeToSeconds(ev.event_time) - timeToSeconds(currentEntry.event_time);
+      pairs.push({ entry: currentEntry, exit: ev, durationMinutes: Math.round(dur / 60) });
+      currentEntry = null;
+    }
+  }
+  if (currentEntry && isToday) {
+    const now = new Date();
+    const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+    const dur = nowSec - timeToSeconds(currentEntry.event_time);
+    if (dur > 0) {
+      pairs.push({ entry: currentEntry, exit: null, durationMinutes: Math.round(dur / 60) });
+    }
+  }
+  return pairs;
+};
+
+const buildDayGroups = (
+  events: SkudEvent[],
+  startDate: string,
+  endDate: string,
+  internalPoints: Set<string>,
+): IDayGroup[] => {
   const start = new Date(startDate + 'T00:00:00');
+  const end = new Date(endDate + 'T00:00:00');
   const todayStr = toLocalISO(new Date());
-  const result: DayAttendance[] = [];
+  const groups: IDayGroup[] = [];
 
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
     const dateStr = toLocalISO(d);
     const dayEvents = events
-      .filter((e) => e.event_date === dateStr)
+      .filter(e => e.event_date === dateStr)
       .sort((a, b) => a.event_time.localeCompare(b.event_time));
 
     const ext = dayEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point));
@@ -78,14 +77,25 @@ const buildWeekAttendance = (events: SkudEvent[], startDate: string, internalPoi
     const exits = src.filter(e => e.direction === 'exit');
     const firstEntry = entries.length > 0 ? entries[0].event_time : null;
     const lastExit = exits.length > 0 ? exits[exits.length - 1].event_time : null;
-    const totalMinutes = calcPairMinutes(dayEvents, internalPoints, dateStr === todayStr);
 
-    result.push({
-      date: dateStr, dayName: DAY_NAMES[i], firstEntry, lastExit, totalMinutes,
-      isToday: dateStr === todayStr, isWeekend: i >= 5,
+    const isToday = dateStr === todayStr;
+    const pairs = buildPairs(dayEvents, internalPoints, isToday);
+    const totalMinutes = pairs.reduce((s, p) => s + p.durationMinutes, 0);
+    const dow = d.getDay() === 0 ? 6 : d.getDay() - 1;
+
+    groups.push({
+      date: dateStr,
+      dayName: DAY_NAMES[dow],
+      events: dayEvents,
+      firstEntry,
+      lastExit,
+      totalMinutes,
+      isToday,
+      isWeekend: dow >= 5,
+      pairs,
     });
   }
-  return result;
+  return groups;
 };
 
 const getPeriodRange = (period: ViewPeriod, offset: number): { startDate: string; endDate: string; label: string } => {
@@ -141,14 +151,12 @@ export const EmployeeDashboardPage: React.FC = () => {
 
   const periodRange = useMemo(() => getPeriodRange(viewPeriod, periodOffset), [viewPeriod, periodOffset]);
 
-  // Обновить профиль если employee_id не привязан (после линковки через админку)
   useEffect(() => {
     if (!profile?.employee_id && refreshProfile) {
       refreshProfile();
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Initial load: employee + access point settings
   useEffect(() => {
     const load = async () => {
       if (!profile?.employee_id) { setLoading(false); return; }
@@ -168,7 +176,6 @@ export const EmployeeDashboardPage: React.FC = () => {
     load();
   }, [profile?.employee_id]);
 
-  // Load SKUD events when period changes
   const loadEvents = useCallback(async (empId: number, start: string, end: string) => {
     setEventsLoading(true);
     try {
@@ -186,76 +193,12 @@ export const EmployeeDashboardPage: React.FC = () => {
     loadEvents(profile.employee_id, periodRange.startDate, periodRange.endDate);
   }, [profile?.employee_id, periodRange.startDate, periodRange.endDate, loadEvents]);
 
-  // Build display data
-  const weekStartDate = useMemo(() => {
-    if (viewPeriod === 'week') return periodRange.startDate;
-    const today = new Date();
-    const currentDay = today.getDay() === 0 ? 6 : today.getDay() - 1;
-    const start = new Date(today);
-    start.setDate(today.getDate() - currentDay);
-    return toLocalISO(start);
-  }, [viewPeriod, periodRange.startDate]);
-
-  const weekData = useMemo(
-    () => buildWeekAttendance(skudEvents, viewPeriod === 'week' ? periodRange.startDate : weekStartDate, internalPoints),
-    [skudEvents, viewPeriod, periodRange.startDate, weekStartDate]
+  const dayGroups = useMemo(
+    () => buildDayGroups(skudEvents, periodRange.startDate, periodRange.endDate, internalPoints),
+    [skudEvents, periodRange.startDate, periodRange.endDate, internalPoints],
   );
 
-  const dayEvents = useMemo(() => {
-    const dateStr = viewPeriod === 'day' ? periodRange.startDate : toLocalISO(new Date());
-    return skudEvents
-      .filter((e) => e.event_date === dateStr)
-      .sort((a, b) => a.event_time.localeCompare(b.event_time));
-  }, [skudEvents, viewPeriod, periodRange.startDate]);
-
-  const dayData = useMemo(() => {
-    const ext = dayEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point));
-    const src = ext.length > 0 ? ext : dayEvents;
-    const entries = src.filter(e => e.direction === 'entry');
-    const exits = src.filter(e => e.direction === 'exit');
-    const first = entries.length > 0 ? entries[0].event_time : null;
-    const last = exits.length > 0 ? exits[exits.length - 1].event_time : null;
-    const dateStr = viewPeriod === 'day' ? periodRange.startDate : toLocalISO(new Date());
-    const totalMinutes = calcPairMinutes(dayEvents, internalPoints, dateStr === toLocalISO(new Date()));
-    return { firstEntry: first, lastExit: last, totalMinutes };
-  }, [dayEvents, internalPoints, viewPeriod, periodRange.startDate]);
-
-  const monthDays = useMemo(() => {
-    if (viewPeriod !== 'month') return [];
-    const start = new Date(periodRange.startDate + 'T00:00:00');
-    const end = new Date(periodRange.endDate + 'T00:00:00');
-    const todayStr = toLocalISO(new Date());
-    const days: DayAttendance[] = [];
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const dateStr = toLocalISO(d);
-      const dayEvts = skudEvents
-        .filter(e => e.event_date === dateStr)
-        .sort((a, b) => a.event_time.localeCompare(b.event_time));
-      const ext = dayEvts.filter(e => !e.access_point || !internalPoints.has(e.access_point));
-      const src = ext.length > 0 ? ext : dayEvts;
-      const entries = src.filter(e => e.direction === 'entry');
-      const exits = src.filter(e => e.direction === 'exit');
-      const firstEntry = entries.length > 0 ? entries[0].event_time : null;
-      const lastExit = exits.length > 0 ? exits[exits.length - 1].event_time : null;
-      const totalMinutes = calcPairMinutes(dayEvts, internalPoints, dateStr === todayStr);
-      const dow = d.getDay() === 0 ? 6 : d.getDay() - 1;
-      days.push({ date: dateStr, dayName: DAY_NAMES[dow], firstEntry, lastExit, totalMinutes, isToday: dateStr === todayStr, isWeekend: dow >= 5 });
-    }
-    return days;
-  }, [viewPeriod, periodRange, skudEvents]);
-
   const isCurrentPeriod = periodOffset === 0;
-
-  const getEventColor = useCallback((event: SkudEvent) => {
-    const isInternal = event.access_point ? internalPoints.has(event.access_point) : false;
-    if (isInternal) return { dot: styles.skudInternal, badge: styles.statusGray, label: 'Внутр.' };
-    const dir = event.direction?.toLowerCase() || '';
-    const isEntry = dir.includes('вход') || dir.includes('in') || event.direction === '1' || dir === 'entry';
-    const isExit = dir.includes('выход') || dir.includes('out') || event.direction === '0' || dir === 'exit';
-    if (isEntry) return { dot: styles.skudEntry, badge: styles.approved, label: 'Вход' };
-    if (isExit) return { dot: styles.skudExit, badge: styles.statusRed, label: 'Выход' };
-    return { dot: styles.skudInternal, badge: styles.statusGray, label: 'Событие' };
-  }, [internalPoints]);
 
   const handleSetup2FA = async () => {
     try {
@@ -324,11 +267,7 @@ export const EmployeeDashboardPage: React.FC = () => {
           setPeriodOffset={setPeriodOffset}
           periodLabel={periodRange.label}
           isCurrentPeriod={isCurrentPeriod}
-          dayEvents={dayEvents}
-          dayData={dayData}
-          weekData={weekData}
-          monthDays={monthDays}
-          getEventColor={getEventColor}
+          dayGroups={dayGroups}
         />
 
         <EmployeeInfoCards
@@ -342,7 +281,6 @@ export const EmployeeDashboardPage: React.FC = () => {
         />
       </div>
 
-      {/* 2FA Setup Modal */}
       {show2FASetup && twoFAData && (
         <TwoFAModal
           twoFAData={twoFAData}
@@ -354,7 +292,6 @@ export const EmployeeDashboardPage: React.FC = () => {
         />
       )}
 
-      {/* Request Modals */}
       {activeModal && (
         <RequestModal activeModal={activeModal} onClose={() => setActiveModal(null)} />
       )}

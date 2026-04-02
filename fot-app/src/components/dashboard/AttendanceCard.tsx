@@ -1,17 +1,25 @@
-import type { FC } from 'react';
+import { type FC, useState, useEffect } from 'react';
 import type { SkudEvent } from '../../types';
 import styles from '../../pages/employee/EmployeeDashboard.module.css';
 
 type ViewPeriod = 'day' | 'week' | 'month';
 
-interface IDayAttendance {
+export interface IDayGroup {
   date: string;
   dayName: string;
+  events: SkudEvent[];
   firstEntry: string | null;
   lastExit: string | null;
   totalMinutes: number;
   isToday: boolean;
   isWeekend: boolean;
+  pairs: IEntryExitPair[];
+}
+
+export interface IEntryExitPair {
+  entry: SkudEvent;
+  exit: SkudEvent | null;
+  durationMinutes: number;
 }
 
 interface IAttendanceCardProps {
@@ -22,17 +30,10 @@ interface IAttendanceCardProps {
   setPeriodOffset: (fn: (o: number) => number) => void;
   periodLabel: string;
   isCurrentPeriod: boolean;
-  dayEvents: SkudEvent[];
-  dayData: { firstEntry: string | null; lastExit: string | null; totalMinutes: number };
-  weekData: IDayAttendance[];
-  monthDays: IDayAttendance[];
-  getEventColor: (event: SkudEvent) => { dot: string; badge: string; label: string };
+  dayGroups: IDayGroup[];
 }
 
 const formatTime = (t: string) => t.slice(0, 5);
-
-const formatDateRu = (d: string) =>
-  new Date(d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 
 const formatHM = (totalMinutes: number): string => {
   const h = Math.floor(totalMinutes / 60);
@@ -42,75 +43,78 @@ const formatHM = (totalMinutes: number): string => {
   return `${h} ч ${m} мин`;
 };
 
-const timeToMinutes = (t: string): number => {
-  const [h, m] = t.split(':').map(Number);
-  return h * 60 + m;
-};
+const formatDateLong = (d: string) =>
+  new Date(d + 'T00:00:00').toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' });
 
-const DayView: FC<Pick<IAttendanceCardProps, 'dayEvents' | 'dayData' | 'getEventColor'>> = ({ dayEvents, dayData, getEventColor }) => (
-  <>
-    {dayEvents.length === 0 ? (
-      <div className={styles.emptyState}>Нет событий СКУД</div>
-    ) : (
-      dayEvents.map((event, i) => {
-        const { dot, badge, label } = getEventColor(event);
-        const firstEntry = dayEvents[0]?.event_time;
-        const duration = firstEntry && i > 0
-          ? Math.max(0, timeToMinutes(event.event_time) - timeToMinutes(firstEntry))
-          : 0;
-        return (
-          <div key={event.id || i} className={styles.requestItem}>
-            <div className={`${styles.skudDot} ${dot}`} />
-            <div className={styles.requestContent}>
-              <div className={styles.requestTitle}>{label}</div>
-              <div className={styles.requestMeta}>
-                {event.access_point || '—'}
-                {duration > 0 && <span className={styles.durationBadge}>{formatHM(duration)}</span>}
-              </div>
-            </div>
-            <div className={`${styles.requestStatus} ${badge}`}>
-              {formatTime(event.event_time)}
-            </div>
-          </div>
-        );
-      })
-    )}
-    {dayData.totalMinutes > 0 && (
-      <div className={styles.todaySummary}>
-        <span>Итого отработано:</span>
-        <strong>{formatHM(dayData.totalMinutes)}</strong>
-      </div>
-    )}
-  </>
+const ChevronDown: FC<{ className?: string }> = ({ className }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+    <polyline points="6 9 12 15 18 9"/>
+  </svg>
 );
 
-const ScheduleRows: FC<{ days: IDayAttendance[] }> = ({ days }) => (
-  <div className={styles.scheduleWeekFull}>
-    {days.map((day) => (
-      <div
-        key={day.date}
-        className={`${styles.scheduleRow} ${day.isToday ? styles.today : ''} ${day.isWeekend ? styles.weekend : ''}`}
-      >
-        <div className={styles.scheduleRowDay}>
-          <span className={styles.scheduleDayName}>{day.dayName}</span>
-          <span className={styles.scheduleDayDate}>{formatDateRu(day.date)}</span>
-        </div>
-        <div className={styles.scheduleRowTimes}>
-          {day.firstEntry ? (
-            <>
-              <span className={styles.scheduleEntry}>{formatTime(day.firstEntry)}</span>
-              <span className={styles.scheduleSep}>–</span>
-              <span className={styles.scheduleExit}>{day.lastExit ? formatTime(day.lastExit) : 'на месте'}</span>
-            </>
+const ChevronRight: FC<{ className?: string }> = ({ className }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+    <polyline points="9 18 15 12 9 6"/>
+  </svg>
+);
+
+const DayEvents: FC<{ group: IDayGroup }> = ({ group }) => (
+  <div className={styles.skudDayEvents}>
+    {group.pairs.length > 0 ? (
+      group.pairs.map((pair, i) => (
+        <div key={i} className={styles.skudPairBlock}>
+          <div className={styles.skudEventRow}>
+            <span className={`${styles.skudEventIcon} ${styles.skudEventEntry}`}>→</span>
+            <span className={styles.skudEventTime}>{formatTime(pair.entry.event_time)}</span>
+            <span className={styles.skudEventDir}>Вход</span>
+            {pair.entry.access_point && <span className={styles.skudEventPoint}>{pair.entry.access_point}</span>}
+          </div>
+          {pair.exit ? (
+            <div className={styles.skudEventRow}>
+              <span className={`${styles.skudEventIcon} ${styles.skudEventExit}`}>←</span>
+              <span className={styles.skudEventTime}>{formatTime(pair.exit.event_time)}</span>
+              <span className={styles.skudEventDir}>Выход</span>
+              {pair.exit.access_point && <span className={styles.skudEventPoint}>{pair.exit.access_point}</span>}
+            </div>
           ) : (
-            <span className={styles.scheduleAbsent}>—</span>
+            <div className={styles.skudEventRow}>
+              <span className={`${styles.skudEventIcon} ${styles.skudEventEntry}`}>→</span>
+              <span className={styles.skudEventTime}>—</span>
+              <span className={styles.skudEventDir}>на месте</span>
+            </div>
+          )}
+          {pair.durationMinutes > 0 && (
+            <div className={styles.skudPairDuration}>{formatHM(pair.durationMinutes)}</div>
           )}
         </div>
-        {day.totalMinutes > 0 && (
-          <div className={styles.scheduleRowHours}>{formatHM(day.totalMinutes)}</div>
-        )}
-      </div>
-    ))}
+      ))
+    ) : (
+      group.events.map((ev, i) => (
+        <div key={i} className={styles.skudEventRow}>
+          <span className={`${styles.skudEventIcon} ${ev.direction === 'entry' ? styles.skudEventEntry : styles.skudEventExit}`}>
+            {ev.direction === 'entry' ? '→' : '←'}
+          </span>
+          <span className={styles.skudEventTime}>{formatTime(ev.event_time)}</span>
+          <span className={styles.skudEventDir}>{ev.direction === 'entry' ? 'Вход' : 'Выход'}</span>
+          {ev.access_point && <span className={styles.skudEventPoint}>{ev.access_point}</span>}
+        </div>
+      ))
+    )}
+  </div>
+);
+
+const DaySummaryBadges: FC<{ group: IDayGroup }> = ({ group }) => (
+  <div className={styles.skudDaySummary}>
+    {group.firstEntry && (
+      <span className={`${styles.skudTimeBadge} ${styles.skudTimeBadgeEntry}`}>{formatTime(group.firstEntry)}</span>
+    )}
+    {group.lastExit && (
+      <span className={`${styles.skudTimeBadge} ${styles.skudTimeBadgeExit}`}>{formatTime(group.lastExit)}</span>
+    )}
+    {group.totalMinutes > 0 && (
+      <span className={`${styles.skudTimeBadge} ${styles.skudTimeBadgeDuration}`}>{formatHM(group.totalMinutes)}</span>
+    )}
+    <span className={styles.skudEventsCount}>{group.events.length} соб.</span>
   </div>
 );
 
@@ -122,19 +126,33 @@ export const AttendanceCard: FC<IAttendanceCardProps> = ({
   setPeriodOffset,
   periodLabel,
   isCurrentPeriod,
-  dayEvents,
-  dayData,
-  weekData,
-  monthDays,
-  getEventColor,
+  dayGroups,
 }) => {
-  const weekTotal = weekData.reduce((s, d) => s + d.totalMinutes, 0);
-  const monthTotal = monthDays.reduce((s, d) => s + d.totalMinutes, 0);
-  const filteredMonthDays = monthDays.filter(d => !d.isWeekend || d.firstEntry);
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
+
+  // Auto-expand for day view
+  useEffect(() => {
+    if (viewPeriod === 'day' && dayGroups.length > 0) {
+      setExpandedDays(new Set(dayGroups.map(g => g.date)));
+    } else {
+      setExpandedDays(new Set());
+    }
+  }, [viewPeriod, dayGroups]);
+
+  const toggleDay = (date: string) => {
+    setExpandedDays(prev => {
+      const next = new Set(prev);
+      if (next.has(date)) next.delete(date);
+      else next.add(date);
+      return next;
+    });
+  };
+
+  const total = dayGroups.reduce((s, g) => s + g.totalMinutes, 0);
+  const periodName = viewPeriod === 'day' ? 'день' : viewPeriod === 'week' ? 'неделю' : 'месяц';
 
   return (
     <div className={styles.card}>
-      {/* Period controls */}
       <div className={styles.attendanceHeader}>
         <div className={styles.periodTabs}>
           {(['day', 'week', 'month'] as ViewPeriod[]).map(p => (
@@ -162,33 +180,45 @@ export const AttendanceCard: FC<IAttendanceCardProps> = ({
         </div>
       </div>
 
-      <div className={styles.requestsList}>
+      <div className={styles.skudDaysList}>
         {(loading || eventsLoading) ? (
           <div className={styles.emptyState}>Загрузка...</div>
-        ) : viewPeriod === 'day' ? (
-          <DayView dayEvents={dayEvents} dayData={dayData} getEventColor={getEventColor} />
-        ) : viewPeriod === 'week' ? (
-          <>
-            <ScheduleRows days={weekData} />
-            {weekTotal > 0 && (
-              <div className={styles.todaySummary}>
-                <span>Итого за неделю:</span>
-                <strong>{formatHM(weekTotal)}</strong>
-              </div>
-            )}
-          </>
+        ) : dayGroups.length === 0 ? (
+          <div className={styles.emptyState}>Нет событий СКУД</div>
         ) : (
-          <>
-            <ScheduleRows days={filteredMonthDays} />
-            {monthTotal > 0 && (
-              <div className={styles.todaySummary}>
-                <span>Итого за месяц:</span>
-                <strong>{formatHM(monthTotal)}</strong>
+          dayGroups.map(group => {
+            const expanded = expandedDays.has(group.date);
+            const hasEvents = group.events.length > 0;
+            return (
+              <div
+                key={group.date}
+                className={`${styles.skudDayCard} ${group.isToday ? styles.skudDayToday : ''} ${group.isWeekend ? styles.skudDayWeekend : ''}`}
+              >
+                <button
+                  className={styles.skudDayHeader}
+                  onClick={() => hasEvents && toggleDay(group.date)}
+                  disabled={!hasEvents}
+                >
+                  <span className={styles.skudDayChevron}>
+                    {hasEvents ? (expanded ? <ChevronDown /> : <ChevronRight />) : <span style={{ width: 16 }} />}
+                  </span>
+                  <span className={styles.skudDayDate}>{formatDateLong(group.date)}</span>
+                  {hasEvents && <DaySummaryBadges group={group} />}
+                  {!hasEvents && <span className={styles.skudAbsentLabel}>—</span>}
+                </button>
+                {expanded && hasEvents && <DayEvents group={group} />}
               </div>
-            )}
-          </>
+            );
+          })
         )}
       </div>
+
+      {total > 0 && (
+        <div className={styles.todaySummary}>
+          <span>Итого за {periodName}:</span>
+          <strong>{formatHM(total)}</strong>
+        </div>
+      )}
     </div>
   );
 };

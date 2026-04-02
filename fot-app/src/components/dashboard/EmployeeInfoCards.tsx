@@ -13,7 +13,7 @@ interface IEmployeeInfoCardsProps {
 }
 
 const formatDateRu = (d: string) =>
-  new Date(d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  new Date(d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
 
 const pluralize = (n: number, one: string, few: string, many: string): string => {
   const lastTwo = n % 100;
@@ -109,11 +109,11 @@ export const EmployeeInfoCards: FC<IEmployeeInfoCardsProps> = ({
         </div>
         <div className={styles.vacationDetail}>
           <span className={styles.vacationDetailLabel}>2FA</span>
-          <span className={styles.vacationDetailValue}>
+          <span className={`${styles.vacationDetailValue} ${styles.twoFARow}`}>
             {isTwoFactorEnabled ? (
-              <><span className={styles.statusOn}>Включена</span><button className={styles.link2FA} onClick={onDisable2FA}>Отключить</button></>
+              <><span className={styles.statusOn}>Включена</span><button className={`${styles.twoFABtn} ${styles.twoFABtnDisable}`} onClick={onDisable2FA}>Отключить</button></>
             ) : (
-              <><span className={styles.statusOff}>Отключена</span><button className={styles.link2FA} onClick={onSetup2FA}>Включить</button></>
+              <><span className={styles.statusOff}>Отключена</span><button className={`${styles.twoFABtn} ${styles.twoFABtnEnable}`} onClick={onSetup2FA}>Включить</button></>
             )}
           </span>
         </div>

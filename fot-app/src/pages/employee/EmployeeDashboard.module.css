@@ -536,8 +536,45 @@
 }
 
 .vacationDetailValue {
-  font-family: 'Space Mono', monospace;
   font-weight: 500;
+}
+
+.twoFARow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.twoFABtn {
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: 1px solid;
+}
+
+.twoFABtnEnable {
+  background: var(--accent-muted);
+  color: var(--accent);
+  border-color: rgba(59, 130, 246, 0.2);
+}
+
+.twoFABtnEnable:hover {
+  background: var(--accent);
+  color: white;
+}
+
+.twoFABtnDisable {
+  background: var(--error-muted);
+  color: var(--error);
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+.twoFABtnDisable:hover {
+  background: var(--error);
+  color: white;
 }
 
 /* Schedule */
@@ -604,6 +641,189 @@
 
 .scheduleDay.today .scheduleDayNum {
   color: var(--accent);
+}
+
+/* SKUD Accordion */
+.skudDaysList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.skudDayCard {
+  background: var(--surface, var(--bg-secondary));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.skudDayCard.skudDayToday {
+  border-color: rgba(99, 102, 241, 0.3);
+  background: rgba(99, 102, 241, 0.04);
+}
+
+.skudDayCard.skudDayWeekend {
+  opacity: 0.6;
+}
+
+.skudDayHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary);
+  font-family: inherit;
+  transition: background 0.12s;
+  text-align: left;
+}
+
+.skudDayHeader:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.skudDayHeader:disabled {
+  cursor: default;
+}
+
+.skudDayChevron {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+}
+
+.skudDayDate {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.skudAbsentLabel {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.skudDaySummary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.skudTimeBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: 'Space Mono', monospace;
+}
+
+.skudTimeBadgeEntry {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+.skudTimeBadgeExit {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
+.skudTimeBadgeDuration {
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+}
+
+.skudEventsCount {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.skudDayEvents {
+  border-top: 1px solid var(--border);
+  padding: 8px 14px 12px 38px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.skudPairBlock {
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+  margin-bottom: 6px;
+}
+
+.skudPairBlock:last-child {
+  margin-bottom: 0;
+}
+
+.skudEventRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.skudEventIcon {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.skudEventEntry {
+  background: rgba(34, 197, 94, 0.12);
+  color: #16a34a;
+}
+
+.skudEventExit {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+
+.skudEventTime {
+  font-family: 'Space Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  min-width: 42px;
+}
+
+.skudEventDir {
+  font-size: 12px;
+  min-width: 40px;
+}
+
+.skudEventPoint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.skudPairDuration {
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 600;
+  padding: 2px 0 2px 26px;
+  font-family: 'Space Mono', monospace;
 }
 
 /* Empty state */

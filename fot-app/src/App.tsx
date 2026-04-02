@@ -52,6 +52,7 @@ const LeaveRequestsPage = lazy(() => import('./pages/employee/LeaveRequestsPage'
 const PayslipsPage = lazy(() => import('./pages/employee/PayslipsPage').then(m => ({ default: m.PayslipsPage })));
 const PaymentsPage = lazy(() => import('./pages/employee/PaymentsPage').then(m => ({ default: m.PaymentsPage })));
 const DocumentsPage = lazy(() => import('./pages/employee/DocumentsPage').then(m => ({ default: m.DocumentsPage })));
+const EmployeeTimesheetPage = lazy(() => import('./pages/employee/EmployeeTimesheetPage').then(m => ({ default: m.EmployeeTimesheetPage })));
 
 // Leave requests management (header/hr)
 const LeaveRequestsManagePage = lazy(() => import('./pages/LeaveRequestsManagePage').then(m => ({ default: m.LeaveRequestsManagePage })));
@@ -159,6 +160,14 @@ const AppRoutes = () => {
             element={
               <EmployeeLayout title="Мои документы">
                 <DocumentsPage />
+              </EmployeeLayout>
+            }
+          />
+          <Route
+            path="/employee/timesheet"
+            element={
+              <EmployeeLayout title="Мой табель">
+                <EmployeeTimesheetPage />
               </EmployeeLayout>
             }
           />

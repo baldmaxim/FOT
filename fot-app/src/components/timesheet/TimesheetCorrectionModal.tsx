@@ -13,6 +13,7 @@ interface ICorrectionModalProps {
   employeeName?: string;
   employeeId?: number;
   workDate?: string;
+  hideCorrectionTab?: boolean;
 }
 
 interface ITypeOption {
@@ -231,6 +232,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   employeeName,
   employeeId,
   workDate,
+  hideCorrectionTab,
 }) => {
   const [tab, setTab] = useState<ModalTab>('events');
 
@@ -261,12 +263,14 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
         >
           События СКУД
         </button>
-        <button
-          className={`ts-modal-tab ${tab === 'correction' ? 'ts-modal-tab--active' : ''}`}
-          onClick={() => setTab('correction')}
-        >
-          Корректировка
-        </button>
+        {!hideCorrectionTab && (
+          <button
+            className={`ts-modal-tab ${tab === 'correction' ? 'ts-modal-tab--active' : ''}`}
+            onClick={() => setTab('correction')}
+          >
+            Корректировка
+          </button>
+        )}
       </div>
 
       {tab === 'events' && employeeId && workDate ? (
