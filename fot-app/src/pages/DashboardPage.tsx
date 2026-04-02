@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useRef, useState, memo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronLeft, ChevronRight, Search, Building2, LogOut, Users, Clock, ArrowDownRight, ArrowUpRight, X } from 'lucide-react';
 import { ActivityList } from '../components/dashboard/ActivityList';
-import { PunctualityCard, AvgArrivalCard, RisksCard } from '../components/dashboard/AnalyticsRow';
-import { HourlyActivityCard, ComparisonCard, TopLateCard } from '../components/dashboard/DashboardSidebar';
+import { PunctualityCard, AvgArrivalCard } from '../components/dashboard/AnalyticsRow';
+import { HourlyActivityCard, ComparisonCard } from '../components/dashboard/DashboardSidebar';
 import { LiveEventsCard } from '../components/dashboard/stats/LiveEventsCard';
 import { usePresence } from '../hooks/usePresence';
 import { useDashboardStats } from '../hooks/useDashboardStats';
@@ -146,6 +146,7 @@ export const DashboardPage: React.FC = () => {
   );
 
   const [lateModalOpen, setLateModalOpen] = useState(false);
+  const [expandedLateId, setExpandedLateId] = useState<number | null>(null);
   const navigate = useNavigate();
 
   const deptInputRef = useRef<HTMLInputElement>(null);
@@ -301,36 +302,70 @@ export const DashboardPage: React.FC = () => {
                 )}
               </div>
 
-              {period !== 'today' && stats?.periodStats && (
+              {stats && (
                 <div className="period-mini-cards">
-                  <div className="pmc-item pmc-green">
-                    <div className="pmc-label">Ср. присутствие</div>
-                    <div className="pmc-value">{stats.periodStats.avgPresent}<span className="pmc-sub">/{employees.length}</span></div>
-                  </div>
-                  <div className="pmc-item pmc-red">
-                    <div className="pmc-label">Ср. отсутствие</div>
-                    <div className="pmc-value">{stats.periodStats.avgAbsent}</div>
-                  </div>
-                  <div className="pmc-item pmc-blue">
-                    <div className="pmc-label">Посещаемость</div>
-                    <div className="pmc-value">{stats.periodStats.attendanceRate}%</div>
-                  </div>
-                  <div
-                    className="pmc-item pmc-orange pmc-clickable"
-                    onClick={() => setLateModalOpen(true)}
-                    title="Посмотреть топ опаздывающих"
-                  >
-                    <div className="pmc-label">Опоздания</div>
-                    <div className="pmc-value">
-                      {stats.periodStats.lateCount}
-                      {stats.periodStats.lateCount !== stats.periodStats.prevLateCount && (
-                        <span className={`pmc-delta ${stats.periodStats.lateCount > stats.periodStats.prevLateCount ? 'neg' : 'pos'}`}>
-                          {stats.periodStats.lateCount > stats.periodStats.prevLateCount ? '+' : ''}
-                          {stats.periodStats.lateCount - stats.periodStats.prevLateCount}
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  {period === 'today' ? (
+                    <>
+                      <div className="pmc-item pmc-green">
+                        <div className="pmc-label">Присутствуют</div>
+                        <div className="pmc-value">{onlineCount}<span className="pmc-sub">/{employees.length}</span></div>
+                      </div>
+                      <div className="pmc-item pmc-red">
+                        <div className="pmc-label">Отсутствуют</div>
+                        <div className="pmc-value">{employees.length - onlineCount}</div>
+                      </div>
+                      <div className="pmc-item pmc-blue">
+                        <div className="pmc-label">Вышедшие</div>
+                        <div className="pmc-value">{stats.earlyLeaveToday}</div>
+                      </div>
+                      <div
+                        className="pmc-item pmc-orange pmc-clickable"
+                        onClick={() => setLateModalOpen(true)}
+                        title="Посмотреть опоздавших"
+                      >
+                        <div className="pmc-label">Опоздания</div>
+                        <div className="pmc-value">
+                          {stats.lateToday}
+                          {stats.lateYesterday > 0 && stats.lateToday !== stats.lateYesterday && (
+                            <span className={`pmc-delta ${stats.lateToday > stats.lateYesterday ? 'neg' : 'pos'}`}>
+                              {stats.lateToday > stats.lateYesterday ? '+' : ''}{stats.lateToday - stats.lateYesterday}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  ) : stats.periodStats && (
+                    <>
+                      <div className="pmc-item pmc-green">
+                        <div className="pmc-label">Ср. присутствие</div>
+                        <div className="pmc-value">{stats.periodStats.avgPresent}<span className="pmc-sub">/{employees.length}</span></div>
+                      </div>
+                      <div className="pmc-item pmc-red">
+                        <div className="pmc-label">Ср. отсутствие</div>
+                        <div className="pmc-value">{stats.periodStats.avgAbsent}</div>
+                      </div>
+                      <div className="pmc-item pmc-blue">
+                        <div className="pmc-label">Посещаемость</div>
+                        <div className="pmc-value">{stats.periodStats.attendanceRate}%</div>
+                      </div>
+                      <div
+                        className="pmc-item pmc-orange pmc-clickable"
+                        onClick={() => setLateModalOpen(true)}
+                        title="Посмотреть топ опаздывающих"
+                      >
+                        <div className="pmc-label">Опоздания</div>
+                        <div className="pmc-value">
+                          {stats.periodStats.lateCount}
+                          {stats.periodStats.lateCount !== stats.periodStats.prevLateCount && (
+                            <span className={`pmc-delta ${stats.periodStats.lateCount > stats.periodStats.prevLateCount ? 'neg' : 'pos'}`}>
+                              {stats.periodStats.lateCount > stats.periodStats.prevLateCount ? '+' : ''}
+                              {stats.periodStats.lateCount - stats.periodStats.prevLateCount}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -340,8 +375,6 @@ export const DashboardPage: React.FC = () => {
                   <AvgArrivalCard data={stats.avgArrivalByDay} period={period} />
                   <HourlyActivityCard data={stats.hourlyActivity} period={period} />
                   <ComparisonCard comparison={stats.weekComparison} period={period} />
-                  <RisksCard risks={stats.risks} period={period} />
-                  <TopLateCard data={stats.topLate} period={period} />
                 </>
               )}
             </div>
@@ -353,7 +386,7 @@ export const DashboardPage: React.FC = () => {
         <div className="dash-modal-overlay" onClick={() => setLateModalOpen(false)}>
           <div className="dash-modal" onClick={e => e.stopPropagation()}>
             <div className="dash-modal-header">
-              <span>Опоздания за {period === 'week' ? 'неделю' : 'месяц'}</span>
+              <span>Опоздания за {period === 'today' ? 'сегодня' : period === 'week' ? 'неделю' : 'месяц'}</span>
               <button className="dash-modal-close" onClick={() => setLateModalOpen(false)}>
                 <X size={16} />
               </button>
@@ -362,24 +395,46 @@ export const DashboardPage: React.FC = () => {
               {stats.topLate.length === 0 ? (
                 <div className="dash-modal-empty">Опозданий нет</div>
               ) : (
-                stats.topLate.map((item, i) => (
-                  <div
-                    key={item.employee_id}
-                    className="dash-late-row"
-                    onClick={() => {
-                      setLateModalOpen(false);
-                      navigate(`/tender/${item.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } });
-                    }}
-                  >
-                    <span className="dash-late-rank">{i + 1}</span>
-                    <div className="dash-late-info">
-                      <div className="dash-late-name">{item.full_name}</div>
-                      <div className="dash-late-avg">~{item.avgArrival}</div>
+                stats.topLate.map((item, i) => {
+                  const isExpanded = expandedLateId === item.employee_id;
+                  return (
+                    <div key={item.employee_id} className="dash-late-group">
+                      <div
+                        className="dash-late-row"
+                        onClick={() => setExpandedLateId(isExpanded ? null : item.employee_id)}
+                      >
+                        <span className="dash-late-rank">{i + 1}</span>
+                        <div className="dash-late-info">
+                          <div className="dash-late-name">{item.full_name}</div>
+                          <div className="dash-late-avg">~{item.avgArrival}</div>
+                        </div>
+                        <span className="dash-late-count">{item.lateCount}</span>
+                        <ChevronDown size={14} className={`dash-late-chevron ${isExpanded ? 'dash-late-chevron--open' : ''}`} />
+                      </div>
+                      {isExpanded && (
+                        <div className="dash-late-details">
+                          {(item.lateDetails || []).map(d => (
+                            <div key={d.date} className="dash-late-detail-row">
+                              <span className="dash-late-detail-date">
+                                {new Date(d.date + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', weekday: 'short' })}
+                              </span>
+                              <span className="dash-late-detail-time">{d.arrival}</span>
+                            </div>
+                          ))}
+                          <div
+                            className="dash-late-detail-link"
+                            onClick={() => {
+                              setLateModalOpen(false);
+                              navigate(`/tender/${item.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } });
+                            }}
+                          >
+                            Открыть карточку →
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <span className="dash-late-count">{item.lateCount}</span>
-                    <ChevronRight size={14} className="dash-late-chevron" />
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>

@@ -1,4 +1,5 @@
 import type { FC } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { TrendingUp, TrendingDown } from 'lucide-react';
 import type { IDashboardStats, DashboardPeriod } from '../../types';
 import styles from './DashboardSidebar.module.css';
@@ -117,26 +118,34 @@ export const ComparisonCard: FC<{ comparison: IDashboardStats['weekComparison'];
   );
 };
 
-export const TopLateCard: FC<{ data: IDashboardStats['topLate']; period: DashboardPeriod }> = ({ data, period }) => (
-  <div className={styles.card}>
-    <div className={styles.cardTitle}>Топ опаздывающих</div>
-    {data.length === 0 ? (
-      <div className={styles.empty}>Нет опозданий за {getPeriodLabel(period)}</div>
-    ) : (
-      data.map((item, i) => (
-        <div key={item.employee_id} className={styles.lateItem}>
-          <span className={styles.lateRank}>{i + 1}</span>
-          <div className={styles.lateAvatar}>{getInitials(item.full_name)}</div>
-          <div className={styles.lateInfo}>
-            <div className={styles.lateName}>{item.full_name}</div>
-            <div className={styles.lateArrival}>~{item.avgArrival}</div>
+export const TopLateCard: FC<{ data: IDashboardStats['topLate']; period: DashboardPeriod }> = ({ data, period }) => {
+  const navigate = useNavigate();
+
+  return (
+    <div className={styles.card}>
+      <div className={styles.cardTitle}>Топ опаздывающих</div>
+      {data.length === 0 ? (
+        <div className={styles.empty}>Нет опозданий за {getPeriodLabel(period)}</div>
+      ) : (
+        data.map((item, i) => (
+          <div
+            key={item.employee_id}
+            className={`${styles.lateItem} ${styles.clickable}`}
+            onClick={() => navigate(`/tender/${item.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } })}
+          >
+            <span className={styles.lateRank}>{i + 1}</span>
+            <div className={styles.lateAvatar}>{getInitials(item.full_name)}</div>
+            <div className={styles.lateInfo}>
+              <div className={styles.lateName}>{item.full_name}</div>
+              <div className={styles.lateArrival}>~{item.avgArrival}</div>
+            </div>
+            <span className={styles.lateCount}>{item.lateCount}×</span>
           </div>
-          <span className={styles.lateCount}>{item.lateCount}×</span>
-        </div>
-      ))
-    )}
-  </div>
-);
+        ))
+      )}
+    </div>
+  );
+};
 
 /** Сравнение двух времён в минутах (положительное = раньше = лучше) */
 function compareTimes(a: string, b: string): number {

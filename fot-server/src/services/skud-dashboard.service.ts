@@ -221,15 +221,17 @@ export async function getDashboardStats(
     else if (s.first_entry! <= slightlyThreshold) slightlyLateCount++;
     else veryLateCount++;
   }
-  const daysWithPresence = new Set(periodWithEntry.map(s => s.date));
-  const actualWorkDays = daysWithPresence.size;
-  const expectedTotal = officeEmpIds.length * (actualWorkDays || 1);
-  const absentCount = Math.max(0, expectedTotal - periodWithEntry.length);
+  const calendarWorkDays = countWorkingDays(periodStartStr, periodEndStr);
+  const actualWorkDays = calendarWorkDays || 1;
+
+  // 100% = пришедшие сотрудники, absent не считаем
+  // Для week/month — средняя пунктуальность за все дни периода
+  const totalArrived = periodWithEntry.length || 1;
   const punctuality = {
-    onTime: Math.round((onTimeCount / expectedTotal) * 100),
-    slightlyLate: Math.round((slightlyLateCount / expectedTotal) * 100),
-    veryLate: Math.round((veryLateCount / expectedTotal) * 100),
-    absent: Math.round((absentCount / expectedTotal) * 100),
+    onTime: Math.round((onTimeCount / totalArrived) * 100),
+    slightlyLate: Math.round((slightlyLateCount / totalArrived) * 100),
+    veryLate: Math.round((veryLateCount / totalArrived) * 100),
+    absent: 0,
   };
 
   // Average arrival by weekday
@@ -395,6 +397,7 @@ export async function getDashboardStats(
   const topLateCountByEmp = new Map<number, number>();
   const avgArrivalByEmp = new Map<number, number>();
   const arrivalCountByEmp = new Map<number, number>();
+  const lateDetailsByEmp = new Map<number, Array<{ date: string; arrival: string }>>();
   for (const s of periodSummaries) {
     if (s.first_entry) {
       const [h, m] = s.first_entry.split(':').map(Number);
@@ -404,6 +407,9 @@ export async function getDashboardStats(
       if (remoteEmpIds.has(s.employee_id)) continue;
       if (s.first_entry > getLateThresholdFor(s.employee_id)) {
         topLateCountByEmp.set(s.employee_id, (topLateCountByEmp.get(s.employee_id) || 0) + 1);
+        const details = lateDetailsByEmp.get(s.employee_id) || [];
+        details.push({ date: s.date, arrival: s.first_entry.slice(0, 5) });
+        lateDetailsByEmp.set(s.employee_id, details);
       }
     }
   }
@@ -420,6 +426,7 @@ export async function getDashboardStats(
         full_name: empNameMap.get(empId) || '',
         lateCount: lateCnt,
         avgArrival: `${String(Math.floor(avg / 60)).padStart(2, '0')}:${String(avg % 60).padStart(2, '0')}`,
+        lateDetails: (lateDetailsByEmp.get(empId) || []).sort((a, b) => b.date.localeCompare(a.date)),
       };
     });
 
@@ -448,11 +455,9 @@ export async function getDashboardStats(
     periodStats = { avgPresent, avgAbsent, attendanceRate, lateCount: pLateCount, prevLateCount };
   }
 
-  // Early leave today
-  const todaySummaries = (summaries || []).filter(s => s.date === todayStr);
-  const earlyLeaveToday = todaySummaries.filter(
-    s => s.first_entry && s.last_exit && s.last_exit < '17:00:00'
-  ).length;
+  // Exited today — уникальные сотрудники, у которых зафиксирован выход
+  const exitedEmployees = new Set((todayExitEvents || []).map(e => e.employee_id));
+  const earlyLeaveToday = exitedEmployees.size;
 
   // Today entries/exits count
   const todayEntriesCount = (todayEvents || []).length;

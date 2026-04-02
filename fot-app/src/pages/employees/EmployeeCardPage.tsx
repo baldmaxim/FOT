@@ -4,6 +4,7 @@ import {
   ArrowLeft, Edit3, Archive, RotateCcw, Trash2,
   Briefcase, FolderOpen, CalendarDays, CheckCircle,
   Clock, DollarSign, BarChart3, LogIn, LogOut,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
 import { skudService } from '../../services/skudService';
@@ -14,6 +15,7 @@ import { EmployeeHistorySection } from '../../components/employees/EmployeeHisto
 import { EmployeeSkudSection } from '../../components/employees/EmployeeSkudSection';
 import { AttendanceCalendar } from '../../components/employees/AttendanceCalendar';
 import { EmployeeCardSidebar } from '../../components/employees/EmployeeCardSidebar';
+import { DateInput } from '../../components/ui/DateInput';
 import {
   calculateAttendance, isEmployeeOnSite, computePeriodData,
 } from '../../utils/attendanceCalc';
@@ -22,16 +24,18 @@ import '../../styles/EmployeeCardPage.css';
 import '../../styles/EmployeeCardV2.css';
 
 type Tab = 'attendance' | 'info' | 'history' | 'skud';
-type StatsPeriod = 'today' | 'week' | 'month';
-const STATS_PERIOD_LABELS: Record<StatsPeriod, string> = {
+type ViewPeriod = 'today' | 'week' | 'month' | 'range';
+const PERIOD_LABELS: Record<ViewPeriod, string> = {
   today: 'Сегодня',
   week: 'Неделя',
   month: 'Месяц',
+  range: 'Период',
 };
-const STATS_TREND_LABELS: Record<StatsPeriod, string> = {
+const STATS_TREND_LABELS: Record<ViewPeriod, string> = {
   today: 'за сегодня',
   week: 'за неделю',
   month: 'за текущий месяц',
+  range: 'за текущий месяц',
 };
 const TABS: { key: Tab; label: string }[] = [
   { key: 'attendance', label: 'Посещаемость' },
@@ -57,6 +61,48 @@ const MONTH_LABELS_GEN = [
   'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
 ];
 
+const MONTH_NAMES_NOM = [
+  'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
+];
+
+const toLocalISO = (d: Date) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+const parseISO = (s: string) => {
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(y, m - 1, d);
+};
+
+const navigateViewDate = (period: ViewPeriod, dateStr: string, dir: number): string => {
+  const d = parseISO(dateStr);
+  if (period === 'today') d.setDate(d.getDate() + dir);
+  else if (period === 'week') d.setDate(d.getDate() + dir * 7);
+  else d.setMonth(d.getMonth() + dir);
+  return toLocalISO(d);
+};
+
+const getViewLabel = (period: ViewPeriod, dateStr: string): string => {
+  const d = parseISO(dateStr);
+  if (period === 'today') {
+    return d.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' });
+  }
+  if (period === 'week') {
+    const start = new Date(d);
+    const dow = start.getDay() || 7;
+    start.setDate(start.getDate() - dow + 1);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    const fmt = (dt: Date) => dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    return `${fmt(start)} — ${fmt(end)}`;
+  }
+  return `${MONTH_NAMES_NOM[d.getMonth()]} ${d.getFullYear()}`;
+};
+
 export const EmployeeCardPage: FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -80,7 +126,10 @@ export const EmployeeCardPage: FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>(urlTab && ['attendance', 'info', 'history', 'skud'].includes(urlTab) ? urlTab : 'attendance');
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<Partial<EmployeeInput>>({});
-  const [statsPeriod, setStatsPeriod] = useState<StatsPeriod>('month');
+  const [viewPeriod, setViewPeriod] = useState<ViewPeriod>('month');
+  const [rangeStart, setRangeStart] = useState(() => new Date().toISOString().slice(0, 10));
+  const [rangeEnd, setRangeEnd] = useState(() => new Date().toISOString().slice(0, 10));
+  const [skudViewDate, setSkudViewDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [skudFocusDate, setSkudFocusDate] = useState<string | null>(urlDate || null);
   const [skudFocusKey] = useState(urlDate ? 1 : 0);
 
@@ -161,6 +210,7 @@ export const EmployeeCardPage: FC = () => {
   const onSite = useMemo(() => isEmployeeOnSite(todayEvents, internalPoints), [todayEvents, internalPoints]);
 
   // Period-filtered stats + weekly pattern
+  const statsPeriod = viewPeriod === 'range' ? 'month' : viewPeriod;
   const periodData = useMemo(() => {
     const { stats: mStats, weeklyPattern: mPattern } = attendance;
     if (statsPeriod === 'month') return { stats: mStats, weeklyPattern: mPattern };
@@ -319,30 +369,49 @@ export const EmployeeCardPage: FC = () => {
         </div>
 
         {/* Stats */}
-        <div className="ec-stats-period-selector">
-          {(['today', 'week', 'month'] as StatsPeriod[]).map(p => (
-            <button
-              key={p}
-              className={`ec-stats-period-btn ${statsPeriod === p ? 'active' : ''}`}
-              onClick={() => setStatsPeriod(p)}
-            >
-              {STATS_PERIOD_LABELS[p]}
-            </button>
-          ))}
+        <div className="ec-stats-period-row">
+          <div className="ec-stats-period-selector">
+            {(['today', 'week', 'month', 'range'] as ViewPeriod[]).map(p => (
+              <button
+                key={p}
+                className={`ec-stats-period-btn ${viewPeriod === p ? 'active' : ''}`}
+                onClick={() => { setViewPeriod(p); if (p !== 'range') setSkudViewDate(new Date().toISOString().slice(0, 10)); }}
+              >
+                {PERIOD_LABELS[p]}
+              </button>
+            ))}
+          </div>
+          {viewPeriod === 'range' ? (
+            <div className="ec-range-inputs">
+              <DateInput value={rangeStart} onChange={setRangeStart} />
+              <span className="ec-range-sep">—</span>
+              <DateInput value={rangeEnd} onChange={setRangeEnd} />
+            </div>
+          ) : (
+            <div className="ec-date-nav">
+              <button className="ec-date-nav-btn" onClick={() => setSkudViewDate(s => navigateViewDate(viewPeriod, s, -1))}>
+                <ChevronLeft size={16} />
+              </button>
+              <span className="ec-date-nav-label">{getViewLabel(viewPeriod, skudViewDate)}</span>
+              <button className="ec-date-nav-btn" onClick={() => setSkudViewDate(s => navigateViewDate(viewPeriod, s, 1))}>
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          )}
         </div>
         <div className="ec-stats-row">
           <div className="ec-stat-card">
             <div className="ec-stat-header">
               <span className="ec-stat-label">Посещаемость</span>
-              <div className="ec-stat-icon green"><CheckCircle size={18} /></div>
+              <div className="ec-stat-icon green"><CheckCircle size={14} /></div>
             </div>
             <div className="ec-stat-value">{pStats.attendancePercent}%</div>
-            <div className="ec-stat-trend neutral">{STATS_TREND_LABELS[statsPeriod]}</div>
+            <div className="ec-stat-trend neutral">{STATS_TREND_LABELS[viewPeriod]}</div>
           </div>
           <div className="ec-stat-card">
             <div className="ec-stat-header">
               <span className="ec-stat-label">Опозданий</span>
-              <div className="ec-stat-icon orange"><Clock size={18} /></div>
+              <div className="ec-stat-icon orange"><Clock size={14} /></div>
             </div>
             <div className="ec-stat-value">{pStats.lateCount}</div>
             <div className={`ec-stat-trend ${pStats.lateCount > 2 ? 'down' : 'neutral'}`}>
@@ -352,7 +421,7 @@ export const EmployeeCardPage: FC = () => {
           <div className="ec-stat-card">
             <div className="ec-stat-header">
               <span className="ec-stat-label">Отработано часов</span>
-              <div className="ec-stat-icon blue"><DollarSign size={18} /></div>
+              <div className="ec-stat-icon blue"><DollarSign size={14} /></div>
             </div>
             <div className="ec-stat-value">{pStats.hoursWorked}ч</div>
             <div className="ec-stat-trend neutral">из {pStats.hoursPlanned}ч по плану</div>
@@ -360,7 +429,7 @@ export const EmployeeCardPage: FC = () => {
           <div className="ec-stat-card">
             <div className="ec-stat-header">
               <span className="ec-stat-label">Ср. время прихода</span>
-              <div className="ec-stat-icon purple"><BarChart3 size={18} /></div>
+              <div className="ec-stat-icon purple"><BarChart3 size={14} /></div>
             </div>
             <div className="ec-stat-value">{pStats.avgArrivalTime || '—'}</div>
             <div className={`ec-stat-trend ${pStats.avgArrivalDiffMinutes > 0 ? 'down' : 'up'}`}>
@@ -398,35 +467,125 @@ export const EmployeeCardPage: FC = () => {
           ? new Date(selectedCalDay + 'T00:00:00').toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' })
           : `Сегодня, ${todayLabel}`;
 
-        // Расчёт часов для показываемого дня
-        const workCalc = (() => {
-          if (showEvents.length === 0) return null;
-          let total = 0;
-          let entry: number | null = null;
-          for (const ev of showEvents) {
-            const [h, m, s = 0] = ev.event_time.split(':').map(Number);
-            const sec = h * 3600 + m * 60 + s;
-            if (ev.direction === 'entry') { if (entry === null) entry = sec; }
-            else if (ev.direction === 'exit' && entry !== null) { total += sec - entry; entry = null; }
-          }
-          const todayStr = new Date().toISOString().slice(0, 10);
-          if (entry !== null && showDate === todayStr) {
-            const now = new Date();
-            const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-            if (nowSec > entry) total += nowSec - entry;
-          }
-          const h = Math.floor(total / 3600);
-          const m = Math.floor((total % 3600) / 60);
-          return `${h}ч ${m}м`;
-        })();
+        const timeToSec = (t: string) => { const [h, m, s = 0] = t.split(':').map(Number); return h * 3600 + m * 60 + s; };
+        const fmtHM = (mins: number) => { const h = Math.floor(mins / 60); const m = mins % 60; return h === 0 ? `${m} мин` : m === 0 ? `${h} ч` : `${h} ч ${m} мин`; };
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const isToday = showDate === todayStr;
 
+        // Построение пар вход/выход
+        const pairs: { entry: SkudEvent; exit: SkudEvent | null; durationMinutes: number }[] = [];
+        let currentEntry: SkudEvent | null = null;
+        let totalSec = 0;
+        for (const ev of showEvents) {
+          if (ev.direction === 'entry') {
+            if (!currentEntry) currentEntry = ev;
+          } else if (ev.direction === 'exit' && currentEntry) {
+            const dur = timeToSec(ev.event_time) - timeToSec(currentEntry.event_time);
+            totalSec += dur;
+            pairs.push({ entry: currentEntry, exit: ev, durationMinutes: Math.round(dur / 60) });
+            currentEntry = null;
+          }
+        }
+        if (currentEntry && isToday) {
+          const now = new Date();
+          const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+          const dur = nowSec - timeToSec(currentEntry.event_time);
+          if (dur > 0) { totalSec += dur; pairs.push({ entry: currentEntry, exit: null, durationMinutes: Math.round(dur / 60) }); }
+        }
+
+        const workCalc = totalSec > 0 ? `${Math.floor(totalSec / 3600)}ч ${Math.floor((totalSec % 3600) / 60)}м` : null;
         const firstEntry = showEvents.find(e => e.direction === 'entry')?.event_time?.slice(0, 5) || null;
         const lastExit = [...showEvents].reverse().find(e => e.direction === 'exit')?.event_time?.slice(0, 5) || null;
 
+        // Время «не на работе» — разрывы между выходом и следующим входом
+        let absentSec = 0;
+        for (let i = 0; i < pairs.length - 1; i++) {
+          const exitTime = pairs[i].exit?.event_time;
+          const nextEntry = pairs[i + 1].entry.event_time;
+          if (exitTime) absentSec += timeToSec(nextEntry) - timeToSec(exitTime);
+        }
+        const absentCalc = absentSec > 0 ? `${Math.floor(absentSec / 3600)}ч ${Math.floor((absentSec % 3600) / 60)}м` : null;
+
         return (
           <div className="ec-grid">
-            <div style={{ display: 'flex', gap: 16, alignItems: 'stretch' }}>
-              <div style={{ flex: '0 0 50%', minWidth: 0 }}>
+            <div className="ec-attendance-row">
+              <div className="ec-today-col">
+                <div className="ec-card" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                  <div className="ec-card-header">
+                    <div className="ec-card-title">
+                      <Clock size={18} />
+                      {dayLabel}
+                    </div>
+                  </div>
+                  {showEvents.length > 0 ? (
+                    <div className="ec-today-events">
+                      {pairs.length > 0 ? pairs.map((pair, i) => (
+                        <div key={i} className="ec-pair-block">
+                          <div className="ec-event-row">
+                            <span className="ec-event-icon ec-event-entry">→</span>
+                            <span className="ec-event-time">{pair.entry.event_time.slice(0, 5)}</span>
+                            <span className="ec-event-dir">Вход</span>
+                            {pair.entry.access_point && <span className="ec-event-point">{pair.entry.access_point}</span>}
+                          </div>
+                          {pair.exit ? (
+                            <div className="ec-event-row">
+                              <span className="ec-event-icon ec-event-exit">←</span>
+                              <span className="ec-event-time">{pair.exit.event_time.slice(0, 5)}</span>
+                              <span className="ec-event-dir">Выход</span>
+                              {pair.exit.access_point && <span className="ec-event-point">{pair.exit.access_point}</span>}
+                            </div>
+                          ) : (
+                            <div className="ec-event-row">
+                              <span className="ec-event-icon ec-event-entry">→</span>
+                              <span className="ec-event-time">—</span>
+                              <span className="ec-event-dir ec-on-site">на месте</span>
+                            </div>
+                          )}
+                          {pair.durationMinutes > 0 && (
+                            <div className="ec-pair-duration">{fmtHM(pair.durationMinutes)}</div>
+                          )}
+                        </div>
+                      )) : showEvents.map((ev, i) => (
+                        <div key={i} className="ec-event-row">
+                          <span className={`ec-event-icon ${ev.direction === 'entry' ? 'ec-event-entry' : 'ec-event-exit'}`}>
+                            {ev.direction === 'entry' ? '→' : '←'}
+                          </span>
+                          <span className="ec-event-time">{ev.event_time.slice(0, 5)}</span>
+                          <span className="ec-event-dir">{ev.direction === 'entry' ? 'Вход' : 'Выход'}</span>
+                          {ev.access_point && <span className="ec-event-point">{ev.access_point}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="ec-tl-empty" style={{ flex: 1 }}>Нет событий</div>
+                  )}
+                  {workCalc && (
+                    <div className="ec-today-footer">
+                      {firstEntry && (
+                        <div className="ec-today-badge ec-today-badge-entry">
+                          <LogIn size={14} />
+                          <span>{firstEntry}</span>
+                        </div>
+                      )}
+                      {lastExit && (
+                        <div className="ec-today-badge ec-today-badge-exit">
+                          <LogOut size={14} />
+                          <span>{lastExit}</span>
+                        </div>
+                      )}
+                      {absentCalc && (
+                        <div className="ec-today-badge ec-today-badge-absent">
+                          <span>Перерыв: {absentCalc}</span>
+                        </div>
+                      )}
+                      <div className="ec-today-total">
+                        {workCalc}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="ec-calendar-col">
                 <AttendanceCalendar
                   days={attendance.days}
                   month={calMonth}
@@ -435,54 +594,6 @@ export const EmployeeCardPage: FC = () => {
                   onNextMonth={nextMonth}
                   onDayClick={handleDayClick}
                 />
-              </div>
-              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-                <div className="ec-card" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                  <div className="ec-card-header">
-                    <div className="ec-card-title">
-                      <Clock size={18} />
-                      {dayLabel}
-                    </div>
-                  </div>
-                  {/* Статистика дня */}
-                  {workCalc && (
-                    <div style={{ display: 'flex', gap: 12, padding: '8px 16px', borderBottom: '1px solid var(--border)' }}>
-                      {firstEntry && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
-                          <LogIn size={14} style={{ color: 'var(--color-success, #22c55e)' }} />
-                          <span style={{ color: 'var(--color-success, #22c55e)', fontWeight: 600 }}>{firstEntry}</span>
-                        </div>
-                      )}
-                      {lastExit && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
-                          <LogOut size={14} style={{ color: 'var(--color-danger, #ef4444)' }} />
-                          <span style={{ color: 'var(--color-danger, #ef4444)', fontWeight: 600 }}>{lastExit}</span>
-                        </div>
-                      )}
-                      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-success, #22c55e)', marginLeft: 'auto' }}>
-                        {workCalc}
-                      </div>
-                    </div>
-                  )}
-                  {showEvents.length > 0 ? (
-                    <div className="ec-timeline" style={{ flex: 1, overflowY: 'auto' }}>
-                      {showEvents.map((ev, i) => (
-                        <div key={i} className="ec-tl-item">
-                          <div className={`ec-tl-icon ${ev.direction === 'entry' ? 'in' : 'out'}`}>
-                            {ev.direction === 'entry' ? <LogIn size={16} /> : <LogOut size={16} />}
-                          </div>
-                          <div className="ec-tl-content">
-                            <div className="ec-tl-title">{ev.direction === 'entry' ? 'Вход' : 'Выход'}</div>
-                            <div className="ec-tl-meta">{ev.access_point || ''}</div>
-                          </div>
-                          <div className="ec-tl-time">{ev.event_time.slice(0, 5)}</div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="ec-tl-empty" style={{ flex: 1 }}>Нет событий</div>
-                  )}
-                </div>
               </div>
             </div>
             <EmployeeCardSidebar
@@ -521,6 +632,10 @@ export const EmployeeCardPage: FC = () => {
           onSync={reloadSkudEvents}
           focusDate={skudFocusDate}
           focusKey={skudFocusKey}
+          externalViewMode={viewPeriod === 'today' ? 'day' : viewPeriod}
+          externalRangeStart={rangeStart}
+          externalRangeEnd={rangeEnd}
+          externalViewDate={skudViewDate}
         />
       )}
     </div>

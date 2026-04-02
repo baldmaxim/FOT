@@ -16,13 +16,22 @@ const formatDate = (dateStr: string | null) => {
   return new Date(dateStr).toLocaleDateString('ru-RU');
 };
 
+const pluralYears = (n: number): string => {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 19) return 'лет';
+  if (mod10 === 1) return 'год';
+  if (mod10 >= 2 && mod10 <= 4) return 'года';
+  return 'лет';
+};
+
 const calculateTenure = (hireDate: string) => {
   const hire = new Date(hireDate);
   const now = new Date();
   const months = (now.getFullYear() - hire.getFullYear()) * 12 + (now.getMonth() - hire.getMonth());
   const years = Math.floor(months / 12);
   const rem = months % 12;
-  return years > 0 ? `${years} г. ${rem} мес.` : `${rem} мес.`;
+  return years > 0 ? `${years} ${pluralYears(years)} ${rem} мес.` : `${rem} мес.`;
 };
 
 const formatSalary = (salary: number | null) => {

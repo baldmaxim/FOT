@@ -72,7 +72,7 @@ export interface IDashboardStats {
     thisWeek: { attendanceRate: number; avgArrival: string; avgHours: number; lateCount: number };
     lastWeek: { attendanceRate: number; avgArrival: string; avgHours: number; lateCount: number };
   } | null;
-  topLate: Array<{ employee_id: number; full_name: string; lateCount: number; avgArrival: string }>;
+  topLate: Array<{ employee_id: number; full_name: string; lateCount: number; avgArrival: string; lateDetails: Array<{ date: string; arrival: string }> }>;
   periodStats: IPeriodStats | null;
   earlyLeaveToday: number;
   recentEvents: IRecentEvent[];

@@ -15,6 +15,10 @@ interface IEmployeeSkudSectionProps {
   onSync?: () => void;
   focusDate?: string | null;
   focusKey?: number;
+  externalViewMode?: ViewMode;
+  externalRangeStart?: string;
+  externalRangeEnd?: string;
+  externalViewDate?: string;
 }
 
 type ViewMode = 'day' | 'week' | 'month' | 'range';
@@ -218,12 +222,13 @@ const getNavLabel = (mode: ViewMode, viewDate: Date): string => {
 
 
 export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
-  employeeId, employeeName, onSync, focusDate, focusKey,
+  employeeId, employeeName, onSync, focusDate, focusKey, externalViewMode,
+  externalRangeStart, externalRangeEnd, externalViewDate,
 }) => {
   const [groups, setGroups] = useState<IDayGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
-  const [viewMode, setViewMode] = useState<ViewMode>('day');
+  const [viewMode, setViewMode] = useState<ViewMode>(externalViewMode || 'day');
   const [viewDateStr, setViewDateStr] = useState(() => focusDate || toLocalISO(new Date()));
   const [rangeStart, setRangeStart] = useState(() => toLocalISO(new Date()));
   const [rangeEnd, setRangeEnd] = useState(() => toLocalISO(new Date()));
@@ -253,6 +258,25 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
       setInternalPoints(new Set(settings.filter(s => s.is_internal).map(s => s.access_point_name.trim())));
     }).catch(() => {});
   }, []);
+
+  // Sync with external viewMode from parent
+  useEffect(() => {
+    if (externalViewMode && externalViewMode !== viewMode) {
+      setViewMode(externalViewMode);
+      if (externalViewMode !== 'range') setViewDateStr(toLocalISO(new Date()));
+    }
+  }, [externalViewMode]);
+
+  // Sync external range dates and view date
+  useEffect(() => {
+    if (externalRangeStart) setRangeStart(externalRangeStart);
+  }, [externalRangeStart]);
+  useEffect(() => {
+    if (externalRangeEnd) setRangeEnd(externalRangeEnd);
+  }, [externalRangeEnd]);
+  useEffect(() => {
+    if (externalViewDate) setViewDateStr(externalViewDate);
+  }, [externalViewDate]);
 
   // React to focusDate from calendar click
   useEffect(() => {
@@ -356,22 +380,24 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
     <div className="skud-section">
       {/* Navigation Bar */}
       <div className="skud-nav-bar">
-        <div className="skud-view-selector">
-          {(['day', 'week', 'month', 'range'] as ViewMode[]).map(m => (
-            <button
-              key={m}
-              className={`skud-view-btn ${viewMode === m ? 'active' : ''}`}
-              onClick={() => {
-                if (m === viewMode) return;
-                setViewMode(m);
-                if (m !== 'range') setViewDateStr(toLocalISO(new Date()));
-              }}
-            >
-              {VIEW_LABELS[m]}
-            </button>
-          ))}
-        </div>
-        {viewMode === 'range' ? (
+        {!externalViewMode && (
+          <div className="skud-view-selector">
+            {(['day', 'week', 'month', 'range'] as ViewMode[]).map(m => (
+              <button
+                key={m}
+                className={`skud-view-btn ${viewMode === m ? 'active' : ''}`}
+                onClick={() => {
+                  if (m === viewMode) return;
+                  setViewMode(m);
+                  if (m !== 'range') setViewDateStr(toLocalISO(new Date()));
+                }}
+              >
+                {VIEW_LABELS[m]}
+              </button>
+            ))}
+          </div>
+        )}
+        {!externalViewMode && (viewMode === 'range' ? (
           <div className="skud-date-nav">
             <DateInput value={rangeStart} onChange={setRangeStart} />
             <span className="skud-range-sep">—</span>
@@ -387,7 +413,7 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
               <ChevronRight size={16} />
             </button>
           </div>
-        )}
+        ))}
         <button
           className="skud-period-btn skud-sync-btn"
           onClick={handleSync}

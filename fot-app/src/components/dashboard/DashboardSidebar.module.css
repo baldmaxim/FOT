@@ -123,6 +123,19 @@
   border-bottom: none;
 }
 
+.clickable {
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background 0.15s ease;
+  margin: 0 -8px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.clickable:hover {
+  background: var(--surface-hover);
+}
+
 .lateRank {
   font-size: 11px;
   color: var(--text-tertiary);

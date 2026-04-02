@@ -46,6 +46,7 @@ export interface IDashboardTopLate {
   full_name: string;
   lateCount: number;
   avgArrival: string;
+  lateDetails: Array<{ date: string; arrival: string }>;
 }
 
 export interface IDashboardWeekMetrics {
