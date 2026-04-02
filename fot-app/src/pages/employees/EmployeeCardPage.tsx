@@ -381,6 +381,7 @@ export const EmployeeCardPage: FC = () => {
               </button>
             ))}
           </div>
+          <div className="ec-period-divider" />
           {viewPeriod === 'range' ? (
             <div className="ec-range-inputs">
               <DateInput value={rangeStart} onChange={setRangeStart} />
@@ -401,44 +402,24 @@ export const EmployeeCardPage: FC = () => {
         </div>
         <div className="ec-stats-row">
           <div className="ec-stat-card">
-            <div className="ec-stat-header">
-              <span className="ec-stat-label">Посещаемость</span>
-              <div className="ec-stat-icon green"><CheckCircle size={14} /></div>
-            </div>
+            <div className="ec-stat-icon green"><CheckCircle size={12} /></div>
+            <span className="ec-stat-label-inline">Посещаемость</span>
             <div className="ec-stat-value">{pStats.attendancePercent}%</div>
-            <div className="ec-stat-trend neutral">{STATS_TREND_LABELS[viewPeriod]}</div>
           </div>
           <div className="ec-stat-card">
-            <div className="ec-stat-header">
-              <span className="ec-stat-label">Опозданий</span>
-              <div className="ec-stat-icon orange"><Clock size={14} /></div>
-            </div>
+            <div className="ec-stat-icon orange"><Clock size={12} /></div>
+            <span className="ec-stat-label-inline">Опозданий</span>
             <div className="ec-stat-value">{pStats.lateCount}</div>
-            <div className={`ec-stat-trend ${pStats.lateCount > 2 ? 'down' : 'neutral'}`}>
-              {pStats.lateCount > 2 ? 'превышен лимит' : 'в пределах нормы'}
-            </div>
           </div>
           <div className="ec-stat-card">
-            <div className="ec-stat-header">
-              <span className="ec-stat-label">Отработано часов</span>
-              <div className="ec-stat-icon blue"><DollarSign size={14} /></div>
-            </div>
-            <div className="ec-stat-value">{pStats.hoursWorked}ч</div>
-            <div className="ec-stat-trend neutral">из {pStats.hoursPlanned}ч по плану</div>
+            <div className="ec-stat-icon blue"><DollarSign size={12} /></div>
+            <span className="ec-stat-label-inline">Часов</span>
+            <div className="ec-stat-value">{pStats.hoursWorked}/{pStats.hoursPlanned}</div>
           </div>
           <div className="ec-stat-card">
-            <div className="ec-stat-header">
-              <span className="ec-stat-label">Ср. время прихода</span>
-              <div className="ec-stat-icon purple"><BarChart3 size={14} /></div>
-            </div>
+            <div className="ec-stat-icon purple"><BarChart3 size={12} /></div>
+            <span className="ec-stat-label-inline">Приход</span>
             <div className="ec-stat-value">{pStats.avgArrivalTime || '—'}</div>
-            <div className={`ec-stat-trend ${pStats.avgArrivalDiffMinutes > 0 ? 'down' : 'up'}`}>
-              {pStats.avgArrivalDiffMinutes > 0
-                ? `+${pStats.avgArrivalDiffMinutes} мин к норме`
-                : pStats.avgArrivalDiffMinutes < 0
-                  ? `${pStats.avgArrivalDiffMinutes} мин к норме`
-                  : 'точно в норме'}
-            </div>
           </div>
         </div>
       </div>
@@ -507,84 +488,85 @@ export const EmployeeCardPage: FC = () => {
         const absentCalc = absentSec > 0 ? `${Math.floor(absentSec / 3600)}ч ${Math.floor((absentSec % 3600) / 60)}м` : null;
 
         return (
-          <div className="ec-grid">
-            <div className="ec-attendance-row">
-              <div className="ec-today-col">
-                <div className="ec-card" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                  <div className="ec-card-header">
-                    <div className="ec-card-title">
-                      <Clock size={18} />
-                      {dayLabel}
-                    </div>
-                  </div>
-                  {showEvents.length > 0 ? (
-                    <div className="ec-today-events">
-                      {pairs.length > 0 ? pairs.map((pair, i) => (
-                        <div key={i} className="ec-pair-block">
-                          <div className="ec-event-row">
-                            <span className="ec-event-icon ec-event-entry">→</span>
-                            <span className="ec-event-time">{pair.entry.event_time.slice(0, 5)}</span>
-                            <span className="ec-event-dir">Вход</span>
-                            {pair.entry.access_point && <span className="ec-event-point">{pair.entry.access_point}</span>}
-                          </div>
-                          {pair.exit ? (
-                            <div className="ec-event-row">
-                              <span className="ec-event-icon ec-event-exit">←</span>
-                              <span className="ec-event-time">{pair.exit.event_time.slice(0, 5)}</span>
-                              <span className="ec-event-dir">Выход</span>
-                              {pair.exit.access_point && <span className="ec-event-point">{pair.exit.access_point}</span>}
-                            </div>
-                          ) : (
-                            <div className="ec-event-row">
-                              <span className="ec-event-icon ec-event-entry">→</span>
-                              <span className="ec-event-time">—</span>
-                              <span className="ec-event-dir ec-on-site">на месте</span>
-                            </div>
-                          )}
-                          {pair.durationMinutes > 0 && (
-                            <div className="ec-pair-duration">{fmtHM(pair.durationMinutes)}</div>
-                          )}
-                        </div>
-                      )) : showEvents.map((ev, i) => (
-                        <div key={i} className="ec-event-row">
-                          <span className={`ec-event-icon ${ev.direction === 'entry' ? 'ec-event-entry' : 'ec-event-exit'}`}>
-                            {ev.direction === 'entry' ? '→' : '←'}
-                          </span>
-                          <span className="ec-event-time">{ev.event_time.slice(0, 5)}</span>
-                          <span className="ec-event-dir">{ev.direction === 'entry' ? 'Вход' : 'Выход'}</span>
-                          {ev.access_point && <span className="ec-event-point">{ev.access_point}</span>}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="ec-tl-empty" style={{ flex: 1 }}>Нет событий</div>
-                  )}
-                  {workCalc && (
-                    <div className="ec-today-footer">
-                      {firstEntry && (
-                        <div className="ec-today-badge ec-today-badge-entry">
-                          <LogIn size={14} />
-                          <span>{firstEntry}</span>
-                        </div>
-                      )}
-                      {lastExit && (
-                        <div className="ec-today-badge ec-today-badge-exit">
-                          <LogOut size={14} />
-                          <span>{lastExit}</span>
-                        </div>
-                      )}
-                      {absentCalc && (
-                        <div className="ec-today-badge ec-today-badge-absent">
-                          <span>Перерыв: {absentCalc}</span>
-                        </div>
-                      )}
-                      <div className="ec-today-total">
-                        {workCalc}
-                      </div>
-                    </div>
-                  )}
+          <div className="ec-attendance-layout">
+            {/* Блок «Сегодня» — адаптивный по высоте */}
+            <div className="ec-card ec-today-card">
+              <div className="ec-card-header">
+                <div className="ec-card-title">
+                  <Clock size={18} />
+                  {dayLabel}
                 </div>
               </div>
+              {showEvents.length > 0 ? (
+                <div className="ec-today-events">
+                  {pairs.length > 0 ? pairs.map((pair, i) => (
+                    <div key={i} className="ec-pair-block">
+                      <div className="ec-event-row">
+                        <span className="ec-event-icon ec-event-entry">→</span>
+                        <span className="ec-event-time">{pair.entry.event_time.slice(0, 5)}</span>
+                        <span className="ec-event-dir">Вход</span>
+                        {pair.entry.access_point && <span className="ec-event-point">{pair.entry.access_point}</span>}
+                      </div>
+                      {pair.exit ? (
+                        <div className="ec-event-row">
+                          <span className="ec-event-icon ec-event-exit">←</span>
+                          <span className="ec-event-time">{pair.exit.event_time.slice(0, 5)}</span>
+                          <span className="ec-event-dir">Выход</span>
+                          {pair.exit.access_point && <span className="ec-event-point">{pair.exit.access_point}</span>}
+                        </div>
+                      ) : (
+                        <div className="ec-event-row">
+                          <span className="ec-event-icon ec-event-entry">→</span>
+                          <span className="ec-event-time">—</span>
+                          <span className="ec-event-dir ec-on-site">на месте</span>
+                        </div>
+                      )}
+                      {pair.durationMinutes > 0 && (
+                        <div className="ec-pair-duration">{fmtHM(pair.durationMinutes)}</div>
+                      )}
+                    </div>
+                  )) : showEvents.map((ev, i) => (
+                    <div key={i} className="ec-event-row">
+                      <span className={`ec-event-icon ${ev.direction === 'entry' ? 'ec-event-entry' : 'ec-event-exit'}`}>
+                        {ev.direction === 'entry' ? '→' : '←'}
+                      </span>
+                      <span className="ec-event-time">{ev.event_time.slice(0, 5)}</span>
+                      <span className="ec-event-dir">{ev.direction === 'entry' ? 'Вход' : 'Выход'}</span>
+                      {ev.access_point && <span className="ec-event-point">{ev.access_point}</span>}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="ec-tl-empty">Нет событий</div>
+              )}
+              {workCalc && (
+                <div className="ec-today-footer">
+                  {firstEntry && (
+                    <div className="ec-today-badge ec-today-badge-entry">
+                      <LogIn size={14} />
+                      <span>{firstEntry}</span>
+                    </div>
+                  )}
+                  {lastExit && (
+                    <div className="ec-today-badge ec-today-badge-exit">
+                      <LogOut size={14} />
+                      <span>{lastExit}</span>
+                    </div>
+                  )}
+                  {absentCalc && (
+                    <div className="ec-today-badge ec-today-badge-absent">
+                      <span>Перерыв: {absentCalc}</span>
+                    </div>
+                  )}
+                  <div className="ec-today-total">
+                    {workCalc}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Календарь + сайдбар в одну строку */}
+            <div className="ec-bottom-row">
               <div className="ec-calendar-col">
                 <AttendanceCalendar
                   days={attendance.days}
@@ -595,12 +577,12 @@ export const EmployeeCardPage: FC = () => {
                   onDayClick={handleDayClick}
                 />
               </div>
+              <EmployeeCardSidebar
+                weeklyPattern={periodData.weeklyPattern}
+                alerts={attendance.alerts}
+                employee={employee}
+              />
             </div>
-            <EmployeeCardSidebar
-              weeklyPattern={periodData.weeklyPattern}
-              alerts={attendance.alerts}
-              employee={employee}
-            />
           </div>
         );
       })()}

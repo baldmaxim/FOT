@@ -433,8 +433,7 @@ export async function getDashboardStats(
   // Period stats
   let periodStats: IDashboardStatsResult['periodStats'] = null;
   if (period === 'week' || period === 'month') {
-    const datesPresent = new Set(periodSummaries.filter(s => s.first_entry).map(s => s.date));
-    const pWorkDays = datesPresent.size || 1;
+    const pWorkDays = actualWorkDays; // календарные рабочие дни (countWorkingDays)
 
     const dailyPresent = new Map<string, number>();
     for (const s of periodSummaries) {
