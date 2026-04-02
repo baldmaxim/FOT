@@ -134,11 +134,10 @@ export const skudService = {
     return response.data;
   },
 
-  async getDashboardStats(departmentId: string, period = 'today', signal?: AbortSignal): Promise<IDashboardStats> {
-    const response = await apiClient.get<ApiResponse<IDashboardStats>>(
-      `/skud/dashboard-stats?department_id=${departmentId}&period=${period}`,
-      { signal },
-    );
+  async getDashboardStats(departmentId: string, period = 'today', signal?: AbortSignal, month?: string): Promise<IDashboardStats> {
+    let url = `/skud/dashboard-stats?department_id=${departmentId}&period=${period}`;
+    if (month) url += `&month=${month}`;
+    const response = await apiClient.get<ApiResponse<IDashboardStats>>(url, { signal });
     return response.data;
   },
 

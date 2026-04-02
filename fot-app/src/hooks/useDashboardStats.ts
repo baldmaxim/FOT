@@ -10,7 +10,11 @@ interface IUseDashboardStatsReturn {
   error: string | null;
 }
 
-export const useDashboardStats = (departmentId: string | null, period: DashboardPeriod = 'today'): IUseDashboardStatsReturn => {
+export const useDashboardStats = (
+  departmentId: string | null,
+  period: DashboardPeriod = 'today',
+  month?: string,
+): IUseDashboardStatsReturn => {
   const [stats, setStats] = useState<IDashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -23,7 +27,7 @@ export const useDashboardStats = (departmentId: string | null, period: Dashboard
       return;
     }
     try {
-      const data = await skudService.getDashboardStats(departmentId, period, signal);
+      const data = await skudService.getDashboardStats(departmentId, period, signal, month);
       if (!signal?.aborted) {
         setStats(data);
         setError(null);
@@ -35,7 +39,7 @@ export const useDashboardStats = (departmentId: string | null, period: Dashboard
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [departmentId, period]);
+  }, [departmentId, period, month]);
 
   useEffect(() => {
     const ac = new AbortController();

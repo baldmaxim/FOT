@@ -26,13 +26,14 @@ const skudReadController = {
         ? req.user.department_id
         : (typeof req.query.department_id === 'string' ? req.query.department_id : null);
       const period = (req.query.period as string) || 'today';
+      const month = typeof req.query.month === 'string' ? req.query.month : undefined;
 
       if (!departmentId) {
         res.status(400).json({ success: false, error: 'department_id обязателен' });
         return;
       }
 
-      const data = await getDashboardStats({ departmentId, period });
+      const data = await getDashboardStats({ departmentId, period, month });
       res.json({ success: true, data });
     } catch (error) {
       console.error('getDashboardStats error:', error);

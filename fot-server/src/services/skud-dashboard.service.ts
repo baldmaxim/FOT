@@ -18,7 +18,7 @@ const SLIGHTLY_LATE_THRESHOLD_DEFAULT = '09:15:00';
 export async function getDashboardStats(
   params: IDashboardStatsParams,
 ): Promise<IDashboardStatsResult> {
-  const { departmentId, period } = params;
+  const { departmentId, period, month } = params;
 
   const deptIds = await collectDeptIds(departmentId);
 
@@ -80,10 +80,22 @@ export async function getDashboardStats(
   const lastMondayStr = formatDateToISO(lastMonday);
   const lastFridayStr = formatDateToISO(lastFriday);
 
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  // Месяц: если передан month=YYYY-MM, используем его; иначе текущий
+  let targetMonthYear = today.getFullYear();
+  let targetMonthIdx = today.getMonth();
+  if (period === 'month' && month && /^\d{4}-\d{2}$/.test(month)) {
+    const [y, m] = month.split('-').map(Number);
+    targetMonthYear = y;
+    targetMonthIdx = m - 1;
+  }
+  const monthStart = new Date(targetMonthYear, targetMonthIdx, 1);
+  const monthEnd = new Date(targetMonthYear, targetMonthIdx + 1, 0); // последний день месяца
   const monthStartStr = formatDateToISO(monthStart);
-  const prevMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-  const prevMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+  // Если выбранный месяц — текущий, конец = сегодня; иначе = конец месяца
+  const isCurrentMonth = targetMonthYear === today.getFullYear() && targetMonthIdx === today.getMonth();
+  const monthEndStr = isCurrentMonth ? todayStr : formatDateToISO(monthEnd);
+  const prevMonthStart = new Date(targetMonthYear, targetMonthIdx - 1, 1);
+  const prevMonthEnd = new Date(targetMonthYear, targetMonthIdx, 0);
   const prevMonthStartStr = formatDateToISO(prevMonthStart);
   const prevMonthEndStr = formatDateToISO(prevMonthEnd);
 
@@ -103,7 +115,7 @@ export async function getDashboardStats(
 
   if (period === 'month') {
     periodStartStr = monthStartStr;
-    periodEndStr = todayStr;
+    periodEndStr = monthEndStr;
     prevPeriodStartStr = prevMonthStartStr;
     prevPeriodEndStr = prevMonthEndStr;
   } else if (period === 'week') {
@@ -118,7 +130,8 @@ export async function getDashboardStats(
     prevPeriodEndStr = yesterdayStr;
   }
 
-  const summaryStartDate = period === 'month' ? prevMonthStartStr : period === 'week' ? lastMondayStr : yesterdayStr;
+  const summaryStartDate = period === 'month' ? prevPeriodStartStr : period === 'week' ? lastMondayStr : yesterdayStr;
+  const summaryEndDate = period === 'month' && !isCurrentMonth ? periodEndStr : todayStr;
 
   // 4 недели назад
   const fourWeeksAgo = new Date(monday);
@@ -131,7 +144,7 @@ export async function getDashboardStats(
     .select('employee_id, date, first_entry, last_exit, total_hours, is_present')
     .in('employee_id', empIds)
     .gte('date', summaryStartDate)
-    .lte('date', todayStr)
+    .lte('date', summaryEndDate)
     .limit(10000);
 
   // Запрос entry-событий за сегодня
@@ -276,9 +289,10 @@ export async function getDashboardStats(
     }
   }
 
-  const lateThreshold = period === 'today' ? 1 : 3;
-  const earlyThreshold = period === 'today' ? 1 : 2;
-  const highThreshold = period === 'today' ? 1 : period === 'week' ? 4 : 8;
+  const periodWorkDays = actualWorkDays || 1;
+  const lateThreshold = period === 'today' ? 1 : Math.max(1, Math.min(3, periodWorkDays - 1));
+  const earlyThreshold = period === 'today' ? 1 : Math.max(1, Math.min(2, periodWorkDays - 1));
+  const highThreshold = period === 'today' ? 1 : Math.max(2, Math.ceil(periodWorkDays * 0.4));
   const risks: IDashboardRisk[] = [];
   for (const [empId, count] of lateCountByEmp) {
     if (count >= lateThreshold) {
@@ -330,11 +344,16 @@ export async function getDashboardStats(
   const hourlyActivity = [...hourlyMap.entries()].map(([hour, count]) => ({ hour, count }));
 
   // Period comparison
+  const calcHoursFromEntryExit = (entry: string, exit: string): number => {
+    const [eh, em] = entry.split(':').map(Number);
+    const [xh, xm] = exit.split(':').map(Number);
+    return Math.max(0, (xh * 60 + xm - eh * 60 - em) / 60);
+  };
+
   const calcWeekMetrics = (weekData: typeof periodSummaries, expectedRecords: number): IDashboardWeekMetrics => {
-    const withEntry = weekData.filter(s => s.first_entry);
-    const presentDays = weekData.filter(s => s.is_present).length;
+    const withEntry = weekData.filter(s => s.first_entry && !remoteEmpIds.has(s.employee_id));
     const total = expectedRecords > 0 ? expectedRecords : 1;
-    const attendanceRate = Math.round((presentDays / total) * 100);
+    const attendanceRate = Math.round((withEntry.length / total) * 100);
 
     let avgArrivalMin = 0;
     if (withEntry.length > 0) {
@@ -348,13 +367,18 @@ export async function getDashboardStats(
       ? `${String(Math.floor(avgArrivalMin / 60)).padStart(2, '0')}:${String(avgArrivalMin % 60).padStart(2, '0')}`
       : '--:--';
 
-    const withHours = weekData.filter(s => s.total_hours != null && s.total_hours > 0);
-    const avgHours = withHours.length > 0
-      ? Math.round((withHours.reduce((sum, s) => sum + (s.total_hours || 0), 0) / withHours.length) * 10) / 10
+    const hoursArr = weekData
+      .map(s => {
+        if (s.total_hours != null && s.total_hours > 0) return s.total_hours;
+        if (s.first_entry && s.last_exit) return calcHoursFromEntryExit(s.first_entry, s.last_exit);
+        return 0;
+      })
+      .filter(h => h > 0);
+    const avgHours = hoursArr.length > 0
+      ? Math.round((hoursArr.reduce((a, b) => a + b, 0) / hoursArr.length) * 10) / 10
       : 0;
 
     const lateCount = withEntry.filter(s => {
-      if (remoteEmpIds.has(s.employee_id)) return false;
       return s.first_entry! > getLateThresholdFor(s.employee_id);
     }).length;
 
@@ -363,8 +387,8 @@ export async function getDashboardStats(
 
   const prevWorkDays = countWorkingDays(prevPeriodStartStr, prevPeriodEndStr);
   const weekComparison = {
-    thisWeek: calcWeekMetrics(periodSummaries, empIds.length * actualWorkDays),
-    lastWeek: calcWeekMetrics(prevPeriodSummaries, empIds.length * prevWorkDays),
+    thisWeek: calcWeekMetrics(periodSummaries, officeEmpIds.length * (actualWorkDays || 1)),
+    lastWeek: calcWeekMetrics(prevPeriodSummaries, officeEmpIds.length * prevWorkDays),
   };
 
   // Top late
@@ -378,7 +402,7 @@ export async function getDashboardStats(
       avgArrivalByEmp.set(s.employee_id, (avgArrivalByEmp.get(s.employee_id) || 0) + min);
       arrivalCountByEmp.set(s.employee_id, (arrivalCountByEmp.get(s.employee_id) || 0) + 1);
       if (remoteEmpIds.has(s.employee_id)) continue;
-      if (s.first_entry > getSlightlyLateFor(s.employee_id)) {
+      if (s.first_entry > getLateThresholdFor(s.employee_id)) {
         topLateCountByEmp.set(s.employee_id, (topLateCountByEmp.get(s.employee_id) || 0) + 1);
       }
     }
@@ -407,13 +431,15 @@ export async function getDashboardStats(
 
     const dailyPresent = new Map<string, number>();
     for (const s of periodSummaries) {
-      if (s.is_present) dailyPresent.set(s.date, (dailyPresent.get(s.date) || 0) + 1);
+      if (s.first_entry && !remoteEmpIds.has(s.employee_id)) {
+        dailyPresent.set(s.date, (dailyPresent.get(s.date) || 0) + 1);
+      }
     }
     const totalPresent = [...dailyPresent.values()].reduce((a, b) => a + b, 0);
     const avgPresent = Math.round(totalPresent / pWorkDays);
-    const avgAbsent = Math.max(0, empIds.length - avgPresent);
+    const avgAbsent = Math.max(0, officeEmpIds.length - avgPresent);
 
-    const pExpectedTotal = empIds.length * pWorkDays;
+    const pExpectedTotal = officeEmpIds.length * pWorkDays;
     const attendanceRate = pExpectedTotal > 0 ? Math.round((totalPresent / pExpectedTotal) * 100) : 0;
 
     const pLateCount = periodSummaries.filter(s => s.first_entry && !remoteEmpIds.has(s.employee_id) && s.first_entry > getLateThresholdFor(s.employee_id)).length;
@@ -425,7 +451,7 @@ export async function getDashboardStats(
   // Early leave today
   const todaySummaries = (summaries || []).filter(s => s.date === todayStr);
   const earlyLeaveToday = todaySummaries.filter(
-    s => s.is_present && s.last_exit && s.last_exit < '17:00:00'
+    s => s.first_entry && s.last_exit && s.last_exit < '17:00:00'
   ).length;
 
   // Today entries/exits count

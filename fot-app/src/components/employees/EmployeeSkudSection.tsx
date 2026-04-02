@@ -53,6 +53,23 @@ const formatDateShort = (dateStr: string): string => {
 const formatTime = (time: string): string => time.slice(0, 8);
 const formatTimeShort = (time: string): string => time.slice(0, 5);
 
+/** "9:32" — без ведущего нуля, без секунд */
+const formatTimeCompact = (time: string): string => {
+  const short = time.slice(0, 5);
+  return short.startsWith('0') ? short.slice(1) : short;
+};
+
+/** "8ч 16м" — без секунд */
+const formatDurationCompact = (seconds: number): string => {
+  if (seconds <= 0) return '';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h === 0 && m === 0) return '<1м';
+  if (h === 0) return `${m}м`;
+  if (m === 0) return `${h}ч`;
+  return `${h}ч ${m}м`;
+};
+
 const formatDuration = (seconds: number): string => {
   if (seconds <= 0) return '';
   const h = Math.floor(seconds / 3600);
@@ -489,10 +506,52 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
                     )}
                     <span className="skud-events-count">{group.events.length} соб.</span>
                   </span>
+                  <span className="skud-day-summary-compact">
+                    {group.firstEntry && (
+                      <span className="skud-compact-time entry">
+                        {formatTimeCompact(group.firstEntry)}
+                      </span>
+                    )}
+                    {group.firstEntry && group.lastExit && (
+                      <span className="skud-compact-sep">–</span>
+                    )}
+                    {group.lastExit && (
+                      <span className="skud-compact-time exit">
+                        {formatTimeCompact(group.lastExit)}
+                      </span>
+                    )}
+                    {duration && (
+                      <span className="skud-compact-duration">
+                        {formatDurationCompact(group.totalSeconds)}
+                      </span>
+                    )}
+                  </span>
                 </button>
 
                 {expanded && (
                   <div className="skud-day-events">
+                    <div className="skud-day-events-summary">
+                      {group.firstEntry && (
+                        <span className="skud-time-badge entry">
+                          <LogIn size={12} /> {formatTime(group.firstEntry)}
+                        </span>
+                      )}
+                      {group.lastExit && (
+                        <span className="skud-time-badge exit">
+                          <LogOut size={12} /> {formatTime(group.lastExit)}
+                        </span>
+                      )}
+                      {span && (
+                        <span className="skud-time-badge span">
+                          <Clock size={12} /> {span}
+                        </span>
+                      )}
+                      {duration && (
+                        <span className="skud-time-badge duration">
+                          <Timer size={12} /> {duration}
+                        </span>
+                      )}
+                    </div>
                     {group.events.map(ev => {
                       const isInternal = ev.access_point ? internalPoints.has(ev.access_point) : false;
                       return (

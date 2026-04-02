@@ -24,6 +24,7 @@ export interface IDailySummaryRow {
 export interface IDashboardStatsParams {
   departmentId: string;
   period: string;
+  month?: string; // YYYY-MM — конкретный месяц (только для period=month)
 }
 
 export interface IDashboardRecentEvent {

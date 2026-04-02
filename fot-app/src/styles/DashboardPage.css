@@ -310,6 +310,59 @@
   font-weight: 600;
 }
 
+/* Period toggle row */
+.period-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+/* Month picker */
+.month-picker {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 3px;
+}
+
+.month-picker-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  border-radius: calc(var(--radius-md) - 2px);
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+}
+
+.month-picker-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.month-picker-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.month-picker-label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  min-width: 100px;
+  text-align: center;
+  user-select: none;
+}
+
 /* Period stat cards grid (week/month) */
 .period-stat-cards {
   display: grid;

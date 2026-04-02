@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, memo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ChevronDown, Search, Building2, LogOut } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Search, Building2, LogOut } from 'lucide-react';
 import { StatCard } from '../components/ui/StatCard';
 import { ActivityList } from '../components/dashboard/ActivityList';
 import { PunctualityCard, AvgArrivalCard, RisksCard } from '../components/dashboard/AnalyticsRow';
@@ -121,9 +121,34 @@ export const DashboardPage: React.FC = () => {
   // Period toggle
   const [period, setPeriod] = useState<DashboardPeriod>('today');
 
+  // Month picker (YYYY-MM)
+  const getCurrentMonth = () => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  };
+  const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth);
+
+  const shiftMonth = (delta: number) => {
+    const [y, m] = selectedMonth.split('-').map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  };
+
+  const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+  const formatMonth = (ym: string) => {
+    const [y, m] = ym.split('-').map(Number);
+    return `${MONTH_NAMES[m - 1]} ${y}`;
+  };
+
+  const isFutureMonth = selectedMonth >= getCurrentMonth();
+
   // Data
   const { employees, loading } = usePresence(selectedDeptId);
-  const { stats, loading: statsLoading } = useDashboardStats(selectedDeptId, period);
+  const { stats, loading: statsLoading } = useDashboardStats(
+    selectedDeptId,
+    period,
+    period === 'month' ? selectedMonth : undefined,
+  );
 
   const onlineCount = useMemo(
     () => employees.filter(e => e.status === 'online').length,
@@ -251,16 +276,33 @@ export const DashboardPage: React.FC = () => {
                 exits={stats?.todayExitsCount ?? 0}
               />
 
-              <div className="period-toggle">
-                {(['today', 'week', 'month'] as const).map(p => (
-                  <button
-                    key={p}
-                    className={`period-btn ${period === p ? 'active' : ''}`}
-                    onClick={() => setPeriod(p)}
-                  >
-                    {p === 'today' ? 'Сегодня' : p === 'week' ? 'Неделя' : 'Месяц'}
-                  </button>
-                ))}
+              <div className="period-toggle-row">
+                <div className="period-toggle">
+                  {(['today', 'week', 'month'] as const).map(p => (
+                    <button
+                      key={p}
+                      className={`period-btn ${period === p ? 'active' : ''}`}
+                      onClick={() => setPeriod(p)}
+                    >
+                      {p === 'today' ? 'Сегодня' : p === 'week' ? 'Неделя' : 'Месяц'}
+                    </button>
+                  ))}
+                </div>
+                {period === 'month' && (
+                  <div className="month-picker">
+                    <button className="month-picker-btn" onClick={() => shiftMonth(-1)}>
+                      <ChevronLeft size={16} />
+                    </button>
+                    <span className="month-picker-label">{formatMonth(selectedMonth)}</span>
+                    <button
+                      className="month-picker-btn"
+                      onClick={() => shiftMonth(1)}
+                      disabled={isFutureMonth}
+                    >
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+                )}
               </div>
 
               {period !== 'today' && stats?.periodStats && (

@@ -669,6 +669,55 @@
   color: var(--text-muted);
 }
 
+/* Compact summary — hidden on desktop */
+.skud-day-summary-compact {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.skud-compact-time {
+  font-weight: 600;
+}
+
+.skud-compact-time.entry {
+  color: #16a34a;
+}
+
+.skud-compact-time.exit {
+  color: #dc2626;
+}
+
+[data-theme="dark"] .skud-compact-time.entry {
+  color: #4ade80;
+}
+
+[data-theme="dark"] .skud-compact-time.exit {
+  color: #f87171;
+}
+
+.skud-compact-sep {
+  color: var(--text-muted);
+}
+
+.skud-compact-duration {
+  color: #2563eb;
+  font-weight: 500;
+  margin-left: 4px;
+}
+
+[data-theme="dark"] .skud-compact-duration {
+  color: #60a5fa;
+}
+
+/* Full summary inside expanded events — hidden on desktop */
+.skud-day-events-summary {
+  display: none;
+}
+
 .skud-day-events {
   border-top: 1px solid var(--border);
   padding: 8px 16px 12px 42px;
@@ -964,8 +1013,20 @@
   }
 
   .skud-day-summary {
+    display: none;
+  }
+
+  .skud-day-summary-compact {
+    display: flex;
+  }
+
+  .skud-day-events-summary {
+    display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 6px;
+    padding-bottom: 8px;
+    margin-bottom: 6px;
+    border-bottom: 1px solid var(--border);
   }
 
   .skud-day-events {
