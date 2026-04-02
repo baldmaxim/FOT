@@ -33,6 +33,11 @@ const formatHM = (decimal: number): string => {
 
 const formatTime = (time: string): string => time.slice(0, 5);
 
+const todayISO = (): string => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
 const timeToSeconds = (time: string): number => {
   const [h, m, s = 0] = time.split(':').map(Number);
   return h * 3600 + m * 60 + s;
@@ -96,6 +101,12 @@ const EventsTab: FC<{ employeeId: number; workDate: string }> = ({ employeeId, w
         total += timeToSeconds(ev.event_time) - entry;
         entry = null;
       }
+    }
+    // Открытый вход (на работе сейчас) — считаем до текущего времени
+    if (entry !== null && workDate === todayISO()) {
+      const now = new Date();
+      const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+      if (nowSec > entry) total += nowSec - entry;
     }
     return total;
   };

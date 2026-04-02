@@ -355,6 +355,27 @@
   text-align: center;
 }
 
+.skud-range-input {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.skud-range-input:focus {
+  border-color: var(--primary);
+}
+
+.skud-range-sep {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
 .skud-period-btn {
   padding: 6px 14px;
   border-radius: var(--radius-sm);

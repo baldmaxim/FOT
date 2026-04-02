@@ -131,7 +131,8 @@ export const exportEmployeeSkudExcel = async (
   a.href = url;
   a.style.display = 'none';
   const safeName = employeeName.replace(/\s+/g, '_');
-  a.download = `СКУД_${safeName}_${startDate}_${endDate}.xlsx`;
+  const fmtDate = (d: string) => d.split('-').reverse().join('-');
+  a.download = `СКУД_${safeName}_${fmtDate(startDate)}_${fmtDate(endDate)}.xlsx`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

@@ -16,12 +16,13 @@ interface IEmployeeSkudSectionProps {
   focusKey?: number;
 }
 
-type ViewMode = 'day' | 'week' | 'month';
+type ViewMode = 'day' | 'week' | 'month' | 'range';
 
 const VIEW_LABELS: Record<ViewMode, string> = {
   day: 'День',
   week: 'Неделя',
   month: 'Месяц',
+  range: 'Период',
 };
 
 const MONTH_NAMES = [
@@ -212,6 +213,8 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
     }
     return new Date();
   });
+  const [rangeStart, setRangeStart] = useState(() => toLocalISO(new Date()));
+  const [rangeEnd, setRangeEnd] = useState(() => toLocalISO(new Date()));
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [internalPoints, setInternalPoints] = useState<Set<string>>(new Set());
@@ -234,10 +237,15 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
     }
   }, [focusDate, focusKey]);
 
+  const getEffectiveRange = useCallback((): { startDate: string; endDate: string } => {
+    if (viewMode === 'range') return { startDate: rangeStart, endDate: rangeEnd };
+    return getDateRange(viewMode, viewDate);
+  }, [viewMode, viewDate, rangeStart, rangeEnd]);
+
   const loadEvents = useCallback(async () => {
     setLoading(true);
     try {
-      const { startDate, endDate } = getDateRange(viewMode, viewDate);
+      const { startDate, endDate } = getEffectiveRange();
       const events = await skudService.getEmployeeEvents(employeeId, startDate, endDate);
       const grouped = groupByDay(events, internalPoints);
       setGroups(grouped);
@@ -249,7 +257,7 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [employeeId, viewMode, viewDate, internalPoints]);
+  }, [employeeId, viewMode, viewDate, rangeStart, rangeEnd, internalPoints, getEffectiveRange]);
 
   useEffect(() => { loadEvents(); }, [loadEvents]);
 
@@ -257,7 +265,7 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
     setSyncing(true);
     setSyncResult(null);
     try {
-      const { startDate, endDate } = getDateRange(viewMode, viewDate);
+      const { startDate, endDate } = getEffectiveRange();
       const result = await skudService.syncEmployee(
         employeeId, startDate, endDate,
         (msg) => setSyncResult(msg),
@@ -293,25 +301,43 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
       {/* Navigation Bar */}
       <div className="skud-nav-bar">
         <div className="skud-view-selector">
-          {(['day', 'week', 'month'] as ViewMode[]).map(m => (
+          {(['day', 'week', 'month', 'range'] as ViewMode[]).map(m => (
             <button
               key={m}
               className={`skud-view-btn ${viewMode === m ? 'active' : ''}`}
-              onClick={() => { setViewMode(m); setViewDate(new Date()); }}
+              onClick={() => { setViewMode(m); if (m !== 'range') setViewDate(new Date()); }}
             >
               {VIEW_LABELS[m]}
             </button>
           ))}
         </div>
-        <div className="skud-date-nav">
-          <button className="skud-nav-arrow" onClick={goBack}>
-            <ChevronLeft size={16} />
-          </button>
-          <span className="skud-nav-label">{getNavLabel(viewMode, viewDate)}</span>
-          <button className="skud-nav-arrow" onClick={goForward}>
-            <ChevronRight size={16} />
-          </button>
-        </div>
+        {viewMode === 'range' ? (
+          <div className="skud-date-nav">
+            <input
+              type="date"
+              className="skud-range-input"
+              value={rangeStart}
+              onChange={e => setRangeStart(e.target.value)}
+            />
+            <span className="skud-range-sep">—</span>
+            <input
+              type="date"
+              className="skud-range-input"
+              value={rangeEnd}
+              onChange={e => setRangeEnd(e.target.value)}
+            />
+          </div>
+        ) : (
+          <div className="skud-date-nav">
+            <button className="skud-nav-arrow" onClick={goBack}>
+              <ChevronLeft size={16} />
+            </button>
+            <span className="skud-nav-label">{getNavLabel(viewMode, viewDate)}</span>
+            <button className="skud-nav-arrow" onClick={goForward}>
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        )}
         <button
           className="skud-period-btn skud-sync-btn"
           onClick={handleSync}
@@ -324,8 +350,9 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
         <button
           className="skud-period-btn skud-sync-btn"
           onClick={() => {
-            const { startDate, endDate } = getDateRange(viewMode, viewDate);
-            exportEmployeeSkudExcel(employeeName, groups, startDate, endDate);
+            const { startDate, endDate } = getEffectiveRange();
+            exportEmployeeSkudExcel(employeeName, groups, startDate, endDate)
+              .catch(err => console.error('Export failed:', err));
           }}
           disabled={loading || groups.length === 0}
           title="Экспорт в Excel"

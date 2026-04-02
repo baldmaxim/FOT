@@ -42,7 +42,9 @@
       "Bash(wmic process:*)",
       "Bash(npm.cmd run:*)",
       "Bash(npx tsx -e \":*)",
-      "Bash(python3 -m json.tool)"
+      "Bash(python3 -m json.tool)",
+      "Bash(grep -E \"\\\\.\\(tsx|ts\\)$\")",
+      "Bash(echo \"CORS_ORIGIN=$CORS_ORIGIN\")"
     ]
   }
 }

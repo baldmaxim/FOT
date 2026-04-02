@@ -157,7 +157,7 @@
 .dashboard-wrap {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 64px);
+  height: calc(100vh - 64px - 48px);
   overflow: hidden;
 }
 
@@ -260,8 +260,9 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   padding-right: 4px;
+  min-height: 0;
 }
 
 /* Hide scrollbar for stats column but keep scrollable */
