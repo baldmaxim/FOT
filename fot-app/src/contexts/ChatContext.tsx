@@ -92,7 +92,10 @@ export const ChatProvider: FC<{ children: ReactNode }> = ({ children }) => {
   }, [ws, info, conversations, selectConversation]);
 
   const openChat = useCallback(() => setIsOpen(true), []);
-  const closeChat = useCallback(() => setIsOpen(false), []);
+  const closeChat = useCallback(() => {
+    setIsOpen(false);
+    setActiveConversationId(null);
+  }, []);
   const toggleChat = useCallback(() => setIsOpen(prev => !prev), []);
 
   return (
