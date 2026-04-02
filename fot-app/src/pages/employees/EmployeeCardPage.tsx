@@ -31,12 +31,6 @@ const PERIOD_LABELS: Record<ViewPeriod, string> = {
   month: 'Месяц',
   range: 'Период',
 };
-const STATS_TREND_LABELS: Record<ViewPeriod, string> = {
-  today: 'за сегодня',
-  week: 'за неделю',
-  month: 'за текущий месяц',
-  range: 'за текущий месяц',
-};
 const TABS: { key: Tab; label: string }[] = [
   { key: 'attendance', label: 'Посещаемость' },
   { key: 'info', label: 'Информация' },
