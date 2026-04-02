@@ -166,6 +166,21 @@
   display: none;
 }
 
+.mobileNewChat {
+  background: var(--primary, #3b82f6);
+  color: white;
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.mobileNewChat:hover {
+  opacity: 0.85;
+  background: var(--primary, #3b82f6);
+  color: white;
+}
+
 .searchSection {
   padding: 8px;
   border-bottom: 1px solid var(--border);

@@ -147,8 +147,17 @@ export const ChatSidePanel: FC = () => {
         {/* Left pane */}
         <div className={`${styles.listPane} ${mobileShowChat ? styles.hidden : ''}`}>
           <div className={styles.listPaneHeader}>
+            {/* Мобильные: + слева */}
+            <button className={`${styles.iconBtn} ${styles.mobileNewChat} ${styles.mobileOnly}`} onClick={handleToggleSearch}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
+                {searchOpen
+                  ? <path d="M18 6L6 18M6 6l12 12"/>
+                  : <path d="M12 5v14M5 12h14"/>
+                }
+              </svg>
+            </button>
             <h3 className={styles.listPaneTitle}>{searchOpen ? 'Новый чат' : 'Чаты'}</h3>
-            {/* + / отмена поиска — только на десктопе */}
+            {/* Десктоп: + справа */}
             <button className={`${styles.iconBtn} ${styles.desktopOnly} ${searchOpen ? styles.iconBtnActive : ''}`} onClick={handleToggleSearch}>
               {searchOpen ? (
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
@@ -160,16 +169,7 @@ export const ChatSidePanel: FC = () => {
                 </svg>
               )}
             </button>
-            {/* Мобильные: + новый чат */}
-            <button className={`${styles.iconBtn} ${styles.mobileOnly}`} onClick={handleToggleSearch}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-                {searchOpen
-                  ? <path d="M18 6L6 18M6 6l12 12"/>
-                  : <path d="M12 5v14M5 12h14"/>
-                }
-              </svg>
-            </button>
-            {/* Мобильные: закрыть чат */}
+            {/* Мобильные: × справа */}
             <button className={`${styles.iconBtn} ${styles.mobileOnly}`} onClick={closeChat}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
                 <path d="M18 6L6 18M6 6l12 12"/>
