@@ -92,6 +92,7 @@ const buildDayGroups = (
       totalMinutes,
       isToday,
       isWeekend: dow >= 5,
+      isFuture: dateStr > todayStr,
       pairs,
     });
   }

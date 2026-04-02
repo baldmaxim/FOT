@@ -215,7 +215,6 @@
   color: var(--text-primary);
   min-width: 120px;
   text-align: center;
-  font-family: 'Space Mono', monospace;
 }
 
 /* Duration badge inside event row */
@@ -663,6 +662,11 @@
 
 .skudDayCard.skudDayWeekend {
   opacity: 0.6;
+}
+
+.skudDayCard.skudDayFuture {
+  opacity: 0.35;
+  pointer-events: none;
 }
 
 .skudDayHeader {

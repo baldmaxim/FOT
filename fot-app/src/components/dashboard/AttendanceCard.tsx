@@ -13,6 +13,7 @@ export interface IDayGroup {
   totalMinutes: number;
   isToday: boolean;
   isWeekend: boolean;
+  isFuture: boolean;
   pairs: IEntryExitPair[];
 }
 
@@ -192,7 +193,7 @@ export const AttendanceCard: FC<IAttendanceCardProps> = ({
             return (
               <div
                 key={group.date}
-                className={`${styles.skudDayCard} ${group.isToday ? styles.skudDayToday : ''} ${group.isWeekend ? styles.skudDayWeekend : ''}`}
+                className={`${styles.skudDayCard} ${group.isToday ? styles.skudDayToday : ''} ${group.isWeekend ? styles.skudDayWeekend : ''} ${group.isFuture ? styles.skudDayFuture : ''}`}
               >
                 <div
                   className={`${styles.skudDayHeader} ${hasEvents ? styles.skudDayHeaderClickable : ''}`}
