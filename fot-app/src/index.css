@@ -164,6 +164,9 @@ body {
 /* Safari iOS only: zoom the app root (not html/body — layout viewport stays intact) */
 @supports (-webkit-touch-callout: none) {
   @media (max-width: 768px) {
+    html {
+      overflow-x: hidden;
+    }
     #root {
       zoom: 1.10;
     }
