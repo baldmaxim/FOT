@@ -27,6 +27,11 @@ const envSchema = z.object({
   SIGUR_EXTERNAL_URL: optionalUrl,
   SIGUR_EXTERNAL_USERNAME: optionalString,
   SIGUR_EXTERNAL_PASSWORD: optionalString,
+
+  // Web Push (VAPID)
+  VAPID_PUBLIC_KEY: optionalString,
+  VAPID_PRIVATE_KEY: optionalString,
+  VAPID_SUBJECT: optionalString,
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -2,6 +2,7 @@ import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
 import { chatService } from '../services/chat.service.js';
+import { pushService } from '../services/push.service.js';
 import type { JWTPayload } from '../types/index.js';
 
 interface IAuthenticatedSocket extends Socket {
@@ -56,12 +57,21 @@ export const setupChatSocket = (io: Server) => {
         const conversations = await chatService.getConversations(userId);
         const conv = conversations.find(c => c.id === data.conversationId);
         if (conv) {
+          const senderName = conv.participants.find(p => p.user_id === userId)?.full_name || 'Сообщение';
+          const messagePreview = message.content.slice(0, 100);
+
           for (const p of conv.participants) {
             if (p.user_id !== userId) {
               io.to(`user:${p.user_id}`).emit('message_notification', {
                 conversationId: data.conversationId,
                 message,
               });
+              // Web Push — доставит уведомление даже если вкладка закрыта
+              pushService.sendChatNotification(p.user_id, {
+                senderName,
+                messagePreview,
+                conversationId: data.conversationId,
+              }).catch(() => undefined);
             }
           }
         }

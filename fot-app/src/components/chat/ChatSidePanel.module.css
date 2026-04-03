@@ -50,6 +50,35 @@
   margin: 0;
 }
 
+/* === Push notification banner === */
+.pushBanner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--accent-soft, rgba(59, 130, 246, 0.08));
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.pushBannerBtn {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--accent, #3b82f6);
+  background: transparent;
+  color: var(--accent, #3b82f6);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pushBannerBtn:hover {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+}
+
 /* === Right: chat area === */
 .chatPane {
   flex: 1;
