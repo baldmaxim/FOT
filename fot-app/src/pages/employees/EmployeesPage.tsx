@@ -36,8 +36,8 @@ export const EmployeesPage: FC = () => {
   // Filters
   const [selectedDeptId, setSelectedDeptId] = useState<string | null>(searchParams.get('dept'));
   const [expandedDepts, setExpandedDepts] = useState<Set<string>>(new Set());
-  const [empSearch, setEmpSearch] = useState(searchParams.get('q') || '');
-  const [debouncedSearch, setDebouncedSearch] = useState(empSearch);
+  const [unifiedSearch, setUnifiedSearch] = useState(searchParams.get('q') || '');
+  const [debouncedSearch, setDebouncedSearch] = useState(unifiedSearch);
   const [activeTab, setActiveTab] = useState<'all' | 'fired'>('all');
 
   // Modals
@@ -60,19 +60,19 @@ export const EmployeesPage: FC = () => {
   // Debounce search
   useEffect(() => {
     const timer = setTimeout(() => {
-      setDebouncedSearch(empSearch);
+      setDebouncedSearch(unifiedSearch);
       setPage(1);
     }, 300);
     return () => clearTimeout(timer);
-  }, [empSearch]);
+  }, [unifiedSearch]);
 
   // URL sync
   useEffect(() => {
     const params = new URLSearchParams();
-    if (empSearch) params.set('q', empSearch);
+    if (unifiedSearch) params.set('q', unifiedSearch);
     if (selectedDeptId) params.set('dept', selectedDeptId);
     setSearchParams(params, { replace: true });
-  }, [empSearch, selectedDeptId, setSearchParams]);
+  }, [unifiedSearch, selectedDeptId, setSearchParams]);
 
   // Reset page when filters change
   useEffect(() => { setPage(1); }, [selectedDeptId, activeTab]);
@@ -84,6 +84,15 @@ export const EmployeesPage: FC = () => {
     return selectedDeptId || undefined;
   }, [selectedDeptId]);
 
+  // Detect if query matches any department name (dept-search mode)
+  const matchesDept = useMemo(() => {
+    if (!debouncedSearch) return false;
+    const q = debouncedSearch.toLowerCase();
+    const check = (nodes: OrgDepartmentNode[]): boolean =>
+      nodes.some(n => n.name.toLowerCase().includes(q) || check(n.children));
+    return check(departments);
+  }, [debouncedSearch, departments]);
+
   // Load paginated data
   const loadPage = useCallback(async () => {
     setLoading(true);
@@ -92,7 +101,7 @@ export const EmployeesPage: FC = () => {
       const result = await employeeService.getPaginated({
         page,
         pageSize: PAGE_SIZE,
-        search: debouncedSearch || undefined,
+        search: (!matchesDept && debouncedSearch) ? debouncedSearch : undefined,
         status: activeTab === 'fired' ? 'fired' : 'active',
         departmentId: serverDeptId,
       });
@@ -104,14 +113,14 @@ export const EmployeesPage: FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, debouncedSearch, activeTab, serverDeptId]);
+  }, [page, debouncedSearch, matchesDept, activeTab, serverDeptId]);
 
   const loadDepartments = useCallback(async () => {
     try {
       const res = await structureApi.getTree();
       if (res.data?.departments) {
         setDepartments(res.data.departments);
-        setExpandedDepts(new Set(res.data.departments.map(d => d.id)));
+        setExpandedDepts(new Set());
       }
     } catch { /* ignore */ }
   }, []);
@@ -133,15 +142,15 @@ export const EmployeesPage: FC = () => {
     return () => clearInterval(interval);
   }, [loadPresence]);
 
-  // Highlight departments of found employees when search is active
+  // Highlight departments of found employees when in employee-search mode
   const highlightedDeptIds = useMemo(() => {
-    if (!debouncedSearch) return new Set<string>();
+    if (!debouncedSearch || matchesDept) return new Set<string>();
     const ids = new Set<string>();
     for (const emp of employees) {
       if (emp.org_department_id) ids.add(emp.org_department_id);
     }
     return ids;
-  }, [debouncedSearch, employees]);
+  }, [debouncedSearch, matchesDept, employees]);
 
   // Auto-expand ancestors of highlighted departments
   useEffect(() => {
@@ -315,6 +324,7 @@ export const EmployeesPage: FC = () => {
         deptCounts={deptCounts}
         totalActive={totalActive}
         highlightedDeptIds={highlightedDeptIds}
+        deptSearch={matchesDept ? unifiedSearch : ''}
         onSelectDept={setSelectedDeptId}
         onToggleDept={toggleDept}
         onRefresh={loadDepartments}
@@ -348,9 +358,9 @@ export const EmployeesPage: FC = () => {
             <Search size={15} />
             <input
               type="text"
-              placeholder="Поиск по имени..."
-              value={empSearch}
-              onChange={e => setEmpSearch(e.target.value)}
+              placeholder="Поиск по имени или отделу..."
+              value={unifiedSearch}
+              onChange={e => setUnifiedSearch(e.target.value)}
             />
           </div>
           {canEdit && (

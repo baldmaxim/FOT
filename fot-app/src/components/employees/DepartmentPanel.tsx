@@ -1,4 +1,4 @@
-import { useState, useMemo, type FC } from 'react';
+import { useMemo, type FC } from 'react';
 import { ChevronRight, Folder, Users, RefreshCw } from 'lucide-react';
 import type { OrgDepartmentNode } from '../../types';
 
@@ -9,6 +9,7 @@ interface IDepartmentPanelProps {
   deptCounts: Map<string, number>;
   totalActive: number;
   highlightedDeptIds?: Set<string>;
+  deptSearch: string;
   onSelectDept: (id: string | null) => void;
   onToggleDept: (id: string) => void;
   onRefresh: () => void;
@@ -16,10 +17,9 @@ interface IDepartmentPanelProps {
 
 export const DepartmentPanel: FC<IDepartmentPanelProps> = ({
   departments, selectedDeptId, expandedDepts, deptCounts, totalActive,
-  highlightedDeptIds,
+  highlightedDeptIds, deptSearch,
   onSelectDept, onToggleDept, onRefresh,
 }) => {
-  const [deptSearch, setDeptSearch] = useState('');
 
   const filteredDepts = useMemo(() => {
     if (!deptSearch) return departments;
@@ -80,14 +80,6 @@ export const DepartmentPanel: FC<IDepartmentPanelProps> = ({
             <RefreshCw size={15} />
           </button>
         </div>
-      </div>
-      <div className="ep-dept-search">
-        <input
-          type="text"
-          placeholder="Поиск отдела..."
-          value={deptSearch}
-          onChange={e => setDeptSearch(e.target.value)}
-        />
       </div>
       <div className="ep-dept-tree">
         <div
