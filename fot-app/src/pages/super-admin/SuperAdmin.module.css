@@ -2,6 +2,7 @@
   padding: 24px;
   max-width: 1200px;
   margin: 0 auto;
+  overflow-x: hidden;
 }
 
 .header {
@@ -375,6 +376,8 @@
   border-radius: 8px;
   border: 4px solid var(--bg-elevated);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  max-width: 100%;
+  height: auto;
 }
 
 .secretSection {
@@ -720,20 +723,118 @@
   border: 1px dashed var(--border);
 }
 
+/* SKUD employee link section */
+.skudLinked {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.skudLinkedText {
+  font-size: 13px;
+  color: var(--success);
+}
+
+.skudUnlinkBtn {
+  background: none;
+  border: none;
+  color: var(--error);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+  transition: opacity 0.15s;
+}
+
+.skudUnlinkBtn:hover {
+  opacity: 0.7;
+}
+
+.skudNotLinked {
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+
+.skudSearchInput {
+  margin-top: 6px;
+}
+
+.skudSearchResults {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 150px;
+  overflow-y: auto;
+  margin-top: 4px;
+  width: 100%;
+}
+
+.skudSearchItem {
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+
+.skudSearchItem:hover {
+  background: var(--bg-tertiary);
+}
+
+.skudSearchLoading {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}
+
+/* Pending users - approval modal employee search */
+.empSelected {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--success);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.empSelectedUnlink {
+  background: none;
+  border: none;
+  color: var(--error);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+}
+
+.empSearchResults {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 160px;
+  overflow-y: auto;
+  margin-top: 4px;
+  width: 100%;
+}
+
+.empSearchItem {
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+
+.empSearchItem:hover {
+  background: var(--bg-tertiary);
+}
+
+.empSearchItemActive {
+  background: var(--accent-muted);
+}
+
+.empSearchLoading {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}
+
 /* Responsive */
-@media (max-width: 768px) {
-  .container {
-    padding: 16px;
-  }
-
-  .header {
-    margin-bottom: 12px;
-  }
-
-  .header h1 {
-    font-size: 20px;
-  }
-
+@media (max-width: 960px) {
   /* Скрываем заголовок таблицы */
   .userListTableHeader {
     display: none;
@@ -762,7 +863,7 @@
     margin-top: 2px;
   }
 
-  /* На мобиле userRowMeta — flex-строка под ФИО */
+  /* userRowMeta — flex-строка под ФИО */
   .userRowMeta {
     display: flex;
     gap: 8px;
@@ -772,7 +873,6 @@
     grid-row: 2;
   }
 
-  /* Убираем центрирование — на мобиле всё выравнивается по левому краю */
   .userRowRole {
     justify-self: auto;
     text-align: left;
@@ -786,6 +886,20 @@
   .userRowStatusCell {
     justify-content: flex-start;
     margin-left: auto;
+  }
+}
+
+@media (max-width: 768px) {
+  .container {
+    padding: 0;
+  }
+
+  .header {
+    margin-bottom: 12px;
+  }
+
+  .header h1 {
+    font-size: 20px;
   }
 
   /* Развёрнутые контролы */
@@ -838,8 +952,8 @@
   .controlActions {
     margin-left: 0;
     margin-top: 4px;
-    justify-content: stretch;
     gap: 8px;
+    flex-wrap: wrap;
   }
 
   .controlActions button {
@@ -890,7 +1004,7 @@
 
 @media (max-width: 430px) {
   .container {
-    padding: 12px;
+    padding: 0;
   }
 
   .header {

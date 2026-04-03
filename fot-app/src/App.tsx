@@ -25,7 +25,6 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ de
 
 // Super Admin
 const UserManagementPage = lazy(() => import('./pages/super-admin/UserManagementPage').then(m => ({ default: m.UserManagementPage })));
-const AdminManagePage = lazy(() => import('./pages/super-admin/AdminManagePage').then(m => ({ default: m.AdminManagePage })));
 const DataAuditPage = lazy(() => import('./pages/super-admin/DataAuditPage').then(m => ({ default: m.DataAuditPage })));
 const RoleManagementPage = lazy(() => import('./pages/super-admin/RoleManagementPage').then(m => ({ default: m.RoleManagementPage })));
 
@@ -224,7 +223,6 @@ const AppRoutes = () => {
               </Layout>
             }
           />
-          <Route path="/admin/structure" element={<Navigate to="/admin/manage" replace />} />
           <Route
             path="/discipline"
             element={
@@ -302,14 +300,6 @@ const AppRoutes = () => {
             element={
               <Layout title="Управление пользователями" theme={theme} onToggleTheme={toggleTheme}>
                 <UserManagementPage />
-              </Layout>
-            }
-          />
-          <Route
-            path="/admin/manage"
-            element={
-              <Layout title="Управление" theme={theme} onToggleTheme={toggleTheme}>
-                <AdminManagePage />
               </Layout>
             }
           />

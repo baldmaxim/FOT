@@ -8,7 +8,6 @@ import {
   UsersIcon,
   CalendarIcon,
   SettingsIcon,
-  BuildingIcon,
   ClipboardCheckIcon,
   FileTextIcon,
   DatabaseIcon,
@@ -56,7 +55,6 @@ const navGroups: INavGroup[] = [
   {
     label: 'Система',
     items: [
-      { id: 'admin-manage', path: '/admin/manage', label: 'Управление', icon: BuildingIcon, requiredPosition: 'super_admin' },
       { id: 'sigur-settings', path: '/skud-settings', label: 'Настройки СКУД', icon: SettingsIcon, requiredPosition: 'super_admin' },
       { id: 'admin-users', path: '/admin/users', label: 'Пользователи', icon: SettingsIcon, requiredPosition: 'super_admin' },
       { id: 'admin-audit', path: '/admin/audit', label: 'Аудит данных', icon: ClipboardCheckIcon, requiredPosition: 'super_admin' },

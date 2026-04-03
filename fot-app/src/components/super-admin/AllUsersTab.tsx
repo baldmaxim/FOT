@@ -375,37 +375,36 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
                       <div className={styles.controlGroup}>
                         <label>Сотрудник СКУД:</label>
                         {user.employee_id ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <span style={{ fontSize: 13, color: 'var(--color-success, #22c55e)' }}>
+                          <div className={styles.skudLinked}>
+                            <span className={styles.skudLinkedText}>
                               ID {user.employee_id}
                             </span>
                             <button
-                              style={{ background: 'none', border: 'none', color: 'var(--color-danger, #ef4444)', cursor: 'pointer', fontSize: 13 }}
+                              className={styles.skudUnlinkBtn}
                               onClick={() => handleEmpLink(user.id, null)}
                             >
                               Отвязать
                             </button>
                           </div>
                         ) : (
-                          <span style={{ fontSize: 13, color: '#888' }}>Не привязан</span>
+                          <span className={styles.skudNotLinked}>Не привязан</span>
                         )}
                         <input
                           type="text"
                           placeholder="Поиск по ФИО..."
                           value={empSearch?.userId === user.id ? empSearch.query : ''}
                           onChange={(e) => handleEmpSearchQuery(user.id, e.target.value)}
-                          className={styles.nameInput}
-                          style={{ marginTop: 6 }}
+                          className={`${styles.nameInput} ${styles.skudSearchInput}`}
                         />
                         {empSearch?.userId === user.id && empSearch.loading && (
-                          <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>Поиск...</div>
+                          <div className={styles.skudSearchLoading}>Поиск...</div>
                         )}
                         {empSearch?.userId === user.id && empSearch.results.length > 0 && (
-                          <div style={{ border: '1px solid var(--border-color, #333)', borderRadius: 6, maxHeight: 150, overflowY: 'auto', marginTop: 4 }}>
+                          <div className={styles.skudSearchResults}>
                             {empSearch.results.map(emp => (
                               <div
                                 key={emp.id}
-                                style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 13 }}
+                                className={styles.skudSearchItem}
                                 onClick={() => handleEmpLink(user.id, emp.id, emp.full_name)}
                               >
                                 {emp.full_name}

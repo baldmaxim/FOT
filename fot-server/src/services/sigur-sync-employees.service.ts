@@ -41,6 +41,7 @@ export interface ISyncEmployeesResult {
   total: number;
   errors: string[];
   unmatched: IUnmatchedSigurEmployee[];
+  auto_fired: number;
 }
 
 // ─── Чистые функции синхронизации ───
@@ -185,7 +186,7 @@ export async function syncEmployeesLogic(
   console.log('[syncEmployees] got', sigurEmployeesRaw.length, 'employees from Sigur');
 
   if (sigurEmployeesRaw.length === 0) {
-    return { imported: 0, updated: 0, skipped: 0, total: 0, errors: [], unmatched: [] };
+    return { imported: 0, updated: 0, skipped: 0, total: 0, errors: [], unmatched: [], auto_fired: 0 };
   }
 
   logSampleAndWarn('syncEmployees', sigurEmployeesRaw[0], ['id', 'name', 'departmentId', 'positionId', 'position']);
@@ -414,6 +415,40 @@ export async function syncEmployeesLogic(
     }
   }
 
-  console.log(`[syncEmployees] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${unmatchedList.length} unmatched`);
-  return { imported, updated, skipped, total: sigurEmployeesRaw.length, errors, unmatched: unmatchedList };
+  // Авто-увольнение сотрудников, которых больше нет в SIGUR
+  const sigurIdSet = new Set<number>();
+  for (const emp of sigurEmployees) {
+    if (emp.id != null) sigurIdSet.add(emp.id);
+  }
+
+  const toAutoFire = existingEmps.filter(
+    e => e.employment_status === 'active' && !sigurIdSet.has(e.sigur_employee_id),
+  );
+
+  let autoFired = 0;
+  const today = new Date().toISOString().slice(0, 10);
+
+  for (const emp of toAutoFire) {
+    const { error: fireErr } = await supabase
+      .from('employees')
+      .update({ employment_status: 'fired' })
+      .eq('id', emp.id);
+    if (fireErr) {
+      errors.push(`auto-fire ${emp.id}: ${fireErr.message}`);
+      continue;
+    }
+    await supabase
+      .from('employee_assignments')
+      .update({ effective_to: today })
+      .eq('employee_id', emp.id)
+      .is('effective_to', null);
+    autoFired++;
+  }
+
+  if (autoFired > 0) {
+    console.log(`[syncEmployees] auto-fired ${autoFired} employees not found in Sigur`);
+  }
+
+  console.log(`[syncEmployees] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${unmatchedList.length} unmatched, ${autoFired} auto-fired`);
+  return { imported, updated, skipped, total: sigurEmployeesRaw.length, errors, unmatched: unmatchedList, auto_fired: autoFired };
 }

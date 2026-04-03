@@ -8,12 +8,14 @@
   margin-left: var(--sidebar-width);
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
 }
 
 .content {
   flex: 1;
   padding: 24px;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .overlay {

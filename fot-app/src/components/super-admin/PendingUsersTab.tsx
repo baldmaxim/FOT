@@ -179,10 +179,10 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onRel
                   className={styles.nameInput}
                 />
                 {approvalModal.employeeId && (
-                  <div style={{ marginTop: 4, fontSize: 13, color: 'var(--color-success, #22c55e)' }}>
+                  <div className={styles.empSelected}>
                     Выбран: ID {approvalModal.employeeId}
                     <button
-                      style={{ marginLeft: 8, background: 'none', border: 'none', color: 'var(--color-danger, #ef4444)', cursor: 'pointer', fontSize: 13 }}
+                      className={styles.empSelectedUnlink}
                       onClick={() => setApprovalModal(prev => prev ? { ...prev, employeeId: null } : null)}
                     >
                       Отвязать
@@ -190,16 +190,11 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onRel
                   </div>
                 )}
                 {approvalModal.employeeResults.length > 0 && (
-                  <div style={{ border: '1px solid var(--border-color, #333)', borderRadius: 6, maxHeight: 160, overflowY: 'auto', marginTop: 4 }}>
+                  <div className={styles.empSearchResults}>
                     {approvalModal.employeeResults.map(emp => (
                       <div
                         key={emp.id}
-                        style={{
-                          padding: '6px 10px',
-                          cursor: 'pointer',
-                          fontSize: 13,
-                          background: approvalModal.employeeId === emp.id ? 'var(--color-primary-bg, #1e3a5f)' : 'transparent',
-                        }}
+                        className={`${styles.empSearchItem} ${approvalModal.employeeId === emp.id ? styles.empSearchItemActive : ''}`}
                         onClick={() => setApprovalModal(prev => prev ? { ...prev, employeeId: emp.id, employeeSearch: emp.full_name, employeeResults: [] } : null)}
                       >
                         {emp.full_name}
@@ -207,10 +202,10 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onRel
                     ))}
                   </div>
                 )}
-                {approvalModal.searchLoading && <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>Поиск...</div>}
+                {approvalModal.searchLoading && <div className={styles.empSearchLoading}>Поиск...</div>}
               </div>
 
-              <div className={styles.controlActions} style={{ marginTop: 16 }}>
+              <div className={styles.controlActions}>
                 <button className={styles.approveBtn} onClick={handleApproveConfirm}>
                   Одобрить
                 </button>
