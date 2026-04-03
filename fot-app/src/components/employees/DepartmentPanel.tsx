@@ -35,7 +35,7 @@ export const DepartmentPanel: FC<IDepartmentPanelProps> = ({
 
   const renderDeptNode = (node: OrgDepartmentNode, level = 0) => {
     const hasChildren = node.children.length > 0;
-    const isExpanded = expandedDepts.has(node.id);
+    const isExpanded = deptSearch ? true : expandedDepts.has(node.id);
     const isSelected = selectedDeptId === node.id;
     const count = deptCounts.get(node.id) || 0;
 

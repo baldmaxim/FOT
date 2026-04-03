@@ -37,16 +37,16 @@ cd fot-app && npm run lint
 
 ## Ключевые паттерны
 
-- **Авторизация**: JWT + 2FA (TOTP). Роли через `position_type`: `worker`, `header`, `admin`, `super_admin`. Проверка в middleware (`auth.ts`), на фронте — `<ProtectedRoute>`.
-- **Шифрование**: ФИО сотрудников хранятся зашифрованными (`full_name_encrypted`), расшифровка в `encryption.service.ts`.
-- **Supabase**: используется service role key (RLS отключён), авторизация проверяется в middleware бэкенда.
+- **Авторизация**: JWT + 2FA (TOTP). Роли через `position_type` + `system_role_id` (таблица `system_roles`). Проверка в middleware (`auth.ts`), на фронте — `<ProtectedRoute>`. Иерархия ролей через `level` из `system_roles`.
+- **ФИО сотрудников**: хранятся plain-text (`full_name`, `last_name`, `first_name`, `middle_name`). `encryption.service.ts` используется только для TOTP и чата, не для ФИО.
+- **Supabase**: используется service role key (RLS отключён), авторизация проверяется в middleware бэкенда. Фронтенд к PostgREST напрямую не обращается.
 - **API роуты**: все под префиксом `/api/` — auth, employees, admin, skud, sigur, structure, timesheet, audit, chat.
 - **Фронтенд роуты**: по ролям — `worker` видит `/employee/*`, `header`+ видит `/dashboard`, `admin`+ видит `/tender`, `super_admin` видит `/skud-settings`, `/admin/*`.
 
 ## Структура бэкенда
 
 - **Контроллеры** (22 файла в `fot-server/src/controllers/`): декомпозированы по доменам — `admin-*`, `auth-*`, `employee-*`, `sigur-*`, `skud-*`, `timesheet-*`.
-- **Сервисы** (20 файлов в `fot-server/src/services/`): `sigur-sync-*` (employees, events, structure, shared), `skud-*` (backfill, dashboard, discipline, import, presence, shared), `employee-mapper.service.ts` (кэш структуры + расшифровка).
+- **Сервисы** (20 файлов в `fot-server/src/services/`): `sigur-sync-*` (employees, events, structure, shared), `skud-*` (backfill, dashboard, discipline, import, presence, shared), `employee-mapper.service.ts` (кэш структуры + маппинг полей).
 - **Feature flags**: `fot-server/src/config/features.ts` — `LOGIN_2FA_ENABLED`, `CRITICAL_2FA_ENABLED`, `IS_PRODUCTION`.
 - **Типы Express**: `fot-server/src/types/express.d.ts` — расширение `req.user` с типизацией.
 

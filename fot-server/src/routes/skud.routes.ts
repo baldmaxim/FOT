@@ -42,10 +42,10 @@ router.get(
   skudController.getDashboardStats
 );
 
-// GET /api/skud/discipline - аналитика дисциплины по всей организации (admin+)
+// GET /api/skud/discipline - аналитика дисциплины по всей организации (header+)
 router.get(
   '/discipline',
-  requireMinPosition('admin'),
+  requireMinPosition('header'),
   skudController.getDisciplineViolations
 );
 

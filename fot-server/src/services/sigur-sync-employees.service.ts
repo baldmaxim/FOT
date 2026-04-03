@@ -4,7 +4,6 @@ import { parseFIO } from '../utils/fio.utils.js';
 import {
   getPositionsRaw,
   getWhitelistedDepartmentIdsCached,
-  getWhitelistedSigurEmployees,
   logSampleAndWarn,
   normalizeEmployee,
   type ISyncContext,
@@ -176,25 +175,21 @@ export async function syncEmployeesLogic(
   const send = onProgress || (() => {});
   send({ type: 'employees_progress', phase: 'loading', current: 0, total: 0, percent: 0 });
 
-  let sigurEmployeesRaw: Record<string, unknown>[];
+  // Всегда загружаем полный список — чтобы обновлять отдел у существующих сотрудников
+  // даже если они переехали за пределы whitelist-отделов
   const whitelist = await getWhitelistedDepartmentIdsCached(context);
   if (whitelist) {
-    console.log(`[syncEmployees] whitelist active: ${whitelist.size} departments`);
-    sigurEmployeesRaw = await getWhitelistedSigurEmployees(connection, context, send);
-  } else {
-    sigurEmployeesRaw = await sigurService.getEmployeesCached(connection);
+    console.log(`[syncEmployees] whitelist active: ${whitelist.size} departments (applies to inserts only)`);
   }
+  const sigurEmployeesRaw = await sigurService.getEmployeesCached(connection);
   console.log('[syncEmployees] got', sigurEmployeesRaw.length, 'employees from Sigur');
 
   if (sigurEmployeesRaw.length === 0) {
     return { imported: 0, updated: 0, skipped: 0, total: 0, errors: [], unmatched: [] };
   }
 
-  if (sigurEmployeesRaw.length > 0) {
-    logSampleAndWarn('syncEmployees', sigurEmployeesRaw[0], ['id', 'name', 'departmentId', 'positionId', 'position']);
-  }
+  logSampleAndWarn('syncEmployees', sigurEmployeesRaw[0], ['id', 'name', 'departmentId', 'positionId', 'position']);
 
-  // Все загруженные уже отфильтрованы по whitelist (если он есть)
   const sigurEmployees = sigurEmployeesRaw.map(normalizeEmployee);
   const skippedByWhitelist = 0;
   console.log(`[syncEmployees] employees to process: ${sigurEmployees.length}`);
@@ -353,6 +348,11 @@ export async function syncEmployeesLogic(
     }
 
     if (autoInsert) {
+      // Whitelist ограничивает только вставку новых сотрудников, не обновление существующих
+      if (whitelist && sigurDeptId != null && !whitelist.has(sigurDeptId)) {
+        skipped++;
+        continue;
+      }
       const fio = parseFIO(fullName);
       inserts.push({
         full_name: fullName.trim(),
