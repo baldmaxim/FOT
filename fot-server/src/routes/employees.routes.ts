@@ -36,16 +36,6 @@ router.get(
   employeesController.getAll
 );
 
-// POST /api/employees/import - импорт из Excel (header+, требуется 2FA)
-router.post(
-  '/import',
-  requirePosition('header', 'hr', 'admin', 'super_admin'),
-  requireCritical2FA,
-  importLimiter,
-  upload.single('file'),
-  employeesController.import
-);
-
 // POST /api/employees/enrich - обогащение данных из Excel (header+, требуется 2FA)
 router.post(
   '/enrich',

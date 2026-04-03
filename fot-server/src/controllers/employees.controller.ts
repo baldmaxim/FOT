@@ -8,7 +8,7 @@ import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js'
 
 // Импорт методов из подконтроллеров
 import { archive, restore, fire, rehire, moveDepartment, getHistory } from './employee-lifecycle.controller.js';
-import { importEmployees, deleteAll } from './employee-import.controller.js';
+import { deleteAll } from './employee-import.controller.js';
 
 // Схемы валидации
 const createEmployeeSchema = z.object({
@@ -368,6 +368,5 @@ export const employeesController = {
   getHistory,
 
   // Методы из employee-import.controller.ts
-  import: importEmployees,
   deleteAll,
 };

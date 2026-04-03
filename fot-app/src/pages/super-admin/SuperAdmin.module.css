@@ -63,6 +63,38 @@
   color: white;
 }
 
+.roleTabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+  overflow-x: auto;
+}
+
+.roleTab {
+  padding: 7px 14px;
+  border: none;
+  background: none;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.roleTab:hover {
+  color: var(--text-primary);
+}
+
+.roleTabActive {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
 .userList {
   display: flex;
   flex-direction: column;
@@ -426,13 +458,32 @@
   background: var(--bg-tertiary);
 }
 
-.userRowHeader {
-  display: flex;
+.userListTableHeader {
+  display: grid;
+  grid-template-columns: 1fr 120px 180px 110px 28px;
   align-items: center;
-  padding: 12px 16px;
+  padding: 6px 16px;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-tertiary);
+}
+
+.userListTableHeader span {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.userRowHeader {
+  display: grid;
+  grid-template-columns: 1fr 120px 180px 110px 28px;
+  align-items: center;
+  padding: 10px 16px;
   cursor: pointer;
   transition: background 0.15s;
-  gap: 16px;
+  gap: 12px;
 }
 
 .userRowHeader:hover {
@@ -477,7 +528,6 @@
 .userRowOrg {
   font-size: 12px;
   color: var(--text-tertiary);
-  max-width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -660,14 +710,18 @@
 
 /* Responsive */
 @media (max-width: 768px) {
-  .userRowHeader {
-    flex-wrap: wrap;
+  .userListTableHeader {
+    display: none;
   }
 
-  .userRowMeta {
-    width: 100%;
-    margin-top: 8px;
+  .userRowHeader {
+    display: flex;
     flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .userRowOrg {
+    max-width: 140px;
   }
 
   .userRowControls {
@@ -727,6 +781,11 @@
     white-space: nowrap;
     padding: 6px 10px;
     font-size: 13px;
+  }
+
+  .roleTab {
+    padding: 6px 10px;
+    font-size: 12px;
   }
 
   .userRowHeader {

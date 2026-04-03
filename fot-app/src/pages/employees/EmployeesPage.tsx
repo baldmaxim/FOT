@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type FC } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Upload, UserPlus, X, FileSpreadsheet, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, UserPlus, X, FileSpreadsheet, ChevronLeft, ChevronRight } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
 import type { PaginatedMeta, EmployeeCounts } from '../../services/employeeService';
 import { skudService } from '../../services/skudService';
@@ -19,7 +19,6 @@ export const EmployeesPage: FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const { canAccess } = useAuth();
   const canEdit = canAccess('header');
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const enrichInputRef = useRef<HTMLInputElement>(null);
 
   // Data
@@ -229,17 +228,6 @@ export const EmployeesPage: FC = () => {
     } catch { setError('Ошибка добавления'); }
   };
 
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const result = await employeeService.import(file);
-      alert(`Импортировано: ${result.imported}`);
-      loadPage();
-    } catch { setError('Ошибка импорта'); }
-    finally { e.target.value = ''; }
-  };
-
   const handleEnrichUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -338,11 +326,6 @@ export const EmployeesPage: FC = () => {
                 <span>Импорт сотрудников</span>
               </button>
               <input ref={enrichInputRef} type="file" accept=".xlsx,.xls" onChange={handleEnrichUpload} hidden />
-              <button className="ep-toolbar-btn secondary" onClick={() => fileInputRef.current?.click()}>
-                <Upload size={16} />
-                <span>Импорт</span>
-              </button>
-              <input ref={fileInputRef} type="file" accept=".xlsx,.xls" onChange={handleImport} hidden />
               <button className="ep-toolbar-btn primary" onClick={() => setShowAddModal(true)}>
                 <UserPlus size={16} />
                 <span>Добавить</span>

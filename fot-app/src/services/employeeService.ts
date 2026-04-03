@@ -6,11 +6,6 @@ interface ApiResponse<T> {
   message?: string;
 }
 
-interface ImportResult {
-  imported: number;
-  errors: string[];
-}
-
 export interface PaginatedParams {
   page: number;
   pageSize?: number;
@@ -88,14 +83,6 @@ export const employeeService = {
 
   async restore(id: number): Promise<Employee> {
     const response = await apiClient.post<ApiResponse<Employee>>(`/employees/${id}/restore`);
-    return response.data;
-  },
-
-  async import(file: File): Promise<ImportResult> {
-    const formData = new FormData();
-    formData.append('file', file);
-
-    const response = await apiClient.post<ApiResponse<ImportResult>>('/employees/import', formData);
     return response.data;
   },
 

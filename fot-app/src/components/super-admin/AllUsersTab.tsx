@@ -60,8 +60,11 @@ const flattenDepts = (nodes: OrgDepartmentNode[], level = 0): IDeptFlat[] => {
   return result;
 };
 
+type RoleFilter = 'headers' | 'workers' | 'hr' | 'admins';
+
 export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
   const toast = useToast();
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>('headers');
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<{ userId: string; value: string } | null>(null);
   const [empSearch, setEmpSearch] = useState<IEmpSearch | null>(null);
@@ -201,10 +204,59 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
     setTwoFactorModal({ visible: false, userId: '', userName: '', data: null, loading: false });
   };
 
+  const counts = {
+    headers: allUsers.filter(u => u.position_type === 'header').length,
+    workers: allUsers.filter(u => u.position_type === 'worker').length,
+    hr: allUsers.filter(u => u.position_type === 'hr').length,
+    admins: allUsers.filter(u => u.position_type === 'admin' || u.position_type === 'super_admin').length,
+  };
+
+  const filteredUsers = allUsers.filter(u => {
+    if (roleFilter === 'headers') return u.position_type === 'header';
+    if (roleFilter === 'workers') return u.position_type === 'worker';
+    if (roleFilter === 'hr') return u.position_type === 'hr';
+    return u.position_type === 'admin' || u.position_type === 'super_admin';
+  });
+
   return (
     <>
+      <div className={styles.roleTabs}>
+        <button
+          className={`${styles.roleTab} ${roleFilter === 'headers' ? styles.roleTabActive : ''}`}
+          onClick={() => setRoleFilter('headers')}
+        >
+          Руководители ({counts.headers})
+        </button>
+        <button
+          className={`${styles.roleTab} ${roleFilter === 'workers' ? styles.roleTabActive : ''}`}
+          onClick={() => setRoleFilter('workers')}
+        >
+          Сотрудники ({counts.workers})
+        </button>
+        <button
+          className={`${styles.roleTab} ${roleFilter === 'hr' ? styles.roleTabActive : ''}`}
+          onClick={() => setRoleFilter('hr')}
+        >
+          HR ({counts.hr})
+        </button>
+        <button
+          className={`${styles.roleTab} ${roleFilter === 'admins' ? styles.roleTabActive : ''}`}
+          onClick={() => setRoleFilter('admins')}
+        >
+          Администраторы ({counts.admins})
+        </button>
+      </div>
+
       <div className={styles.userListCompact}>
-        {allUsers.map(user => {
+        <div className={styles.userListTableHeader}>
+          <span>ФИО</span>
+          <span>Роль</span>
+          <span>Отдел</span>
+          <span>Статус</span>
+          <span></span>
+        </div>
+
+        {filteredUsers.map(user => {
           const isExpanded = expandedUserId === user.id;
           const isSuperAdmin = user.position_type === 'super_admin';
 
@@ -220,17 +272,15 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
                   <div className={styles.userRowEmail}>{user.email || ''}</div>
                 </div>
 
-                <div className={styles.userRowMeta}>
-                  <span className={styles.userRowRole}>{getPositionName(user.position_type)}</span>
-                  <span className={styles.userRowOrg}>{getDeptName(user)}</span>
-                  {!user.is_approved ? (
-                    <span className={styles.notApproved}>Не одобрен</span>
-                  ) : !user.two_factor_enabled ? (
-                    <span className={styles.twoFaDisabled}>Ожидает 2FA</span>
-                  ) : (
-                    <span className={styles.approved}>Активен</span>
-                  )}
-                </div>
+                <span className={styles.userRowRole}>{getPositionName(user.position_type)}</span>
+                <span className={styles.userRowOrg}>{getDeptName(user)}</span>
+                <span className={
+                  !user.is_approved ? styles.notApproved
+                  : !user.two_factor_enabled ? styles.twoFaDisabled
+                  : styles.approved
+                }>
+                  {!user.is_approved ? 'Не одобрен' : !user.two_factor_enabled ? 'Ожидает 2FA' : 'Активен'}
+                </span>
 
                 <div className={styles.expandIcon}>
                   <svg
