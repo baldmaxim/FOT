@@ -24,6 +24,9 @@ import scheduleRoutes from './routes/schedule.routes.js';
 
 const app = express();
 
+// Trust nginx proxy (needed for correct IP in rate limiting behind reverse proxy)
+app.set('trust proxy', 1);
+
 // Security middleware
 app.use(helmet());
 app.use(cors({

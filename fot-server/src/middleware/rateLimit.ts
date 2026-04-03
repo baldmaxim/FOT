@@ -5,7 +5,7 @@ const skipInDev = (): boolean => !IS_PRODUCTION;
 
 export const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: IS_PRODUCTION ? 200 : 500,
+  max: IS_PRODUCTION ? 500 : 1000,
   skip: skipInDev,
   message: { success: false, error: 'Слишком много запросов, попробуйте позже' },
   standardHeaders: true,
