@@ -444,33 +444,17 @@
 
 @media (max-width: 768px) {
   .loginContainer {
-    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
   }
 
   .brandPanel {
-    width: 100%;
-    padding: 32px 24px;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .brandHeadline {
-    display: none;
-  }
-
-  .features {
-    display: none;
-  }
-
-  .logo {
-    margin-bottom: 0;
-  }
-
-  .brandFooter {
     display: none;
   }
 
   .authPanel {
+    flex: 1;
+    height: 100vh;
     padding: 32px 24px;
   }
 }

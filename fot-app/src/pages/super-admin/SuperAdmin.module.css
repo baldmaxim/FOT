@@ -726,6 +726,10 @@
     padding: 16px;
   }
 
+  .header {
+    margin-bottom: 12px;
+  }
+
   .header h1 {
     font-size: 20px;
   }
@@ -889,9 +893,14 @@
     padding: 12px;
   }
 
+  .header {
+    display: none;
+  }
+
   .tabs {
     overflow-x: auto;
     scrollbar-width: none;
+    margin-bottom: 12px;
   }
 
   .tabs::-webkit-scrollbar {
