@@ -107,12 +107,14 @@ export const adminUsersController = {
       const usersWithEmail = await Promise.all(
         users.map(async (u: UserProfile) => {
           let email = '';
+          let emailConfirmed = false;
           try {
             const { data: authUser, error: authError } = await supabase.auth.admin.getUserById(u.id);
             if (authError) {
               console.error(`Failed to get email for user ${u.id}:`, authError);
             }
             email = authUser?.user?.email || '';
+            emailConfirmed = !!authUser?.user?.email_confirmed_at;
           } catch (e) {
             console.error('Failed to get user email:', e);
           }
@@ -120,7 +122,7 @@ export const adminUsersController = {
           return {
             id: u.id,
             email,
-            email_confirmed: !!authUser?.user?.email_confirmed_at,
+            email_confirmed: emailConfirmed,
             full_name: u.full_name,
             position_type: u.position_type,
             imported_position: u.imported_position,
