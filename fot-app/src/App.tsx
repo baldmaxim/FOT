@@ -225,6 +225,14 @@ const AppRoutes = () => {
             }
           />
           <Route path="/admin/structure" element={<Navigate to="/admin/manage" replace />} />
+          <Route
+            path="/discipline"
+            element={
+              <Layout title="Аналитика дисциплины" theme={theme} onToggleTheme={toggleTheme}>
+                <DisciplineAnalyticsPage />
+              </Layout>
+            }
+          />
         </Route>
 
         {/* HR routes */}
@@ -262,14 +270,6 @@ const AppRoutes = () => {
             element={
               <Layout title="Просмотр СКУД (база)" theme={theme} onToggleTheme={toggleTheme}>
                 <SkudSupabasePage />
-              </Layout>
-            }
-          />
-          <Route
-            path="/discipline"
-            element={
-              <Layout title="Аналитика дисциплины" theme={theme} onToggleTheme={toggleTheme}>
-                <DisciplineAnalyticsPage />
               </Layout>
             }
           />

@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, type FC } from 'react';
 import { skudService } from '../services/skudService';
+import { useAuth } from '../contexts/AuthContext';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { DisciplineTable } from '../components/discipline/DisciplineTable';
 import { DisciplineDetailPanel } from '../components/discipline/DisciplineDetailPanel';
@@ -106,6 +107,8 @@ const getSummary = (v: IViolationRaw): string => {
 };
 
 export const DisciplineAnalyticsPage: FC = () => {
+  const { positionType, profile } = useAuth();
+  const isHeaderOnly = positionType === 'header';
   const isMobile = useIsMobile(430);
 
   const now = new Date();
@@ -153,6 +156,12 @@ export const DisciplineAnalyticsPage: FC = () => {
   }, []);
 
   const buildMonthValue = useCallback((year: number, month: number) => `${year}-${String(month).padStart(2, '0')}`, []);
+
+  useEffect(() => {
+    if (isHeaderOnly && profile?.department_id) {
+      setSelectedDept(profile.department_id);
+    }
+  }, [isHeaderOnly, profile?.department_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchData = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -254,10 +263,10 @@ export const DisciplineAnalyticsPage: FC = () => {
 
   const panelEmployee = panelEmpId !== null ? employees.find(e => e.employee_id === panelEmpId) ?? null : null;
 
-  const hasFilters = selectedDept !== '' || searchQuery !== '';
+  const hasFilters = (isHeaderOnly ? false : selectedDept !== '') || searchQuery !== '';
 
   const clearFilters = () => {
-    setSelectedDept('');
+    if (!isHeaderOnly) setSelectedDept('');
     setSearchQuery('');
   };
 
@@ -396,16 +405,22 @@ export const DisciplineAnalyticsPage: FC = () => {
                   <button className="da-search-clear" onClick={() => setSearchQuery('')}>&times;</button>
                 )}
               </div>
-              <select
-                className="da-dept-select"
-                value={selectedDept}
-                onChange={e => setSelectedDept(e.target.value)}
-              >
-                <option value="">Все отделы</option>
-                {departmentOptions.map(([id, name]) => (
-                  <option key={id} value={id}>{name}</option>
-                ))}
-              </select>
+              {isHeaderOnly ? (
+                <div className="da-dept-label">
+                  {deptData[selectedDept] ?? 'Мой отдел'}
+                </div>
+              ) : (
+                <select
+                  className="da-dept-select"
+                  value={selectedDept}
+                  onChange={e => setSelectedDept(e.target.value)}
+                >
+                  <option value="">Все отделы</option>
+                  {departmentOptions.map(([id, name]) => (
+                    <option key={id} value={id}>{name}</option>
+                  ))}
+                </select>
+              )}
               {hasFilters && (
                 <button className="da-btn da-btn-reset" onClick={clearFilters}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>

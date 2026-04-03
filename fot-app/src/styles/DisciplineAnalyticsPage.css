@@ -212,6 +212,20 @@
   border-color: var(--primary);
 }
 
+.da-dept-label {
+  height: 36px;
+  padding: 0 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  min-width: 160px;
+  max-width: 260px;
+}
+
 .da-btn-reset {
   color: var(--text-muted);
   font-size: 12px;

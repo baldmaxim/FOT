@@ -49,7 +49,7 @@ const navGroups: INavGroup[] = [
     items: [
       { id: 'skud-raw', path: '/skud-raw', label: 'Просмотр СКУД', icon: FileTextIcon, requiredPosition: 'admin' },
       { id: 'skud-db', path: '/skud-db', label: 'СКУД (база)', icon: DatabaseIcon, requiredPosition: 'admin' },
-      { id: 'discipline', path: '/discipline', label: 'Аналитика', icon: BarChartIcon, requiredPosition: 'admin' },
+      { id: 'discipline', path: '/discipline', label: 'Аналитика', icon: BarChartIcon, requiredPosition: 'header' },
       { id: 'timesheet-review', path: '/timesheet-review', label: 'Проверка табелей', icon: CalendarIcon, requiredPosition: 'hr' },
     ]
   },
