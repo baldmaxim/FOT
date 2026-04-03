@@ -1288,9 +1288,14 @@
   }
 
   .quickActionIcon {
-    width: 28px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     border-radius: 6px;
+  }
+
+  .periodNavBtn {
+    width: 36px;
+    height: 36px;
   }
 
   .quickActionIcon svg {

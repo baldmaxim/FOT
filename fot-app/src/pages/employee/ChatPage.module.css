@@ -413,6 +413,24 @@
   }
 }
 
+@media (max-width: 430px) {
+  .sidebarHeader h2 {
+    font-size: 16px;
+  }
+
+  .messagesContainer {
+    padding: 10px;
+  }
+
+  .inputArea {
+    padding: 6px 10px;
+  }
+
+  .message {
+    max-width: 90%;
+  }
+}
+
 /* iPad */
 @media (min-width: 769px) and (max-width: 1024px) {
   .sidebar {

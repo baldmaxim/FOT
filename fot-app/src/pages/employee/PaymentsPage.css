@@ -22,3 +22,9 @@
 @media (max-width: 600px) {
   .pm-page { padding: 16px; }
 }
+
+@media (max-width: 430px) {
+  .pm-page { padding: 12px; }
+  .pm-title { font-size: 17px; }
+  .pm-card { padding: 12px 14px; }
+}

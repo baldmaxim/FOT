@@ -559,6 +559,22 @@
   }
 }
 
+@media (max-width: 430px) {
+  .messageBubble {
+    max-width: 90%;
+  }
+
+  .messageInput {
+    font-size: 14px;
+  }
+
+  .sendBtn {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+  }
+}
+
 /* iPad */
 @media (min-width: 769px) and (max-width: 1024px) {
   .panel {

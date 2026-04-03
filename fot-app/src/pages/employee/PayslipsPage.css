@@ -28,3 +28,9 @@
   .ps-page { padding: 16px; }
   .ps-card-amounts { flex-direction: column; gap: 4px; }
 }
+
+@media (max-width: 430px) {
+  .ps-page { padding: 12px; }
+  .ps-title { font-size: 17px; }
+  .ps-card { padding: 12px 14px; }
+}
