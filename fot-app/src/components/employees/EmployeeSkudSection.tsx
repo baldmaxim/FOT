@@ -222,7 +222,7 @@ const getNavLabel = (mode: ViewMode, viewDate: Date): string => {
 
 
 export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
-  employeeId, employeeName, onSync, focusDate, focusKey, externalViewMode,
+  employeeId, employeeName, focusDate, focusKey, externalViewMode,
   externalRangeStart, externalRangeEnd, externalViewDate,
 }) => {
   const [groups, setGroups] = useState<IDayGroup[]>([]);
