@@ -10,6 +10,7 @@ interface IDepartmentPanelProps {
   totalActive: number;
   highlightedDeptIds?: Set<string>;
   deptSearch: string;
+  visibleDeptIds?: Set<string>;
   onSelectDept: (id: string | null) => void;
   onToggleDept: (id: string) => void;
   onRefresh: () => void;
@@ -17,11 +18,22 @@ interface IDepartmentPanelProps {
 
 export const DepartmentPanel: FC<IDepartmentPanelProps> = ({
   departments, selectedDeptId, expandedDepts, deptCounts, totalActive,
-  highlightedDeptIds, deptSearch,
+  highlightedDeptIds, deptSearch, visibleDeptIds,
   onSelectDept, onToggleDept, onRefresh,
 }) => {
 
   const filteredDepts = useMemo(() => {
+    if (visibleDeptIds) {
+      const filterById = (nodes: OrgDepartmentNode[]): OrgDepartmentNode[] =>
+        nodes.reduce<OrgDepartmentNode[]>((acc, node) => {
+          const children = filterById(node.children);
+          if (visibleDeptIds.has(node.id) || children.length > 0) {
+            acc.push({ ...node, children });
+          }
+          return acc;
+        }, []);
+      return filterById(departments);
+    }
     if (!deptSearch) return departments;
     const q = deptSearch.toLowerCase();
     const filterTree = (nodes: OrgDepartmentNode[]): OrgDepartmentNode[] =>
@@ -33,7 +45,7 @@ export const DepartmentPanel: FC<IDepartmentPanelProps> = ({
         return acc;
       }, []);
     return filterTree(departments);
-  }, [departments, deptSearch]);
+  }, [departments, deptSearch, visibleDeptIds]);
 
   const renderDeptNode = (node: OrgDepartmentNode, level = 0) => {
     const hasChildren = node.children.length > 0;

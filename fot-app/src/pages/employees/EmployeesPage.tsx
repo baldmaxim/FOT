@@ -325,6 +325,7 @@ export const EmployeesPage: FC = () => {
         totalActive={totalActive}
         highlightedDeptIds={highlightedDeptIds}
         deptSearch={matchesDept ? unifiedSearch : ''}
+        visibleDeptIds={(!matchesDept && debouncedSearch) ? highlightedDeptIds : undefined}
         onSelectDept={setSelectedDeptId}
         onToggleDept={toggleDept}
         onRefresh={loadDepartments}
