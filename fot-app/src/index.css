@@ -164,7 +164,7 @@ body {
 /* Safari iOS only: scale up to match Chromium-based browsers rendering */
 @supports (-webkit-touch-callout: none) {
   @media (max-width: 768px) {
-    body {
+    html {
       zoom: 1.15;
     }
   }
