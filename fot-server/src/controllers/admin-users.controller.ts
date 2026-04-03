@@ -120,6 +120,7 @@ export const adminUsersController = {
           return {
             id: u.id,
             email,
+            email_confirmed: !!authUser?.user?.email_confirmed_at,
             full_name: u.full_name,
             position_type: u.position_type,
             imported_position: u.imported_position,

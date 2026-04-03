@@ -8,6 +8,7 @@ import styles from '../../pages/super-admin/SuperAdmin.module.css';
 export interface IPendingUser {
   id: string;
   email: string;
+  email_confirmed?: boolean;
   full_name: string | null;
   position_type: EmployeePositionType;
   imported_position: string | null;
@@ -120,13 +121,15 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onRel
                 </div>
               </div>
               <div className={styles.userActions}>
-                <button
-                  className={styles.primaryBtn}
-                  onClick={() => handleConfirmEmail(user.id)}
-                  title="Если пользователь не может войти из-за неподтверждённого email"
-                >
-                  Подтвердить email
-                </button>
+                {!user.email_confirmed && (
+                  <button
+                    className={styles.primaryBtn}
+                    onClick={() => handleConfirmEmail(user.id)}
+                    title="Если пользователь не может войти из-за неподтверждённого email"
+                  >
+                    Подтвердить email
+                  </button>
+                )}
                 <button
                   className={styles.approveBtn}
                   onClick={() => openApprovalModal(user)}

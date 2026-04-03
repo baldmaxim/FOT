@@ -257,7 +257,7 @@ export async function syncEventsLogic(
     // Вставка батчами с паузами (защита от 502 на облачном Supabase)
     for (let i = 0; i < dayInserts.length; i += BATCH_SIZE) {
       const batch = dayInserts.slice(i, i + BATCH_SIZE);
-      const { error: insertError } = await supabase.from('skud_events').upsert(batch, { onConflict: 'dedup_hash', ignoreDuplicates: true });
+      const { error: insertError } = await supabase.from('skud_events').upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true });
       if (insertError) {
         errors.push(`[${day}] ${insertError.message}`);
       } else {

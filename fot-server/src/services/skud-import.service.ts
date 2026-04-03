@@ -122,7 +122,7 @@ export async function importFromExcel(params: IImportParams): Promise<IImportRes
   // Вставляем события
   const { error: insertError } = await supabase
     .from('skud_events')
-    .upsert(eventsToInsert, { onConflict: 'dedup_hash', ignoreDuplicates: true });
+    .upsert(eventsToInsert, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true });
 
   if (insertError) {
     console.error('Import insert error:', insertError);
@@ -318,7 +318,7 @@ export async function syncEmployeeRange(params: {
       const batch = toInsert.slice(i, i + BATCH);
       const { error: insertErr } = await supabase
         .from('skud_events')
-        .upsert(batch, { onConflict: 'dedup_hash', ignoreDuplicates: true });
+        .upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true });
       if (!insertErr) {
         totalInserted += batch.length;
       }
@@ -481,7 +481,7 @@ export async function syncEmployee(
     const BATCH = 500;
     for (let i = 0; i < toInsert.length; i += BATCH) {
       const batch = toInsert.slice(i, i + BATCH);
-      const { error: insertErr } = await supabase.from('skud_events').upsert(batch, { onConflict: 'dedup_hash', ignoreDuplicates: true });
+      const { error: insertErr } = await supabase.from('skud_events').upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true });
       if (!insertErr) {
         dayInserted += batch.length;
         totalInserted += batch.length;

@@ -276,7 +276,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       const batch = inserts.slice(i, i + BATCH_SIZE);
       const { error } = await supabase
         .from('skud_events')
-        .upsert(batch, { onConflict: 'dedup_hash', ignoreDuplicates: true });
+        .upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true });
       if (error) {
         console.error('[presence-polling] insert error:', error.message);
       } else {

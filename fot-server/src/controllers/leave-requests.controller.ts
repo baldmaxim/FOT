@@ -1,6 +1,8 @@
 import type { Response } from 'express';
 import { supabase } from '../config/database.js';
 import type { AuthenticatedRequest } from '../types/index.js';
+import { pushService } from '../services/push.service.js';
+import { getIo } from '../socket/io-instance.js';
 
 const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'dayoff', 'business_trip', 'certificate'] as const;
 const LEAVE_TO_TIMESHEET: Record<string, string> = {
@@ -43,6 +45,19 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       .single();
 
     if (error) throw error;
+
+    // Уведомляем руководителя отдела и админов (fire-and-forget)
+    pushService.sendLeaveRequestNotification(employeeId, request_type, req.user.id)
+      .then((recipientIds) => {
+        const io = getIo();
+        if (io) {
+          for (const uid of recipientIds) {
+            io.to(`user:${uid}`).emit('leave_request_notification', { requestType: request_type });
+          }
+        }
+      })
+      .catch((e) => console.error('leave-request notify error:', e));
+
     res.json({ success: true, data });
   } catch (err) {
     console.error('leave-requests.create error:', err);
