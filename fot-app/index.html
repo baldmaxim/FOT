@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/fot-favicon-32.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, viewport-fit=cover" />
+    <script>
+      (function() {
+        var ua = navigator.userAgent;
+        var isSafari = /^((?!chrome|crios|fxios|yabrowser|android).)*safari/i.test(ua);
+        if (isSafari && window.screen.width <= 480) {
+          var w = Math.round(window.screen.width / 1.15);
+          document.querySelector('meta[name="viewport"]').content =
+            'width=' + w + ', viewport-fit=cover, minimum-scale=1.0, maximum-scale=5.0';
+        }
+      })();
+    </script>
     <title>ФОТ — Управление персоналом</title>
     <link rel="manifest" href="/manifest.json" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
