@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { apiClient, ApiError } from '../api/client';
-import type { User, UserProfile, AuthState, LoginCredentials, RegisterData, EmployeePositionType } from '../types';
+import type { User, UserProfile, AuthState, LoginCredentials, RegisterData, EmployeePositionType, SystemRole } from '../types';
 
 interface AuthResponse {
   access_token: string;
@@ -19,6 +19,7 @@ interface RegisterResponse {
 
 interface AuthContextType extends AuthState {
   token: string | null;
+  roles: SystemRole[];
   login: (credentials: LoginCredentials) => Promise<{ requires2FA: boolean }>;
   verify2FA: (code: string) => Promise<void>;
   register: (data: RegisterData) => Promise<RegisterResponse | null>;
@@ -26,6 +27,7 @@ interface AuthContextType extends AuthState {
   refreshProfile: () => Promise<void>;
   hasPosition: (positions: EmployeePositionType | EmployeePositionType[]) => boolean;
   canAccess: (requiredPosition?: EmployeePositionType) => boolean;
+  getRoleLabel: (code: string) => string;
   // Deprecated aliases for compatibility
   role: EmployeePositionType | null;
   hasRole: (roles: EmployeePositionType | EmployeePositionType[]) => boolean;
@@ -46,6 +48,17 @@ const initialState: AuthState = {
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<AuthState>(initialState);
+  const [roles, setRoles] = useState<SystemRole[]>([]);
+
+  const loadRoles = useCallback(async () => {
+    try {
+      const response = await apiClient.get<{ data: SystemRole[] }>('/roles');
+      setRoles(response.data ?? []);
+    } catch {
+      // Не критично — используем пустой массив
+    }
+  }, []);
+
   // Check existing session on mount
   useEffect(() => {
     const checkAuth = async () => {
@@ -58,7 +71,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       try {
-        const response = await apiClient.get<{ user: User; profile: UserProfile; access_token?: string }>('/auth/me');
+        const [response] = await Promise.all([
+          apiClient.get<{ user: User; profile: UserProfile; access_token?: string }>('/auth/me'),
+          loadRoles(),
+        ]);
         const { user, profile } = response;
 
         // Обновляем токен если сервер вернул свежий (при смене org/employee_id без перелогина)
@@ -86,7 +102,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     checkAuth();
-  }, []);
+  }, [loadRoles]);
 
   const login = useCallback(async (credentials: LoginCredentials): Promise<{ requires2FA: boolean }> => {
     const response = await apiClient.post<AuthResponse>('/auth/login', credentials, { skipAuth: true });
@@ -112,6 +128,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // Fully authenticated
     localStorage.setItem('2fa_verified', 'true');
+    await loadRoles();
     setState({
       user: response.user,
       profile: response.profile,
@@ -152,6 +169,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
     localStorage.removeItem('2fa_verified');
+    setRoles([]);
     setState({ ...initialState, loading: false });
   }, []);
 
@@ -189,29 +207,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Deprecated alias for backward compatibility
   const hasRole = hasPosition;
 
-  // Check if user can access based on position hierarchy
+  const getRoleLevel = useCallback((code: string): number => {
+    return roles.find(r => r.code === code)?.level ?? 0;
+  }, [roles]);
+
+  const getRoleLabel = useCallback((code: string): string => {
+    return roles.find(r => r.code === code)?.name ?? code;
+  }, [roles]);
+
+  // Check if user can access based on position hierarchy (dynamic from system_roles)
   const canAccess = useCallback((requiredPosition?: EmployeePositionType): boolean => {
     if (!state.isAuthenticated || !state.isApproved) return false;
     if (state.isTwoFactorEnabled && !state.isTwoFactorVerified) return false;
     if (!requiredPosition) return true;
-
-    // Position hierarchy: super_admin > admin > header > worker
-    const positionHierarchy: Record<EmployeePositionType, number> = {
-      super_admin: 4,
-      admin: 3,
-      hr: 3,
-      header: 2,
-      worker: 1,
-    };
-
     if (!effectivePositionType) return false;
-    return positionHierarchy[effectivePositionType] >= positionHierarchy[requiredPosition];
-  }, [state.isAuthenticated, state.isApproved, state.isTwoFactorEnabled, state.isTwoFactorVerified, effectivePositionType]);
+    return getRoleLevel(effectivePositionType) >= getRoleLevel(requiredPosition);
+  }, [state.isAuthenticated, state.isApproved, state.isTwoFactorEnabled, state.isTwoFactorVerified, effectivePositionType, getRoleLevel]);
 
   const value: AuthContextType = {
     ...state,
     positionType: effectivePositionType,
     token: localStorage.getItem('access_token'),
+    roles,
     login,
     verify2FA,
     register,
@@ -219,6 +236,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshProfile,
     hasPosition,
     canAccess,
+    getRoleLabel,
     // Deprecated aliases for compatibility
     role: effectivePositionType,
     hasRole,

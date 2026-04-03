@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
 import { CRITICAL_2FA_ENABLED } from '../config/features.js';
 import type { AuthenticatedRequest, JWTPayload, EmployeePositionType } from '../types/index.js';
+import { getHierarchyLevel } from '../services/roles-cache.service.js';
 
 /**
  * Middleware для проверки JWT токена
@@ -117,33 +118,31 @@ export const requirePosition = (...allowedPositions: EmployeePositionType[]) => 
 
 
 /**
- * Middleware для проверки должности пользователя по иерархии
- * header (2) < admin (3) < super_admin (4)
+ * Middleware для проверки должности пользователя по иерархии (динамически из system_roles)
  */
-const POSITION_HIERARCHY: Record<EmployeePositionType, number> = {
-  worker: 1,
-  header: 2,
-  hr: 3,
-  admin: 3,
-  super_admin: 4,
-};
-
 export const requireMinPosition = (minPosition: EmployeePositionType) => {
-  return (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
+  return async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     if (!req.user) {
       res.status(401).json({ success: false, error: 'Authentication required' });
       return;
     }
 
-    const userLevel = POSITION_HIERARCHY[req.user.position_type] ?? 0;
-    const requiredLevel = POSITION_HIERARCHY[minPosition];
+    try {
+      const [userLevel, requiredLevel] = await Promise.all([
+        getHierarchyLevel(req.user.position_type),
+        getHierarchyLevel(minPosition),
+      ]);
 
-    if (userLevel < requiredLevel) {
-      res.status(403).json({ success: false, error: 'Insufficient permissions' });
-      return;
+      if (userLevel < requiredLevel) {
+        res.status(403).json({ success: false, error: 'Insufficient permissions' });
+        return;
+      }
+
+      next();
+    } catch (error) {
+      console.error('requireMinPosition error:', error);
+      res.status(500).json({ success: false, error: 'Authorization check failed' });
     }
-
-    next();
   };
 };
 

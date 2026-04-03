@@ -2,12 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { apiClient } from '../../api/client';
-import { POSITION_LABELS } from '../../types';
 import { ShieldIcon, MailIcon, CalendarIcon, UserIcon } from '../../components/ui/Icons';
 import styles from './ProfilePage.module.css';
 
 export const ProfilePage: React.FC = () => {
-  const { user, profile, refreshProfile, isTwoFactorEnabled } = useAuth();
+  const { user, profile, refreshProfile, isTwoFactorEnabled, getRoleLabel } = useAuth();
   const { showToast } = useToast();
 
   const [isEditing, setIsEditing] = useState(false);
@@ -174,7 +173,7 @@ export const ProfilePage: React.FC = () => {
             <div className={styles.infoContent}>
               <span className={styles.infoLabel}>Должность</span>
               <span className={styles.infoValue}>
-                {profile?.position_type ? POSITION_LABELS[profile.position_type] : '—'}
+                {profile?.position_type ? getRoleLabel(profile.position_type) : '—'}
               </span>
             </div>
           </div>

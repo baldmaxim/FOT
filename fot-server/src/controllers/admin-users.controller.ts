@@ -4,9 +4,10 @@ import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest, UserProfile } from '../types/index.js';
 import { logSupabaseError } from './admin-helpers.js';
+import { getRoleByCode } from '../services/roles-cache.service.js';
 
 const approveUserSchema = z.object({
-  position_type: z.enum(['worker', 'header', 'hr', 'admin', 'super_admin']).optional(),
+  position_type: z.string().optional(),
   employee_id: z.number().int().positive().optional(),
 });
 
@@ -298,8 +299,14 @@ export const adminUsersController = {
     try {
       const { id } = req.params;
       const { position_type } = z.object({
-        position_type: z.enum(['worker', 'header', 'hr', 'admin', 'super_admin'])
+        position_type: z.string().min(1)
       }).parse(req.body);
+
+      const role = await getRoleByCode(position_type);
+      if (!role) {
+        res.status(400).json({ success: false, error: 'Роль не найдена' });
+        return;
+      }
 
       const { data: profile } = await supabase
         .from('user_profiles')

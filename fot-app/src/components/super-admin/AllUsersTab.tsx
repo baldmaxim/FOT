@@ -3,8 +3,8 @@ import type { FC } from 'react';
 import { adminService } from '../../services/adminService';
 import { structureApi } from '../../api/structure';
 import { useToast } from '../../contexts/ToastContext';
+import { useAuth } from '../../contexts/AuthContext';
 import type { EmployeePositionType, TwoFactorData, OrgDepartmentNode } from '../../types';
-import { POSITION_LABELS } from '../../types';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
 
 export interface IUserFromApi {
@@ -64,6 +64,7 @@ type RoleFilter = 'headers' | 'workers' | 'hr' | 'admins';
 
 export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
   const toast = useToast();
+  const { roles, getRoleLabel } = useAuth();
   const [roleFilter, setRoleFilter] = useState<RoleFilter>('headers');
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<{ userId: string; value: string } | null>(null);
@@ -96,7 +97,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
   };
 
   const getPositionName = (positionType: EmployeePositionType) => {
-    return POSITION_LABELS[positionType] || positionType;
+    return getRoleLabel(positionType);
   };
 
   const handleEmpSearchQuery = async (userId: string, query: string) => {
@@ -272,15 +273,19 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
                   <div className={styles.userRowEmail}>{user.email || ''}</div>
                 </div>
 
-                <span className={styles.userRowRole}>{getPositionName(user.position_type)}</span>
-                <span className={styles.userRowOrg}>{getDeptName(user)}</span>
-                <span className={
-                  !user.is_approved ? styles.notApproved
-                  : !user.two_factor_enabled ? styles.twoFaDisabled
-                  : styles.approved
-                }>
-                  {!user.is_approved ? 'Не одобрен' : !user.two_factor_enabled ? 'Ожидает 2FA' : 'Активен'}
-                </span>
+                <div className={styles.userRowMeta}>
+                  <span className={styles.userRowRole}>{getPositionName(user.position_type)}</span>
+                  <span className={styles.userRowOrg}>{getDeptName(user)}</span>
+                  <div className={styles.userRowStatusCell}>
+                    <span className={
+                      !user.is_approved ? styles.notApproved
+                      : !user.two_factor_enabled ? styles.twoFaDisabled
+                      : styles.approved
+                    }>
+                      {!user.is_approved ? 'Не одобрен' : !user.two_factor_enabled ? 'Ожидает 2FA' : 'Активен'}
+                    </span>
+                  </div>
+                </div>
 
                 <div className={styles.expandIcon}>
                   <svg
@@ -339,9 +344,13 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
                           value={user.position_type}
                           onChange={(e) => handlePositionChange(user.id, e.target.value as EmployeePositionType)}
                         >
-                          <option value="worker">Сотрудник</option>
-                          <option value="header">Руководитель</option>
-                          <option value="admin">Администратор</option>
+                          {roles
+                            .filter(r => r.is_active && r.code !== 'super_admin')
+                            .sort((a, b) => a.level - b.level)
+                            .map(r => (
+                              <option key={r.code} value={r.code}>{r.name}</option>
+                            ))
+                          }
                         </select>
                       </div>
 

@@ -476,6 +476,10 @@
   letter-spacing: 0.5px;
 }
 
+.userListTableHeader span:not(:first-child) {
+  text-align: center;
+}
+
 .userRowHeader {
   display: grid;
   grid-template-columns: 1fr 120px 180px 110px 28px;
@@ -510,11 +514,9 @@
   margin-top: 2px;
 }
 
+/* На десктопе — прозрачная обёртка: дети становятся прямыми grid-элементами */
 .userRowMeta {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-shrink: 0;
+  display: contents;
 }
 
 .userRowRole {
@@ -523,14 +525,24 @@
   padding: 2px 8px;
   background: var(--bg-elevated);
   border-radius: 4px;
+  justify-self: center;
+  text-align: center;
 }
 
 .userRowOrg {
   font-size: 12px;
-  color: var(--text-tertiary);
+  font-weight: 600;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: center;
+}
+
+.userRowStatusCell {
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 .expandIcon {
@@ -710,39 +722,6 @@
 
 /* Responsive */
 @media (max-width: 768px) {
-  .userListTableHeader {
-    display: none;
-  }
-
-  .userRowHeader {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .userRowOrg {
-    max-width: 140px;
-  }
-
-  .userRowControls {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .controlGroup {
-    width: 100%;
-  }
-
-  .controlGroup select {
-    flex: 1;
-  }
-
-  .controlActions {
-    margin-left: 0;
-    margin-top: 8px;
-    justify-content: flex-end;
-  }
-
   .container {
     padding: 16px;
   }
@@ -751,12 +730,141 @@
     font-size: 20px;
   }
 
+  /* Скрываем заголовок таблицы */
+  .userListTableHeader {
+    display: none;
+  }
+
+  /* Строка пользователя — 2-колоночная сетка: [контент | шеврон] */
+  .userRowHeader {
+    display: grid;
+    grid-template-columns: 1fr 28px;
+    grid-template-rows: auto auto;
+    row-gap: 6px;
+    column-gap: 8px;
+    padding: 12px 14px;
+  }
+
+  .userRowInfo {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+  }
+
+  .expandIcon {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: start;
+    margin-top: 2px;
+  }
+
+  /* На мобиле userRowMeta — flex-строка под ФИО */
+  .userRowMeta {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  /* Убираем центрирование — на мобиле всё выравнивается по левому краю */
+  .userRowRole {
+    justify-self: auto;
+    text-align: left;
+  }
+
+  .userRowOrg {
+    text-align: left;
+    max-width: 160px;
+  }
+
+  .userRowStatusCell {
+    justify-content: flex-start;
+    margin-left: auto;
+  }
+
+  /* Развёрнутые контролы */
+  .userRowControls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .controlGroup {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    gap: 4px;
+  }
+
+  .controlGroup label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+
+  .controlGroup select,
+  .controlGroup input[type='text'] {
+    width: 100%;
+  }
+
+  .nameInput {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .nameEditGroup {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .nameEditGroup input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .editNameBtn {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .controlActions {
+    margin-left: 0;
+    margin-top: 4px;
+    justify-content: stretch;
+    gap: 8px;
+  }
+
+  .controlActions button {
+    flex: 1;
+    min-height: 40px;
+  }
+
+  /* Карточки ожидающих */
+  .userActions {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .userActions > button {
+    flex: 1;
+    min-width: 120px;
+  }
+
+  /* Модалки */
   .modalOverlay {
     padding: 12px;
+    align-items: flex-end;
   }
 
   .modal {
-    max-width: calc(100% - 24px);
+    width: 100%;
+    max-width: 100%;
+    border-radius: 16px 16px 0 0;
+    max-height: 85vh;
   }
 
   .modalHeader {
@@ -765,6 +873,14 @@
 
   .modalContent {
     padding: 16px;
+  }
+
+  .modalContent .controlGroup {
+    margin-bottom: 12px;
+  }
+
+  .modalContent .controlActions {
+    margin-top: 16px;
   }
 }
 
@@ -775,12 +891,25 @@
 
   .tabs {
     overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .tabs::-webkit-scrollbar {
+    display: none;
   }
 
   .tab {
     white-space: nowrap;
     padding: 6px 10px;
     font-size: 13px;
+  }
+
+  .roleTabs {
+    scrollbar-width: none;
+  }
+
+  .roleTabs::-webkit-scrollbar {
+    display: none;
   }
 
   .roleTab {
@@ -790,10 +919,17 @@
 
   .userRowHeader {
     padding: 10px 12px;
-    gap: 10px;
   }
 
   .userRowControls {
     padding: 12px;
+  }
+
+  .userRowName {
+    font-size: 13px;
+  }
+
+  .recoveryCodes {
+    grid-template-columns: 1fr;
   }
 }

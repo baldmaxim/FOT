@@ -1,10 +1,33 @@
 import { Request } from 'express';
 
-// Типы должностей (новая система)
-export type EmployeePositionType = 'worker' | 'header' | 'hr' | 'admin' | 'super_admin';
+// Тип должности (динамический, хранится в system_roles)
+export type EmployeePositionType = string;
 
 // Для обратной совместимости
 export type UserRole = EmployeePositionType;
+
+// Системная роль
+export interface SystemRole {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  permissions: string[];
+  level: number;
+  is_active: boolean;
+  is_system: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// Матрица доступа к страницам
+export interface RolePageAccess {
+  id: string;
+  role_code: string;
+  page_path: string;
+  can_view: boolean;
+  can_edit: boolean;
+}
 
 // Профиль пользователя
 export interface UserProfile {

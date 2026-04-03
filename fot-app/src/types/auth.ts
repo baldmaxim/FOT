@@ -1,19 +1,22 @@
-// Auth types - Новая система должностей
-export type EmployeePositionType = 'worker' | 'header' | 'hr' | 'admin' | 'super_admin';
+// Тип должности (динамический, из system_roles)
+export type EmployeePositionType = string;
 
-// Для обратной совместимости (deprecated, использовать EmployeePositionType)
+// Для обратной совместимости (deprecated)
 export type UserRole = EmployeePositionType;
 
-export const POSITION_LABELS: Record<EmployeePositionType, string> = {
-  worker: 'Сотрудник',       // Отображается реальная должность из imported_position
-  header: 'Руководитель',    // Начальник участка
-  hr: 'Отдел кадров',        // Проверка табелей, документы, расчётные листки
-  admin: 'Администратор',    // Просмотр всех, без изменения прав
-  super_admin: 'Супер-админ' // Полный доступ
-};
-
-// Deprecated: для обратной совместимости
-export const ROLE_LABELS = POSITION_LABELS;
+// Системная роль (из БД system_roles)
+export interface SystemRole {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  permissions: string[];
+  level: number;
+  is_active: boolean;
+  is_system: boolean;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface User {
   id: string;
@@ -71,16 +74,3 @@ export interface PendingUser {
   position_type: EmployeePositionType;
 }
 
-// Системная роль (права доступа) - заменяет ENUM position_type
-export interface SystemRole {
-  id: string;
-  code: string;                // 'worker', 'header', 'admin', 'super_admin'
-  name: string;                // 'Сотрудник', 'Руководитель'
-  description: string | null;
-  permissions: string[];       // ['view_own', 'manage_timesheet', ...]
-  level: number;               // Уровень для сортировки
-  is_active: boolean;
-  is_system: boolean;          // Системная роль - нельзя удалить
-  created_at: string;
-  updated_at: string;
-}
