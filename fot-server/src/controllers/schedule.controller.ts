@@ -16,7 +16,7 @@ const dayOverrideSchema = z.object({
   work_hours: z.number().min(0.5).max(24),
 });
 
-const createScheduleSchema = z.object({
+const baseScheduleSchema = z.object({
   name: z.string().min(1).max(100),
   schedule_type: scheduleTypeEnum,
   work_start: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
@@ -26,7 +26,9 @@ const createScheduleSchema = z.object({
   office_days: weekDayArray.nullable().optional(),
   late_threshold_minutes: z.number().int().min(0).max(120).optional(),
   day_overrides: z.record(z.string().regex(/^[1-7]$/), dayOverrideSchema).nullable().optional(),
-}).refine((data) => {
+});
+
+const createScheduleSchema = baseScheduleSchema.refine((data) => {
   if (!data.day_overrides) return true;
   return Object.keys(data.day_overrides).every(k => data.work_days.includes(Number(k)));
 }, { message: 'day_overrides keys must be in work_days' });
@@ -115,7 +117,7 @@ export const scheduleController = {
     try {
       const { id } = req.params;
 
-      const parsed = createScheduleSchema.partial().safeParse(req.body);
+      const parsed = baseScheduleSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.issues });
 
       const body: Record<string, unknown> = { ...parsed.data, updated_at: new Date().toISOString() };

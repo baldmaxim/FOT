@@ -283,7 +283,7 @@ export async function getDashboardStats(
   const earlyLeaveByEmp = new Map<number, number>();
   for (const s of periodSummaries) {
     if (remoteEmpIds.has(s.employee_id)) continue;
-    const threshold = getLateThresholdFor(s.employee_id);
+    const threshold = getLateThresholdFor(s.employee_id, s.date);
     if (s.first_entry && s.first_entry > threshold) {
       lateCountByEmp.set(s.employee_id, (lateCountByEmp.get(s.employee_id) || 0) + 1);
     }
@@ -382,7 +382,7 @@ export async function getDashboardStats(
       : 0;
 
     const lateCount = withEntry.filter(s => {
-      return s.first_entry! > getLateThresholdFor(s.employee_id);
+      return s.first_entry! > getLateThresholdFor(s.employee_id, s.date);
     }).length;
 
     return { attendanceRate, avgArrival, avgHours, lateCount };
@@ -406,7 +406,7 @@ export async function getDashboardStats(
       avgArrivalByEmp.set(s.employee_id, (avgArrivalByEmp.get(s.employee_id) || 0) + min);
       arrivalCountByEmp.set(s.employee_id, (arrivalCountByEmp.get(s.employee_id) || 0) + 1);
       if (remoteEmpIds.has(s.employee_id)) continue;
-      if (s.first_entry > getLateThresholdFor(s.employee_id)) {
+      if (s.first_entry > getLateThresholdFor(s.employee_id, s.date)) {
         topLateCountByEmp.set(s.employee_id, (topLateCountByEmp.get(s.employee_id) || 0) + 1);
         const details = lateDetailsByEmp.get(s.employee_id) || [];
         details.push({ date: s.date, arrival: s.first_entry.slice(0, 5) });
@@ -453,8 +453,8 @@ export async function getDashboardStats(
 
     console.log('[dashboard-stats]', { period, periodStartStr, periodEndStr, pWorkDays, officeEmpCount: officeEmpIds.length, remoteCount: remoteEmpIds.size, totalEmp: empIds.length, totalPresent, avgPresent, dailyBreakdown: [...dailyPresent.entries()].map(([d, s]) => `${d}:${s.size}`) });
 
-    const pLateCount = periodSummaries.filter(s => s.first_entry && !remoteEmpIds.has(s.employee_id) && s.first_entry > getLateThresholdFor(s.employee_id)).length;
-    const prevLateCount = prevPeriodSummaries.filter(s => s.first_entry && !remoteEmpIds.has(s.employee_id) && s.first_entry > getLateThresholdFor(s.employee_id)).length;
+    const pLateCount = periodSummaries.filter(s => s.first_entry && !remoteEmpIds.has(s.employee_id) && s.first_entry > getLateThresholdFor(s.employee_id, s.date)).length;
+    const prevLateCount = prevPeriodSummaries.filter(s => s.first_entry && !remoteEmpIds.has(s.employee_id) && s.first_entry > getLateThresholdFor(s.employee_id, s.date)).length;
 
     periodStats = { avgPresent, avgAbsent, attendanceRate, lateCount: pLateCount, prevLateCount };
   }
