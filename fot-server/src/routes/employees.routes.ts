@@ -2,6 +2,8 @@ import { Router } from 'express';
 import multer from 'multer';
 import { employeesController } from '../controllers/employees.controller.js';
 import { employeeEnrichController } from '../controllers/employee-enrich.controller.js';
+import { employeeSalaryEnrichController } from '../controllers/employee-enrich-salary.controller.js';
+import { employeeSalaryHistoryController } from '../controllers/employee-enrich-salary-history.controller.js';
 import { authenticate, requirePosition, requireCritical2FA } from '../middleware/auth.js';
 import { importLimiter } from '../middleware/rateLimit.js';
 
@@ -44,6 +46,26 @@ router.post(
   importLimiter,
   upload.single('file'),
   employeeEnrichController.enrich
+);
+
+// POST /api/employees/enrich-salary - импорт окладов и ставок из Excel (header+, требуется 2FA)
+router.post(
+  '/enrich-salary',
+  requirePosition('header', 'hr', 'admin', 'super_admin'),
+  requireCritical2FA,
+  importLimiter,
+  upload.single('file'),
+  employeeSalaryEnrichController.enrichSalary
+);
+
+// POST /api/employees/enrich-salary-history - импорт истории окладов из Excel (header+, требуется 2FA)
+router.post(
+  '/enrich-salary-history',
+  requirePosition('header', 'hr', 'admin', 'super_admin'),
+  requireCritical2FA,
+  importLimiter,
+  upload.single('file'),
+  employeeSalaryHistoryController.enrichSalaryHistory
 );
 
 // DELETE /api/employees/all - удаление ВСЕХ (super_admin, только для разработки)
@@ -125,6 +147,22 @@ router.post(
   '/:id/move-department',
   requirePosition('header', 'hr', 'admin', 'super_admin'),
   employeesController.moveDepartment
+);
+
+// POST /api/employees/:id/change-salary - изменить оклад (admin+, требуется 2FA)
+router.post(
+  '/:id/change-salary',
+  requirePosition('admin', 'super_admin'),
+  requireCritical2FA,
+  employeesController.changeSalary
+);
+
+// POST /api/employees/:id/change-position - сменить должность (admin+, требуется 2FA)
+router.post(
+  '/:id/change-position',
+  requirePosition('admin', 'super_admin'),
+  requireCritical2FA,
+  employeesController.changePosition
 );
 
 export default router;

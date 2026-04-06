@@ -4,6 +4,7 @@ import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import { loadStructureCache, decryptEmployee, decryptEmployeeList } from '../services/employee-mapper.service.js';
 import { parseFIO } from '../utils/fio.utils.js';
+import { employeeChangesService } from '../services/employee-changes.service.js';
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 
 // Импорт методов из подконтроллеров
@@ -16,6 +17,9 @@ const createEmployeeSchema = z.object({
   hire_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   birth_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   current_salary: z.number().min(0).max(999999999).nullable().optional(),
+  salary_actual: z.number().min(0).max(999999999).nullable().optional(),
+  salary_calculated: z.number().min(0).max(999999999).nullable().optional(),
+  staff_units: z.number().min(0).max(1).nullable().optional(),
   country: z.string().max(100).nullable().optional(),
   pension_number: z.string().max(50).nullable().optional(),
   patent_issue_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
@@ -356,6 +360,88 @@ export const employeesController = {
     } catch (error) {
       console.error('Delete employee error:', error);
       res.status(500).json({ success: false, error: 'Failed to delete employee' });
+    }
+  },
+
+  // POST /api/employees/:id/change-salary
+  async changeSalary(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { salary, reason, effective_date } = req.body as { salary: number; reason?: string; effective_date?: string };
+
+      if (!salary || salary <= 0) {
+        res.status(400).json({ success: false, error: 'salary is required and must be positive' });
+        return;
+      }
+
+      await employeeChangesService.changeSalary(Number(id), salary, {
+        reason,
+        effectiveDate: effective_date,
+        createdBy: req.user.id,
+      });
+
+      await auditService.logFromRequest(req, req.user.id, 'UPDATE_SALARY', {
+        entityType: 'employee',
+        entityId: id,
+        details: { salary, reason },
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Change salary error:', error);
+      res.status(500).json({ success: false, error: 'Failed to change salary' });
+    }
+  },
+
+  // POST /api/employees/:id/change-position
+  async changePosition(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { position_name, reason, effective_date } = req.body as { position_name: string; reason?: string; effective_date?: string };
+
+      if (!position_name?.trim()) {
+        res.status(400).json({ success: false, error: 'position_name is required' });
+        return;
+      }
+
+      // Ищем или создаём должность
+      const name = position_name.trim();
+      let positionId: string;
+
+      const { data: existing } = await supabase
+        .from('positions')
+        .select('id')
+        .ilike('name', name)
+        .limit(1)
+        .single();
+
+      if (existing) {
+        positionId = existing.id;
+      } else {
+        const { data: created } = await supabase
+          .from('positions')
+          .insert({ name, is_active: true, sort_order: 0 })
+          .select('id')
+          .single();
+        positionId = created!.id;
+      }
+
+      await employeeChangesService.changePosition(Number(id), positionId, {
+        reason,
+        effectiveDate: effective_date,
+        createdBy: req.user.id,
+      });
+
+      await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
+        entityType: 'employee',
+        entityId: id,
+        details: { position_name: name, reason },
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Change position error:', error);
+      res.status(500).json({ success: false, error: 'Failed to change position' });
     }
   },
 

@@ -60,6 +60,8 @@ export const AUDIT_ACTIONS = {
   // Salary
   VIEW_SALARY: 'VIEW_SALARY',
   UPDATE_SALARY: 'UPDATE_SALARY',
+  ENRICH_SALARY: 'ENRICH_SALARY',
+  ENRICH_SALARY_HISTORY: 'ENRICH_SALARY_HISTORY',
 } as const;
 
 export type AuditAction = typeof AUDIT_ACTIONS[keyof typeof AUDIT_ACTIONS];

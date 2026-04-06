@@ -1046,6 +1046,89 @@
   }
 }
 
+/* ===== Import Modal ===== */
+.import-modal {
+  max-width: 520px;
+}
+
+.import-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+}
+
+.import-option-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  text-align: left;
+  width: 100%;
+}
+
+.import-option-card:hover {
+  border-color: var(--primary, #3b82f6);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.import-option-icon {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-secondary, #f3f4f6);
+  border-radius: 8px;
+  color: var(--primary, #3b82f6);
+}
+
+.import-option-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.import-option-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #1f2937);
+  margin-bottom: 4px;
+}
+
+.import-option-desc {
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+  line-height: 1.4;
+  margin-bottom: 6px;
+}
+
+.import-option-cols {
+  font-size: 11px;
+  color: var(--text-tertiary, #9ca3af);
+  line-height: 1.3;
+}
+
+.import-option-cols-label {
+  font-weight: 600;
+  color: var(--text-secondary, #6b7280);
+}
+
+.import-option-action {
+  flex-shrink: 0;
+  color: var(--text-tertiary, #9ca3af);
+  margin-top: 2px;
+}
+
+.import-option-card:hover .import-option-action {
+  color: var(--primary, #3b82f6);
+}
+
 /* ===== Enrich Modal ===== */
 .enrich-modal {
   max-width: 720px;

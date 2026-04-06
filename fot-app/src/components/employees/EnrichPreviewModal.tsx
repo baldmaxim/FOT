@@ -10,6 +10,7 @@ interface IEnrichPreviewModalProps {
   loading: boolean;
   onApply: (manualMatches: Array<{ fullName: string; employeeId: number }>) => void;
   onClose: () => void;
+  title?: string;
 }
 
 export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
@@ -17,6 +18,7 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
   loading,
   onApply,
   onClose,
+  title = 'Импорт сотрудников — Превью',
 }) => {
   const [showUnmatched, setShowUnmatched] = useState(false);
   const [showAmbiguous, setShowAmbiguous] = useState(false);
@@ -93,7 +95,7 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
     <div className="ep-modal-overlay" onClick={onClose}>
       <div className="ep-modal enrich-modal" onClick={e => e.stopPropagation()}>
         <div className="ep-modal-header">
-          <span className="ep-modal-title">Импорт сотрудников — Превью</span>
+          <span className="ep-modal-title">{title}</span>
           <button className="ep-modal-close" onClick={onClose}>
             <X size={14} />
           </button>

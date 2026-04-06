@@ -246,4 +246,23 @@ export const structureController = {
 
     return created.id;
   },
+
+  async getPositions(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { data, error } = await supabase
+        .from('positions')
+        .select('id, name')
+        .eq('is_active', true)
+        .order('name');
+
+      if (error) {
+        res.status(500).json({ success: false, error: 'Failed to fetch positions' });
+        return;
+      }
+      res.json({ success: true, data: data || [] });
+    } catch (error) {
+      console.error('Get positions error:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch positions' });
+    }
+  },
 };

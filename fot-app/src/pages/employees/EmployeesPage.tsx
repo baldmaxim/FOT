@@ -1,12 +1,13 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type FC } from 'react';
+import { useState, useEffect, useCallback, useMemo, type FC } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { UserPlus, X, FileSpreadsheet, ChevronLeft, ChevronRight } from 'lucide-react';
+import { UserPlus, X, ChevronLeft, ChevronRight, Upload } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
 import type { PaginatedMeta, EmployeeCounts } from '../../services/employeeService';
 import { skudService } from '../../services/skudService';
 import { structureApi } from '../../api/structure';
 import { useAuth } from '../../contexts/AuthContext';
 import { EnrichPreviewModal } from '../../components/employees/EnrichPreviewModal';
+import { ImportModal } from '../../components/employees/ImportModal';
 import { EmpVirtualList } from '../../components/employees/EmpVirtualList';
 import { DepartmentPanel } from '../../components/employees/DepartmentPanel';
 import type { Employee, EmployeeInput, OrgDepartmentNode, IEmployeePresence, EnrichPreview } from '../../types';
@@ -19,7 +20,6 @@ export const EmployeesPage: FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const { canAccess } = useAuth();
   const canEdit = canAccess('header');
-  const enrichInputRef = useRef<HTMLInputElement>(null);
 
   // Data
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -49,10 +49,23 @@ export const EmployeesPage: FC = () => {
     hire_date: new Date().toISOString().split('T')[0],
   });
 
+  // Import modal
+  const [showImportModal, setShowImportModal] = useState(false);
+
   // Enrich
   const [enrichPreview, setEnrichPreview] = useState<EnrichPreview | null>(null);
   const [enrichFile, setEnrichFile] = useState<File | null>(null);
   const [enrichLoading, setEnrichLoading] = useState(false);
+
+  // Salary enrich
+  const [salaryEnrichPreview, setSalaryEnrichPreview] = useState<EnrichPreview | null>(null);
+  const [salaryEnrichFile, setSalaryEnrichFile] = useState<File | null>(null);
+  const [salaryEnrichLoading, setSalaryEnrichLoading] = useState(false);
+
+  // Salary history enrich
+  const [salaryHistoryPreview, setSalaryHistoryPreview] = useState<EnrichPreview | null>(null);
+  const [salaryHistoryFile, setSalaryHistoryFile] = useState<File | null>(null);
+  const [salaryHistoryLoading, setSalaryHistoryLoading] = useState(false);
 
   // Selection
   const [selectedEmps, setSelectedEmps] = useState<Set<number>>(new Set());
@@ -270,11 +283,10 @@ export const EmployeesPage: FC = () => {
     } catch { setError('Ошибка добавления'); }
   };
 
-  const handleEnrichUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleEnrichFileFromModal = async (file: File) => {
     try {
       setEnrichLoading(true);
+      setShowImportModal(false);
       const preview = await employeeService.enrichPreview(file);
       setEnrichPreview(preview);
       setEnrichFile(file);
@@ -282,7 +294,20 @@ export const EmployeesPage: FC = () => {
       setError('Ошибка чтения файла');
     } finally {
       setEnrichLoading(false);
-      e.target.value = '';
+    }
+  };
+
+  const handleSalaryEnrichUpload = async (file: File) => {
+    try {
+      setSalaryEnrichLoading(true);
+      setShowImportModal(false);
+      const preview = await employeeService.salaryEnrichPreview(file);
+      setSalaryEnrichPreview(preview);
+      setSalaryEnrichFile(file);
+    } catch {
+      setError('Ошибка чтения файла окладов');
+    } finally {
+      setSalaryEnrichLoading(false);
     }
   };
 
@@ -299,6 +324,52 @@ export const EmployeesPage: FC = () => {
       setEnrichLoading(false);
       setEnrichPreview(null);
       setEnrichFile(null);
+    }
+  };
+
+  const handleSalaryEnrichApply = async (manualMatches: Array<{ fullName: string; employeeId: number }> = []) => {
+    if (!salaryEnrichFile) return;
+    try {
+      setSalaryEnrichLoading(true);
+      const result = await employeeService.salaryEnrichApply(salaryEnrichFile, manualMatches);
+      alert(`Обновлено: ${result.updated} сотрудников`);
+      loadPage();
+    } catch {
+      setError('Ошибка импорта окладов');
+    } finally {
+      setSalaryEnrichLoading(false);
+      setSalaryEnrichPreview(null);
+      setSalaryEnrichFile(null);
+    }
+  };
+
+  const handleSalaryHistoryUpload = async (file: File) => {
+    try {
+      setSalaryHistoryLoading(true);
+      setShowImportModal(false);
+      const preview = await employeeService.salaryHistoryEnrichPreview(file);
+      setSalaryHistoryPreview(preview);
+      setSalaryHistoryFile(file);
+    } catch {
+      setError('Ошибка чтения файла истории окладов');
+    } finally {
+      setSalaryHistoryLoading(false);
+    }
+  };
+
+  const handleSalaryHistoryApply = async (manualMatches: Array<{ fullName: string; employeeId: number }> = []) => {
+    if (!salaryHistoryFile) return;
+    try {
+      setSalaryHistoryLoading(true);
+      const result = await employeeService.salaryHistoryEnrichApply(salaryHistoryFile, manualMatches);
+      alert(`Обновлено: ${result.updated} сотрудников`);
+      loadPage();
+    } catch {
+      setError('Ошибка импорта истории окладов');
+    } finally {
+      setSalaryHistoryLoading(false);
+      setSalaryHistoryPreview(null);
+      setSalaryHistoryFile(null);
     }
   };
 
@@ -359,11 +430,10 @@ export const EmployeesPage: FC = () => {
         {canEdit && (
           <div className="ep-emp-toolbar">
             <div className="ep-toolbar-actions">
-              <button className="ep-toolbar-btn secondary" onClick={() => enrichInputRef.current?.click()}>
-                <FileSpreadsheet size={16} />
-                <span>Импорт сотрудников</span>
+              <button className="ep-toolbar-btn secondary" onClick={() => setShowImportModal(true)}>
+                <Upload size={16} />
+                <span>Импорт данных</span>
               </button>
-              <input ref={enrichInputRef} type="file" accept=".xlsx,.xls" onChange={handleEnrichUpload} hidden />
               <button className="ep-toolbar-btn primary" onClick={() => setShowAddModal(true)}>
                 <UserPlus size={16} />
                 <span>Добавить</span>
@@ -457,6 +527,16 @@ export const EmployeesPage: FC = () => {
         </div>
       )}
 
+      {/* Import Hub Modal */}
+      {showImportModal && (
+        <ImportModal
+          onClose={() => setShowImportModal(false)}
+          onEnrichFile={handleEnrichFileFromModal}
+          onSalaryFile={handleSalaryEnrichUpload}
+          onSalaryHistoryFile={handleSalaryHistoryUpload}
+        />
+      )}
+
       {/* Enrich Preview Modal */}
       {enrichPreview && (
         <EnrichPreviewModal
@@ -464,6 +544,29 @@ export const EmployeesPage: FC = () => {
           loading={enrichLoading}
           onApply={handleEnrichApply}
           onClose={() => { setEnrichPreview(null); setEnrichFile(null); }}
+          title="Импорт документов — Превью"
+        />
+      )}
+
+      {/* Salary Enrich Preview Modal */}
+      {salaryEnrichPreview && (
+        <EnrichPreviewModal
+          preview={salaryEnrichPreview}
+          loading={salaryEnrichLoading}
+          onApply={handleSalaryEnrichApply}
+          onClose={() => { setSalaryEnrichPreview(null); setSalaryEnrichFile(null); }}
+          title="Импорт окладов — Превью"
+        />
+      )}
+
+      {/* Salary History Enrich Preview Modal */}
+      {salaryHistoryPreview && (
+        <EnrichPreviewModal
+          preview={salaryHistoryPreview}
+          loading={salaryHistoryLoading}
+          onApply={handleSalaryHistoryApply}
+          onClose={() => { setSalaryHistoryPreview(null); setSalaryHistoryFile(null); }}
+          title="Импорт истории окладов — Превью"
         />
       )}
 

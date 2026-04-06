@@ -62,4 +62,15 @@ export const structureApi = {
       };
     }
   },
+
+  async getPositions(): Promise<ApiResponse<Array<{ id: string; name: string }>>> {
+    try {
+      const res = await apiClient.get<ApiResponse<Array<{ id: string; name: string }>>>('/structure/positions');
+      return { data: res.data };
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error.message : 'Ошибка загрузки должностей',
+      };
+    }
+  },
 };

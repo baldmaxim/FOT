@@ -8,6 +8,7 @@ import {
   normalizeEmployee,
   type ISyncContext,
 } from './sigur-sync-shared.js';
+import { employeeChangesService } from './employee-changes.service.js';
 
 // ─── Типы результатов ───
 
@@ -196,13 +197,13 @@ export async function syncEmployeesLogic(
   console.log(`[syncEmployees] employees to process: ${sigurEmployees.length}`);
 
   // Глобальный поиск по sigur_employee_id
-  const existingEmps: { id: number; sigur_employee_id: number; employment_status: string; department_locked: boolean }[] = [];
+  const existingEmps: { id: number; sigur_employee_id: number; employment_status: string; department_locked: boolean; org_department_id: string | null; position_id: string | null }[] = [];
   const EMP_PAGE = 1000;
   let empOffset = 0;
   while (true) {
     const { data: existingEmpsPage } = await supabase
       .from('employees')
-      .select('id, sigur_employee_id, employment_status, department_locked')
+      .select('id, sigur_employee_id, employment_status, department_locked, org_department_id, position_id')
       .not('sigur_employee_id', 'is', null)
       .range(empOffset, empOffset + EMP_PAGE - 1);
     if (!existingEmpsPage || existingEmpsPage.length === 0) break;
@@ -214,11 +215,13 @@ export async function syncEmployeesLogic(
   const sigurIdToDbId = new Map<number, number>();
   const firedSigurIds = new Set<number>();
   const lockedDeptSigurIds = new Set<number>();
+  const dbEmpById = new Map<number, { org_department_id: string | null; position_id: string | null }>();
   for (const e of existingEmps || []) {
     if (e.sigur_employee_id != null) {
       if (!sigurIdToDbId.has(e.sigur_employee_id)) {
         sigurIdToDbId.set(e.sigur_employee_id, e.id);
       }
+      dbEmpById.set(e.id, { org_department_id: e.org_department_id, position_id: e.position_id });
       if (e.employment_status === 'fired') firedSigurIds.add(e.sigur_employee_id);
       if (e.department_locked) lockedDeptSigurIds.add(e.sigur_employee_id);
     }
@@ -338,7 +341,7 @@ export async function syncEmployeesLogic(
       if (orgDepartmentId && !(sigurEmpId && lockedDeptSigurIds.has(sigurEmpId))) {
         updateFields.org_department_id = orgDepartmentId;
       }
-      if (positionId) updateFields.position_id = positionId;
+      // Должности из Sigur не обновляем — приоритет у портала ФОТ
 
       if (Object.keys(updateFields).length > 0) {
         updates.push({ id: dbId, fields: updateFields, name: fullName });
@@ -386,7 +389,27 @@ export async function syncEmployeesLogic(
   for (let i = 0; i < updates.length; i += UPDATE_CONCURRENCY) {
     const batch = updates.slice(i, i + UPDATE_CONCURRENCY);
     const results = await Promise.all(
-      batch.map(u => supabase.from('employees').update(u.fields).eq('id', u.id))
+      batch.map(async u => {
+        try {
+          const prev = dbEmpById.get(u.id);
+          // Отдел изменился → пишем историю
+          if (u.fields.org_department_id && prev && u.fields.org_department_id !== prev.org_department_id) {
+            await employeeChangesService.changeDepartment(u.id, u.fields.org_department_id as string, {
+              reason: 'Синхронизация Sigur',
+            });
+            delete u.fields.org_department_id;
+          }
+          // Должность из Sigur — прямой update без истории (история ведётся вручную)
+          // Остальные поля — прямой update
+          if (Object.keys(u.fields).length > 0) {
+            const { error } = await supabase.from('employees').update(u.fields).eq('id', u.id);
+            if (error) return { error };
+          }
+          return { error: null };
+        } catch (err) {
+          return { error: { message: err instanceof Error ? err.message : 'Unknown' } };
+        }
+      })
     );
     for (let j = 0; j < results.length; j++) {
       if (!results[j].error) updated++;

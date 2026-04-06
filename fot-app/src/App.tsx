@@ -53,6 +53,7 @@ const PayslipsPage = lazy(() => import('./pages/employee/PayslipsPage').then(m =
 const PaymentsPage = lazy(() => import('./pages/employee/PaymentsPage').then(m => ({ default: m.PaymentsPage })));
 const DocumentsPage = lazy(() => import('./pages/employee/DocumentsPage').then(m => ({ default: m.DocumentsPage })));
 const EmployeeTimesheetPage = lazy(() => import('./pages/employee/EmployeeTimesheetPage').then(m => ({ default: m.EmployeeTimesheetPage })));
+const MyHistoryPage = lazy(() => import('./pages/employee/MyHistoryPage').then(m => ({ default: m.MyHistoryPage })));
 
 // Leave requests management (header/hr)
 const LeaveRequestsManagePage = lazy(() => import('./pages/LeaveRequestsManagePage').then(m => ({ default: m.LeaveRequestsManagePage })));
@@ -168,6 +169,14 @@ const AppRoutes = () => {
             element={
               <EmployeeLayout title="Мой табель">
                 <EmployeeTimesheetPage />
+              </EmployeeLayout>
+            }
+          />
+          <Route
+            path="/employee/history"
+            element={
+              <EmployeeLayout title="Моя история">
+                <MyHistoryPage />
               </EmployeeLayout>
             }
           />

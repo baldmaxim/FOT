@@ -246,7 +246,7 @@ async function checkOrphanedAssignments(): Promise<AuditCheckResult> {
 async function checkEmployeesWithoutSalary(): Promise<AuditCheckResult> {
   const issues: AuditIssue[] = [];
 
-  // Находим сотрудников без записей в tender_salary_history
+  // Находим сотрудников без записей в salary_history
   const { data: employees } = await supabase
     .from('employees')
     .select('id, full_name')
@@ -255,7 +255,7 @@ async function checkEmployeesWithoutSalary(): Promise<AuditCheckResult> {
   if (employees) {
     for (const emp of employees) {
       const { count } = await supabase
-        .from('tender_salary_history')
+        .from('salary_history')
         .select('*', { count: 'exact', head: true })
         .eq('employee_id', emp.id);
 

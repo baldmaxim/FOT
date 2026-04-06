@@ -159,7 +159,25 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
             <span className="ec-info-val">{employee.work_object}</span>
           </div>
         )}
-        {employee.current_salary && (
+        {employee.salary_actual != null && (
+          <div className="ec-info-row">
+            <span className="ec-info-label">Оклад по договору</span>
+            <span className="ec-info-val">{formatSalary(employee.salary_actual)}</span>
+          </div>
+        )}
+        {employee.salary_calculated != null && (
+          <div className="ec-info-row">
+            <span className="ec-info-label">Реальный оклад</span>
+            <span className="ec-info-val">{formatSalary(employee.salary_calculated)}</span>
+          </div>
+        )}
+        {employee.staff_units != null && (
+          <div className="ec-info-row">
+            <span className="ec-info-label">Ставка</span>
+            <span className="ec-info-val">{employee.staff_units}</span>
+          </div>
+        )}
+        {employee.current_salary && !employee.salary_actual && (
           <div className="ec-info-row">
             <span className="ec-info-label">Оклад</span>
             <span className="ec-info-val">{formatSalary(employee.current_salary)}</span>

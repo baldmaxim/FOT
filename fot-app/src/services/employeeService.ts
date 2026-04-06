@@ -123,6 +123,22 @@ export const employeeService = {
     return response.data;
   },
 
+  async changeSalary(id: number, salary: number, reason?: string, effectiveDate?: string): Promise<void> {
+    await apiClient.post(`/employees/${id}/change-salary`, {
+      salary,
+      reason,
+      effective_date: effectiveDate,
+    });
+  },
+
+  async changePosition(id: number, positionName: string, reason?: string, effectiveDate?: string): Promise<void> {
+    await apiClient.post(`/employees/${id}/change-position`, {
+      position_name: positionName,
+      reason,
+      effective_date: effectiveDate,
+    });
+  },
+
   async moveDepartment(id: number, orgDepartmentId: string): Promise<Employee> {
     const response = await apiClient.post<ApiResponse<Employee>>(`/employees/${id}/move-department`, {
       org_department_id: orgDepartmentId,
@@ -144,6 +160,40 @@ export const employeeService = {
       formData.append('manualMatches', JSON.stringify(manualMatches));
     }
     const response = await apiClient.post<ApiResponse<EnrichResult>>('/employees/enrich?preview=false', formData);
+    return response.data;
+  },
+
+  async salaryEnrichPreview(file: File): Promise<EnrichPreview> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await apiClient.post<ApiResponse<EnrichPreview>>('/employees/enrich-salary?preview=true', formData);
+    return response.data;
+  },
+
+  async salaryEnrichApply(file: File, manualMatches?: Array<{ fullName: string; employeeId: number }>): Promise<EnrichResult> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (manualMatches?.length) {
+      formData.append('manualMatches', JSON.stringify(manualMatches));
+    }
+    const response = await apiClient.post<ApiResponse<EnrichResult>>('/employees/enrich-salary?preview=false', formData);
+    return response.data;
+  },
+
+  async salaryHistoryEnrichPreview(file: File): Promise<EnrichPreview> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await apiClient.post<ApiResponse<EnrichPreview>>('/employees/enrich-salary-history?preview=true', formData);
+    return response.data;
+  },
+
+  async salaryHistoryEnrichApply(file: File, manualMatches?: Array<{ fullName: string; employeeId: number }>): Promise<EnrichResult> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (manualMatches?.length) {
+      formData.append('manualMatches', JSON.stringify(manualMatches));
+    }
+    const response = await apiClient.post<ApiResponse<EnrichResult>>('/employees/enrich-salary-history?preview=false', formData);
     return response.data;
   },
 };

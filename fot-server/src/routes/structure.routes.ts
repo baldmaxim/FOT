@@ -14,6 +14,13 @@ router.get(
   structureController.getTree
 );
 
+// GET /api/structure/positions - список должностей (worker+)
+router.get(
+  '/positions',
+  requirePosition('worker', 'header', 'hr', 'admin', 'super_admin'),
+  structureController.getPositions
+);
+
 // === Отделы (только super_admin) ===
 
 // POST /api/structure/departments - создание отдела

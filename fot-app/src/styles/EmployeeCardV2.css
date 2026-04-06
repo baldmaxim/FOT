@@ -1011,71 +1011,156 @@
 /* ==================== History Timeline V2 ==================== */
 .ec-history-timeline {
   padding: 16px;
+  position: relative;
 }
 
 .ec-history-item {
   display: flex;
-  gap: 14px;
-  padding: 14px 0;
-  border-bottom: 1px solid var(--border);
+  align-items: flex-start;
+  gap: 0;
+  padding: 6px 0;
+  position: relative;
 }
 
-.ec-history-item:last-child {
-  border-bottom: none;
-}
-
-.ec-history-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+/* Date column */
+.ec-history-date-col {
+  width: 100px;
   flex-shrink: 0;
+  text-align: right;
+  padding-right: 16px;
+  padding-top: 4px;
 }
 
-.ec-history-icon svg {
-  width: 18px;
-  height: 18px;
+.ec-history-date-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
-.ec-history-icon.green {
-  background: var(--success-muted);
+.ec-history-date-end {
+  display: block;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
 }
-.ec-history-icon.green svg { color: var(--success); }
 
-.ec-history-icon.blue {
-  background: rgba(59, 130, 246, 0.12);
+/* Timeline line + dot */
+.ec-history-line {
+  width: 20px;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  position: relative;
 }
-.ec-history-icon.blue svg { color: var(--primary); }
 
-.ec-history-icon.orange {
-  background: var(--warning-muted);
+.ec-history-item:not(:last-child) .ec-history-line::after {
+  content: '';
+  position: absolute;
+  top: 16px;
+  bottom: -12px;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: var(--border);
 }
-.ec-history-icon.orange svg { color: var(--warning); }
 
-.ec-history-content {
+.ec-history-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 6px;
+  position: relative;
+  z-index: 1;
+  border: 2px solid var(--bg-primary, #fff);
+  box-shadow: 0 0 0 2px var(--border);
+}
+
+.ec-history-dot.green { background: #059669; box-shadow: 0 0 0 2px #059669; }
+.ec-history-dot.red { background: #dc2626; box-shadow: 0 0 0 2px #dc2626; }
+.ec-history-dot.gray { background: #9ca3af; box-shadow: 0 0 0 2px #9ca3af; }
+.ec-history-dot.blue { background: var(--primary, #3b82f6); box-shadow: 0 0 0 2px var(--primary, #3b82f6); }
+
+/* Card */
+.ec-history-card {
   flex: 1;
   min-width: 0;
+  padding: 8px 12px;
+  margin-left: 12px;
+  background: var(--bg-secondary, #f9fafb);
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 
-.ec-history-title {
+.ec-history-card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Salary */
+.ec-history-salary-amount {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.ec-history-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 10px;
+}
+
+.ec-history-delta.up {
+  background: rgba(5, 150, 105, 0.1);
+  color: #059669;
+}
+
+.ec-history-delta.down {
+  background: rgba(220, 38, 38, 0.1);
+  color: #dc2626;
+}
+
+.ec-history-delta.neutral {
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+}
+
+.ec-history-card-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+/* Assignment */
+.ec-history-assign-icon {
+  color: var(--primary, #3b82f6);
+  flex-shrink: 0;
+}
+
+.ec-history-assign-title {
   font-size: 14px;
   font-weight: 500;
-  margin-bottom: 4px;
+  color: var(--text-primary);
 }
 
-.ec-history-desc {
+.ec-history-card-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 4px;
   font-size: 12px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
-.ec-history-date {
-  font-family: 'Space Mono', monospace;
-  font-size: 12px;
+.ec-history-dept {
   color: var(--text-tertiary);
-  flex-shrink: 0;
-  white-space: nowrap;
 }
 
 .ec-history-empty {
@@ -1083,6 +1168,145 @@
   text-align: center;
   color: var(--text-tertiary);
   font-size: 13px;
+}
+
+/* ==================== Change Modals ==================== */
+.ec-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: ec-fade 0.15s ease;
+}
+
+@keyframes ec-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.ec-change-modal {
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+  animation: ec-scale 0.15s ease;
+}
+
+@keyframes ec-scale {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.ec-change-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ec-change-modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.ec-change-modal-close {
+  background: none;
+  border: none;
+  font-size: 20px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.ec-change-modal-close:hover {
+  color: var(--text-primary);
+}
+
+.ec-change-modal-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ec-change-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ec-change-field label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.ec-change-field input,
+.ec-change-field select {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
+  transition: border-color 0.15s;
+  outline: none;
+}
+
+.ec-change-field input:focus,
+.ec-change-field select:focus {
+  border-color: var(--primary, #3b82f6);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.ec-change-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.ec-change-btn {
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  transition: all 0.15s;
+}
+
+.ec-change-btn.cancel {
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
+}
+
+.ec-change-btn.cancel:hover {
+  background: var(--bg-secondary, #f3f4f6);
+}
+
+.ec-change-btn.apply {
+  background: var(--primary, #3b82f6);
+  color: #fff;
+  border-color: var(--primary, #3b82f6);
+}
+
+.ec-change-btn.apply:hover {
+  filter: brightness(1.1);
+}
+
+.ec-change-btn.apply:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ==================== Loading / Error ==================== */
@@ -1339,14 +1563,18 @@
     padding: 16px;
     border-radius: 12px;
   }
-  .ec-history-item {
-    gap: 10px;
-  }
-  .ec-history-date {
-    font-size: 11px;
-  }
   .ec-history-timeline {
     padding: 12px;
+  }
+  .ec-history-date-col {
+    width: 80px;
+    padding-right: 10px;
+  }
+  .ec-history-date-text {
+    font-size: 11px;
+  }
+  .ec-history-salary-amount {
+    font-size: 14px;
   }
   /* Attendance: stack to single column */
   .ec-attendance-3col {
@@ -1730,29 +1958,25 @@
 
   /* History */
   .ec-history-timeline {
-    padding: 10px;
+    padding: 8px;
   }
-  .ec-history-item {
-    padding: 8px 0;
-    gap: 8px;
+  .ec-history-date-col {
+    width: 65px;
+    padding-right: 6px;
   }
-  .ec-history-icon {
-    width: 30px;
-    height: 30px;
-    border-radius: 8px;
-  }
-  .ec-history-icon svg {
-    width: 14px;
-    height: 14px;
-  }
-  .ec-history-title {
-    font-size: 12px;
-  }
-  .ec-history-desc {
+  .ec-history-date-text {
     font-size: 10px;
   }
-  .ec-history-date {
+  .ec-history-salary-amount {
+    font-size: 13px;
+  }
+  .ec-history-delta {
     font-size: 10px;
+    padding: 0 5px;
+  }
+  .ec-history-card {
+    padding: 6px 8px;
+    margin-left: 8px;
   }
   .ec-history-empty {
     padding: 32px 16px;

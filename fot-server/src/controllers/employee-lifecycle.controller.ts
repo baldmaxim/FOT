@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
+import { employeeChangesService } from '../services/employee-changes.service.js';
 import { loadStructureCache, decryptEmployee } from '../services/employee-mapper.service.js';
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 
@@ -174,42 +175,16 @@ export async function moveDepartment(req: AuthenticatedRequest, res: Response): 
       return;
     }
 
-    // Получаем текущие данные сотрудника для переноса в назначение
-    const { data: empBefore } = await supabase
-      .from('employees')
-      .select('position_id, org_company_id')
-      .eq('id', id)
-      .single();
-
-    const today = new Date().toISOString().slice(0, 10);
-
-    // Закрываем все активные назначения
-    await supabase
-      .from('employee_assignments')
-      .update({ effective_to: today })
-      .eq('employee_id', id)
-      .is('effective_to', null);
-
-    // Создаём новое назначение с новым отделом
-    await supabase
-      .from('employee_assignments')
-      .insert({
-        employee_id: Number(id),
-        org_department_id,
-        org_company_id: empBefore?.org_company_id || null,
-        position_id: empBefore?.position_id || null,
-        effective_from: today,
-        is_primary: true,
-        assignment_type: 'main',
-        change_reason: 'Перевод в другой отдел',
-        created_by: req.user.id,
-      });
+    await employeeChangesService.changeDepartment(Number(id), org_department_id, {
+      reason: 'Перевод в другой отдел',
+      lockDepartment: true,
+      createdBy: req.user.id,
+    });
 
     const { data, error } = await supabase
       .from('employees')
-      .update({ org_department_id, department_locked: true })
+      .select('*')
       .eq('id', id)
-      .select()
       .single();
 
     if (error || !data) {
