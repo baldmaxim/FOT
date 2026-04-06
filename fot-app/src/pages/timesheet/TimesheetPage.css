@@ -1354,6 +1354,12 @@
   .ts-header {
     flex-direction: column;
     align-items: flex-start;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--bg-primary);
+    padding: 10px 16px;
+    margin: -16px -16px 0 -16px;
   }
   .ts-header-left {
     width: 100%;
@@ -1365,7 +1371,13 @@
   }
   .ts-header-right {
     width: 100%;
+    flex-wrap: wrap;
+    gap: 6px;
     overflow-x: auto;
+  }
+  .ts-dept-btn {
+    font-size: 12px;
+    padding: 6px 10px;
   }
   .ts-stat-value {
     font-size: 14px;
@@ -1380,10 +1392,31 @@
     margin: 16px;
   }
   .ts-table-header-bar {
-    padding: 10px 14px;
+    padding: 8px 12px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .ts-legend {
+    display: none;
   }
   .ts-table {
     min-width: 800px;
+  }
+  .ts-employee-cell {
+    min-width: 110px;
+    max-width: 130px;
+    padding: 6px 8px;
+  }
+  .ts-day {
+    width: 30px;
+    height: 36px;
+    font-size: 11px;
+    padding: 2px;
+  }
+  .ts-summary {
+    min-width: 40px;
+    padding: 6px 4px;
+    font-size: 11px;
   }
   .ts-table-scroll {
     -webkit-overflow-scrolling: touch;
@@ -1424,6 +1457,13 @@
   .ts-table td {
     font-size: 11px;
     padding: 4px 2px;
+  }
+  .ts-employee-cell {
+    min-width: 100px;
+    max-width: 115px;
+  }
+  .ts-day {
+    width: 28px;
   }
   .ts-modal-overlay {
     align-items: flex-end;

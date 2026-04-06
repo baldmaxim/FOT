@@ -367,6 +367,8 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .message {
@@ -490,7 +492,9 @@
 /* Mobile: full width, stacked */
 @media (max-width: 768px) {
   .panel {
-    width: 100vw;
+    left: 0;
+    right: 0;
+    width: auto;
     flex-direction: column;
   }
 
@@ -546,6 +550,10 @@
   .messageInput {
     font-size: 16px;
     padding: 10px 14px;
+  }
+
+  .searchInput {
+    font-size: 16px;
   }
 
   .inputArea {

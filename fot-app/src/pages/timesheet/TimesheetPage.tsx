@@ -63,6 +63,15 @@ export const TimesheetPage: FC = () => {
   const [schedules, setSchedules] = useState<Record<number, IResolvedSchedule>>({});
   const [loading, setLoading] = useState(false);
 
+  // Mobile compact mode
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
   // Schedule settings panel
   const [schedPanelOpen, setSchedPanelOpen] = useState(false);
 
@@ -316,6 +325,7 @@ export const TimesheetPage: FC = () => {
           year={year}
           month={month}
           schedules={schedules}
+          compact={isMobile}
           onEmployeeClick={handleEmployeeClick}
           onDayClick={handleDayClick}
         />

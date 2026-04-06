@@ -1,5 +1,5 @@
 import { useMemo, type FC } from 'react';
-import { ChevronRight, Folder, Users, RefreshCw } from 'lucide-react';
+import { ChevronRight, Folder, Users, RefreshCw, Search, X } from 'lucide-react';
 import type { OrgDepartmentNode } from '../../types';
 
 interface IDepartmentPanelProps {
@@ -11,6 +11,8 @@ interface IDepartmentPanelProps {
   highlightedDeptIds?: Set<string>;
   deptSearch: string;
   visibleDeptIds?: Set<string>;
+  searchValue?: string;
+  onSearchChange?: (v: string) => void;
   onSelectDept: (id: string | null) => void;
   onToggleDept: (id: string) => void;
   onRefresh: () => void;
@@ -18,7 +20,7 @@ interface IDepartmentPanelProps {
 
 export const DepartmentPanel: FC<IDepartmentPanelProps> = ({
   departments, selectedDeptId, expandedDepts, deptCounts, totalActive,
-  highlightedDeptIds, deptSearch, visibleDeptIds,
+  highlightedDeptIds, deptSearch, visibleDeptIds, searchValue, onSearchChange,
   onSelectDept, onToggleDept, onRefresh,
 }) => {
 
@@ -93,6 +95,22 @@ export const DepartmentPanel: FC<IDepartmentPanelProps> = ({
           </button>
         </div>
       </div>
+      {onSearchChange && (
+        <div className="ep-dept-search-wrap">
+          <Search size={14} />
+          <input
+            type="text"
+            value={searchValue ?? ''}
+            onChange={e => onSearchChange(e.target.value)}
+            placeholder="Поиск по имени или отделу..."
+          />
+          {searchValue && (
+            <button className="ep-search-clear" onClick={() => onSearchChange('')}>
+              <X size={13} />
+            </button>
+          )}
+        </div>
+      )}
       <div className="ep-dept-tree">
         <div
           className={`ep-dept-header ep-dept-all ${!selectedDeptId ? 'active' : ''}`}

@@ -149,6 +149,10 @@ body {
     --sidebar-width: 0px;
   }
 
+  body {
+    font-size: 15px;
+  }
+
   /* Prevent iOS Safari auto-zoom on input focus (requires font-size >= 16px) */
   input, textarea, select {
     font-size: 16px;
@@ -161,14 +165,11 @@ body {
   }
 }
 
-/* Safari iOS only: zoom the app root (not html/body — layout viewport stays intact) */
+/* Safari iOS only */
 @supports (-webkit-touch-callout: none) {
   @media (max-width: 768px) {
     html {
       overflow-x: hidden;
-    }
-    #root {
-      zoom: 1.10;
     }
   }
 }

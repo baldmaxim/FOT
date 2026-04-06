@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type FC } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, UserPlus, X, FileSpreadsheet, ChevronLeft, ChevronRight } from 'lucide-react';
+import { UserPlus, X, FileSpreadsheet, ChevronLeft, ChevronRight } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
 import type { PaginatedMeta, EmployeeCounts } from '../../services/employeeService';
 import { skudService } from '../../services/skudService';
@@ -326,6 +326,8 @@ export const EmployeesPage: FC = () => {
         highlightedDeptIds={highlightedDeptIds}
         deptSearch={matchesDept ? unifiedSearch : ''}
         visibleDeptIds={(!matchesDept && debouncedSearch) ? highlightedDeptIds : undefined}
+        searchValue={unifiedSearch}
+        onSearchChange={setUnifiedSearch}
         onSelectDept={setSelectedDeptId}
         onToggleDept={toggleDept}
         onRefresh={loadDepartments}
@@ -354,22 +356,8 @@ export const EmployeesPage: FC = () => {
           </div>
         </div>
 
-        <div className="ep-emp-toolbar">
-          <div className="ep-toolbar-search">
-            <Search size={15} />
-            <input
-              type="text"
-              placeholder="Поиск по имени или отделу..."
-              value={unifiedSearch}
-              onChange={e => setUnifiedSearch(e.target.value)}
-            />
-            {unifiedSearch && (
-              <button className="ep-search-clear" onClick={() => setUnifiedSearch('')}>
-                <X size={14} />
-              </button>
-            )}
-          </div>
-          {canEdit && (
+        {canEdit && (
+          <div className="ep-emp-toolbar">
             <div className="ep-toolbar-actions">
               <button className="ep-toolbar-btn secondary" onClick={() => enrichInputRef.current?.click()}>
                 <FileSpreadsheet size={16} />
@@ -381,8 +369,8 @@ export const EmployeesPage: FC = () => {
                 <span>Добавить</span>
               </button>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {error && (
           <div className="ep-error">

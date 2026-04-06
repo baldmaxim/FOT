@@ -88,6 +88,40 @@
   box-shadow: 0 0 0 3px var(--primary-light);
 }
 
+/* Department search inside left panel */
+.ep-dept-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ep-dept-search-wrap svg {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.ep-dept-search-wrap input {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+  outline: none;
+  font-family: inherit;
+}
+
+.ep-dept-search-wrap input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.ep-dept-search-wrap input:focus {
+  border-color: var(--primary);
+}
+
 /* Department Tree */
 .ep-dept-tree {
   flex: 1;
@@ -857,10 +891,18 @@
   }
 
   .ep-emp-header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--bg-primary);
     flex-direction: column;
     gap: 10px;
     align-items: flex-start;
     padding: 12px 14px;
+  }
+
+  .ep-dept-search-wrap input {
+    font-size: 16px;
   }
 
   .ep-emp-title h2 {

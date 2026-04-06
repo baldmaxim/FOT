@@ -713,6 +713,19 @@
 @media (max-width: 768px) {
   .container {
     padding: 20px;
+    height: 100dvh;
+    overflow-y: auto;
+    align-items: flex-start;
+    padding-top: 16px;
+    padding-bottom: 16px;
+  }
+
+  .formInput {
+    font-size: 16px;
+  }
+
+  .formSelect {
+    font-size: 16px;
   }
 
   .logo {
@@ -817,12 +830,12 @@
 
   .formInput {
     height: 44px;
-    font-size: 13px;
+    font-size: 16px;
   }
 
   .formSelect {
     height: 44px;
-    font-size: 13px;
+    font-size: 16px;
   }
 
   .submitBtn {

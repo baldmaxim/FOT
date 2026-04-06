@@ -15,6 +15,7 @@ interface ITimesheetGridProps {
   year: number;
   month: number;
   schedules?: Record<number, IResolvedSchedule>;
+  compact?: boolean;
   onEmployeeClick: (employee: TimesheetEmployee) => void;
   onDayClick: (employee: TimesheetEmployee, day: number, entry: TimesheetEntry | null) => void;
 }
@@ -63,6 +64,12 @@ const STATUS_CELL_TEXT: Record<TimesheetStatus, string> = {
   remote: 'У',
   unpaid: 'НО',
   manual: '',
+};
+
+const abbreviateName = (fullName: string): string => {
+  const parts = fullName.trim().split(/\s+/);
+  if (parts.length < 2) return fullName;
+  return `${parts[0]} ${parts.slice(1).map(p => p[0] ? p[0] + '.' : '').join('')}`;
 };
 
 const getDayCellClass = (entry: TimesheetEntry | null, weekend: boolean, today: boolean, future: boolean, workHoursNorm = 8): string => {
@@ -117,6 +124,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   year,
   month,
   schedules = {},
+  compact = false,
   onEmployeeClick,
   onDayClick,
 }) => {
@@ -223,8 +231,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     className="ts-col-sticky ts-employee-cell"
                     onClick={() => onEmployeeClick(row.employee)}
                   >
-                    <div className="ts-employee-name">{row.employee.full_name}</div>
-                    <div className="ts-employee-role">{row.employee.position_name || '—'}</div>
+                    <div className="ts-employee-name" title={row.employee.full_name}>
+                      {compact ? abbreviateName(row.employee.full_name) : row.employee.full_name}
+                    </div>
+                    {!compact && <div className="ts-employee-role">{row.employee.position_name || '—'}</div>}
                   </td>
                   {days.map(d => {
                     const sched = schedules[row.employee.id];
