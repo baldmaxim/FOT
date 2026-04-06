@@ -1,7 +1,7 @@
 import { supabase } from '../config/database.js';
 import type { SystemRole } from '../types/index.js';
 
-const ROLES_CACHE_TTL_MS = 60_000;
+const ROLES_CACHE_TTL_MS = 300_000;
 
 let rolesCache: Map<string, SystemRole> | null = null;
 let rolesCacheExpiresAt = 0;

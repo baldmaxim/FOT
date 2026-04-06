@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
+import { invalidateDeptTreeCache } from '../services/skud-shared.service.js';
 import type {
   AuthenticatedRequest,
   OrgDepartment,
@@ -109,6 +110,7 @@ export const structureController = {
         return;
       }
 
+      invalidateDeptTreeCache();
       await auditService.logFromRequest(req, req.user.id, 'CREATE_ORG_DEPARTMENT', {
         entityType: 'org_department',
         entityId: data.id,
@@ -139,6 +141,7 @@ export const structureController = {
         return;
       }
 
+      invalidateDeptTreeCache();
       await auditService.logFromRequest(req, req.user.id, 'DELETE_ORG_DEPARTMENT', {
         entityType: 'org_department',
         entityId: id,
@@ -181,6 +184,7 @@ export const structureController = {
         return;
       }
 
+      invalidateDeptTreeCache();
       await auditService.logFromRequest(req, req.user.id, 'CLEAR_STRUCTURE', {
         details: { employeesDeleted, departmentsDeleted },
       });

@@ -60,10 +60,42 @@ export const adminUsersController = {
         }
       }
 
+      // Подгружаем email и статус подтверждения из Supabase Auth
+      const authEmailMap: Record<string, { email: string; email_confirmed: boolean }> = {};
+      try {
+        const perPage = 1000;
+        let page = 1;
+        let hasMore = true;
+        while (hasMore) {
+          const { data: authData, error: authError } = await supabase.auth.admin.listUsers({ page, perPage });
+          if (authError) {
+            console.error('[GetUsers] listUsers error:', authError);
+            break;
+          }
+          if (authData?.users) {
+            for (const au of authData.users) {
+              authEmailMap[au.id] = {
+                email: au.email || '',
+                email_confirmed: !!au.email_confirmed_at,
+              };
+            }
+            hasMore = authData.users.length === perPage;
+            page++;
+          } else {
+            hasMore = false;
+          }
+        }
+      } catch (err) {
+        console.error('[GetUsers] Auth fetch error:', err);
+      }
+
       const sanitizedUsers = users.map((u: UserProfile) => {
         const deptId = u.employee_id ? empDeptMap[u.employee_id] || null : null;
+        const authInfo = authEmailMap[u.id];
         return {
           id: u.id,
+          email: authInfo?.email || '',
+          email_confirmed: authInfo?.email_confirmed ?? false,
           full_name: u.full_name,
           department_id: deptId,
           department_name: deptId ? (deptNameMap[deptId] || null) : null,

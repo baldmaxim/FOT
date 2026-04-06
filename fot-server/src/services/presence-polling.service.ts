@@ -6,7 +6,7 @@ import { backfillUnmatchedEvents } from './skud-backfill.service.js';
 import { normalizePersonName } from './sigur-sync-shared.js';
 
 const POLL_INTERVAL = 60_000;
-const EMPLOYEE_CACHE_TTL = 5 * 60_000;
+const EMPLOYEE_CACHE_TTL = 10 * 60_000;
 const BATCH_SIZE = 500;
 export const POLL_OVERLAP_MS = 2 * 60_000;
 

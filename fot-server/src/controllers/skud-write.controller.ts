@@ -4,6 +4,7 @@ import { auditService } from '../services/audit.service.js';
 import { sigurService } from '../services/sigur.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
+import { invalidateInternalPointsCache } from '../services/skud-shared.service.js';
 import {
   importFromExcel,
   syncEmployee as syncEmployeeService,
@@ -87,6 +88,7 @@ export const skudWriteController = {
         }
       }
 
+      invalidateInternalPointsCache();
       res.json({ success: true, message: 'Настройки сохранены' });
     } catch (error) {
       console.error('Save access point settings error:', error);

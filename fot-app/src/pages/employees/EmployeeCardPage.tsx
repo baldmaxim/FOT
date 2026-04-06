@@ -102,7 +102,21 @@ export const EmployeeCardPage: FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const backLabel = (location.state as { label?: string })?.label || 'Сотрудники';
+  const locState = location.state as { label?: string; from?: string } | null;
+  const savedBack = (() => {
+    try { return JSON.parse(sessionStorage.getItem(`ec-back-${id}`) || 'null'); } catch { return null; }
+  })() as { label?: string; from?: string } | null;
+  const backLabel = locState?.label || savedBack?.label || 'Сотрудники';
+  const backPath = locState?.from || savedBack?.from;
+
+  useEffect(() => {
+    if (locState?.from) sessionStorage.setItem(`ec-back-${id}`, JSON.stringify({ label: locState.label, from: locState.from }));
+  }, [id, locState]);
+
+  const handleBack = () => {
+    if (backPath) return navigate(backPath);
+    navigate(-1);
+  };
   const { canAccess } = useAuth();
   const canEdit = canAccess('admin');
 
@@ -120,15 +134,6 @@ export const EmployeeCardPage: FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>(urlTab && ['attendance', 'info', 'history', 'skud'].includes(urlTab) ? urlTab : 'attendance');
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<Partial<EmployeeInput>>({});
-  const [showChangeSalary, setShowChangeSalary] = useState(false);
-  const [showChangePosition, setShowChangePosition] = useState(false);
-  const [changeSalaryVal, setChangeSalaryVal] = useState('');
-  const [changeSalaryReason, setChangeSalaryReason] = useState('');
-  const [changeSalaryDate, setChangeSalaryDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [changePositionId, setChangePositionId] = useState('');
-  const [changePositionReason, setChangePositionReason] = useState('');
-  const [changePositionDate, setChangePositionDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [positions, setPositions] = useState<Array<{ id: string; name: string }>>([]);
   const [viewPeriod, setViewPeriod] = useState<ViewPeriod>('month');
   const [rangeStart, setRangeStart] = useState(() => new Date().toISOString().slice(0, 10));
   const [rangeEnd, setRangeEnd] = useState(() => new Date().toISOString().slice(0, 10));
@@ -280,41 +285,6 @@ export const EmployeeCardPage: FC = () => {
     catch { setError('Ошибка удаления'); }
   };
 
-  const handleChangeSalary = async () => {
-    if (!employee) return;
-    const salary = parseFloat(changeSalaryVal.replace(/\s/g, '').replace(',', '.'));
-    if (!salary || salary <= 0) return;
-    try {
-      await employeeService.changeSalary(employee.id, salary, changeSalaryReason || undefined, changeSalaryDate);
-      setShowChangeSalary(false);
-      setChangeSalaryVal('');
-      setChangeSalaryReason('');
-      setChangeSalaryDate(new Date().toISOString().slice(0, 10));
-      loadData();
-    } catch { setError('Ошибка изменения оклада'); }
-  };
-
-  const openChangePosition = async () => {
-    setShowChangePosition(true);
-    if (positions.length === 0) {
-      try {
-        const res = await structureApi.getPositions();
-        if (res.data) setPositions(res.data);
-      } catch { /* ignore */ }
-    }
-  };
-
-  const handleChangePosition = async () => {
-    if (!employee || !changePositionId) return;
-    try {
-      await employeeService.changePosition(employee.id, changePositionId, changePositionReason || undefined, changePositionDate);
-      setShowChangePosition(false);
-      setChangePositionId('');
-      setChangePositionReason('');
-      setChangePositionDate(new Date().toISOString().slice(0, 10));
-      loadData();
-    } catch { setError('Ошибка смены должности'); }
-  };
 
   // Loading / Error states
   if (loading) return <div className="ec-content"><div className="ec-loading">Загрузка...</div></div>;
@@ -346,7 +316,7 @@ export const EmployeeCardPage: FC = () => {
 
       {/* ===== Profile Card ===== */}
       <div className="ec-profile-card">
-        <button className="ec-back-btn" onClick={() => navigate(-1)}>
+        <button className="ec-back-btn" onClick={handleBack}>
           <ArrowLeft size={16} />
           {backLabel}
         </button>
@@ -402,12 +372,6 @@ export const EmployeeCardPage: FC = () => {
               )}
               <button className="ec-action-btn danger" onClick={handleDelete}>
                 <Trash2 size={16} /> Удалить
-              </button>
-              <button className="ec-action-btn" onClick={() => setShowChangeSalary(true)}>
-                <DollarSign size={16} /> Изменить оклад
-              </button>
-              <button className="ec-action-btn" onClick={openChangePosition}>
-                <Briefcase size={16} /> Сменить должность
               </button>
             </div>
           )}
@@ -668,65 +632,6 @@ export const EmployeeCardPage: FC = () => {
         />
       )}
 
-      {/* Change Salary Modal */}
-      {showChangeSalary && (
-        <div className="ec-overlay" onClick={() => setShowChangeSalary(false)}>
-          <div className="ec-change-modal" onClick={e => e.stopPropagation()}>
-            <div className="ec-change-modal-header">
-              <h3>Изменить оклад</h3>
-              <button className="ec-change-modal-close" onClick={() => setShowChangeSalary(false)}>&times;</button>
-            </div>
-            <div className="ec-change-modal-body">
-              <div className="ec-change-field">
-                <label>Новый оклад (₽)</label>
-                <input type="number" value={changeSalaryVal} onChange={e => setChangeSalaryVal(e.target.value)} placeholder="150 000" autoFocus />
-              </div>
-              <div className="ec-change-field">
-                <label>Дата вступления в силу</label>
-                <input type="date" value={changeSalaryDate} onChange={e => setChangeSalaryDate(e.target.value)} />
-              </div>
-              <div className="ec-change-field">
-                <label>Причина</label>
-                <input value={changeSalaryReason} onChange={e => setChangeSalaryReason(e.target.value)} placeholder="Повышение, пересмотр..." />
-              </div>
-            </div>
-            <div className="ec-change-modal-footer">
-              <button className="ec-change-btn cancel" onClick={() => setShowChangeSalary(false)}>Отмена</button>
-              <button className="ec-change-btn apply" onClick={handleChangeSalary} disabled={!changeSalaryVal}>Применить</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Change Position Modal */}
-      {showChangePosition && (
-        <div className="ec-overlay" onClick={() => setShowChangePosition(false)}>
-          <div className="ec-change-modal" onClick={e => e.stopPropagation()}>
-            <div className="ec-change-modal-header">
-              <h3>Сменить должность</h3>
-              <button className="ec-change-modal-close" onClick={() => setShowChangePosition(false)}>&times;</button>
-            </div>
-            <div className="ec-change-modal-body">
-              <div className="ec-change-field">
-                <label>Должность</label>
-                <input value={changePositionId} onChange={e => setChangePositionId(e.target.value)} placeholder="Название должности" autoFocus />
-              </div>
-              <div className="ec-change-field">
-                <label>Дата вступления в силу</label>
-                <input type="date" value={changePositionDate} onChange={e => setChangePositionDate(e.target.value)} />
-              </div>
-              <div className="ec-change-field">
-                <label>Причина</label>
-                <input value={changePositionReason} onChange={e => setChangePositionReason(e.target.value)} placeholder="Повышение, перевод..." />
-              </div>
-            </div>
-            <div className="ec-change-modal-footer">
-              <button className="ec-change-btn cancel" onClick={() => setShowChangePosition(false)}>Отмена</button>
-              <button className="ec-change-btn apply" onClick={handleChangePosition} disabled={!changePositionId}>Применить</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

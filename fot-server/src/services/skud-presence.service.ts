@@ -4,14 +4,13 @@
 import { supabase } from '../config/database.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import type { IPresenceParams, IPresenceItem } from '../types/skud.types.js';
+import { getAllDepartmentsTree, getInternalAccessPoints } from './skud-shared.service.js';
 
 export async function getPresence(params: IPresenceParams): Promise<IPresenceItem[]> {
   const { departmentId } = params;
 
-  // Загружаем все отделы
-  const allDeptsQuery = supabase.from('org_departments').select('id, parent_id');
-  const { data: allDeptsData } = await allDeptsQuery;
-  const allDepts = allDeptsData || [];
+  // Загружаем все отделы (из кэша)
+  const allDepts = await getAllDepartmentsTree();
 
   // Собираем ID отдела + все дочерние
   let deptIds: string[] | null = null;
@@ -70,16 +69,8 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
     posMap.set(p.id, p.name || '');
   }
 
-  // Загружаем все внутренние точки доступа
-  const settingsQuery = supabase
-    .from('skud_access_point_settings')
-    .select('access_point_name')
-    .eq('is_internal', true);
-
-  const { data: apSettings } = await settingsQuery;
-  const orgInternalPoints = new Set<string>(
-    (apSettings || []).map(s => s.access_point_name.trim()),
-  );
+  // Загружаем все внутренние точки доступа (из кэша)
+  const orgInternalPoints = await getInternalAccessPoints();
 
   const today = formatDateToISO(new Date());
 

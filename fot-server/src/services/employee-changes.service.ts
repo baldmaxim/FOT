@@ -146,4 +146,114 @@ export const employeeChangesService = {
       .update(updateData)
       .eq('id', employeeId);
   },
+
+  /**
+   * Обновить запись salary_history
+   */
+  async updateSalaryHistory(
+    historyId: number,
+    employeeId: number,
+    updates: { salary?: number; effective_date?: string; change_reason?: string; note?: string },
+  ): Promise<void> {
+    const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (updates.salary !== undefined) updateData.salary = updates.salary;
+    if (updates.effective_date !== undefined) updateData.effective_date = updates.effective_date;
+    if (updates.change_reason !== undefined) updateData.change_reason = updates.change_reason;
+    if (updates.note !== undefined) updateData.note = updates.note;
+
+    await supabase.from('salary_history').update(updateData).eq('id', historyId).eq('employee_id', employeeId);
+
+    // Пересчитать актуальный оклад
+    const { data: latest } = await supabase
+      .from('salary_history')
+      .select('salary')
+      .eq('employee_id', employeeId)
+      .order('effective_date', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (latest) {
+      await supabase.from('employees').update({
+        salary_actual: latest.salary,
+        current_salary: latest.salary,
+        updated_at: new Date().toISOString(),
+      }).eq('id', employeeId);
+    }
+  },
+
+  /**
+   * Удалить запись salary_history
+   */
+  async deleteSalaryHistory(historyId: number, employeeId: number): Promise<void> {
+    await supabase.from('salary_history').delete().eq('id', historyId).eq('employee_id', employeeId);
+
+    const { data: latest } = await supabase
+      .from('salary_history')
+      .select('salary')
+      .eq('employee_id', employeeId)
+      .order('effective_date', { ascending: false })
+      .limit(1)
+      .single();
+
+    await supabase.from('employees').update({
+      salary_actual: latest?.salary || null,
+      current_salary: latest?.salary || null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', employeeId);
+  },
+
+  /**
+   * Обновить запись employee_assignments
+   */
+  async updateAssignment(
+    assignmentId: string,
+    employeeId: number,
+    updates: { position_id?: string; org_department_id?: string; effective_from?: string; change_reason?: string },
+  ): Promise<void> {
+    const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (updates.position_id !== undefined) updateData.position_id = updates.position_id;
+    if (updates.org_department_id !== undefined) updateData.org_department_id = updates.org_department_id;
+    if (updates.effective_from !== undefined) updateData.effective_from = updates.effective_from;
+    if (updates.change_reason !== undefined) updateData.change_reason = updates.change_reason;
+
+    await supabase.from('employee_assignments').update(updateData).eq('id', assignmentId).eq('employee_id', employeeId);
+
+    // Пересчитать текущие position_id / org_department_id
+    const { data: latest } = await supabase
+      .from('employee_assignments')
+      .select('position_id, org_department_id')
+      .eq('employee_id', employeeId)
+      .order('effective_from', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (latest) {
+      await supabase.from('employees').update({
+        position_id: latest.position_id,
+        org_department_id: latest.org_department_id,
+        updated_at: new Date().toISOString(),
+      }).eq('id', employeeId);
+    }
+  },
+
+  /**
+   * Удалить запись employee_assignments
+   */
+  async deleteAssignment(assignmentId: string, employeeId: number): Promise<void> {
+    await supabase.from('employee_assignments').delete().eq('id', assignmentId).eq('employee_id', employeeId);
+
+    const { data: latest } = await supabase
+      .from('employee_assignments')
+      .select('position_id, org_department_id')
+      .eq('employee_id', employeeId)
+      .order('effective_from', { ascending: false })
+      .limit(1)
+      .single();
+
+    await supabase.from('employees').update({
+      position_id: latest?.position_id || null,
+      org_department_id: latest?.org_department_id || null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', employeeId);
+  },
 };

@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { ChatProvider } from './contexts/ChatContext';
@@ -11,6 +12,17 @@ import { EmployeeLayout } from './components/layout/EmployeeLayout';
 import { useTheme } from './hooks/useTheme';
 import { PageLoader } from './components/ui/PageLoader';
 import './App.css';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      gcTime: 5 * 60_000,
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
 
 // Auth pages
 const LoginPage = lazy(() => import('./pages/auth/LoginPage').then(m => ({ default: m.LoginPage })));
@@ -42,6 +54,9 @@ const TimesheetReviewPage = lazy(() => import('./pages/timesheet/TimesheetReview
 
 // Discipline Analytics
 const DisciplineAnalyticsPage = lazy(() => import('./pages/DisciplineAnalyticsPage').then(m => ({ default: m.DisciplineAnalyticsPage })));
+
+// Staff Control
+const StaffControlPage = lazy(() => import('./pages/StaffControlPage').then(m => ({ default: m.StaffControlPage })));
 
 // Profile
 const ProfilePage = lazy(() => import('./pages/profile/ProfilePage').then(m => ({ default: m.ProfilePage })));
@@ -280,6 +295,14 @@ const AppRoutes = () => {
               </Layout>
             }
           />
+          <Route
+            path="/staff-control"
+            element={
+              <Layout title="Управление кадрами" theme={theme} onToggleTheme={toggleTheme}>
+                <StaffControlPage />
+              </Layout>
+            }
+          />
         </Route>
 
         {/* Profile - for header+ */}
@@ -352,17 +375,19 @@ const AppRoutes = () => {
 
 const App = () => {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <ToastProvider>
-          <ChatProvider>
-            <AppRoutes />
-            <ChatButton />
-            <ChatSidePanel />
-          </ChatProvider>
-        </ToastProvider>
-      </AuthProvider>
-    </BrowserRouter>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <AuthProvider>
+          <ToastProvider>
+            <ChatProvider>
+              <AppRoutes />
+              <ChatButton />
+              <ChatSidePanel />
+            </ChatProvider>
+          </ToastProvider>
+        </AuthProvider>
+      </BrowserRouter>
+    </QueryClientProvider>
   );
 };
 

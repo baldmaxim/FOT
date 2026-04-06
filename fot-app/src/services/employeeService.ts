@@ -139,6 +139,14 @@ export const employeeService = {
     });
   },
 
+  async updateHistoryEvent(employeeId: number, eventId: string, data: Record<string, unknown>): Promise<void> {
+    await apiClient.put(`/employees/${employeeId}/history/${eventId}`, data);
+  },
+
+  async deleteHistoryEvent(employeeId: number, eventId: string): Promise<void> {
+    await apiClient.delete(`/employees/${employeeId}/history/${eventId}`);
+  },
+
   async moveDepartment(id: number, orgDepartmentId: string): Promise<Employee> {
     const response = await apiClient.post<ApiResponse<Employee>>(`/employees/${id}/move-department`, {
       org_department_id: orgDepartmentId,

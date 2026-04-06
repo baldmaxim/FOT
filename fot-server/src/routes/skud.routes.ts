@@ -3,6 +3,17 @@ import multer from 'multer';
 import { skudController } from '../controllers/skud.controller.js';
 import { authenticate, requireMinPosition, requireCritical2FA } from '../middleware/auth.js';
 import { importLimiter } from '../middleware/rateLimit.js';
+import { cacheResponse } from '../middleware/cacheResponse.js';
+
+const presenceCache = cacheResponse(
+  (req) => `presence:${req.query.department_id || 'all'}`,
+  30_000,
+);
+
+const dashboardCache = cacheResponse(
+  (req) => `dashboard:${req.query.department_id}:${req.query.period}:${req.query.month || ''}`,
+  60_000,
+);
 
 const router = Router();
 
@@ -35,10 +46,11 @@ router.get(
   skudController.getOrganizations
 );
 
-// GET /api/skud/dashboard-stats - аналитика дашборда (header+)
+// GET /api/skud/dashboard-stats - аналитика дашборда (header+, кэш 60с)
 router.get(
   '/dashboard-stats',
   requireMinPosition('header'),
+  dashboardCache,
   skudController.getDashboardStats
 );
 
@@ -98,10 +110,11 @@ router.post(
   skudController.syncAccessPoints
 );
 
-// GET /api/skud/presence - статус присутствия сотрудников (header+)
+// GET /api/skud/presence - статус присутствия сотрудников (header+, кэш 30с)
 router.get(
   '/presence',
   requireMinPosition('header'),
+  presenceCache,
   skudController.getPresence
 );
 

@@ -3,20 +3,39 @@
  */
 import { supabase } from '../config/database.js';
 
+// ─── Кэш дерева отделов ───
+
+const DEPT_TREE_CACHE_TTL = 5 * 60_000;
+let deptTreeCache: { data: { id: string; parent_id: string | null }[]; expiresAt: number } | null = null;
+
+/** Кэшированная загрузка всех отделов (id, parent_id). TTL 5 мин. */
+export async function getAllDepartmentsTree(): Promise<{ id: string; parent_id: string | null }[]> {
+  const now = Date.now();
+  if (deptTreeCache && deptTreeCache.expiresAt > now) return deptTreeCache.data;
+
+  const { data } = await supabase.from('org_departments').select('id, parent_id');
+  deptTreeCache = { data: data || [], expiresAt: now + DEPT_TREE_CACHE_TTL };
+  return deptTreeCache.data;
+}
+
+/** Инвалидация кэша отделов (вызывать после sync/CRUD) */
+export function invalidateDeptTreeCache(): void {
+  deptTreeCache = null;
+}
+
 // ─── Сбор ID отделов (включая дочерние) ───
 
 /** Собирает ID отдела + все дочерние */
 export async function collectDeptIds(
   departmentId: string,
 ): Promise<string[]> {
-  const deptQuery = supabase.from('org_departments').select('id, parent_id');
-  const { data: allDepts } = await deptQuery;
+  const allDepts = await getAllDepartmentsTree();
 
   const ids = [departmentId];
   let changed = true;
   while (changed) {
     changed = false;
-    for (const d of allDepts || []) {
+    for (const d of allDepts) {
       if (d.parent_id && ids.includes(d.parent_id) && !ids.includes(d.id)) {
         ids.push(d.id);
         changed = true;
@@ -49,11 +68,24 @@ export function getAncestorDeptIds(
 
 // ─── Sync filter: фильтрация сотрудников по отделам ───
 
+const SYNC_FILTER_CACHE_TTL = 5 * 60_000;
+let syncFilterCache: { data: { empIds: Set<number>; empNames: Set<string> } | null; expiresAt: number } | null = null;
+
+/** Инвалидация кэша sync filter (вызывать при PUT /sigur/sync-filter) */
+export function invalidateSyncFilterCache(): void {
+  syncFilterCache = null;
+}
+
 /**
  * Загружает ID и имена сотрудников, относящихся к отделам из sync filter.
  * Возвращает null если фильтр не настроен (показывать всё).
+ * Кэшируется на 5 мин.
  */
 export async function getSyncFilteredEmployees(): Promise<{ empIds: Set<number>; empNames: Set<string> } | null> {
+  const now = Date.now();
+  if (syncFilterCache && syncFilterCache.expiresAt > now) {
+    return syncFilterCache.data;
+  }
   // 1. Загружаем whitelist sigur_department_id
   const { data: filterRows } = await supabase
     .from('skud_sync_department_filter')
@@ -61,6 +93,7 @@ export async function getSyncFilteredEmployees(): Promise<{ empIds: Set<number>;
 
   if (!filterRows || filterRows.length === 0) {
     console.log('[sync-filter] Нет фильтра → показываем всё');
+    syncFilterCache = { data: null, expiresAt: Date.now() + SYNC_FILTER_CACHE_TTL };
     return null;
   }
 
@@ -79,9 +112,7 @@ export async function getSyncFilteredEmployees(): Promise<{ empIds: Set<number>;
   if (!depts || depts.length === 0) return { empIds: new Set(), empNames: new Set() };
 
   // 3. Собираем дочерние отделы
-  const { data: allDepts } = await supabase
-    .from('org_departments')
-    .select('id, parent_id');
+  const allDepts = await getAllDepartmentsTree();
 
   const deptIds = new Set(depts.map(d => d.id));
   let changed = true;
@@ -112,7 +143,9 @@ export async function getSyncFilteredEmployees(): Promise<{ empIds: Set<number>;
 
   console.log('[sync-filter] Найдено сотрудников:', empIds.size);
 
-  return { empIds, empNames };
+  const result = { empIds, empNames };
+  syncFilterCache = { data: result, expiresAt: Date.now() + SYNC_FILTER_CACHE_TTL };
+  return result;
 }
 
 // ─── Access point settings cache ───
@@ -126,6 +159,34 @@ export function getAccessPointCacheEntry(key: string): string[] | null {
     return cached.data;
   }
   return null;
+}
+
+// ─── Кэш внутренних точек доступа ───
+
+let internalPointsCache: { data: Set<string>; expiresAt: number } | null = null;
+
+/** Кэшированная загрузка внутренних точек доступа. TTL 10 мин. */
+export async function getInternalAccessPoints(): Promise<Set<string>> {
+  const now = Date.now();
+  if (internalPointsCache && internalPointsCache.expiresAt > now) {
+    return internalPointsCache.data;
+  }
+
+  const { data } = await supabase
+    .from('skud_access_point_settings')
+    .select('access_point_name')
+    .eq('is_internal', true);
+
+  const points = new Set<string>(
+    (data || []).map((s: { access_point_name: string }) => s.access_point_name.trim()),
+  );
+  internalPointsCache = { data: points, expiresAt: now + AP_CACHE_TTL };
+  return points;
+}
+
+/** Инвалидация кэша внутренних точек доступа */
+export function invalidateInternalPointsCache(): void {
+  internalPointsCache = null;
 }
 
 export function setAccessPointCacheEntry(key: string, data: string[]): void {

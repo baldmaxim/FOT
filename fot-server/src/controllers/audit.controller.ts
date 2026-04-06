@@ -2,7 +2,6 @@ import { Response } from 'express';
 import { supabase } from '../config/database.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
-// Типы для результатов аудита
 interface AuditIssue {
   employee_id: number;
   full_name: string;
@@ -28,50 +27,63 @@ interface AuditSummary {
   run_at: string;
 }
 
+// ─── Кэш результата аудита (10 мин) ───
+
+const AUDIT_CACHE_TTL = 10 * 60_000;
+let auditCache: { data: AuditSummary; expiresAt: number } | null = null;
+
 export const auditController = {
-  /**
-   * GET /api/audit/run
-   * Запуск полного аудита данных
-   */
   async runFullAudit(_req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const checks: AuditCheckResult[] = [];
+      const now = Date.now();
+      if (auditCache && auditCache.expiresAt > now) {
+        res.json({ success: true, data: auditCache.data });
+        return;
+      }
 
-      // Получаем общее количество сотрудников
-      const { count: totalEmployees } = await supabase
-        .from('employees')
-        .select('*', { count: 'exact', head: true })
-        .eq('is_archived', false);
+      // Загружаем все данные параллельно одним батчем
+      const [empResult, assignResult, salaryResult] = await Promise.all([
+        supabase
+          .from('employees')
+          .select('id, full_name, birth_date, patent_expiry_date')
+          .eq('is_archived', false),
+        supabase
+          .from('employee_assignments')
+          .select('employee_id, org_company_id, org_department_id, org_site_id, org_subdivision_id')
+          .is('effective_to', null),
+        supabase
+          .from('salary_history')
+          .select('employee_id'),
+      ]);
 
-      // 1. Проверка: Сотрудники без назначений
-      const unassignedCheck = await checkUnassignedEmployees();
-      checks.push(unassignedCheck);
+      const employees = empResult.data || [];
+      const assignments = assignResult.data || [];
+      const salaryRecords = salaryResult.data || [];
 
-      // 2. Проверка: Потерянные назначения (удалённые подразделения)
-      const orphanedCheck = await checkOrphanedAssignments();
-      checks.push(orphanedCheck);
+      // Предварительные индексы
+      const assignmentsByEmp = new Map<number, typeof assignments>();
+      for (const a of assignments) {
+        const list = assignmentsByEmp.get(a.employee_id) || [];
+        list.push(a);
+        assignmentsByEmp.set(a.employee_id, list);
+      }
 
-      // 3. Проверка: Сотрудники без зарплаты
-      const noSalaryCheck = await checkEmployeesWithoutSalary();
-      checks.push(noSalaryCheck);
+      const employeesWithSalary = new Set<number>();
+      for (const s of salaryRecords) {
+        employeesWithSalary.add(s.employee_id);
+      }
 
-      // 4. Проверка: Истёкшие патенты
-      const expiredPatentsCheck = await checkExpiredPatents();
-      checks.push(expiredPatentsCheck);
+      // Все проверки выполняются in-memory, 0 дополнительных запросов
+      const checks: AuditCheckResult[] = [
+        checkUnassigned(employees, assignmentsByEmp),
+        checkOrphaned(employees, assignments),
+        checkNoSalary(employees, employeesWithSalary),
+        checkExpiredPatents(employees),
+        checkMissingBirthDate(employees),
+        checkDuplicates(employees),
+        checkMultipleAssignments(employees, assignmentsByEmp),
+      ];
 
-      // 5. Проверка: Отсутствует дата рождения
-      const noBirthDateCheck = await checkMissingBirthDate();
-      checks.push(noBirthDateCheck);
-
-      // 6. Проверка: Дублирующиеся записи
-      const duplicatesCheck = await checkDuplicateEmployees();
-      checks.push(duplicatesCheck);
-
-      // 7. Проверка: Множественные активные назначения
-      const multipleAssignmentsCheck = await checkMultipleAssignments();
-      checks.push(multipleAssignmentsCheck);
-
-      // Подсчёт итогов
       let totalIssues = 0;
       let criticalCount = 0;
       let warningCount = 0;
@@ -87,7 +99,7 @@ export const auditController = {
       }
 
       const summary: AuditSummary = {
-        total_employees: totalEmployees || 0,
+        total_employees: employees.length,
         total_issues: totalIssues,
         critical_count: criticalCount,
         warning_count: warningCount,
@@ -96,6 +108,7 @@ export const auditController = {
         run_at: new Date().toISOString(),
       };
 
+      auditCache = { data: summary, expiresAt: now + AUDIT_CACHE_TTL };
       res.json({ success: true, data: summary });
     } catch (error) {
       console.error('Audit error:', error);
@@ -103,44 +116,65 @@ export const auditController = {
     }
   },
 
-  /**
-   * GET /api/audit/check/:checkType
-   * Запуск конкретной проверки
-   */
   async runSingleCheck(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { checkType } = req.params;
 
-      let result: AuditCheckResult;
+      const checkMap: Record<string, () => Promise<AuditCheckResult>> = {
+        'unassigned': async () => {
+          const [e, a] = await Promise.all([
+            supabase.from('employees').select('id, full_name').eq('is_archived', false),
+            supabase.from('employee_assignments').select('employee_id').is('effective_to', null),
+          ]);
+          const byEmp = new Map<number, number>();
+          for (const r of a.data || []) byEmp.set(r.employee_id, (byEmp.get(r.employee_id) || 0) + 1);
+          return checkUnassigned(e.data || [], byEmp as never);
+        },
+        'orphaned': async () => {
+          const [e, a] = await Promise.all([
+            supabase.from('employees').select('id, full_name').eq('is_archived', false),
+            supabase.from('employee_assignments').select('employee_id, org_company_id, org_department_id, org_site_id, org_subdivision_id').is('effective_to', null),
+          ]);
+          return checkOrphaned(e.data || [], a.data || []);
+        },
+        'no-salary': async () => {
+          const [e, s] = await Promise.all([
+            supabase.from('employees').select('id, full_name').eq('is_archived', false),
+            supabase.from('salary_history').select('employee_id'),
+          ]);
+          const set = new Set((s.data || []).map(r => r.employee_id));
+          return checkNoSalary(e.data || [], set);
+        },
+        'expired-patents': async () => {
+          const { data } = await supabase.from('employees').select('id, full_name, patent_expiry_date').eq('is_archived', false).not('patent_expiry_date', 'is', null);
+          return checkExpiredPatents(data || []);
+        },
+        'no-birthdate': async () => {
+          const { data } = await supabase.from('employees').select('id, full_name, birth_date').eq('is_archived', false);
+          return checkMissingBirthDate(data || []);
+        },
+        'duplicates': async () => {
+          const { data } = await supabase.from('employees').select('id, full_name').eq('is_archived', false);
+          return checkDuplicates(data || []);
+        },
+        'multiple-assignments': async () => {
+          const [e, a] = await Promise.all([
+            supabase.from('employees').select('id, full_name').eq('is_archived', false),
+            supabase.from('employee_assignments').select('employee_id').is('effective_to', null),
+          ]);
+          const byEmp = new Map<number, number>();
+          for (const r of a.data || []) byEmp.set(r.employee_id, (byEmp.get(r.employee_id) || 0) + 1);
+          return checkMultipleAssignments(e.data || [], byEmp as never);
+        },
+      };
 
-      switch (checkType) {
-        case 'unassigned':
-          result = await checkUnassignedEmployees();
-          break;
-        case 'orphaned':
-          result = await checkOrphanedAssignments();
-          break;
-        case 'no-salary':
-          result = await checkEmployeesWithoutSalary();
-          break;
-        case 'expired-patents':
-          result = await checkExpiredPatents();
-          break;
-        case 'no-birthdate':
-          result = await checkMissingBirthDate();
-          break;
-        case 'duplicates':
-          result = await checkDuplicateEmployees();
-          break;
-        case 'multiple-assignments':
-          result = await checkMultipleAssignments();
-          break;
-        default:
-          res.status(400).json({ success: false, error: 'Unknown check type' });
-          return;
+      const fn = checkMap[checkType];
+      if (!fn) {
+        res.status(400).json({ success: false, error: 'Unknown check type' });
+        return;
       }
 
-      res.json({ success: true, data: result });
+      res.json({ success: true, data: await fn() });
     } catch (error) {
       console.error('Audit check error:', error);
       res.status(500).json({ success: false, error: 'Check failed' });
@@ -148,39 +182,27 @@ export const auditController = {
   },
 };
 
-/**
- * Проверка 1: Сотрудники без активных назначений
- */
-async function checkUnassignedEmployees(): Promise<AuditCheckResult> {
+// ─── Чистые функции проверок (in-memory, 0 запросов к БД) ───
+
+type EmpRow = { id: number; full_name: string | null; birth_date?: string | null; patent_expiry_date?: string | null };
+
+function checkUnassigned(
+  employees: EmpRow[],
+  assignmentsByEmp: Map<number, unknown[]>,
+): AuditCheckResult {
   const issues: AuditIssue[] = [];
-
-  // Находим сотрудников без активных назначений
-  const { data: employees } = await supabase
-    .from('employees')
-    .select('id, full_name')
-    .eq('is_archived', false);
-
-  if (employees) {
-    for (const emp of employees) {
-      // Проверяем есть ли активные назначения
-      const { count } = await supabase
-        .from('employee_assignments')
-        .select('*', { count: 'exact', head: true })
-        .eq('employee_id', emp.id)
-        .is('effective_to', null);
-
-      if (!count || count === 0) {
-        issues.push({
-          employee_id: emp.id,
-          full_name: emp.full_name || 'Неизвестно',
-          issue_type: 'unassigned',
-          details: 'Сотрудник не имеет активных назначений в структуре',
-          severity: 'critical',
-        });
-      }
+  for (const emp of employees) {
+    const assignments = assignmentsByEmp.get(emp.id);
+    if (!assignments || assignments.length === 0) {
+      issues.push({
+        employee_id: emp.id,
+        full_name: emp.full_name || 'Неизвестно',
+        issue_type: 'unassigned',
+        details: 'Сотрудник не имеет активных назначений в структуре',
+        severity: 'critical',
+      });
     }
   }
-
   return {
     check_name: 'unassigned',
     check_description: 'Сотрудники без назначений в структуре',
@@ -189,49 +211,30 @@ async function checkUnassignedEmployees(): Promise<AuditCheckResult> {
   };
 }
 
-/**
- * Проверка 2: Назначения с удалёнными подразделениями
- */
-async function checkOrphanedAssignments(): Promise<AuditCheckResult> {
+function checkOrphaned(
+  employees: EmpRow[],
+  assignments: { employee_id: number; org_company_id: string | null; org_department_id: string | null; org_site_id: string | null; org_subdivision_id: string | null }[],
+): AuditCheckResult {
   const issues: AuditIssue[] = [];
-
-  // Находим назначения где все структурные ссылки NULL (но назначение активно)
-  const { data: assignments } = await supabase
-    .from('employee_assignments')
-    .select(`
-      id,
-      employee_id,
-      org_company_id,
-      org_department_id,
-      org_site_id,
-      org_subdivision_id,
-      employees!inner(full_name, is_archived)
-    `)
-    .is('effective_to', null)
-    .eq('employees.is_archived', false);
-
-  if (assignments) {
-    for (const assignment of assignments) {
-      const hasOrphanedRefs = (
-        assignment.org_company_id === null &&
-        assignment.org_department_id === null &&
-        assignment.org_site_id === null &&
-        assignment.org_subdivision_id === null
-      );
-
-      if (hasOrphanedRefs) {
-        const emp = assignment.employees as unknown as { full_name: string };
-        issues.push({
-          employee_id: assignment.employee_id,
-          full_name: emp.full_name || 'Неизвестно',
-          issue_type: 'orphaned_assignment',
-          details: 'Назначение не связано ни с одним подразделением (возможно удалено)',
-          severity: 'critical',
-        });
-      }
-    }
+  const empNames = new Map<number, string>();
+  const activeEmpIds = new Set<number>();
+  for (const e of employees) {
+    empNames.set(e.id, e.full_name || 'Неизвестно');
+    activeEmpIds.add(e.id);
   }
 
+  for (const a of assignments) {
+    if (!activeEmpIds.has(a.employee_id)) continue;
+    if (!a.org_company_id && !a.org_department_id && !a.org_site_id && !a.org_subdivision_id) {
+      issues.push({
+        employee_id: a.employee_id,
+        full_name: empNames.get(a.employee_id) || 'Неизвестно',
+        issue_type: 'orphaned_assignment',
+        details: 'Назначение не связано ни с одним подразделением (возможно удалено)',
+        severity: 'critical',
+      });
+    }
+  }
   return {
     check_name: 'orphaned',
     check_description: 'Потерянные назначения (удалённые подразделения)',
@@ -240,37 +243,22 @@ async function checkOrphanedAssignments(): Promise<AuditCheckResult> {
   };
 }
 
-/**
- * Проверка 3: Сотрудники без установленной зарплаты
- */
-async function checkEmployeesWithoutSalary(): Promise<AuditCheckResult> {
+function checkNoSalary(
+  employees: EmpRow[],
+  employeesWithSalary: Set<number>,
+): AuditCheckResult {
   const issues: AuditIssue[] = [];
-
-  // Находим сотрудников без записей в salary_history
-  const { data: employees } = await supabase
-    .from('employees')
-    .select('id, full_name')
-    .eq('is_archived', false);
-
-  if (employees) {
-    for (const emp of employees) {
-      const { count } = await supabase
-        .from('salary_history')
-        .select('*', { count: 'exact', head: true })
-        .eq('employee_id', emp.id);
-
-      if (!count || count === 0) {
-        issues.push({
-          employee_id: emp.id,
-          full_name: emp.full_name || 'Неизвестно',
-          issue_type: 'no_salary',
-          details: 'Зарплата не установлена',
-          severity: 'warning',
-        });
-      }
+  for (const emp of employees) {
+    if (!employeesWithSalary.has(emp.id)) {
+      issues.push({
+        employee_id: emp.id,
+        full_name: emp.full_name || 'Неизвестно',
+        issue_type: 'no_salary',
+        details: 'Зарплата не установлена',
+        severity: 'warning',
+      });
     }
   }
-
   return {
     check_name: 'no-salary',
     check_description: 'Сотрудники без установленной зарплаты',
@@ -279,48 +267,35 @@ async function checkEmployeesWithoutSalary(): Promise<AuditCheckResult> {
   };
 }
 
-/**
- * Проверка 4: Истёкшие патенты
- */
-async function checkExpiredPatents(): Promise<AuditCheckResult> {
+function checkExpiredPatents(employees: EmpRow[]): AuditCheckResult {
   const issues: AuditIssue[] = [];
   const today = new Date().toISOString().split('T')[0];
 
-  const { data: employees } = await supabase
-    .from('employees')
-    .select('id, full_name, patent_expiry_date')
-    .eq('is_archived', false)
-    .not('patent_expiry_date', 'is', null);
+  for (const emp of employees) {
+    const expiryDate = emp.patent_expiry_date;
+    if (!expiryDate) continue;
 
-  if (employees) {
-    for (const emp of employees) {
-      const expiryDate = emp.patent_expiry_date;
-      if (expiryDate && expiryDate < today) {
+    if (expiryDate < today) {
+      issues.push({
+        employee_id: emp.id,
+        full_name: emp.full_name || 'Неизвестно',
+        issue_type: 'expired_patent',
+        details: `Патент истёк ${expiryDate}`,
+        severity: 'critical',
+      });
+    } else {
+      const daysUntilExpiry = Math.ceil((new Date(expiryDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+      if (daysUntilExpiry <= 30 && daysUntilExpiry > 0) {
         issues.push({
           employee_id: emp.id,
           full_name: emp.full_name || 'Неизвестно',
-          issue_type: 'expired_patent',
-          details: `Патент истёк ${expiryDate}`,
-          severity: 'critical',
+          issue_type: 'expiring_patent',
+          details: `Патент истекает через ${daysUntilExpiry} дней (${expiryDate})`,
+          severity: 'warning',
         });
-      } else if (expiryDate) {
-        // Проверяем истекает ли в ближайшие 30 дней
-        const expiryDateObj = new Date(expiryDate);
-        const daysUntilExpiry = Math.ceil((expiryDateObj.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-
-        if (daysUntilExpiry <= 30 && daysUntilExpiry > 0) {
-          issues.push({
-            employee_id: emp.id,
-            full_name: emp.full_name || 'Неизвестно',
-            issue_type: 'expiring_patent',
-            details: `Патент истекает через ${daysUntilExpiry} дней (${expiryDate})`,
-            severity: 'warning',
-          });
-        }
       }
     }
   }
-
   return {
     check_name: 'expired-patents',
     check_description: 'Истёкшие и истекающие патенты',
@@ -329,31 +304,19 @@ async function checkExpiredPatents(): Promise<AuditCheckResult> {
   };
 }
 
-/**
- * Проверка 5: Отсутствует дата рождения
- */
-async function checkMissingBirthDate(): Promise<AuditCheckResult> {
+function checkMissingBirthDate(employees: EmpRow[]): AuditCheckResult {
   const issues: AuditIssue[] = [];
-
-  const { data: employees } = await supabase
-    .from('employees')
-    .select('id, full_name, birth_date')
-    .eq('is_archived', false);
-
-  if (employees) {
-    for (const emp of employees) {
-      if (!emp.birth_date) {
-        issues.push({
-          employee_id: emp.id,
-          full_name: emp.full_name || 'Неизвестно',
-          issue_type: 'no_birthdate',
-          details: 'Не указана дата рождения',
-          severity: 'info',
-        });
-      }
+  for (const emp of employees) {
+    if (!emp.birth_date) {
+      issues.push({
+        employee_id: emp.id,
+        full_name: emp.full_name || 'Неизвестно',
+        issue_type: 'no_birthdate',
+        details: 'Не указана дата рождения',
+        severity: 'info',
+      });
     }
   }
-
   return {
     check_name: 'no-birthdate',
     check_description: 'Сотрудники без даты рождения',
@@ -362,49 +325,31 @@ async function checkMissingBirthDate(): Promise<AuditCheckResult> {
   };
 }
 
-/**
- * Проверка 6: Дублирующиеся записи (по ФИО)
- */
-async function checkDuplicateEmployees(): Promise<AuditCheckResult> {
+function checkDuplicates(employees: EmpRow[]): AuditCheckResult {
   const issues: AuditIssue[] = [];
+  const nameMap = new Map<string, { id: number; full_name: string }[]>();
 
-  const { data: employees } = await supabase
-    .from('employees')
-    .select('id, full_name')
-    .eq('is_archived', false);
+  for (const emp of employees) {
+    const fullName = emp.full_name || '';
+    const normalized = fullName.toLowerCase().trim();
+    if (!normalized) continue;
+    if (!nameMap.has(normalized)) nameMap.set(normalized, []);
+    nameMap.get(normalized)!.push({ id: emp.id, full_name: fullName });
+  }
 
-  if (employees) {
-    // Группируем по расшифрованному ФИО
-    const nameMap = new Map<string, { id: number; full_name: string }[]>();
-
-    for (const emp of employees) {
-      const fullName = emp.full_name || '';
-      const normalizedName = fullName.toLowerCase().trim();
-
-      if (normalizedName) {
-        if (!nameMap.has(normalizedName)) {
-          nameMap.set(normalizedName, []);
-        }
-        nameMap.get(normalizedName)!.push({ id: emp.id, full_name: fullName });
-      }
-    }
-
-    // Находим дубликаты
-    for (const [, duplicates] of nameMap) {
-      if (duplicates.length > 1) {
-        for (const dup of duplicates) {
-          issues.push({
-            employee_id: dup.id,
-            full_name: dup.full_name,
-            issue_type: 'duplicate',
-            details: `Найдено ${duplicates.length} записей с таким ФИО`,
-            severity: 'warning',
-          });
-        }
+  for (const [, duplicates] of nameMap) {
+    if (duplicates.length > 1) {
+      for (const dup of duplicates) {
+        issues.push({
+          employee_id: dup.id,
+          full_name: dup.full_name,
+          issue_type: 'duplicate',
+          details: `Найдено ${duplicates.length} записей с таким ФИО`,
+          severity: 'warning',
+        });
       }
     }
   }
-
   return {
     check_name: 'duplicates',
     check_description: 'Возможные дубликаты сотрудников',
@@ -413,37 +358,23 @@ async function checkDuplicateEmployees(): Promise<AuditCheckResult> {
   };
 }
 
-/**
- * Проверка 7: Множественные активные назначения
- */
-async function checkMultipleAssignments(): Promise<AuditCheckResult> {
+function checkMultipleAssignments(
+  employees: EmpRow[],
+  assignmentsByEmp: Map<number, unknown[]>,
+): AuditCheckResult {
   const issues: AuditIssue[] = [];
-
-  const { data: employees } = await supabase
-    .from('employees')
-    .select('id, full_name')
-    .eq('is_archived', false);
-
-  if (employees) {
-    for (const emp of employees) {
-      const { count } = await supabase
-        .from('employee_assignments')
-        .select('*', { count: 'exact', head: true })
-        .eq('employee_id', emp.id)
-        .is('effective_to', null);
-
-      if (count && count > 1) {
-        issues.push({
-          employee_id: emp.id,
-          full_name: emp.full_name || 'Неизвестно',
-          issue_type: 'multiple_assignments',
-          details: `Имеет ${count} активных назначений`,
-          severity: 'info',
-        });
-      }
+  for (const emp of employees) {
+    const assignments = assignmentsByEmp.get(emp.id);
+    if (assignments && assignments.length > 1) {
+      issues.push({
+        employee_id: emp.id,
+        full_name: emp.full_name || 'Неизвестно',
+        issue_type: 'multiple_assignments',
+        details: `Имеет ${assignments.length} активных назначений`,
+        severity: 'info',
+      });
     }
   }
-
   return {
     check_name: 'multiple-assignments',
     check_description: 'Сотрудники с несколькими назначениями',

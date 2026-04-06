@@ -1,16 +1,20 @@
 import { Router } from 'express';
 import { structureController } from '../controllers/structure.controller.js';
 import { authenticate, requirePosition, requireCritical2FA } from '../middleware/auth.js';
+import { cacheResponse } from '../middleware/cacheResponse.js';
 
 const router = Router();
+
+const structureTreeCache = cacheResponse(() => 'structure:tree', 5 * 60_000);
 
 // Все роуты требуют аутентификации
 router.use(authenticate);
 
-// GET /api/structure - получение дерева (worker+)
+// GET /api/structure - получение дерева (worker+, кэш 5мин)
 router.get(
   '/',
   requirePosition('worker', 'header', 'hr', 'admin', 'super_admin'),
+  structureTreeCache,
   structureController.getTree
 );
 

@@ -8,6 +8,7 @@ import {
   normalizeDepartment,
   type ISyncContext,
 } from './sigur-sync-shared.js';
+import { invalidateDeptTreeCache } from './skud-shared.service.js';
 
 // ─── Типы результатов ───
 
@@ -203,5 +204,6 @@ export async function syncDepartmentsLogic(
   }
 
   console.log(`[syncDepartments] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${filtered} filtered, ${parentLinksSet} parent links`);
+  invalidateDeptTreeCache();
   return { imported, updated, skipped, filtered, total: departments.length, parentLinksSet, errors };
 }

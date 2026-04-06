@@ -83,6 +83,22 @@ router.get(
   employeesController.getHistory
 );
 
+// PUT /api/employees/:id/history/:eventId - редактирование записи истории (admin+, 2FA)
+router.put(
+  '/:id/history/:eventId',
+  requirePosition('admin', 'super_admin'),
+  requireCritical2FA,
+  employeesController.updateHistoryEvent
+);
+
+// DELETE /api/employees/:id/history/:eventId - удаление записи истории (admin+, 2FA)
+router.delete(
+  '/:id/history/:eventId',
+  requirePosition('admin', 'super_admin'),
+  requireCritical2FA,
+  employeesController.deleteHistoryEvent
+);
+
 // GET /api/employees/:id - получение одного (worker+)
 router.get(
   '/:id',

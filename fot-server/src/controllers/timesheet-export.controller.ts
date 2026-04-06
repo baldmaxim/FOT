@@ -3,6 +3,7 @@ import XLSX from 'xlsx';
 import { supabase } from '../config/database.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { resolveSchedulesBulk, isWorkingDay, needsSkudCheck, countWorkingDaysForSchedule } from '../services/schedule.service.js';
+import { getInternalAccessPoints } from '../services/skud-shared.service.js';
 
 /** GET /api/timesheet/export?month=YYYY-MM&department_id=... */
 export async function exportTimesheet(req: AuthenticatedRequest, res: Response) {
@@ -38,15 +39,9 @@ export async function exportTimesheet(req: AuthenticatedRequest, res: Response) 
     const empList = (employees || []).map(e => ({ id: e.id as number, org_department_id: (e.org_department_id as string | null) }));
     const schedulesMap = await resolveSchedulesBulk(empList, startDate);
 
-    // Fetch internal access points
-    const BATCH = 200;
-    const { data: expApSettings } = await supabase
-      .from('skud_access_point_settings')
-      .select('access_point_name')
-      .eq('is_internal', true);
-    const expInternalPoints = new Set<string>(
-      (expApSettings || []).map((s: { access_point_name: string }) => s.access_point_name.trim()),
-    );
+    // Fetch internal access points (из кэша)
+    const BATCH = 500;
+    const expInternalPoints = await getInternalAccessPoints();
 
     // Fetch raw SKUD events
     interface IExpRawEvent {

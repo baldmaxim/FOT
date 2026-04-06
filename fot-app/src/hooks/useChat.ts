@@ -132,7 +132,7 @@ export const useChat = (ws: typeof wsService | null) => {
       } catch {
         // ignore
       }
-    }, 30000);
+    }, 60000);
     return () => clearInterval(interval);
   }, []);
 

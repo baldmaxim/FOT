@@ -8,7 +8,7 @@ import { employeeChangesService } from '../services/employee-changes.service.js'
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 
 // Импорт методов из подконтроллеров
-import { archive, restore, fire, rehire, moveDepartment, getHistory } from './employee-lifecycle.controller.js';
+import { archive, restore, fire, rehire, moveDepartment, getHistory, updateHistoryEvent, deleteHistoryEvent } from './employee-lifecycle.controller.js';
 import { deleteAll } from './employee-import.controller.js';
 
 // Схемы валидации
@@ -452,6 +452,8 @@ export const employeesController = {
   rehire,
   moveDepartment,
   getHistory,
+  updateHistoryEvent,
+  deleteHistoryEvent,
 
   // Методы из employee-import.controller.ts
   deleteAll,

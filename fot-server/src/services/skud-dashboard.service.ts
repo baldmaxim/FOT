@@ -3,7 +3,7 @@
  */
 import { supabase } from '../config/database.js';
 import { formatDateToISO } from '../utils/date.utils.js';
-import { collectDeptIds, getMonday, DAY_NAMES, countWorkingDays } from './skud-shared.service.js';
+import { collectDeptIds, getMonday, DAY_NAMES, countWorkingDays, getInternalAccessPoints } from './skud-shared.service.js';
 import { resolveSchedulesBulk, getEffectiveLateThreshold, needsSkudCheck } from './schedule.service.js';
 import type {
   IDashboardStatsParams,
@@ -24,15 +24,18 @@ export async function getDashboardStats(
 
   const deptIds = await collectDeptIds(departmentId);
 
-  // Загрузить сотрудников отдела
-  const empQuery = supabase
-    .from('employees')
-    .select('id, full_name')
-    .eq('is_archived', false)
-    .eq('employment_status', 'active')
-    .in('org_department_id', deptIds);
+  // Загрузить сотрудников отдела (с org_department_id для графиков)
+  const [empResult, internalPoints] = await Promise.all([
+    supabase
+      .from('employees')
+      .select('id, full_name, org_department_id')
+      .eq('is_archived', false)
+      .eq('employment_status', 'active')
+      .in('org_department_id', deptIds),
+    getInternalAccessPoints(),
+  ]);
 
-  const { data: employees } = await empQuery;
+  const employees = empResult.data;
   if (!employees || employees.length === 0) {
     return {
       lateToday: 0, lateYesterday: 0,
@@ -50,22 +53,8 @@ export async function getDashboardStats(
     empNameMap.set(e.id, e.full_name || '');
   }
 
-  const { data: apSettings } = await supabase
-    .from('skud_access_point_settings')
-    .select('access_point_name')
-    .eq('is_internal', true);
-  const internalPoints = new Set<string>(
-    (apSettings || []).map(s => s.access_point_name.trim()),
-  );
-
   // Resolve графики — нужны для пороговых значений и исключения remote
-  // Загрузка org_department_id из employees
-  const empDeptQuery = supabase
-    .from('employees')
-    .select('id, org_department_id')
-    .in('id', empIds);
-  const { data: empDepts } = await empDeptQuery;
-  const empListForSched = (empDepts || []).map(e => ({ id: e.id as number, org_department_id: (e.org_department_id as string | null) }));
+  const empListForSched = employees.map(e => ({ id: e.id as number, org_department_id: (e.org_department_id as string | null) }));
   const schedulesMap = await resolveSchedulesBulk(empListForSched, formatDateToISO(new Date()));
 
   // Множество сотрудников, которым не нужен СКУД-контроль сегодня
@@ -148,44 +137,42 @@ export async function getDashboardStats(
   fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 21);
   const fourWeeksAgoStr = formatDateToISO(fourWeeksAgo);
 
-  // Запрос daily_summary
-  const { data: summaries } = await supabase
-    .from('skud_daily_summary')
-    .select('employee_id, date, first_entry, last_exit, total_hours, is_present')
-    .in('employee_id', empIds)
-    .gte('date', summaryStartDate)
-    .lte('date', summaryEndDate)
-    .limit(10000);
+  // Параллельные запросы: daily_summary + 3 типа событий
+  const [summariesRes, todayEventsRes, todayExitEventsRes, recentEventsRes] = await Promise.all([
+    supabase
+      .from('skud_daily_summary')
+      .select('employee_id, date, first_entry, last_exit, total_hours, is_present')
+      .in('employee_id', empIds)
+      .gte('date', summaryStartDate)
+      .lte('date', summaryEndDate)
+      .limit(10000),
+    supabase
+      .from('skud_events')
+      .select('event_time, employee_id')
+      .eq('event_date', todayStr)
+      .eq('direction', 'entry')
+      .in('employee_id', empIds)
+      .limit(5000),
+    supabase
+      .from('skud_events')
+      .select('event_time, employee_id')
+      .eq('event_date', todayStr)
+      .eq('direction', 'exit')
+      .in('employee_id', empIds)
+      .limit(5000),
+    supabase
+      .from('skud_events')
+      .select('event_time, employee_id, physical_person, access_point, direction')
+      .eq('event_date', todayStr)
+      .in('employee_id', empIds)
+      .order('event_time', { ascending: false })
+      .limit(50),
+  ]);
 
-  // Запрос entry-событий за сегодня
-  const eventsQuery = supabase
-    .from('skud_events')
-    .select('event_time, employee_id')
-    .eq('event_date', todayStr)
-    .eq('direction', 'entry')
-    .in('employee_id', empIds)
-    .limit(5000);
-  const { data: todayEvents } = await eventsQuery;
-
-  // Запрос exit-событий за сегодня
-  const exitEventsQuery = supabase
-    .from('skud_events')
-    .select('event_time, employee_id')
-    .eq('event_date', todayStr)
-    .eq('direction', 'exit')
-    .in('employee_id', empIds)
-    .limit(5000);
-  const { data: todayExitEvents } = await exitEventsQuery;
-
-  // Запрос последних событий
-  const recentEvQuery = supabase
-    .from('skud_events')
-    .select('event_time, employee_id, physical_person, access_point, direction')
-    .eq('event_date', todayStr)
-    .in('employee_id', empIds)
-    .order('event_time', { ascending: false })
-    .limit(50);
-  const { data: recentEventsRaw } = await recentEvQuery;
+  const summaries = summariesRes.data;
+  const todayEvents = todayEventsRes.data;
+  const todayExitEvents = todayExitEventsRes.data;
+  const recentEventsRaw = recentEventsRes.data;
 
 
   // --- Агрегация ---

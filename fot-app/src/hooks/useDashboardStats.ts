@@ -1,8 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { skudService } from '../services/skudService';
 import type { IDashboardStats, DashboardPeriod } from '../types';
-
-const REFRESH_INTERVAL = 60_000;
 
 interface IUseDashboardStatsReturn {
   stats: IDashboardStats | null;
@@ -15,46 +13,17 @@ export const useDashboardStats = (
   period: DashboardPeriod = 'today',
   month?: string,
 ): IUseDashboardStatsReturn => {
-  const [stats, setStats] = useState<IDashboardStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const intervalRef = useRef<number | null>(null);
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['dashboard-stats', departmentId, period, month],
+    queryFn: ({ signal }) => skudService.getDashboardStats(departmentId!, period, signal, month),
+    enabled: !!departmentId,
+    refetchInterval: 120_000,
+    staleTime: 60_000,
+  });
 
-  const fetchStats = useCallback(async (signal?: AbortSignal) => {
-    if (!departmentId) {
-      setStats(null);
-      setLoading(false);
-      return;
-    }
-    try {
-      const data = await skudService.getDashboardStats(departmentId, period, signal, month);
-      if (!signal?.aborted) {
-        setStats(data);
-        setError(null);
-      }
-    } catch {
-      if (!signal?.aborted) {
-        setError('Ошибка загрузки аналитики');
-      }
-    } finally {
-      if (!signal?.aborted) setLoading(false);
-    }
-  }, [departmentId, period, month]);
-
-  useEffect(() => {
-    const ac = new AbortController();
-    setLoading(true);
-    fetchStats(ac.signal);
-    return () => ac.abort();
-  }, [fetchStats]);
-
-  useEffect(() => {
-    if (!departmentId) return;
-    intervalRef.current = window.setInterval(() => fetchStats(), REFRESH_INTERVAL);
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [fetchStats, departmentId]);
-
-  return { stats, loading, error };
+  return {
+    stats: data ?? null,
+    loading: isLoading,
+    error: error ? 'Ошибка загрузки аналитики' : null,
+  };
 };

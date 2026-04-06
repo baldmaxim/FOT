@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { supabase } from '../config/database.js';
 import type { AuthenticatedRequest } from '../types/index.js';
+import { invalidateSyncFilterCache } from '../services/skud-shared.service.js';
 
 export const sigurFilterController = {
   /**
@@ -71,6 +72,7 @@ export const sigurFilterController = {
         }
       }
 
+      invalidateSyncFilterCache();
       res.json({ success: true, data: { count: departments.length } });
     } catch (error) {
       console.error('updateSyncFilter error:', error);

@@ -278,3 +278,57 @@ export async function getHistory(req: AuthenticatedRequest, res: Response): Prom
     res.status(500).json({ success: false, error: 'Failed to fetch history' });
   }
 }
+
+/**
+ * PUT /api/employees/:id/history/:eventId
+ */
+export async function updateHistoryEvent(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const employeeId = Number(req.params.id);
+    const eventId = req.params.eventId;
+
+    if (eventId.startsWith('sal_')) {
+      const historyId = Number(eventId.replace('sal_', ''));
+      await employeeChangesService.updateSalaryHistory(historyId, employeeId, {
+        salary: req.body.salary,
+        effective_date: req.body.effective_date,
+        change_reason: req.body.change_reason,
+        note: req.body.note,
+      });
+    } else {
+      await employeeChangesService.updateAssignment(eventId, employeeId, {
+        position_id: req.body.position_id,
+        org_department_id: req.body.org_department_id,
+        effective_from: req.body.effective_date,
+        change_reason: req.body.change_reason,
+      });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Update history event error:', error);
+    res.status(500).json({ success: false, error: 'Failed to update history event' });
+  }
+}
+
+/**
+ * DELETE /api/employees/:id/history/:eventId
+ */
+export async function deleteHistoryEvent(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const employeeId = Number(req.params.id);
+    const eventId = req.params.eventId;
+
+    if (eventId.startsWith('sal_')) {
+      const historyId = Number(eventId.replace('sal_', ''));
+      await employeeChangesService.deleteSalaryHistory(historyId, employeeId);
+    } else {
+      await employeeChangesService.deleteAssignment(eventId, employeeId);
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete history event error:', error);
+    res.status(500).json({ success: false, error: 'Failed to delete history event' });
+  }
+}

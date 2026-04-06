@@ -10,6 +10,7 @@ import styles from '../../pages/super-admin/SuperAdmin.module.css';
 export interface IUserFromApi {
   id: string;
   email?: string;
+  email_confirmed?: boolean;
   full_name: string | null;
   department_id: string | null;
   department_name: string | null;
@@ -201,6 +202,16 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
     }
   };
 
+  const handleConfirmEmail = async (userId: string) => {
+    try {
+      await adminService.confirmUserEmail(userId);
+      toast.success('Email подтверждён');
+      await onReload();
+    } catch {
+      toast.error('Ошибка подтверждения email');
+    }
+  };
+
   const closeTwoFactorModal = () => {
     setTwoFactorModal({ visible: false, userId: '', userName: '', data: null, loading: false });
   };
@@ -279,10 +290,11 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
                   <div className={styles.userRowStatusCell}>
                     <span className={
                       !user.is_approved ? styles.notApproved
+                      : !user.email_confirmed ? styles.notApproved
                       : !user.two_factor_enabled ? styles.twoFaDisabled
                       : styles.approved
                     }>
-                      {!user.is_approved ? 'Не одобрен' : !user.two_factor_enabled ? 'Ожидает 2FA' : 'Активен'}
+                      {!user.is_approved ? 'Не одобрен' : !user.email_confirmed ? 'Email не подтверждён' : !user.two_factor_enabled ? 'Ожидает 2FA' : 'Активен'}
                     </span>
                   </div>
                 </div>
@@ -417,6 +429,15 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
                   )}
 
                   <div className={styles.controlActions}>
+                    {!user.email_confirmed && (
+                      <button
+                        className={styles.primaryBtn}
+                        onClick={() => handleConfirmEmail(user.id)}
+                      >
+                        Подтвердить email
+                      </button>
+                    )}
+
                     {user.two_factor_enabled ? (
                       <button
                         className={styles.dangerBtn}

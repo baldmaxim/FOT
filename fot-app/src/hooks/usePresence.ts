@@ -1,8 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { skudService } from '../services/skudService';
 import type { IEmployeePresence } from '../types';
-
-const REFRESH_INTERVAL = 30_000;
 
 interface IUsePresenceReturn {
   employees: IEmployeePresence[];
@@ -13,42 +11,19 @@ interface IUsePresenceReturn {
 }
 
 export const usePresence = (departmentId: string | null): IUsePresenceReturn => {
-  const [employees, setEmployees] = useState<IEmployeePresence[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const intervalRef = useRef<number | null>(null);
+  const { data, isLoading, error, dataUpdatedAt, refetch } = useQuery({
+    queryKey: ['presence', departmentId],
+    queryFn: () => skudService.getPresence(departmentId!),
+    enabled: !!departmentId,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
 
-  const fetchPresence = useCallback(async () => {
-    if (!departmentId) {
-      setEmployees([]);
-      setLoading(false);
-      return;
-    }
-    try {
-      const data = await skudService.getPresence(departmentId);
-      setEmployees(data);
-      setLastUpdated(new Date());
-      setError(null);
-    } catch {
-      setError('Ошибка загрузки статусов');
-    } finally {
-      setLoading(false);
-    }
-  }, [departmentId]);
-
-  useEffect(() => {
-    setLoading(true);
-    fetchPresence();
-  }, [fetchPresence]);
-
-  useEffect(() => {
-    if (!departmentId) return;
-    intervalRef.current = window.setInterval(fetchPresence, REFRESH_INTERVAL);
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [fetchPresence, departmentId]);
-
-  return { employees, loading, error, lastUpdated, refresh: fetchPresence };
+  return {
+    employees: data || [],
+    loading: isLoading,
+    error: error ? 'Ошибка загрузки статусов' : null,
+    lastUpdated: dataUpdatedAt ? new Date(dataUpdatedAt) : null,
+    refresh: () => { refetch(); },
+  };
 };

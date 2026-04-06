@@ -12,7 +12,7 @@ export interface StructureCache {
  * Кэшируется в памяти на 60 секунд для избежания повторных запросов
  */
 const structureCacheStore = new Map<string, { data: StructureCache; expiresAt: number }>();
-const STRUCTURE_CACHE_TTL_MS = 60_000;
+const STRUCTURE_CACHE_TTL_MS = 300_000;
 
 export async function loadStructureCache(): Promise<StructureCache> {
   const cacheKey = '__global__';

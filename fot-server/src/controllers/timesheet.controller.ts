@@ -5,6 +5,7 @@ import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest, TimeStatus, IResolvedSchedule } from '../types/index.js';
 import { exportTimesheet } from './timesheet-export.controller.js';
 import { resolveSchedulesBulk, isWorkingDay, needsSkudCheck, countWorkingDaysUpToToday as schedWorkingDaysUpToToday, getEffectiveLateThreshold } from '../services/schedule.service.js';
+import { getInternalAccessPoints } from '../services/skud-shared.service.js';
 
 const validStatuses: TimeStatus[] = ['work', 'vacation', 'dayoff', 'remote', 'unpaid', 'absent', 'sick', 'business_trip', 'manual'];
 
@@ -117,17 +118,10 @@ export const timesheetController = {
         (positions || []).forEach((p: { id: string; name: string }) => posMap.set(p.id, p.name));
       }
 
-      const BATCH_SIZE = 200;
+      const BATCH_SIZE = 500;
 
-      // Load internal access points for filtering
-      const internalPointsQuery = supabase
-        .from('skud_access_point_settings')
-        .select('access_point_name')
-        .eq('is_internal', true);
-      const { data: apSettings } = await internalPointsQuery;
-      const internalPoints = new Set<string>(
-        (apSettings || []).map((s: { access_point_name: string }) => s.access_point_name.trim()),
-      );
+      // Load internal access points for filtering (из кэша)
+      const internalPoints = await getInternalAccessPoints();
 
       // Fetch raw SKUD events
       interface IRawEvent {
