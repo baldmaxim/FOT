@@ -39,6 +39,7 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ de
 const UserManagementPage = lazy(() => import('./pages/super-admin/UserManagementPage').then(m => ({ default: m.UserManagementPage })));
 const DataAuditPage = lazy(() => import('./pages/super-admin/DataAuditPage').then(m => ({ default: m.DataAuditPage })));
 const RoleManagementPage = lazy(() => import('./pages/super-admin/RoleManagementPage').then(m => ({ default: m.RoleManagementPage })));
+const SystemSettingsPage = lazy(() => import('./pages/super-admin/SystemSettingsPage').then(m => ({ default: m.SystemSettingsPage })));
 
 // Employees & SKUD
 const EmployeesPage = lazy(() => import('./pages/employees/EmployeesPage').then(m => ({ default: m.EmployeesPage })));
@@ -69,6 +70,9 @@ const PaymentsPage = lazy(() => import('./pages/employee/PaymentsPage').then(m =
 const DocumentsPage = lazy(() => import('./pages/employee/DocumentsPage').then(m => ({ default: m.DocumentsPage })));
 const EmployeeTimesheetPage = lazy(() => import('./pages/employee/EmployeeTimesheetPage').then(m => ({ default: m.EmployeeTimesheetPage })));
 const MyHistoryPage = lazy(() => import('./pages/employee/MyHistoryPage').then(m => ({ default: m.MyHistoryPage })));
+const SalaryRaisePage = lazy(() => import('./pages/employee/SalaryRaisePage').then(m => ({ default: m.SalaryRaisePage })));
+const SalaryRaiseFormPage = lazy(() => import('./pages/employee/SalaryRaiseFormPage').then(m => ({ default: m.SalaryRaiseFormPage })));
+const SalaryRaiseViewPage = lazy(() => import('./pages/employee/SalaryRaiseViewPage').then(m => ({ default: m.SalaryRaiseViewPage })));
 
 // Leave requests management (header/hr)
 const LeaveRequestsManagePage = lazy(() => import('./pages/LeaveRequestsManagePage').then(m => ({ default: m.LeaveRequestsManagePage })));
@@ -192,6 +196,38 @@ const AppRoutes = () => {
             element={
               <EmployeeLayout title="Моя история">
                 <MyHistoryPage />
+              </EmployeeLayout>
+            }
+          />
+          <Route
+            path="/employee/salary-raise"
+            element={
+              <EmployeeLayout title="Повышение оклада">
+                <SalaryRaisePage />
+              </EmployeeLayout>
+            }
+          />
+          <Route
+            path="/employee/salary-raise/new"
+            element={
+              <EmployeeLayout title="Новая заявка на повышение">
+                <SalaryRaiseFormPage />
+              </EmployeeLayout>
+            }
+          />
+          <Route
+            path="/employee/salary-raise/:id"
+            element={
+              <EmployeeLayout title="Заявка на повышение">
+                <SalaryRaiseViewPage />
+              </EmployeeLayout>
+            }
+          />
+          <Route
+            path="/employee/salary-raise/:id/edit"
+            element={
+              <EmployeeLayout title="Редактирование заявки">
+                <SalaryRaiseFormPage />
               </EmployeeLayout>
             }
           />
@@ -349,6 +385,14 @@ const AppRoutes = () => {
             element={
               <Layout title="Управление ролями" theme={theme} onToggleTheme={toggleTheme}>
                 <RoleManagementPage />
+              </Layout>
+            }
+          />
+          <Route
+            path="/admin/settings"
+            element={
+              <Layout title="Системные настройки" theme={theme} onToggleTheme={toggleTheme}>
+                <SystemSettingsPage />
               </Layout>
             }
           />

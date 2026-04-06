@@ -1,0 +1,336 @@
+/* Page */
+.page {
+  padding: 24px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  gap: 12px;
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.createBtn {
+  padding: 10px 20px;
+  background: #3b82f6;
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.createBtn:hover {
+  background: #2563eb;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.createBtn:active {
+  transform: scale(0.97);
+}
+
+/* List */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Card */
+.card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  border-left: 4px solid var(--border);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
+}
+
+.cardPending {
+  border-left-color: #f59e0b;
+}
+
+.cardApproved {
+  border-left-color: #22c55e;
+}
+
+.cardRejected {
+  border-left-color: #ef4444;
+}
+
+.cardDraft {
+  border-left-color: #6b7280;
+}
+
+/* Card Header */
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  gap: 12px;
+}
+
+.cardHeaderLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.requestType {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cardDate {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* Status Badge */
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.statusPending {
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+}
+
+.statusApproved {
+  background: rgba(34, 197, 94, 0.1);
+  color: #22c55e;
+}
+
+.statusRejected {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+.statusDraft {
+  background: var(--bg-tertiary, rgba(107, 114, 128, 0.1));
+  color: var(--text-tertiary, #6b7280);
+}
+
+/* Card Body */
+.cardBody {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* Salary Row */
+.salaryRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+}
+
+.label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.salaryLabel {
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+
+.salaryValue {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.arrow {
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+
+.raisePercent {
+  font-size: 13px;
+  font-weight: 600;
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+/* Card Meta */
+.cardMeta {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  flex-wrap: wrap;
+  margin-top: 10px;
+  grid-column: 1 / -1;
+}
+
+/* Empty State */
+.empty {
+  text-align: center;
+  padding: 60px 24px;
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+
+/* Loading */
+.loading {
+  text-align: center;
+  padding: 60px 24px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent, #3b82f6);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  margin: 0 auto 12px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Dark theme */
+[data-theme="dark"] .card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+/* Tablet */
+@media (max-width: 768px) {
+  .page {
+    padding: 16px 12px;
+  }
+
+  .title {
+    font-size: 18px;
+  }
+
+  .header {
+    flex-wrap: wrap;
+  }
+
+  .createBtn {
+    padding: 8px 16px;
+    font-size: 13px;
+    width: 100%;
+    text-align: center;
+  }
+
+  .card {
+    padding: 16px;
+  }
+
+  .cardBody {
+    gap: 10px;
+  }
+
+  .salaryRow {
+    gap: 6px;
+  }
+
+  .value {
+    font-size: 15px;
+  }
+
+  .cardMeta {
+    flex-direction: column;
+    gap: 4px;
+  }
+}
+
+/* iPhone */
+@media (max-width: 430px) {
+  .page {
+    padding: 12px 10px;
+  }
+
+  .title {
+    font-size: 16px;
+  }
+
+  .header {
+    margin-bottom: 16px;
+  }
+
+  .createBtn {
+    padding: 8px 14px;
+    font-size: 12px;
+    border-radius: 8px;
+  }
+
+  .card {
+    padding: 14px 12px;
+    border-radius: 10px;
+  }
+
+  .cardBody {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .cardHeader {
+    flex-wrap: wrap;
+  }
+
+  .salaryValue {
+    font-size: 14px;
+  }
+
+  .value {
+    font-size: 14px;
+  }
+
+  .empty {
+    padding: 40px 16px;
+  }
+}

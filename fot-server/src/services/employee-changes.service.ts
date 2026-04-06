@@ -37,6 +37,7 @@ export const employeeChangesService = {
       .select('salary')
       .eq('employee_id', employeeId)
       .order('effective_date', { ascending: false })
+      .order('created_at', { ascending: false })
       .limit(1)
       .single();
 
@@ -84,6 +85,7 @@ export const employeeChangesService = {
       .select('position_id')
       .eq('employee_id', employeeId)
       .order('effective_from', { ascending: false })
+      .order('created_at', { ascending: false })
       .limit(1)
       .single();
 
@@ -130,6 +132,7 @@ export const employeeChangesService = {
       .select('org_department_id')
       .eq('employee_id', employeeId)
       .order('effective_from', { ascending: false })
+      .order('created_at', { ascending: false })
       .limit(1)
       .single();
 
@@ -169,6 +172,7 @@ export const employeeChangesService = {
       .select('salary')
       .eq('employee_id', employeeId)
       .order('effective_date', { ascending: false })
+      .order('created_at', { ascending: false })
       .limit(1)
       .single();
 
@@ -192,6 +196,7 @@ export const employeeChangesService = {
       .select('salary')
       .eq('employee_id', employeeId)
       .order('effective_date', { ascending: false })
+      .order('created_at', { ascending: false })
       .limit(1)
       .single();
 
@@ -224,6 +229,7 @@ export const employeeChangesService = {
       .select('position_id, org_department_id')
       .eq('employee_id', employeeId)
       .order('effective_from', { ascending: false })
+      .order('created_at', { ascending: false })
       .limit(1)
       .single();
 
@@ -247,6 +253,7 @@ export const employeeChangesService = {
       .select('position_id, org_department_id')
       .eq('employee_id', employeeId)
       .order('effective_from', { ascending: false })
+      .order('created_at', { ascending: false })
       .limit(1)
       .single();
 

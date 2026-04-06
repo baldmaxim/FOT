@@ -60,6 +60,7 @@ const navGroups: INavGroup[] = [
       { id: 'admin-users', path: '/admin/users', label: 'Пользователи', icon: SettingsIcon, requiredPosition: 'super_admin' },
       { id: 'admin-audit', path: '/admin/audit', label: 'Аудит данных', icon: ClipboardCheckIcon, requiredPosition: 'super_admin' },
       { id: 'admin-roles', path: '/admin/roles', label: 'Роли', icon: ShieldIcon, requiredPosition: 'super_admin' },
+      { id: 'admin-settings', path: '/admin/settings', label: 'Настройки', icon: SettingsIcon, requiredPosition: 'super_admin' },
     ]
   }
 ];

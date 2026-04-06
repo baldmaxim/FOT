@@ -307,6 +307,49 @@ export interface LeaveRequest {
   updated_at: string;
 }
 
+// Заявка на повышение оклада
+export type SalaryRaiseStatus = 'draft' | 'supervisor_review' | 'hr_review' | 'finance_review' | 'approved' | 'rejected' | 'cancelled';
+export type SalaryRaiseRequestType = 'performance' | 'market_adjustment' | 'promotion' | 'new_responsibilities' | 'retention' | 'other';
+
+export interface SalaryRaiseRequest {
+  id: number;
+  employee_id: number;
+  author_user_id: string;
+  status: SalaryRaiseStatus;
+  employee_snapshot: Record<string, unknown>;
+  request_type: SalaryRaiseRequestType;
+  requested_salary: number;
+  raise_percentage: number;
+  desired_effective_date: string;
+  reason_brief: string;
+  achievements: Record<string, unknown>[];
+  responsibility_changes: Record<string, unknown>;
+  self_assessment: Record<string, unknown>;
+  supervisor_review: Record<string, unknown> | null;
+  supervisor_reviewer_id: string | null;
+  supervisor_reviewed_at: string | null;
+  hr_review: Record<string, unknown> | null;
+  hr_reviewer_id: string | null;
+  hr_reviewed_at: string | null;
+  finance_review: Record<string, unknown> | null;
+  finance_reviewer_id: string | null;
+  finance_reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SalaryRaiseAttachment {
+  id: number;
+  salary_raise_id: number;
+  achievement_index: number | null;
+  file_name: string;
+  file_size: number;
+  mime_type: string;
+  r2_key: string;
+  uploaded_by: string;
+  created_at: string;
+}
+
 // Документы (R2)
 export type DocumentCategory = 'certificate' | 'scan' | 'approval' | 'payslip' | 'other';
 
@@ -355,6 +398,12 @@ export interface Payment {
 // Графики работы
 export type ScheduleType = 'office' | 'remote' | 'hybrid' | 'shift';
 
+export interface IDayOverride {
+  work_start: string;
+  work_end: string;
+  work_hours: number;
+}
+
 export interface WorkSchedule {
   id: string;
   name: string;
@@ -365,6 +414,7 @@ export interface WorkSchedule {
   work_days: number[];
   office_days: number[] | null;
   late_threshold_minutes: number;
+  day_overrides: Record<string, IDayOverride> | null;
   is_default: boolean;
   created_at: string;
   updated_at: string;
@@ -400,6 +450,7 @@ export interface IResolvedSchedule {
   work_days: number[];
   office_days: number[] | null;
   late_threshold_minutes: number;
+  day_overrides: Record<string, IDayOverride> | null;
   source: 'employee' | 'department' | 'default';
 }
 

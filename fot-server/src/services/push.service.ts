@@ -140,6 +140,39 @@ export const pushService = {
     return ids;
   },
 
+  /** Отправить уведомление о заявке на повышение по списку user_ids */
+  async sendSalaryRaiseNotification(
+    targetUserIds: string[],
+    title: string,
+    body: string,
+  ): Promise<string[]> {
+    if (!vapidReady || targetUserIds.length === 0) return targetUserIds;
+
+    const notification = JSON.stringify({ title, body });
+
+    const { data: subscriptions } = await supabase
+      .from('push_subscriptions')
+      .select('user_id, endpoint, p256dh, auth')
+      .in('user_id', targetUserIds);
+
+    await Promise.allSettled(
+      (subscriptions || []).map(async (sub: { user_id: string; endpoint: string; p256dh: string; auth: string }) => {
+        try {
+          await webpush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            notification,
+          );
+        } catch (err: unknown) {
+          if (err && typeof err === 'object' && 'statusCode' in err && (err as { statusCode: number }).statusCode === 410) {
+            await supabase.from('push_subscriptions').delete().eq('endpoint', sub.endpoint);
+          }
+        }
+      }),
+    );
+
+    return targetUserIds;
+  },
+
   async sendChatNotification(recipientId: string, payload: IChatNotificationPayload): Promise<void> {
     if (!vapidReady) return;
 

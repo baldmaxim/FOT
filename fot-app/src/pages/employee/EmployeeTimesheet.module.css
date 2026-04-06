@@ -1,0 +1,563 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  gap: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.backBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+.backBtn:hover {
+  background: var(--bg-secondary);
+}
+
+.monthNav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.monthBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: background 0.15s;
+}
+.monthBtn:hover {
+  background: var(--bg-secondary);
+}
+
+.monthLabel {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 140px;
+  text-align: center;
+}
+
+/* Section card */
+.section {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.sectionTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 14px 0;
+}
+
+/* ── Compact Timesheet Row ── */
+.compactWrap {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.compactRow {
+  display: flex;
+  gap: 3px;
+  overflow-x: auto;
+  flex: 1;
+  padding-bottom: 4px;
+}
+
+.compactRow::-webkit-scrollbar {
+  height: 4px;
+}
+.compactRow::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.dayCell {
+  min-width: 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.1s;
+  flex-shrink: 0;
+  border: none;
+  padding: 0;
+  font-family: 'Inter', 'SF Pro', sans-serif;
+}
+.dayCell:hover {
+  transform: scale(1.15);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 1;
+}
+
+.dayCellWeekend {
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+  cursor: default;
+}
+.dayCellWeekend:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.dayCellFull {
+  background: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+}
+
+.dayCellPartial {
+  background: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+}
+
+.dayCellSick {
+  background: rgba(59, 130, 246, 0.15);
+  color: #2563eb;
+}
+
+.dayCellVacation {
+  background: rgba(139, 92, 246, 0.15);
+  color: #7c3aed;
+}
+
+.dayCellAbsent {
+  background: rgba(239, 68, 68, 0.15);
+  color: #dc2626;
+}
+
+.dayCellRemote {
+  background: rgba(34, 197, 94, 0.2);
+  color: #059669;
+}
+
+.dayCellTrip {
+  background: rgba(59, 130, 246, 0.15);
+  color: #2563eb;
+}
+
+.dayCellEmpty {
+  background: transparent;
+  color: var(--text-tertiary);
+  border: 1px dashed var(--border);
+}
+
+.dayCellToday {
+  box-shadow: inset 0 0 0 2px #22c55e;
+}
+
+/* Summary pills next to compact row */
+.compactSummary {
+  display: flex;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.summaryItem {
+  text-align: center;
+}
+
+.summaryValue {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: 'Space Mono', 'SF Mono', monospace;
+}
+
+.summaryValuePositive {
+  color: #16a34a;
+}
+.summaryValueNegative {
+  color: #dc2626;
+}
+
+.summaryLabel {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+/* Legend */
+.legend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.legendDot {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 7px;
+  font-weight: 700;
+}
+
+/* ── Salary Calculation ── */
+.salaryTotal {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.salaryTotalLabel {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.salaryTotalValue {
+  font-size: 28px;
+  font-weight: 700;
+  color: #16a34a;
+  font-family: 'Space Mono', 'SF Mono', monospace;
+}
+
+.formulaRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 14px;
+  min-width: 80px;
+}
+
+.pillResult {
+  background: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.pillLabel {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-bottom: 2px;
+  white-space: nowrap;
+}
+
+.pillValue {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: 'Space Mono', 'SF Mono', monospace;
+  white-space: nowrap;
+}
+
+.pillResultValue {
+  color: #16a34a;
+}
+
+.operator {
+  font-size: 18px;
+  font-weight: 300;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.dailyRate {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.dailyRateValue {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: 'Space Mono', 'SF Mono', monospace;
+}
+
+/* ── Daily Breakdown Table ── */
+.breakdownTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.breakdownTable thead th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 2px solid var(--border);
+  white-space: nowrap;
+}
+
+.breakdownTable tbody td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.breakdownTable tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.rowWeekend td {
+  color: var(--text-tertiary) !important;
+  background: var(--bg-secondary);
+}
+
+.rowFuture td {
+  color: var(--text-tertiary) !important;
+  opacity: 0.5;
+}
+
+.statusBadge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.statusWork {
+  background: rgba(34, 197, 94, 0.12);
+  color: #16a34a;
+}
+.statusRemote {
+  background: rgba(34, 197, 94, 0.18);
+  color: #059669;
+}
+.statusSick {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+.statusVacation {
+  background: rgba(139, 92, 246, 0.12);
+  color: #7c3aed;
+}
+.statusAbsent {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+.statusTrip {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+.statusDayoff {
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+}
+.statusUnpaid {
+  background: rgba(245, 158, 11, 0.12);
+  color: #d97706;
+}
+
+.cellMoney {
+  font-family: 'Space Mono', 'SF Mono', monospace;
+  font-weight: 600;
+  text-align: right;
+}
+
+.cellFormula {
+  font-family: 'Space Mono', 'SF Mono', monospace;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.cellHours {
+  font-family: 'Space Mono', 'SF Mono', monospace;
+  text-align: center;
+}
+
+/* Total row */
+.totalRow td {
+  font-weight: 700 !important;
+  border-top: 2px solid var(--border);
+  padding-top: 10px;
+  color: var(--text-primary) !important;
+}
+
+.totalMoney {
+  font-family: 'Space Mono', 'SF Mono', monospace;
+  font-weight: 700;
+  color: #16a34a !important;
+  text-align: right;
+}
+
+/* Loading */
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+
+/* ── Dark theme ── */
+[data-theme="dark"] .dayCell:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="dark"] .dayCellFull {
+  background: rgba(34, 197, 94, 0.2);
+}
+[data-theme="dark"] .dayCellPartial {
+  background: rgba(245, 158, 11, 0.2);
+}
+[data-theme="dark"] .dayCellSick {
+  background: rgba(59, 130, 246, 0.2);
+}
+[data-theme="dark"] .dayCellVacation {
+  background: rgba(139, 92, 246, 0.2);
+}
+[data-theme="dark"] .dayCellAbsent {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  .page {
+    padding: 16px;
+    gap: 14px;
+  }
+
+  .section {
+    padding: 14px;
+  }
+
+  .compactWrap {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .compactSummary {
+    justify-content: space-around;
+  }
+
+  .formulaRow {
+    gap: 6px;
+  }
+
+  .pill {
+    padding: 6px 10px;
+    min-width: 60px;
+  }
+
+  .pillValue {
+    font-size: 13px;
+  }
+
+  .salaryTotalValue {
+    font-size: 22px;
+  }
+
+  .breakdownTable {
+    font-size: 12px;
+  }
+
+  .breakdownTable thead th,
+  .breakdownTable tbody td {
+    padding: 6px 6px;
+  }
+
+  .cellFormula {
+    display: none;
+  }
+}
+
+@media (max-width: 430px) {
+  .page {
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .section {
+    padding: 12px;
+    border-radius: 10px;
+  }
+
+  .dayCell {
+    min-width: 24px;
+    width: 24px;
+    height: 24px;
+    font-size: 9px;
+    border-radius: 4px;
+  }
+
+  .monthLabel {
+    font-size: 14px;
+    min-width: 120px;
+  }
+
+  .pill {
+    padding: 5px 8px;
+    min-width: 50px;
+  }
+
+  .pillLabel {
+    font-size: 9px;
+  }
+
+  .pillValue {
+    font-size: 12px;
+  }
+
+  .operator {
+    font-size: 14px;
+  }
+
+  .salaryTotalValue {
+    font-size: 20px;
+  }
+}

@@ -2,7 +2,13 @@
  * Сервис графиков работы: resolve (каскад employee → department → default), bulk, хелперы.
  */
 import { supabase } from '../config/database.js';
-import type { IResolvedSchedule, ScheduleType } from '../types/index.js';
+import type { IResolvedSchedule, IDayOverride, ScheduleType } from '../types/index.js';
+
+export interface IDayScheduleParams {
+  work_start: string;
+  work_end: string;
+  work_hours: number;
+}
 
 const DEFAULT_SCHEDULE: IResolvedSchedule = {
   schedule_id: '',
@@ -13,6 +19,7 @@ const DEFAULT_SCHEDULE: IResolvedSchedule = {
   work_days: [1, 2, 3, 4, 5],
   office_days: null,
   late_threshold_minutes: 0,
+  day_overrides: null,
   source: 'default',
 };
 
@@ -24,6 +31,26 @@ const getISODow = (date: Date): number => {
 
 export const isWorkingDay = (schedule: IResolvedSchedule, date: Date): boolean =>
   schedule.work_days.includes(getISODow(date));
+
+/** Возвращает work_start/work_end/work_hours для конкретного дня с учётом day_overrides */
+export const getScheduleForDate = (schedule: IResolvedSchedule, date: Date): IDayScheduleParams => {
+  if (schedule.day_overrides) {
+    const dow = String(getISODow(date));
+    const override = schedule.day_overrides[dow];
+    if (override) {
+      return {
+        work_start: override.work_start,
+        work_end: override.work_end,
+        work_hours: override.work_hours,
+      };
+    }
+  }
+  return {
+    work_start: schedule.work_start,
+    work_end: schedule.work_end,
+    work_hours: schedule.work_hours,
+  };
+};
 
 export const isOfficeDay = (schedule: IResolvedSchedule, date: Date): boolean => {
   if (schedule.schedule_type !== 'hybrid') return schedule.schedule_type === 'office' || schedule.schedule_type === 'shift';
@@ -60,13 +87,47 @@ export const countWorkingDaysUpToToday = (year: number, month: number, schedule:
   return count;
 };
 
-/** Порог опоздания с учётом допуска */
-export const getEffectiveLateThreshold = (schedule: IResolvedSchedule): string => {
-  const [h, m, s] = schedule.work_start.split(':').map(Number);
+/** Порог опоздания с учётом допуска (опционально — для конкретного дня) */
+export const getEffectiveLateThreshold = (schedule: IResolvedSchedule, date?: Date): string => {
+  const dayParams = date ? getScheduleForDate(schedule, date) : schedule;
+  const [h, m, s] = dayParams.work_start.split(':').map(Number);
   const totalMin = h * 60 + m + schedule.late_threshold_minutes;
   const hh = Math.floor(totalMin / 60);
   const mm = totalMin % 60;
   return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(s || 0).padStart(2, '0')}`;
+};
+
+/** Считает норму часов в месяце по графику с учётом day_overrides */
+export const countNormHoursForSchedule = (year: number, month: number, schedule: IResolvedSchedule): number => {
+  const daysInMonth = new Date(year, month, 0).getDate();
+  let total = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const date = new Date(year, month - 1, d);
+    if (!isWorkingDay(schedule, date)) continue;
+    total += getScheduleForDate(schedule, date).work_hours;
+  }
+  return total;
+};
+
+/** Считает норму часов до сегодня включительно */
+export const countNormHoursUpToToday = (year: number, month: number, schedule: IResolvedSchedule): number => {
+  const now = new Date();
+  const curYear = now.getFullYear();
+  const curMonth = now.getMonth() + 1;
+
+  if (year < curYear || (year === curYear && month < curMonth)) {
+    return countNormHoursForSchedule(year, month, schedule);
+  }
+  if (year > curYear || (year === curYear && month > curMonth)) return 0;
+
+  const today = now.getDate();
+  let total = 0;
+  for (let d = 1; d <= today; d++) {
+    const date = new Date(year, month - 1, d);
+    if (!isWorkingDay(schedule, date)) continue;
+    total += getScheduleForDate(schedule, date).work_hours;
+  }
+  return total;
 };
 
 /** Нужен ли СКУД-контроль для сотрудника в этот день */
@@ -220,6 +281,7 @@ function mapToResolved(
     work_days: (ws.work_days as number[]) || [1, 2, 3, 4, 5],
     office_days: (ws.office_days as number[] | null) || null,
     late_threshold_minutes: Number(ws.late_threshold_minutes) || 0,
+    day_overrides: (ws.day_overrides as Record<string, IDayOverride> | null) || null,
     source,
   };
 }

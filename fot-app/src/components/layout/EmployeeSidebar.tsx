@@ -78,6 +78,17 @@ const navGroups: INavGroup[] = [
     label: 'Финансы',
     items: [
       {
+        id: 'salary-raise',
+        path: '/employee/salary-raise',
+        label: 'Повышение оклада',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
+            <polyline points="17 6 23 6 23 12"/>
+          </svg>
+        ),
+      },
+      {
         id: 'payslips',
         path: '/employee/payslips',
         label: 'Расчётные листки',
@@ -147,9 +158,17 @@ export const EmployeeSidebar: FC<IEmployeeSidebarProps> = ({ isOpen, onClose, th
   const getActiveItem = () => {
     const path = location.pathname;
 
+    // Точное совпадение
     for (const group of navGroups) {
       for (const item of group.items) {
         if (item.path === path) return item.id;
+      }
+    }
+
+    // Совпадение по префиксу (для вложенных роутов вроде /employee/salary-raise/new)
+    for (const group of navGroups) {
+      for (const item of group.items) {
+        if (item.path !== '/employee' && path.startsWith(item.path)) return item.id;
       }
     }
 
