@@ -1,10 +1,13 @@
-import { useState, useEffect, useCallback, useRef, type FC } from 'react';
+import { useState, useEffect, useCallback, useMemo, type FC } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Pencil, ArrowRightLeft, History, X, TrendingUp, Briefcase, Trash2, Check, Upload, UserPlus, ChevronDown } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
-import { structureApi } from '../api/structure';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { useStaffData } from '../hooks/useStaffData';
+import { DeptSelect } from '../components/staff/DeptSelect';
+import { HistoryPanel } from '../components/staff/HistoryPanel';
 import { ImportModal } from '../components/employees/ImportModal';
 import { EnrichPreviewModal } from '../components/employees/EnrichPreviewModal';
 import type { Employee, EmployeeHistoryEvent, EmployeeInput, EnrichPreview } from '../types';
@@ -26,314 +29,6 @@ const sortDepts = (depts: OrgDepartmentNode[]): OrgDepartmentNode[] =>
 const fmt = (n: number | null | undefined) =>
   n ? n.toLocaleString('ru-RU') + ' ₽' : '—';
 
-const fmtDate = (d: string) =>
-  new Date(d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
-
-/* ───────── DeptSelect ───────── */
-
-const DeptSelect: FC<{
-  departments: OrgDepartmentNode[];
-  value: string;
-  onChange: (id: string) => void;
-}> = ({ departments, value, onChange }) => {
-  const [open, setOpen] = useState(false);
-  const [q, setQ] = useState('');
-  const ref = useRef<HTMLDivElement>(null);
-
-  const selected = departments.find(d => d.id === value);
-  const qLower = q.toLowerCase();
-  const filtered = q ? departments.filter(d => d.name.toLowerCase().includes(qLower)) : departments;
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  const pick = (id: string) => {
-    onChange(id);
-    setOpen(false);
-    setQ('');
-  };
-
-  return (
-    <div className="sc-dept-select" ref={ref}>
-      <button className="sc-dept-trigger" onClick={() => { setOpen(!open); setQ(''); }}>
-        <span className="sc-dept-trigger-text">{selected ? selected.name : 'Все отделы'}</span>
-        <ChevronDown size={14} />
-      </button>
-      {open && (
-        <div className="sc-dept-dropdown">
-          <input
-            className="sc-dept-search"
-            value={q}
-            onChange={e => setQ(e.target.value)}
-            placeholder="Поиск отдела..."
-            autoFocus
-          />
-          <div className="sc-dept-list">
-            <div className={`sc-dept-option ${!value ? 'active' : ''}`} onClick={() => pick('')}>
-              Все отделы
-            </div>
-            {filtered.map(d => (
-              <div
-                key={d.id}
-                className={`sc-dept-option ${d.id === value ? 'active' : ''}`}
-                onClick={() => pick(d.id)}
-              >
-                {d.name}
-              </div>
-            ))}
-            {filtered.length === 0 && <div className="sc-dept-empty">Не найдено</div>}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-/* ───────── HistoryPanel ───────── */
-
-const HistoryPanel: FC<{
-  employee: Employee;
-  history: EmployeeHistoryEvent[];
-  loading: boolean;
-  onClose: () => void;
-  onRefresh: () => void;
-  onDataChanged: () => void;
-}> = ({ employee, history, loading, onClose, onRefresh, onDataChanged }) => {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editSalary, setEditSalary] = useState('');
-  const [editDate, setEditDate] = useState('');
-  const [editReason, setEditReason] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  // add forms
-  const [addMode, setAddMode] = useState<'salary' | 'position' | null>(null);
-  const [addVal, setAddVal] = useState('');
-  const [addDate, setAddDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [addReason, setAddReason] = useState('');
-
-  const salaryEvents = history
-    .filter(e => e.event_type === 'salary')
-    .sort((a, b) => a.event_date.localeCompare(b.event_date));
-
-  const salaryDeltas = new Map<string, number>();
-  for (let i = 1; i < salaryEvents.length; i++) {
-    const prev = (salaryEvents[i - 1].event_data as Record<string, unknown>).salary as number;
-    const curr = (salaryEvents[i].event_data as Record<string, unknown>).salary as number;
-    if (prev && curr) salaryDeltas.set(salaryEvents[i].event_id, curr - prev);
-  }
-
-  const sorted = [...history].sort((a, b) => b.event_date.localeCompare(a.event_date));
-
-  const startEdit = (ev: EmployeeHistoryEvent) => {
-    const data = ev.event_data as Record<string, unknown>;
-    setEditingId(ev.event_id);
-    setEditDate(ev.event_date);
-    setEditReason(String(data.reason || data.change_reason || ''));
-    if (ev.event_type === 'salary') setEditSalary(String(data.salary || ''));
-    setAddMode(null);
-  };
-
-  const saveEdit = async (ev: EmployeeHistoryEvent) => {
-    setSaving(true);
-    const body: Record<string, unknown> = { effective_date: editDate, change_reason: editReason };
-    if (ev.event_type === 'salary') body.salary = Number(editSalary);
-    await employeeService.updateHistoryEvent(employee.id, ev.event_id, body);
-    setEditingId(null);
-    setSaving(false);
-    onRefresh();
-    onDataChanged();
-  };
-
-  const handleDelete = async (ev: EmployeeHistoryEvent) => {
-    if (!confirm('Удалить запись?')) return;
-    await employeeService.deleteHistoryEvent(employee.id, ev.event_id);
-    onRefresh();
-    onDataChanged();
-  };
-
-  const handleAdd = async () => {
-    if (!addVal) return;
-    setSaving(true);
-    if (addMode === 'salary') {
-      await employeeService.changeSalary(employee.id, Number(addVal), addReason || undefined, addDate || undefined);
-    } else {
-      await employeeService.changePosition(employee.id, addVal, addReason || undefined, addDate || undefined);
-    }
-    setAddMode(null);
-    setAddVal('');
-    setAddReason('');
-    setAddDate(new Date().toISOString().slice(0, 10));
-    setSaving(false);
-    onRefresh();
-    onDataChanged();
-  };
-
-  const openAdd = (mode: 'salary' | 'position') => {
-    setAddMode(mode);
-    setAddVal('');
-    setAddDate(new Date().toISOString().slice(0, 10));
-    setAddReason('');
-    setEditingId(null);
-  };
-
-  return (
-    <div className="sc-panel-overlay" onClick={onClose}>
-      <div className="sc-panel" onClick={e => e.stopPropagation()}>
-        <div className="sc-panel-header">
-          <h3>{employee.full_name}</h3>
-          <button className="sc-panel-close" onClick={onClose}><X size={18} /></button>
-        </div>
-
-        {/* Add buttons */}
-        <div className="sc-panel-add-bar">
-          <button className="sc-panel-add-btn" onClick={() => openAdd('salary')}>
-            <TrendingUp size={13} /> Оклад
-          </button>
-          <button className="sc-panel-add-btn" onClick={() => openAdd('position')}>
-            <Briefcase size={13} /> Должность
-          </button>
-        </div>
-
-        {/* Add form */}
-        {addMode && (
-          <div className="sc-panel-add-form">
-            <div className="sc-panel-edit-row">
-              {addMode === 'salary' ? (
-                <input type="number" value={addVal} onChange={e => setAddVal(e.target.value)} placeholder="Оклад (₽)" autoFocus />
-              ) : (
-                <input value={addVal} onChange={e => setAddVal(e.target.value)} placeholder="Должность" autoFocus />
-              )}
-              <input type="date" value={addDate} onChange={e => setAddDate(e.target.value)} />
-            </div>
-            <input value={addReason} onChange={e => setAddReason(e.target.value)} placeholder="Причина" />
-            <div className="sc-panel-edit-actions">
-              <button className="sc-panel-edit-btn save" onClick={handleAdd} disabled={!addVal || saving}>
-                <Check size={13} /> {saving ? '...' : 'Добавить'}
-              </button>
-              <button className="sc-panel-edit-btn" onClick={() => setAddMode(null)}>Отмена</button>
-            </div>
-          </div>
-        )}
-
-        <div className="sc-panel-body">
-          {loading ? (
-            <div className="sc-panel-loading">Загрузка...</div>
-          ) : sorted.length === 0 ? (
-            <div className="sc-panel-empty">Нет записей</div>
-          ) : (
-            <div className="sc-panel-timeline">
-              {sorted.map(ev => {
-                const data = ev.event_data as Record<string, unknown>;
-                const isEditing = editingId === ev.event_id;
-
-                if (ev.event_type === 'salary') {
-                  const salary = data.salary as number | null;
-                  const delta = salaryDeltas.get(ev.event_id);
-                  const reason = String(data.reason || '');
-                  const isFirst = salaryEvents[0]?.event_id === ev.event_id;
-                  const isHire = reason.toLowerCase().includes('приеме') || reason.toLowerCase().includes('приём');
-
-                  return (
-                    <div key={ev.event_id} className={`sc-panel-item ${isEditing ? 'editing' : ''}`}>
-                      <div className="sc-panel-dot-col">
-                        <div className={`sc-panel-dot ${delta && delta > 0 ? 'green' : delta && delta < 0 ? 'red' : 'gray'}`} />
-                        <div className="sc-panel-line" />
-                      </div>
-                      <div className="sc-panel-content">
-                        {isEditing ? (
-                          <div className="sc-panel-edit-form">
-                            <div className="sc-panel-edit-row">
-                              <input type="number" value={editSalary} onChange={e => setEditSalary(e.target.value)} placeholder="Оклад" />
-                              <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)} />
-                            </div>
-                            <input value={editReason} onChange={e => setEditReason(e.target.value)} placeholder="Причина" />
-                            <div className="sc-panel-edit-actions">
-                              <button className="sc-panel-edit-btn save" onClick={() => saveEdit(ev)} disabled={saving}>
-                                <Check size={13} /> {saving ? '...' : 'OK'}
-                              </button>
-                              <button className="sc-panel-edit-btn" onClick={() => setEditingId(null)}>×</button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="sc-panel-row-compact">
-                            <span className="sc-panel-date-sm">{fmtDate(ev.event_date)}</span>
-                            <span className="sc-panel-salary-sm">{fmt(salary)}</span>
-                            {delta != null && delta !== 0 && (
-                              <span className={`sc-panel-delta-sm ${delta > 0 ? 'up' : 'down'}`}>
-                                {delta > 0 ? '+' : ''}{delta.toLocaleString('ru-RU')}
-                              </span>
-                            )}
-                            {isFirst && !delta && <span className="sc-panel-delta-sm neutral">старт</span>}
-                            {reason && !isHire ? <span className="sc-panel-reason-sm">{reason}</span> : null}
-                            <span className="sc-panel-item-btns">
-                              <button className="sc-panel-act-btn" onClick={() => startEdit(ev)}><Pencil size={11} /></button>
-                              <button className="sc-panel-act-btn danger" onClick={() => handleDelete(ev)}><Trash2 size={11} /></button>
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                }
-
-                // assignment
-                const title = (() => {
-                  if (data.type === 'hire' || data.type === 'Прием') return 'Приём';
-                  if (data.type === 'transfer' || data.type === 'Перевод') return 'Перевод';
-                  if (data.type === 'dismiss' || data.type === 'Увольнение') return 'Увольнение';
-                  return 'Назначение';
-                })();
-
-                return (
-                  <div key={ev.event_id} className={`sc-panel-item ${isEditing ? 'editing' : ''}`}>
-                    <div className="sc-panel-dot-col">
-                      <div className="sc-panel-dot blue" />
-                      <div className="sc-panel-line" />
-                    </div>
-                    <div className="sc-panel-content">
-                      {isEditing ? (
-                        <div className="sc-panel-edit-form">
-                          <div className="sc-panel-edit-row">
-                            <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)} />
-                          </div>
-                          <input value={editReason} onChange={e => setEditReason(e.target.value)} placeholder="Причина" />
-                          <div className="sc-panel-edit-actions">
-                            <button className="sc-panel-edit-btn save" onClick={() => saveEdit(ev)} disabled={saving}>
-                              <Check size={13} /> {saving ? '...' : 'OK'}
-                            </button>
-                            <button className="sc-panel-edit-btn" onClick={() => setEditingId(null)}>×</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="sc-panel-row-compact">
-                          <span className="sc-panel-date-sm">{fmtDate(ev.event_date)}</span>
-                          <Briefcase size={12} className="sc-panel-assign-icon" />
-                          <span className="sc-panel-assign-sm">{title}</span>
-                          {data.position ? <span className="sc-panel-pos-sm">{String(data.position)}</span> : null}
-                          {data.department ? <span className="sc-panel-reason-sm">{String(data.department)}</span> : null}
-                          <span className="sc-panel-item-btns">
-                            <button className="sc-panel-act-btn" onClick={() => startEdit(ev)}><Pencil size={11} /></button>
-                            <button className="sc-panel-act-btn danger" onClick={() => handleDelete(ev)}><Trash2 size={11} /></button>
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-};
-
 /* ───────── Main Page ───────── */
 
 export const StaffControlPage: FC = () => {
@@ -341,21 +36,20 @@ export const StaffControlPage: FC = () => {
   const [urlParams, setUrlParams] = useSearchParams();
   const isMobile = useIsMobile(768);
 
-  // data
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [departments, setDepartments] = useState<OrgDepartmentNode[]>([]);
-  const [loading, setLoading] = useState(true);
+  // data — из кэширующего хука
+  const { employees, departments, loading, refresh, patchEmployee } = useStaffData();
 
   // filters — синхронизация с URL
   const [search, setSearch] = useState(() => urlParams.get('q') || '');
   const [deptId, setDeptId] = useState(() => urlParams.get('dept') || '');
+  const debouncedSearch = useDebouncedValue(search, 300);
 
   useEffect(() => {
     const p = new URLSearchParams();
     if (deptId) p.set('dept', deptId);
-    if (search) p.set('q', search);
+    if (debouncedSearch) p.set('q', debouncedSearch);
     setUrlParams(p, { replace: true });
-  }, [deptId, search, setUrlParams]);
+  }, [deptId, debouncedSearch, setUrlParams]);
 
   // history panel
   const [panelEmp, setPanelEmp] = useState<Employee | null>(null);
@@ -390,50 +84,38 @@ export const StaffControlPage: FC = () => {
   const [salaryHistoryFile, setSalaryHistoryFile] = useState<File | null>(null);
   const [salaryHistoryLoading, setSalaryHistoryLoading] = useState(false);
 
-  /* ─── load ─── */
+  /* ─── memoized computations ─── */
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    const [emps, tree] = await Promise.all([
-      employeeService.getAll(),
-      structureApi.getTree(),
-    ]);
-    setEmployees(emps.filter(e => e.employment_status === 'active'));
-    if (tree.data) setDepartments(tree.data.departments);
-    setLoading(false);
-  }, []);
+  const allDepts = useMemo(() => sortDepts(flattenDepts(departments)), [departments]);
 
-  useEffect(() => { loadData(); }, [loadData]);
-
-  /* ─── filter ─── */
-
-  const allDepts = sortDepts(flattenDepts(departments));
-  const searchLower = search.toLowerCase();
-
-  const filtered = employees.filter(e => {
-    if (deptId && e.org_department_id !== deptId) return false;
-    if (searchLower && !e.full_name.toLowerCase().includes(searchLower)) return false;
-    return true;
-  });
+  const searchLower = debouncedSearch.toLowerCase();
+  const filtered = useMemo(
+    () => employees.filter(e => {
+      if (deptId && e.org_department_id !== deptId) return false;
+      if (searchLower && !e.full_name.toLowerCase().includes(searchLower)) return false;
+      return true;
+    }),
+    [employees, deptId, searchLower],
+  );
 
   /* ─── history panel ─── */
 
-  const openHistory = async (emp: Employee) => {
+  const openHistory = useCallback(async (emp: Employee) => {
     setPanelEmp(emp);
     setPanelLoading(true);
     const history = await employeeService.getHistory(emp.id);
     setPanelHistory(history);
     setPanelLoading(false);
-  };
+  }, []);
 
-  const closeHistory = () => {
+  const closeHistory = useCallback(() => {
     setPanelEmp(null);
     setPanelHistory([]);
-  };
+  }, []);
 
   /* ─── modal open ─── */
 
-  const openModal = (emp: Employee, type: 'salary' | 'salary_actual' | 'position' | 'department') => {
+  const openModal = useCallback((emp: Employee, type: 'salary' | 'salary_actual' | 'position' | 'department') => {
     setModalEmp(emp);
     setModalType(type);
     setSalaryVal('');
@@ -443,41 +125,56 @@ export const StaffControlPage: FC = () => {
     setPositionDate(new Date().toISOString().slice(0, 10));
     setPositionReason('');
     setDeptVal(emp.org_department_id || '');
-  };
+  }, []);
 
-  const closeModal = () => {
+  const closeModal = useCallback(() => {
     setModalType(null);
     setModalEmp(null);
-  };
+  }, []);
 
-  /* ─── save handlers ─── */
+  /* ─── save handlers (optimistic updates) ─── */
 
   const handleSaveSalary = async () => {
     if (!modalEmp || !salaryVal) return;
+    const empId = modalEmp.id;
+    const val = Number(salaryVal);
     setSaving(true);
-    await employeeService.changeSalary(modalEmp.id, Number(salaryVal), salaryReason || undefined, salaryDate || undefined);
+    await employeeService.changeSalary(empId, val, salaryReason || undefined, salaryDate || undefined);
     closeModal();
     setSaving(false);
-    loadData();
+    if (modalType === 'salary_actual') {
+      patchEmployee(empId, { salary_actual: val });
+    } else {
+      patchEmployee(empId, { salary_calculated: val });
+    }
   };
 
   const handleSavePosition = async () => {
     if (!modalEmp || !positionVal) return;
+    const empId = modalEmp.id;
     setSaving(true);
-    await employeeService.changePosition(modalEmp.id, positionVal, positionReason || undefined, positionDate || undefined);
+    await employeeService.changePosition(empId, positionVal, positionReason || undefined, positionDate || undefined);
     closeModal();
     setSaving(false);
-    loadData();
+    patchEmployee(empId, { position_name: positionVal });
   };
 
   const handleSaveDepartment = async () => {
     if (!modalEmp || !deptVal) return;
+    const empId = modalEmp.id;
     setSaving(true);
-    await employeeService.moveDepartment(modalEmp.id, deptVal);
+    await employeeService.moveDepartment(empId, deptVal);
     closeModal();
     setSaving(false);
-    loadData();
+    const deptName = allDepts.find(d => d.id === deptVal)?.name;
+    patchEmployee(empId, { org_department_id: deptVal, department: deptName });
   };
+
+  /* ─── history panel data changed ─── */
+
+  const handleHistoryDataChanged = useCallback(() => {
+    refresh();
+  }, [refresh]);
 
   /* ─── import handlers ─── */
 
@@ -498,7 +195,7 @@ export const StaffControlPage: FC = () => {
     try {
       const r = await employeeService.enrichApply(enrichFile, manualMatches);
       alert(`Обновлено: ${r.updated} сотрудников`);
-      loadData();
+      refresh();
     } catch { /* ignore */ }
     setEnrichLoading(false);
     setEnrichPreview(null);
@@ -522,7 +219,7 @@ export const StaffControlPage: FC = () => {
     try {
       const r = await employeeService.salaryEnrichApply(salaryEnrichFile, manualMatches);
       alert(`Обновлено: ${r.updated} сотрудников`);
-      loadData();
+      refresh();
     } catch { /* ignore */ }
     setSalaryEnrichLoading(false);
     setSalaryEnrichPreview(null);
@@ -546,7 +243,7 @@ export const StaffControlPage: FC = () => {
     try {
       const r = await employeeService.salaryHistoryEnrichApply(salaryHistoryFile, manualMatches);
       alert(`Обновлено: ${r.updated} сотрудников`);
-      loadData();
+      refresh();
     } catch { /* ignore */ }
     setSalaryHistoryLoading(false);
     setSalaryHistoryPreview(null);
@@ -558,7 +255,7 @@ export const StaffControlPage: FC = () => {
     await employeeService.create(addForm);
     setShowAddModal(false);
     setAddForm({ full_name: '', hire_date: new Date().toISOString().slice(0, 10) });
-    loadData();
+    refresh();
   };
 
   /* ─── render ─── */
@@ -720,7 +417,7 @@ export const StaffControlPage: FC = () => {
           loading={panelLoading}
           onClose={closeHistory}
           onRefresh={() => openHistory(panelEmp)}
-          onDataChanged={loadData}
+          onDataChanged={handleHistoryDataChanged}
         />
       )}
 

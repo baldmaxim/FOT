@@ -281,7 +281,13 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
                     {user.full_name || 'Без имени'}
                     {isSuperAdmin && <span className={styles.adminBadge}>Super Admin</span>}
                   </div>
-                  <div className={styles.userRowEmail}>{user.email || ''}</div>
+                  <div className={styles.userRowEmail}>
+                    {user.email || ''}
+                    {user.email_confirmed
+                      ? <span className={styles.emailConfirmed}>✓ подтверждён</span>
+                      : <span className={styles.emailNotConfirmed}>✗ не подтверждён</span>
+                    }
+                  </div>
                 </div>
 
                 <div className={styles.userRowMeta}>

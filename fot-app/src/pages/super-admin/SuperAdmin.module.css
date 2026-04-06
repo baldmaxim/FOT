@@ -515,6 +515,21 @@
   font-size: 12px;
   color: var(--text-tertiary);
   margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.emailConfirmed {
+  font-size: 11px;
+  color: var(--success);
+  font-weight: 500;
+}
+
+.emailNotConfirmed {
+  font-size: 11px;
+  color: var(--error);
+  font-weight: 500;
 }
 
 /* На десктопе — прозрачная обёртка: дети становятся прямыми grid-элементами */
