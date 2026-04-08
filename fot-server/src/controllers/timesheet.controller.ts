@@ -4,6 +4,7 @@ import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest, TimeStatus, IResolvedSchedule } from '../types/index.js';
 import { exportTimesheet } from './timesheet-export.controller.js';
+import { exportTimesheetMass } from './timesheet-mass-export.controller.js';
 import { resolveSchedulesBulk, isWorkingDay, needsSkudCheck, countWorkingDaysUpToToday as schedWorkingDaysUpToToday, countNormHoursUpToToday, getScheduleForDate, getEffectiveLateThreshold } from '../services/schedule.service.js';
 import { getInternalAccessPoints } from '../services/skud-shared.service.js';
 
@@ -514,4 +515,7 @@ export const timesheetController = {
 
   /** GET /api/timesheet/export?month=YYYY-MM&department_id=... */
   export: exportTimesheet,
+
+  /** POST /api/timesheet/export-mass  body: { month, department_ids } */
+  exportMass: exportTimesheetMass,
 };

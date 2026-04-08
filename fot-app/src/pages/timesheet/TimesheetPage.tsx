@@ -204,10 +204,13 @@ export const TimesheetPage: FC = () => {
         month: monthStr,
         department_id: selectedDeptId || undefined,
       });
+      const monthNames = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+      const filename = `${selectedDeptName}_${monthNames[month]}_${year}.xlsx`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `timesheet-${monthStr}.xlsx`;
+      a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {

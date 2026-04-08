@@ -6,22 +6,38 @@ import { invalidateRolesCache } from '../services/roles-cache.service.js';
 
 // Список доступных страниц системы (для матрицы доступа)
 const AVAILABLE_PAGES = [
-  { path: '/employee',        label: 'Личный кабинет сотрудника' },
-  { path: '/dashboard',       label: 'Дашборд' },
-  { path: '/my-employees',    label: 'Мои сотрудники' },
-  { path: '/leave-requests',  label: 'Заявления' },
-  { path: '/timesheet',       label: 'Табель' },
-  { path: '/profile',         label: 'Профиль' },
-  { path: '/timesheet-review',label: 'Проверка табелей' },
-  { path: '/tender',          label: 'Сотрудники (список)' },
-  { path: '/skud-raw',        label: 'СКУД — сырые данные' },
-  { path: '/skud-db',         label: 'СКУД — база данных' },
-  { path: '/discipline',      label: 'Дисциплина' },
-  { path: '/skud-settings',   label: 'Настройки СКУД' },
-  { path: '/admin/users',     label: 'Управление пользователями' },
-  { path: '/admin/manage',    label: 'Управление структурой' },
-  { path: '/admin/audit',     label: 'Аудит данных' },
-  { path: '/admin/roles',     label: 'Управление ролями' },
+  // Личный кабинет
+  { path: '/employee',              label: 'Личный кабинет сотрудника' },
+  { path: '/employee/requests',     label: 'Заявления (ЛК)' },
+  { path: '/employee/payslips',     label: 'Расчётные листки' },
+  { path: '/employee/payments',     label: 'История выплат' },
+  { path: '/employee/documents',    label: 'Документы' },
+  { path: '/employee/timesheet',    label: 'Табель сотрудника' },
+  { path: '/employee/history',      label: 'Моя история' },
+  { path: '/employee/salary-raise', label: 'Заявки на повышение оклада' },
+  // Руководитель
+  { path: '/dashboard',             label: 'Дашборд' },
+  { path: '/my-employees',          label: 'Мои сотрудники' },
+  { path: '/leave-requests',        label: 'Заявления' },
+  { path: '/timesheet',             label: 'Табель' },
+  { path: '/salary-raise-review',   label: 'Проверка заявок на повышение' },
+  { path: '/discipline',            label: 'Дисциплина' },
+  { path: '/profile',               label: 'Профиль' },
+  // HR
+  { path: '/timesheet-review',      label: 'Проверка табелей' },
+  // Админ
+  { path: '/tender',                label: 'Сотрудники (список)' },
+  { path: '/skud-raw',              label: 'СКУД — сырые данные' },
+  { path: '/skud-db',               label: 'СКУД — база данных' },
+  { path: '/staff-control',         label: 'Управление кадрами' },
+  // Супер-админ
+  { path: '/skud-settings',         label: 'Настройки СКУД' },
+  { path: '/admin/users',           label: 'Управление пользователями' },
+  { path: '/admin/audit',           label: 'Аудит данных' },
+  { path: '/admin/roles',           label: 'Управление ролями' },
+  { path: '/admin/settings',        label: 'Системные настройки' },
+  { path: '/admin/production-calendar', label: 'Производственный календарь' },
+  { path: '/admin/payslips',        label: 'Управление расчётными листками' },
 ];
 
 const createRoleSchema = z.object({

@@ -53,6 +53,7 @@ const navGroups: INavGroup[] = [
       { id: 'discipline', path: '/discipline', label: 'Аналитика', icon: BarChartIcon, requiredPosition: 'header' },
       { id: 'staff-control', path: '/staff-control', label: 'Управление кадрами', icon: UsersIcon, requiredPosition: 'admin' },
       { id: 'timesheet-review', path: '/timesheet-review', label: 'Проверка табелей', icon: CalendarIcon, requiredPosition: 'hr' },
+      { id: 'timesheet-export', path: '/timesheet-export', label: 'Экспорт табелей', icon: FileTextIcon, requiredPosition: 'hr' },
     ]
   },
   {

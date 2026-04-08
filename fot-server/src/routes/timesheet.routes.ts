@@ -20,6 +20,13 @@ router.get(
   timesheetController.export
 );
 
+// POST /api/timesheet/export-mass
+router.post(
+  '/export-mass',
+  requirePosition('header', 'hr', 'admin', 'super_admin'),
+  timesheetController.exportMass
+);
+
 // POST /api/timesheet
 router.post(
   '/',

@@ -40,6 +40,22 @@ export const timesheetService = {
     return res.data;
   },
 
+  async exportMass(filters: { month: string; department_ids: string[] }): Promise<Blob> {
+    const response = await fetch(
+      `${import.meta.env.VITE_API_URL || 'http://localhost:3000/api'}/timesheet/export-mass`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('access_token')}`,
+        },
+        body: JSON.stringify(filters),
+      }
+    );
+    if (!response.ok) throw new Error('Ошибка массового экспорта');
+    return response.blob();
+  },
+
   async export(filters: TimesheetFilters): Promise<Blob> {
     const params = new URLSearchParams();
     params.append('month', filters.month);

@@ -54,6 +54,7 @@ const SkudSupabasePage = lazy(() => import('./pages/skud/SkudSupabasePage').then
 // Timesheet
 const TimesheetPage = lazy(() => import('./pages/timesheet/TimesheetPage').then(m => ({ default: m.TimesheetPage })));
 const TimesheetReviewPage = lazy(() => import('./pages/timesheet/TimesheetReviewPage').then(m => ({ default: m.TimesheetReviewPage })));
+const MassTimesheetExportPage = lazy(() => import('./pages/timesheet/MassTimesheetExportPage').then(m => ({ default: m.MassTimesheetExportPage })));
 
 // Discipline Analytics
 const DisciplineAnalyticsPage = lazy(() => import('./pages/DisciplineAnalyticsPage').then(m => ({ default: m.DisciplineAnalyticsPage })));
@@ -261,6 +262,14 @@ const AppRoutes = () => {
             element={
               <Layout title="Табель" theme={theme} onToggleTheme={toggleTheme}>
                 <TimesheetPage />
+              </Layout>
+            }
+          />
+          <Route
+            path="/timesheet-export"
+            element={
+              <Layout title="Экспорт табелей" theme={theme} onToggleTheme={toggleTheme}>
+                <MassTimesheetExportPage />
               </Layout>
             }
           />
