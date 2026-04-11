@@ -2,6 +2,7 @@ import { Request } from 'express';
 
 // Тип должности (динамический, хранится в system_roles)
 export type EmployeePositionType = string;
+export type ChatInboundMode = 'open' | 'requests_only' | 'disabled';
 
 // Для обратной совместимости
 export type UserRole = EmployeePositionType;
@@ -36,6 +37,7 @@ export interface UserProfile {
   position_type: EmployeePositionType;    // Заменяет role
   employee_id: number | null;              // Связь с employees (заполняется админом)
   supervisor_id: string | null;            // ID руководителя
+  chat_inbound_mode: ChatInboundMode;
   imported_position: string | null;        // Должность из импорта
   is_approved: boolean;
   approved_by: string | null;
