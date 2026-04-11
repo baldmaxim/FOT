@@ -3,6 +3,8 @@ import { Settings, MapPin, Filter, Database } from 'lucide-react';
 import { ConnectionSettingsTab } from '../../components/skud/ConnectionSettingsTab';
 import { AccessPointsTab } from '../../components/skud/AccessPointsTab';
 import { SyncFilterTab } from '../../components/skud/SyncFilterTab';
+import { TravelObjectsTab } from '../../components/skud/TravelObjectsTab';
+import { TravelRoutesTab } from '../../components/skud/TravelRoutesTab';
 import { sigurService } from '../../services/sigurService';
 import { useAuth } from '../../contexts/AuthContext';
 import type { SettingsTab } from '../../components/skud/sigur-settings.types';
@@ -89,6 +91,20 @@ export const SigurSettingsPage = () => {
           Точки доступа
         </button>
         <button
+          className={`sigur-tab ${activeTab === 'objects' ? 'active' : ''}`}
+          onClick={() => setActiveTab('objects')}
+        >
+          <Database size={14} />
+          Объекты
+        </button>
+        <button
+          className={`sigur-tab ${activeTab === 'routes' ? 'active' : ''}`}
+          onClick={() => setActiveTab('routes')}
+        >
+          <MapPin size={14} />
+          Маршруты
+        </button>
+        <button
           className={`sigur-tab ${activeTab === 'sync-filter' ? 'active' : ''}`}
           onClick={() => setActiveTab('sync-filter')}
         >
@@ -131,6 +147,20 @@ export const SigurSettingsPage = () => {
       {activeTab === 'access-points' && (
         <AccessPointsTab
           connected={connected}
+          canEdit={canEdit}
+          setError={setError}
+        />
+      )}
+
+      {activeTab === 'objects' && (
+        <TravelObjectsTab
+          canEdit={canEdit}
+          setError={setError}
+        />
+      )}
+
+      {activeTab === 'routes' && (
+        <TravelRoutesTab
           canEdit={canEdit}
           setError={setError}
         />

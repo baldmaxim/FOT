@@ -58,6 +58,15 @@ const formatDuration = (seconds: number): string => {
   return `${h}ч ${m}м`;
 };
 
+const formatTravelMinutes = (minutes: number): string => {
+  if (minutes <= 0) return '0 мин';
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours === 0) return `${mins} мин`;
+  if (mins === 0) return `${hours}ч`;
+  return `${hours}ч ${mins}м`;
+};
+
 const todayISO = (): string => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -355,6 +364,20 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                       <div className={`ts-day-detail-hours ${getHoursClass(entry)}`}>
                         {getHoursLabel(entry)}
                       </div>
+                      {entry && (
+                        ((entry.travel_minutes_credited || 0) > 0
+                          || (entry.travel_delay_minutes || 0) > 0
+                          || (entry.travel_problematic_segments || 0) > 0)
+                      ) && (
+                        <div className="ts-day-detail-travel">
+                          {(entry.travel_minutes_credited || 0) > 0
+                            ? `дорога +${formatTravelMinutes(entry.travel_minutes_credited || 0)}`
+                            : 'дорога не зачтена'}
+                          {(entry.travel_delay_minutes || 0) > 0
+                            ? ` • задержка ${formatTravelMinutes(entry.travel_delay_minutes || 0)}`
+                            : ''}
+                        </div>
+                      )}
                     </div>
                   </div>
 

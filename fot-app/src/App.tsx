@@ -51,6 +51,7 @@ const HeaderEmployeesPage = lazy(() => import('./pages/employees/HeaderEmployees
 const SigurSettingsPage = lazy(() => import('./pages/skud/SigurSettingsPage').then(m => ({ default: m.SigurSettingsPage })));
 const SigurRawDataPage = lazy(() => import('./pages/skud/SigurRawDataPage').then(m => ({ default: m.SigurRawDataPage })));
 const SkudSupabasePage = lazy(() => import('./pages/skud/SkudSupabasePage').then(m => ({ default: m.SkudSupabasePage })));
+const TravelSegmentsPage = lazy(() => import('./pages/skud/TravelSegmentsPage').then(m => ({ default: m.TravelSegmentsPage })));
 
 // Timesheet
 const TimesheetPage = lazy(() => import('./pages/timesheet/TimesheetPage').then(m => ({ default: m.TimesheetPage })));
@@ -310,6 +311,14 @@ const AppRoutes = () => {
             element={
               <Layout title="Аналитика дисциплины" theme={theme} onToggleTheme={toggleTheme}>
                 <DisciplineAnalyticsPage />
+              </Layout>
+            }
+          />
+          <Route
+            path="/skud-travel"
+            element={
+              <Layout title="Передвижения" theme={theme} onToggleTheme={toggleTheme}>
+                <TravelSegmentsPage />
               </Layout>
             }
           />

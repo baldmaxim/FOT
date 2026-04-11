@@ -1,0 +1,213 @@
+.travel-config-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  margin-bottom: 1rem;
+}
+
+.travel-config-hint {
+  font-size: 0.8125rem;
+  color: var(--text-tertiary);
+  line-height: 1.45;
+}
+
+.travel-config-create,
+.travel-config-actions,
+.travel-config-search-row,
+.travel-route-form {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.travel-config-input,
+.travel-route-form select,
+.travel-route-form input {
+  min-height: 40px;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.travel-config-input {
+  flex: 1;
+  min-width: 240px;
+}
+
+.travel-route-form select,
+.travel-route-form input {
+  min-width: 180px;
+}
+
+.travel-config-layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 1rem;
+  min-height: 420px;
+}
+
+.travel-config-sidebar,
+.travel-config-main {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-hover);
+  padding: 0.875rem;
+  min-height: 0;
+}
+
+.travel-config-sidebar-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+}
+
+.travel-config-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.travel-config-list-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.travel-config-list-item:hover {
+  border-color: var(--primary);
+  transform: translateY(-1px);
+}
+
+.travel-config-list-item.active {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent);
+}
+
+.travel-config-count {
+  min-width: 28px;
+  padding: 0.125rem 0.375rem;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.travel-config-empty {
+  color: var(--text-tertiary);
+  text-align: center;
+  padding: 1rem;
+}
+
+.travel-config-points {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.625rem;
+  max-height: 520px;
+  overflow: auto;
+  padding-right: 0.25rem;
+}
+
+.travel-config-point {
+  display: flex;
+  gap: 0.625rem;
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 0.75rem;
+}
+
+.travel-config-point.selected {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+}
+
+.travel-config-point input {
+  margin-top: 0.1rem;
+}
+
+.travel-config-point-name {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+  font-size: 0.875rem;
+}
+
+.travel-config-owner {
+  font-size: 0.75rem;
+  color: var(--warning);
+}
+
+.travel-config-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.travel-config-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.travel-config-table th,
+.travel-config-table td {
+  padding: 0.875rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: 0.875rem;
+}
+
+.travel-config-table th {
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.travel-config-table-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 900px) {
+  .travel-config-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .travel-config-points {
+    grid-template-columns: 1fr;
+  }
+
+  .travel-config-create,
+  .travel-config-actions,
+  .travel-config-search-row,
+  .travel-route-form,
+  .travel-config-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .travel-route-form select,
+  .travel-route-form input,
+  .travel-config-input {
+    min-width: 0;
+    width: 100%;
+  }
+}

@@ -56,6 +56,7 @@ const navGroups: INavGroup[] = [
   {
     label: 'СКУД',
     items: [
+      { id: 'skud-travel', path: '/skud-travel', label: 'Передвижения', icon: FileTextIcon, requiredPosition: 'header' },
       { id: 'skud-raw', path: '/skud-raw', label: 'Просмотр СКУД', icon: FileTextIcon, requiredPosition: 'admin' },
       { id: 'skud-db', path: '/skud-db', label: 'СКУД (база)', icon: DatabaseIcon, requiredPosition: 'admin' },
       { id: 'sigur-settings', path: '/skud-settings', label: 'Настройки СКУД', icon: SettingsIcon, requiredPosition: 'super_admin' },

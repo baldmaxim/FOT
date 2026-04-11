@@ -54,13 +54,13 @@ export const travelTimeService = {
     month: string;
     department_id?: string;
     employee_id?: number;
-    status?: TravelSegmentStatus | 'problem';
+    status?: TravelSegmentStatus | 'problem' | 'all';
   }): Promise<ITravelSegment[]> {
     const params = new URLSearchParams();
     params.append('month', filters.month);
     if (filters.department_id) params.append('department_id', filters.department_id);
     if (typeof filters.employee_id === 'number') params.append('employee_id', String(filters.employee_id));
-    if (filters.status) params.append('status', filters.status);
+    if (filters.status && filters.status !== 'all') params.append('status', filters.status);
 
     const res = await apiClient.get<ApiResponse<ITravelSegment[]>>(`/skud/travel-segments?${params.toString()}`);
     return res.data || [];

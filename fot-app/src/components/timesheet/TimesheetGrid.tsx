@@ -105,6 +105,11 @@ const getDayCellClass = (entry: TimesheetEntry | null, weekend: boolean, today: 
       break;
   }
   if (entry.is_correction) classes.push('ts-day--corrected');
+  if ((entry.travel_problematic_segments || 0) > 0 || (entry.travel_delay_minutes || 0) > 0) {
+    classes.push('ts-day--travel-issue');
+  } else if ((entry.travel_minutes_credited || 0) > 0) {
+    classes.push('ts-day--travel');
+  }
   return classes.join(' ');
 };
 
@@ -196,6 +201,9 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
           </div>
           <div className="ts-legend-item">
             <span className="ts-legend-dot ts-legend-dot--corrected">К</span>Корректировка
+          </div>
+          <div className="ts-legend-item">
+            <span className="ts-legend-dot ts-legend-dot--travel-issue">!</span>Проблема в дороге
           </div>
         </div>
       </div>
