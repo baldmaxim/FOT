@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import type { FC } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { rolesService } from '../../services/rolesService';
 import type {
   RolePageAccessEntry,
@@ -42,9 +43,11 @@ const areSamePermissions = (left: string[] | undefined, right: string[] | undefi
 };
 
 const emptyAccessCell = (): IAccessCell => ({ can_view: false, can_edit: false });
+const EMPTY_ROLES: SystemRole[] = [];
 
 export const RoleManagementPage: FC = () => {
   const { error: toastError, success: toastSuccess } = useToast();
+  const queryClient = useQueryClient();
   const toastErrorRef = useRef(toastError);
   const toastSuccessRef = useRef(toastSuccess);
   toastErrorRef.current = toastError;
@@ -52,29 +55,93 @@ export const RoleManagementPage: FC = () => {
 
   const [tab, setTab] = useState<Tab>('roles');
 
-  const [roles, setRoles] = useState<SystemRole[]>([]);
-  const [loadingRoles, setLoadingRoles] = useState(true);
   const [showNewForm, setShowNewForm] = useState(false);
   const [newForm, setNewForm] = useState<INewRoleForm>({ code: '', name: '', level: '' });
   const [editState, setEditState] = useState<IEditState | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const [pages, setPages] = useState<AvailablePage[]>([]);
-  const [matrix, setMatrix] = useState<AccessMatrix>({});
-  const [loadingAccess, setLoadingAccess] = useState(false);
+  const [accessOverrides, setAccessOverrides] = useState<AccessMatrix>({});
   const [savingAccess, setSavingAccess] = useState(false);
 
-  const [permissionGroups, setPermissionGroups] = useState<PermissionGroup[]>([]);
-  const [permissionMatrix, setPermissionMatrix] = useState<PermissionMatrix>({});
-  const [loadingPermissions, setLoadingPermissions] = useState(false);
+  const [permissionOverrides, setPermissionOverrides] = useState<PermissionMatrix>({});
   const [savingPermissions, setSavingPermissions] = useState(false);
   const [permissionSearch, setPermissionSearch] = useState('');
   const [expandedPermissionRoles, setExpandedPermissionRoles] = useState<Set<string>>(new Set());
+
+  const rolesQuery = useQuery<SystemRole[]>({
+    queryKey: ['roles', 'all'],
+    queryFn: () => rolesService.getAll(),
+    staleTime: 60_000,
+  });
+  const accessQuery = useQuery<{ accessData: RolePageAccessEntry[]; pagesData: AvailablePage[] }>({
+    queryKey: ['roles', 'access-matrix'],
+    queryFn: async () => {
+      const [accessData, pagesData] = await Promise.all([
+        rolesService.getPageAccess(),
+        rolesService.getAvailablePages(),
+      ]);
+      return { accessData, pagesData };
+    },
+    enabled: tab === 'access',
+    staleTime: 60_000,
+  });
+  const permissionCatalogQuery = useQuery<PermissionGroup[]>({
+    queryKey: ['roles', 'permission-catalog'],
+    queryFn: () => rolesService.getPermissionCatalog(),
+    enabled: tab === 'permissions',
+    staleTime: 5 * 60_000,
+  });
+
+  const roles = rolesQuery.data ?? EMPTY_ROLES;
+  const loadingRoles = rolesQuery.isPending;
+  const loadingAccess = accessQuery.isPending;
+  const loadingPermissions = permissionCatalogQuery.isPending;
+  const pages = accessQuery.data?.pagesData ?? [];
+  const permissionGroups = permissionCatalogQuery.data ?? [];
 
   const sortedRoles = useMemo(
     () => [...roles].sort((a, b) => a.level - b.level || a.name.localeCompare(b.name, 'ru')),
     [roles],
   );
+
+  const basePermissionMatrix = useMemo(() => {
+    const nextPermissionMatrix: PermissionMatrix = {};
+    for (const role of roles) {
+      nextPermissionMatrix[role.code] = normalizePermissions(role.permissions);
+    }
+    return nextPermissionMatrix;
+  }, [roles]);
+
+  const permissionMatrix = useMemo<PermissionMatrix>(
+    () => ({ ...basePermissionMatrix, ...permissionOverrides }),
+    [basePermissionMatrix, permissionOverrides],
+  );
+
+  const baseAccessMatrix = useMemo<AccessMatrix>(() => {
+    const nextMatrix: AccessMatrix = {};
+    const accessData = accessQuery.data?.accessData ?? [];
+    for (const entry of accessData) {
+      if (!nextMatrix[entry.role_code]) {
+        nextMatrix[entry.role_code] = {};
+      }
+      nextMatrix[entry.role_code][entry.page_path] = {
+        can_view: entry.can_view,
+        can_edit: entry.can_edit,
+      };
+    }
+    return nextMatrix;
+  }, [accessQuery.data?.accessData]);
+
+  const matrix = useMemo<AccessMatrix>(() => {
+    const merged: AccessMatrix = { ...baseAccessMatrix };
+    for (const [roleCode, roleCells] of Object.entries(accessOverrides)) {
+      merged[roleCode] = {
+        ...(merged[roleCode] ?? {}),
+        ...roleCells,
+      };
+    }
+    return merged;
+  }, [accessOverrides, baseAccessMatrix]);
 
   const filteredPermissionRoles = useMemo(() => {
     const query = permissionSearch.trim().toLowerCase();
@@ -94,73 +161,12 @@ export const RoleManagementPage: FC = () => {
     [expandedPermissionRoles, filteredPermissionRoles],
   );
 
-  const loadRoles = useCallback(async () => {
-    setLoadingRoles(true);
-    try {
-      const data = await rolesService.getAll();
-      setRoles(data);
-
-      const nextPermissionMatrix: PermissionMatrix = {};
-      for (const role of data) {
-        nextPermissionMatrix[role.code] = normalizePermissions(role.permissions);
-      }
-      setPermissionMatrix(nextPermissionMatrix);
-    } catch {
-      toastErrorRef.current('Ошибка загрузки ролей');
-    } finally {
-      setLoadingRoles(false);
-    }
-  }, []);
-
-  const loadAccess = useCallback(async () => {
-    setLoadingAccess(true);
-    try {
-      const [accessData, pagesData] = await Promise.all([
-        rolesService.getPageAccess(),
-        rolesService.getAvailablePages(),
-      ]);
-      setPages(pagesData);
-
-      const nextMatrix: AccessMatrix = {};
-      for (const entry of accessData) {
-        if (!nextMatrix[entry.role_code]) {
-          nextMatrix[entry.role_code] = {};
-        }
-        nextMatrix[entry.role_code][entry.page_path] = {
-          can_view: entry.can_view,
-          can_edit: entry.can_edit,
-        };
-      }
-      setMatrix(nextMatrix);
-    } catch {
-      toastErrorRef.current('Ошибка загрузки матрицы доступа');
-    } finally {
-      setLoadingAccess(false);
-    }
-  }, []);
-
-  const loadPermissionCatalog = useCallback(async () => {
-    setLoadingPermissions(true);
-    try {
-      const data = await rolesService.getPermissionCatalog();
-      setPermissionGroups(data);
-    } catch {
-      toastErrorRef.current('Ошибка загрузки каталога прав');
-    } finally {
-      setLoadingPermissions(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadRoles();
-    loadPermissionCatalog();
-  }, [loadPermissionCatalog, loadRoles]);
-
-  useEffect(() => {
-    if (tab === 'access') {
-      loadAccess();
-    }
-  }, [tab, loadAccess]);
+  const refreshRoles = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['roles', 'all'] }),
+      queryClient.invalidateQueries({ queryKey: ['roles', 'access-matrix'] }),
+    ]);
+  };
 
   const handleCreateRole = async () => {
     const level = parseInt(newForm.level, 10);
@@ -175,7 +181,8 @@ export const RoleManagementPage: FC = () => {
       toastSuccessRef.current('Роль создана');
       setNewForm({ code: '', name: '', level: '' });
       setShowNewForm(false);
-      await loadRoles();
+      setPermissionOverrides({});
+      await refreshRoles();
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Ошибка создания роли';
       toastErrorRef.current(message);
@@ -198,7 +205,8 @@ export const RoleManagementPage: FC = () => {
       await rolesService.update(code, { name: editState.name, level });
       toastSuccessRef.current('Роль обновлена');
       setEditState(null);
-      await loadRoles();
+      setPermissionOverrides({});
+      await refreshRoles();
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Ошибка сохранения';
       toastErrorRef.current(message);
@@ -216,7 +224,7 @@ export const RoleManagementPage: FC = () => {
         is_active: !role.is_active,
       });
       toastSuccessRef.current(role.is_active ? 'Роль деактивирована' : 'Роль активирована');
-      await loadRoles();
+      await refreshRoles();
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Ошибка изменения статуса';
       toastErrorRef.current(message);
@@ -229,7 +237,9 @@ export const RoleManagementPage: FC = () => {
     try {
       await rolesService.deleteRole(code);
       toastSuccessRef.current('Роль удалена');
-      await loadRoles();
+      setAccessOverrides({});
+      setPermissionOverrides({});
+      await refreshRoles();
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Ошибка удаления';
       toastErrorRef.current(message);
@@ -237,8 +247,8 @@ export const RoleManagementPage: FC = () => {
   };
 
   const handleMatrixToggle = (roleCode: string, pagePath: string, action: 'view' | 'edit') => {
-    setMatrix(prev => {
-      const current = prev[roleCode]?.[pagePath] ?? emptyAccessCell();
+    setAccessOverrides(prev => {
+      const current = (prev[roleCode]?.[pagePath] ?? matrix[roleCode]?.[pagePath]) ?? emptyAccessCell();
       let next = current;
 
       if (action === 'view') {
@@ -279,7 +289,8 @@ export const RoleManagementPage: FC = () => {
 
       await rolesService.updatePageAccess(items);
       toastSuccessRef.current('Матрица доступа сохранена');
-      await loadAccess();
+      setAccessOverrides({});
+      await queryClient.invalidateQueries({ queryKey: ['roles', 'access-matrix'] });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Ошибка сохранения';
       toastErrorRef.current(message);
@@ -289,8 +300,8 @@ export const RoleManagementPage: FC = () => {
   };
 
   const handlePermissionChange = (roleCode: string, group: PermissionGroup, nextCode: string | null) => {
-    setPermissionMatrix(prev => {
-      const current = normalizePermissions(prev[roleCode]);
+    setPermissionOverrides(prev => {
+      const current = normalizePermissions(permissionMatrix[roleCode]);
 
       if (group.exclusive) {
         const optionCodes = new Set(group.options.map(option => option.code));
@@ -368,7 +379,8 @@ export const RoleManagementPage: FC = () => {
       );
 
       toastSuccessRef.current('Права ролей сохранены');
-      await loadRoles();
+      setPermissionOverrides({});
+      await queryClient.invalidateQueries({ queryKey: ['roles', 'all'] });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Ошибка сохранения прав';
       toastErrorRef.current(message);
@@ -399,6 +411,10 @@ export const RoleManagementPage: FC = () => {
           Права
         </button>
       </div>
+
+      {rolesQuery.isError && (
+        <div className={styles.loading}>Ошибка загрузки ролей</div>
+      )}
 
       {tab === 'roles' && (
         <div className={styles.section}>
@@ -578,6 +594,8 @@ export const RoleManagementPage: FC = () => {
 
           {loadingAccess ? (
             <div className={styles.loading}>Загрузка...</div>
+          ) : accessQuery.isError ? (
+            <div className={styles.loading}>Ошибка загрузки матрицы доступа</div>
           ) : (
             <div className={styles.matrixWrapper}>
               <table className={styles.matrixTable}>
@@ -661,6 +679,8 @@ export const RoleManagementPage: FC = () => {
 
           {loadingPermissions || loadingRoles ? (
             <div className={styles.loading}>Загрузка...</div>
+          ) : permissionCatalogQuery.isError ? (
+            <div className={styles.loading}>Ошибка загрузки каталога прав</div>
           ) : (
             <div className={styles.permissionCards}>
               <div className={styles.permissionToolbar}>

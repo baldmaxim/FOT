@@ -1,7 +1,7 @@
-import { type FC, useState, useEffect, useCallback, useMemo } from 'react';
+import { Suspense, lazy, type FC, useState, useMemo } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { scheduleService } from '../../services/scheduleService';
 import { workCategoryService } from '../../services/workCategoryService';
-import { ProductionCalendarPage } from '../super-admin/ProductionCalendarPage';
 import type {
   IDayOverride,
   IWorkSchedule,
@@ -17,6 +17,10 @@ import {
 } from '../../types/schedule';
 import { parseHMToMinutes, minutesToHM } from '../../utils/scheduleUtils';
 import styles from './SchedulesPage.module.css';
+
+const ProductionCalendarPage = lazy(() => import('../super-admin/ProductionCalendarPage').then(module => ({
+  default: module.ProductionCalendarPage,
+})));
 
 type TabKey = 'templates' | 'category-assignments' | 'category-manage' | 'production-calendar';
 
@@ -122,14 +126,14 @@ const PATTERN_PRESETS: Record<PatternType, Partial<IFormState>> = {
   '6+0': { work_days: [1, 2, 3, 4, 5, 6], expected_saturdays_per_month: 0 },
   'custom': {},
 };
+const EMPTY_TEMPLATES: IWorkSchedule[] = [];
+const EMPTY_ASSIGNMENTS: ICategorySchedule[] = [];
+const EMPTY_WORK_CATEGORIES: IWorkCategory[] = [];
 
 export const SchedulesPage: FC = () => {
   const today = getLocalISODate();
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<TabKey>('templates');
-  const [templates, setTemplates] = useState<IWorkSchedule[]>([]);
-  const [assignments, setAssignments] = useState<ICategorySchedule[]>([]);
-  const [workCategories, setWorkCategories] = useState<IWorkCategory[]>([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const [showForm, setShowForm] = useState(false);
@@ -140,28 +144,53 @@ export const SchedulesPage: FC = () => {
   const [editingCategoryCode, setEditingCategoryCode] = useState<string | null>(null);
   const [categoryForm, setCategoryForm] = useState({ code: '', name: '', description: '', sort_order: 0 });
 
-  const loadAll = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const [tpls, asgn, cats] = await Promise.all([
-        scheduleService.list(),
-        scheduleService.listCategories(),
-        workCategoryService.list(),
-      ]);
-      setTemplates(tpls);
-      setAssignments(asgn);
-      setWorkCategories(cats);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка загрузки');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const needsTemplates = tab === 'templates' || tab === 'category-assignments';
+  const needsAssignments = tab === 'category-assignments';
+  const needsWorkCategories = tab === 'category-assignments' || tab === 'category-manage';
 
-  useEffect(() => {
-    loadAll();
-  }, [loadAll]);
+  const templatesQuery = useQuery({
+    queryKey: ['schedules', 'templates'],
+    queryFn: () => scheduleService.list(),
+    enabled: needsTemplates,
+    staleTime: 5 * 60_000,
+    placeholderData: previousData => previousData,
+  });
+  const assignmentsQuery = useQuery({
+    queryKey: ['schedules', 'category-assignments'],
+    queryFn: () => scheduleService.listCategories(),
+    enabled: needsAssignments,
+    staleTime: 5 * 60_000,
+    placeholderData: previousData => previousData,
+  });
+  const workCategoriesQuery = useQuery({
+    queryKey: ['work-categories'],
+    queryFn: () => workCategoryService.list(),
+    enabled: needsWorkCategories,
+    staleTime: 5 * 60_000,
+    placeholderData: previousData => previousData,
+  });
+  const templates = templatesQuery.data ?? EMPTY_TEMPLATES;
+  const assignments = assignmentsQuery.data ?? EMPTY_ASSIGNMENTS;
+  const workCategories = workCategoriesQuery.data ?? EMPTY_WORK_CATEGORIES;
+  const loading = (
+    (needsTemplates && templatesQuery.isPending)
+    || (needsAssignments && assignmentsQuery.isPending)
+    || (needsWorkCategories && workCategoriesQuery.isPending)
+  );
+  const queryError = (
+    (needsTemplates ? templatesQuery.error : null)
+    || (needsAssignments ? assignmentsQuery.error : null)
+    || (needsWorkCategories ? workCategoriesQuery.error : null)
+  );
+  const visibleError = error || (queryError instanceof Error ? queryError.message : '');
+
+  const reloadScheduleData = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['schedules', 'templates'] }),
+      queryClient.invalidateQueries({ queryKey: ['schedules', 'category-assignments'] }),
+      queryClient.invalidateQueries({ queryKey: ['work-categories'] }),
+    ]);
+  };
 
   const shiftHours = useMemo(
     () => computeShiftHours(form.work_start, form.work_end),
@@ -319,7 +348,7 @@ export const SchedulesPage: FC = () => {
       }
       setShowForm(false);
       setForm(createEmptyForm());
-      await loadAll();
+      await reloadScheduleData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка сохранения');
     }
@@ -330,7 +359,7 @@ export const SchedulesPage: FC = () => {
     setError('');
     try {
       await scheduleService.remove(id);
-      await loadAll();
+      await reloadScheduleData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка удаления');
     }
@@ -357,7 +386,7 @@ export const SchedulesPage: FC = () => {
           effective_from: today,
         });
       }
-      await loadAll();
+      await reloadScheduleData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка назначения');
     }
@@ -413,7 +442,7 @@ export const SchedulesPage: FC = () => {
       }
       setShowCategoryForm(false);
       setEditingCategoryCode(null);
-      await loadAll();
+      await reloadScheduleData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка сохранения');
     }
@@ -424,7 +453,7 @@ export const SchedulesPage: FC = () => {
     setError('');
     try {
       await workCategoryService.remove(code);
-      await loadAll();
+      await reloadScheduleData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка удаления');
     }
@@ -463,7 +492,7 @@ export const SchedulesPage: FC = () => {
         </button>
       </div>
 
-      {error && <div className={styles.error}>{error}</div>}
+      {visibleError && <div className={styles.error}>{visibleError}</div>}
 
       {tab === 'templates' && (
         <>
@@ -915,7 +944,11 @@ export const SchedulesPage: FC = () => {
         </>
       )}
 
-      {tab === 'production-calendar' && <ProductionCalendarPage />}
+      {tab === 'production-calendar' && (
+        <Suspense fallback={<div>Загрузка производственного календаря...</div>}>
+          <ProductionCalendarPage />
+        </Suspense>
+      )}
     </div>
   );
 };

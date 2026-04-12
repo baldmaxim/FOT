@@ -1,12 +1,13 @@
-import { type FC, useState, useEffect, useCallback } from 'react';
+import { type FC, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Check, X, Send, Clock, CheckCircle, XCircle } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   timesheetApprovalService,
   APPROVAL_STATUS_LABELS,
-  type ITimesheetApproval,
   type TimesheetApprovalStatus,
 } from '../../services/timesheetApprovalService';
+import { useTimesheetApprovalStatus } from '../../hooks/useTimesheetApprovalData';
 
 interface IProps {
   departmentId: string | null;
@@ -31,23 +32,12 @@ export const TimesheetApprovalBar: FC<IProps> = ({ departmentId, period }) => {
   const { canEditPage } = useAuth();
   const canSubmitDepartment = canEditPage('/timesheet');
   const canReviewHr = canEditPage('/timesheet-hr');
+  const queryClient = useQueryClient();
 
-  const [approval, setApproval] = useState<ITimesheetApproval | null>(null);
   const [loading, setLoading] = useState(false);
   const [comment, setComment] = useState('');
   const [showComment, setShowComment] = useState(false);
-
-  const loadStatus = useCallback(async () => {
-    if (!departmentId || !period) return;
-    try {
-      const data = await timesheetApprovalService.getStatus(departmentId, period);
-      setApproval(data);
-    } catch {
-      setApproval(null);
-    }
-  }, [departmentId, period]);
-
-  useEffect(() => { loadStatus(); }, [loadStatus]);
+  const { data: approval } = useTimesheetApprovalStatus(departmentId, period);
 
   const status = approval?.status || 'draft';
   const Icon = STATUS_ICONS[status];
@@ -57,7 +47,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({ departmentId, period }) => {
     setLoading(true);
     try {
       await timesheetApprovalService.submit(departmentId, period);
-      await loadStatus();
+      await queryClient.invalidateQueries({ queryKey: ['timesheet-approval'] });
     } finally {
       setLoading(false);
     }
@@ -70,7 +60,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({ departmentId, period }) => {
       await timesheetApprovalService.approve(approval.id, comment || undefined);
       setComment('');
       setShowComment(false);
-      await loadStatus();
+      await queryClient.invalidateQueries({ queryKey: ['timesheet-approval'] });
     } finally {
       setLoading(false);
     }
@@ -83,7 +73,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({ departmentId, period }) => {
       await timesheetApprovalService.reject(approval.id, comment || undefined);
       setComment('');
       setShowComment(false);
-      await loadStatus();
+      await queryClient.invalidateQueries({ queryKey: ['timesheet-approval'] });
     } finally {
       setLoading(false);
     }

@@ -2,7 +2,7 @@ import { sigurService } from './sigur.service.js';
 import { supabase } from '../config/database.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
 import { computeDedupHash } from '../utils/dedup.utils.js';
-import { buildInclusiveDateRange } from '../utils/date.utils.js';
+import { buildInclusiveDateRange, buildMoscowEventTimestamp } from '../utils/date.utils.js';
 import {
   buildWhitelistedEmployeesCache,
   getWhitelistedDbEmployeeSets,
@@ -245,6 +245,7 @@ export async function syncEventsLogic(
         card_number: mapped.cardNumber || null,
         event_date: mapped.eventDate,
         event_time: mapped.eventTime,
+        event_at: buildMoscowEventTimestamp(mapped.eventDate, mapped.eventTime),
         access_point: mapped.accessPoint,
         direction: mapped.direction,
         employee_id: emp?.id || null,

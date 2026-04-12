@@ -4,9 +4,9 @@ import {
   Clock, Timer, Download,
 } from 'lucide-react';
 import { skudService } from '../../services/skudService';
-import { exportEmployeeSkudExcel } from './exportEmployeeSkudExcel';
 import { DateInput } from '../ui/DateInput';
 import type { SkudEvent } from '../../types';
+import { triggerBlobDownload } from '../../utils/download';
 
 interface IEmployeeSkudSectionProps {
   employeeId: number;
@@ -222,17 +222,19 @@ const getNavLabel = (mode: ViewMode, viewDate: Date): string => {
 
 
 export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
-  employeeId, employeeName, focusDate, focusKey, externalViewMode,
+  employeeId, focusDate, focusKey, externalViewMode,
   externalRangeStart, externalRangeEnd, externalViewDate,
 }) => {
   const [groups, setGroups] = useState<IDayGroup[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<ViewMode>(externalViewMode || 'day');
   const [viewDateStr, setViewDateStr] = useState(() => focusDate || toLocalISO(new Date()));
   const [rangeStart, setRangeStart] = useState(() => toLocalISO(new Date()));
   const [rangeEnd, setRangeEnd] = useState(() => toLocalISO(new Date()));
   const [internalPoints, setInternalPoints] = useState<Set<string>>(new Set());
+  const [isExporting, setIsExporting] = useState(false);
   const prevFocusKey = useRef<number>(0);
   const requestIdRef = useRef(0);
   const internalPointsRef = useRef(internalPoints);
@@ -261,9 +263,8 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
   useEffect(() => {
     if (externalViewMode && externalViewMode !== viewMode) {
       setViewMode(externalViewMode);
-      if (externalViewMode !== 'range') setViewDateStr(toLocalISO(new Date()));
     }
-  }, [externalViewMode]);
+  }, [externalViewMode, viewMode]);
 
   // Sync external range dates and view date
   useEffect(() => {
@@ -291,6 +292,7 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
   useEffect(() => {
     const currentReqId = ++requestIdRef.current;
     setLoading(true);
+    setError('');
 
     skudService.getEmployeeEvents(employeeId, effStart, effEnd)
       .then(events => {
@@ -301,9 +303,10 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
           setExpandedDays(new Set([grouped[0].date]));
         }
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (requestIdRef.current !== currentReqId) return;
         setGroups([]);
+        setError(err instanceof Error ? err.message : 'Не удалось загрузить события СКУД');
       })
       .finally(() => {
         if (requestIdRef.current !== currentReqId) return;
@@ -349,6 +352,19 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
 
   const allEvents = groups.flatMap(g => g.events).sort((a, b) => a.event_time.localeCompare(b.event_time));
 
+  const handleExport = async () => {
+    const { startDate, endDate } = getEffectiveRange();
+    setIsExporting(true);
+    try {
+      const { blob, filename } = await skudService.exportEmployeeEvents(employeeId, startDate, endDate);
+      triggerBlobDownload(blob, filename);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Не удалось экспортировать СКУД');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   return (
     <div className="skud-section">
       {/* Navigation Bar */}
@@ -390,21 +406,19 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
 
         <button
           className="skud-period-btn skud-sync-btn"
-          onClick={() => {
-            const { startDate, endDate } = getEffectiveRange();
-            exportEmployeeSkudExcel(employeeName, groups, startDate, endDate)
-              .catch(err => console.error('Export failed:', err));
-          }}
-          disabled={loading || groups.length === 0}
+          onClick={() => { void handleExport(); }}
+          disabled={loading || isExporting || groups.length === 0}
           title="Экспорт в Excel"
         >
           <Download size={14} />
-          Экспорт
+          {isExporting ? 'Экспорт...' : 'Экспорт'}
         </button>
       </div>
 
       {loading ? (
         <div className="skud-loading">Загрузка событий СКУД...</div>
+      ) : error ? (
+        <div className="card-history-empty">{error}</div>
       ) : groups.length === 0 ? (
         <div className="card-history-empty">Нет событий СКУД за выбранный период</div>
       ) : viewMode === 'day' ? (

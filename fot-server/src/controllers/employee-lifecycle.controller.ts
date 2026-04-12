@@ -168,7 +168,6 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       .insert({
         employee_id: Number(id),
         org_department_id: data.org_department_id || null,
-        org_company_id: data.org_company_id || null,
         position_id: data.position_id || null,
         effective_from: today,
         is_primary: true,

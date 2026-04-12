@@ -1,5 +1,13 @@
-import type { SkudEvent } from '../types';
+import type { SkudEvent, TimesheetEntry, IProductionCalendarMonth } from '../types';
 import type { IResolvedSchedule } from '../types/schedule';
+import {
+  getEffectiveLateThresholdForDay,
+  getFullDayThresholdHoursForDay,
+  getScheduleForTimesheetDay,
+  getWorkHoursForDay,
+  isScheduleDayOff,
+  parseHMToMinutes,
+} from './scheduleUtils';
 
 const WORK_START_MINUTES = 9 * 60; // 09:00
 const WORKDAY_TARGET_SECONDS = 8 * 3600; // 8 часов фактического присутствия
@@ -22,6 +30,8 @@ export interface IDayAttendance {
   arrivalTime?: string;
   totalSeconds: number;
   isLate?: boolean;
+  plannedHours?: number;
+  scheduledStartMinutes?: number | null;
 }
 
 export interface IMonthStats {
@@ -66,6 +76,19 @@ const minutesToTime = (minutes: number): string => {
   const h = Math.floor(minutes / 60);
   const m = Math.round(minutes % 60);
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+};
+
+const getScheduledStartMinutes = (
+  sched: IResolvedSchedule | undefined,
+  year: number,
+  month: number,
+  day: number,
+): number => {
+  if (!sched) return WORK_START_MINUTES;
+  const date = new Date(year, month, day);
+  const isoDow = getISODow(date);
+  const override = sched.day_overrides?.[String(isoDow)];
+  return parseHMToMinutes((override?.work_start || sched.work_start).slice(0, 5)) ?? WORK_START_MINUTES;
 };
 
 const isWeekend = (year: number, month: number, day: number): boolean => {
@@ -140,7 +163,7 @@ export const calculateAttendance = (
       continue;
     }
     if (isCurrentMonth && d > todayDate) {
-      days.push({ day: d, status: 'future', totalSeconds: 0 });
+      days.push({ day: d, status: 'future', totalSeconds: 0, plannedHours: schedule ? schedule.work_hours : 8, scheduledStartMinutes: workStartMin });
       continue;
     }
 
@@ -150,14 +173,14 @@ export const calculateAttendance = (
     if (isRemoteSchedule) {
       presentCount++;
       totalWorkSecs += targetSeconds;
-      days.push({ day: d, status: 'present', totalSeconds: targetSeconds });
+      days.push({ day: d, status: 'present', totalSeconds: targetSeconds, plannedHours: schedule ? schedule.work_hours : 8, scheduledStartMinutes: workStartMin });
       continue;
     }
 
     const dayEvs = eventsByDay.get(d) || [];
 
     if (dayEvs.length === 0) {
-      days.push({ day: d, status: 'absent', totalSeconds: 0 });
+      days.push({ day: d, status: 'absent', totalSeconds: 0, plannedHours: schedule ? schedule.work_hours : 8, scheduledStartMinutes: workStartMin });
       continue;
     }
 
@@ -187,7 +210,15 @@ export const calculateAttendance = (
 
     if (late) lateCount++;
     presentCount++;
-    days.push({ day: d, status, arrivalTime, totalSeconds: workSecs, isLate: late });
+    days.push({
+      day: d,
+      status,
+      arrivalTime,
+      totalSeconds: workSecs,
+      isLate: late,
+      plannedHours: schedule ? schedule.work_hours : 8,
+      scheduledStartMinutes: workStartMin,
+    });
   }
 
   const attendancePercent = totalWorkdays > 0
@@ -267,13 +298,14 @@ export const computePeriodData = (
   month: number,
 ): { stats: IMonthStats; weeklyPattern: IWeekdayPattern[] } => {
   const workDays = days.filter(d => d.status !== 'weekend' && d.status !== 'future');
-  const presentDays = workDays.filter(d => d.status === 'present' || d.status === 'underwork');
+  const presentDays = workDays.filter(d => d.status !== 'absent');
   const lateDays = workDays.filter(d => d.isLate);
 
   const attendancePercent = workDays.length > 0
     ? Math.round((presentDays.length / workDays.length) * 100)
     : 0;
   const totalSecs = workDays.reduce((sum, d) => sum + d.totalSeconds, 0);
+  const totalPlannedHours = workDays.reduce((sum, d) => sum + (d.plannedHours ?? 8), 0);
 
   const arrivalMins = presentDays
     .filter(d => d.arrivalTime)
@@ -287,14 +319,18 @@ export const computePeriodData = (
   if (arrivalMins.length > 0) {
     const avg = arrivalMins.reduce((a, b) => a + b, 0) / arrivalMins.length;
     avgArrivalTime = minutesToTime(avg);
-    avgArrivalDiffMinutes = Math.round(avg - WORK_START_MINUTES);
+    const baseStartMinutes = presentDays
+      .filter(d => d.arrivalTime)
+      .map(d => d.scheduledStartMinutes ?? WORK_START_MINUTES);
+    const avgBase = baseStartMinutes.reduce((a, b) => a + b, 0) / baseStartMinutes.length;
+    avgArrivalDiffMinutes = Math.round(avg - avgBase);
   }
 
   const stats: IMonthStats = {
     attendancePercent,
     lateCount: lateDays.length,
     hoursWorked: Math.round(totalSecs / 3600),
-    hoursPlanned: workDays.length * 8,
+    hoursPlanned: Math.round(totalPlannedHours),
     avgArrivalTime,
     avgArrivalDiffMinutes,
   };
@@ -321,6 +357,201 @@ export const computePeriodData = (
   });
 
   return { stats, weeklyPattern };
+};
+
+export const calculateAttendanceFromTimesheet = (params: {
+  employeeId: number;
+  entries: TimesheetEntry[];
+  year: number;
+  month: number;
+  schedules?: Record<number, IResolvedSchedule>;
+  dailySchedules?: Record<number, Record<string, IResolvedSchedule>>;
+  calendar?: IProductionCalendarMonth | null;
+}) => {
+  const {
+    employeeId,
+    entries,
+    year,
+    month,
+    schedules,
+    dailySchedules,
+    calendar,
+  } = params;
+
+  const today = new Date();
+  const todayDate = today.getDate();
+  const isCurrentMonth = today.getFullYear() === year && today.getMonth() === month;
+  const daysInMonth = getDaysInMonth(year, month);
+
+  const entryByDay = new Map<number, TimesheetEntry>();
+  for (const entry of entries) {
+    if (entry.employee_id !== employeeId) continue;
+    const workDate = new Date(`${entry.work_date}T00:00:00`);
+    if (workDate.getFullYear() !== year || workDate.getMonth() !== month) continue;
+    entryByDay.set(workDate.getDate(), entry);
+  }
+
+  const days: IDayAttendance[] = [];
+  let coveredDays = 0;
+  let lateCount = 0;
+  let totalWorkdays = 0;
+  let totalWorkSecs = 0;
+  let totalPlannedHours = 0;
+  const arrivalMins: number[] = [];
+  const arrivalDiffs: number[] = [];
+  const arrivalByDow: number[][] = [[], [], [], [], []];
+  const workedLikeStatuses = new Set(['work', 'manual', 'remote', 'business_trip']);
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const schedule = getScheduleForTimesheetDay(schedules, dailySchedules, employeeId, year, month + 1, day);
+    const plannedHours = isScheduleDayOff(schedule, calendar ?? null, year, month + 1, day)
+      ? 0
+      : getWorkHoursForDay(schedule, year, month + 1, day);
+    const scheduledStartMinutes = getScheduledStartMinutes(schedule, year, month, day);
+    const entry = entryByDay.get(day);
+    const isScheduledDayOff = plannedHours <= 0;
+
+    if (isCurrentMonth && day > todayDate) {
+      days.push({ day, status: 'future', totalSeconds: 0, plannedHours, scheduledStartMinutes });
+      continue;
+    }
+
+    if (isScheduledDayOff && !entry) {
+      days.push({ day, status: 'weekend', totalSeconds: 0, plannedHours: 0, scheduledStartMinutes });
+      continue;
+    }
+
+    if (!isScheduledDayOff) {
+      totalWorkdays++;
+      totalPlannedHours += plannedHours;
+    }
+
+    if (!entry) {
+      days.push({ day, status: 'absent', totalSeconds: 0, plannedHours, scheduledStartMinutes });
+      continue;
+    }
+
+    const totalSeconds = Math.max(0, Math.round((entry.hours_worked ?? 0) * 3600));
+    const arrivalTime = entry.first_entry?.slice(0, 5);
+    const hasActualPresence = totalSeconds > 0 || Boolean(entry.first_entry) || Boolean(entry.last_exit) || workedLikeStatuses.has(entry.status);
+    let isLate = false;
+
+    if (arrivalTime && !isScheduledDayOff) {
+      const arrivalMinutes = timeToMinutes(arrivalTime);
+      arrivalMins.push(arrivalMinutes);
+      arrivalDiffs.push(arrivalMinutes - scheduledStartMinutes);
+      const dow = new Date(year, month, day).getDay();
+      const dowIdx = dow === 0 ? 6 : dow - 1;
+      if (dowIdx < 5) {
+        arrivalByDow[dowIdx].push(arrivalMinutes);
+      }
+      const lateThresholdMinutes = parseHMToMinutes(getEffectiveLateThresholdForDay(schedule, year, month + 1, day).slice(0, 5)) ?? scheduledStartMinutes;
+      isLate = arrivalMinutes > lateThresholdMinutes;
+    }
+
+    const fullDayThresholdHours = getFullDayThresholdHoursForDay(schedule, calendar ?? null, year, month + 1, day);
+    let status: IDayAttendance['status'];
+    if (entry.status === 'absent' || entry.status === 'unpaid') {
+      status = 'absent';
+    } else if (hasActualPresence) {
+      status = (entry.hours_worked ?? 0) < fullDayThresholdHours ? 'underwork' : 'present';
+    } else if (isScheduledDayOff && entry.status === 'dayoff') {
+      status = 'weekend';
+    } else {
+      status = 'present';
+    }
+
+    if (!isScheduledDayOff && status !== 'absent') {
+      coveredDays++;
+    }
+    if (isLate) {
+      lateCount++;
+    }
+    totalWorkSecs += totalSeconds;
+
+    days.push({
+      day,
+      status,
+      arrivalTime,
+      totalSeconds,
+      isLate,
+      plannedHours,
+      scheduledStartMinutes,
+    });
+  }
+
+  const attendancePercent = totalWorkdays > 0
+    ? Math.round((coveredDays / totalWorkdays) * 100)
+    : 0;
+
+  let avgArrivalTime: string | null = null;
+  let avgArrivalDiffMinutes = 0;
+  if (arrivalMins.length > 0) {
+    const avgArrival = arrivalMins.reduce((a, b) => a + b, 0) / arrivalMins.length;
+    avgArrivalTime = minutesToTime(avgArrival);
+    avgArrivalDiffMinutes = Math.round(arrivalDiffs.reduce((a, b) => a + b, 0) / arrivalDiffs.length);
+  }
+
+  const DOW_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт'];
+  const weeklyPattern: IWeekdayPattern[] = DOW_LABELS.map((label, index) => {
+    const times = arrivalByDow[index];
+    if (times.length === 0) return { day: label, avgTime: null, heightPercent: 0 };
+    const avg = times.reduce((a, b) => a + b, 0) / times.length;
+    const minM = 8 * 60 + 30;
+    const maxM = 9 * 60 + 30;
+    const pct = ((Math.max(minM, Math.min(maxM, avg)) - minM) / (maxM - minM)) * 100;
+    return { day: label, avgTime: minutesToTime(avg), heightPercent: Math.max(20, pct) };
+  });
+
+  const alerts: IAlert[] = [];
+  if (lateCount > 2) {
+    alerts.push({
+      type: 'warning',
+      title: `${lateCount} опозданий за месяц`,
+      description: 'Превышен лимит в 2 опоздания',
+    });
+  }
+
+  const absentDays = days.filter(d => d.status === 'absent').map(d => d.day);
+  if (absentDays.length > 0) {
+    const monthNames = [
+      'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+      'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
+    ];
+    const ranges: string[] = [];
+    let start = absentDays[0];
+    let end = absentDays[0];
+    for (let i = 1; i < absentDays.length; i++) {
+      if (absentDays[i] === end + 1) {
+        end = absentDays[i];
+      } else {
+        ranges.push(start === end ? `${start}` : `${start}–${end}`);
+        start = absentDays[i];
+        end = absentDays[i];
+      }
+    }
+    ranges.push(start === end ? `${start}` : `${start}–${end}`);
+    const word = absentDays.length === 1 ? 'день' : absentDays.length < 5 ? 'дня' : 'дней';
+    alerts.push({
+      type: 'error',
+      title: `${absentDays.length} ${word} отсутствия`,
+      description: `${ranges.join(', ')} ${monthNames[month]} без подтверждённого покрытия в табеле`,
+    });
+  }
+
+  return {
+    days,
+    stats: {
+      attendancePercent,
+      lateCount,
+      hoursWorked: Math.round(totalWorkSecs / 3600),
+      hoursPlanned: Math.round(totalPlannedHours),
+      avgArrivalTime,
+      avgArrivalDiffMinutes,
+    } as IMonthStats,
+    weeklyPattern,
+    alerts,
+  };
 };
 
 export const isEmployeeOnSite = (events: SkudEvent[], internalPoints: Set<string>): boolean => {

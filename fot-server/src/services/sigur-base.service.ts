@@ -73,6 +73,20 @@ export class SigurServiceBase {
     return this.isConnectionAvailable('external') || this.isConnectionAvailable('internal');
   }
 
+  /**
+   * Фоновые процессы всегда должны идти через внешний канал, если он настроен.
+   * Во внутренний откатываемся только как в fallback для локальной/аварийной среды.
+   */
+  getBackgroundConnectionType(): ConnectionType {
+    if (this.isConnectionAvailable('external')) return 'external';
+    if (this.isConnectionAvailable('internal')) return 'internal';
+    throw new Error(
+      IS_PRODUCTION
+        ? 'Sigur не настроен. В production требуется SIGUR_EXTERNAL_* в .env'
+        : 'Sigur не настроен. Укажите SIGUR_INTERNAL_* или SIGUR_EXTERNAL_* в .env',
+    );
+  }
+
   /** Возвращает информацию о доступных подключениях. */
   getAvailableConnections(): { external: boolean; internal: boolean } {
     return {

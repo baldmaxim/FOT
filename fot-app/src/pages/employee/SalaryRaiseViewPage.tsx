@@ -1,4 +1,5 @@
-import { type FC, useState, useEffect, useCallback } from 'react';
+import { type FC, useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import {
@@ -9,11 +10,11 @@ import {
   RATING_OPTIONS,
   IMPACT_OPTIONS,
   RECOMMENDATION_OPTIONS,
-  type ISalaryRaiseRequest,
   type ISupervisorReview,
   type IHrReview,
   type IFinanceReview,
 } from '../../services/salaryRaiseService';
+import { useSalaryRaiseRequest } from '../../hooks/useSalaryRaiseData';
 import styles from './SalaryRaiseViewPage.module.css';
 
 const formatSalary = (v: number | null | undefined) =>
@@ -48,34 +49,32 @@ export const SalaryRaiseViewPage: FC = () => {
   const { user, canEditPage } = useAuth();
   const isReviewContext = location.pathname.startsWith('/salary-raise-review');
   const backPath = isReviewContext ? '/salary-raise-review' : '/employee/salary-raise';
+  const requestId = id ? Number(id) : null;
+  const queryClient = useQueryClient();
 
-  const [request, setRequest] = useState<ISalaryRaiseRequest | null>(null);
-  const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
   // Review forms
   const [supReview, setSupReview] = useState<ISupervisorReview>({ ...EMPTY_SUPERVISOR });
   const [hrReview, setHrReview] = useState<IHrReview>({ ...EMPTY_HR });
   const [finReview, setFinReview] = useState<IFinanceReview>({ ...EMPTY_FINANCE });
+  const requestQuery = useSalaryRaiseRequest(requestId, !!requestId);
+  const request = requestQuery.data ?? null;
 
-  const load = useCallback(async () => {
-    if (!id) return;
-    try {
-      const data = await salaryRaiseService.getById(Number(id));
-      setRequest(data);
-      if (data.supervisor_review) setSupReview(data.supervisor_review as ISupervisorReview);
-      if (data.hr_review) setHrReview(data.hr_review as IHrReview);
-      if (data.finance_review) setFinReview(data.finance_review as IFinanceReview);
-    } catch {
+  useEffect(() => {
+    if (requestQuery.isError) {
       navigate(backPath);
-    } finally {
-      setLoading(false);
     }
-  }, [id, navigate]);
+  }, [backPath, navigate, requestQuery.isError]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!request) return;
+    setSupReview(request.supervisor_review ? request.supervisor_review as ISupervisorReview : { ...EMPTY_SUPERVISOR });
+    setHrReview(request.hr_review ? request.hr_review as IHrReview : { ...EMPTY_HR });
+    setFinReview(request.finance_review ? request.finance_review as IFinanceReview : { ...EMPTY_FINANCE });
+  }, [request]);
 
-  if (loading) return <div className={styles.loading}>Загрузка...</div>;
+  if (requestQuery.isLoading) return <div className={styles.loading}>Загрузка...</div>;
   if (!request) return null;
 
   const snapshot = request.employee_snapshot;
@@ -102,7 +101,8 @@ export const SalaryRaiseViewPage: FC = () => {
       } else {
         await salaryRaiseService.financeReview(request.id, action, finReview);
       }
-      await load();
+      await queryClient.invalidateQueries({ queryKey: ['salary-raise'] });
+      await requestQuery.refetch();
     } catch (err) {
       console.error('Review error:', err);
     } finally {
@@ -114,7 +114,8 @@ export const SalaryRaiseViewPage: FC = () => {
     setSubmitting(true);
     try {
       await salaryRaiseService.cancel(request.id);
-      await load();
+      await queryClient.invalidateQueries({ queryKey: ['salary-raise'] });
+      await requestQuery.refetch();
     } catch (err) {
       console.error('Cancel error:', err);
     } finally {
@@ -165,7 +166,7 @@ export const SalaryRaiseViewPage: FC = () => {
           <div className={styles.infoItem}><span className={styles.infoLabel}>Должность</span><span className={styles.infoValue}>{snapshot.position_name || '—'}</span></div>
           <div className={styles.infoItem}><span className={styles.infoLabel}>Отдел</span><span className={styles.infoValue}>{snapshot.department_name || '—'}</span></div>
           <div className={styles.infoItem}><span className={styles.infoLabel}>Объект</span><span className={styles.infoValue}>{snapshot.work_object || '—'}</span></div>
-          <div className={styles.infoItem}><span className={styles.infoLabel}>Текущий оклад</span><span className={styles.infoValue}>{formatSalary(snapshot.salary_actual ?? snapshot.current_salary)}</span></div>
+          <div className={styles.infoItem}><span className={styles.infoLabel}>Текущий оклад</span><span className={styles.infoValue}>{formatSalary(snapshot.current_salary)}</span></div>
           <div className={styles.infoItem}><span className={styles.infoLabel}>Руководитель</span><span className={styles.infoValue}>{snapshot.supervisor_name || '—'}</span></div>
         </div>
       </div>
@@ -177,7 +178,7 @@ export const SalaryRaiseViewPage: FC = () => {
         </h3>
         <div className={styles.infoGrid}>
           <div className={styles.infoItem}><span className={styles.infoLabel}>Тип</span><span className={styles.infoValue}>{REQUEST_TYPE_LABELS[request.request_type]}</span></div>
-          <div className={styles.infoItem}><span className={styles.infoLabel}>Запрашиваемый оклад</span><span className={styles.infoValue}>{formatSalary(request.requested_salary)} (+{(() => { const cur = snapshot.salary_actual ?? snapshot.current_salary; return cur && cur > 0 ? (((request.requested_salary - cur) / cur) * 100).toFixed(1) : request.raise_percentage ?? 0; })()}%)</span></div>
+          <div className={styles.infoItem}><span className={styles.infoLabel}>Запрашиваемый оклад</span><span className={styles.infoValue}>{formatSalary(request.requested_salary)} (+{(() => { const cur = snapshot.current_salary; return cur && cur > 0 ? (((request.requested_salary - cur) / cur) * 100).toFixed(1) : request.raise_percentage ?? 0; })()}%)</span></div>
           <div className={styles.infoItem}><span className={styles.infoLabel}>Желаемая дата</span><span className={styles.infoValue}>{formatDate(request.desired_effective_date)}</span></div>
           <div className={styles.infoItem}><span className={styles.infoLabel}>Дата найма</span><span className={styles.infoValue}>{formatDate(snapshot.hire_date)}</span></div>
           <div className={styles.infoValueFull}><span className={styles.infoLabel}>Причина</span><p>{request.reason_brief}</p></div>

@@ -1,9 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
-import { skudService } from '../services/skudService';
-import type { IEmployeePresence } from '../types';
+import { usePresenceQuery } from './useEmployeeDirectory';
+import { useDocumentVisibility } from './useDocumentVisibility';
 
 interface IUsePresenceReturn {
-  employees: IEmployeePresence[];
+  employees: import('../types').IEmployeePresence[];
   loading: boolean;
   error: string | null;
   lastUpdated: Date | null;
@@ -11,12 +10,10 @@ interface IUsePresenceReturn {
 }
 
 export const usePresence = (departmentId: string | null): IUsePresenceReturn => {
-  const { data, isLoading, error, dataUpdatedAt, refetch } = useQuery({
-    queryKey: ['presence', departmentId],
-    queryFn: () => skudService.getPresence(departmentId!),
+  const isVisible = useDocumentVisibility();
+  const { data, isLoading, error, dataUpdatedAt, refetch } = usePresenceQuery(departmentId, {
     enabled: !!departmentId,
-    refetchInterval: 60_000,
-    staleTime: 30_000,
+    refetchInterval: isVisible ? 60_000 : false,
   });
 
   return {

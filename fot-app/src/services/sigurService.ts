@@ -19,14 +19,6 @@ interface ISigurPreviewResult {
   mappedCount?: number;
 }
 
-interface ISigurSyncResult {
-  imported: number;
-  skipped: number;
-  matched: number;
-  errors: string[];
-  sigurTotal: number;
-}
-
 export const sigurService = {
   async testConnection(connection?: 'internal' | 'external'): Promise<ISigurTestResult> {
     const params = connection ? `?connection=${connection}` : '';
@@ -39,43 +31,6 @@ export const sigurService = {
     if (connection) params.append('connection', connection);
     const result = await apiClient.get<ISigurPreviewResult>(`/sigur/preview?${params.toString()}`);
     return result;
-  },
-
-  async sync(startDate: string, endDate: string): Promise<ISigurSyncResult> {
-    // Go API creates a sync command and returns its ID
-    const response = await apiClient.post<ApiResponse<{ id: number }>>('/sigur/sync', {
-      startDate,
-      endDate,
-    });
-    const commandId = response.data.id;
-    // Poll progress until done
-    return this.pollSyncProgress(commandId);
-  },
-
-  async pollSyncProgress(commandId: number): Promise<ISigurSyncResult> {
-    const MAX_POLLS = 300; // 5 min max
-    const POLL_INTERVAL = 1000;
-    for (let i = 0; i < MAX_POLLS; i++) {
-      const res = await apiClient.get<ApiResponse<{
-        status: string;
-        result?: ISigurSyncResult;
-        error?: string;
-      }>>(`/sigur/sync-progress/${commandId}`);
-
-      const progress = res.data;
-      if (progress.status === 'done' && progress.result) {
-        return progress.result;
-      }
-      if (progress.status === 'error') {
-        throw new Error(progress.error || 'Ошибка синхронизации');
-      }
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL));
-    }
-    throw new Error('Таймаут синхронизации');
-  },
-
-  async getSyncStatus(): Promise<{ running: boolean; lastSync?: string }> {
-    return apiClient.get('/sigur/sync-status');
   },
 
   async getEvents(startTime?: string, endTime?: string): Promise<{ data: unknown[]; count: number }> {

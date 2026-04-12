@@ -89,11 +89,12 @@ export const ChatSidePanel: FC = () => {
     if (!isOpen) return;
     const viewport = window.visualViewport;
     if (!viewport) return;
+    const panelNode = panelRef.current;
 
     const update = () => {
-      if (!panelRef.current) return;
-      panelRef.current.style.height = `${viewport.height}px`;
-      panelRef.current.style.top = `${viewport.offsetTop}px`;
+      if (!panelNode) return;
+      panelNode.style.height = `${viewport.height}px`;
+      panelNode.style.top = `${viewport.offsetTop}px`;
     };
 
     update();
@@ -103,9 +104,9 @@ export const ChatSidePanel: FC = () => {
     return () => {
       viewport.removeEventListener('resize', update);
       viewport.removeEventListener('scroll', update);
-      if (panelRef.current) {
-        panelRef.current.style.height = '';
-        panelRef.current.style.top = '';
+      if (panelNode) {
+        panelNode.style.height = '';
+        panelNode.style.top = '';
       }
     };
   }, [isOpen]);

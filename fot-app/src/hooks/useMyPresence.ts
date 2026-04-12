@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import { skudService } from '../services/skudService';
+import { useDocumentVisibility } from './useDocumentVisibility';
 
 type PresenceStatus = 'online' | 'offline' | 'unknown';
 
@@ -15,6 +16,7 @@ const toLocalISO = (d: Date): string => {
 export const useMyPresence = (): { status: PresenceStatus; loading: boolean } => {
   const { profile } = useAuth();
   const empId = profile?.employee_id ?? null;
+  const isVisible = useDocumentVisibility();
 
   // Настройки точек доступа — меняются редко, единый кэш 10 мин на всё приложение
   const accessPointsQuery = useQuery({
@@ -30,7 +32,8 @@ export const useMyPresence = (): { status: PresenceStatus; loading: boolean } =>
     queryFn: () => (empId ? skudService.getEmployeeEvents(empId, today, today) : Promise.resolve([])),
     enabled: !!empId,
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: isVisible ? 60_000 : false,
+    refetchIntervalInBackground: false,
   });
 
   const status: PresenceStatus = useMemo(() => {

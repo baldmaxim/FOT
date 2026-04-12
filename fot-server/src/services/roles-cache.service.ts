@@ -36,6 +36,17 @@ export async function getRoleByCode(code: string): Promise<SystemRole | null> {
   return cache.get(code) ?? null;
 }
 
+export async function getRoleById(id: string | null | undefined): Promise<SystemRole | null> {
+  if (!id) return null;
+  const cache = await loadRolesCache();
+  for (const role of cache.values()) {
+    if (role.id === id) {
+      return role;
+    }
+  }
+  return null;
+}
+
 export async function getHierarchyLevel(code: string): Promise<number> {
   const role = await getRoleByCode(code);
   return role?.level ?? 0;

@@ -46,10 +46,11 @@ const mockedState = vi.hoisted(() => ({
   },
   sigurServiceMock: {
     isConfigured: vi.fn(() => true),
+    getBackgroundConnectionType: vi.fn(() => 'external'),
     testConnection: vi.fn(async () => ({
       success: true,
       message: 'ok',
-      connection: 'internal',
+      connection: 'external',
     })),
   },
 }));
@@ -232,6 +233,8 @@ vi.mock('./sigur.service.js', () => ({
 }));
 
 import {
+  markPresencePollingCycleFinished,
+  markPresencePollingCycleStarted,
   recordSigurMonitorFailure,
   recordSigurMonitorSuccess,
   resetSigurMonitorStateForTests,
@@ -246,10 +249,12 @@ describe('sigur-monitor.service', () => {
     mockedState.tables.skud_events = [];
     mockedState.notificationServiceMock.createMany.mockClear();
     mockedState.sigurServiceMock.isConfigured.mockReturnValue(true);
+    mockedState.sigurServiceMock.getBackgroundConnectionType.mockReturnValue('external');
+    mockedState.sigurServiceMock.testConnection.mockClear();
     mockedState.sigurServiceMock.testConnection.mockResolvedValue({
       success: true,
       message: 'ok',
-      connection: 'internal',
+      connection: 'external',
     });
     mockedState.settings = {
       enabled: true,
@@ -375,5 +380,32 @@ describe('sigur-monitor.service', () => {
     expect(mockedState.tables.sigur_incidents[0].detected_by).toBe('silence_detector');
     expect(mockedState.tables.sigur_health_checks.at(-1)?.status).toBe('silence');
     expect(mockedState.notificationServiceMock.createMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the external background channel for direct probes', async () => {
+    await runSigurMonitorCycleNow(new Date('2026-04-11T07:03:00.000Z'));
+
+    expect(mockedState.sigurServiceMock.testConnection).toHaveBeenCalledWith('external');
+    expect(mockedState.tables.sigur_health_checks.at(-1)).toMatchObject({
+      source: 'monitor_probe',
+      status: 'success',
+      connection_type: 'external',
+    });
+  });
+
+  it('skips direct probe while presence polling cycle is still in flight', async () => {
+    await recordSigurMonitorSuccess({
+      source: 'presence_polling',
+      checkedAt: new Date('2026-04-11T07:00:00.000Z'),
+      eventsLastWindow: 3,
+    });
+
+    markPresencePollingCycleStarted(new Date('2026-04-11T07:01:00.000Z'));
+    await runSigurMonitorCycleNow(new Date('2026-04-11T07:03:00.000Z'));
+    markPresencePollingCycleFinished();
+
+    expect(mockedState.sigurServiceMock.testConnection).not.toHaveBeenCalled();
+    expect(mockedState.tables.sigur_health_checks).toHaveLength(1);
+    expect(mockedState.tables.sigur_health_checks[0]?.source).toBe('presence_polling');
   });
 });

@@ -122,6 +122,30 @@ const getDayCellText = (entry: TimesheetEntry | null, weekend: boolean): string 
   return '';
 };
 
+const getDayCellTitle = (entry: TimesheetEntry | null, weekend: boolean): string | undefined => {
+  if (weekend && !entry) return 'Выходной';
+  if (!entry) return undefined;
+
+  const parts: string[] = [];
+  if (entry.hours_worked != null) {
+    parts.push(`Часы: ${formatHM(entry.hours_worked)}`);
+  }
+  if ((entry.travel_minutes_credited || 0) > 0) {
+    parts.push(`Учтено время в дороге: ${formatHM((entry.travel_minutes_credited || 0) / 60)}`);
+  }
+  if ((entry.travel_delay_minutes || 0) > 0) {
+    parts.push(`Задержка в дороге: ${formatHM((entry.travel_delay_minutes || 0) / 60)}`);
+  }
+  if ((entry.travel_problematic_segments || 0) > 0) {
+    parts.push(`Проблемных дорожных сегментов: ${entry.travel_problematic_segments}`);
+  }
+  if (entry.is_correction) {
+    parts.push('Есть корректировка');
+  }
+
+  return parts.length > 0 ? parts.join(' • ') : undefined;
+};
+
 export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   employees,
   entries,
@@ -173,6 +197,89 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     });
   }, [employees, entries, year, month, schedules, dailySchedules, calendar]);
 
+  if (compact) {
+    return (
+      <div className="ts-table-container">
+        <div className="ts-table-header-bar">
+          <h3 className="ts-table-title">Табель учёта рабочего времени</h3>
+        </div>
+
+        <div className="ts-mobile-list">
+          {rows.map(row => {
+            const diff = row.factHours - row.normHours;
+            const hasVacation = Array.from(row.days.values()).some(e => e.status === 'vacation');
+
+            return (
+              <article key={row.employee.id} className="ts-mobile-card">
+                <button
+                  type="button"
+                  className="ts-mobile-card-header"
+                  onClick={() => onEmployeeClick(row.employee)}
+                >
+                  <div className="ts-mobile-card-meta">
+                    <div className="ts-mobile-card-name">{row.employee.full_name}</div>
+                    <div className="ts-mobile-card-role">{row.employee.position_name || '—'}</div>
+                  </div>
+                  <div className="ts-mobile-summary">
+                    <span className="ts-mobile-summary-chip">Факт {formatHM(row.factHours)}</span>
+                    <span className="ts-mobile-summary-chip">Норма {formatHM(row.normHours)}</span>
+                    <span
+                      className={`ts-mobile-summary-chip ${
+                        hasVacation && row.factHours === 0
+                          ? ''
+                          : diff >= 0
+                            ? 'ts-mobile-summary-chip--positive'
+                            : 'ts-mobile-summary-chip--negative'
+                      }`}
+                    >
+                      {hasVacation && row.factHours === 0
+                        ? 'Отпуск'
+                        : `${diff >= 0 ? '+' : '−'}${formatHM(Math.abs(diff))}`}
+                    </span>
+                  </div>
+                </button>
+
+                <div className="ts-mobile-days">
+                  {days.map(d => {
+                    const sched = getScheduleForTimesheetDay(schedules, dailySchedules, row.employee.id, year, month, d);
+                    const dayOff = isScheduleDayOff(sched, calendar, year, month, d);
+                    const today = isToday(year, month, d);
+                    const future = isFutureDay(year, month, d);
+                    const entry = row.days.get(d) || null;
+                    const thresholdHours = getFullDayThresholdHoursForDay(sched, calendar, year, month, d);
+                    const cls = getDayCellClass(entry, dayOff, today, future, thresholdHours);
+                    const text = getDayCellText(entry, dayOff);
+                    const title = getDayCellTitle(entry, dayOff);
+
+                    return (
+                      <button
+                        key={d}
+                        type="button"
+                        className={`${cls} ts-mobile-day-btn`}
+                        title={title}
+                        onClick={() => onDayClick(row.employee, d, entry)}
+                      >
+                        <span className="ts-mobile-day-head">
+                          <span className="ts-mobile-day-num">{d}</span>
+                          <span className="ts-mobile-day-weekday">{getWeekdayShort(year, month, d)}</span>
+                        </span>
+                        <span className="ts-mobile-day-value">{text || '·'}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </article>
+            );
+          })}
+
+          {rows.length === 0 && (
+            <div className="ts-mobile-empty">Нет сотрудников для отображения</div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="ts-table-container">
       <div className="ts-table-header-bar">
@@ -201,6 +308,9 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
           </div>
           <div className="ts-legend-item">
             <span className="ts-legend-dot ts-legend-dot--corrected">К</span>Корректировка
+          </div>
+          <div className="ts-legend-item">
+            <span className="ts-legend-dot ts-legend-dot--travel">↔</span>Учтено время в дороге
           </div>
           <div className="ts-legend-item">
             <span className="ts-legend-dot ts-legend-dot--travel-issue">!</span>Проблема в дороге
@@ -256,11 +366,13 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     const thresholdHours = getFullDayThresholdHoursForDay(sched, calendar, year, month, d);
                     const cls = getDayCellClass(entry, dayOff, today, future, thresholdHours);
                     const text = getDayCellText(entry, dayOff);
+                    const title = getDayCellTitle(entry, dayOff);
 
                     return (
                       <td
                         key={d}
                         className={cls}
+                        title={title}
                         onClick={() => onDayClick(row.employee, d, entry)}
                       >
                         {text}

@@ -5,23 +5,27 @@ import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest, TimeStatus, IResolvedSchedule } from '../types/index.js';
 import { exportTimesheet } from './timesheet-export.controller.js';
 import { exportTimesheetMass } from './timesheet-mass-export.controller.js';
-import { resolveSchedulesForPeriod, isWorkingDay, needsSkudCheck, getScheduleForDate, getEffectiveLateThreshold, loadCalendarMonth } from '../services/schedule.service.js';
-import { getInternalAccessPoints } from '../services/skud-shared.service.js';
-import { getTravelHoursSummaryForRange, travelMinutesToHours } from '../services/skud-travel.service.js';
+import { resolveSchedulesForPeriod, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, loadCalendarMonth } from '../services/schedule.service.js';
 import { canAccessEmployeeInScope, resolveRequestDataScope, resolveScopedDepartmentId } from '../services/data-scope.service.js';
+import {
+  buildAttendanceEntries,
+  getAttendanceAdjustmentById,
+  updateAttendanceAdjustmentById,
+  upsertAttendanceAdjustment,
+} from '../services/attendance.service.js';
 
-const validStatuses: TimeStatus[] = ['work', 'vacation', 'dayoff', 'remote', 'unpaid', 'absent', 'sick', 'business_trip', 'manual'];
+const validStatuses = ['work', 'vacation', 'dayoff', 'remote', 'unpaid', 'absent', 'sick', 'business_trip', 'manual'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
 
 const createEntrySchema = z.object({
   employee_id: z.number().int().positive(),
   work_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  status: z.enum(validStatuses as [string, ...string[]]),
+  status: z.enum(validStatuses),
   hours_worked: z.number().min(0).max(24).nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
 });
 
 const updateEntrySchema = z.object({
-  status: z.enum(validStatuses as [string, ...string[]]).optional(),
+  status: z.enum(validStatuses).optional(),
   hours_worked: z.number().min(0).max(24).nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
 });
@@ -57,7 +61,7 @@ function getWorkingDaysUpToToday(year: number, month: number): number {
 }
 
 export const timesheetController = {
-  /** GET /api/timesheet?month=YYYY-MM&department_id=... */
+  /** GET /api/timesheet?month=YYYY-MM&department_id=...&employee_id=... */
   async getAll(req: AuthenticatedRequest, res: Response) {
     try {
       const { month } = req.query;
@@ -66,6 +70,9 @@ export const timesheetController = {
         return res.status(403).json({ success: false, error: 'Data scope не настроен для роли' });
       }
       const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
+      const requestedEmployeeId = typeof req.query.employee_id === 'string'
+        ? Number.parseInt(req.query.employee_id, 10)
+        : null;
       const department_id = await resolveScopedDepartmentId(req, requestedDepartmentId);
 
       if (!month || typeof month !== 'string' || !/^\d{4}-\d{2}$/.test(month)) {
@@ -81,6 +88,11 @@ export const timesheetController = {
       const todayStr = today.toISOString().slice(0, 10);
 
       const hasDeptFilter = department_id && typeof department_id === 'string';
+      const hasEmployeeFilter = Number.isInteger(requestedEmployeeId) && (requestedEmployeeId as number) > 0;
+
+      if (hasEmployeeFilter && !(await canAccessEmployeeInScope(req, requestedEmployeeId))) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
 
       if (scope === 'self' && !req.user.employee_id) {
         return res.json({
@@ -93,7 +105,7 @@ export const timesheetController = {
         });
       }
 
-      if (scope !== 'self' && !hasDeptFilter) {
+      if (scope !== 'self' && !hasDeptFilter && !hasEmployeeFilter) {
         return res.json({
           success: true,
           data: {
@@ -112,7 +124,9 @@ export const timesheetController = {
         .eq('is_archived', false)
         .order('full_name');
 
-      if (scope === 'self' && req.user.employee_id) {
+      if (hasEmployeeFilter) {
+        empQuery = empQuery.eq('id', requestedEmployeeId as number);
+      } else if (scope === 'self' && req.user.employee_id) {
         empQuery = empQuery.eq('id', req.user.employee_id);
       } else if (hasDeptFilter) {
         empQuery = empQuery.eq('org_department_id', department_id as string);
@@ -150,298 +164,20 @@ export const timesheetController = {
         (positions || []).forEach((p: { id: string; name: string }) => posMap.set(p.id, p.name));
       }
 
-      const BATCH_SIZE = 500;
+	      const { entries } = await buildAttendanceEntries({
+	        employees: (employees || []).map(employee => ({
+	          id: employee.id as number,
+	          full_name: (employee.full_name as string | null) || null,
+	          work_category: (employee.work_category as string | null) || null,
+	        })),
+	        startDate,
+	        endDate,
+	        dailySchedulesMap,
+	        calendarMonth,
+	        todayStr,
+	      });
 
-      // Load internal access points for filtering (из кэша)
-      const internalPoints = await getInternalAccessPoints();
-
-      // Fetch raw SKUD events
-      interface IRawEvent {
-        employee_id: number;
-        event_date: string;
-        event_time: string;
-        direction: string | null;
-        access_point: string | null;
-      }
-      let rawEvents: IRawEvent[] = [];
-      for (let i = 0; i < employeeIds.length; i += BATCH_SIZE) {
-        const batch = employeeIds.slice(i, i + BATCH_SIZE);
-        const { data, error } = await supabase
-          .from('skud_events')
-          .select('employee_id, event_date, event_time, direction, access_point')
-          .in('employee_id', batch)
-          .gte('event_date', startDate)
-          .lte('event_date', endDate)
-          .order('event_time', { ascending: true });
-        if (error) throw error;
-        rawEvents.push(...(data || []));
-      }
-
-      // Also find unmatched events (employee_id IS NULL) by full_name
-      const empNameMap = new Map<string, number>();
-      for (const emp of employees || []) {
-        if (emp.full_name) empNameMap.set(emp.full_name.toLowerCase().trim(), emp.id);
-      }
-      const seenEventIds = new Set(rawEvents.map(e => `${e.employee_id}_${e.event_date}_${e.event_time}`));
-
-      if (empNameMap.size > 0) {
-        const unmatchedQuery = supabase
-          .from('skud_events')
-          .select('id, physical_person, employee_id, event_date, event_time, direction, access_point')
-          .is('employee_id', null)
-          .gte('event_date', startDate)
-          .lte('event_date', endDate)
-          .order('event_time', { ascending: true })
-          .limit(5000);
-
-        const { data: unmatchedEvents } = await unmatchedQuery;
-        const idsToBackfill: { id: number; empId: number }[] = [];
-
-        for (const ev of unmatchedEvents || []) {
-          const name = ((ev.physical_person as string) || '').toLowerCase().trim();
-          const empId = empNameMap.get(name);
-          if (empId) {
-            const dedupKey = `${empId}_${ev.event_date}_${ev.event_time}`;
-            if (!seenEventIds.has(dedupKey)) {
-              rawEvents.push({
-                employee_id: empId,
-                event_date: ev.event_date as string,
-                event_time: ev.event_time as string,
-                direction: ev.direction as string | null,
-                access_point: ev.access_point as string | null,
-              });
-              seenEventIds.add(dedupKey);
-            }
-            idsToBackfill.push({ id: ev.id as number, empId });
-          }
-        }
-
-        // Backfill employee_id in background
-        if (idsToBackfill.length > 0) {
-          const ids = idsToBackfill.map(x => x.id);
-          const empIds = idsToBackfill.map(x => x.empId);
-          Promise.resolve(supabase.rpc('bulk_update_employee_ids', {
-            p_event_ids: ids,
-            p_employee_ids: empIds,
-          })).then(() => {
-            console.log(`[timesheet] backfilled employee_id on ${idsToBackfill.length} events`);
-          }).catch((err: unknown) => console.error('[timesheet] backfill failed:', err));
-        }
-      }
-
-      // Group events by employee_id + date and compute first_entry, last_exit, total_hours
-      const skudMap = new Map<string, { employee_id: number; date: string; first_entry: string | null; last_exit: string | null; total_hours: number }>();
-
-      // Group events
-      const eventsByKey = new Map<string, IRawEvent[]>();
-      for (const evt of rawEvents) {
-        const key = `${evt.employee_id}_${evt.event_date}`;
-        if (!eventsByKey.has(key)) eventsByKey.set(key, []);
-        eventsByKey.get(key)!.push(evt);
-      }
-
-      // Helper: московское время (события СКУД в MSK)
-      const getMoscowNow = (): { dateStr: string; timeMs: number } => {
-        const msk = new Date().toLocaleString('en-US', { timeZone: 'Europe/Moscow' });
-        const d = new Date(msk);
-        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        const timeMs = (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()) * 1000;
-        return { dateStr, timeMs };
-      };
-      const mskNow = getMoscowNow();
-
-      // Helper: calculate total ms from entry/exit pairs
-      const calcPairMs = (evts: IRawEvent[]): number => {
-        let total = 0;
-        let entry: number | null = null;
-        for (const evt of evts) {
-          const [h, m, s] = evt.event_time.split(':').map(Number);
-          const ms = (h * 3600 + m * 60 + (s || 0)) * 1000;
-          if (evt.direction === 'entry') {
-            if (entry === null) entry = ms;
-          } else if (evt.direction === 'exit' && entry !== null) {
-            total += ms - entry;
-            entry = null;
-          }
-        }
-        // Если остался открытый вход (сотрудник на месте) и это сегодня — считаем до текущего времени (MSK)
-        if (entry !== null && evts.length > 0 && evts[0].event_date === mskNow.dateStr) {
-          if (mskNow.timeMs > entry) {
-            total += mskNow.timeMs - entry;
-          }
-        }
-        return total;
-      };
-
-      for (const [key, events] of eventsByKey) {
-        // Filter out internal access points (like EmployeeSkudSection does)
-        const extEvents = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
-
-        // Calculate hours from external events; fallback to all if external gives 0
-        let totalMs = calcPairMs(extEvents);
-        if (totalMs === 0 && events.length > 0) {
-          totalMs = calcPairMs(events);
-        }
-
-        const totalHours = Math.round((totalMs / 3600000) * 100) / 100;
-        const empId = events[0].employee_id;
-        const date = events[0].event_date;
-
-        // first_entry/last_exit: use external if they gave hours, otherwise all
-        const usedFallback = calcPairMs(extEvents) === 0 && events.length > 0;
-        const srcEvents = usedFallback ? events : (extEvents.length > 0 ? extEvents : events);
-        const firstEntry = srcEvents.find(e => e.direction === 'entry');
-        const lastExit = [...srcEvents].reverse().find(e => e.direction === 'exit');
-
-        skudMap.set(key, {
-          employee_id: empId,
-          date,
-          first_entry: firstEntry?.event_time || null,
-          last_exit: lastExit?.event_time || null,
-          total_hours: totalHours,
-        });
-      }
-
-      // Fetch manual corrections from tender_timesheet
-      let manualEntries: Array<Record<string, unknown>> = [];
-      for (let i = 0; i < employeeIds.length; i += BATCH_SIZE) {
-        const batch = employeeIds.slice(i, i + BATCH_SIZE);
-        const { data, error } = await supabase
-          .from('tender_timesheet')
-          .select('*')
-          .in('employee_id', batch)
-          .gte('work_date', startDate)
-          .lte('work_date', endDate);
-        if (error) throw error;
-        manualEntries.push(...(data || []));
-      }
-
-      let travelSummaries = new Map<string, {
-        creditedMinutes: number;
-        delayMinutes: number;
-        segmentsCount: number;
-        problematicSegmentsCount: number;
-      }>();
-      try {
-        travelSummaries = await getTravelHoursSummaryForRange({
-          employeeIds,
-          startDate,
-          endDate,
-        });
-      } catch (travelError) {
-        console.warn('[timesheet] failed to calculate travel summaries:', travelError);
-      }
-
-      // Resolve corrected_by names
-      const correctorIds = [...new Set(
-        manualEntries
-          .map(m => m.corrected_by as number | null)
-          .filter((id): id is number => id != null)
-      )];
-      const correctorNames = new Map<number, string>();
-      if (correctorIds.length > 0) {
-        const { data: correctors } = await supabase
-          .from('employees')
-          .select('id, full_name')
-          .in('id', correctorIds);
-        for (const c of correctors || []) {
-          correctorNames.set(c.id as number, c.full_name as string);
-        }
-      }
-
-      // Merge: manual corrections take priority over SKUD
-      const entries: Array<Record<string, unknown>> = [];
-      const seenKeys = new Set<string>();
-
-      for (const m of manualEntries) {
-        const key = `${m.employee_id}_${m.work_date}`;
-        seenKeys.add(key);
-        const correctedBy = (m.corrected_by as number | null) ?? null;
-        const travelSummary = travelSummaries.get(key);
-        const travelMinutes = travelSummary?.creditedMinutes || 0;
-        const normalized = {
-          ...m,
-          is_correction: true,
-          corrected_at: (m.corrected_at as string | null) || (m.updated_at as string | null) || (m.created_at as string | null) || null,
-          corrected_by_name: correctedBy ? correctorNames.get(correctedBy) || null : null,
-          base_hours_worked: typeof m.hours_worked === 'number' ? m.hours_worked : null,
-          travel_minutes_credited: travelMinutes,
-          travel_hours_credited: travelMinutesToHours(travelMinutes),
-          travel_delay_minutes: travelSummary?.delayMinutes || 0,
-          travel_segments_count: travelSummary?.segmentsCount || 0,
-          travel_problematic_segments: travelSummary?.problematicSegmentsCount || 0,
-        };
-        entries.push(normalized);
-      }
-
-      for (const [key, s] of skudMap) {
-        if (seenKeys.has(key)) continue;
-        seenKeys.add(key);
-
-        const travelSummary = travelSummaries.get(key);
-        const travelMinutes = travelSummary?.creditedMinutes || 0;
-        const travelHours = travelMinutesToHours(travelMinutes);
-        const adjustedHours = Math.round(((s.total_hours || 0) + travelHours) * 100) / 100;
-        const isPresent = s.total_hours > 0 || s.first_entry !== null || travelMinutes > 0;
-        entries.push({
-          id: null,
-          employee_id: s.employee_id,
-          work_date: s.date,
-          status: isPresent ? 'work' : 'absent',
-          hours_worked: isPresent ? adjustedHours : 0,
-          base_hours_worked: s.total_hours,
-          travel_minutes_credited: travelMinutes,
-          travel_hours_credited: travelHours,
-          travel_delay_minutes: travelSummary?.delayMinutes || 0,
-          travel_segments_count: travelSummary?.segmentsCount || 0,
-          travel_problematic_segments: travelSummary?.problematicSegmentsCount || 0,
-          is_correction: false,
-          first_entry: s.first_entry,
-          last_exit: s.last_exit,
-        });
-      }
-
-      // Автозаполнение для remote/hybrid-remote дней
-      const daysInMonth = new Date(year, mon, 0).getDate();
-
-      for (const empId of employeeIds) {
-        for (let d = 1; d <= daysInMonth; d++) {
-          const dateObj = new Date(year, mon - 1, d);
-          const dateStr = `${month}-${String(d).padStart(2, '0')}`;
-          const key = `${empId}_${dateStr}`;
-          const sched = dailySchedulesMap.get(empId)?.get(dateStr);
-
-          // Пропускаем будущие дни и дни с уже имеющимися записями
-          if (dateStr > todayStr) continue;
-          if (seenKeys.has(key)) continue;
-          if (!sched) continue;
-
-          // Проверяем рабочий ли день по графику
-          if (!isWorkingDay(sched, dateObj, calendarMonth)) continue;
-
-          // Если не нужен СКУД-контроль (remote или hybrid на remote-день) — автозаполнение
-          if (!needsSkudCheck(sched, dateObj, calendarMonth)) {
-            const workHours = getScheduleForDate(sched, dateObj).work_hours;
-            seenKeys.add(key);
-            entries.push({
-              id: null,
-              employee_id: empId,
-              work_date: dateStr,
-              status: 'remote',
-              hours_worked: workHours,
-              base_hours_worked: workHours,
-              travel_minutes_credited: 0,
-              travel_hours_credited: 0,
-              travel_delay_minutes: 0,
-              travel_segments_count: 0,
-              travel_problematic_segments: 0,
-              is_correction: false,
-              first_entry: null,
-              last_exit: null,
-            });
-          }
-        }
-      }
+	      const daysInMonth = new Date(year, mon, 0).getDate();
 
       // Compute stats (schedule-aware)
       let normHours = 0;
@@ -535,29 +271,34 @@ export const timesheetController = {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 
-      const { data, error } = await supabase
-        .from('tender_timesheet')
-        .upsert({
-          employee_id: parsed.employee_id,
-          work_date: parsed.work_date,
-          status: parsed.status,
-          hours_worked: parsed.hours_worked ?? null,
-          notes: parsed.notes ?? null,
-          is_correction: true,
-          corrected_by: req.user.employee_id ?? null,
-          corrected_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'employee_id,work_date' })
-        .select()
-        .single();
+	      const raw = await upsertAttendanceAdjustment({
+	        employee_id: parsed.employee_id,
+	        work_date: parsed.work_date,
+	        status: parsed.status,
+	        hours_override: parsed.hours_worked ?? null,
+	        source_type: 'manual',
+	        source_id: 'manual',
+	        reason: parsed.notes ?? null,
+	        created_by: req.user.id,
+	      });
 
-      if (error) throw error;
+	      const data = {
+	        id: Number(raw.id),
+	        employee_id: parsed.employee_id,
+	        work_date: parsed.work_date,
+	        status: parsed.status,
+	        hours_worked: parsed.hours_worked ?? null,
+	        notes: parsed.notes ?? null,
+	        is_correction: true,
+	        corrected_at: String(raw.updated_at ?? raw.created_at ?? new Date().toISOString()),
+	        corrected_by_name: null,
+	      };
 
-      await auditService.logFromRequest(req, req.user.id, 'CREATE_TIMESHEET_ENTRY', {
-        entityType: 'timesheet',
-        entityId: String(data.id),
-        details: {
-          employee_id: parsed.employee_id,
+	      await auditService.logFromRequest(req, req.user.id, 'CREATE_TIMESHEET_ENTRY', {
+	        entityType: 'timesheet',
+	        entityId: String(data.id),
+	        details: {
+	          employee_id: parsed.employee_id,
           work_date: parsed.work_date,
           status: parsed.status,
         },
@@ -579,40 +320,41 @@ export const timesheetController = {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ success: false, error: 'Некорректный ID' });
 
-      const parsed = updateEntrySchema.parse(req.body);
-      const { data: existing, error: existingError } = await supabase
-        .from('tender_timesheet')
-        .select('employee_id')
-        .eq('id', id)
-        .single();
+	      const parsed = updateEntrySchema.parse(req.body);
+	      const existing = await getAttendanceAdjustmentById(id);
+	      if (!existing) {
+	        return res.status(404).json({ success: false, error: 'Запись не найдена' });
+	      }
+	      if (!(await canAccessEmployeeInScope(req, Number(existing.employee_id)))) {
+	        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+	      }
 
-      if (existingError || !existing) {
-        return res.status(404).json({ success: false, error: 'Запись не найдена' });
-      }
-      if (!(await canAccessEmployeeInScope(req, existing.employee_id))) {
-        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
-      }
+	      const updated = await updateAttendanceAdjustmentById(id, {
+	        ...(parsed.status ? { status: parsed.status } : {}),
+	        ...(parsed.hours_worked !== undefined ? { hours_override: parsed.hours_worked } : {}),
+	        ...(parsed.notes !== undefined ? { reason: parsed.notes ?? null } : {}),
+	        created_by: req.user.id,
+	      });
+	      if (!updated) return res.status(404).json({ success: false, error: 'Запись не найдена' });
 
-      const { data, error } = await supabase
-        .from('tender_timesheet')
-        .update({
-          ...parsed,
-          is_correction: true,
-          corrected_by: req.user.employee_id ?? null,
-          corrected_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', id)
-        .select()
-        .single();
+	      const data = {
+	        id: Number(updated.id),
+	        employee_id: Number(updated.employee_id),
+	        work_date: String(updated.work_date),
+	        status: String(updated.status),
+	        hours_worked: typeof updated.hours_override === 'number'
+	          ? updated.hours_override
+	          : (typeof updated.hours_worked === 'number' ? updated.hours_worked : null),
+	        notes: typeof updated.reason === 'string' ? updated.reason : null,
+	        is_correction: true,
+	        corrected_at: String(updated.updated_at ?? updated.created_at ?? new Date().toISOString()),
+	        corrected_by_name: null,
+	      };
 
-      if (error) throw error;
-      if (!data) return res.status(404).json({ success: false, error: 'Запись не найдена' });
-
-      await auditService.logFromRequest(req, req.user.id, 'UPDATE_TIMESHEET_ENTRY', {
-        entityType: 'timesheet',
-        entityId: String(id),
-        details: { ...parsed },
+	      await auditService.logFromRequest(req, req.user.id, 'UPDATE_TIMESHEET_ENTRY', {
+	        entityType: 'timesheet',
+	        entityId: String(id),
+	        details: { ...parsed },
       });
 
       res.json({ success: true, data });

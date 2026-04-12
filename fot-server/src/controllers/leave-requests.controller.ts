@@ -5,19 +5,25 @@ import { pushService } from '../services/push.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { getIo } from '../socket/io-instance.js';
 import { canAccessEmployeeInScope, resolveScopedDepartmentId } from '../services/data-scope.service.js';
+import { upsertAttendanceAdjustment } from '../services/attendance.service.js';
+import type { TimeStatus } from '../types/index.js';
 
 const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'dayoff', 'business_trip', 'certificate', 'time_correction'] as const;
 const LEAVE_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск', sick_leave: 'Больничный', remote: 'Удалёнка',
   dayoff: 'Отгул', business_trip: 'Командировка', certificate: 'Справка', time_correction: 'Корректировка',
 };
-const LEAVE_TO_TIMESHEET: Record<string, string> = {
+const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote' | 'dayoff' | 'business_trip', TimeStatus> = {
   vacation: 'vacation',
   sick_leave: 'sick',
   remote: 'remote',
   dayoff: 'dayoff',
   business_trip: 'business_trip',
 };
+
+function isTimeStatus(value: unknown): value is TimeStatus {
+  return ['work', 'vacation', 'dayoff', 'remote', 'unpaid', 'absent', 'sick', 'business_trip', 'manual'].includes(String(value));
+}
 
 async function loadEmployeeIdsByDepartment(departmentId: string): Promise<Array<{ id: number; full_name: string | null }>> {
   const { data, error } = await supabase
@@ -264,45 +270,44 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
 
     if (error) throw error;
 
-    // Создаём записи в табеле
-    const timesheetStatus = LEAVE_TO_TIMESHEET[request.request_type];
+    // Создаём attendance adjustments как канонический источник ручных статусов
+    const timesheetStatus = Object.prototype.hasOwnProperty.call(LEAVE_TO_TIMESHEET, request.request_type)
+      ? LEAVE_TO_TIMESHEET[request.request_type as keyof typeof LEAVE_TO_TIMESHEET]
+      : undefined;
     if (timesheetStatus) {
       const startDate = new Date(request.start_date);
       const endDate = new Date(request.end_date);
-      const entries = [];
 
       for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
         const dayOfWeek = d.getDay();
         if (dayOfWeek === 0 || dayOfWeek === 6) continue; // Пропускаем выходные
-        entries.push({
+
+        await upsertAttendanceAdjustment({
           employee_id: request.employee_id,
           work_date: d.toISOString().split('T')[0],
           status: timesheetStatus,
-          hours_worked: null,
-          is_correction: false,
-        });
-      }
-
-      if (entries.length > 0) {
-        await supabase.from('timesheet').upsert(entries, {
-          onConflict: 'employee_id,work_date',
-          ignoreDuplicates: false,
+          hours_override: null,
+          source_type: 'leave_request',
+          source_id: String(request.id),
+          reason: `Approved leave request: ${request.request_type}`,
+          created_by: req.user.id,
         });
       }
     }
 
     // Обработка корректировки табеля
     if (request.request_type === 'time_correction' && request.correction_date) {
-      await supabase.from('tender_timesheet').upsert({
+      const correctionStatus: TimeStatus = isTimeStatus(request.correction_status) ? request.correction_status : 'work';
+      await upsertAttendanceAdjustment({
         employee_id: request.employee_id,
         work_date: request.correction_date,
-        status: request.correction_status || 'work',
-        hours_worked: request.correction_hours ?? null,
-        is_correction: true,
-        corrected_by: req.user.employee_id ?? null,
-        corrected_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'employee_id,work_date' });
+        status: correctionStatus,
+        hours_override: request.correction_hours ?? null,
+        source_type: 'leave_request',
+        source_id: `${request.id}:time_correction`,
+        reason: request.reason || 'Approved time correction request',
+        created_by: req.user.id,
+      });
     }
 
     res.json({ success: true, data });

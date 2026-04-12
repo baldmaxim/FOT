@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import type { FC } from 'react';
 import { adminService } from '../../services/adminService';
-import { structureApi } from '../../api/structure';
+import { useStructureTree } from '../../hooks/useStructure';
 import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
 import type { ChatInboundMode, EmployeePositionType, TwoFactorData, OrgDepartmentNode } from '../../types';
@@ -65,11 +65,11 @@ const flattenDepts = (nodes: OrgDepartmentNode[], level = 0): IDeptFlat[] => {
 export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
   const toast = useToast();
   const { roles, getRoleLabel } = useAuth();
+  const structureQuery = useStructureTree();
   const [roleFilter, setRoleFilter] = useState<EmployeePositionType | null>(null);
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<{ userId: string; value: string } | null>(null);
   const [empSearch, setEmpSearch] = useState<IEmpSearch | null>(null);
-  const [flatDepts, setFlatDepts] = useState<IDeptFlat[]>([]);
   const [twoFactorModal, setTwoFactorModal] = useState<ITwoFactorModal>({
     visible: false,
     userId: '',
@@ -77,14 +77,10 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
     data: null,
     loading: false,
   });
-
-  useEffect(() => {
-    structureApi.getTree().then(res => {
-      if (res.data?.departments) {
-        setFlatDepts(flattenDepts(res.data.departments));
-      }
-    });
-  }, []);
+  const flatDepts = useMemo(
+    () => flattenDepts(structureQuery.data?.departments || []),
+    [structureQuery.data?.departments],
+  );
 
   const roleOptions = useMemo(() => {
     const codeSet = new Set<string>([
@@ -105,15 +101,12 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
       });
   }, [allUsers, getRoleLabel, roles]);
 
-  useEffect(() => {
-    if (!roleOptions.length) {
-      setRoleFilter(null);
-      return;
+  const effectiveRoleFilter = useMemo(() => {
+    if (!roleOptions.length) return null;
+    if (roleFilter && roleOptions.some(option => option.code === roleFilter)) {
+      return roleFilter;
     }
-
-    if (!roleFilter || !roleOptions.some(option => option.code === roleFilter)) {
-      setRoleFilter(roleOptions[0].code);
-    }
+    return roleOptions[0].code;
   }, [roleFilter, roleOptions]);
 
   const toggleExpand = (userId: string) => {
@@ -256,8 +249,8 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
   };
 
   const filteredUsers = allUsers.filter(u => {
-    if (!roleFilter) return true;
-    return u.position_type === roleFilter;
+    if (!effectiveRoleFilter) return true;
+    return u.position_type === effectiveRoleFilter;
   });
 
   return (
@@ -266,7 +259,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
         {roleOptions.map(option => (
           <button
             key={option.code}
-            className={`${styles.roleTab} ${roleFilter === option.code ? styles.roleTabActive : ''}`}
+            className={`${styles.roleTab} ${effectiveRoleFilter === option.code ? styles.roleTabActive : ''}`}
             onClick={() => setRoleFilter(option.code)}
           >
             {getPositionName(option.code)}

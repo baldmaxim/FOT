@@ -18,14 +18,6 @@ export default defineConfig({
             if (id.includes('react-dom') || id.includes('/react/'))
               return 'vendor-react'
           }
-          if (id.includes('/pages/auth/'))
-            return 'page-auth'
-          if (id.includes('/pages/super-admin/'))
-            return 'page-super-admin'
-          if (id.includes('/pages/skud/'))
-            return 'page-skud'
-          if (id.includes('/pages/employees/'))
-            return 'page-employees'
         },
       },
     },

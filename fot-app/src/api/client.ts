@@ -1,5 +1,9 @@
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
+let sessionToken: string | null = null;
+let refreshPromise: Promise<boolean> | null = null;
+const tokenListeners = new Set<(token: string | null) => void>();
+
 export class ApiError extends Error {
   status: number;
   code?: string;
@@ -14,12 +18,71 @@ export class ApiError extends Error {
 
 interface RequestOptions extends RequestInit {
   skipAuth?: boolean;
+  __skipRefresh?: boolean;
 }
+
+export const setSessionToken = (token: string | null): void => {
+  sessionToken = token;
+  tokenListeners.forEach(listener => listener(token));
+};
+
+export const getSessionToken = (): string | null => sessionToken;
+
+export const subscribeSessionToken = (listener: (token: string | null) => void): (() => void) => {
+  tokenListeners.add(listener);
+  return () => {
+    tokenListeners.delete(listener);
+  };
+};
+
+export const buildApiUrl = (endpoint: string): string => `${API_URL}${endpoint}`;
+
+export const buildAuthHeaders = (headers: HeadersInit = {}): HeadersInit => {
+  if (!sessionToken) return headers;
+  return {
+    ...headers,
+    Authorization: `Bearer ${sessionToken}`,
+  };
+};
+
+const refreshSession = async (): Promise<boolean> => {
+  if (refreshPromise) {
+    return refreshPromise;
+  }
+
+  refreshPromise = (async () => {
+    const response = await fetch(buildApiUrl('/auth/refresh'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      setSessionToken(null);
+      return false;
+    }
+
+    const contentType = response.headers.get('content-type');
+    if (contentType?.includes('application/json')) {
+      const payload = await response.json().catch(() => null) as { access_token?: string } | null;
+      setSessionToken(payload?.access_token ?? null);
+    } else {
+      setSessionToken(null);
+    }
+
+    return true;
+  })().finally(() => {
+    refreshPromise = null;
+  });
+
+  return refreshPromise;
+};
 
 export const apiClient = {
   async request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
-    const { skipAuth, ...fetchOptions } = options;
-    const token = localStorage.getItem('access_token');
+    const { skipAuth, __skipRefresh, ...fetchOptions } = options;
 
     const headers: HeadersInit = {
       ...fetchOptions.headers,
@@ -31,17 +94,25 @@ export const apiClient = {
     }
 
     // Add Authorization header if token exists and not skipped
-    if (token && !skipAuth) {
-      (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
+    if (!skipAuth && sessionToken) {
+      (headers as Record<string, string>)['Authorization'] = `Bearer ${sessionToken}`;
     }
 
-    const response = await fetch(`${API_URL}${endpoint}`, {
+    const response = await fetch(buildApiUrl(endpoint), {
       ...fetchOptions,
+      credentials: 'include',
       headers,
     });
 
     // Handle 401 - authentication error
     if (response.status === 401) {
+      if (!skipAuth && !__skipRefresh && endpoint !== '/auth/refresh') {
+        const refreshed = await refreshSession();
+        if (refreshed) {
+          return this.request<T>(endpoint, { ...options, __skipRefresh: true });
+        }
+      }
+
       const error = await response.json().catch(() => ({ message: 'Ошибка аутентификации', error: 'Unknown' }));
 
       // Не удаляем токены и не редиректим автоматически

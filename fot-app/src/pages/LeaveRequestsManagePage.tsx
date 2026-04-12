@@ -1,4 +1,5 @@
-import { type FC, useState, useEffect, useCallback } from 'react';
+import { type FC, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Check, X, Clock, CheckCircle, XCircle, Ban } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -8,6 +9,7 @@ import {
   type ILeaveRequest,
   type LeaveRequestStatus,
 } from '../services/leaveRequestService';
+import { useLeaveRequestsManage } from '../hooks/usePortalData';
 import './LeaveRequestsManagePage.css';
 
 const STATUS_COLORS: Record<LeaveRequestStatus, string> = {
@@ -23,47 +25,35 @@ const STATUS_ICONS: Record<LeaveRequestStatus, FC<{ size?: number }>> = {
   rejected: XCircle,
   cancelled: Ban,
 };
+const EMPTY_REQUESTS: ILeaveRequest[] = [];
 
 export const LeaveRequestsManagePage: FC = () => {
   const { hasPermission } = useAuth();
   const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
+  const scope = isDepartmentScope ? 'department' : 'all';
+  const queryClient = useQueryClient();
 
-  const [requests, setRequests] = useState<ILeaveRequest[]>([]);
-  const [employeeMap, setEmployeeMap] = useState<Map<number, string>>(new Map());
-  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'pending' | 'all'>('pending');
   const [commentId, setCommentId] = useState<number | null>(null);
   const [comment, setComment] = useState('');
-
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = isDepartmentScope
-        ? await leaveRequestService.getDepartment()
-        : await leaveRequestService.getAll(filter === 'pending' ? 'pending' : undefined);
-      setRequests(data);
-
-      // ФИО приходят с бэкенда в employee_name
-      const map = new Map<number, string>();
-      for (const r of data) {
-        if (r.employee_name) map.set(r.employee_id, r.employee_name);
+  const { data, isLoading } = useLeaveRequestsManage(scope, filter);
+  const requests = data ?? EMPTY_REQUESTS;
+  const employeeMap = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const request of requests) {
+      if (request.employee_name) {
+        map.set(request.employee_id, request.employee_name);
       }
-      setEmployeeMap(map);
-    } catch {
-      setRequests([]);
-    } finally {
-      setLoading(false);
     }
-  }, [isDepartmentScope, filter]);
-
-  useEffect(() => { loadData(); }, [loadData]);
+    return map;
+  }, [requests]);
 
   const handleApprove = async (id: number) => {
     try {
       await leaveRequestService.approve(id, comment || undefined);
       setCommentId(null);
       setComment('');
-      await loadData();
+      await queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] });
     } catch (err) {
       console.error('Approve error:', err);
     }
@@ -74,7 +64,7 @@ export const LeaveRequestsManagePage: FC = () => {
       await leaveRequestService.reject(id, comment || undefined);
       setCommentId(null);
       setComment('');
-      await loadData();
+      await queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] });
     } catch (err) {
       console.error('Reject error:', err);
     }
@@ -101,7 +91,7 @@ export const LeaveRequestsManagePage: FC = () => {
         </div>
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="lrm-loading">Загрузка...</div>
       ) : filteredRequests.length === 0 ? (
         <div className="lrm-empty">Нет заявлений</div>

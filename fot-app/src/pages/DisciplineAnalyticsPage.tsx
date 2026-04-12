@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { DisciplineTable } from '../components/discipline/DisciplineTable';
 import { DisciplineDetailPanel } from '../components/discipline/DisciplineDetailPanel';
-import { exportDisciplineExcel } from '../components/discipline/exportDisciplineExcel';
+import { triggerBlobDownload } from '../utils/download';
 import '../styles/DisciplineAnalyticsPage.css';
 
 type ViolationType = 'late' | 'underwork' | 'early' | 'absence';
@@ -121,6 +121,7 @@ export const DisciplineAnalyticsPage: FC = () => {
   const [deptData, setDeptData] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
   const [panelEmpId, setPanelEmpId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -130,18 +131,6 @@ export const DisciplineAnalyticsPage: FC = () => {
     if (startMonth <= endMonth) return { startMonth, endMonth };
     return { startMonth: endMonth, endMonth: startMonth };
   }, [startMonth, endMonth]);
-
-  const formatMonthLabel = useCallback((value: string) => {
-    const [y, m] = value.split('-').map(Number);
-    return `${MONTH_NAMES[m - 1]} ${y}`;
-  }, []);
-
-  const monthLabel = useMemo(() => {
-    if (normalizedPeriod.startMonth === normalizedPeriod.endMonth) {
-      return formatMonthLabel(normalizedPeriod.startMonth);
-    }
-    return `${formatMonthLabel(normalizedPeriod.startMonth)} - ${formatMonthLabel(normalizedPeriod.endMonth)}`;
-  }, [formatMonthLabel, normalizedPeriod]);
 
   const yearOptions = useMemo(() => {
     const selectedYears = [startMonth, endMonth].map(value => Number(value.slice(0, 4)));
@@ -161,7 +150,7 @@ export const DisciplineAnalyticsPage: FC = () => {
     if (isDepartmentScope && profile?.department_id) {
       setSelectedDept(profile.department_id);
     }
-  }, [isDepartmentScope, profile?.department_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isDepartmentScope, profile?.department_id]);
 
   const fetchData = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -270,7 +259,23 @@ export const DisciplineAnalyticsPage: FC = () => {
     setSearchQuery('');
   };
 
-  const exportToExcel = () => exportDisciplineExcel(filtered, employees, monthLabel);
+  const exportToExcel = async () => {
+    setIsExporting(true);
+    try {
+      const { blob, filename } = await skudService.exportDiscipline({
+        startMonth: normalizedPeriod.startMonth,
+        endMonth: normalizedPeriod.endMonth,
+        tab: activeTab as 'all' | ViolationType,
+        departmentId: selectedDept || undefined,
+        search: searchQuery,
+      });
+      triggerBlobDownload(blob, filename);
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : 'Не удалось экспортировать аналитику дисциплины');
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   return (
     <div className="da-page">
@@ -344,9 +349,9 @@ export const DisciplineAnalyticsPage: FC = () => {
           </label>
         </div>
         <div className="da-header-spacer" />
-        <button className="da-btn da-btn-export" onClick={exportToExcel}>
+        <button className="da-btn da-btn-export" onClick={() => { void exportToExcel(); }} disabled={isExporting}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          Экспорт в Excel
+          {isExporting ? 'Экспорт...' : 'Экспорт в Excel'}
         </button>
       </div>
 

@@ -87,12 +87,11 @@ export const AVAILABLE_PAGES: AvailablePage[] = [
   { path: '/dashboard', label: 'Дашборд' },
   { path: '/timesheet', label: 'Табель' },
   { path: '/timesheet-hr', label: 'Табели HR' },
-  { path: '/my-employees', label: 'Мои сотрудники' },
   { path: '/leave-requests', label: 'Заявления' },
   { path: '/salary-raise-review', label: 'Проверка заявок на повышение' },
   { path: '/discipline', label: 'Дисциплина' },
   { path: '/skud-travel', label: 'Передвижения' },
-  { path: '/tender', label: 'Сотрудники' },
+  { path: '/employees', label: 'Сотрудники' },
   { path: '/skud-raw', label: 'Просмотр СКУД' },
   { path: '/skud-db', label: 'СКУД (база)' },
   { path: '/skud-monitor', label: 'Монитор Sigur' },
@@ -104,6 +103,7 @@ export const AVAILABLE_PAGES: AvailablePage[] = [
   { path: '/admin/settings', label: 'Системные настройки' },
   { path: '/admin/schedules', label: 'Графики работы' },
   { path: '/admin/payslips', label: 'Управление расчётными листками' },
+  { path: '/admin/payments', label: 'Управление выплатами' },
 ];
 
 export const SCOPE_REQUIRED_PAGES = new Set<string>([
@@ -118,17 +118,17 @@ export const SCOPE_REQUIRED_PAGES = new Set<string>([
   '/dashboard',
   '/timesheet',
   '/timesheet-hr',
-  '/my-employees',
   '/leave-requests',
   '/salary-raise-review',
   '/discipline',
   '/skud-travel',
-  '/tender',
+  '/employees',
   '/skud-raw',
   '/skud-db',
   '/skud-monitor',
   '/staff-control',
   '/admin/payslips',
+  '/admin/payments',
 ]);
 
 export const PAGE_ACCESS_KEYS = new Set(AVAILABLE_PAGES.map(page => page.path));

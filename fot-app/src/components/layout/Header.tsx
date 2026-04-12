@@ -1,12 +1,11 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import type { FC } from 'react';
 import styles from './Header.module.css';
 import { IconButton } from '../ui/Button';
 import { Tabs } from '../ui/Tabs';
 import { MoonIcon, SunIcon, BellIcon } from '../ui/Icons';
-import { NotificationDropdown } from '../ui/NotificationDropdown';
-import { useNotifications } from '../../hooks/useNotifications';
 import dropdownStyles from '../ui/NotificationDropdown.module.css';
+import { useUnreadNotificationsCount } from '../../hooks/useUnreadNotificationsCount';
 
 interface IHeaderProps {
   title: string;
@@ -17,11 +16,22 @@ interface IHeaderProps {
 }
 
 const periodTabs = ['Сегодня', 'Неделя', 'Месяц'];
+const NotificationBellContent = lazy(() => import('../ui/NotificationBellContent').then(m => ({ default: m.NotificationBellContent })));
 
 export const Header: FC<IHeaderProps> = ({ title, theme, onToggleTheme, onMenuOpen, showPeriodTabs = false }) => {
   const [activeTab, setActiveTab] = useState(0);
   const [bellOpen, setBellOpen] = useState(false);
-  const { notifications, unreadCount, loading, loadNotifications, markRead, markAllRead } = useNotifications();
+  const [notificationsActivated, setNotificationsActivated] = useState(false);
+  const { unreadCount, setUnreadCount } = useUnreadNotificationsCount();
+
+  const activateNotifications = () => {
+    setNotificationsActivated(true);
+  };
+
+  const toggleNotifications = () => {
+    activateNotifications();
+    setBellOpen(prev => !prev);
+  };
 
   return (
     <header className={styles.header}>
@@ -45,7 +55,12 @@ export const Header: FC<IHeaderProps> = ({ title, theme, onToggleTheme, onMenuOp
         </IconButton>
 
         <div className={dropdownStyles.wrapper}>
-          <IconButton onClick={() => setBellOpen(!bellOpen)} title="Уведомления">
+          <IconButton
+            onClick={toggleNotifications}
+            onMouseEnter={activateNotifications}
+            onFocus={activateNotifications}
+            title="Уведомления"
+          >
             <BellIcon />
             {unreadCount > 0 && (
               <span className={dropdownStyles.badge}>
@@ -53,15 +68,14 @@ export const Header: FC<IHeaderProps> = ({ title, theme, onToggleTheme, onMenuOp
               </span>
             )}
           </IconButton>
-          {bellOpen && (
-            <NotificationDropdown
-              notifications={notifications}
-              loading={loading}
-              onLoad={loadNotifications}
-              onMarkRead={markRead}
-              onMarkAllRead={markAllRead}
-              onClose={() => setBellOpen(false)}
-            />
+          {notificationsActivated && (
+            <Suspense fallback={null}>
+              <NotificationBellContent
+                open={bellOpen}
+                onClose={() => setBellOpen(false)}
+                onUnreadCountChange={setUnreadCount}
+              />
+            </Suspense>
           )}
         </div>
       </div>

@@ -9,9 +9,10 @@ const router = Router();
 // Публичные роуты
 router.post('/register', authLimiter, authController.register);
 router.post('/login', authLimiter, authController.login);
+router.post('/refresh', authLimiter, authController.refresh);
+router.post('/logout', authController.logout);
 router.post('/forgot-password', authLimiter, authController.forgotPassword);
 router.post('/reset-password', authLimiter, authController.resetPassword);
-router.get('/organizations', authController.getOrganizations);
 
 // Роуты требующие аутентификации
 router.post(

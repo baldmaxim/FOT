@@ -1,11 +1,13 @@
-import { type FC, useState, useEffect, useCallback } from 'react';
+import { type FC, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Check, X, Clock, CheckCircle, XCircle } from 'lucide-react';
 import { Tabs } from '../../components/ui/Tabs';
 import {
   timesheetApprovalService,
   type ITimesheetApproval,
 } from '../../services/timesheetApprovalService';
-import { apiClient } from '../../api/client';
+import { useStructureTree } from '../../hooks/useStructure';
+import { useTimesheetApprovalReviewList } from '../../hooks/useTimesheetApprovalData';
 import './TimesheetReviewPage.css';
 
 interface IDeptMap { [id: string]: string }
@@ -21,46 +23,35 @@ const formatPeriod = (period: string) => {
 };
 
 export const TimesheetReviewPage: FC = () => {
-  const [approvals, setApprovals] = useState<ITimesheetApproval[]>([]);
-  const [deptMap, setDeptMap] = useState<IDeptMap>({});
-  const [loading, setLoading] = useState(true);
   const [commentId, setCommentId] = useState<number | null>(null);
   const [comment, setComment] = useState('');
   const [activeTab, setActiveTab] = useState(0);
-
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const status = TAB_STATUSES[activeTab];
-      const data = await timesheetApprovalService.getByStatus(status);
-      setApprovals(data);
-
-      // Загружаем названия отделов
-      const res = await apiClient.get<{ data: { departments: Array<{ id: string; name: string; children: unknown[] }> } }>('/structure');
-      const map: IDeptMap = {};
-      const flatten = (nodes: Array<{ id: string; name: string; children: unknown[] }>) => {
-        for (const n of nodes) {
-          map[n.id] = n.name;
-          if (Array.isArray(n.children)) flatten(n.children as typeof nodes);
+  const queryClient = useQueryClient();
+  const status = TAB_STATUSES[activeTab];
+  const approvalsQuery = useTimesheetApprovalReviewList(status);
+  const approvals: ITimesheetApproval[] = approvalsQuery.data ?? [];
+  const structureQuery = useStructureTree();
+  const deptMap = useMemo<IDeptMap>(() => {
+    const map: IDeptMap = {};
+    const flatten = (nodes: Array<{ id: string; name: string; children?: unknown[] }>) => {
+      for (const node of nodes) {
+        map[node.id] = node.name;
+        if (Array.isArray(node.children)) {
+          flatten(node.children as Array<{ id: string; name: string; children?: unknown[] }>);
         }
-      };
-      flatten(res.data?.departments || []);
-      setDeptMap(map);
-    } catch {
-      setApprovals([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [activeTab]);
-
-  useEffect(() => { loadData(); }, [loadData]);
+      }
+    };
+    flatten(structureQuery.data?.departments ?? []);
+    return map;
+  }, [structureQuery.data]);
+  const loading = approvalsQuery.isLoading || structureQuery.isLoading;
 
   const handleApprove = async (id: number) => {
     try {
       await timesheetApprovalService.approve(id, comment || undefined);
       setCommentId(null);
       setComment('');
-      await loadData();
+      await queryClient.invalidateQueries({ queryKey: ['timesheet-approval'] });
     } catch (err) {
       console.error('Approve error:', err);
     }
@@ -71,7 +62,7 @@ export const TimesheetReviewPage: FC = () => {
       await timesheetApprovalService.reject(id, comment || undefined);
       setCommentId(null);
       setComment('');
-      await loadData();
+      await queryClient.invalidateQueries({ queryKey: ['timesheet-approval'] });
     } catch (err) {
       console.error('Reject error:', err);
     }

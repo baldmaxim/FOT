@@ -1,4 +1,4 @@
-import { type FC, type KeyboardEvent, useEffect, useMemo, useState } from 'react';
+import { type FC, type KeyboardEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { Pencil, Plus, Save, Trash2 } from 'lucide-react';
 import { skudService } from '../../services/skudService';
 import { travelTimeService } from '../../services/travelTimeService';
@@ -27,7 +27,7 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const [loadedObjects, loadedAccessPoints] = await Promise.all([
@@ -44,11 +44,11 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedConnection, setError]);
 
   useEffect(() => {
     void loadData();
-  }, [selectedConnection]);
+  }, [loadData]);
 
   const selectedObject = useMemo(
     () => objects.find(object => object.id === selectedObjectId) || null,

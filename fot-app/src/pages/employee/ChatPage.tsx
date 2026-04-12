@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { ApiError } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -113,10 +113,7 @@ export const ChatPage: React.FC = () => {
       ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
   };
 
-  const activeConversation = useMemo(
-    () => conversations.find(c => c.id === activeConversationId),
-    [conversations, activeConversationId]
-  );
+  const activeConversation = conversations.find(c => c.id === activeConversationId);
 
   return (
     <div className={styles.chatLayout}>

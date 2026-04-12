@@ -6,7 +6,7 @@ import { supabase } from '../config/database.js';
 import { auditService } from './audit.service.js';
 import { sigurService } from './sigur.service.js';
 import { mapSigurEvent, type IMappedSigurEvent } from '../utils/sigur.mapper.js';
-import { buildInclusiveDateRange, parseDate } from '../utils/date.utils.js';
+import { buildInclusiveDateRange, buildMoscowEventTimestamp, parseDate } from '../utils/date.utils.js';
 import { computeDedupHash } from '../utils/dedup.utils.js';
 import { isHeaderRow, parseTimeFromDateTime } from './skud-shared.service.js';
 import { normalizePersonName } from './sigur-sync-shared.js';
@@ -104,6 +104,7 @@ export async function importFromExcel(params: IImportParams): Promise<IImportRes
       card_number: cardNumber,
       event_date: eventDate,
       event_time: eventTime,
+      event_at: buildMoscowEventTimestamp(eventDate, eventTime),
       access_point: accessPoint,
       direction,
       employee_id: employeeId,
@@ -305,6 +306,7 @@ export async function syncEmployeeRange(params: {
         card_number: m.cardNumber || null,
         event_date: m.eventDate,
         event_time: m.eventTime,
+        event_at: buildMoscowEventTimestamp(m.eventDate, m.eventTime),
         access_point: m.accessPoint,
         direction: m.direction,
         employee_id: employeeId,
@@ -469,6 +471,7 @@ export async function syncEmployee(
         card_number: m.cardNumber || null,
         event_date: m.eventDate,
         event_time: m.eventTime,
+        event_at: buildMoscowEventTimestamp(m.eventDate, m.eventTime),
         access_point: m.accessPoint,
         direction: m.direction,
         employee_id: employeeId,

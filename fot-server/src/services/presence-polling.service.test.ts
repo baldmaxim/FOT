@@ -24,9 +24,12 @@ const mockedState = vi.hoisted(() => ({
   },
   sigurServiceMock: {
     isConfigured: vi.fn(() => true),
+    getBackgroundConnectionType: vi.fn(() => 'external'),
     getEvents: vi.fn<(...args: unknown[]) => Promise<Array<Record<string, unknown>>>>(async () => []),
   },
   sigurMonitorMock: {
+    markPresencePollingCycleStarted: vi.fn(),
+    markPresencePollingCycleFinished: vi.fn(),
     recordSigurMonitorSuccess: vi.fn(async () => undefined),
     recordSigurMonitorFailure: vi.fn(async () => undefined),
   },
@@ -91,6 +94,8 @@ vi.mock('./skud-backfill.service.js', () => ({
 }));
 
 vi.mock('./sigur-monitor.service.js', () => ({
+  markPresencePollingCycleStarted: mockedState.sigurMonitorMock.markPresencePollingCycleStarted,
+  markPresencePollingCycleFinished: mockedState.sigurMonitorMock.markPresencePollingCycleFinished,
   recordSigurMonitorSuccess: mockedState.sigurMonitorMock.recordSigurMonitorSuccess,
   recordSigurMonitorFailure: mockedState.sigurMonitorMock.recordSigurMonitorFailure,
 }));
@@ -143,8 +148,11 @@ describe('presence-polling.service', () => {
     mockedState.supabaseMock.rpc.mockClear();
     mockedState.supabaseMock.rpc.mockResolvedValue({ data: null, error: null });
     mockedState.sigurServiceMock.isConfigured.mockReturnValue(true);
+    mockedState.sigurServiceMock.getBackgroundConnectionType.mockReturnValue('external');
     mockedState.sigurServiceMock.getEvents.mockReset();
     mockedState.sigurServiceMock.getEvents.mockResolvedValue([] as Array<Record<string, unknown>>);
+    mockedState.sigurMonitorMock.markPresencePollingCycleStarted.mockClear();
+    mockedState.sigurMonitorMock.markPresencePollingCycleFinished.mockClear();
     mockedState.sigurMonitorMock.recordSigurMonitorSuccess.mockClear();
     mockedState.sigurMonitorMock.recordSigurMonitorFailure.mockClear();
     resetPresencePollingStateForTests();
@@ -182,9 +190,13 @@ describe('presence-polling.service', () => {
     expect(mockedState.sigurServiceMock.getEvents).toHaveBeenCalledWith(
       '2026-03-27T08:08:00',
       '2026-03-27T12:00:00',
-      undefined,
+      'external',
       'PASS_DETECTED',
     );
+    expect(mockedState.sigurMonitorMock.recordSigurMonitorSuccess).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'presence_polling',
+      connectionType: 'external',
+    }));
   });
 
   it('does not cut the recovery window at the current day boundary', async () => {
@@ -215,7 +227,7 @@ describe('presence-polling.service', () => {
     expect(mockedState.sigurServiceMock.getEvents).toHaveBeenCalledWith(
       '2026-03-26T23:56:00',
       '2026-03-27T10:00:00',
-      undefined,
+      'external',
       'PASS_DETECTED',
     );
   });
@@ -248,14 +260,14 @@ describe('presence-polling.service', () => {
       1,
       '2026-03-27T07:58:00',
       '2026-03-27T10:00:00',
-      undefined,
+      'external',
       'PASS_DETECTED',
     );
     expect(mockedState.sigurServiceMock.getEvents).toHaveBeenNthCalledWith(
       2,
       '2026-03-27T09:58:00',
       '2026-03-27T10:05:00',
-      undefined,
+      'external',
       'PASS_DETECTED',
     );
   });
@@ -282,7 +294,7 @@ describe('presence-polling.service', () => {
     expect(mockedState.sigurServiceMock.getEvents).toHaveBeenCalledWith(
       '2026-03-27T00:00:00',
       '2026-03-27T09:30:00',
-      undefined,
+      'external',
       'PASS_DETECTED',
     );
   });
@@ -317,11 +329,13 @@ describe('presence-polling.service', () => {
     const payload = upsertQuery?.operations.find(op => op.method === 'upsert')?.args[0] as Array<{
       employee_id: number | null;
       physical_person: string;
+      event_at: string;
     }>;
 
     expect(payload).toHaveLength(1);
     expect(payload[0]?.employee_id).toBeNull();
     expect(payload[0]?.physical_person).toBe('Неизвестный Сотрудник');
+    expect(payload[0]?.event_at).toBe('2026-03-27T09:15:00+03:00');
     expect(mockedState.supabaseMock.rpc).not.toHaveBeenCalled();
   });
 
@@ -368,5 +382,26 @@ describe('presence-polling.service', () => {
       query.table === 'skud_events' && findOperation(query, 'select', 'dedup_hash'),
     );
     expect(preCheck).toBeUndefined();
+  });
+
+  it('passes the actual background connection to the failure hook', async () => {
+    const now = new Date(2026, 2, 27, 10, 0, 0);
+
+    mockedState.queryResolver = (query) => {
+      if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
+        return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
+      }
+      throw new Error(`Unexpected query: ${query.table}`);
+    };
+
+    mockedState.sigurServiceMock.getEvents.mockRejectedValueOnce(new Error('connect ETIMEDOUT external-host:9500'));
+
+    await pollEventsOnce(now);
+
+    expect(mockedState.sigurMonitorMock.recordSigurMonitorFailure).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'presence_polling',
+      connectionType: 'external',
+      errorMessage: 'connect ETIMEDOUT external-host:9500',
+    }));
   });
 });

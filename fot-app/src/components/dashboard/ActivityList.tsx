@@ -93,7 +93,7 @@ const EmployeeRow = memo<{
   const outsideWarning = outsideMin > 60;
 
   return (
-    <div className={styles.item} onClick={() => navigate(`/tender/${employee.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } })}>
+    <div className={styles.item} onClick={() => navigate(`/employees/${employee.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } })}>
       <button
         className={`${styles.starBtn} ${isFavorite ? styles.starActive : ''}`}
         onClick={e => { e.stopPropagation(); onToggleFavorite(employee.employee_id); }}

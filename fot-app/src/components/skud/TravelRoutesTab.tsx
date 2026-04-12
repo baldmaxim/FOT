@@ -1,4 +1,4 @@
-import { type FC, useEffect, useMemo, useState } from 'react';
+import { type FC, useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, Save, Trash2 } from 'lucide-react';
 import { travelTimeService } from '../../services/travelTimeService';
 import type { ITravelObject, ITravelRoute } from '../../types';
@@ -19,7 +19,7 @@ export const TravelRoutesTab: FC<ITravelRoutesTabProps> = ({ canEdit, setError }
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const [loadedObjects, loadedRoutes] = await Promise.all([
@@ -33,11 +33,11 @@ export const TravelRoutesTab: FC<ITravelRoutesTabProps> = ({ canEdit, setError }
     } finally {
       setLoading(false);
     }
-  };
+  }, [setError]);
 
   useEffect(() => {
     void loadData();
-  }, []);
+  }, [loadData]);
 
   const sortedObjects = useMemo(
     () => [...objects].sort((left, right) => left.name.localeCompare(right.name, 'ru')),

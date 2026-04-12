@@ -329,4 +329,66 @@
     flex-direction: column;
     align-items: stretch;
   }
+
+  .skud-monitor-table {
+    min-width: 0;
+  }
+
+  .skud-monitor-table thead {
+    display: none;
+  }
+
+  .skud-monitor-table,
+  .skud-monitor-table tbody,
+  .skud-monitor-table tr,
+  .skud-monitor-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .skud-monitor-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .skud-monitor-table tr {
+    display: grid;
+    gap: 8px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--surface);
+  }
+
+  .skud-monitor-table td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0;
+    border: none;
+    text-align: right;
+  }
+
+  .skud-monitor-table td::before {
+    content: attr(data-label);
+    flex: 0 0 45%;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+    text-align: left;
+  }
+
+  .skud-monitor-table td.skud-monitor-empty {
+    display: block;
+    text-align: center;
+  }
+
+  .skud-monitor-table td.skud-monitor-empty::before {
+    content: none;
+  }
 }

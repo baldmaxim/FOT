@@ -316,13 +316,16 @@ export const employeesController = {
       }
 
       const fio = parseFIO(validated.full_name);
+      const canonicalSalary = validated.current_salary ?? validated.salary_actual ?? null;
 
       const insertData = {
         full_name: validated.full_name,
         last_name: fio.lastName,
         first_name: fio.firstName || null,
         middle_name: fio.middleName || null,
-        current_salary: validated.current_salary ?? null,
+        current_salary: canonicalSalary,
+        salary_actual: canonicalSalary,
+        salary_calculated: validated.salary_calculated ?? null,
         birth_date: validated.birth_date || null,
         hire_date: validated.hire_date,
         country: validated.country || null,
@@ -404,8 +407,13 @@ export const employeesController = {
         updateData.first_name = fio.firstName || null;
         updateData.middle_name = fio.middleName || null;
       }
-      if (validated.current_salary !== undefined) {
-        updateData.current_salary = validated.current_salary ?? null;
+      if (validated.current_salary !== undefined || validated.salary_actual !== undefined) {
+        const canonicalSalary = validated.current_salary ?? validated.salary_actual ?? null;
+        updateData.current_salary = canonicalSalary;
+        updateData.salary_actual = canonicalSalary;
+      }
+      if (validated.salary_calculated !== undefined) {
+        updateData.salary_calculated = validated.salary_calculated ?? null;
       }
       if (validated.birth_date !== undefined) {
         updateData.birth_date = validated.birth_date || null;

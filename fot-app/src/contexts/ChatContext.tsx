@@ -30,24 +30,24 @@ interface IChatContextType {
 
 const ChatContext = createContext<IChatContextType | null>(null);
 
-export const ChatProvider: FC<{ children: ReactNode }> = ({ children }) => {
+export const ChatProvider: FC<{ children: ReactNode; initialOpen?: boolean }> = ({ children, initialOpen = false }) => {
   const { token, isAuthenticated, isApproved } = useAuth();
   const { info } = useToast();
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(initialOpen);
   const wsRef = useRef(false);
 
   // Socket lifecycle
   useEffect(() => {
     if (isAuthenticated && isApproved && token) {
-      wsService.connect(token);
+      wsService.connect(token, 'chat-context');
       wsRef.current = true;
     } else if (wsRef.current) {
-      wsService.disconnect();
+      wsService.disconnect('chat-context');
       wsRef.current = false;
     }
     return () => {
       if (wsRef.current) {
-        wsService.disconnect();
+        wsService.disconnect('chat-context');
         wsRef.current = false;
       }
     };

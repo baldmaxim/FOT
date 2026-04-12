@@ -1,10 +1,11 @@
-import { type FC, useState, useEffect, useCallback, useMemo } from 'react';
+import { type FC, useState, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { TimesheetCorrectionModal } from '../../components/timesheet/TimesheetCorrectionModal';
-import { timesheetService } from '../../services/timesheetService';
 import { employeeService } from '../../services/employeeService';
 import { useAuth } from '../../contexts/AuthContext';
+import { useEmployeeTimesheetMonth } from '../../hooks/useEmployeeTimesheet';
 import {
   getDaysInMonth,
   getWeekdayShort,
@@ -22,7 +23,6 @@ import type {
   TimesheetEntry,
   TimesheetEmployee,
   Employee,
-  IProductionCalendarMonth,
 } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
 import s from './EmployeeTimesheet.module.css';
@@ -54,6 +54,7 @@ const STATUS_CSS: Record<string, string> = {
 };
 
 const WORKED_STATUSES = new Set(['work', 'manual', 'remote', 'business_trip']);
+const EMPTY_SCHEDULES: Record<number, IResolvedSchedule> = {};
 
 const formatHM = (decimal: number): string => {
   const h = Math.floor(decimal);
@@ -75,13 +76,6 @@ export const EmployeeTimesheetPage: FC = () => {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
 
-  const [allEmployees, setAllEmployees] = useState<TimesheetEmployee[]>([]);
-  const [allEntries, setAllEntries] = useState<TimesheetEntry[]>([]);
-  const [schedules, setSchedules] = useState<Record<number, IResolvedSchedule>>({});
-  const [calendar, setCalendar] = useState<IProductionCalendarMonth | null>(null);
-  const [employee, setEmployee] = useState<Employee | null>(null);
-  const [loading, setLoading] = useState(false);
-
   // Modal
   const [modalOpen, setModalOpen] = useState(false);
   const [modalEmployee, setModalEmployee] = useState<TimesheetEmployee | null>(null);
@@ -89,43 +83,27 @@ export const EmployeeTimesheetPage: FC = () => {
   const [modalEntry, setModalEntry] = useState<TimesheetEntry | null>(null);
 
   const employeeId = profile?.employee_id;
-  const departmentId = profile?.department_id;
+  const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+  const timesheetQuery = useEmployeeTimesheetMonth(employeeId, monthStr, !!employeeId);
+  const employeeQuery = useQuery<Employee | null>({
+    queryKey: ['employee', employeeId],
+    queryFn: () => employeeService.getById(employeeId as number),
+    enabled: !!employeeId,
+    staleTime: 60_000,
+  });
 
-  const loadData = useCallback(async () => {
-    if (!departmentId || !employeeId) return;
-    setLoading(true);
-    try {
-      const monthStr = `${year}-${String(month).padStart(2, '0')}`;
-      const [res, emp] = await Promise.all([
-        timesheetService.getAll({ month: monthStr, department_id: departmentId }),
-        employeeService.getById(employeeId),
-      ]);
-      setAllEmployees(res.employees || []);
-      setAllEntries(res.entries || []);
-      setSchedules(res.schedules || {});
-      setCalendar(res.calendar || null);
-      setEmployee(emp);
-    } catch {
-      setAllEmployees([]);
-      setAllEntries([]);
-      setCalendar(null);
-      setEmployee(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [year, month, departmentId, employeeId]);
-
-  useEffect(() => { loadData(); }, [loadData]);
-
-  const employees = useMemo(() => {
-    if (!employeeId) return [];
-    return allEmployees.filter(e => e.id === employeeId);
-  }, [allEmployees, employeeId]);
-
-  const entries = useMemo(() => {
-    if (!employeeId) return [];
-    return allEntries.filter(e => e.employee_id === employeeId);
-  }, [allEntries, employeeId]);
+  const employees = useMemo<TimesheetEmployee[]>(
+    () => timesheetQuery.data?.employees || [],
+    [timesheetQuery.data],
+  );
+  const entries = useMemo<TimesheetEntry[]>(
+    () => timesheetQuery.data?.entries || [],
+    [timesheetQuery.data],
+  );
+  const schedules = timesheetQuery.data?.schedules || EMPTY_SCHEDULES;
+  const calendar = timesheetQuery.data?.calendar || null;
+  const employee = employeeQuery.data ?? null;
+  const loading = timesheetQuery.isLoading || employeeQuery.isLoading;
 
   // Build entry map for quick lookup
   const entryMap = useMemo(() => {
@@ -142,7 +120,7 @@ export const EmployeeTimesheetPage: FC = () => {
 
   // Salary calculation
   const salaryData = useMemo(() => {
-    const salary = employee?.salary_calculated ?? employee?.current_salary ?? 0;
+    const salary = employee?.current_salary ?? 0;
     const sched = employeeId ? schedules[employeeId] : undefined;
 
     let normDays = 0;

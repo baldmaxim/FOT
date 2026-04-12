@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, useMemo, useRef, memo, type FC } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo, type FC } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, SlidersHorizontal, X } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
 import { scheduleService } from '../services/scheduleService';
@@ -16,12 +17,13 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useStaffData } from '../hooks/useStaffData';
 import { DeptSelect } from '../components/staff/DeptSelect';
-import { HistoryPanel } from '../components/staff/HistoryPanel';
-import { ImportModal } from '../components/employees/ImportModal';
-import { EnrichPreviewModal } from '../components/employees/EnrichPreviewModal';
 import type { Employee, EmployeeHistoryEvent, EmployeeInput, EnrichPreview } from '../types';
 import type { OrgDepartmentNode } from '../types/organization';
 import '../styles/StaffControlPage.css';
+
+const HistoryPanel = lazy(() => import('../components/staff/HistoryPanel').then(m => ({ default: m.HistoryPanel })));
+const ImportModal = lazy(() => import('../components/employees/ImportModal').then(m => ({ default: m.ImportModal })));
+const EnrichPreviewModal = lazy(() => import('../components/employees/EnrichPreviewModal').then(m => ({ default: m.EnrichPreviewModal })));
 
 /* ───────── helpers ───────── */
 
@@ -63,6 +65,10 @@ const SCHEDULE_SOURCE_LABELS: Record<ScheduleSource, string> = {
   category: 'кат.',
   default: 'деф.',
 };
+const EMPTY_WORK_CATEGORIES: IWorkCategory[] = [];
+const EMPTY_SCHEDULE_TEMPLATES: IWorkSchedule[] = [];
+const EMPTY_CATEGORY_ASSIGNMENTS: ICategorySchedule[] = [];
+const EMPTY_EMPLOYEE_SCHEDULE_ASSIGNMENTS: IEmployeeScheduleAssignment[] = [];
 
 /* ───────── Memoized table row ───────── */
 
@@ -188,33 +194,18 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   onSaveCategory,
   onSaveSchedule,
 }) => {
+  const currentSchedule = modalEmp ? scheduleViews.get(modalEmp.id) : undefined;
   const [salaryVal, setSalaryVal] = useState('');
   const [salaryDate, setSalaryDate] = useState(() => getLocalISODate());
   const [salaryReason, setSalaryReason] = useState('');
   const [positionVal, setPositionVal] = useState('');
   const [positionDate, setPositionDate] = useState(() => getLocalISODate());
   const [positionReason, setPositionReason] = useState('');
-  const [deptVal, setDeptVal] = useState('');
-  const [categoryVal, setCategoryVal] = useState<string>('');
-  const [scheduleVal, setScheduleVal] = useState('');
-  const [scheduleDate, setScheduleDate] = useState(() => getLocalISODate());
+  const [deptVal, setDeptVal] = useState(() => modalEmp?.org_department_id || '');
+  const [categoryVal, setCategoryVal] = useState<string>(() => modalEmp?.work_category || '');
+  const [scheduleVal, setScheduleVal] = useState(() => currentSchedule?.source === 'employee' ? currentSchedule.scheduleId || '' : '');
+  const [scheduleDate, setScheduleDate] = useState(() => currentSchedule?.source === 'employee' ? currentSchedule.effectiveFrom || getLocalISODate() : getLocalISODate());
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (modalEmp) {
-      const currentSchedule = scheduleViews.get(modalEmp.id);
-      setSalaryVal('');
-      setSalaryDate(getLocalISODate());
-      setSalaryReason('');
-      setPositionVal('');
-      setPositionDate(getLocalISODate());
-      setPositionReason('');
-      setDeptVal(modalEmp.org_department_id || '');
-      setCategoryVal(modalEmp.work_category || '');
-      setScheduleVal(currentSchedule?.source === 'employee' ? currentSchedule.scheduleId || '' : '');
-      setScheduleDate(currentSchedule?.source === 'employee' ? currentSchedule.effectiveFrom || getLocalISODate() : getLocalISODate());
-    }
-  }, [modalEmp, scheduleViews]);
 
   if (!modalType || !modalEmp) return null;
 
@@ -759,14 +750,13 @@ export const StaffControlPage: FC = () => {
   const navigate = useNavigate();
   const [urlParams, setUrlParams] = useSearchParams();
   const isMobile = useIsMobile(768);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const [search, setSearch] = useState(() => urlParams.get('q') || '');
   const [deptId, setDeptId] = useState(() => urlParams.get('dept') || '');
   const [page, setPage] = useState(1);
   const debouncedSearch = useDebouncedValue(search, 300);
-
-  // Reset page on filter change
-  useEffect(() => { setPage(1); }, [debouncedSearch, deptId]);
+  const queryClient = useQueryClient();
 
   const { employees, departments, loading, meta, totalActive, refresh, patchEmployee } = useStaffData({
     page,
@@ -776,47 +766,36 @@ export const StaffControlPage: FC = () => {
   });
 
   const today = getLocalISODate();
-  const [workCategories, setWorkCategories] = useState<IWorkCategory[]>([]);
-  const [scheduleTemplates, setScheduleTemplates] = useState<IWorkSchedule[]>([]);
-  const [categoryAssignments, setCategoryAssignments] = useState<ICategorySchedule[]>([]);
-  const [employeeScheduleAssignments, setEmployeeScheduleAssignments] = useState<IEmployeeScheduleAssignment[]>([]);
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<number[]>([]);
   const [bulkScheduleOpen, setBulkScheduleOpen] = useState(false);
   const [bulkFilterScheduleOpen, setBulkFilterScheduleOpen] = useState(false);
-  useEffect(() => {
-    workCategoryService.list().then(setWorkCategories).catch(() => setWorkCategories([]));
-  }, []);
-  useEffect(() => {
-    Promise.all([
-      scheduleService.list(),
-      scheduleService.listCategories(),
-    ])
-      .then(([templates, assignments]) => {
-        setScheduleTemplates(templates);
-        setCategoryAssignments(assignments);
-      })
-      .catch(() => {
-        setScheduleTemplates([]);
-        setCategoryAssignments([]);
-      });
-  }, []);
-
-  const loadEmployeeScheduleAssignments = useCallback(async () => {
-    if (employees.length === 0) {
-      setEmployeeScheduleAssignments([]);
-      return;
-    }
-    try {
-      const assignments = await scheduleService.listEmployeeAssignments(employees.map(emp => emp.id));
-      setEmployeeScheduleAssignments(assignments);
-    } catch {
-      setEmployeeScheduleAssignments([]);
-    }
-  }, [employees]);
-
-  useEffect(() => {
-    loadEmployeeScheduleAssignments();
-  }, [loadEmployeeScheduleAssignments]);
+  const visibleEmployeeIds = useMemo(() => employees.map(emp => emp.id), [employees]);
+  const workCategoriesQuery = useQuery({
+    queryKey: ['work-categories'],
+    queryFn: () => workCategoryService.list(),
+    staleTime: 5 * 60_000,
+  });
+  const scheduleTemplatesQuery = useQuery({
+    queryKey: ['schedules', 'templates'],
+    queryFn: () => scheduleService.list(),
+    staleTime: 5 * 60_000,
+  });
+  const categoryAssignmentsQuery = useQuery({
+    queryKey: ['schedules', 'category-assignments'],
+    queryFn: () => scheduleService.listCategories(),
+    staleTime: 5 * 60_000,
+  });
+  const employeeScheduleAssignmentsQuery = useQuery({
+    queryKey: ['schedules', 'employee-assignments', visibleEmployeeIds],
+    queryFn: () => scheduleService.listEmployeeAssignments(visibleEmployeeIds),
+    enabled: visibleEmployeeIds.length > 0,
+    placeholderData: previousData => previousData,
+    staleTime: 60_000,
+  });
+  const workCategories = workCategoriesQuery.data ?? EMPTY_WORK_CATEGORIES;
+  const scheduleTemplates = scheduleTemplatesQuery.data ?? EMPTY_SCHEDULE_TEMPLATES;
+  const categoryAssignments = categoryAssignmentsQuery.data ?? EMPTY_CATEGORY_ASSIGNMENTS;
+  const employeeScheduleAssignments = employeeScheduleAssignmentsQuery.data ?? EMPTY_EMPLOYEE_SCHEDULE_ASSIGNMENTS;
 
   const categoryLabels = useMemo(() => {
     const m = new Map<string, string>();
@@ -824,11 +803,11 @@ export const StaffControlPage: FC = () => {
     return m;
   }, [workCategories]);
 
-  useEffect(() => {
-    setSelectedEmployeeIds(prev => prev.filter(id => employees.some(emp => emp.id === id)));
-  }, [employees]);
-
-  const selectedEmployeeIdSet = useMemo(() => new Set(selectedEmployeeIds), [selectedEmployeeIds]);
+  const selectedEmployeeIdsVisible = useMemo(
+    () => selectedEmployeeIds.filter(id => employees.some(emp => emp.id === id)),
+    [selectedEmployeeIds, employees],
+  );
+  const selectedEmployeeIdSet = useMemo(() => new Set(selectedEmployeeIdsVisible), [selectedEmployeeIdsVisible]);
 
   const selectedEmployees = useMemo(
     () => employees.filter(emp => selectedEmployeeIdSet.has(emp.id)),
@@ -960,10 +939,27 @@ export const StaffControlPage: FC = () => {
     return parts.join(' • ');
   }, [deptId, debouncedSearch, allDepts]);
 
+  const selectedDeptName = useMemo(
+    () => allDepts.find(dept => dept.id === deptId)?.name || 'Все отделы',
+    [allDepts, deptId],
+  );
+  const filtersVisible = isMobile && filtersOpen;
+
+  const handleSearchChange = useCallback((value: string) => {
+    setSearch(value);
+    setPage(1);
+  }, []);
+
+  const handleDeptChange = useCallback((value: string) => {
+    setDeptId(value);
+    setPage(1);
+    if (isMobile) setFiltersOpen(false);
+  }, [isMobile]);
+
   /* ─── stable callbacks for child components ─── */
 
   const handleNavigate = useCallback((emp: Employee) => {
-    navigate(`/tender/${emp.id}`, { state: { label: 'Управление кадрами', from: `/staff-control?${urlParams.toString()}` } });
+    navigate(`/employees/${emp.id}`, { state: { label: 'Управление кадрами', from: `/staff-control?${urlParams.toString()}` } });
   }, [navigate, urlParams]);
 
   const openHistory = useCallback(async (emp: Employee) => {
@@ -1054,9 +1050,12 @@ export const StaffControlPage: FC = () => {
     } else {
       await scheduleService.removeEmployeeAssignment(empId, effectiveFrom);
     }
-    await loadEmployeeScheduleAssignments();
+    await Promise.all([
+      employeeScheduleAssignmentsQuery.refetch(),
+      queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
+    ]);
     closeModal();
-  }, [closeModal, loadEmployeeScheduleAssignments]);
+  }, [closeModal, employeeScheduleAssignmentsQuery, queryClient]);
 
   const applyScheduleToEmployees = useCallback(async (employeeIds: number[], scheduleId: string | null, effectiveFrom: string) => {
     if (employeeIds.length === 0) return;
@@ -1077,10 +1076,13 @@ export const StaffControlPage: FC = () => {
 
   const handleBulkSaveSchedule = useCallback(async (scheduleId: string | null, effectiveFrom: string) => {
     await applyScheduleToEmployees(selectedEmployees.map(employee => employee.id), scheduleId, effectiveFrom);
-    await loadEmployeeScheduleAssignments();
+    await Promise.all([
+      employeeScheduleAssignmentsQuery.refetch(),
+      queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
+    ]);
     setBulkScheduleOpen(false);
     setSelectedEmployeeIds([]);
-  }, [applyScheduleToEmployees, selectedEmployees, loadEmployeeScheduleAssignments]);
+  }, [applyScheduleToEmployees, employeeScheduleAssignmentsQuery, queryClient, selectedEmployees]);
 
   const handleFilteredBulkSaveSchedule = useCallback(async (scheduleId: string | null, effectiveFrom: string) => {
     const employeeIds = await employeeService.getFilteredIds({
@@ -1090,9 +1092,12 @@ export const StaffControlPage: FC = () => {
       view: 'list',
     });
     await applyScheduleToEmployees(employeeIds, scheduleId, effectiveFrom);
-    await loadEmployeeScheduleAssignments();
+    await Promise.all([
+      employeeScheduleAssignmentsQuery.refetch(),
+      queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
+    ]);
     setBulkFilterScheduleOpen(false);
-  }, [applyScheduleToEmployees, debouncedSearch, deptId, loadEmployeeScheduleAssignments]);
+  }, [applyScheduleToEmployees, debouncedSearch, deptId, employeeScheduleAssignmentsQuery, queryClient]);
 
   /* ─── history panel data changed ─── */
 
@@ -1182,35 +1187,73 @@ export const StaffControlPage: FC = () => {
     refresh();
   };
 
+  const filtersContent = (
+    <div className="sc-filters">
+      <DeptSelect
+        departments={allDepts}
+        value={deptId}
+        onChange={handleDeptChange}
+      />
+      <div className="sc-filter-search">
+        <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
+      </div>
+      <div className="sc-filter-count">
+        {meta.total} из {totalActive}
+      </div>
+      <div className="sc-filter-actions">
+        <button className="sc-btn secondary" onClick={() => setBulkFilterScheduleOpen(true)} disabled={meta.total === 0}>
+          <Calendar size={14} /> По фильтру
+        </button>
+        <button className="sc-btn secondary" onClick={() => setShowImportModal(true)}>
+          <Upload size={14} /> Импорт
+        </button>
+        <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
+          <UserPlus size={14} /> Добавить
+        </button>
+      </div>
+    </div>
+  );
+
   /* ─── render ─── */
 
   return (
     <div className="sc-page">
       {/* Filters */}
-      <div className="sc-filters">
-        <DeptSelect
-          departments={allDepts}
-          value={deptId}
-          onChange={setDeptId}
-        />
-        <div className="sc-filter-search">
-          <SearchInput value={search} onValueChange={setSearch} placeholder="Поиск по ФИО..." />
-        </div>
-        <div className="sc-filter-count">
-          {meta.total} из {totalActive}
-        </div>
-        <div className="sc-filter-actions">
-          <button className="sc-btn secondary" onClick={() => setBulkFilterScheduleOpen(true)} disabled={meta.total === 0}>
-            <Calendar size={14} /> По фильтру
-          </button>
-          <button className="sc-btn secondary" onClick={() => setShowImportModal(true)}>
-            <Upload size={14} /> Импорт
-          </button>
-          <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
-            <UserPlus size={14} /> Добавить
-          </button>
-        </div>
-      </div>
+      {isMobile ? (
+        <>
+          <div className="sc-mobile-toolbar">
+            <button className="sc-mobile-filter-btn" onClick={() => setFiltersOpen(true)}>
+              <SlidersHorizontal size={16} />
+              <span className="sc-mobile-filter-label">{selectedDeptName}</span>
+            </button>
+            <div className="sc-mobile-toolbar-meta">
+              <span className="sc-mobile-count-pill">{meta.total}</span>
+              <button className="sc-btn secondary" onClick={() => setShowImportModal(true)}>
+                <Upload size={14} /> Импорт
+              </button>
+              <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
+                <UserPlus size={14} /> Добавить
+              </button>
+            </div>
+          </div>
+
+          <div className={`sc-mobile-filters-overlay ${filtersVisible ? 'open' : ''}`} onClick={() => setFiltersOpen(false)} />
+          <div className={`sc-mobile-filters-sheet ${filtersVisible ? 'open' : ''}`}>
+            <div className="sc-mobile-filters-head">
+              <div>
+                <div className="sc-mobile-filters-title">Фильтры</div>
+                <div className="sc-mobile-filters-subtitle">{currentFilterDescription}</div>
+              </div>
+              <button className="sc-mobile-filters-close" onClick={() => setFiltersOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+            {filtersContent}
+          </div>
+        </>
+      ) : (
+        filtersContent
+      )}
 
       {selectedEmployeeIds.length > 0 && (
         <div className="sc-bulk-bar">
@@ -1267,18 +1310,21 @@ export const StaffControlPage: FC = () => {
 
       {/* History Side Panel */}
       {panelEmp && (
-        <HistoryPanel
-          employee={panelEmp}
-          history={panelHistory}
-          loading={panelLoading}
-          onClose={closeHistory}
-          onRefresh={() => openHistory(panelEmp)}
-          onDataChanged={handleHistoryDataChanged}
-        />
+        <Suspense fallback={null}>
+          <HistoryPanel
+            employee={panelEmp}
+            history={panelHistory}
+            loading={panelLoading}
+            onClose={closeHistory}
+            onRefresh={() => openHistory(panelEmp)}
+            onDataChanged={handleHistoryDataChanged}
+          />
+        </Suspense>
       )}
 
       {/* Modals — isolated from table */}
       <StaffModals
+        key={`${modalType ?? 'none'}-${modalEmp?.id ?? 'none'}`}
         modalType={modalType}
         modalEmp={modalEmp}
         allDepts={allDepts}
@@ -1314,22 +1360,30 @@ export const StaffControlPage: FC = () => {
 
       {/* ─── Import Modal ─── */}
       {showImportModal && (
-        <ImportModal
-          onClose={() => setShowImportModal(false)}
-          onEnrichFile={handleEnrichFile}
-          onSalaryFile={handleSalaryFile}
-          onSalaryHistoryFile={handleSalaryHistoryFile}
-        />
+        <Suspense fallback={null}>
+          <ImportModal
+            onClose={() => setShowImportModal(false)}
+            onEnrichFile={handleEnrichFile}
+            onSalaryFile={handleSalaryFile}
+            onSalaryHistoryFile={handleSalaryHistoryFile}
+          />
+        </Suspense>
       )}
 
       {enrichPreview && (
-        <EnrichPreviewModal preview={enrichPreview} loading={enrichLoading} onApply={handleEnrichApply} onClose={() => { setEnrichPreview(null); setEnrichFile(null); }} title="Импорт документов — Превью" />
+        <Suspense fallback={null}>
+          <EnrichPreviewModal preview={enrichPreview} loading={enrichLoading} onApply={handleEnrichApply} onClose={() => { setEnrichPreview(null); setEnrichFile(null); }} title="Импорт документов — Превью" />
+        </Suspense>
       )}
       {salaryEnrichPreview && (
-        <EnrichPreviewModal preview={salaryEnrichPreview} loading={salaryEnrichLoading} onApply={handleSalaryApply} onClose={() => { setSalaryEnrichPreview(null); setSalaryEnrichFile(null); }} title="Импорт окладов — Превью" />
+        <Suspense fallback={null}>
+          <EnrichPreviewModal preview={salaryEnrichPreview} loading={salaryEnrichLoading} onApply={handleSalaryApply} onClose={() => { setSalaryEnrichPreview(null); setSalaryEnrichFile(null); }} title="Импорт окладов — Превью" />
+        </Suspense>
       )}
       {salaryHistoryPreview && (
-        <EnrichPreviewModal preview={salaryHistoryPreview} loading={salaryHistoryLoading} onApply={handleSalaryHistoryApply} onClose={() => { setSalaryHistoryPreview(null); setSalaryHistoryFile(null); }} title="Импорт истории окладов — Превью" />
+        <Suspense fallback={null}>
+          <EnrichPreviewModal preview={salaryHistoryPreview} loading={salaryHistoryLoading} onApply={handleSalaryHistoryApply} onClose={() => { setSalaryHistoryPreview(null); setSalaryHistoryFile(null); }} title="Импорт истории окладов — Превью" />
+        </Suspense>
       )}
 
       {/* ─── Add Employee Modal ─── */}

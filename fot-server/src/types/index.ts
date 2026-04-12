@@ -25,6 +25,7 @@ export interface SystemRole {
 export interface RolePageAccess {
   id: string;
   role_code: string;
+  system_role_id?: string | null;
   page_path: string;
   can_view: boolean;
   can_edit: boolean;
@@ -35,6 +36,7 @@ export interface UserProfile {
   id: string;
   full_name: string | null;
   position_type: EmployeePositionType;    // Заменяет role
+  system_role_id?: string | null;
   employee_id: number | null;              // Связь с employees (заполняется админом)
   supervisor_id: string | null;            // ID руководителя
   chat_inbound_mode: ChatInboundMode;
@@ -55,6 +57,7 @@ export interface AuthenticatedRequest extends Request {
     id: string;
     email: string;
     position_type: EmployeePositionType;  // Заменяет role
+    system_role_id?: string | null;
     employee_id: number | null;
     department_id: string | null;         // org_department_id сотрудника
     is_approved: boolean;
@@ -246,7 +249,9 @@ export interface ApiResponse<T = unknown> {
 export interface JWTPayload {
   sub: string; // user id
   email: string;
+  token_type?: 'access' | 'refresh';
   position_type: EmployeePositionType;  // Заменяет role
+  system_role_id?: string | null;
   employee_id: number | null;
   department_id: string | null;          // org_department_id сотрудника
   is_approved: boolean;

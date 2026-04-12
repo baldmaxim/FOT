@@ -64,7 +64,7 @@ worker (1) < header (2) < admin (3) < super_admin (4)
 |------|--------|
 | worker | `/employee/*` — личный кабинет |
 | header | + `/dashboard`, `/timesheet`, `/admin/structure` |
-| admin | + `/tender`, `/skud-raw`, `/skud-db`, `/discipline` |
+| admin | + `/employees`, `/skud-raw`, `/skud-db`, `/discipline` |
 | super_admin | + `/skud-settings`, `/admin/users`, `/admin/organizations`, `/admin/audit` |
 
 ---

@@ -1,12 +1,12 @@
-import { type FC, useState, useEffect, useCallback } from 'react';
+import { type FC } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  salaryRaiseService,
   REQUEST_TYPE_LABELS,
   STATUS_LABELS,
   STATUS_COLORS,
   type ISalaryRaiseRequest,
 } from '../../services/salaryRaiseService';
+import { useMySalaryRaiseRequests } from '../../hooks/useSalaryRaiseData';
 import styles from './SalaryRaisePage.module.css';
 
 const formatSalary = (value: number | null | undefined): string => {
@@ -16,27 +16,12 @@ const formatSalary = (value: number | null | undefined): string => {
 
 const formatDate = (date: string): string =>
   new Date(date).toLocaleDateString('ru-RU');
+const EMPTY_REQUESTS: ISalaryRaiseRequest[] = [];
 
 export const SalaryRaisePage: FC = () => {
   const navigate = useNavigate();
-  const [requests, setRequests] = useState<ISalaryRaiseRequest[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const loadRequests = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await salaryRaiseService.getMy();
-      setRequests(res);
-    } catch {
-      setRequests([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadRequests();
-  }, [loadRequests]);
+  const { data, isLoading } = useMySalaryRaiseRequests();
+  const requests = data ?? EMPTY_REQUESTS;
 
   return (
     <div className={styles.page}>
@@ -50,7 +35,7 @@ export const SalaryRaisePage: FC = () => {
         </button>
       </header>
 
-      {loading ? (
+      {isLoading ? (
         <div className={styles.loading}>Загрузка...</div>
       ) : requests.length === 0 ? (
         <div className={styles.empty}>
@@ -59,7 +44,7 @@ export const SalaryRaisePage: FC = () => {
       ) : (
         <div className={styles.list}>
           {requests.map((r) => {
-            const currentSalary = r.employee_snapshot?.salary_actual ?? r.employee_snapshot?.current_salary;
+            const currentSalary = r.employee_snapshot?.current_salary;
             const raisePercent = r.raise_percentage != null
               ? r.raise_percentage.toFixed(1)
               : null;

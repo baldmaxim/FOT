@@ -1,12 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Activity, AlertTriangle, RefreshCw, ShieldAlert, Siren, Waves } from 'lucide-react';
-import {
-  sigurMonitorService,
-  type ISigurHealthCheck,
-  type ISigurIncident,
-  type ISigurIncidentDetails,
-  type ISigurMonitorStatus,
-} from '../../services/sigurMonitorService';
+import { type ISigurHealthCheck, type ISigurIncident } from '../../services/sigurMonitorService';
+import { useSkudMonitorDashboard, useSkudMonitorIncident } from '../../hooks/useSkudOpsData';
 import '../../styles/SkudMonitorPage.css';
 
 const formatDateTime = (value: string | null): string => {
@@ -48,72 +44,49 @@ const severityLabel: Record<ISigurIncident['severity'], string> = {
   critical: 'Критично',
   warning: 'Предупреждение',
 };
+const EMPTY_INCIDENTS: ISigurIncident[] = [];
+const EMPTY_CHECKS: ISigurHealthCheck[] = [];
 
 export const SkudMonitorPage = () => {
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<ISigurMonitorStatus | null>(null);
-  const [incidents, setIncidents] = useState<ISigurIncident[]>([]);
-  const [checks, setChecks] = useState<ISigurHealthCheck[]>([]);
   const [selectedIncidentId, setSelectedIncidentId] = useState<number | null>(null);
-  const [incidentDetails, setIncidentDetails] = useState<ISigurIncidentDetails | null>(null);
   const [incidentFilter, setIncidentFilter] = useState<'all' | 'open' | 'resolved'>('all');
   const [checkFilter, setCheckFilter] = useState<'all' | 'success' | 'failure' | 'silence'>('all');
+  const queryClient = useQueryClient();
+  const dashboardQuery = useSkudMonitorDashboard(incidentFilter, checkFilter);
+  const status = dashboardQuery.data?.status ?? null;
+  const incidents = dashboardQuery.data?.incidents.data ?? EMPTY_INCIDENTS;
+  const checks = dashboardQuery.data?.checks.data ?? EMPTY_CHECKS;
+  const incidentDetailsQuery = useSkudMonitorIncident(selectedIncidentId);
+  const incidentDetails = incidentDetailsQuery.data ?? null;
+  const loading = dashboardQuery.isLoading;
+  const error = dashboardQuery.error instanceof Error
+    ? dashboardQuery.error.message
+    : incidentDetailsQuery.error instanceof Error
+      ? incidentDetailsQuery.error.message
+      : null;
 
-  const loadDashboard = useCallback(async () => {
-    setError(null);
-    const [statusData, incidentsData, checksData] = await Promise.all([
-      sigurMonitorService.getStatus(),
-      sigurMonitorService.getIncidents({ limit: 20, status: incidentFilter }),
-      sigurMonitorService.getChecks({ limit: 30, status: checkFilter }),
-    ]);
-
-    setStatus(statusData);
-    setIncidents(incidentsData.data);
-    setChecks(checksData.data);
-
-    const nextSelected = incidentsData.data.some(incident => incident.id === selectedIncidentId)
+  useEffect(() => {
+    if (!dashboardQuery.data) return;
+    const nextSelected = incidents.some(incident => incident.id === selectedIncidentId)
       ? selectedIncidentId
-      : (statusData.activeIncident?.id ?? incidentsData.data[0]?.id ?? null);
-
-    setSelectedIncidentId(nextSelected);
-    return nextSelected;
-  }, [checkFilter, incidentFilter, selectedIncidentId]);
-
-  const loadIncidentDetails = useCallback(async (incidentId: number | null) => {
-    if (!incidentId) {
-      setIncidentDetails(null);
-      return;
+      : (status?.activeIncident?.id ?? incidents[0]?.id ?? null);
+    if (nextSelected !== selectedIncidentId) {
+      setSelectedIncidentId(nextSelected);
     }
+  }, [dashboardQuery.data, incidents, selectedIncidentId, status?.activeIncident?.id]);
 
-    const details = await sigurMonitorService.getIncident(incidentId);
-    setIncidentDetails(details);
-  }, []);
-
-  const refresh = useCallback(async (withSpinner = false) => {
+  const refresh = async (withSpinner = false) => {
     try {
       if (withSpinner) setRefreshing(true);
-      const incidentId = await loadDashboard();
-      await loadIncidentDetails(incidentId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка загрузки мониторинга Sigur');
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['skud-monitor'] }),
+        queryClient.invalidateQueries({ queryKey: ['skud-monitor', 'incident'] }),
+      ]);
     } finally {
-      setLoading(false);
       setRefreshing(false);
     }
-  }, [loadDashboard, loadIncidentDetails]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  useEffect(() => {
-    if (selectedIncidentId == null) return;
-    void loadIncidentDetails(selectedIncidentId).catch(err => {
-      setError(err instanceof Error ? err.message : 'Ошибка загрузки инцидента');
-    });
-  }, [selectedIncidentId, loadIncidentDetails]);
+  };
 
   const summaryCards = useMemo(() => {
     return [
@@ -236,7 +209,8 @@ export const SkudMonitorPage = () => {
             <h2>Детали инцидента</h2>
           </div>
 
-          {!incidentDetails && <div className="skud-monitor-empty">Выберите инцидент слева</div>}
+          {incidentDetailsQuery.isLoading && <div className="skud-monitor-empty">Загрузка деталей...</div>}
+          {!incidentDetailsQuery.isLoading && !incidentDetails && <div className="skud-monitor-empty">Выберите инцидент слева</div>}
 
           {incidentDetails && (
             <div className="skud-monitor-details">
@@ -288,11 +262,11 @@ export const SkudMonitorPage = () => {
                     <tbody>
                       {incidentDetails.checks.map(check => (
                         <tr key={check.id}>
-                          <td>{formatDateTime(check.checked_at)}</td>
-                          <td>{sourceLabel[check.source]}</td>
-                          <td>{checkStatusLabel[check.status]}</td>
-                          <td>{check.events_last_window ?? '—'}</td>
-                          <td>{check.error_message || '—'}</td>
+                          <td data-label="Время">{formatDateTime(check.checked_at)}</td>
+                          <td data-label="Источник">{sourceLabel[check.source]}</td>
+                          <td data-label="Статус">{checkStatusLabel[check.status]}</td>
+                          <td data-label="Событий">{check.events_last_window ?? '—'}</td>
+                          <td data-label="Ошибка">{check.error_message || '—'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -336,13 +310,13 @@ export const SkudMonitorPage = () => {
               )}
               {checks.map(check => (
                 <tr key={check.id}>
-                  <td>{formatDateTime(check.checked_at)}</td>
-                  <td>{sourceLabel[check.source]}</td>
-                  <td>{checkStatusLabel[check.status]}</td>
-                  <td>{check.events_last_window ?? '—'}</td>
-                  <td>{check.baseline_events ?? '—'}</td>
-                  <td>{check.consecutive_failures}</td>
-                  <td>{check.error_message || '—'}</td>
+                  <td data-label="Время">{formatDateTime(check.checked_at)}</td>
+                  <td data-label="Источник">{sourceLabel[check.source]}</td>
+                  <td data-label="Статус">{checkStatusLabel[check.status]}</td>
+                  <td data-label="События">{check.events_last_window ?? '—'}</td>
+                  <td data-label="Baseline">{check.baseline_events ?? '—'}</td>
+                  <td data-label="Ошибки подряд">{check.consecutive_failures}</td>
+                  <td data-label="Ошибка">{check.error_message || '—'}</td>
                 </tr>
               ))}
             </tbody>

@@ -2,7 +2,8 @@
  * Сервис авто-генерации расчётных листков из данных табеля.
  */
 import { supabase } from '../config/database.js';
-import { resolveSchedulesBulk, countWorkingDaysForSchedule } from './schedule.service.js';
+import { buildAttendanceEntries } from './attendance.service.js';
+import { resolveSchedulesBulk, resolveSchedulesForPeriod, countWorkingDaysForSchedule, loadCalendarMonth } from './schedule.service.js';
 
 const WORKED_STATUSES = new Set(['work', 'manual', 'remote', 'business_trip']);
 const NDFL_RATE = 0.13;
@@ -32,7 +33,7 @@ export const generatePayslipsForMonth = async (
   // 1. Получаем активных сотрудников с окладом
   let query = supabase
     .from('employees')
-    .select('id, full_name, salary_calculated, current_salary, org_department_id, work_category')
+    .select('id, full_name, current_salary, org_department_id, work_category')
     .eq('employment_status', 'active');
 
   if (departmentId) {
@@ -53,47 +54,37 @@ export const generatePayslipsForMonth = async (
     midMonth,
   );
 
-  // 3. Проверяем production_calendar
-  const { data: calEntry } = await supabase
-    .from('production_calendar')
-    .select('norm_days')
-    .eq('year', year)
-    .eq('month', month)
-    .single();
+  // 3. Загружаем календари и канонические attendance entries
+  const [calendarMonth, dailySchedulesMap] = await Promise.all([
+    loadCalendarMonth(year, month),
+    resolveSchedulesForPeriod(
+      employees.map(e => ({
+        id: e.id as number,
+        work_category: (e.work_category as string | null) || null,
+      })),
+      startDate,
+      endDate,
+    ),
+  ]);
 
-  // 4. Получаем записи табеля (tender_timesheet + timesheet)
-  const employeeIds = employees.map(e => e.id as number);
-  const BATCH = 500;
-
-  let allEntries: Array<{ employee_id: number; status: string }> = [];
-
-  for (let i = 0; i < employeeIds.length; i += BATCH) {
-    const batch = employeeIds.slice(i, i + BATCH);
-
-    const [tenderRes, tsRes] = await Promise.all([
-      supabase
-        .from('tender_timesheet')
-        .select('employee_id, status')
-        .in('employee_id', batch)
-        .gte('work_date', startDate)
-        .lte('work_date', endDate),
-      supabase
-        .from('timesheet')
-        .select('employee_id, status')
-        .in('employee_id', batch)
-        .gte('work_date', startDate)
-        .lte('work_date', endDate),
-    ]);
-
-    if (tenderRes.data) allEntries.push(...(tenderRes.data as Array<{ employee_id: number; status: string }>));
-    if (tsRes.data) allEntries.push(...(tsRes.data as Array<{ employee_id: number; status: string }>));
-  }
+  const attendance = await buildAttendanceEntries({
+    employees: employees.map(e => ({
+      id: e.id as number,
+      full_name: (e.full_name as string | null) || null,
+      work_category: (e.work_category as string | null) || null,
+    })),
+    startDate,
+    endDate,
+    dailySchedulesMap,
+    calendarMonth,
+    todayStr: endDate,
+  });
 
   // Группируем рабочие дни по сотруднику
   const workedMap = new Map<number, number>();
-  for (const e of allEntries) {
-    if (WORKED_STATUSES.has(e.status)) {
-      workedMap.set(e.employee_id, (workedMap.get(e.employee_id) || 0) + 1);
+  for (const entry of attendance.entries) {
+    if (WORKED_STATUSES.has(entry.status)) {
+      workedMap.set(entry.employee_id, (workedMap.get(entry.employee_id) || 0) + 1);
     }
   }
 
@@ -103,11 +94,11 @@ export const generatePayslipsForMonth = async (
 
   for (const emp of employees) {
     const empId = emp.id as number;
-    const salary = (emp.salary_calculated as number) ?? (emp.current_salary as number) ?? 0;
+    const salary = (emp.current_salary as number) ?? 0;
     if (salary <= 0) continue;
 
     const sched = scheduleMap.get(empId);
-    const normDays = calEntry?.norm_days ?? (sched ? countWorkingDaysForSchedule(year, month, sched) : 22);
+    const normDays = calendarMonth?.norm_days ?? (sched ? countWorkingDaysForSchedule(year, month, sched) : 22);
     const workedDays = workedMap.get(empId) || 0;
 
     if (workedDays === 0) continue;
@@ -141,6 +132,7 @@ export const generatePayslipsForMonth = async (
 
   // 6. Upsert в payslips
   if (upsertRecords.length > 0) {
+    const BATCH = 500;
     for (let i = 0; i < upsertRecords.length; i += BATCH) {
       const batch = upsertRecords.slice(i, i + BATCH);
       const { error } = await supabase

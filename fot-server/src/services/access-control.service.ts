@@ -6,7 +6,7 @@ import {
   type DataScope,
   type EmployeePortalVariant,
 } from '../config/access-control.js';
-import { getRoleByCode, invalidateRolesCache } from './roles-cache.service.js';
+import { getRoleByCode, getRoleById, invalidateRolesCache } from './roles-cache.service.js';
 
 interface PageAccessPermission {
   can_view: boolean;
@@ -28,7 +28,7 @@ async function loadPageAccessCache(): Promise<RolePageAccessMap> {
 
   const { data, error } = await supabase
     .from('role_page_access')
-    .select('role_code, page_path, can_view, can_edit');
+    .select('system_role_id, role_code, page_path, can_view, can_edit');
 
   if (error) {
     throw new Error(`Failed to load role page access cache: ${error.message}`);
@@ -36,10 +36,11 @@ async function loadPageAccessCache(): Promise<RolePageAccessMap> {
 
   const cache: RolePageAccessMap = new Map();
   for (const entry of data || []) {
-    if (!cache.has(entry.role_code)) {
-      cache.set(entry.role_code, new Map());
+    const key = entry.system_role_id || entry.role_code;
+    if (!cache.has(key)) {
+      cache.set(key, new Map());
     }
-    cache.get(entry.role_code)!.set(entry.page_path, {
+    cache.get(key)!.set(entry.page_path, {
       can_view: !!entry.can_view || !!entry.can_edit,
       can_edit: !!entry.can_edit,
     });
@@ -50,56 +51,65 @@ async function loadPageAccessCache(): Promise<RolePageAccessMap> {
   return cache;
 }
 
-export async function getRolePermissions(roleCode: string): Promise<string[]> {
-  const role = await getRoleByCode(roleCode);
+async function resolveRole(roleRef: string) {
+  return (await getRoleById(roleRef)) ?? (await getRoleByCode(roleRef));
+}
+
+async function resolveRoleCacheKey(roleRef: string): Promise<string> {
+  const role = await resolveRole(roleRef);
+  return role?.id ?? roleRef;
+}
+
+export async function getRolePermissions(roleRef: string): Promise<string[]> {
+  const role = await resolveRole(roleRef);
   return normalizePermissions(role?.permissions);
 }
 
-export async function getRolePageAccess(roleCode: string): Promise<Record<string, PageAccessPermission>> {
+export async function getRolePageAccess(roleRef: string): Promise<Record<string, PageAccessPermission>> {
   const cache = await loadPageAccessCache();
-  const entries = cache.get(roleCode) ?? new Map<string, PageAccessPermission>();
+  const entries = cache.get(await resolveRoleCacheKey(roleRef)) ?? new Map<string, PageAccessPermission>();
 
   return Object.fromEntries(entries.entries());
 }
 
-export async function hasPermission(roleCode: string, permission: string): Promise<boolean> {
-  const permissions = await getRolePermissions(roleCode);
+export async function hasPermission(roleRef: string, permission: string): Promise<boolean> {
+  const permissions = await getRolePermissions(roleRef);
   return permissions.includes(permission);
 }
 
-export async function hasAnyPermission(roleCode: string, permissions: string[]): Promise<boolean> {
-  const rolePermissions = await getRolePermissions(roleCode);
+export async function hasAnyPermission(roleRef: string, permissions: string[]): Promise<boolean> {
+  const rolePermissions = await getRolePermissions(roleRef);
   return permissions.some(permission => rolePermissions.includes(permission));
 }
 
-export async function hasPageView(roleCode: string, pagePath: string): Promise<boolean> {
-  const access = await getRolePageAccess(roleCode);
+export async function hasPageView(roleRef: string, pagePath: string): Promise<boolean> {
+  const access = await getRolePageAccess(roleRef);
   return access[pagePath]?.can_view === true;
 }
 
-export async function hasPageEdit(roleCode: string, pagePath: string): Promise<boolean> {
-  const access = await getRolePageAccess(roleCode);
+export async function hasPageEdit(roleRef: string, pagePath: string): Promise<boolean> {
+  const access = await getRolePageAccess(roleRef);
   return access[pagePath]?.can_edit === true;
 }
 
-export async function getEffectiveAccess(roleCode: string): Promise<{
+export async function getEffectiveAccess(roleRef: string): Promise<{
   permissions: string[];
   page_access: Record<string, PageAccessPermission>;
 }> {
   const [permissions, page_access] = await Promise.all([
-    getRolePermissions(roleCode),
-    getRolePageAccess(roleCode),
+    getRolePermissions(roleRef),
+    getRolePageAccess(roleRef),
   ]);
 
   return { permissions, page_access };
 }
 
-export async function resolveRoleEmployeeVariant(roleCode: string): Promise<EmployeePortalVariant | null> {
-  return resolveEmployeeVariantFromPermissions(await getRolePermissions(roleCode));
+export async function resolveRoleEmployeeVariant(roleRef: string): Promise<EmployeePortalVariant | null> {
+  return resolveEmployeeVariantFromPermissions(await getRolePermissions(roleRef));
 }
 
-export async function resolveRoleDataScope(roleCode: string): Promise<DataScope | null> {
-  return resolveDataScopeFromPermissions(await getRolePermissions(roleCode));
+export async function resolveRoleDataScope(roleRef: string): Promise<DataScope | null> {
+  return resolveDataScopeFromPermissions(await getRolePermissions(roleRef));
 }
 
 export function invalidateAccessControlCache(): void {

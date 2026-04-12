@@ -1,13 +1,13 @@
-import { type FC, useState, useEffect, useCallback } from 'react';
+import { type FC, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  salaryRaiseService,
   REQUEST_TYPE_LABELS,
   STATUS_LABELS,
   STATUS_COLORS,
   type ISalaryRaiseRequest,
 } from '../services/salaryRaiseService';
+import { useSalaryRaiseReviewList } from '../hooks/useSalaryRaiseData';
 import './SalaryRaiseReviewPage.css';
 
 const formatSalary = (value: number | null | undefined): string => {
@@ -19,37 +19,16 @@ const formatDate = (date: string): string =>
   new Date(date).toLocaleDateString('ru-RU');
 
 type FilterTab = 'pending' | 'all';
+const EMPTY_REQUESTS: ISalaryRaiseRequest[] = [];
 
 export const SalaryRaiseReviewPage: FC = () => {
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
   const canViewAll = hasPermission('data.scope.all');
 
-  const [requests, setRequests] = useState<ISalaryRaiseRequest[]>([]);
-  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterTab>('pending');
-
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      if (filter === 'pending') {
-        const data = await salaryRaiseService.getPending();
-        setRequests(data);
-      } else if (canViewAll) {
-        const data = await salaryRaiseService.getAll();
-        setRequests(data);
-      } else {
-        const data = await salaryRaiseService.getPending();
-        setRequests(data);
-      }
-    } catch {
-      setRequests([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [filter, canViewAll]);
-
-  useEffect(() => { loadData(); }, [loadData]);
+  const { data, isLoading } = useSalaryRaiseReviewList(filter, canViewAll);
+  const requests = data ?? EMPTY_REQUESTS;
 
   return (
     <div className="srr-page">
@@ -73,7 +52,7 @@ export const SalaryRaiseReviewPage: FC = () => {
         </div>
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="srr-loading">Загрузка...</div>
       ) : requests.length === 0 ? (
         <div className="srr-empty">Нет заявок на рассмотрении</div>
@@ -81,7 +60,7 @@ export const SalaryRaiseReviewPage: FC = () => {
         <div className="srr-list">
           {requests.map((r) => {
             const snapshot = r.employee_snapshot;
-            const currentSalary = snapshot?.salary_actual ?? snapshot?.current_salary;
+            const currentSalary = snapshot?.current_salary;
             const employeeName = snapshot?.full_name || `Сотрудник #${r.employee_id}`;
             const raisePercent = r.raise_percentage != null && r.raise_percentage !== 0
               ? r.raise_percentage.toFixed(1)

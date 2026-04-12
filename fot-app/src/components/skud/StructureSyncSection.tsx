@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import type { FC } from 'react';
 import { RefreshCw, Trash2 } from 'lucide-react';
+import { buildApiUrl, buildAuthHeaders } from '../../api/client';
 import { structureApi } from '../../api/structure';
 import type {
   ISyncAllStep,
@@ -82,13 +83,12 @@ export const StructureSyncSection: FC<IStructureSyncSectionProps> = ({
     setSyncAllSteps(buildStepState(selectedSyncAllSteps));
 
     try {
-      const token = localStorage.getItem('access_token');
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
-      const response = await fetch(`${apiUrl}/sigur/sync-all`, {
+      const response = await fetch(buildApiUrl('/sigur/sync-all'), {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...buildAuthHeaders(),
         },
         body: JSON.stringify({ steps: selectedSyncAllSteps }),
       });

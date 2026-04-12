@@ -2,6 +2,7 @@ import type { Response } from 'express';
 import { supabase } from '../config/database.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { generatePayslipsForMonth } from '../services/payslip-generation.service.js';
+import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
 
 /** Мои расчётные листки (worker) */
 const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -30,11 +31,16 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
 const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { empId } = req.params;
+    const employeeId = Number(empId);
+    if (!Number.isInteger(employeeId) || !(await canAccessEmployeeInScope(req, employeeId))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      return;
+    }
 
     const { data, error } = await supabase
       .from('payslips')
       .select('id, employee_id, period, gross_amount, net_amount, deductions, details, document_id, created_by, created_at')
-      .eq('employee_id', empId)
+      .eq('employee_id', employeeId)
       .order('period', { ascending: false });
 
     if (error) throw error;
@@ -51,6 +57,10 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     const { employee_id, period, gross_amount, net_amount, deductions, details, document_id } = req.body;
     if (!employee_id || !period) {
       res.status(400).json({ success: false, error: 'employee_id и period обязательны' });
+      return;
+    }
+    if (!(await canAccessEmployeeInScope(req, Number(employee_id)))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
 
@@ -84,6 +94,12 @@ const importBatch = async (req: AuthenticatedRequest, res: Response): Promise<vo
     if (!Array.isArray(items) || items.length === 0) {
       res.status(400).json({ success: false, error: 'items должен быть непустым массивом' });
       return;
+    }
+    for (const item of items) {
+      if (!(await canAccessEmployeeInScope(req, Number(item.employee_id)))) {
+        res.status(403).json({ success: false, error: 'Нет доступа к одному из сотрудников в batch' });
+        return;
+      }
     }
 
     const records = items.map((item: { employee_id: number; period: string; gross_amount?: number; net_amount?: number; deductions?: number }) => ({

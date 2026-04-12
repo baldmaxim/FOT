@@ -1,16 +1,7 @@
 import { supabase } from '../config/database.js';
-import { resolveSchedulesForPeriod, isWorkingDay, needsSkudCheck, getScheduleForDate } from './schedule.service.js';
-import { getInternalAccessPoints } from './skud-shared.service.js';
+import { resolveSchedulesForPeriod } from './schedule.service.js';
 import type { IResolvedSchedule } from '../types/index.js';
-import { getTravelHoursSummaryForRange, travelMinutesToHours } from './skud-travel.service.js';
-
-interface IRawEvent {
-  employee_id: number;
-  event_date: string;
-  event_time: string;
-  direction: string | null;
-  access_point: string | null;
-}
+import { buildAttendanceEntries } from './attendance.service.js';
 
 export interface IExportEmployee {
   id: number;
@@ -35,24 +26,6 @@ export interface IDepartmentTimesheetData {
   mon: number;
   daysInMonth: number;
 }
-
-const BATCH = 500;
-
-const calcPairMs = (evts: IRawEvent[]): number => {
-  let total = 0;
-  let entry: number | null = null;
-  for (const evt of evts) {
-    const [h, m, s] = evt.event_time.split(':').map(Number);
-    const ms = (h * 3600 + m * 60 + (s || 0)) * 1000;
-    if (evt.direction === 'entry') {
-      if (entry === null) entry = ms;
-    } else if (evt.direction === 'exit' && entry !== null) {
-      total += ms - entry;
-      entry = null;
-    }
-  }
-  return total;
-};
 
 export async function fetchTimesheetDataForDepartment(
   month: string,
@@ -99,8 +72,6 @@ export async function fetchTimesheetDataForDepartment(
     sigur_employee_id: (e.sigur_employee_id as number | null),
     work_category: (e.work_category as string | null) || null,
   }));
-  const employeeIds = empArr.map(e => e.id);
-
   // Графики
   const empList = empArr.map(e => ({ id: e.id, work_category: e.work_category }));
   const dailySchedulesMap = await resolveSchedulesForPeriod(empList, startDate, endDate);
@@ -111,187 +82,32 @@ export async function fetchTimesheetDataForDepartment(
     if (schedule) schedulesMap.set(employeeId, schedule);
   }
 
-  // Internal access points
-  const internalPoints = await getInternalAccessPoints();
+  const attendance = await buildAttendanceEntries({
+    employees: empArr.map(employee => ({
+      id: employee.id,
+      full_name: employee.full_name,
+      work_category: employee.work_category,
+    })),
+    startDate,
+    endDate,
+    dailySchedulesMap,
+    calendarMonth: null,
+    todayStr,
+  });
 
-  // SKUD events
-  let rawEvents: IRawEvent[] = [];
-  for (let i = 0; i < employeeIds.length; i += BATCH) {
-    const batch = employeeIds.slice(i, i + BATCH);
-    const { data: sd } = await supabase
-      .from('skud_events')
-      .select('employee_id, event_date, event_time, direction, access_point')
-      .in('employee_id', batch)
-      .gte('event_date', startDate)
-      .lte('event_date', endDate)
-      .order('event_time', { ascending: true });
-    rawEvents.push(...(sd || []));
-  }
-
-  // Unmatched events by full_name
-  const nameMap = new Map<string, number>();
-  for (const emp of empArr) {
-    if (emp.full_name) nameMap.set(emp.full_name.toLowerCase().trim(), emp.id);
-  }
-  const seenKeys = new Set(rawEvents.map(e => `${e.employee_id}_${e.event_date}_${e.event_time}`));
-
-  if (nameMap.size > 0) {
-    const { data: unmatched } = await supabase
-      .from('skud_events')
-      .select('id, physical_person, employee_id, event_date, event_time, direction, access_point')
-      .is('employee_id', null)
-      .gte('event_date', startDate)
-      .lte('event_date', endDate)
-      .order('event_time', { ascending: true })
-      .limit(5000);
-
-    for (const ev of unmatched || []) {
-      const name = ((ev.physical_person as string) || '').toLowerCase().trim();
-      const empId = nameMap.get(name);
-      if (empId) {
-        const dedupKey = `${empId}_${ev.event_date}_${ev.event_time}`;
-        if (!seenKeys.has(dedupKey)) {
-          rawEvents.push({
-            employee_id: empId,
-            event_date: ev.event_date as string,
-            event_time: ev.event_time as string,
-            direction: ev.direction as string | null,
-            access_point: ev.access_point as string | null,
-          });
-          seenKeys.add(dedupKey);
-        }
-      }
-    }
-  }
-
-  // Group events
-  const eventsByKey = new Map<string, IRawEvent[]>();
-  for (const evt of rawEvents) {
-    const key = `${evt.employee_id}_${evt.event_date}`;
-    if (!eventsByKey.has(key)) eventsByKey.set(key, []);
-    eventsByKey.get(key)!.push(evt);
-  }
-
-  // dataMap: employee_id -> date -> { status, hours, corrected? }
   const dataMap = new Map<number, Map<string, { status: string; hours: number; corrected?: boolean }>>();
-  // skudMap: raw SKUD hours per employee per day (for "СКУД" row in export)
-  const skudMap = new Map<number, Map<string, { hours: number; corrected: boolean }>>();
-
-  // SKUD events
-  for (const [, events] of eventsByKey) {
-    const extEvents = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
-    let totalMs = calcPairMs(extEvents);
-    if (totalMs === 0 && events.length > 0) {
-      totalMs = calcPairMs(events);
-    }
-    const totalHours = Math.round((totalMs / 3600000) * 100) / 100;
-    const empId = events[0].employee_id;
-    const date = events[0].event_date;
-    const isPresent = totalHours > 0 || events.some(e => e.direction === 'entry');
-
-    if (!dataMap.has(empId)) dataMap.set(empId, new Map());
-    dataMap.get(empId)!.set(date, {
-      status: isPresent ? 'work' : 'absent',
-      hours: isPresent ? totalHours : 0,
-    });
-
-    // Populate skudMap with raw SKUD hours
-    if (isPresent) {
-      if (!skudMap.has(empId)) skudMap.set(empId, new Map());
-      skudMap.get(empId)!.set(date, { hours: totalHours, corrected: false });
-    }
-  }
-
-  let travelSummaries = new Map<string, {
-    creditedMinutes: number;
-    delayMinutes: number;
-    segmentsCount: number;
-    problematicSegmentsCount: number;
-  }>();
-  try {
-    travelSummaries = await getTravelHoursSummaryForRange({
-      employeeIds,
-      startDate,
-      endDate,
-    });
-  } catch (travelError) {
-    console.warn('[timesheet-export] failed to calculate travel summaries:', travelError);
-  }
-
-  for (const [key, summary] of travelSummaries) {
-    const [employeeIdRaw, date] = key.split('_');
-    const empId = Number(employeeIdRaw);
-    const travelHours = travelMinutesToHours(summary.creditedMinutes);
-    if (!dataMap.has(empId)) dataMap.set(empId, new Map());
-
-    const current = dataMap.get(empId)!.get(date);
-    if (current?.corrected) continue;
-
-    if (!current) {
-      dataMap.get(empId)!.set(date, {
-        status: summary.creditedMinutes > 0 ? 'work' : 'absent',
-        hours: travelHours,
+  for (const [employeeId, dateMap] of attendance.byEmployeeDate) {
+    dataMap.set(employeeId, new Map());
+    for (const [date, entry] of dateMap) {
+      dataMap.get(employeeId)!.set(date, {
+        status: entry.status,
+        hours: typeof entry.hours_worked === 'number' ? entry.hours_worked : 0,
+        corrected: entry.is_correction,
       });
-      continue;
-    }
-
-    dataMap.get(empId)!.set(date, {
-      ...current,
-      status: current.status === 'absent' && summary.creditedMinutes > 0 ? 'work' : current.status,
-      hours: Math.round((current.hours + travelHours) * 100) / 100,
-    });
-  }
-
-  // Manual corrections override SKUD
-  let manualEntries: Array<Record<string, unknown>> = [];
-  for (let i = 0; i < employeeIds.length; i += BATCH) {
-    const batch = employeeIds.slice(i, i + BATCH);
-    const { data: md } = await supabase
-      .from('tender_timesheet')
-      .select('employee_id, work_date, status, hours_worked')
-      .in('employee_id', batch)
-      .gte('work_date', startDate)
-      .lte('work_date', endDate);
-    manualEntries.push(...(md || []));
-  }
-
-  for (const m of manualEntries) {
-    const empId = m.employee_id as number;
-    const date = m.work_date as string;
-
-    // Mark SKUD entry as corrected if it exists
-    const empSkud = skudMap.get(empId);
-    if (empSkud?.has(date)) {
-      empSkud.get(date)!.corrected = true;
-    }
-
-    if (!dataMap.has(empId)) dataMap.set(empId, new Map());
-    dataMap.get(empId)!.set(date, {
-      status: m.status as string,
-      hours: typeof m.hours_worked === 'number' ? m.hours_worked : 0,
-      corrected: true,
-    });
-  }
-
-  // Автозаполнение remote/hybrid-remote дней
-  for (const empId of employeeIds) {
-    if (!dataMap.has(empId)) dataMap.set(empId, new Map());
-    const empData = dataMap.get(empId)!;
-
-    for (let d = 1; d <= daysInMonth; d++) {
-      const dateStr = `${year}-${String(mon).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      const sched = dailySchedulesMap.get(empId)?.get(dateStr);
-      if (dateStr > todayStr) continue;
-      if (empData.has(dateStr)) continue;
-      if (!sched) continue;
-
-      const dateObj = new Date(year, mon - 1, d);
-      if (!isWorkingDay(sched, dateObj)) continue;
-      if (!needsSkudCheck(sched, dateObj)) {
-        empData.set(dateStr, { status: 'remote', hours: getScheduleForDate(sched, dateObj).work_hours });
-      }
     }
   }
+
+  const skudMap = attendance.skudMap;
 
   // Positions
   const positionIds = [...new Set(empArr.map(e => e.position_id).filter(Boolean))] as string[];

@@ -41,7 +41,7 @@ const getNextStatus = (current: string, action: string): SalaryRaiseStatus | nul
 const buildSnapshot = async (employeeId: number) => {
   const { data: emp } = await supabase
     .from('employees')
-    .select('full_name, current_salary, salary_actual, hire_date, work_object, position_id, org_department_id')
+    .select('full_name, current_salary, hire_date, work_object, position_id, org_department_id')
     .eq('id', employeeId)
     .single();
 
@@ -87,7 +87,7 @@ const buildSnapshot = async (employeeId: number) => {
     department_name: departmentName,
     work_object: emp.work_object,
     current_salary: emp.current_salary,
-    salary_actual: emp.salary_actual,
+    salary_actual: emp.current_salary,
     hire_date: emp.hire_date,
     supervisor_name: supervisorName,
     last_raise_date: lastRaise?.effective_date || null,
@@ -170,8 +170,8 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         employee_snapshot: snapshot,
         request_type,
         requested_salary,
-        raise_percentage: snapshot.salary_actual && snapshot.salary_actual > 0
-          ? Math.round(((requested_salary - snapshot.salary_actual) / snapshot.salary_actual) * 1000) / 10
+        raise_percentage: snapshot.current_salary && snapshot.current_salary > 0
+          ? Math.round(((requested_salary - snapshot.current_salary) / snapshot.current_salary) * 1000) / 10
           : 0,
         desired_effective_date,
         reason_brief,
@@ -228,8 +228,8 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     if (request_type !== undefined) updateData.request_type = request_type;
     if (requested_salary !== undefined) updateData.requested_salary = requested_salary;
     const finalSalary = requested_salary ?? request.requested_salary;
-    if (snapshot && snapshot.salary_actual && snapshot.salary_actual > 0 && finalSalary) {
-      updateData.raise_percentage = Math.round(((finalSalary - snapshot.salary_actual) / snapshot.salary_actual) * 1000) / 10;
+    if (snapshot && snapshot.current_salary && snapshot.current_salary > 0 && finalSalary) {
+      updateData.raise_percentage = Math.round(((finalSalary - snapshot.current_salary) / snapshot.current_salary) * 1000) / 10;
     }
     if (desired_effective_date !== undefined) updateData.desired_effective_date = desired_effective_date;
     if (reason_brief !== undefined) updateData.reason_brief = reason_brief;

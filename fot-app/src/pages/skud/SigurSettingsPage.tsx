@@ -1,14 +1,25 @@
-import { useState, useEffect, useCallback } from 'react';
+import { Suspense, lazy, useState, useEffect, useCallback } from 'react';
 import { Settings, MapPin, Filter, Database } from 'lucide-react';
-import { ConnectionSettingsTab } from '../../components/skud/ConnectionSettingsTab';
-import { AccessPointsTab } from '../../components/skud/AccessPointsTab';
-import { SyncFilterTab } from '../../components/skud/SyncFilterTab';
-import { TravelObjectsTab } from '../../components/skud/TravelObjectsTab';
-import { TravelRoutesTab } from '../../components/skud/TravelRoutesTab';
 import { sigurService } from '../../services/sigurService';
 import { useAuth } from '../../contexts/AuthContext';
 import type { SettingsTab } from '../../components/skud/sigur-settings.types';
 import '../../styles/SigurSettingsPage.css';
+
+const ConnectionSettingsTab = lazy(() => import('../../components/skud/ConnectionSettingsTab').then(module => ({
+  default: module.ConnectionSettingsTab,
+})));
+const AccessPointsTab = lazy(() => import('../../components/skud/AccessPointsTab').then(module => ({
+  default: module.AccessPointsTab,
+})));
+const SyncFilterTab = lazy(() => import('../../components/skud/SyncFilterTab').then(module => ({
+  default: module.SyncFilterTab,
+})));
+const TravelObjectsTab = lazy(() => import('../../components/skud/TravelObjectsTab').then(module => ({
+  default: module.TravelObjectsTab,
+})));
+const TravelRoutesTab = lazy(() => import('../../components/skud/TravelRoutesTab').then(module => ({
+  default: module.TravelRoutesTab,
+})));
 
 const SIGUR_CONNECTION_STORAGE_KEY = 'sigur_selected_connection';
 
@@ -68,6 +79,12 @@ export const SigurSettingsPage = () => {
       ? 'Фильтр не задан: синхронизация затронет все отделы'
       : `Активен фильтр: ${syncFilterCount} отдел(ов)`;
 
+  const tabFallback = (
+    <div className="sigur-loading">
+      Загрузка вкладки...
+    </div>
+  );
+
   return (
     <div className="sigur-page">
       <div className="sigur-header">
@@ -121,51 +138,61 @@ export const SigurSettingsPage = () => {
       )}
 
       {activeTab === 'settings' && (
-        <ConnectionSettingsTab
-          connected={connected}
-          checking={checking}
-          selectedConnection={selectedConnection}
-          availableConnections={availableConnections}
-          canEdit={canEdit}
-          error={error}
-          setError={setError}
-          setSelectedConnection={setSelectedConnection}
-          checkConnection={checkConnection}
-          setActiveTab={setActiveTab}
-          syncFilterSummary={syncFilterSummary}
-        />
+        <Suspense fallback={tabFallback}>
+          <ConnectionSettingsTab
+            connected={connected}
+            checking={checking}
+            selectedConnection={selectedConnection}
+            availableConnections={availableConnections}
+            canEdit={canEdit}
+            error={error}
+            setError={setError}
+            setSelectedConnection={setSelectedConnection}
+            checkConnection={checkConnection}
+            setActiveTab={setActiveTab}
+            syncFilterSummary={syncFilterSummary}
+          />
+        </Suspense>
       )}
 
       {activeTab === 'sync-filter' && (
-        <SyncFilterTab
-          connected={connected}
-          canEdit={canEdit}
-          onFilterCountChange={setSyncFilterCount}
-        />
+        <Suspense fallback={tabFallback}>
+          <SyncFilterTab
+            connected={connected}
+            canEdit={canEdit}
+            onFilterCountChange={setSyncFilterCount}
+          />
+        </Suspense>
       )}
 
       {activeTab === 'access-points' && (
-        <AccessPointsTab
-          connected={connected}
-          canEdit={canEdit}
-          selectedConnection={selectedConnection}
-          setError={setError}
-        />
+        <Suspense fallback={tabFallback}>
+          <AccessPointsTab
+            connected={connected}
+            canEdit={canEdit}
+            selectedConnection={selectedConnection}
+            setError={setError}
+          />
+        </Suspense>
       )}
 
       {activeTab === 'objects' && (
-        <TravelObjectsTab
-          canEdit={canEdit}
-          selectedConnection={selectedConnection}
-          setError={setError}
-        />
+        <Suspense fallback={tabFallback}>
+          <TravelObjectsTab
+            canEdit={canEdit}
+            selectedConnection={selectedConnection}
+            setError={setError}
+          />
+        </Suspense>
       )}
 
       {activeTab === 'routes' && (
-        <TravelRoutesTab
-          canEdit={canEdit}
-          setError={setError}
-        />
+        <Suspense fallback={tabFallback}>
+          <TravelRoutesTab
+            canEdit={canEdit}
+            setError={setError}
+          />
+        </Suspense>
       )}
     </div>
   );

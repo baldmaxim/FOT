@@ -1,15 +1,11 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
-import { ChatProvider } from './contexts/ChatContext';
-import { ChatButton } from './components/chat/ChatButton';
-import { ChatSidePanel } from './components/chat/ChatSidePanel';
 import { ProtectedRoute, PublicRoute } from './components/auth/ProtectedRoute';
-import { Layout } from './components/layout/Layout';
-import { EmployeeLayout } from './components/layout/EmployeeLayout';
 import { useTheme } from './hooks/useTheme';
+import { useChatUnreadCount } from './hooks/useChatUnreadCount';
 import { PageLoader } from './components/ui/PageLoader';
 import './App.css';
 
@@ -35,6 +31,8 @@ const ResetPasswordPage = lazy(() => import('./pages/auth/ResetPasswordPage').th
 
 // Dashboard
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
+const Layout = lazy(() => import('./components/layout/Layout').then(m => ({ default: m.Layout })));
+const EmployeeLayout = lazy(() => import('./components/layout/EmployeeLayout').then(m => ({ default: m.EmployeeLayout })));
 
 // Super Admin
 const UserManagementPage = lazy(() => import('./pages/super-admin/UserManagementPage').then(m => ({ default: m.UserManagementPage })));
@@ -47,7 +45,6 @@ const SchedulesPage = lazy(() => import('./pages/admin/SchedulesPage').then(m =>
 // Employees & SKUD
 const EmployeesPage = lazy(() => import('./pages/employees/EmployeesPage').then(m => ({ default: m.EmployeesPage })));
 const EmployeeCardPage = lazy(() => import('./pages/employees/EmployeeCardPage').then(m => ({ default: m.EmployeeCardPage })));
-const HeaderEmployeesPage = lazy(() => import('./pages/employees/HeaderEmployeesPage').then(m => ({ default: m.HeaderEmployeesPage })));
 const SigurSettingsPage = lazy(() => import('./pages/skud/SigurSettingsPage').then(m => ({ default: m.SigurSettingsPage })));
 const SigurRawDataPage = lazy(() => import('./pages/skud/SigurRawDataPage').then(m => ({ default: m.SigurRawDataPage })));
 const SkudSupabasePage = lazy(() => import('./pages/skud/SkudSupabasePage').then(m => ({ default: m.SkudSupabasePage })));
@@ -76,6 +73,9 @@ const MyHistoryPage = lazy(() => import('./pages/employee/MyHistoryPage').then(m
 const SalaryRaisePage = lazy(() => import('./pages/employee/SalaryRaisePage').then(m => ({ default: m.SalaryRaisePage })));
 const SalaryRaiseFormPage = lazy(() => import('./pages/employee/SalaryRaiseFormPage').then(m => ({ default: m.SalaryRaiseFormPage })));
 const SalaryRaiseViewPage = lazy(() => import('./pages/employee/SalaryRaiseViewPage').then(m => ({ default: m.SalaryRaiseViewPage })));
+const NotFoundPage = lazy(() => import('./pages/NotFoundPage').then(m => ({ default: m.NotFoundPage })));
+const ChatRoot = lazy(() => import('./components/chat/ChatRoot').then(m => ({ default: m.ChatRoot })));
+const ChatLauncher = lazy(() => import('./components/chat/ChatLauncher').then(m => ({ default: m.ChatLauncher })));
 
 // Leave requests management (header/hr)
 const LeaveRequestsManagePage = lazy(() => import('./pages/LeaveRequestsManagePage').then(m => ({ default: m.LeaveRequestsManagePage })));
@@ -115,6 +115,30 @@ const EmployeeHomeRoute = () => {
   }
 
   return <Navigate to="/unauthorized" replace />;
+};
+
+const ChatEntryPoint = () => {
+  const { isAuthenticated, isApproved } = useAuth();
+  const [chatActivated, setChatActivated] = useState(false);
+  const { unreadCount } = useChatUnreadCount(isAuthenticated && isApproved && !chatActivated);
+
+  if (!isAuthenticated || !isApproved) {
+    return null;
+  }
+
+  if (!chatActivated) {
+    return (
+      <Suspense fallback={null}>
+        <ChatLauncher unreadCount={unreadCount} onOpen={() => setChatActivated(true)} />
+      </Suspense>
+    );
+  }
+
+  return (
+    <Suspense fallback={null}>
+      <ChatRoot initialOpen />
+    </Suspense>
+  );
 };
 
 const AppRoutes = () => {
@@ -173,7 +197,10 @@ const AppRoutes = () => {
             path="/employee/*"
             element={
               <EmployeeLayout title="Личный кабинет">
-                <div style={{ padding: '28px' }}>Страница в разработке</div>
+                <NotFoundPage
+                  title="Раздел не найден"
+                  message="Этот раздел личного кабинета больше не существует или ещё не реализован."
+                />
               </EmployeeLayout>
             }
           />
@@ -302,17 +329,6 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage="/my-employees" />}>
-          <Route
-            path="/my-employees"
-            element={
-              <Layout title="Сотрудники" theme={theme} onToggleTheme={toggleTheme}>
-                <HeaderEmployeesPage />
-              </Layout>
-            }
-          />
-        </Route>
-
         <Route element={<ProtectedRoute requiredPage="/leave-requests" />}>
           <Route
             path="/leave-requests"
@@ -343,9 +359,9 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage={['/my-employees', '/tender', '/staff-control']} />}>
+        <Route element={<ProtectedRoute requiredPage={['/employees', '/staff-control']} />}>
           <Route
-            path="/tender/:id"
+            path="/employees/:id"
             element={
               <Layout title="Карточка сотрудника" theme={theme} onToggleTheme={toggleTheme}>
                 <EmployeeCardPage />
@@ -387,9 +403,9 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage="/tender" />}>
+        <Route element={<ProtectedRoute requiredPage="/employees" />}>
           <Route
-            path="/tender"
+            path="/employees"
             element={
               <Layout title="Сотрудники" theme={theme} onToggleTheme={toggleTheme}>
                 <EmployeesPage />
@@ -452,8 +468,6 @@ const AppRoutes = () => {
             }
           />
         </Route>
-
-        <Route path="/profile" element={<Navigate to="/employee" replace />} />
 
         <Route element={<ProtectedRoute requiredPage="/skud-settings" />}>
           <Route
@@ -533,8 +547,7 @@ const AppRoutes = () => {
           }
         />
 
-        {/* Catch all - redirect to home */}
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </Suspense>
   );
@@ -546,11 +559,8 @@ const App = () => {
       <BrowserRouter>
         <AuthProvider>
           <ToastProvider>
-            <ChatProvider>
-              <AppRoutes />
-              <ChatButton />
-              <ChatSidePanel />
-            </ChatProvider>
+            <AppRoutes />
+            <ChatEntryPoint />
           </ToastProvider>
         </AuthProvider>
       </BrowserRouter>

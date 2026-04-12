@@ -14,14 +14,7 @@ const collectAllIds = (nodes: OrgDepartmentNode[]): string[] => {
   }
   return ids;
 };
-
-const collectChildIds = (node: OrgDepartmentNode): string[] => {
-  const ids: string[] = [node.id];
-  for (const c of node.children || []) {
-    ids.push(...collectChildIds(c));
-  }
-  return ids;
-};
+const EMPTY_DEPARTMENTS: OrgDepartmentNode[] = [];
 
 const matchesSearch = (node: OrgDepartmentNode, query: string): boolean => {
   if (node.name.toLowerCase().includes(query)) return true;
@@ -105,7 +98,7 @@ export const MassTimesheetExportPage: FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   const { data: structure, isLoading } = useStructureTree();
-  const departments = structure?.departments || [];
+  const departments = structure?.departments ?? EMPTY_DEPARTMENTS;
 
   const filteredDepts = useMemo(
     () => filterTree(departments, searchQuery.toLowerCase().trim()),

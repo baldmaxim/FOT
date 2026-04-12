@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import type { FC } from 'react';
 import { RefreshCw, Download, Trash2 } from 'lucide-react';
 import { sigurService } from '../../services/sigurService';
+import { buildApiUrl, buildAuthHeaders } from '../../api/client';
 import type {
   ISyncResult,
   IEventsProgressState,
@@ -56,13 +57,12 @@ export const EventsSyncSection: FC<IEventsSyncSectionProps> = ({
     setEmployeesProgress(null);
 
     try {
-      const token = localStorage.getItem('access_token');
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
-      const response = await fetch(`${apiUrl}/sigur/sync`, {
+      const response = await fetch(buildApiUrl('/sigur/sync'), {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...buildAuthHeaders(),
         },
         body: JSON.stringify({ startDate: syncStartDate, endDate: syncEndDate }),
       });

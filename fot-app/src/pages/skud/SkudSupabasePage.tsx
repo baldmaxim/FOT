@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Search, X, HardDrive, RefreshCw, AlertCircle } from 'lucide-react';
-import { skudService } from '../../services/skudService';
+import { getSkudSupabaseEventsQueryKey, getSkudSupabaseSummaryQueryKey, useSkudSupabaseEvents, useSkudSupabaseSummary } from '../../hooks/useSkudOpsData';
 import type { SkudEvent, SkudDailySummary } from '../../types';
 import '../../styles/SkudSupabasePage.css';
 
@@ -15,6 +16,8 @@ const TABS: ITab[] = [
   { id: 'events', label: 'События' },
   { id: 'summary', label: 'Сводка' },
 ];
+const EMPTY_EVENTS: SkudEvent[] = [];
+const EMPTY_SUMMARY: SkudDailySummary[] = [];
 
 const today = () => {
   const d = new Date();
@@ -35,20 +38,22 @@ const formatCellValue = (value: unknown): string => {
 
 export const SkudSupabasePage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabId>('events');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const abortRef = useRef<AbortController | null>(null);
+  const queryClient = useQueryClient();
 
   // Даты
   const [startDate, setStartDate] = useState(monthStart);
   const [endDate, setEndDate] = useState(today);
-
-  // Данные
-  const [events, setEvents] = useState<SkudEvent[]>([]);
-  const [summary, setSummary] = useState<SkudDailySummary[]>([]);
+  const eventsQuery = useSkudSupabaseEvents(startDate, endDate, searchQuery, activeTab === 'events');
+  const summaryQuery = useSkudSupabaseSummary(startDate, activeTab === 'summary');
+  const events = eventsQuery.data ?? EMPTY_EVENTS;
+  const summary = summaryQuery.data ?? EMPTY_SUMMARY;
+  const loading = activeTab === 'events' ? eventsQuery.isFetching : summaryQuery.isFetching;
+  const error = activeTab === 'events'
+    ? eventsQuery.error instanceof Error ? eventsQuery.error.message : null
+    : summaryQuery.error instanceof Error ? summaryQuery.error.message : null;
 
   // Debounce поиска (для табa events — серверный поиск)
   const handleSearchChange = useCallback((value: string) => {
@@ -56,62 +61,6 @@ export const SkudSupabasePage: React.FC = () => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => setSearchQuery(value), 400);
   }, []);
-
-  const cancelLoading = useCallback(() => {
-    if (abortRef.current) {
-      abortRef.current.abort();
-      abortRef.current = null;
-    }
-  }, []);
-
-  const loadEvents = useCallback(async () => {
-    cancelLoading();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await skudService.getEvents({
-        startDate,
-        endDate,
-        search: searchQuery || undefined,
-      }, controller.signal);
-      setEvents(data);
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return;
-      setError(err instanceof Error ? err.message : 'Ошибка загрузки');
-      setEvents([]);
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-    }
-  }, [startDate, endDate, searchQuery, cancelLoading]);
-
-  const loadSummary = useCallback(async () => {
-    cancelLoading();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await skudService.getDailySummary(startDate, controller.signal);
-      setSummary(data);
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return;
-      setError(err instanceof Error ? err.message : 'Ошибка загрузки');
-      setSummary([]);
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-    }
-  }, [startDate, cancelLoading]);
-
-  const loadData = useCallback(() => {
-    if (activeTab === 'events') loadEvents();
-    else loadSummary();
-  }, [activeTab, loadEvents, loadSummary]);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
 
   // Данные для таблицы
   const tableData: Record<string, unknown>[] = useMemo(() => {
@@ -138,6 +87,14 @@ export const SkudSupabasePage: React.FC = () => {
       columns.some(col => formatCellValue(row[col]).toLowerCase().includes(q))
     );
   }, [activeTab, tableData, searchInput, columns]);
+
+  const loadData = useCallback(async () => {
+    if (activeTab === 'events') {
+      await queryClient.invalidateQueries({ queryKey: getSkudSupabaseEventsQueryKey(startDate, endDate, searchQuery) });
+    } else {
+      await queryClient.invalidateQueries({ queryKey: getSkudSupabaseSummaryQueryKey(startDate) });
+    }
+  }, [activeTab, endDate, queryClient, searchQuery, startDate]);
 
   const handleTabChange = (tabId: TabId) => {
     setActiveTab(tabId);
@@ -228,7 +185,16 @@ export const SkudSupabasePage: React.FC = () => {
         <div className="skud-db-loading">
           <div className="spinner"></div>
           <p>Загрузка из базы...</p>
-          <button className="skud-db-cancel" onClick={() => { cancelLoading(); setLoading(false); }}>
+          <button
+            className="skud-db-cancel"
+            onClick={() => {
+              if (activeTab === 'events') {
+                void queryClient.cancelQueries({ queryKey: getSkudSupabaseEventsQueryKey(startDate, endDate, searchQuery) });
+              } else {
+                void queryClient.cancelQueries({ queryKey: getSkudSupabaseSummaryQueryKey(startDate) });
+              }
+            }}
+          >
             <X size={14} />
             Отменить
           </button>

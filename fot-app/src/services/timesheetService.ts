@@ -1,9 +1,10 @@
-import { apiClient } from '../api/client';
+import { apiClient, buildApiUrl, buildAuthHeaders } from '../api/client';
 import type { TimesheetEntry, TimesheetResponse, TimesheetStatus } from '../types';
 
 interface TimesheetFilters {
   month: string; // YYYY-MM
   department_id?: string;
+  employee_id?: number;
 }
 
 interface ApiResponse<T> {
@@ -17,6 +18,7 @@ export const timesheetService = {
     const params = new URLSearchParams();
     params.append('month', filters.month);
     if (filters.department_id) params.append('department_id', filters.department_id);
+    if (filters.employee_id) params.append('employee_id', String(filters.employee_id));
     const res = await apiClient.get<ApiResponse<TimesheetResponse>>(`/timesheet?${params.toString()}`);
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки табеля');
     return res.data;
@@ -42,12 +44,13 @@ export const timesheetService = {
 
   async exportMass(filters: { month: string; department_ids: string[] }): Promise<Blob> {
     const response = await fetch(
-      `${import.meta.env.VITE_API_URL || 'http://localhost:3000/api'}/timesheet/export-mass`,
+      buildApiUrl('/timesheet/export-mass'),
       {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('access_token')}`,
+          ...buildAuthHeaders(),
         },
         body: JSON.stringify(filters),
       }
@@ -60,13 +63,13 @@ export const timesheetService = {
     const params = new URLSearchParams();
     params.append('month', filters.month);
     if (filters.department_id) params.append('department_id', filters.department_id);
+    if (filters.employee_id) params.append('employee_id', String(filters.employee_id));
 
     const response = await fetch(
-      `${import.meta.env.VITE_API_URL || 'http://localhost:3000/api'}/timesheet/export?${params.toString()}`,
+      buildApiUrl(`/timesheet/export?${params.toString()}`),
       {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('access_token')}`,
-        },
+        credentials: 'include',
+        headers: buildAuthHeaders(),
       }
     );
 

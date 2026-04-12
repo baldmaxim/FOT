@@ -1,13 +1,22 @@
-import { type FC, useState, useEffect, useCallback } from 'react';
+import { type FC, useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { settingsService, type IR2Status, type ISigurMonitorSettings } from '../../services/settingsService';
+import {
+  getR2StatusQueryKey,
+  getSigurMonitorSettingsQueryKey,
+  useR2Status,
+  useSigurMonitorSettings,
+} from '../../hooks/useSettingsData';
 import styles from './SystemSettingsPage.module.css';
 
 export const SystemSettingsPage: FC = () => {
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [status, setStatus] = useState<IR2Status | null>(null);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const queryClient = useQueryClient();
+  const r2StatusQuery = useR2Status();
+  const monitorSettingsQuery = useSigurMonitorSettings();
+  const status: IR2Status | null = r2StatusQuery.data ?? null;
 
   // Form
   const [accountId, setAccountId] = useState('');
@@ -26,24 +35,19 @@ export const SystemSettingsPage: FC = () => {
   });
   const [monitorSaving, setMonitorSaving] = useState(false);
   const [monitorResult, setMonitorResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const loading = r2StatusQuery.isLoading || monitorSettingsQuery.isLoading;
 
-  const load = useCallback(async () => {
-    try {
-      const [s, monitor] = await Promise.all([
-        settingsService.getR2Status(),
-        settingsService.getSigurMonitorSettings(),
-      ]);
-      setStatus(s);
-      setMonitorSettings(monitor);
-      if (s.bucket_name) setBucketName(s.bucket_name);
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
+  useEffect(() => {
+    if (status?.bucket_name) {
+      setBucketName(status.bucket_name);
     }
-  }, []);
+  }, [status?.bucket_name]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (monitorSettingsQuery.data) {
+      setMonitorSettings(monitorSettingsQuery.data);
+    }
+  }, [monitorSettingsQuery.data]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -56,7 +60,7 @@ export const SystemSettingsPage: FC = () => {
       data.bucket_name = bucketName;
 
       await settingsService.saveR2(data);
-      await load();
+      await queryClient.invalidateQueries({ queryKey: getR2StatusQueryKey() });
       setAccountId('');
       setAccessKeyId('');
       setSecretAccessKey('');
@@ -94,6 +98,7 @@ export const SystemSettingsPage: FC = () => {
     try {
       const next = await settingsService.saveSigurMonitorSettings(monitorSettings);
       setMonitorSettings(next);
+      queryClient.setQueryData(getSigurMonitorSettingsQueryKey(), next);
       setMonitorResult({ ok: true, msg: 'Настройки мониторинга сохранены' });
     } catch {
       setMonitorResult({ ok: false, msg: 'Ошибка сохранения настроек мониторинга' });

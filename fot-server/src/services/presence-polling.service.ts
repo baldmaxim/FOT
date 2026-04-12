@@ -2,11 +2,18 @@ import { sigurService } from './sigur.service.js';
 import { supabase } from '../config/database.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
 import { computeDedupHash } from '../utils/dedup.utils.js';
+import { buildMoscowEventTimestamp } from '../utils/date.utils.js';
 import { backfillUnmatchedEvents } from './skud-backfill.service.js';
 import { normalizePersonName } from './sigur-sync-shared.js';
 import { invalidatePresenceCache } from './skud-presence.service.js';
 import { invalidateDashboardCache } from './skud-dashboard.service.js';
-import { recordSigurMonitorFailure, recordSigurMonitorSuccess } from './sigur-monitor.service.js';
+import {
+  markPresencePollingCycleFinished,
+  markPresencePollingCycleStarted,
+  recordSigurMonitorFailure,
+  recordSigurMonitorSuccess,
+} from './sigur-monitor.service.js';
+import type { ConnectionType } from './sigur.service.js';
 
 const POLL_INTERVAL = 60_000;
 const EMPLOYEE_CACHE_TTL = 10 * 60_000;
@@ -192,18 +199,20 @@ export function resetPresencePollingStateForTests(): void {
 export async function pollEventsOnce(now = new Date()): Promise<void> {
   const cycleStartedAt = Date.now();
   let window: PollingWindow | null = null;
+  let connectionType: ConnectionType | null = null;
 
   try {
     if (!sigurService.isConfigured()) return;
+    connectionType = sigurService.getBackgroundConnectionType();
 
     window = await resolvePollingWindow(now);
     console.log(
-      `[presence-polling] window source=${window.checkpointSource} start=${window.startTime} end=${window.endTime}`,
+      `[presence-polling] window source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime}`,
     );
 
-    const rawEvents = await sigurService.getEvents(window.startTime, window.endTime, undefined, 'PASS_DETECTED');
+    const rawEvents = await sigurService.getEvents(window.startTime, window.endTime, connectionType, 'PASS_DETECTED');
     console.log(
-      `[presence-polling] fetched=${rawEvents.length} source=${window.checkpointSource} start=${window.startTime} end=${window.endTime}`,
+      `[presence-polling] fetched=${rawEvents.length} source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime}`,
     );
 
     const { byName, bySigurId, byUniqueName } = await getEmployeeMaps();
@@ -219,6 +228,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       card_number: string | null;
       event_date: string;
       event_time: string;
+      event_at: string;
       access_point: string | null;
       direction: 'entry' | 'exit' | null;
       employee_id: number | null;
@@ -258,6 +268,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         card_number: mapped.cardNumber || null,
         event_date: mapped.eventDate,
         event_time: mapped.eventTime,
+        event_at: buildMoscowEventTimestamp(mapped.eventDate, mapped.eventTime),
         access_point: mapped.accessPoint,
         direction: mapped.direction,
         employee_id: emp?.id || null,
@@ -300,15 +311,18 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     }
 
     lastSuccessfulPollAt = now;
+    const monitorCheckedAt = new Date();
     console.log(
-      `[presence-polling] cycle done source=${window.checkpointSource} start=${window.startTime} end=${window.endTime} fetched=${rawEvents.length} inserted=${totalInserted} unmatched=${storedUnmatched} summaries=${summariesToUpdate.size}`,
+      `[presence-polling] cycle done source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} fetched=${rawEvents.length} inserted=${totalInserted} unmatched=${storedUnmatched} summaries=${summariesToUpdate.size}`,
     );
     void recordSigurMonitorSuccess({
       source: 'presence_polling',
-      checkedAt: now,
+      checkedAt: monitorCheckedAt,
+      connectionType,
       responseMs: Date.now() - cycleStartedAt,
       eventsLastWindow: rawEvents.length,
       meta: {
+        connectionType,
         checkpointSource: window.checkpointSource,
         windowStart: window.startTime,
         windowEnd: window.endTime,
@@ -322,12 +336,15 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     });
   } catch (error) {
     console.error('[presence-polling] error:', (error as Error).message);
+    const monitorCheckedAt = new Date();
     void recordSigurMonitorFailure({
       source: 'presence_polling',
-      checkedAt: now,
+      checkedAt: monitorCheckedAt,
+      connectionType,
       responseMs: Date.now() - cycleStartedAt,
       errorMessage: (error as Error).message,
       meta: {
+        connectionType,
         checkpointSource: window?.checkpointSource || null,
         windowStart: window?.startTime || null,
         windowEnd: window?.endTime || null,
@@ -351,12 +368,14 @@ async function runPollCycle(): Promise<void> {
   }
 
   pollInFlight = (async () => {
+    markPresencePollingCycleStarted(new Date());
     try {
       await pollEvents();
       await backfillUnmatchedEvents();
     } catch (err) {
       console.error('[presence-polling] cycle error:', (err as Error).message);
     } finally {
+      markPresencePollingCycleFinished();
       pollInFlight = null;
     }
   })();

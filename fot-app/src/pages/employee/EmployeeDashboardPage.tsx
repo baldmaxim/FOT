@@ -1,15 +1,19 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { apiClient } from '../../api/client';
 import { employeeService } from '../../services/employeeService';
 import { skudService } from '../../services/skudService';
-import type { Employee, SkudEvent, IAccessPointSetting } from '../../types';
+import type { Employee, SkudEvent, IAccessPointSetting, TimesheetEntry, TimesheetStatus } from '../../types';
 import { AttendanceCard } from '../../components/dashboard/AttendanceCard';
 import type { IDayGroup, IEntryExitPair } from '../../components/dashboard/AttendanceCard';
-import { EmployeeInfoCards } from '../../components/dashboard/EmployeeInfoCards';
-import { RequestModal, TwoFAModal } from '../../components/dashboard/RequestModals';
+import { useEmployeeTimesheetMonths } from '../../hooks/useEmployeeTimesheet';
 import styles from './EmployeeDashboard.module.css';
+
+const EmployeeInfoCards = lazy(() => import('../../components/dashboard/EmployeeInfoCards').then(m => ({ default: m.EmployeeInfoCards })));
+const RequestModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.RequestModal })));
+const TwoFAModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.TwoFAModal })));
 
 type RequestType = 'vacation' | 'sick' | 'remote' | 'docs';
 type ViewPeriod = 'day' | 'week' | 'month';
@@ -27,6 +31,33 @@ const toLocalISO = (d: Date): string => {
 };
 
 const DAY_NAMES = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const STATUS_LABELS: Record<TimesheetStatus, string> = {
+  work: 'Работа',
+  manual: 'Работа',
+  remote: 'Удалёнка',
+  sick: 'Больничный',
+  vacation: 'Отпуск',
+  dayoff: 'Выходной',
+  absent: 'Неявка',
+  business_trip: 'Командировка',
+  unpaid: 'Без содержания',
+};
+const WORKED_STATUSES = new Set<TimesheetStatus>(['work', 'manual', 'remote', 'business_trip']);
+
+const getRangeMonthKeys = (startDate: string, endDate: string): string[] => {
+  const [startYear, startMonth] = startDate.split('-').map(Number);
+  const [endYear, endMonth] = endDate.split('-').map(Number);
+  const cursor = new Date(startYear, startMonth - 1, 1);
+  const finish = new Date(endYear, endMonth - 1, 1);
+  const result: string[] = [];
+
+  while (cursor <= finish) {
+    result.push(`${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`);
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+
+  return result;
+};
 
 const buildPairs = (events: SkudEvent[], internalPoints: Set<string>, isToday: boolean): IEntryExitPair[] => {
   const ext = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
@@ -55,33 +86,53 @@ const buildPairs = (events: SkudEvent[], internalPoints: Set<string>, isToday: b
 };
 
 const buildDayGroups = (
-  events: SkudEvent[],
   startDate: string,
   endDate: string,
+  timesheetEntries: TimesheetEntry[],
+  events: SkudEvent[],
   internalPoints: Set<string>,
 ): IDayGroup[] => {
   const start = new Date(startDate + 'T00:00:00');
   const end = new Date(endDate + 'T00:00:00');
   const todayStr = toLocalISO(new Date());
   const groups: IDayGroup[] = [];
+  const eventsByDate = new Map<string, SkudEvent[]>();
+  const entriesByDate = new Map<string, TimesheetEntry>();
+
+  for (const event of events) {
+    const bucket = eventsByDate.get(event.event_date);
+    if (bucket) bucket.push(event);
+    else eventsByDate.set(event.event_date, [event]);
+  }
+
+  for (const entry of timesheetEntries) {
+    entriesByDate.set(entry.work_date, entry);
+  }
 
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
     const dateStr = toLocalISO(d);
-    const dayEvents = events
-      .filter(e => e.event_date === dateStr)
-      .sort((a, b) => a.event_time.localeCompare(b.event_time));
+    const entry = entriesByDate.get(dateStr) ?? null;
+    const dayEvents = [...(eventsByDate.get(dateStr) ?? [])].sort((a, b) => a.event_time.localeCompare(b.event_time));
 
     const ext = dayEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point));
     const src = ext.length > 0 ? ext : dayEvents;
-    const entries = src.filter(e => e.direction === 'entry');
+    const directionEntries = src.filter(e => e.direction === 'entry');
     const exits = src.filter(e => e.direction === 'exit');
-    const firstEntry = entries.length > 0 ? entries[0].event_time : null;
-    const lastExit = exits.length > 0 ? exits[exits.length - 1].event_time : null;
 
     const isToday = dateStr === todayStr;
     const pairs = buildPairs(dayEvents, internalPoints, isToday);
-    const totalMinutes = pairs.reduce((s, p) => s + p.durationMinutes, 0);
+    const rawTotalMinutes = pairs.reduce((sum, pair) => sum + pair.durationMinutes, 0);
+    const canonicalMinutes = entry?.hours_worked != null
+      ? Math.max(0, Math.round(entry.hours_worked * 60))
+      : 0;
+    const hasWorkedStatus = entry ? WORKED_STATUSES.has(entry.status) : rawTotalMinutes > 0;
+    const totalMinutes = isToday && rawTotalMinutes > 0 && (!entry || hasWorkedStatus)
+      ? Math.max(canonicalMinutes, rawTotalMinutes)
+      : (canonicalMinutes > 0 || entry ? canonicalMinutes : rawTotalMinutes);
+    const firstEntry = entry?.first_entry ?? (directionEntries.length > 0 ? directionEntries[0].event_time : null);
+    const lastExit = entry?.last_exit ?? (exits.length > 0 ? exits[exits.length - 1].event_time : null);
     const dow = d.getDay() === 0 ? 6 : d.getDay() - 1;
+    const status = entry?.status ?? (dayEvents.length > 0 ? 'work' : null);
 
     groups.push({
       date: dateStr,
@@ -91,9 +142,14 @@ const buildDayGroups = (
       lastExit,
       totalMinutes,
       isToday,
-      isWeekend: dow >= 5,
+      isWeekend: dow >= 5 && !hasWorkedStatus,
       isFuture: dateStr > todayStr,
       pairs,
+      status,
+      statusLabel: status ? STATUS_LABELS[status] : null,
+      isCorrection: Boolean(entry?.is_correction),
+      hasSkudDetails: dayEvents.length > 0,
+      hasCanonicalEntry: Boolean(entry),
     });
   }
   return groups;
@@ -135,11 +191,6 @@ export const EmployeeDashboardPage: React.FC = () => {
   const { user, profile, refreshProfile, isTwoFactorEnabled } = useAuth();
   const { showToast } = useToast();
   const [activeModal, setActiveModal] = useState<RequestType | null>(null);
-  const [employee, setEmployee] = useState<Employee | null>(null);
-  const [skudEvents, setSkudEvents] = useState<SkudEvent[]>([]);
-  const [internalPoints, setInternalPoints] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
-  const [eventsLoading, setEventsLoading] = useState(false);
 
   // Period navigation
   const [viewPeriod, setViewPeriod] = useState<ViewPeriod>('day');
@@ -151,53 +202,70 @@ export const EmployeeDashboardPage: React.FC = () => {
   const [verifyCode, setVerifyCode] = useState('');
   const [isEnabling2FA, setIsEnabling2FA] = useState(false);
 
+  const employeeId = profile?.employee_id ?? null;
   const periodRange = useMemo(() => getPeriodRange(viewPeriod, periodOffset), [viewPeriod, periodOffset]);
+  const periodMonthKeys = useMemo(
+    () => getRangeMonthKeys(periodRange.startDate, periodRange.endDate),
+    [periodRange.endDate, periodRange.startDate],
+  );
+  const shouldLoadSkudDetails = viewPeriod !== 'month';
 
   useEffect(() => {
-    if (!profile?.employee_id && refreshProfile) {
+    if (!employeeId && refreshProfile) {
       refreshProfile();
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [employeeId, refreshProfile]);
 
-  useEffect(() => {
-    const load = async () => {
-      if (!profile?.employee_id) { setLoading(false); return; }
-      try {
-        const [emp, apSettings] = await Promise.all([
-          employeeService.getById(profile.employee_id),
-          skudService.getAccessPointSettings().catch(() => [] as IAccessPointSetting[]),
-        ]);
-        setEmployee(emp);
-        setInternalPoints(new Set(apSettings.filter(s => s.is_internal).map(s => s.access_point_name)));
-      } catch (e) {
-        console.error('Failed to load employee data:', e);
-      } finally {
-        setLoading(false);
+  const employeeQuery = useQuery<Employee | null>({
+    queryKey: ['employee', employeeId],
+    queryFn: () => employeeService.getById(employeeId as number),
+    enabled: !!employeeId,
+    staleTime: 60_000,
+  });
+
+  const accessPointsQuery = useQuery<IAccessPointSetting[]>({
+    queryKey: ['skud-access-point-settings'],
+    queryFn: () => skudService.getAccessPointSettings().catch(() => [] as IAccessPointSetting[]),
+    enabled: shouldLoadSkudDetails,
+    staleTime: 10 * 60_000,
+  });
+
+  const timesheetQuery = useEmployeeTimesheetMonths(employeeId, periodMonthKeys, !!employeeId);
+
+  const skudEventsQuery = useQuery<SkudEvent[]>({
+    queryKey: ['employee-dashboard-skud-events', employeeId, periodRange.startDate, periodRange.endDate],
+    enabled: !!employeeId && shouldLoadSkudDetails,
+    staleTime: 30_000,
+    queryFn: () => skudService.getEmployeeEvents(
+      employeeId as number,
+      periodRange.startDate,
+      periodRange.endDate,
+    ).catch(() => [] as SkudEvent[]),
+  });
+
+  const employee = employeeQuery.data ?? null;
+  const timesheetEntries = useMemo(() => {
+    const uniqueEntries = new Map<string, TimesheetEntry>();
+    for (const response of timesheetQuery.data) {
+      for (const entry of response.entries || []) {
+        if (entry.employee_id !== employeeId) continue;
+        if (entry.work_date < periodRange.startDate || entry.work_date > periodRange.endDate) continue;
+        uniqueEntries.set(entry.work_date, entry);
       }
-    };
-    load();
-  }, [profile?.employee_id]);
-
-  const loadEvents = useCallback(async (empId: number, start: string, end: string) => {
-    setEventsLoading(true);
-    try {
-      const events = await skudService.getEmployeeEvents(empId, start, end);
-      setSkudEvents(events);
-    } catch (e) {
-      console.error('Failed to load events:', e);
-    } finally {
-      setEventsLoading(false);
     }
-  }, []);
-
-  useEffect(() => {
-    if (!profile?.employee_id) return;
-    loadEvents(profile.employee_id, periodRange.startDate, periodRange.endDate);
-  }, [profile?.employee_id, periodRange.startDate, periodRange.endDate, loadEvents]);
+    return Array.from(uniqueEntries.values()).sort((a, b) => a.work_date.localeCompare(b.work_date));
+  }, [employeeId, periodRange.endDate, periodRange.startDate, timesheetQuery.data]);
+  const skudEvents = useMemo(() => skudEventsQuery.data ?? [], [skudEventsQuery.data]);
+  const internalPoints = useMemo(
+    () => new Set((accessPointsQuery.data ?? []).filter(point => point.is_internal).map(point => point.access_point_name)),
+    [accessPointsQuery.data],
+  );
+  const loading = employeeQuery.isLoading || timesheetQuery.isLoading || (shouldLoadSkudDetails && accessPointsQuery.isLoading);
+  const eventsLoading = shouldLoadSkudDetails ? skudEventsQuery.isLoading : false;
 
   const dayGroups = useMemo(
-    () => buildDayGroups(skudEvents, periodRange.startDate, periodRange.endDate, internalPoints),
-    [skudEvents, periodRange.startDate, periodRange.endDate, internalPoints],
+    () => buildDayGroups(periodRange.startDate, periodRange.endDate, timesheetEntries, skudEvents, internalPoints),
+    [periodRange.startDate, periodRange.endDate, timesheetEntries, skudEvents, internalPoints],
   );
 
   const isCurrentPeriod = periodOffset === 0;
@@ -238,6 +306,12 @@ export const EmployeeDashboardPage: React.FC = () => {
     }
   };
 
+  const DashboardCardFallback = (
+    <div className={styles.infoCard}>
+      <div className={styles.emptyState}>Загрузка...</div>
+    </div>
+  );
+
   return (
     <div className={styles.content}>
       {/* Quick Actions */}
@@ -273,31 +347,37 @@ export const EmployeeDashboardPage: React.FC = () => {
         />
 
         <div className={styles.rightColumn}>
-          <EmployeeInfoCards
-            loading={loading}
-            employee={employee}
-            importedPosition={profile?.imported_position ?? undefined}
-            email={user?.email ?? undefined}
-            isTwoFactorEnabled={isTwoFactorEnabled}
-            onSetup2FA={handleSetup2FA}
-            onDisable2FA={handleDisable2FA}
-          />
+          <Suspense fallback={DashboardCardFallback}>
+            <EmployeeInfoCards
+              loading={loading}
+              employee={employee}
+              importedPosition={profile?.imported_position ?? undefined}
+              email={user?.email ?? undefined}
+              isTwoFactorEnabled={isTwoFactorEnabled}
+              onSetup2FA={handleSetup2FA}
+              onDisable2FA={handleDisable2FA}
+            />
+          </Suspense>
         </div>
       </div>
 
       {show2FASetup && twoFAData && (
-        <TwoFAModal
-          twoFAData={twoFAData}
-          verifyCode={verifyCode}
-          setVerifyCode={setVerifyCode}
-          isEnabling2FA={isEnabling2FA}
-          onEnable={handleEnable2FA}
-          onClose={() => setShow2FASetup(false)}
-        />
+        <Suspense fallback={null}>
+          <TwoFAModal
+            twoFAData={twoFAData}
+            verifyCode={verifyCode}
+            setVerifyCode={setVerifyCode}
+            isEnabling2FA={isEnabling2FA}
+            onEnable={handleEnable2FA}
+            onClose={() => setShow2FASetup(false)}
+          />
+        </Suspense>
       )}
 
       {activeModal && (
-        <RequestModal activeModal={activeModal} onClose={() => setActiveModal(null)} />
+        <Suspense fallback={null}>
+          <RequestModal activeModal={activeModal} onClose={() => setActiveModal(null)} />
+        </Suspense>
       )}
     </div>
   );

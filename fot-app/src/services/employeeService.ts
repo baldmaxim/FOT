@@ -120,23 +120,6 @@ export const employeeService = {
     return response.data;
   },
 
-  async export(): Promise<Blob> {
-    const response = await fetch(
-      `${import.meta.env.VITE_API_URL || 'http://localhost:3000/api'}/employees/export`,
-      {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('access_token')}`,
-        },
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error('Ошибка экспорта');
-    }
-
-    return response.blob();
-  },
-
   async getHistory(id: number): Promise<EmployeeHistoryEvent[]> {
     const response = await apiClient.get<ApiResponse<EmployeeHistoryEvent[]>>(`/employees/${id}/history`);
     return response.data || [];

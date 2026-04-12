@@ -140,7 +140,7 @@ export const RisksCard: FC<{ risks: IDashboardStats['risks']; period: DashboardP
             <div
               key={risk.employee_id}
               className={`${styles.riskItem} ${styles[risk.severity]} ${styles.clickable}`}
-              onClick={() => navigate(`/tender/${risk.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } })}
+              onClick={() => navigate(`/employees/${risk.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } })}
             >
               <div className={styles.riskAvatar}>{getInitials(risk.full_name)}</div>
               <div className={styles.riskInfo}>

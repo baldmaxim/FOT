@@ -1,6 +1,8 @@
-import { type FC, useState, useEffect, useCallback, useMemo } from 'react';
+import { type FC, useState, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Save, RotateCcw } from 'lucide-react';
 import { productionCalendarService, type IProductionCalendarEntry } from '../../services/productionCalendarService';
+import { getProductionCalendarQueryKey, useProductionCalendar } from '../../hooks/useSettingsData';
 import styles from './ProductionCalendarPage.module.css';
 
 const MONTH_NAMES = [
@@ -24,29 +26,15 @@ const stringToDates = (str: string): string[] =>
     .split(/[\s,;]+/)
     .map(s => s.trim())
     .filter(s => /^\d{4}-\d{2}-\d{2}$/.test(s));
+const EMPTY_ENTRIES: IProductionCalendarEntry[] = [];
 
 export const ProductionCalendarPage: FC = () => {
   const [year, setYear] = useState(new Date().getFullYear());
-  const [entries, setEntries] = useState<IProductionCalendarEntry[]>([]);
-  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState<number | null>(null);
   const [editing, setEditing] = useState<IEditingRow | null>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await productionCalendarService.getByYear(year);
-      console.log('ProductionCalendar loaded:', data?.length, 'entries');
-      setEntries(data);
-    } catch (err) {
-      console.error('ProductionCalendar load error:', err);
-      setEntries([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [year]);
-
-  useEffect(() => { load(); }, [load]);
+  const queryClient = useQueryClient();
+  const { data, isLoading } = useProductionCalendar(year);
+  const entries = data ?? EMPTY_ENTRIES;
 
   const entryMap = useMemo(() => new Map(entries.map(e => [e.month, e])), [entries]);
 
@@ -65,14 +53,22 @@ export const ProductionCalendarPage: FC = () => {
     if (!editing) return;
     setSaving(editing.month);
     try {
-      await productionCalendarService.update(year, editing.month, {
+      const updated = await productionCalendarService.update(year, editing.month, {
         norm_days: editing.norm_days,
         norm_hours: editing.norm_hours,
         holidays: stringToDates(editing.holidays),
         mandatory_holidays: stringToDates(editing.mandatory_holidays),
       });
+      queryClient.setQueryData<IProductionCalendarEntry[]>(
+        getProductionCalendarQueryKey(year),
+        (prev = EMPTY_ENTRIES) => {
+          const next = prev.filter(entry => entry.month !== updated.month);
+          next.push(updated);
+          next.sort((left, right) => left.month - right.month);
+          return next;
+        },
+      );
       setEditing(null);
-      await load();
     } catch {
       // ignore
     } finally {
@@ -100,7 +96,7 @@ export const ProductionCalendarPage: FC = () => {
         </div>
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className={styles.loading}>Загрузка...</div>
       ) : (
         <div className={styles.tableWrap}>

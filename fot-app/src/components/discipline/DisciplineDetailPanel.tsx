@@ -77,7 +77,7 @@ export const DisciplineDetailPanel: FC<IDisciplineDetailPanelProps> = ({ employe
                   <a
                     key={i}
                     className="da-violation-item da-violation-link"
-                    href={`/tender/${employee.employee_id}?tab=skud&date=${v.date}`}
+                    href={`/employees/${employee.employee_id}?tab=skud&date=${v.date}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     title="Открыть СКУД сотрудника за этот день"

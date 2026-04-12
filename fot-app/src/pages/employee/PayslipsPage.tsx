@@ -1,6 +1,7 @@
-import { type FC, useState, useEffect, useCallback } from 'react';
+import { type FC } from 'react';
 import { FileText } from 'lucide-react';
-import { payslipService, type IPayslip } from '../../services/payslipService';
+import { type IPayslip } from '../../services/payslipService';
+import { useMyPayslips } from '../../hooks/usePortalData';
 import './PayslipsPage.css';
 
 const formatMoney = (v: number | null) => v != null ? v.toLocaleString('ru-RU', { minimumFractionDigits: 2 }) + ' р.' : '—';
@@ -10,30 +11,17 @@ const formatPeriod = (period: string) => {
   const months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
   return `${months[parseInt(m, 10) - 1]} ${y}`;
 };
+const EMPTY_PAYSLIPS: IPayslip[] = [];
 
 export const PayslipsPage: FC = () => {
-  const [payslips, setPayslips] = useState<IPayslip[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await payslipService.getMy();
-      setPayslips(data);
-    } catch {
-      setPayslips([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
+  const { data, isLoading } = useMyPayslips();
+  const payslips = data ?? EMPTY_PAYSLIPS;
 
   return (
     <div className="ps-page">
       <h1 className="ps-title">Расчётные листки</h1>
 
-      {loading ? (
+      {isLoading ? (
         <div className="ps-loading">Загрузка...</div>
       ) : payslips.length === 0 ? (
         <div className="ps-empty">Нет расчётных листков</div>

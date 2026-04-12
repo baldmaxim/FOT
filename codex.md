@@ -48,7 +48,7 @@ cd fot-server && npm run test
 - **ФИО сотрудников**: хранятся plain-text (`full_name`, `last_name`, `first_name`, `middle_name`). `encryption.service.ts` используется только для TOTP и чата, не для ФИО.
 - **Supabase**: используется service role key (RLS отключён), авторизация проверяется в middleware бэкенда. Фронтенд к PostgREST напрямую не обращается.
 - **API роуты**: все под префиксом `/api/` — auth, employees, admin, skud, sigur, structure, timesheet, audit, chat, push, leave-requests, documents, payslips, payments, production-calendar, timesheet-approvals, schedules, roles, salary-raise, settings, notifications.
-- **Фронтенд роуты**: по ролям — `worker` видит `/employee/*`, `header`+ видит `/dashboard`, `admin`+ видит `/tender`, `super_admin` видит `/skud-settings`, `/admin/*`.
+- **Фронтенд роуты**: по ролям — `worker` видит `/employee/*`, `header`+ видит `/dashboard`, `admin`+ видит `/employees`, `super_admin` видит `/skud-settings`, `/admin/*`.
 
 ## Структура бэкенда
 
@@ -63,6 +63,7 @@ cd fot-server && npm run test
 Запускаются в `src/index.ts` при старте сервера:
 - **Presence polling** (`presence-polling.service.ts`): опрос СКУД-событий каждые 60 сек, кэш сотрудников с TTL 10 мин, дедупликация, lock для синхронизации.
 - **Structure sync** (`sigur-structure-scheduler.service.ts`): синхронизация отделов/должностей/сотрудников из Sigur каждый час, задержка 30 сек при старте.
+- **Sigur background**: фоновые задачи Sigur всегда явно выбирают канал подключения и логируют фактически использованный (`external` при наличии, `internal` только как fallback).
 
 ## Socket.IO
 

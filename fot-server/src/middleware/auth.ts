@@ -11,6 +11,7 @@ import {
   hasPermission,
 } from '../services/access-control.service.js';
 import { getHierarchyLevel } from '../services/roles-cache.service.js';
+import { getAccessTokenFromRequest } from '../utils/auth-session.js';
 
 /**
  * Middleware для проверки JWT токена
@@ -21,17 +22,19 @@ export const authenticate = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const authHeader = req.headers.authorization;
+    const token = getAccessTokenFromRequest(req);
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!token) {
       res.status(401).json({ success: false, error: 'Authorization token required' });
       return;
     }
 
-    const token = authHeader.substring(7);
-
     // Верифицируем JWT
     const decoded = jwt.verify(token, env.JWT_SECRET) as JWTPayload;
+    if (decoded.token_type === 'refresh') {
+      res.status(401).json({ success: false, error: 'Invalid access token' });
+      return;
+    }
 
     // Проверяем что пользователь одобрен
     if (!decoded.is_approved) {
@@ -43,6 +46,7 @@ export const authenticate = async (
       id: decoded.sub,
       email: decoded.email,
       position_type: decoded.position_type,
+      system_role_id: decoded.system_role_id ?? null,
       employee_id: decoded.employee_id ?? null,
       department_id: decoded.department_id ?? null,
       is_approved: decoded.is_approved,
@@ -131,7 +135,8 @@ export const requirePermission = (permission: string) => {
     }
 
     try {
-      if (!(await hasPermission(req.user.position_type, permission))) {
+      const roleRef = req.user.system_role_id ?? req.user.position_type;
+      if (!(await hasPermission(roleRef, permission))) {
         res.status(403).json({ success: false, error: 'Insufficient permissions' });
         return;
       }
@@ -152,7 +157,8 @@ export const requireAnyPermission = (permissions: string[]) => {
     }
 
     try {
-      if (!(await hasAnyPermission(req.user.position_type, permissions))) {
+      const roleRef = req.user.system_role_id ?? req.user.position_type;
+      if (!(await hasAnyPermission(roleRef, permissions))) {
         res.status(403).json({ success: false, error: 'Insufficient permissions' });
         return;
       }
@@ -173,9 +179,10 @@ export const requirePageAccess = (pagePath: string, action: AccessAction = 'view
     }
 
     try {
+      const roleRef = req.user.system_role_id ?? req.user.position_type;
       const hasAccess = action === 'edit'
-        ? await hasPageEdit(req.user.position_type, pagePath)
-        : await hasPageView(req.user.position_type, pagePath);
+        ? await hasPageEdit(roleRef, pagePath)
+        : await hasPageView(roleRef, pagePath);
 
       if (!hasAccess) {
         res.status(403).json({ success: false, error: 'Insufficient permissions' });
@@ -198,11 +205,12 @@ export const requireAnyPageAccess = (pagePaths: string[], action: AccessAction =
     }
 
     try {
+      const roleRef = req.user.system_role_id ?? req.user.position_type;
       const checks = await Promise.all(
         pagePaths.map(pagePath => (
           action === 'edit'
-            ? hasPageEdit(req.user.position_type, pagePath)
-            : hasPageView(req.user.position_type, pagePath)
+            ? hasPageEdit(roleRef, pagePath)
+            : hasPageView(roleRef, pagePath)
         )),
       );
 

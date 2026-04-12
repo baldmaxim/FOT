@@ -136,7 +136,7 @@ export const employeeSalaryEnrichController = {
       while (true) {
         const { data, error: empError } = await supabase
           .from('employees')
-          .select('id, full_name, hire_date, position_id, org_department_id, salary_actual, salary_calculated, staff_units, current_salary')
+          .select('id, full_name, hire_date, position_id, org_department_id, salary_calculated, staff_units, current_salary')
           .eq('is_archived', false)
           .range(from, from + PAGE_SIZE - 1);
 
@@ -208,11 +208,11 @@ export const employeeSalaryEnrichController = {
 
         const fmtNum = (v: number | null) => v !== null ? String(v) : null;
 
-        if (row.salaryActual !== null && String(existing.salary_actual || '') !== String(row.salaryActual)) {
-          updates['Оклад (договор)'] = { old: fmtNum(existing.salary_actual as number | null), new: fmtNum(row.salaryActual) };
+        if (row.salaryActual !== null && String(existing.current_salary || '') !== String(row.salaryActual)) {
+          updates['Оклад'] = { old: fmtNum(existing.current_salary as number | null), new: fmtNum(row.salaryActual) };
         }
         if (row.salaryCalculated !== null && String(existing.salary_calculated || '') !== String(row.salaryCalculated)) {
-          updates['Оклад (программа)'] = { old: fmtNum(existing.salary_calculated as number | null), new: fmtNum(row.salaryCalculated) };
+          updates['Оклад (расчёт)'] = { old: fmtNum(existing.salary_calculated as number | null), new: fmtNum(row.salaryCalculated) };
         }
         if (row.staffUnits !== null && String(existing.staff_units || '') !== String(row.staffUnits)) {
           updates['Ставка'] = { old: fmtNum(existing.staff_units as number | null), new: fmtNum(row.staffUnits) };
@@ -325,7 +325,7 @@ export const employeeSalaryEnrichController = {
           // Оклад → через сервис (пишет salary_history)
           if (row.salaryActual !== null) {
             const existing = match.data as Record<string, unknown>;
-            if (Number(existing.salary_actual || 0) !== row.salaryActual) {
+            if (Number(existing.current_salary || 0) !== row.salaryActual) {
               await employeeChangesService.changeSalary(match.id, row.salaryActual, {
                 reason: 'Импорт из Excel',
                 createdBy: req.user.id,

@@ -5,6 +5,7 @@ export interface ISkudEventRow {
   card_number: string | null;
   event_date: string;
   event_time: string;
+  event_at: string;
   access_point: string | null;
   direction: 'entry' | 'exit' | null;
   employee_id: number | null;

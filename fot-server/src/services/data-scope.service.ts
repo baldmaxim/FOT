@@ -4,7 +4,7 @@ import type { DataScope } from '../config/access-control.js';
 import { resolveRoleDataScope } from './access-control.service.js';
 
 export async function resolveRequestDataScope(req: AuthenticatedRequest): Promise<DataScope | null> {
-  return resolveRoleDataScope(req.user.position_type);
+  return resolveRoleDataScope(req.user.system_role_id ?? req.user.position_type);
 }
 
 export async function canAccessEmployeeInScope(

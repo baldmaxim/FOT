@@ -1,6 +1,8 @@
-import { type FC, useState, useEffect, useCallback, useRef } from 'react';
+import { type FC, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Upload, Download, FileText } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { getMyDocumentsQueryKey, useMyDocuments } from '../../hooks/usePortalData';
 import {
   documentService,
   CATEGORY_LABELS,
@@ -10,30 +12,18 @@ import {
 import './DocumentsPage.css';
 
 const CATEGORIES = Object.keys(CATEGORY_LABELS) as DocumentCategory[];
+const EMPTY_DOCUMENTS: IDocument[] = [];
 
 export const DocumentsPage: FC = () => {
   const { profile } = useAuth();
   const employeeId = profile?.employee_id || null;
   const fileRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
 
-  const [documents, setDocuments] = useState<IDocument[]>([]);
-  const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadCategory, setUploadCategory] = useState<DocumentCategory>('other');
-
-  const loadDocuments = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await documentService.getMy();
-      setDocuments(data);
-    } catch {
-      setDocuments([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { loadDocuments(); }, [loadDocuments]);
+  const { data, isLoading } = useMyDocuments();
+  const documents = data ?? EMPTY_DOCUMENTS;
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -42,7 +32,7 @@ export const DocumentsPage: FC = () => {
     setUploading(true);
     try {
       await documentService.uploadFile(file, employeeId, uploadCategory);
-      await loadDocuments();
+      await queryClient.invalidateQueries({ queryKey: getMyDocumentsQueryKey() });
     } catch (err) {
       console.error('Upload error:', err);
     } finally {
@@ -91,7 +81,7 @@ export const DocumentsPage: FC = () => {
         <input ref={fileRef} type="file" hidden onChange={handleUpload} />
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="docs-loading">Загрузка...</div>
       ) : documents.length === 0 ? (
         <div className="docs-empty">Нет документов</div>

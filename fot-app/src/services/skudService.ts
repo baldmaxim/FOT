@@ -1,4 +1,4 @@
-import { apiClient } from '../api/client';
+import { apiClient, buildApiUrl, buildAuthHeaders } from '../api/client';
 import type { SkudEvent, SkudDailySummary, IEmployeePresence, IAccessPointSetting, IDashboardStats } from '../types';
 import { readSseResponse } from '../components/skud/sigur-settings.utils';
 
@@ -20,6 +20,52 @@ interface SkudFilters {
   employeeId?: string;
   search?: string;
 }
+
+interface DownloadFileResult {
+  blob: Blob;
+  filename: string;
+}
+
+const parseDownloadFilename = (contentDisposition: string | null, fallbackName: string): string => {
+  if (!contentDisposition) return fallbackName;
+
+  const utfMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utfMatch?.[1]) {
+    try {
+      return decodeURIComponent(utfMatch[1]);
+    } catch {
+      return utfMatch[1];
+    }
+  }
+
+  const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+  if (plainMatch?.[1]) {
+    try {
+      return decodeURIComponent(plainMatch[1]);
+    } catch {
+      return plainMatch[1];
+    }
+  }
+
+  return fallbackName;
+};
+
+const fetchExportFile = async (endpoint: string, fallbackName: string): Promise<DownloadFileResult> => {
+  const response = await fetch(buildApiUrl(endpoint), {
+    credentials: 'include',
+    headers: buildAuthHeaders(),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    throw new Error(errorText || 'Ошибка экспорта');
+  }
+
+  return {
+    blob: await response.blob(),
+    filename: parseDownloadFilename(response.headers.get('Content-Disposition'), fallbackName),
+  };
+};
 
 export const skudService = {
   async getEvents(filters?: SkudFilters, signal?: AbortSignal): Promise<SkudEvent[]> {
@@ -78,14 +124,12 @@ export const skudService = {
     endDate: string,
     onProgress?: (msg: string) => void,
   ): Promise<{ inserted: number; skipped: number; total: number }> {
-    const token = localStorage.getItem('access_token');
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
-
-    const response = await fetch(`${apiUrl}/skud/sync-employee`, {
+    const response = await fetch(buildApiUrl('/skud/sync-employee'), {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...buildAuthHeaders(),
       },
       body: JSON.stringify({ employeeId, startDate, endDate }),
     });
@@ -163,26 +207,31 @@ export const skudService = {
     return response.data;
   },
 
-  async exportEvents(filters?: SkudFilters): Promise<Blob> {
-    const params = new URLSearchParams();
-    if (filters?.startDate) params.append('startDate', filters.startDate);
-    if (filters?.endDate) params.append('endDate', filters.endDate);
-    if (filters?.accessPoint) params.append('accessPoint', filters.accessPoint);
-
-    const query = params.toString();
-    const response = await fetch(
-      `${import.meta.env.VITE_API_URL || 'http://localhost:3000/api'}/skud/export${query ? `?${query}` : ''}`,
-      {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('access_token')}`,
-        },
-      }
+  async exportEmployeeEvents(employeeId: number, startDate: string, endDate: string): Promise<DownloadFileResult> {
+    const params = new URLSearchParams({ startDate, endDate });
+    return fetchExportFile(
+      `/skud/employee-events/${employeeId}/export?${params.toString()}`,
+      `skud_${employeeId}_${startDate}_${endDate}.xlsx`,
     );
-
-    if (!response.ok) {
-      throw new Error('Ошибка экспорта');
-    }
-
-    return response.blob();
   },
+
+  async exportDiscipline(filters: {
+    startMonth: string;
+    endMonth?: string;
+    tab?: 'all' | 'late' | 'underwork' | 'early' | 'absence';
+    departmentId?: string;
+    search?: string;
+  }): Promise<DownloadFileResult> {
+    const params = new URLSearchParams({ startMonth: filters.startMonth });
+    if (filters.endMonth) params.append('endMonth', filters.endMonth);
+    if (filters.tab && filters.tab !== 'all') params.append('tab', filters.tab);
+    if (filters.departmentId) params.append('department_id', filters.departmentId);
+    if (filters.search?.trim()) params.append('search', filters.search.trim());
+
+    return fetchExportFile(
+      `/skud/discipline/export?${params.toString()}`,
+      `discipline_${filters.startMonth}_${filters.endMonth || filters.startMonth}.xlsx`,
+    );
+  },
+
 };

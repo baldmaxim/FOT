@@ -131,7 +131,7 @@ export const TopLateCard: FC<{ data: IDashboardStats['topLate']; period: Dashboa
           <div
             key={item.employee_id}
             className={`${styles.lateItem} ${styles.clickable}`}
-            onClick={() => navigate(`/tender/${item.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } })}
+            onClick={() => navigate(`/employees/${item.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } })}
           >
             <span className={styles.lateRank}>{i + 1}</span>
             <div className={styles.lateAvatar}>{getInitials(item.full_name)}</div>

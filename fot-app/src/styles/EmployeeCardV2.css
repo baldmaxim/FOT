@@ -700,6 +700,11 @@
   box-shadow: 0 0 0 2px var(--primary);
 }
 
+.ec-cal-day.selected {
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.9);
+  transform: scale(1.03);
+}
+
 .ec-cal-day .ec-time-badge {
   position: absolute;
   bottom: 3px;

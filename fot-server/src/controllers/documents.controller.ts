@@ -5,6 +5,96 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
 
 const DOCUMENT_CATEGORIES = ['certificate', 'scan', 'approval', 'payslip', 'other'] as const;
+const DOCUMENT_SELECT_COLUMNS = 'id, employee_id, leave_request_id, category, file_name, file_size, mime_type, r2_key, uploaded_by, created_at';
+
+const ensureDocumentLinks = async (
+  documentId: number,
+  employeeId: number,
+  category: string,
+  leaveRequestId?: number | null,
+): Promise<void> => {
+  const links = [
+    {
+      document_id: documentId,
+      entity_type: 'employee',
+      entity_id: String(employeeId),
+      purpose: category,
+    },
+  ];
+
+  if (leaveRequestId) {
+    links.push({
+      document_id: documentId,
+      entity_type: 'leave_request',
+      entity_id: String(leaveRequestId),
+      purpose: category,
+    });
+  }
+
+  const { error } = await supabase
+    .from('document_links')
+    .upsert(links, { onConflict: 'document_id,entity_type,entity_id,purpose' });
+
+  if (error) {
+    throw error;
+  }
+};
+
+const loadDocumentsByEmployeeId = async (employeeId: number): Promise<Record<string, unknown>[]> => {
+  const { data: links, error: linksError } = await supabase
+    .from('document_links')
+    .select('document_id')
+    .eq('entity_type', 'employee')
+    .eq('entity_id', String(employeeId));
+
+  if (linksError) {
+    throw linksError;
+  }
+
+  const linkedIds = [...new Set((links || []).map(link => Number(link.document_id)).filter(Number.isFinite))];
+  let linkedDocs: Record<string, unknown>[] = [];
+  if (linkedIds.length > 0) {
+    const { data, error } = await supabase
+      .from('documents')
+      .select(DOCUMENT_SELECT_COLUMNS)
+      .in('id', linkedIds);
+
+    if (error) {
+      throw error;
+    }
+
+    linkedDocs = (data || []) as Record<string, unknown>[];
+  }
+
+  const linkedIdSet = new Set(linkedDocs.map(doc => Number(doc.id)));
+  const { data: legacyDocs, error: legacyError } = await supabase
+    .from('documents')
+    .select(DOCUMENT_SELECT_COLUMNS)
+    .eq('employee_id', employeeId)
+    .order('created_at', { ascending: false });
+
+  if (legacyError) {
+    throw legacyError;
+  }
+
+  const missingLegacyDocs = (legacyDocs || []).filter(doc => !linkedIdSet.has(Number(doc.id)));
+  if (missingLegacyDocs.length > 0) {
+    await Promise.all(
+      missingLegacyDocs.map(doc =>
+        ensureDocumentLinks(
+          Number(doc.id),
+          employeeId,
+          String(doc.category),
+          typeof doc.leave_request_id === 'number' ? doc.leave_request_id : null,
+        ).catch(() => undefined),
+      ),
+    );
+  }
+
+  return [...linkedDocs, ...missingLegacyDocs].sort(
+    (left, right) => new Date(String(right.created_at)).getTime() - new Date(String(left.created_at)).getTime(),
+  );
+};
 
 /** Получить presigned URL для загрузки */
 const getUploadUrl = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -78,6 +168,7 @@ const confirmUpload = async (req: AuthenticatedRequest, res: Response): Promise<
       .single();
 
     if (error) throw error;
+    await ensureDocumentLinks(Number(data.id), Number(employee_id), String(category), leave_request_id || null);
     res.json({ success: true, data });
   } catch (err) {
     console.error('documents.confirmUpload error:', err);
@@ -96,7 +187,7 @@ const getDownloadUrl = async (req: AuthenticatedRequest, res: Response): Promise
     const { id } = req.params;
     const { data: doc, error } = await supabase
       .from('documents')
-      .select('id, employee_id, leave_request_id, category, file_name, file_size, mime_type, r2_key, uploaded_by, created_at')
+      .select(DOCUMENT_SELECT_COLUMNS)
       .eq('id', id)
       .single();
 
@@ -127,14 +218,8 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
       return;
     }
 
-    const { data, error } = await supabase
-      .from('documents')
-      .select('id, employee_id, leave_request_id, category, file_name, file_size, mime_type, r2_key, uploaded_by, created_at')
-      .eq('employee_id', employeeId)
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-    res.json({ success: true, data: data || [] });
+    const data = await loadDocumentsByEmployeeId(employeeId);
+    res.json({ success: true, data });
   } catch (err) {
     console.error('documents.getMy error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения документов' });
@@ -154,14 +239,8 @@ const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<
       return;
     }
 
-    const { data, error } = await supabase
-      .from('documents')
-      .select('id, employee_id, leave_request_id, category, file_name, file_size, mime_type, r2_key, uploaded_by, created_at')
-      .eq('employee_id', employeeId)
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-    res.json({ success: true, data: data || [] });
+    const data = await loadDocumentsByEmployeeId(employeeId);
+    res.json({ success: true, data });
   } catch (err) {
     console.error('documents.getByEmployee error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения документов' });

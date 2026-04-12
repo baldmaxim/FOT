@@ -30,21 +30,21 @@ router.get(
 // GET /api/documents/employee/:empId — документы сотрудника
 router.get(
   '/employee/:empId',
-  requireAnyPageAccess(['/my-employees', '/tender', '/staff-control'], 'view'),
+  requireAnyPageAccess(['/employees', '/staff-control'], 'view'),
   documentsController.getByEmployee
 );
 
 // GET /api/documents/:id/download — скачать
 router.get(
   '/:id/download',
-  requireAnyPageAccess(['/employee/documents', '/my-employees', '/tender', '/staff-control'], 'view'),
+  requireAnyPageAccess(['/employee/documents', '/employees', '/staff-control'], 'view'),
   documentsController.getDownloadUrl
 );
 
 // DELETE /api/documents/:id — удалить
 router.delete(
   '/:id',
-  requireAnyPageAccess(['/employee/documents', '/my-employees', '/tender', '/staff-control'], 'edit'),
+  requireAnyPageAccess(['/employee/documents', '/employees', '/staff-control'], 'edit'),
   documentsController.remove
 );
 

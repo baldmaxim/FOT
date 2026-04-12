@@ -1,5 +1,6 @@
-import { type FC, useState, useEffect } from 'react';
+import { type FC, useMemo, useState } from 'react';
 import type { SkudEvent } from '../../types';
+import type { TimesheetStatus } from '../../types';
 import styles from '../../pages/employee/EmployeeDashboard.module.css';
 
 type ViewPeriod = 'day' | 'week' | 'month';
@@ -15,6 +16,11 @@ export interface IDayGroup {
   isWeekend: boolean;
   isFuture: boolean;
   pairs: IEntryExitPair[];
+  status: TimesheetStatus | null;
+  statusLabel: string | null;
+  isCorrection: boolean;
+  hasSkudDetails: boolean;
+  hasCanonicalEntry: boolean;
 }
 
 export interface IEntryExitPair {
@@ -46,6 +52,15 @@ const formatHM = (totalMinutes: number): string => {
 
 const formatDateLong = (d: string) =>
   new Date(d + 'T00:00:00').toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' });
+
+const getStatusClassName = (status: TimesheetStatus | null): string => {
+  if (status === 'work' || status === 'manual') return styles.dayStatusBadgeWork;
+  if (status === 'remote') return styles.dayStatusBadgeRemote;
+  if (status === 'business_trip') return styles.dayStatusBadgeTrip;
+  if (status === 'vacation' || status === 'dayoff' || status === 'sick' || status === 'unpaid') return styles.dayStatusBadgeVacation;
+  if (status === 'absent') return styles.dayStatusBadgeAbsent;
+  return '';
+};
 
 const ChevronDown: FC<{ className?: string }> = ({ className }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
@@ -106,6 +121,16 @@ const DayEvents: FC<{ group: IDayGroup }> = ({ group }) => (
 
 const DaySummaryBadges: FC<{ group: IDayGroup }> = ({ group }) => (
   <div className={styles.skudDaySummary}>
+    {group.statusLabel && group.status !== 'work' && group.status !== 'manual' && (
+      <span className={`${styles.dayStatusBadge} ${getStatusClassName(group.status)}`}>
+        {group.statusLabel}
+      </span>
+    )}
+    {group.isCorrection && (
+      <span className={`${styles.dayStatusBadge} ${styles.dayStatusBadgeCorrection}`}>
+        Корр.
+      </span>
+    )}
     {group.firstEntry && (
       <span className={`${styles.skudTimeBadge} ${styles.skudTimeBadgeEntry}`}>{formatTime(group.firstEntry)}</span>
     )}
@@ -115,7 +140,9 @@ const DaySummaryBadges: FC<{ group: IDayGroup }> = ({ group }) => (
     {group.totalMinutes > 0 && (
       <span className={`${styles.skudTimeBadge} ${styles.skudTimeBadgeDuration}`}>{formatHM(group.totalMinutes)}</span>
     )}
-    <span className={styles.skudEventsCount}>{group.events.length} соб.</span>
+    {group.hasSkudDetails && (
+      <span className={styles.skudEventsCount}>{group.events.length} соб.</span>
+    )}
   </div>
 );
 
@@ -129,19 +156,14 @@ export const AttendanceCard: FC<IAttendanceCardProps> = ({
   isCurrentPeriod,
   dayGroups,
 }) => {
-  const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
-
-  // Auto-expand for day view
-  useEffect(() => {
-    if (viewPeriod === 'day' && dayGroups.length > 0) {
-      setExpandedDays(new Set(dayGroups.map(g => g.date)));
-    } else {
-      setExpandedDays(new Set());
-    }
-  }, [viewPeriod, dayGroups]);
+  const [manualExpandedDays, setManualExpandedDays] = useState<Set<string>>(new Set());
+  const expandedDays = useMemo(
+    () => (viewPeriod === 'day' ? new Set(dayGroups.map(group => group.date)) : manualExpandedDays),
+    [dayGroups, manualExpandedDays, viewPeriod],
+  );
 
   const toggleDay = (date: string) => {
-    setExpandedDays(prev => {
+    setManualExpandedDays(prev => {
       const next = new Set(prev);
       if (next.has(date)) next.delete(date);
       else next.add(date);
@@ -185,28 +207,31 @@ export const AttendanceCard: FC<IAttendanceCardProps> = ({
         {(loading || eventsLoading) ? (
           <div className={styles.emptyState}>Загрузка...</div>
         ) : dayGroups.length === 0 ? (
-          <div className={styles.emptyState}>Нет событий СКУД</div>
+          <div className={styles.emptyState}>Нет данных табеля</div>
         ) : (
           dayGroups.map(group => {
             const expanded = expandedDays.has(group.date);
-            const hasEvents = group.events.length > 0;
+            const hasDetails = group.hasSkudDetails && group.events.length > 0;
+            const hasSummary = Boolean(
+              ((group.statusLabel && group.status !== 'work' && group.status !== 'manual') || group.isCorrection || group.firstEntry || group.lastExit || group.totalMinutes > 0),
+            );
             return (
               <div
                 key={group.date}
                 className={`${styles.skudDayCard} ${group.isToday ? styles.skudDayToday : ''} ${group.isWeekend ? styles.skudDayWeekend : ''} ${group.isFuture ? styles.skudDayFuture : ''}`}
               >
                 <div
-                  className={`${styles.skudDayHeader} ${hasEvents ? styles.skudDayHeaderClickable : ''}`}
-                  onClick={() => hasEvents && toggleDay(group.date)}
+                  className={`${styles.skudDayHeader} ${hasDetails ? styles.skudDayHeaderClickable : ''}`}
+                  onClick={() => hasDetails && toggleDay(group.date)}
                 >
                   <span className={styles.skudDayChevron}>
-                    {hasEvents ? (expanded ? <ChevronDown /> : <ChevronRight />) : <span style={{ width: 16, display: 'inline-block' }} />}
+                    {hasDetails ? (expanded ? <ChevronDown /> : <ChevronRight />) : <span style={{ width: 16, display: 'inline-block' }} />}
                   </span>
                   <span className={styles.skudDayDate}>{formatDateLong(group.date)}</span>
-                  {hasEvents && <DaySummaryBadges group={group} />}
-                  {!hasEvents && <span className={styles.skudAbsentLabel}>—</span>}
+                  {hasSummary && <DaySummaryBadges group={group} />}
+                  {!hasSummary && <span className={styles.skudAbsentLabel}>—</span>}
                 </div>
-                {expanded && hasEvents && <DayEvents group={group} />}
+                {expanded && hasDetails && <DayEvents group={group} />}
               </div>
             );
           })

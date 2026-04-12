@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import type { FC, ReactNode } from 'react';
 import { EmployeeSidebar } from './EmployeeSidebar';
 import styles from './EmployeeLayout.module.css';
@@ -6,14 +6,15 @@ import { useMobileMenu } from '../../hooks/useMobileMenu';
 import { useSwipe } from '../../hooks/useSwipe';
 import { useTheme } from '../../hooks/useTheme';
 import { useMyPresence } from '../../hooks/useMyPresence';
-import { useNotifications } from '../../hooks/useNotifications';
-import { NotificationDropdown } from '../ui/NotificationDropdown';
 import dropdownStyles from '../ui/NotificationDropdown.module.css';
+import { useUnreadNotificationsCount } from '../../hooks/useUnreadNotificationsCount';
 
 interface IEmployeeLayoutProps {
   children: ReactNode;
   title: string;
 }
+
+const NotificationBellContent = lazy(() => import('../ui/NotificationBellContent').then(m => ({ default: m.NotificationBellContent })));
 
 export const EmployeeLayout: FC<IEmployeeLayoutProps> = ({ children, title }) => {
   const { isOpen, open, close } = useMobileMenu();
@@ -21,7 +22,17 @@ export const EmployeeLayout: FC<IEmployeeLayoutProps> = ({ children, title }) =>
   const { status: presenceStatus } = useMyPresence();
   const swipeHandlers = useSwipe({ isOpen, onOpen: open, onClose: close });
   const [bellOpen, setBellOpen] = useState(false);
-  const { notifications, unreadCount, loading, loadNotifications, markRead, markAllRead } = useNotifications();
+  const [notificationsActivated, setNotificationsActivated] = useState(false);
+  const { unreadCount, setUnreadCount } = useUnreadNotificationsCount();
+
+  const activateNotifications = () => {
+    setNotificationsActivated(true);
+  };
+
+  const toggleNotifications = () => {
+    activateNotifications();
+    setBellOpen(prev => !prev);
+  };
 
   return (
     <div className={styles.app} {...swipeHandlers}>
@@ -66,7 +77,13 @@ export const EmployeeLayout: FC<IEmployeeLayoutProps> = ({ children, title }) =>
               )}
             </button>
             <div className={dropdownStyles.wrapper}>
-              <button className={styles.headerBtn} onClick={() => setBellOpen(!bellOpen)} title="Уведомления">
+              <button
+                className={styles.headerBtn}
+                onClick={toggleNotifications}
+                onMouseEnter={activateNotifications}
+                onFocus={activateNotifications}
+                title="Уведомления"
+              >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
                   <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
@@ -77,15 +94,14 @@ export const EmployeeLayout: FC<IEmployeeLayoutProps> = ({ children, title }) =>
                   </span>
                 )}
               </button>
-              {bellOpen && (
-                <NotificationDropdown
-                  notifications={notifications}
-                  loading={loading}
-                  onLoad={loadNotifications}
-                  onMarkRead={markRead}
-                  onMarkAllRead={markAllRead}
-                  onClose={() => setBellOpen(false)}
-                />
+              {notificationsActivated && (
+                <Suspense fallback={null}>
+                  <NotificationBellContent
+                    open={bellOpen}
+                    onClose={() => setBellOpen(false)}
+                    onUnreadCountChange={setUnreadCount}
+                  />
+                </Suspense>
               )}
             </div>
           </div>

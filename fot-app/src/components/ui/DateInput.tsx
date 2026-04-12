@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type FC } from 'react';
+import { useState, useRef, type FC } from 'react';
 
 interface IDateInputProps {
   value: string; // YYYY-MM-DD
@@ -17,20 +17,14 @@ export const DateInput: FC<IDateInputProps> = ({ value, onChange, className }) =
   const [d, setD] = useState(day);
   const [m, setM] = useState(month);
   const [y, setY] = useState(year);
-  const focusedRef = useRef(false);
+  const [isFocused, setIsFocused] = useState(false);
 
   const dayRef = useRef<HTMLInputElement>(null);
   const monthRef = useRef<HTMLInputElement>(null);
   const yearRef = useRef<HTMLInputElement>(null);
-
-  // Синхронизация с внешним value — только когда НЕ в фокусе
-  useEffect(() => {
-    if (focusedRef.current) return;
-    const [nd, nm, ny] = parse(value);
-    setD(nd);
-    setM(nm);
-    setY(ny);
-  }, [value]);
+  const displayD = isFocused ? d : day;
+  const displayM = isFocused ? m : month;
+  const displayY = isFocused ? y : year;
 
   const tryEmit = (nd: string, nm: string, ny: string) => {
     // Эмитим только когда все поля полностью заполнены
@@ -69,7 +63,7 @@ export const DateInput: FC<IDateInputProps> = ({ value, onChange, className }) =
   };
 
   const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
-    focusedRef.current = true;
+    setIsFocused(true);
     e.target.select();
   };
 
@@ -82,12 +76,7 @@ export const DateInput: FC<IDateInputProps> = ({ value, onChange, className }) =
         active !== monthRef.current &&
         active !== yearRef.current
       ) {
-        focusedRef.current = false;
-        // При потере фокуса — синхронизация с parent
-        const [nd, nm, ny] = parse(value);
-        setD(nd);
-        setM(nm);
-        setY(ny);
+        setIsFocused(false);
       }
     });
   };
@@ -110,7 +99,7 @@ export const DateInput: FC<IDateInputProps> = ({ value, onChange, className }) =
         type="text"
         inputMode="numeric"
         className="date-input-segment date-input-dd"
-        value={d}
+        value={displayD}
         onChange={e => handleDay(e.target.value)}
         onKeyDown={e => handleKeyDown(e, 'day')}
         onFocus={handleFocus}
@@ -124,7 +113,7 @@ export const DateInput: FC<IDateInputProps> = ({ value, onChange, className }) =
         type="text"
         inputMode="numeric"
         className="date-input-segment date-input-mm"
-        value={m}
+        value={displayM}
         onChange={e => handleMonth(e.target.value)}
         onKeyDown={e => handleKeyDown(e, 'month')}
         onFocus={handleFocus}
@@ -138,7 +127,7 @@ export const DateInput: FC<IDateInputProps> = ({ value, onChange, className }) =
         type="text"
         inputMode="numeric"
         className="date-input-segment date-input-yyyy"
-        value={y}
+        value={displayY}
         onChange={e => handleYear(e.target.value)}
         onKeyDown={e => handleKeyDown(e, 'year')}
         onFocus={handleFocus}

@@ -8,6 +8,14 @@ import { getDashboardStats } from '../services/skud-dashboard.service.js';
 import { getPresence } from '../services/skud-presence.service.js';
 import { getDisciplineViolations } from '../services/skud-discipline.service.js';
 import {
+  buildDisciplineWorkbook,
+  buildEmployeeSkudWorkbook,
+  formatMonthRangeLabel,
+  sanitizeExportFileName,
+  type DisciplineExportEmployeeSummary,
+  type DisciplineViolationType,
+} from '../services/skud-export.service.js';
+import {
   getSyncFilteredEmployees,
   queryEventsByEmployeeId,
   searchAndBackfillByName,
@@ -17,6 +25,276 @@ import {
 import { skudWriteController } from './skud-write.controller.js';
 import { skudTravelController } from './skud-travel.controller.js';
 import { canAccessEmployeeInScope, resolveScopedDepartmentId, resolveRequestDataScope } from '../services/data-scope.service.js';
+import type { IDisciplineResult } from '../types/skud.types.js';
+
+const MONTH_PATTERN = /^\d{4}-\d{2}$/;
+type DisciplineTab = 'all' | DisciplineViolationType;
+
+function formatDisciplineDate(isoDate: string): string {
+  const [year, month, day] = isoDate.split('-');
+  return `${day}.${month}.${year}`;
+}
+
+async function loadEmployeeEventsForRequest(
+  employeeId: number,
+  startDate: unknown,
+  endDate: unknown,
+  options: {
+    includeEmployeeName?: boolean;
+    preferFastSingleDay?: boolean;
+    useCache?: boolean;
+  } = {},
+): Promise<{
+  employeeName: string;
+  events: Array<{
+    id: number | string;
+    physical_person: string | null;
+    card_number: string | null;
+    event_date: string;
+    event_time: string;
+    access_point: string | null;
+    direction: 'entry' | 'exit' | null;
+    employee_id: number | null;
+  }>;
+}> {
+  const includeEmployeeName = options.includeEmployeeName ?? true;
+  const preferFastSingleDay = options.preferFastSingleDay ?? false;
+  const useCache = options.useCache ?? false;
+  const singleDayRequest = typeof startDate === 'string' && typeof endDate === 'string' && startDate === endDate;
+  const cacheKey = `${employeeId}:${String(startDate || '')}:${String(endDate || '')}:${includeEmployeeName ? 'named' : 'anon'}`;
+
+  type EmployeeEventsResponse = {
+    employeeName: string;
+    events: Array<{
+      id: number | string;
+      physical_person: string | null;
+      card_number: string | null;
+      event_date: string;
+      event_time: string;
+      access_point: string | null;
+      direction: 'entry' | 'exit' | null;
+      employee_id: number | null;
+    }>;
+  };
+
+  const cacheTtlMs = 60_000;
+  const cacheStore = (loadEmployeeEventsForRequest as typeof loadEmployeeEventsForRequest & {
+    __cache?: Map<string, { at: number; data: EmployeeEventsResponse }>;
+  }).__cache ??= new Map<string, { at: number; data: EmployeeEventsResponse }>();
+
+  if (useCache) {
+    const cached = cacheStore.get(cacheKey);
+    if (cached && Date.now() - cached.at < cacheTtlMs) {
+      return cached.data;
+    }
+  }
+
+  const mapEvents = (events: Record<string, unknown>[]) => events.map((event: Record<string, unknown>) => ({
+    id: (event.id as number | string) ?? '',
+    physical_person: (event.physical_person as string | null) || null,
+    card_number: (event.card_number as string | null) || null,
+    event_date: String(event.event_date),
+    event_time: String(event.event_time),
+    access_point: (event.access_point as string | null) || null,
+    direction: (event.direction as 'entry' | 'exit' | null) || null,
+    employee_id: (event.employee_id as number | null) || null,
+  }));
+
+  const byId = await queryEventsByEmployeeId(employeeId, startDate, endDate);
+  let employeeName = `Сотрудник_${employeeId}`;
+  let employeeFullName: string | null = null;
+
+  if (includeEmployeeName || byId.length === 0 || !preferFastSingleDay) {
+    const { data: employeeData } = await supabase
+      .from('employees')
+      .select('full_name')
+      .eq('id', employeeId)
+      .single();
+
+    if (employeeData?.full_name) {
+      employeeName = employeeData.full_name;
+      employeeFullName = employeeData.full_name;
+    }
+  }
+
+  if (preferFastSingleDay && singleDayRequest && byId.length > 0) {
+    const response = {
+      employeeName,
+      events: mapEvents(byId),
+    };
+    if (useCache) {
+      cacheStore.set(cacheKey, { at: Date.now(), data: response });
+    }
+
+    void (async () => {
+      try {
+        let resolvedFullName = employeeFullName;
+        if (!resolvedFullName) {
+          const { data: employeeData } = await supabase
+            .from('employees')
+            .select('full_name')
+            .eq('id', employeeId)
+            .single();
+          resolvedFullName = employeeData?.full_name || null;
+        }
+        if (!resolvedFullName) return;
+
+        const byName = await searchAndBackfillByName(
+          employeeId,
+          resolvedFullName.toLowerCase().trim(),
+          startDate,
+          endDate,
+        );
+        if (byName.length === 0) return;
+
+        const seenIds = new Set(byId.map((event: Record<string, unknown>) => String(event.id)));
+        const merged = [...byId, ...byName.filter((event: Record<string, unknown>) => !seenIds.has(String(event.id)))];
+        cacheStore.set(cacheKey, {
+          at: Date.now(),
+          data: {
+            employeeName: resolvedFullName,
+            events: mapEvents(merged),
+          },
+        });
+      } catch (error) {
+        console.warn('[skud] background employee event backfill failed:', error);
+      }
+    })();
+
+    return response;
+  }
+
+  let byName: Record<string, unknown>[] = [];
+  if (employeeFullName) {
+    byName = await searchAndBackfillByName(employeeId, employeeFullName.toLowerCase().trim(), startDate, endDate);
+  }
+
+  const seenIds = new Set(byId.map((event: Record<string, unknown>) => String(event.id)));
+  const merged = [...byId, ...byName.filter((event: Record<string, unknown>) => !seenIds.has(String(event.id)))];
+
+  const response = {
+    employeeName,
+    events: mapEvents(merged),
+  };
+  if (useCache) {
+    cacheStore.set(cacheKey, { at: Date.now(), data: response });
+  }
+  return response;
+}
+
+async function getInternalAccessPointsForRequest(req: AuthenticatedRequest): Promise<Set<string>> {
+  const scope = await resolveRequestDataScope(req);
+  let query = supabase
+    .from('skud_access_point_settings')
+    .select('access_point_name, is_internal');
+
+  if (scope === 'department' && req.user.department_id) {
+    query = query.eq('department_id', req.user.department_id);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  return new Set(
+    (data || [])
+      .filter(row => row.is_internal)
+      .map(row => row.access_point_name.trim())
+      .filter(Boolean),
+  );
+}
+
+async function getScopedDisciplineData(
+  req: AuthenticatedRequest,
+  startMonth: string,
+  endMonth: string,
+): Promise<IDisciplineResult> {
+  const data = await getDisciplineViolations({ startMonth, endMonth });
+  const scope = await resolveRequestDataScope(req);
+
+  if (scope !== 'department' || !req.user.department_id) {
+    return data;
+  }
+
+  const filteredEmployeeIds = Object.entries(data.employees)
+    .filter(([, employee]) => employee.department_id === req.user.department_id)
+    .map(([employeeId]) => Number(employeeId));
+  const employeeIdSet = new Set(filteredEmployeeIds);
+
+  return {
+    ...data,
+    employees: Object.fromEntries(
+      Object.entries(data.employees).filter(([employeeId]) => employeeIdSet.has(Number(employeeId))),
+    ),
+    violations: data.violations.filter(item => employeeIdSet.has(item.employee_id)),
+  };
+}
+
+function buildDisciplineEmployeeSummaries(data: IDisciplineResult): DisciplineExportEmployeeSummary[] {
+  const map: Record<number, DisciplineExportEmployeeSummary> = {};
+
+  for (const violation of data.violations) {
+    if (!map[violation.employee_id]) {
+      const employee = data.employees[violation.employee_id] || {
+        full_name: `#${violation.employee_id}`,
+        position: null,
+        department_id: null,
+      };
+
+      map[violation.employee_id] = {
+        employee_id: violation.employee_id,
+        name: employee.full_name,
+        position: employee.position || '—',
+        department: employee.department_id ? (data.departments[employee.department_id] || '—') : '—',
+        departmentId: employee.department_id,
+        late: 0,
+        underwork: 0,
+        early: 0,
+        absence: 0,
+        total: 0,
+        violations: [],
+      };
+    }
+
+    const summary = map[violation.employee_id];
+    summary[violation.type] += 1;
+    summary.total += 1;
+    summary.violations.push({
+      ...violation,
+      dateFormatted: formatDisciplineDate(violation.date),
+    });
+  }
+
+  return Object.values(map).sort((left, right) => right.total - left.total);
+}
+
+function filterDisciplineEmployeeSummaries(
+  employees: DisciplineExportEmployeeSummary[],
+  filters: {
+    departmentId: string;
+    searchQuery: string;
+    activeTab: DisciplineTab;
+  },
+): DisciplineExportEmployeeSummary[] {
+  let filtered = employees;
+
+  if (filters.departmentId) {
+    filtered = filtered.filter(employee => employee.departmentId === filters.departmentId);
+  }
+
+  if (filters.searchQuery.trim()) {
+    const normalizedQuery = filters.searchQuery.trim().toLowerCase();
+    filtered = filtered.filter(employee => employee.name.toLowerCase().includes(normalizedQuery));
+  }
+
+  if (filters.activeTab !== 'all') {
+    const key = filters.activeTab as DisciplineViolationType;
+    filtered = filtered
+      .filter(employee => employee[key] > 0)
+      .sort((left, right) => right[key] - left[key]);
+  }
+
+  return filtered;
+}
 
 const skudReadController = {
   /**
@@ -110,43 +388,65 @@ const skudReadController = {
       }
 
       const { startDate, endDate } = req.query;
-
-      const { data: empData, error: empError } = await supabase.from('employees').select('full_name').eq('id', employeeId).single();
-      console.log(`[employee-events] empData=`, JSON.stringify(empData), `empError=`, empError?.message);
-
-      const byId = await queryEventsByEmployeeId(employeeId, startDate, endDate);
-      console.log(`[employee-events] id=${employeeId} byId=${byId.length} dates=${startDate as string}..${endDate as string}`);
-
-      let byName: Record<string, unknown>[] = [];
-      if (empData?.full_name) {
-        const employeeName = empData.full_name.toLowerCase().trim();
-        console.log(`[employee-events] searching by name: "${employeeName}"`);
-        byName = await searchAndBackfillByName(employeeId, employeeName, startDate, endDate);
-        console.log(`[employee-events] byName=${byName.length}`);
-      } else {
-        console.log(`[employee-events] skip name search: empData=${!!empData}`);
-      }
-
-      const seenIds = new Set(byId.map((e: Record<string, unknown>) => e.id));
-      let events = [...byId, ...byName.filter((e: Record<string, unknown>) => !seenIds.has(e.id))];
-
-      console.log(`[employee-events] total=${events.length}`);
-
-      const result = events.map((event: Record<string, unknown>) => ({
-        id: event.id,
-        physical_person: event.physical_person,
-        card_number: event.card_number || null,
-        event_date: event.event_date,
-        event_time: event.event_time,
-        access_point: event.access_point,
-        direction: event.direction,
-        employee_id: event.employee_id,
-      }));
-
-      res.json({ success: true, data: result });
+      const { events } = await loadEmployeeEventsForRequest(employeeId, startDate, endDate, {
+        includeEmployeeName: false,
+        preferFastSingleDay: true,
+        useCache: true,
+      });
+      res.json({ success: true, data: events });
     } catch (error) {
       console.error('Get employee events error:', error);
       res.status(500).json({ success: false, error: 'Failed to fetch employee events' });
+    }
+  },
+
+  /**
+   * GET /api/skud/employee-events/:employeeId/export
+   */
+  async exportEmployeeEvents(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const employeeId = parseInt(req.params.employeeId, 10);
+      if (isNaN(employeeId)) {
+        res.status(400).json({ success: false, error: 'Invalid employeeId' });
+        return;
+      }
+
+      if (!(await canAccessEmployeeInScope(req, employeeId))) {
+        res.status(403).json({ success: false, error: 'Access denied' });
+        return;
+      }
+
+      const startDate = typeof req.query.startDate === 'string' ? req.query.startDate : '';
+      const endDate = typeof req.query.endDate === 'string' ? req.query.endDate : '';
+      if (!startDate || !endDate) {
+        res.status(400).json({ success: false, error: 'Параметры startDate и endDate обязательны' });
+        return;
+      }
+
+      const { employeeName, events } = await loadEmployeeEventsForRequest(employeeId, startDate, endDate);
+      const internalPoints = await getInternalAccessPointsForRequest(req);
+      const workbook = buildEmployeeSkudWorkbook({
+        employeeName,
+        startDate,
+        endDate,
+        events,
+        internalPoints,
+      });
+      const buffer = await workbook.xlsx.writeBuffer();
+
+      const fileName = sanitizeExportFileName(
+        `СКУД_${employeeName.replace(/\s+/g, '_')}_${startDate.split('-').reverse().join('-')}_${endDate.split('-').reverse().join('-')}.xlsx`,
+      );
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+      );
+      res.send(Buffer.from(buffer));
+    } catch (error) {
+      console.error('exportEmployeeEvents error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка экспорта событий СКУД' });
     }
   },
 
@@ -347,28 +647,6 @@ const skudReadController = {
   },
 
   /**
-   * GET /api/skud/organizations
-   */
-  async getOrganizations(_req: AuthenticatedRequest, res: Response): Promise<void> {
-    try {
-      const { data: orgs, error } = await supabase
-        .from('organizations')
-        .select('id, name')
-        .order('name');
-
-      if (error) {
-        res.status(500).json({ success: false, error: error.message });
-        return;
-      }
-
-      res.json({ success: true, data: orgs || [] });
-    } catch (error) {
-      console.error('Get SKUD organizations error:', error);
-      res.status(500).json({ success: false, error: 'Ошибка загрузки организаций' });
-    }
-  },
-
-  /**
    * GET /api/skud/discipline?month=2026-03
    */
   async getDisciplineViolations(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -377,40 +655,64 @@ const skudReadController = {
       const startMonth = (req.query.startMonth as string) || (req.query.month as string) || fallbackMonth;
       const endMonth = (req.query.endMonth as string) || startMonth;
 
-      const monthPattern = /^\d{4}-\d{2}$/;
-      if (!monthPattern.test(startMonth) || !monthPattern.test(endMonth)) {
+      if (!MONTH_PATTERN.test(startMonth) || !MONTH_PATTERN.test(endMonth)) {
         res.status(400).json({ success: false, error: 'Некорректный формат месяца. Используйте YYYY-MM' });
         return;
       }
 
-      const data = await getDisciplineViolations({ startMonth, endMonth });
-      const scope = await resolveRequestDataScope(req);
-
-      if (scope === 'department' && req.user.department_id) {
-        const filteredEmployeeIds = Object.entries(data.employees)
-          .filter(([, employee]) => employee.department_id === req.user.department_id)
-          .map(([employeeId]) => Number(employeeId));
-        const employeeIdSet = new Set(filteredEmployeeIds);
-        const filteredEmployees = Object.fromEntries(
-          Object.entries(data.employees).filter(([employeeId]) => employeeIdSet.has(Number(employeeId))),
-        );
-        const filteredViolations = data.violations.filter(item => employeeIdSet.has(item.employee_id));
-
-        res.json({
-          success: true,
-          data: {
-            ...data,
-            employees: filteredEmployees,
-            violations: filteredViolations,
-          },
-        });
-        return;
-      }
-
+      const data = await getScopedDisciplineData(req, startMonth, endMonth);
       res.json({ success: true, data });
     } catch (error) {
       console.error('getDisciplineViolations error:', error);
       res.status(500).json({ success: false, error: 'Ошибка получения аналитики дисциплины' });
+    }
+  },
+
+  /**
+   * GET /api/skud/discipline/export
+   */
+  async exportDisciplineViolations(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const fallbackMonth = formatDateToISO(new Date()).slice(0, 7);
+      const startMonth = (req.query.startMonth as string) || (req.query.month as string) || fallbackMonth;
+      const endMonth = (req.query.endMonth as string) || startMonth;
+
+      if (!MONTH_PATTERN.test(startMonth) || !MONTH_PATTERN.test(endMonth)) {
+        res.status(400).json({ success: false, error: 'Некорректный формат месяца. Используйте YYYY-MM' });
+        return;
+      }
+
+      const tab = typeof req.query.tab === 'string' ? req.query.tab : 'all';
+      if (!['all', 'late', 'underwork', 'early', 'absence'].includes(tab)) {
+        res.status(400).json({ success: false, error: 'Некорректный тип фильтра' });
+        return;
+      }
+
+      const departmentId = typeof req.query.department_id === 'string' ? req.query.department_id : '';
+      const searchQuery = typeof req.query.search === 'string' ? req.query.search : '';
+      const data = await getScopedDisciplineData(req, startMonth, endMonth);
+      const employees = buildDisciplineEmployeeSummaries(data);
+      const filtered = filterDisciplineEmployeeSummaries(employees, {
+        departmentId,
+        searchQuery,
+        activeTab: tab as DisciplineTab,
+      });
+      const source = filtered.length > 0 ? filtered : employees;
+      const workbook = buildDisciplineWorkbook({ employees: source });
+      const buffer = await workbook.xlsx.writeBuffer();
+      const fileName = sanitizeExportFileName(
+        `Аналитика_дисциплины_${formatMonthRangeLabel(startMonth, endMonth).replace(/\s+/g, '_')}.xlsx`,
+      );
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+      );
+      res.send(Buffer.from(buffer));
+    } catch (error) {
+      console.error('exportDisciplineViolations error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка экспорта аналитики дисциплины' });
     }
   },
 

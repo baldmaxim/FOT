@@ -123,3 +123,17 @@ export function buildInclusiveDateRange(startDate: string, endDate: string): str
 
   return days;
 }
+
+/**
+ * Собирает timestamptz-строку для события SKUD в часовом поясе Europe/Moscow.
+ * Используется как канонический источник для skud_events.event_at.
+ */
+export function buildMoscowEventTimestamp(eventDate: string, eventTime: string): string {
+  const normalizedTime = (() => {
+    const parts = eventTime.trim().split(':');
+    if (parts.length === 2) return `${parts[0]}:${parts[1]}:00`;
+    return eventTime.trim();
+  })();
+
+  return `${eventDate}T${normalizedTime}+03:00`;
+}

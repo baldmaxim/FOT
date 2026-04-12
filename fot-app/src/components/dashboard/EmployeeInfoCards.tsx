@@ -88,7 +88,9 @@ export const EmployeeInfoCards: FC<IEmployeeInfoCardsProps> = ({
           </div>
           <div className={styles.vacationDetail}>
             <span className={styles.vacationDetailLabel}>Оклад</span>
-            <span className={styles.vacationDetailValue}>{employee.salary_calculated ? employee.salary_calculated.toLocaleString('ru-RU') + ' ₽' : '—'}</span>
+            <span className={styles.vacationDetailValue}>
+              {employee.current_salary ? employee.current_salary.toLocaleString('ru-RU') + ' ₽' : '—'}
+            </span>
           </div>
         </div>
       ) : (

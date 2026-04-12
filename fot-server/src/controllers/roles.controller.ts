@@ -35,10 +35,22 @@ const pageAccessItemSchema = z.object({
   can_edit: z.boolean().optional().default(false),
 });
 
+async function loadRoleIdByCode(): Promise<Map<string, string>> {
+  const { data, error } = await supabase
+    .from('system_roles')
+    .select('id, code');
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return new Map((data || []).map(role => [role.code, role.id]));
+}
+
 async function loadPageAccessMatrix(): Promise<Record<string, Record<string, { can_view: boolean; can_edit: boolean }>>> {
   const { data, error } = await supabase
     .from('role_page_access')
-    .select('role_code, page_path, can_view, can_edit');
+    .select('role_code, system_role_id, page_path, can_view, can_edit');
 
   if (error) {
     throw new Error(error.message);
@@ -254,6 +266,20 @@ export const rolesController = {
       return;
     }
 
+    let roleIdByCode: Map<string, string>;
+    try {
+      roleIdByCode = await loadRoleIdByCode();
+    } catch (error) {
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Failed to load roles' });
+      return;
+    }
+
+    const unmappedRole = items.find(item => !roleIdByCode.has(item.role_code));
+    if (unmappedRole) {
+      res.status(400).json({ success: false, error: `Неизвестная роль в матрице доступа: ${unmappedRole.role_code}` });
+      return;
+    }
+
     const currentMatrix = await loadPageAccessMatrix();
     for (const item of items) {
       if (!currentMatrix[item.role_code]) {
@@ -288,7 +314,13 @@ export const rolesController = {
 
     const { error } = await supabase
       .from('role_page_access')
-      .upsert(items, { onConflict: 'role_code,page_path' });
+      .upsert(
+        items.map(item => ({
+          ...item,
+          system_role_id: roleIdByCode.get(item.role_code) ?? null,
+        })),
+        { onConflict: 'system_role_id,page_path' },
+      );
 
     if (error) {
       res.status(500).json({ success: false, error: error.message });

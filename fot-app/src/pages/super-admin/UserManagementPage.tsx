@@ -1,41 +1,47 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { lazy, Suspense, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { adminService } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
-import { PendingUsersTab } from '../../components/super-admin/PendingUsersTab';
 import type { IPendingUser } from '../../components/super-admin/PendingUsersTab';
-import { AllUsersTab } from '../../components/super-admin/AllUsersTab';
 import type { IUserFromApi } from '../../components/super-admin/AllUsersTab';
 import styles from './SuperAdmin.module.css';
 
+const PendingUsersTab = lazy(() => import('../../components/super-admin/PendingUsersTab').then(module => ({
+  default: module.PendingUsersTab,
+})));
+const AllUsersTab = lazy(() => import('../../components/super-admin/AllUsersTab').then(module => ({
+  default: module.AllUsersTab,
+})));
+
 export const UserManagementPage: React.FC = () => {
   const toast = useToast();
+  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'pending' | 'all'>('pending');
-  const [pendingUsers, setPendingUsers] = useState<IPendingUser[]>([]);
-  const [allUsers, setAllUsers] = useState<IUserFromApi[]>([]);
-  const [loading, setLoading] = useState(true);
+  const pendingUsersQuery = useQuery<IPendingUser[]>({
+    queryKey: ['admin-users', 'pending'],
+    queryFn: () => adminService.getPendingUsers(),
+    staleTime: 30_000,
+  });
+  const allUsersQuery = useQuery<IUserFromApi[]>({
+    queryKey: ['admin-users', 'all'],
+    queryFn: () => adminService.getAllUsers(),
+    staleTime: 30_000,
+  });
+  const pendingUsers = pendingUsersQuery.data || [];
+  const allUsers = allUsersQuery.data || [];
+  const loading = pendingUsersQuery.isPending || allUsersQuery.isPending;
+  const hasQueryError = pendingUsersQuery.isError || allUsersQuery.isError;
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-
+  const reloadUsers = async () => {
     try {
-      const [pending, users] = await Promise.all([
-        adminService.getPendingUsers(),
-        adminService.getAllUsers(),
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['admin-users', 'pending'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-users', 'all'] }),
       ]);
-
-      setPendingUsers(pending);
-      setAllUsers(users);
     } catch {
       toast.error('Ошибка загрузки данных');
-    } finally {
-      setLoading(false);
     }
-  }, [toast]);
-
-  useEffect(() => {
-    loadData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Пустой массив - загружаем только при монтировании
+  };
 
   if (loading) {
     return (
@@ -50,6 +56,10 @@ export const UserManagementPage: React.FC = () => {
       <div className={styles.header}>
         <h1>Управление пользователями</h1>
       </div>
+
+      {hasQueryError && (
+        <div className={styles.error}>Ошибка загрузки данных</div>
+      )}
 
       <div className={styles.tabs}>
         <button
@@ -67,17 +77,21 @@ export const UserManagementPage: React.FC = () => {
       </div>
 
       {activeTab === 'pending' && (
-        <PendingUsersTab
-          pendingUsers={pendingUsers}
-          onReload={loadData}
-        />
+        <Suspense fallback={<div className={styles.loading}>Загрузка вкладки...</div>}>
+          <PendingUsersTab
+            pendingUsers={pendingUsers}
+            onReload={reloadUsers}
+          />
+        </Suspense>
       )}
 
       {activeTab === 'all' && (
-        <AllUsersTab
-          allUsers={allUsers}
-          onReload={loadData}
-        />
+        <Suspense fallback={<div className={styles.loading}>Загрузка вкладки...</div>}>
+          <AllUsersTab
+            allUsers={allUsers}
+            onReload={reloadUsers}
+          />
+        </Suspense>
       )}
     </div>
   );

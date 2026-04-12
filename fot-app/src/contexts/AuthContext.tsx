@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { apiClient, ApiError } from '../api/client';
+import { apiClient, ApiError, getSessionToken, setSessionToken, subscribeSessionToken } from '../api/client';
 import type {
   User,
   UserProfile,
@@ -60,6 +60,9 @@ const initialState: AuthState = {
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<AuthState>(initialState);
   const [roles, setRoles] = useState<SystemRole[]>([]);
+  const [token, setToken] = useState<string | null>(getSessionToken());
+
+  useEffect(() => subscribeSessionToken(setToken), []);
 
   const loadRoles = useCallback(async () => {
     try {
@@ -73,13 +76,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Check existing session on mount
   useEffect(() => {
     const checkAuth = async () => {
-      const token = localStorage.getItem('access_token');
-      const twoFactorVerified = localStorage.getItem('2fa_verified') === 'true';
-
-      if (!token) {
-        setState({ ...initialState, loading: false });
-        return;
-      }
+      const twoFactorVerified = sessionStorage.getItem('2fa_verified') === 'true';
 
       try {
         const [response] = await Promise.all([
@@ -88,9 +85,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         ]);
         const { user, profile } = response;
 
-        // Обновляем токен если сервер вернул свежий (при смене org/employee_id без перелогина)
         if (response.access_token) {
-          localStorage.setItem('access_token', response.access_token);
+          setSessionToken(response.access_token);
+          setToken(response.access_token);
         }
 
         setState({
@@ -104,10 +101,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           loading: false,
         });
       } catch {
-        // Token invalid, clear storage
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
-        localStorage.removeItem('2fa_verified');
+        setSessionToken(null);
+        setToken(null);
+        sessionStorage.removeItem('2fa_verified');
         setState({ ...initialState, loading: false });
       }
     };
@@ -118,8 +114,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = useCallback(async (credentials: LoginCredentials): Promise<{ requires2FA: boolean }> => {
     const response = await apiClient.post<AuthResponse>('/auth/login', credentials, { skipAuth: true });
 
-    localStorage.setItem('access_token', response.access_token);
-    localStorage.setItem('refresh_token', response.refresh_token);
+    setSessionToken(response.access_token);
+    setToken(response.access_token);
 
     if (response.requires_2fa) {
       // Partially authenticated, needs 2FA
@@ -138,7 +134,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     // Fully authenticated
-    localStorage.setItem('2fa_verified', 'true');
+    sessionStorage.setItem('2fa_verified', 'true');
     await loadRoles();
     setState({
       user: response.user,
@@ -157,13 +153,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const verify2FA = useCallback(async (code: string): Promise<void> => {
     const response = await apiClient.post<{ token: string; user: User & UserProfile }>('/auth/verify-2fa', { code });
 
-    // Сохраняем новый токен с подтверждённой 2FA
     if (response.token) {
-      localStorage.setItem('access_token', response.token);
-      localStorage.setItem('refresh_token', response.token);
+      setSessionToken(response.token);
+      setToken(response.token);
     }
 
-    localStorage.setItem('2fa_verified', 'true');
+    sessionStorage.setItem('2fa_verified', 'true');
     setState(prev => ({
       ...prev,
       isTwoFactorVerified: true,
@@ -177,9 +172,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    localStorage.removeItem('2fa_verified');
+    void apiClient.post('/auth/logout', undefined, { skipAuth: true }).catch(() => undefined);
+    setSessionToken(null);
+    setToken(null);
+    sessionStorage.removeItem('2fa_verified');
     setRoles([]);
     setState({ ...initialState, loading: false });
   }, []);
@@ -189,7 +185,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const response = await apiClient.get<{ user: User; profile: UserProfile; access_token?: string }>('/auth/me');
       const { user, profile } = response;
       if (response.access_token) {
-        localStorage.setItem('access_token', response.access_token);
+        setSessionToken(response.access_token);
+        setToken(response.access_token);
       }
       setState(prev => ({
         ...prev,
@@ -256,7 +253,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const value: AuthContextType = {
     ...state,
     positionType: effectivePositionType,
-    token: localStorage.getItem('access_token'),
+    token,
     roles,
     login,
     verify2FA,

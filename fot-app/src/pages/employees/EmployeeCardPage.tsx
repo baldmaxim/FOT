@@ -1,37 +1,41 @@
-import { useState, useEffect, useCallback, useMemo, type FC } from 'react';
+import { Suspense, lazy, useState, useEffect, useCallback, useMemo, type FC } from 'react';
 import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Edit3, Archive, RotateCcw, Trash2,
   Briefcase, FolderOpen, CalendarDays, CheckCircle,
-  Clock, DollarSign, BarChart3, LogIn, LogOut,
-  ChevronLeft, ChevronRight,
+  Clock, DollarSign, BarChart3,
 } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
 import { skudService } from '../../services/skudService';
-import { structureApi } from '../../api/structure';
 import { useAuth } from '../../contexts/AuthContext';
-import { EmployeeInfoSection } from '../../components/employees/EmployeeInfoSection';
-import { EmployeeHistorySection } from '../../components/employees/EmployeeHistorySection';
-import { EmployeeSkudSection } from '../../components/employees/EmployeeSkudSection';
-import { AttendanceCalendar } from '../../components/employees/AttendanceCalendar';
-import { EmployeeCardSidebar } from '../../components/employees/EmployeeCardSidebar';
-import { DateInput } from '../../components/ui/DateInput';
+import { useStructureTree } from '../../hooks/useStructure';
+import { useEmployeeTimesheetMonth } from '../../hooks/useEmployeeTimesheet';
 import {
-  calculateAttendance, isEmployeeOnSite, computePeriodData,
+  calculateAttendance, calculateAttendanceFromTimesheet, isEmployeeOnSite, computePeriodData,
 } from '../../utils/attendanceCalc';
 import type { EmployeeInput, SkudEvent } from '../../types';
 import '../../styles/EmployeeCardPage.css';
 import '../../styles/EmployeeCardV2.css';
 
+const EmployeeAttendanceSection = lazy(() => import('../../components/employees/EmployeeAttendanceSection').then(module => ({
+  default: module.EmployeeAttendanceSection,
+})));
+const EmployeeInfoSection = lazy(() => import('../../components/employees/EmployeeInfoSection').then(module => ({
+  default: module.EmployeeInfoSection,
+})));
+const EmployeeHistorySection = lazy(() => import('../../components/employees/EmployeeHistorySection').then(module => ({
+  default: module.EmployeeHistorySection,
+})));
+const EmployeeSkudControls = lazy(() => import('../../components/employees/EmployeeSkudControls').then(module => ({
+  default: module.EmployeeSkudControls,
+})));
+const EmployeeSkudSection = lazy(() => import('../../components/employees/EmployeeSkudSection').then(module => ({
+  default: module.EmployeeSkudSection,
+})));
+
 type Tab = 'attendance' | 'info' | 'history' | 'skud';
-type ViewPeriod = 'today' | 'week' | 'month' | 'range';
-const PERIOD_LABELS: Record<ViewPeriod, string> = {
-  today: 'Сегодня',
-  week: 'Неделя',
-  month: 'Месяц',
-  range: 'Период',
-};
+type SkudViewMode = 'day' | 'week' | 'month' | 'range';
 const TABS: { key: Tab; label: string }[] = [
   { key: 'attendance', label: 'Посещаемость' },
   { key: 'info', label: 'Информация' },
@@ -61,6 +65,23 @@ const MONTH_NAMES_NOM = [
   'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
 ];
 
+const EMPTY_ATTENDANCE_STATS = {
+  attendancePercent: 0,
+  lateCount: 0,
+  hoursWorked: 0,
+  hoursPlanned: 0,
+  avgArrivalTime: null,
+  avgArrivalDiffMinutes: 0,
+};
+
+const EMPTY_WEEKLY_PATTERN = [
+  { day: 'Пн', avgTime: null, heightPercent: 0 },
+  { day: 'Вт', avgTime: null, heightPercent: 0 },
+  { day: 'Ср', avgTime: null, heightPercent: 0 },
+  { day: 'Чт', avgTime: null, heightPercent: 0 },
+  { day: 'Пт', avgTime: null, heightPercent: 0 },
+];
+
 const toLocalISO = (d: Date) => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -73,17 +94,17 @@ const parseISO = (s: string) => {
   return new Date(y, m - 1, d);
 };
 
-const navigateViewDate = (period: ViewPeriod, dateStr: string, dir: number): string => {
+const navigateViewDate = (period: SkudViewMode, dateStr: string, dir: number): string => {
   const d = parseISO(dateStr);
-  if (period === 'today') d.setDate(d.getDate() + dir);
+  if (period === 'day') d.setDate(d.getDate() + dir);
   else if (period === 'week') d.setDate(d.getDate() + dir * 7);
   else d.setMonth(d.getMonth() + dir);
   return toLocalISO(d);
 };
 
-const getViewLabel = (period: ViewPeriod, dateStr: string): string => {
+const getViewLabel = (period: SkudViewMode, dateStr: string): string => {
   const d = parseISO(dateStr);
-  if (period === 'today') {
+  if (period === 'day') {
     return d.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' });
   }
   if (period === 'week') {
@@ -119,7 +140,7 @@ export const EmployeeCardPage: FC = () => {
     navigate(-1);
   };
   const { canEditPage } = useAuth();
-  const canEdit = canEditPage('/tender') || canEditPage('/staff-control');
+  const canEdit = canEditPage('/employees') || canEditPage('/staff-control');
 
   // Deep-link: ?tab=skud&date=2026-03-18
   const urlTab = searchParams.get('tab') as Tab | null;
@@ -131,12 +152,12 @@ export const EmployeeCardPage: FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>(urlTab && ['attendance', 'info', 'history', 'skud'].includes(urlTab) ? urlTab : 'attendance');
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<Partial<EmployeeInput>>({});
-  const [viewPeriod, setViewPeriod] = useState<ViewPeriod>('month');
-  const [rangeStart, setRangeStart] = useState(() => new Date().toISOString().slice(0, 10));
-  const [rangeEnd, setRangeEnd] = useState(() => new Date().toISOString().slice(0, 10));
-  const [skudViewDate, setSkudViewDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [skudFocusDate, setSkudFocusDate] = useState<string | null>(urlDate || null);
-  const [skudFocusKey] = useState(urlDate ? 1 : 0);
+  const [skudViewMode, setSkudViewMode] = useState<SkudViewMode>(urlDate ? 'day' : 'month');
+  const [skudRangeStart, setSkudRangeStart] = useState(() => new Date().toISOString().slice(0, 10));
+  const [skudRangeEnd, setSkudRangeEnd] = useState(() => new Date().toISOString().slice(0, 10));
+  const [skudViewDate, setSkudViewDate] = useState(() => urlDate || new Date().toISOString().slice(0, 10));
+  const skudFocusDate = urlDate || null;
+  const skudFocusKey = urlDate ? 1 : 0;
 
   // Calendar month — если есть urlDate, начинаем с его месяца
   const now = new Date();
@@ -168,17 +189,13 @@ export const EmployeeCardPage: FC = () => {
   const historyQuery = useQuery({
     queryKey: ['employee-history', empIdNum],
     queryFn: () => employeeService.getHistory(empIdNum).catch(() => []),
-    enabled: !!empIdNum && !Number.isNaN(empIdNum),
+    enabled: !!empIdNum && !Number.isNaN(empIdNum) && activeTab === 'history',
     staleTime: 60_000,
   });
   const history = historyQuery.data ?? [];
 
-  // Структура (для редактирования отделов) — грузится 1 раз, кэш 5 мин
-  useQuery({
-    queryKey: ['structure-tree'],
-    queryFn: () => structureApi.getTree().catch(() => null),
-    staleTime: 5 * 60_000,
-  });
+  // Структура (для редактирования отделов) — общий query key, но ленивый запуск только при редактировании
+  useStructureTree(isEditing);
 
   // Настройки точек доступа (меняются редко, но нужны для расчёта внутренних проходов)
   const accessPointsQuery = useQuery({
@@ -197,53 +214,107 @@ export const EmployeeCardPage: FC = () => {
     const endDate = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(new Date(calYear, calMonth + 1, 0).getDate()).padStart(2, '0')}`;
     return { startDate, endDate };
   }, [calMonth, calYear]);
+  const monthKey = useMemo(
+    () => `${calYear}-${String(calMonth + 1).padStart(2, '0')}`,
+    [calMonth, calYear],
+  );
+
+  const canonicalTimesheetQuery = useEmployeeTimesheetMonth(
+    !Number.isNaN(empIdNum) ? empIdNum : null,
+    monthKey,
+    !!empIdNum && !Number.isNaN(empIdNum),
+  );
+  const shouldLoadMonthlySkudFallback = canonicalTimesheetQuery.isError;
 
   const skudEventsQuery = useQuery({
     queryKey: ['skud-employee-events', empIdNum, monthRange.startDate, monthRange.endDate],
     queryFn: () => skudService.getEmployeeEvents(empIdNum, monthRange.startDate, monthRange.endDate).catch(() => [] as SkudEvent[]),
-    enabled: !!empIdNum && !Number.isNaN(empIdNum),
+    enabled: !!empIdNum && !Number.isNaN(empIdNum) && shouldLoadMonthlySkudFallback,
     staleTime: 30_000,
   });
   const skudEvents = useMemo<SkudEvent[]>(() => skudEventsQuery.data ?? [], [skudEventsQuery.data]);
 
   // События сегодняшнего дня для статуса on-site.
-  // Если выбранный месяц совпадает с текущим — берём из месячного массива, избегая лишнего запроса.
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const isCurrentMonth = now.getFullYear() === calYear && now.getMonth() === calMonth;
 
   const todayEventsQuery = useQuery({
     queryKey: ['skud-employee-events-today', empIdNum, todayStr],
     queryFn: () => skudService.getEmployeeEvents(empIdNum, todayStr, todayStr).catch(() => [] as SkudEvent[]),
-    enabled: !!empIdNum && !Number.isNaN(empIdNum) && !isCurrentMonth,
+    enabled: !!empIdNum && !Number.isNaN(empIdNum),
     staleTime: 30_000,
   });
+  const todayEventsFromMonth = useMemo(
+    () => skudEvents.filter(e => e.event_date === todayStr),
+    [skudEvents, todayStr],
+  );
   const todayEvents = useMemo<SkudEvent[]>(() => {
-    if (isCurrentMonth) {
-      return skudEvents.filter(e => e.event_date === todayStr);
+    if (todayEventsQuery.data) {
+      return [...todayEventsQuery.data].sort((a, b) => a.event_time.localeCompare(b.event_time));
     }
-    return todayEventsQuery.data ?? [];
-  }, [isCurrentMonth, skudEvents, todayEventsQuery.data, todayStr]);
+    return [...todayEventsFromMonth].sort((a, b) => a.event_time.localeCompare(b.event_time));
+  }, [todayEventsQuery.data, todayEventsFromMonth]);
 
   const reloadSkudEvents = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['skud-employee-events', empIdNum] });
     queryClient.invalidateQueries({ queryKey: ['skud-employee-events-today', empIdNum] });
+    queryClient.invalidateQueries({ queryKey: ['skud-employee-events-day', empIdNum] });
   }, [queryClient, empIdNum]);
 
   const reloadEmployee = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['employee', empIdNum] });
     queryClient.invalidateQueries({ queryKey: ['employee-history', empIdNum] });
+    queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', empIdNum] });
   }, [queryClient, empIdNum]);
 
   // Calculated attendance data
-  const attendance = useMemo(
-    () => calculateAttendance(skudEvents, internalPoints, calYear, calMonth),
-    [skudEvents, internalPoints, calYear, calMonth],
-  );
+  const attendance = useMemo(() => {
+    if (canonicalTimesheetQuery.isLoading && !canonicalTimesheetQuery.data) {
+      return null;
+    }
+
+    const timesheetData = canonicalTimesheetQuery.data;
+    if (timesheetData) {
+      return calculateAttendanceFromTimesheet({
+        employeeId: empIdNum,
+        entries: timesheetData.entries,
+        year: calYear,
+        month: calMonth,
+        schedules: timesheetData.schedules,
+        dailySchedules: timesheetData.daily_schedules,
+        calendar: timesheetData.calendar || null,
+      });
+    }
+
+    if (canonicalTimesheetQuery.isError) {
+      if (skudEventsQuery.isLoading && !skudEventsQuery.data) {
+        return null;
+      }
+      return calculateAttendance(skudEvents, internalPoints, calYear, calMonth);
+    }
+
+    return calculateAttendance(skudEvents, internalPoints, calYear, calMonth);
+  }, [
+    canonicalTimesheetQuery.isLoading,
+    canonicalTimesheetQuery.data,
+    canonicalTimesheetQuery.isError,
+    skudEventsQuery.isLoading,
+    skudEventsQuery.data,
+    empIdNum,
+    calYear,
+    calMonth,
+    skudEvents,
+    internalPoints,
+  ]);
+  const attendanceLoading = attendance === null;
   const onSite = useMemo(() => isEmployeeOnSite(todayEvents, internalPoints), [todayEvents, internalPoints]);
 
   // Period-filtered stats + weekly pattern
-  const statsPeriod = viewPeriod === 'range' ? 'month' : viewPeriod;
+  const statsPeriod = 'month';
   const periodData = useMemo(() => {
+    if (!attendance) {
+      return { stats: EMPTY_ATTENDANCE_STATS, weeklyPattern: EMPTY_WEEKLY_PATTERN };
+    }
+
     const { stats: mStats, weeklyPattern: mPattern } = attendance;
     if (statsPeriod === 'month') return { stats: mStats, weeklyPattern: mPattern };
     const n = new Date();
@@ -256,8 +327,20 @@ export const EmployeeCardPage: FC = () => {
     return computePeriodData(filteredDays, calYear, calMonth);
   }, [statsPeriod, attendance, calYear, calMonth]);
 
-  // Calendar day click → SKUD tab
-  const [selectedCalDay, setSelectedCalDay] = useState<string | null>(null);
+  // Calendar day click → attendance detail pane
+  const [selectedCalDayState, setSelectedCalDay] = useState<string | null>(null);
+  const selectedCalDay = useMemo(() => {
+    if (!selectedCalDayState) return null;
+    const [selectedYear, selectedMonth] = selectedCalDayState.split('-').map(Number);
+    if (selectedYear !== calYear || selectedMonth !== calMonth + 1) return null;
+    return selectedCalDayState;
+  }, [selectedCalDayState, calYear, calMonth]);
+  const selectedCalDayNumber = useMemo(() => {
+    if (!selectedCalDay) return null;
+    const [selectedYear, selectedMonth, selectedDay] = selectedCalDay.split('-').map(Number);
+    if (selectedYear !== calYear || selectedMonth !== calMonth + 1) return null;
+    return selectedDay;
+  }, [selectedCalDay, calYear, calMonth]);
 
   const handleDayClick = useCallback((day: number) => {
     const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -270,6 +353,37 @@ export const EmployeeCardPage: FC = () => {
       .filter(e => e.event_date === selectedCalDay)
       .sort((a, b) => a.event_time.localeCompare(b.event_time));
   }, [skudEvents, selectedCalDay]);
+  const getDayEventsStaleTime = useCallback((dateStr: string) => (
+    dateStr === todayStr ? 15_000 : 5 * 60_000
+  ), [todayStr]);
+  const fetchDayEvents = useCallback((dateStr: string) => (
+    skudService.getEmployeeEvents(empIdNum, dateStr, dateStr).catch(() => [] as SkudEvent[])
+  ), [empIdNum]);
+  const selectedDayEventsQuery = useQuery({
+    queryKey: ['skud-employee-events-day', empIdNum, selectedCalDay],
+    queryFn: () => fetchDayEvents(selectedCalDay!),
+    enabled: !!empIdNum && !Number.isNaN(empIdNum) && !!selectedCalDay && activeTab === 'attendance',
+    staleTime: selectedCalDay ? getDayEventsStaleTime(selectedCalDay) : 30_000,
+  });
+  const prefetchDayEvents = useCallback((day: number) => {
+    if (!empIdNum || Number.isNaN(empIdNum)) return;
+    const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    void queryClient.prefetchQuery({
+      queryKey: ['skud-employee-events-day', empIdNum, dateStr],
+      queryFn: () => fetchDayEvents(dateStr),
+      staleTime: getDayEventsStaleTime(dateStr),
+    });
+  }, [empIdNum, calYear, calMonth, queryClient, fetchDayEvents, getDayEventsStaleTime]);
+  const selectedDayEventsFast = useMemo(() => {
+    if (!selectedCalDay) return [];
+    if (selectedDayEventsQuery.data) {
+      return [...selectedDayEventsQuery.data].sort((a, b) => a.event_time.localeCompare(b.event_time));
+    }
+    if (selectedCalDay === todayStr && todayEvents.length > 0) {
+      return [...todayEvents].sort((a, b) => a.event_time.localeCompare(b.event_time));
+    }
+    return selectedDayEvents;
+  }, [selectedCalDay, selectedDayEventsQuery.data, selectedDayEvents, todayStr, todayEvents]);
 
   // Actions
   const startEditing = () => {
@@ -327,7 +441,29 @@ export const EmployeeCardPage: FC = () => {
   if (!employee) return null;
 
   const { stats: pStats } = periodData;
-  const todayLabel = `${now.getDate()} ${MONTH_LABELS_GEN[now.getMonth()]}`;
+  const attendanceViewModel = activeTab === 'attendance' ? (() => {
+    const currentDate = new Date();
+    const todayLocalStr = currentDate.toISOString().slice(0, 10);
+    const showDate = selectedCalDay || todayLocalStr;
+    const showEvents = selectedCalDay
+      ? selectedDayEventsFast
+      : todayEvents
+        .filter(e => !e.access_point || !internalPoints.has(e.access_point))
+        .sort((a, b) => a.event_time.localeCompare(b.event_time));
+    const showEventsLoading = selectedCalDay
+      ? selectedDayEventsQuery.isLoading && selectedDayEventsFast.length === 0
+      : todayEventsQuery.isLoading && todayEvents.length === 0;
+    const dayLabel = selectedCalDay
+      ? new Date(`${selectedCalDay}T00:00:00`).toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' })
+      : `Сегодня, ${currentDate.getDate()} ${MONTH_LABELS_GEN[currentDate.getMonth()]}`;
+
+    return {
+      showDate,
+      showEvents,
+      showEventsLoading,
+      dayLabel,
+    };
+  })() : null;
 
   return (
     <div className="ec-content">
@@ -405,22 +541,22 @@ export const EmployeeCardPage: FC = () => {
           <div className="ec-stat-card">
             <div className="ec-stat-icon green"><CheckCircle size={12} /></div>
             <span className="ec-stat-label-inline">Посещаемость</span>
-            <div className="ec-stat-value">{pStats.attendancePercent}%</div>
+            <div className="ec-stat-value">{attendanceLoading ? '—' : `${pStats.attendancePercent}%`}</div>
           </div>
           <div className="ec-stat-card">
             <div className="ec-stat-icon orange"><Clock size={12} /></div>
             <span className="ec-stat-label-inline">Опозданий</span>
-            <div className="ec-stat-value">{pStats.lateCount}</div>
+            <div className="ec-stat-value">{attendanceLoading ? '—' : pStats.lateCount}</div>
           </div>
           <div className="ec-stat-card">
             <div className="ec-stat-icon blue"><DollarSign size={12} /></div>
             <span className="ec-stat-label-inline">Часов</span>
-            <div className="ec-stat-value">{pStats.hoursWorked}/{pStats.hoursPlanned}</div>
+            <div className="ec-stat-value">{attendanceLoading ? '—' : `${pStats.hoursWorked}/${pStats.hoursPlanned}`}</div>
           </div>
           <div className="ec-stat-card">
             <div className="ec-stat-icon purple"><BarChart3 size={12} /></div>
             <span className="ec-stat-label-inline">Приход</span>
-            <div className="ec-stat-value">{pStats.avgArrivalTime || '—'}</div>
+            <div className="ec-stat-value">{attendanceLoading ? '—' : (pStats.avgArrivalTime || '—')}</div>
           </div>
         </div>
       </div>
@@ -432,228 +568,97 @@ export const EmployeeCardPage: FC = () => {
             <button
               key={t.key}
               className={`ec-tab ${activeTab === t.key ? 'active' : ''}`}
-              onClick={() => { setActiveTab(t.key); setSkudFocusDate(null); }}
+              onClick={() => setActiveTab(t.key)}
             >
               {t.label}
             </button>
           ))}
         </div>
         {activeTab === 'skud' && (
-          <div className="ec-stats-period-row">
-            <div className="ec-stats-period-selector">
-              {(['today', 'week', 'month', 'range'] as ViewPeriod[]).map(p => (
-                <button
-                  key={p}
-                  className={`ec-stats-period-btn ${viewPeriod === p ? 'active' : ''}`}
-                  onClick={() => { setViewPeriod(p); if (p !== 'range') setSkudViewDate(new Date().toISOString().slice(0, 10)); }}
-                >
-                  {PERIOD_LABELS[p]}
-                </button>
-              ))}
-            </div>
-            <div className="ec-period-divider" />
-            {viewPeriod === 'range' ? (
-              <div className="ec-range-inputs">
-                <DateInput value={rangeStart} onChange={setRangeStart} />
-                <span className="ec-range-sep">—</span>
-                <DateInput value={rangeEnd} onChange={setRangeEnd} />
-              </div>
-            ) : (
-              <div className="ec-date-nav">
-                <button className="ec-date-nav-btn" onClick={() => setSkudViewDate(s => navigateViewDate(viewPeriod, s, -1))}>
-                  <ChevronLeft size={16} />
-                </button>
-                <span className="ec-date-nav-label">{getViewLabel(viewPeriod, skudViewDate)}</span>
-                <button className="ec-date-nav-btn" onClick={() => setSkudViewDate(s => navigateViewDate(viewPeriod, s, 1))}>
-                  <ChevronRight size={16} />
-                </button>
-              </div>
-            )}
-          </div>
+          <Suspense fallback={<div className="ec-loading">Загрузка фильтров...</div>}>
+            <EmployeeSkudControls
+              viewMode={skudViewMode}
+              onViewModeChange={(mode) => {
+                setSkudViewMode(mode);
+                if (mode !== 'range') {
+                  setSkudViewDate(skudFocusDate || `${calYear}-${String(calMonth + 1).padStart(2, '0')}-01`);
+                }
+              }}
+              rangeStart={skudRangeStart}
+              rangeEnd={skudRangeEnd}
+              onRangeStartChange={setSkudRangeStart}
+              onRangeEndChange={setSkudRangeEnd}
+              viewLabel={getViewLabel(skudViewMode, skudViewDate)}
+              onPrev={() => setSkudViewDate(s => navigateViewDate(skudViewMode, s, -1))}
+              onNext={() => setSkudViewDate(s => navigateViewDate(skudViewMode, s, 1))}
+            />
+          </Suspense>
         )}
       </div>
 
 
       {/* ===== Tab Content ===== */}
-      {activeTab === 'attendance' && (() => {
-        // Показываемые события: выбранный день или сегодня
-        const showDate = selectedCalDay || new Date().toISOString().slice(0, 10);
-        const showEvents = selectedCalDay ? selectedDayEvents : todayEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point)).sort((a, b) => a.event_time.localeCompare(b.event_time));
-        const dayLabel = selectedCalDay
-          ? new Date(selectedCalDay + 'T00:00:00').toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' })
-          : `Сегодня, ${todayLabel}`;
-
-        const timeToSec = (t: string) => { const [h, m, s = 0] = t.split(':').map(Number); return h * 3600 + m * 60 + s; };
-        const fmtHM = (mins: number) => { const h = Math.floor(mins / 60); const m = mins % 60; return h === 0 ? `${m} мин` : m === 0 ? `${h} ч` : `${h} ч ${m} мин`; };
-        const todayStr = new Date().toISOString().slice(0, 10);
-        const isToday = showDate === todayStr;
-
-        // Построение пар вход/выход
-        const pairs: { entry: SkudEvent; exit: SkudEvent | null; durationMinutes: number }[] = [];
-        let currentEntry: SkudEvent | null = null;
-        let totalSec = 0;
-        for (const ev of showEvents) {
-          if (ev.direction === 'entry') {
-            if (!currentEntry) currentEntry = ev;
-          } else if (ev.direction === 'exit' && currentEntry) {
-            const dur = timeToSec(ev.event_time) - timeToSec(currentEntry.event_time);
-            totalSec += dur;
-            pairs.push({ entry: currentEntry, exit: ev, durationMinutes: Math.round(dur / 60) });
-            currentEntry = null;
-          }
-        }
-        if (currentEntry && isToday) {
-          const now = new Date();
-          const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-          const dur = nowSec - timeToSec(currentEntry.event_time);
-          if (dur > 0) { totalSec += dur; pairs.push({ entry: currentEntry, exit: null, durationMinutes: Math.round(dur / 60) }); }
-        }
-
-        const workCalc = totalSec > 0 ? `${Math.floor(totalSec / 3600)}ч ${Math.floor((totalSec % 3600) / 60)}м` : null;
-        const firstEntry = showEvents.find(e => e.direction === 'entry')?.event_time?.slice(0, 5) || null;
-        const lastExit = [...showEvents].reverse().find(e => e.direction === 'exit')?.event_time?.slice(0, 5) || null;
-
-        // Время «не на работе» — разрывы между выходом и следующим входом
-        let absentSec = 0;
-        for (let i = 0; i < pairs.length - 1; i++) {
-          const exitTime = pairs[i].exit?.event_time;
-          const nextEntry = pairs[i + 1].entry.event_time;
-          if (exitTime) absentSec += timeToSec(nextEntry) - timeToSec(exitTime);
-        }
-        const absentCalc = absentSec > 0 ? `${Math.floor(absentSec / 3600)}ч ${Math.floor((absentSec % 3600) / 60)}м` : null;
-
-        return (
-          <div className="ec-attendance-3col">
-            {/* Блок «Сегодня» */}
-            <div className="ec-card ec-today-card">
-              <div className="ec-card-header">
-                <div className="ec-card-title">
-                  <Clock size={16} />
-                  {dayLabel}
-                </div>
-              </div>
-              {showEvents.length > 0 ? (
-                <div className="ec-today-events">
-                  {pairs.length > 0 ? pairs.map((pair, i) => (
-                    <div key={i} className="ec-pair-block">
-                      <div className="ec-event-row">
-                        <span className="ec-event-icon ec-event-entry">→</span>
-                        <span className="ec-event-time">{pair.entry.event_time.slice(0, 5)}</span>
-                        <span className="ec-event-dir">Вход</span>
-                        {pair.entry.access_point && <span className="ec-event-point">{pair.entry.access_point}</span>}
-                      </div>
-                      {pair.exit ? (
-                        <div className="ec-event-row">
-                          <span className="ec-event-icon ec-event-exit">←</span>
-                          <span className="ec-event-time">{pair.exit.event_time.slice(0, 5)}</span>
-                          <span className="ec-event-dir">Выход</span>
-                          {pair.exit.access_point && <span className="ec-event-point">{pair.exit.access_point}</span>}
-                        </div>
-                      ) : (
-                        <div className="ec-event-row">
-                          <span className="ec-event-icon ec-event-entry">→</span>
-                          <span className="ec-event-time">—</span>
-                          <span className="ec-event-dir ec-on-site">на месте</span>
-                        </div>
-                      )}
-                      {pair.durationMinutes > 0 && (
-                        <div className="ec-pair-duration">{fmtHM(pair.durationMinutes)}</div>
-                      )}
-                    </div>
-                  )) : showEvents.map((ev, i) => (
-                    <div key={i} className="ec-event-row">
-                      <span className={`ec-event-icon ${ev.direction === 'entry' ? 'ec-event-entry' : 'ec-event-exit'}`}>
-                        {ev.direction === 'entry' ? '→' : '←'}
-                      </span>
-                      <span className="ec-event-time">{ev.event_time.slice(0, 5)}</span>
-                      <span className="ec-event-dir">{ev.direction === 'entry' ? 'Вход' : 'Выход'}</span>
-                      {ev.access_point && <span className="ec-event-point">{ev.access_point}</span>}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="ec-tl-empty">Нет событий</div>
-              )}
-              {workCalc && (
-                <div className="ec-today-footer">
-                  {firstEntry && (
-                    <div className="ec-today-badge ec-today-badge-entry">
-                      <LogIn size={14} />
-                      <span>{firstEntry}</span>
-                    </div>
-                  )}
-                  {lastExit && (
-                    <div className="ec-today-badge ec-today-badge-exit">
-                      <LogOut size={14} />
-                      <span>{lastExit}</span>
-                    </div>
-                  )}
-                  {absentCalc && (
-                    <div className="ec-today-badge ec-today-badge-absent">
-                      <span>Перерыв: {absentCalc}</span>
-                    </div>
-                  )}
-                  <div className="ec-today-total">
-                    {workCalc}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Календарь — компактный */}
-            <div className="ec-calendar-col">
-              <AttendanceCalendar
-                days={attendance.days}
-                month={calMonth}
-                year={calYear}
-                onPrevMonth={prevMonth}
-                onNextMonth={nextMonth}
-                onDayClick={handleDayClick}
-              />
-            </div>
-
-            {/* Сайдбар — паттерн + алерты + инфо */}
-            <EmployeeCardSidebar
-              weeklyPattern={periodData.weeklyPattern}
-              alerts={attendance.alerts}
-              employee={employee}
-            />
-          </div>
-        );
-      })()}
+      {activeTab === 'attendance' && attendanceViewModel && (
+        <Suspense fallback={<div className="ec-loading">Загрузка посещаемости...</div>}>
+          <EmployeeAttendanceSection
+            employee={employee}
+            attendanceDays={attendance?.days ?? []}
+            attendanceLoading={attendanceLoading}
+            year={calYear}
+            month={calMonth}
+            onPrevMonth={prevMonth}
+            onNextMonth={nextMonth}
+            onDayClick={handleDayClick}
+            onDayPrefetch={prefetchDayEvents}
+            selectedDay={selectedCalDayNumber}
+            dayLabel={attendanceViewModel.dayLabel}
+            showDate={attendanceViewModel.showDate}
+            showEvents={attendanceViewModel.showEvents}
+            showEventsLoading={attendanceViewModel.showEventsLoading}
+            weeklyPattern={periodData.weeklyPattern}
+            alerts={attendance?.alerts ?? []}
+          />
+        </Suspense>
+      )}
 
       {activeTab === 'info' && (
         <div className="ec-tab-content-full">
-          <EmployeeInfoSection
-            employee={employee}
-            isEditing={isEditing}
-            editData={editData}
-            onEditDataChange={setEditData}
-            onSave={saveEditing}
-            onCancel={() => { setIsEditing(false); setEditData({}); }}
-          />
+          <Suspense fallback={<div className="ec-loading">Загрузка раздела...</div>}>
+            <EmployeeInfoSection
+              employee={employee}
+              isEditing={isEditing}
+              editData={editData}
+              onEditDataChange={setEditData}
+              onSave={saveEditing}
+              onCancel={() => { setIsEditing(false); setEditData({}); }}
+            />
+          </Suspense>
         </div>
       )}
 
       {activeTab === 'history' && (
         <div className="ec-tab-content-full">
-          <EmployeeHistorySection history={history} />
+          <Suspense fallback={<div className="ec-loading">Загрузка истории...</div>}>
+            <EmployeeHistorySection history={history} />
+          </Suspense>
         </div>
       )}
 
       {activeTab === 'skud' && (
-        <EmployeeSkudSection
-          employeeId={employee.id}
-          employeeName={employee.full_name}
-          departmentId={employee.org_department_id || undefined}
-          onSync={reloadSkudEvents}
-          focusDate={skudFocusDate}
-          focusKey={skudFocusKey}
-          externalViewMode={viewPeriod === 'today' ? 'day' : viewPeriod}
-          externalRangeStart={rangeStart}
-          externalRangeEnd={rangeEnd}
-          externalViewDate={skudViewDate}
-        />
+        <Suspense fallback={<div className="ec-loading">Загрузка СКУД...</div>}>
+          <EmployeeSkudSection
+            employeeId={employee.id}
+            employeeName={employee.full_name}
+            departmentId={employee.org_department_id || undefined}
+            onSync={reloadSkudEvents}
+            focusDate={skudFocusDate}
+            focusKey={skudFocusKey}
+            externalViewMode={skudViewMode}
+            externalRangeStart={skudRangeStart}
+            externalRangeEnd={skudRangeEnd}
+            externalViewDate={skudViewDate}
+          />
+        </Suspense>
       )}
 
     </div>

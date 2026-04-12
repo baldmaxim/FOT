@@ -81,6 +81,11 @@ const decryptOrPassthrough = (content: string): string => {
   return content;
 };
 
+const wasReadByTimestamp = (readAt: string | null | undefined, createdAt: string): boolean => {
+  if (!readAt) return false;
+  return new Date(readAt).getTime() >= new Date(createdAt).getTime();
+};
+
 const toWriteState = (
   participantIds: string[],
   currentUserId: string,
@@ -251,7 +256,7 @@ export const chatService = {
         sender_id: senderId,
         content: encryptedContent,
       })
-      .select('id, conversation_id, sender_id, content, is_read, created_at')
+      .select('id, conversation_id, sender_id, content, created_at')
       .single();
 
     if (error || !message) {
@@ -263,7 +268,13 @@ export const chatService = {
       .update({ updated_at: new Date().toISOString() })
       .eq('id', conversationId);
 
-    return { ...message, content: plainContent } as IChatMessage;
+    await supabase
+      .from('chat_participants')
+      .update({ last_read_at: new Date().toISOString() })
+      .eq('conversation_id', conversationId)
+      .eq('user_id', senderId);
+
+    return { ...message, content: plainContent, is_read: false } as IChatMessage;
   },
 
   async getMessages(conversationId: string, userId: string, limit = 50, offset = 0): Promise<IChatMessage[]> {
@@ -271,23 +282,40 @@ export const chatService = {
 
     const { data, error } = await supabase
       .from('chat_messages')
-      .select('id, conversation_id, sender_id, content, is_read, created_at')
+      .select('id, conversation_id, sender_id, content, created_at')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
     if (error) throw new Error('Failed to fetch messages');
 
+    const { data: participants, error: participantsError } = await supabase
+      .from('chat_participants')
+      .select('conversation_id, user_id, last_read_at')
+      .eq('conversation_id', conversationId);
+
+    if (participantsError) {
+      throw new Error('Failed to fetch conversation read state');
+    }
+
+    const otherParticipant = (participants || []).find(participant => participant.user_id !== userId);
+    const currentParticipant = (participants || []).find(participant => participant.user_id === userId);
+    const otherLastReadAt = otherParticipant?.last_read_at ?? null;
+    const currentLastReadAt = currentParticipant?.last_read_at ?? null;
+
     return (data || []).map(message => ({
       ...message,
       content: decryptOrPassthrough(message.content),
+      is_read: message.sender_id === userId
+        ? wasReadByTimestamp(otherLastReadAt, message.created_at)
+        : wasReadByTimestamp(currentLastReadAt, message.created_at),
     })) as IChatMessage[];
   },
 
   async getConversations(userId: string): Promise<IChatConversation[]> {
     const { data: participations, error: participationsError } = await supabase
       .from('chat_participants')
-      .select('conversation_id')
+      .select('conversation_id, last_read_at')
       .eq('user_id', userId);
 
     if (participationsError) {
@@ -312,7 +340,7 @@ export const chatService = {
 
     const { data: allParticipants, error: allParticipantsError } = await supabase
       .from('chat_participants')
-      .select('conversation_id, user_id')
+      .select('conversation_id, user_id, last_read_at')
       .in('conversation_id', conversationIds);
 
     if (allParticipantsError) {
@@ -320,10 +348,15 @@ export const chatService = {
     }
 
     const participantsByConversation = new Map<string, string[]>();
+    const readAtByConversationUser = new Map<string, Map<string, string | null>>();
     (allParticipants || []).forEach(participant => {
       const existing = participantsByConversation.get(participant.conversation_id) || [];
       existing.push(participant.user_id);
       participantsByConversation.set(participant.conversation_id, existing);
+
+      const readMap = readAtByConversationUser.get(participant.conversation_id) || new Map<string, string | null>();
+      readMap.set(participant.user_id, participant.last_read_at ?? null);
+      readAtByConversationUser.set(participant.conversation_id, readMap);
     });
 
     const allUserIds = [...new Set((allParticipants || []).map(participant => participant.user_id))];
@@ -341,7 +374,7 @@ export const chatService = {
 
     const { data: allMessages, error: allMessagesError } = await supabase
       .from('chat_messages')
-      .select('conversation_id, content, sender_id, created_at, is_read')
+      .select('conversation_id, content, sender_id, created_at')
       .in('conversation_id', conversationIds)
       .order('created_at', { ascending: false })
       .limit(conversationIds.length * 50);
@@ -362,7 +395,8 @@ export const chatService = {
         });
       }
 
-      if (!message.is_read && message.sender_id !== userId) {
+      const currentUserReadAt = readAtByConversationUser.get(message.conversation_id)?.get(userId) ?? null;
+      if (message.sender_id !== userId && !wasReadByTimestamp(currentUserReadAt, message.created_at)) {
         unreadByConversation.set(
           message.conversation_id,
           (unreadByConversation.get(message.conversation_id) || 0) + 1,
@@ -409,17 +443,16 @@ export const chatService = {
     await this.getConversationAccess(conversationId, userId);
 
     await supabase
-      .from('chat_messages')
-      .update({ is_read: true })
+      .from('chat_participants')
+      .update({ last_read_at: new Date().toISOString() })
       .eq('conversation_id', conversationId)
-      .eq('is_read', false)
-      .neq('sender_id', userId);
+      .eq('user_id', userId);
   },
 
   async getUnreadCount(userId: string): Promise<number> {
     const { data: participations, error: participationsError } = await supabase
       .from('chat_participants')
-      .select('conversation_id')
+      .select('conversation_id, last_read_at')
       .eq('user_id', userId);
 
     if (participationsError) {
@@ -429,19 +462,25 @@ export const chatService = {
     if (!participations || participations.length === 0) return 0;
 
     const conversationIds = participations.map(participation => participation.conversation_id);
+    const lastReadByConversation = new Map(
+      participations.map(participation => [participation.conversation_id, participation.last_read_at ?? null] as const),
+    );
 
-    const { count, error } = await supabase
+    const { data: messages, error } = await supabase
       .from('chat_messages')
-      .select('id', { count: 'exact', head: true })
+      .select('conversation_id, sender_id, created_at')
       .in('conversation_id', conversationIds)
-      .eq('is_read', false)
       .neq('sender_id', userId);
 
     if (error) {
       throw new Error('Failed to load unread count');
     }
 
-    return count || 0;
+    return (messages || []).reduce((count, message) => (
+      wasReadByTimestamp(lastReadByConversation.get(message.conversation_id) ?? null, message.created_at)
+        ? count
+        : count + 1
+    ), 0);
   },
 
   async searchUsers(query: string, currentUserId: string): Promise<IChatUser[]> {

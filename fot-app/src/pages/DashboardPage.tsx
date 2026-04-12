@@ -1,16 +1,19 @@
-import React, { useEffect, useMemo, useRef, useState, memo } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState, memo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronLeft, ChevronRight, Search, Building2, LogOut, Users, Clock, ArrowDownRight, ArrowUpRight, X } from 'lucide-react';
-import { ActivityList } from '../components/dashboard/ActivityList';
-import { PunctualityCard, AvgArrivalCard } from '../components/dashboard/AnalyticsRow';
-import { HourlyActivityCard, ComparisonCard } from '../components/dashboard/DashboardSidebar';
-import { LiveEventsCard } from '../components/dashboard/stats/LiveEventsCard';
 import { usePresence } from '../hooks/usePresence';
 import { useDashboardStats } from '../hooks/useDashboardStats';
+import { useStructureTree } from '../hooks/useStructure';
 import { useAuth } from '../contexts/AuthContext';
-import { apiClient } from '../api/client';
 import type { DashboardPeriod } from '../types';
 import '../styles/DashboardPage.css';
+
+const ActivityList = lazy(() => import('../components/dashboard/ActivityList').then(m => ({ default: m.ActivityList })));
+const PunctualityCard = lazy(() => import('../components/dashboard/AnalyticsRow').then(m => ({ default: m.PunctualityCard })));
+const AvgArrivalCard = lazy(() => import('../components/dashboard/AnalyticsRow').then(m => ({ default: m.AvgArrivalCard })));
+const HourlyActivityCard = lazy(() => import('../components/dashboard/DashboardSidebar').then(m => ({ default: m.HourlyActivityCard })));
+const ComparisonCard = lazy(() => import('../components/dashboard/DashboardSidebar').then(m => ({ default: m.ComparisonCard })));
+const LiveEventsCard = lazy(() => import('../components/dashboard/stats/LiveEventsCard').then(m => ({ default: m.LiveEventsCard })));
 
 interface IDbDepartment {
   id: string;
@@ -50,6 +53,13 @@ const LiveClock = memo(() => {
   return <div className="live-clock">Время: {clock}</div>;
 });
 
+const DashboardSectionFallback = () => (
+  <div className="dash-placeholder" style={{ minHeight: 160 }}>
+    <div className="loading-spinner" />
+    <p>Загрузка блока...</p>
+  </div>
+);
+
 export const DashboardPage: React.FC = () => {
   const { hasPermission, profile } = useAuth();
   const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
@@ -64,10 +74,11 @@ export const DashboardPage: React.FC = () => {
   // Department selector
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedDeptId = searchParams.get('dept');
-  const [deptOptions, setDeptOptions] = useState<IDeptFlatOption[]>([]);
+  const effectiveSelectedDeptId = selectedDeptId || (isDepartmentScope ? profile?.department_id ?? null : null);
   const [deptDropdownOpen, setDeptDropdownOpen] = useState(false);
   const [deptSearchQuery, setDeptSearchQuery] = useState('');
   const deptDropdownRef = useRef<HTMLDivElement>(null);
+  const structureQuery = useStructureTree(!isDepartmentScope);
 
   // Для header: сразу ставим отдел в URL без ожидания загрузки структуры
   useEffect(() => {
@@ -76,16 +87,12 @@ export const DashboardPage: React.FC = () => {
     }
   }, [isDepartmentScope, profile?.department_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    apiClient.get<{ success: boolean; data: { departments: IDbDepartment[] } }>('/structure')
-      .then(res => {
-        const departments = res.data?.departments || [];
-        const collator = new Intl.Collator('ru', { sensitivity: 'base', ignorePunctuation: true });
-        const flat = flattenDbTree(departments).sort((a, b) => collator.compare(a.name.trim(), b.name.trim()));
-        setDeptOptions(flat);
-      })
-      .catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const deptOptions = useMemo(() => {
+    if (isDepartmentScope) return [];
+    const departments = (structureQuery.data?.departments || []) as IDbDepartment[];
+    const collator = new Intl.Collator('ru', { sensitivity: 'base', ignorePunctuation: true });
+    return flattenDbTree(departments).sort((a, b) => collator.compare(a.name.trim(), b.name.trim()));
+  }, [isDepartmentScope, structureQuery.data?.departments]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -98,8 +105,8 @@ export const DashboardPage: React.FC = () => {
   }, []);
 
   const selectedDept = useMemo(
-    () => selectedDeptId ? deptOptions.find(d => d.id === selectedDeptId) : null,
-    [selectedDeptId, deptOptions],
+    () => effectiveSelectedDeptId ? deptOptions.find(d => d.id === effectiveSelectedDeptId) : null,
+    [effectiveSelectedDeptId, deptOptions],
   );
 
   const filteredDeptOptions = useMemo(() => {
@@ -133,9 +140,9 @@ export const DashboardPage: React.FC = () => {
   const isFutureMonth = selectedMonth >= getCurrentMonth();
 
   // Data
-  const { employees, loading } = usePresence(selectedDeptId);
+  const { employees, loading } = usePresence(effectiveSelectedDeptId);
   const { stats, loading: statsLoading } = useDashboardStats(
-    selectedDeptId,
+    effectiveSelectedDeptId,
     period,
     period === 'month' ? selectedMonth : undefined,
   );
@@ -179,8 +186,8 @@ export const DashboardPage: React.FC = () => {
     </div>
   ) : (
     <div className="dash-dept-dropdown" ref={deptDropdownRef}>
-      <div className={`dash-dept-trigger ${selectedDeptId ? 'has-value' : ''} ${!selectedDeptId ? 'dash-dept-trigger--large' : ''}`}>
-        <Search size={selectedDeptId ? 14 : 16} className="dash-dept-search-icon" />
+        <div className={`dash-dept-trigger ${effectiveSelectedDeptId ? 'has-value' : ''} ${!effectiveSelectedDeptId ? 'dash-dept-trigger--large' : ''}`}>
+        <Search size={effectiveSelectedDeptId ? 14 : 16} className="dash-dept-search-icon" />
         <input
           ref={deptInputRef}
           className="dash-dept-input"
@@ -190,15 +197,15 @@ export const DashboardPage: React.FC = () => {
           onChange={handleDeptInputChange}
           onFocus={handleDeptInputFocus}
         />
-        <ChevronDown size={selectedDeptId ? 14 : 18} className={`dash-dept-chevron ${deptDropdownOpen ? 'open' : ''}`} />
+        <ChevronDown size={effectiveSelectedDeptId ? 14 : 18} className={`dash-dept-chevron ${deptDropdownOpen ? 'open' : ''}`} />
       </div>
       {deptDropdownOpen && (
-        <div className={`dash-dept-menu ${!selectedDeptId ? 'dash-dept-menu--center' : ''}`}>
+        <div className={`dash-dept-menu ${!effectiveSelectedDeptId ? 'dash-dept-menu--center' : ''}`}>
           <div className="dash-dept-list">
             {filteredDeptOptions.map(dept => (
               <div
                 key={dept.id}
-                className={`dash-dept-item ${selectedDeptId === dept.id ? 'selected' : ''}`}
+                className={`dash-dept-item ${effectiveSelectedDeptId === dept.id ? 'selected' : ''}`}
                 onClick={() => handleDeptSelect(dept.id)}
               >
                 {dept.name}
@@ -215,7 +222,7 @@ export const DashboardPage: React.FC = () => {
 
   return (
     <>
-      {!selectedDeptId ? (
+      {!effectiveSelectedDeptId ? (
         <div className="dash-placeholder">
           <Building2 size={48} strokeWidth={1.2} />
           <h3>Выберите отдел</h3>
@@ -262,14 +269,18 @@ export const DashboardPage: React.FC = () => {
 
           <div className="dashboard-columns">
             <div className="col-activity">
-              <ActivityList employees={employees} loading={loading} />
+              <Suspense fallback={<DashboardSectionFallback />}>
+                <ActivityList employees={employees} loading={loading} />
+              </Suspense>
             </div>
 
             <div className="col-events">
-              <LiveEventsCard
-                events={stats?.recentEvents ?? []}
-                totalCount={(stats?.todayEntriesCount ?? 0) + (stats?.todayExitsCount ?? 0)}
-              />
+              <Suspense fallback={<DashboardSectionFallback />}>
+                <LiveEventsCard
+                  events={stats?.recentEvents ?? []}
+                  totalCount={(stats?.todayEntriesCount ?? 0) + (stats?.todayExitsCount ?? 0)}
+                />
+              </Suspense>
             </div>
 
             <div className="col-stats">
@@ -370,12 +381,12 @@ export const DashboardPage: React.FC = () => {
               )}
 
               {stats && !statsLoading && (
-                <>
+                <Suspense fallback={<DashboardSectionFallback />}>
                   <PunctualityCard punctuality={stats.punctuality} period={period} />
                   <AvgArrivalCard data={stats.avgArrivalByDay} period={period} />
                   <HourlyActivityCard data={stats.hourlyActivity} period={period} />
                   <ComparisonCard comparison={stats.weekComparison} period={period} />
-                </>
+                </Suspense>
               )}
             </div>
           </div>
@@ -425,7 +436,7 @@ export const DashboardPage: React.FC = () => {
                             className="dash-late-detail-link"
                             onClick={() => {
                               setLateModalOpen(false);
-                              navigate(`/tender/${item.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } });
+                              navigate(`/employees/${item.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } });
                             }}
                           >
                             Открыть карточку →

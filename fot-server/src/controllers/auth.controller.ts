@@ -3,12 +3,20 @@ import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { supabase, supabaseAuth } from '../config/database.js';
-import { env } from '../config/env.js';
 import { auditService } from '../services/audit.service.js';
-import type { AuthenticatedRequest, JWTPayload, UserProfile } from '../types/index.js';
+import type { AuthenticatedRequest, UserProfile } from '../types/index.js';
 import { LOGIN_2FA_ENABLED } from '../config/features.js';
 import { getEffectiveAccess } from '../services/access-control.service.js';
+import { getRoleById } from '../services/roles-cache.service.js';
 import { verify2FA, useRecoveryCode } from './auth-2fa.controller.js';
+import {
+  clearSessionCookies,
+  generateAccessToken,
+  generateRefreshToken,
+  getRefreshTokenFromRequest,
+  setSessionCookies,
+  verifyRefreshToken,
+} from '../utils/auth-session.js';
 
 // Схемы валидации
 const loginSchema = z.object({
@@ -44,27 +52,14 @@ export async function resolveDepartmentId(employeeId: number | null): Promise<st
   return data?.org_department_id || null;
 }
 
-/**
- * Генерирует JWT токен
- */
-export function generateToken(
-  profile: UserProfile,
-  email: string,
-  twoFactorVerified: boolean,
-  departmentId: string | null = null
-): string {
-  const payload: Omit<JWTPayload, 'iat' | 'exp'> = {
-    sub: profile.id,
-    email,
-    position_type: profile.position_type,
-    employee_id: profile.employee_id,
-    department_id: departmentId,
-    is_approved: profile.is_approved,
-    two_factor_enabled: profile.two_factor_enabled,
-    two_factor_verified: twoFactorVerified,
-  };
-
-  return jwt.sign(payload, env.JWT_SECRET, { expiresIn: env.JWT_EXPIRES_IN } as jwt.SignOptions);
+async function resolveProfileRoleCode(profile: Pick<UserProfile, 'position_type'> & { system_role_id?: string | null }): Promise<string> {
+  if (profile.system_role_id) {
+    const role = await getRoleById(profile.system_role_id);
+    if (role?.code) {
+      return role.code;
+    }
+  }
+  return profile.position_type;
 }
 
 /**
@@ -77,7 +72,7 @@ async function register(req: Request, res: Response): Promise<void> {
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email,
       password,
-      email_confirm: true,
+      email_confirm: false,
     });
 
     if (authError || !authData.user) {
@@ -161,8 +156,8 @@ async function login(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const positionType = profile.position_type;
-    const effectiveAccess = await getEffectiveAccess(positionType);
+    const positionType = await resolveProfileRoleCode(profile as UserProfile & { system_role_id?: string | null });
+    const effectiveAccess = await getEffectiveAccess(profile.system_role_id ?? positionType);
 
     if (!profile.is_approved) {
       res.status(403).json({
@@ -175,13 +170,14 @@ async function login(req: Request, res: Response): Promise<void> {
 
     // Если 2FA включена, возвращаем промежуточный ответ
     if (LOGIN_2FA_ENABLED && profile.two_factor_enabled) {
-      const tempToken = generateToken(profile, email, false);
+      const tempToken = generateAccessToken(profile as UserProfile, email, false);
+      setSessionCookies(res, tempToken, null);
 
       res.json({
         success: true,
         requires_2fa: true,
         access_token: tempToken,
-        refresh_token: tempToken,
+        refresh_token: '',
         user: {
           id: profile.id,
           email,
@@ -190,6 +186,7 @@ async function login(req: Request, res: Response): Promise<void> {
           id: profile.id,
           full_name: profile.full_name,
           position_type: positionType,
+          system_role_id: profile.system_role_id ?? null,
           permissions: effectiveAccess.permissions,
           page_access: effectiveAccess.page_access,
           chat_inbound_mode: profile.chat_inbound_mode || 'open',
@@ -202,14 +199,16 @@ async function login(req: Request, res: Response): Promise<void> {
     }
 
     const departmentId = await resolveDepartmentId(profile.employee_id);
-    const accessToken = generateToken(profile, email, true, departmentId);
+    const accessToken = generateAccessToken(profile as UserProfile, email, true, departmentId);
+    const refreshToken = generateRefreshToken(profile.id, email);
+    setSessionCookies(res, accessToken, refreshToken);
 
     await auditService.logFromRequest(req, profile.id, 'LOGIN');
 
     res.json({
       success: true,
       access_token: accessToken,
-      refresh_token: accessToken,
+      refresh_token: refreshToken,
       user: {
         id: profile.id,
         email,
@@ -218,6 +217,7 @@ async function login(req: Request, res: Response): Promise<void> {
         id: profile.id,
         full_name: profile.full_name,
         position_type: positionType,
+        system_role_id: profile.system_role_id ?? null,
         permissions: effectiveAccess.permissions,
         page_access: effectiveAccess.page_access,
         chat_inbound_mode: profile.chat_inbound_mode || 'open',
@@ -268,12 +268,13 @@ async function forgotPassword(req: Request, res: Response): Promise<void> {
     }
 
     const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
     const resetTokenExpires = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
     const { error: updateError } = await supabase
       .from('user_profiles')
       .update({
-        reset_token: resetToken,
+        reset_token: resetTokenHash,
         reset_token_expires: resetTokenExpires,
       })
       .eq('id', user.id);
@@ -308,11 +309,12 @@ async function forgotPassword(req: Request, res: Response): Promise<void> {
 async function resetPassword(req: Request, res: Response): Promise<void> {
   try {
     const { token, password } = resetPasswordSchema.parse(req.body);
+    const resetTokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
     const { data: profile, error: profileError } = await supabase
       .from('user_profiles')
       .select('id, reset_token, reset_token_expires')
-      .eq('reset_token', token)
+      .eq('reset_token', resetTokenHash)
       .single();
 
     if (profileError || !profile) {
@@ -379,17 +381,18 @@ async function getMe(req: AuthenticatedRequest, res: Response): Promise<void> {
       return;
     }
 
-    const positionType = profile.position_type;
-    const effectiveAccess = await getEffectiveAccess(positionType);
+    const positionType = await resolveProfileRoleCode(profile as UserProfile & { system_role_id?: string | null });
+    const effectiveAccess = await getEffectiveAccess(profile.system_role_id ?? positionType);
 
     const departmentId = await resolveDepartmentId(profile.employee_id);
 
-    const freshToken = generateToken(
+    const freshToken = generateAccessToken(
       { ...profile, position_type: positionType } as UserProfile,
       req.user.email,
       req.user.two_factor_verified,
       departmentId,
     );
+    setSessionCookies(res, freshToken);
 
     res.json({
       success: true,
@@ -402,6 +405,7 @@ async function getMe(req: AuthenticatedRequest, res: Response): Promise<void> {
         id: profile.id,
         full_name: profile.full_name,
         position_type: positionType,
+        system_role_id: profile.system_role_id ?? null,
         permissions: effectiveAccess.permissions,
         page_access: effectiveAccess.page_access,
         chat_inbound_mode: profile.chat_inbound_mode || 'open',
@@ -421,36 +425,91 @@ async function getMe(req: AuthenticatedRequest, res: Response): Promise<void> {
 }
 
 /**
- * GET /api/auth/organizations
+ * POST /api/auth/refresh
  */
-async function getOrganizations(_req: Request, res: Response): Promise<void> {
+async function refresh(req: Request, res: Response): Promise<void> {
   try {
-    const { data: orgsEncrypted, error } = await supabase
-      .from('organizations')
-      .select('id, name')
-      .order('created_at');
-
-    if (error) {
-      console.error('Get organizations error:', error);
-      res.status(500).json({ success: false, error: 'Failed to fetch organizations' });
+    const refreshToken = getRefreshTokenFromRequest(req);
+    if (!refreshToken) {
+      clearSessionCookies(res);
+      res.status(401).json({ success: false, error: 'Refresh token required' });
       return;
     }
 
-    const organizations = (orgsEncrypted || [])
-      .map((org: { id: string; name: string }) => ({
-        id: org.id,
-        name: org.name || '',
-      }))
-      .sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name, 'ru'));
+    const decoded = verifyRefreshToken(refreshToken);
+    if (decoded.token_type !== 'refresh') {
+      clearSessionCookies(res);
+      res.status(401).json({ success: false, error: 'Invalid refresh token' });
+      return;
+    }
+
+    const { data: profile, error } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .eq('id', decoded.sub)
+      .single();
+
+    if (error || !profile || !profile.is_approved) {
+      clearSessionCookies(res);
+      res.status(401).json({ success: false, error: 'Session is no longer valid' });
+      return;
+    }
+
+    const positionType = await resolveProfileRoleCode(profile as UserProfile & { system_role_id?: string | null });
+    const effectiveAccess = await getEffectiveAccess(profile.system_role_id ?? positionType);
+    const departmentId = await resolveDepartmentId(profile.employee_id);
+    const accessToken = generateAccessToken(
+      { ...profile, position_type: positionType } as UserProfile,
+      decoded.email,
+      true,
+      departmentId,
+    );
+    const nextRefreshToken = generateRefreshToken(profile.id, decoded.email);
+
+    setSessionCookies(res, accessToken, nextRefreshToken);
 
     res.json({
       success: true,
-      data: organizations,
+      access_token: accessToken,
+      refresh_token: nextRefreshToken,
+      user: {
+        id: profile.id,
+        email: decoded.email,
+      },
+      profile: {
+        id: profile.id,
+        full_name: profile.full_name,
+        position_type: positionType,
+        system_role_id: profile.system_role_id ?? null,
+        permissions: effectiveAccess.permissions,
+        page_access: effectiveAccess.page_access,
+        chat_inbound_mode: profile.chat_inbound_mode || 'open',
+        imported_position: profile.imported_position,
+        employee_id: profile.employee_id,
+        department_id: departmentId,
+        supervisor_id: profile.supervisor_id,
+        is_approved: profile.is_approved,
+        two_factor_enabled: profile.two_factor_enabled,
+        created_at: profile.created_at,
+      },
     });
   } catch (error) {
-    console.error('Get organizations error:', error);
-    res.status(500).json({ success: false, error: 'Failed to fetch organizations' });
+    if (error instanceof jwt.TokenExpiredError || error instanceof jwt.JsonWebTokenError) {
+      clearSessionCookies(res);
+      res.status(401).json({ success: false, error: 'Refresh token expired' });
+      return;
+    }
+    console.error('Refresh error:', error);
+    res.status(500).json({ success: false, error: 'Failed to refresh session' });
   }
+}
+
+/**
+ * POST /api/auth/logout
+ */
+async function logout(_req: Request, res: Response): Promise<void> {
+  clearSessionCookies(res);
+  res.json({ success: true });
 }
 
 export const authController = {
@@ -459,7 +518,8 @@ export const authController = {
   forgotPassword,
   resetPassword,
   getMe,
-  getOrganizations,
+  refresh,
+  logout,
   verify2FA,
   useRecoveryCode,
 };

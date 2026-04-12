@@ -10,13 +10,25 @@ interface ChangeOpts {
 
 const today = () => new Date().toISOString().slice(0, 10);
 
+const syncEmployeeSalarySnapshot = async (employeeId: number, salary: number | null): Promise<void> => {
+  await supabase
+    .from('employees')
+    .update({
+      current_salary: salary,
+      // Legacy mirror for old screens/imports until salary_actual is retired fully.
+      salary_actual: salary,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', employeeId);
+};
+
 /**
  * Единый сервис для изменений сотрудника с автоматической записью истории.
  * Все контроллеры должны вызывать эти методы вместо прямого supabase.update().
  */
 export const employeeChangesService = {
   /**
-   * Изменение оклада → salary_history + employees.salary_actual/current_salary
+   * Изменение оклада → salary_history + employees.current_salary snapshot
    */
   async changeSalary(employeeId: number, salary: number, opts: ChangeOpts = {}): Promise<void> {
     const date = opts.effectiveDate || today();
@@ -32,7 +44,7 @@ export const employeeChangesService = {
         created_by: opts.createdBy || null,
       });
 
-    // Обновляем salary_actual только из самой поздней записи
+    // Обновляем salary snapshot только из самой поздней записи
     const { data: latest } = await supabase
       .from('salary_history')
       .select('salary')
@@ -43,14 +55,7 @@ export const employeeChangesService = {
       .single();
 
     if (latest) {
-      await supabase
-        .from('employees')
-        .update({
-          salary_actual: latest.salary,
-          current_salary: latest.salary,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', employeeId);
+      await syncEmployeeSalarySnapshot(employeeId, latest.salary);
     }
 
     employeeCache.invalidate(employeeId);
@@ -184,11 +189,7 @@ export const employeeChangesService = {
       .single();
 
     if (latest) {
-      await supabase.from('employees').update({
-        salary_actual: latest.salary,
-        current_salary: latest.salary,
-        updated_at: new Date().toISOString(),
-      }).eq('id', employeeId);
+      await syncEmployeeSalarySnapshot(employeeId, latest.salary);
     }
 
     employeeCache.invalidate(employeeId);
@@ -209,11 +210,7 @@ export const employeeChangesService = {
       .limit(1)
       .single();
 
-    await supabase.from('employees').update({
-      salary_actual: latest?.salary || null,
-      current_salary: latest?.salary || null,
-      updated_at: new Date().toISOString(),
-    }).eq('id', employeeId);
+    await syncEmployeeSalarySnapshot(employeeId, latest?.salary || null);
   },
 
   /**

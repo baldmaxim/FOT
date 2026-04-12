@@ -1,4 +1,5 @@
-import { type FC, useState, useEffect, useCallback } from 'react';
+import { type FC, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Plus, X, Clock, CheckCircle, XCircle, Ban } from 'lucide-react';
 import {
   leaveRequestService,
@@ -8,6 +9,7 @@ import {
   type LeaveRequestType,
   type LeaveRequestStatus,
 } from '../../services/leaveRequestService';
+import { getMyLeaveRequestsQueryKey, useMyLeaveRequests } from '../../hooks/usePortalData';
 import './LeaveRequestsPage.css';
 
 const STATUS_ICONS: Record<LeaveRequestStatus, FC<{ size?: number }>> = {
@@ -25,12 +27,14 @@ const STATUS_COLORS: Record<LeaveRequestStatus, string> = {
 };
 
 const REQUEST_TYPES = Object.keys(REQUEST_TYPE_LABELS) as LeaveRequestType[];
+const EMPTY_REQUESTS: ILeaveRequest[] = [];
 
 export const LeaveRequestsPage: FC = () => {
-  const [requests, setRequests] = useState<ILeaveRequest[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  const { data, isLoading } = useMyLeaveRequests();
+  const requests = data ?? EMPTY_REQUESTS;
 
   // Form state
   const [formType, setFormType] = useState<LeaveRequestType>('vacation');
@@ -43,20 +47,6 @@ export const LeaveRequestsPage: FC = () => {
   const [correctionHours, setCorrectionHours] = useState<number>(8);
 
   const isCorrection = formType === 'time_correction';
-
-  const loadRequests = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await leaveRequestService.getMy();
-      setRequests(data);
-    } catch {
-      setRequests([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { loadRequests(); }, [loadRequests]);
 
   const handleSubmit = async () => {
     if (isCorrection) {
@@ -86,7 +76,7 @@ export const LeaveRequestsPage: FC = () => {
       setCorrectionDate('');
       setCorrectionStatus('work');
       setCorrectionHours(8);
-      await loadRequests();
+      await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
     } catch (err) {
       console.error('Create leave request error:', err);
     } finally {
@@ -97,7 +87,7 @@ export const LeaveRequestsPage: FC = () => {
   const handleCancel = async (id: number) => {
     try {
       await leaveRequestService.cancel(id);
-      await loadRequests();
+      await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
     } catch (err) {
       console.error('Cancel leave request error:', err);
     }
@@ -177,7 +167,7 @@ export const LeaveRequestsPage: FC = () => {
         </div>
       )}
 
-      {loading ? (
+      {isLoading ? (
         <div className="lr-loading">Загрузка...</div>
       ) : requests.length === 0 ? (
         <div className="lr-empty">Нет заявлений</div>

@@ -12,7 +12,9 @@ const envSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   ENCRYPTION_KEY: z.string().length(64, 'ENCRYPTION_KEY must be 64 hex characters (32 bytes)'),
   JWT_SECRET: z.string().min(32),
+  JWT_REFRESH_SECRET: z.string().min(32).optional(),
   JWT_EXPIRES_IN: z.string().default('7d'),
+  JWT_REFRESH_EXPIRES_IN: z.string().default('30d'),
   TOTP_ISSUER: z.string().default('FOT-App'),
   PORT: z.string().default('3000'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -43,3 +45,7 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
+
+if (!env.JWT_REFRESH_SECRET) {
+  env.JWT_REFRESH_SECRET = env.JWT_SECRET;
+}

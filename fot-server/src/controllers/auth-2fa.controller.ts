@@ -4,7 +4,12 @@ import { supabase } from '../config/database.js';
 import { totpService } from '../services/totp.service.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest, UserProfile } from '../types/index.js';
-import { generateToken } from './auth.controller.js';
+import { resolveDepartmentId } from './auth.controller.js';
+import {
+  generateAccessToken,
+  generateRefreshToken,
+  setSessionCookies,
+} from '../utils/auth-session.js';
 
 // Схемы валидации
 const verify2FASchema = z.object({
@@ -42,13 +47,17 @@ export const verify2FA = async (req: AuthenticatedRequest, res: Response): Promi
       return;
     }
 
-    const token = generateToken(profile as UserProfile, req.user.email, true);
+    const departmentId = await resolveDepartmentId(profile.employee_id);
+    const token = generateAccessToken(profile as UserProfile, req.user.email, true, departmentId);
+    const refreshToken = generateRefreshToken(profile.id, req.user.email);
+    setSessionCookies(res, token, refreshToken);
 
     await auditService.logFromRequest(req, req.user.id, '2FA_VERIFIED');
 
     res.json({
       success: true,
       token,
+      refresh_token: refreshToken,
       user: {
         id: profile.id,
         email: req.user.email,
@@ -105,7 +114,10 @@ export const useRecoveryCode = async (req: AuthenticatedRequest, res: Response):
       .update({ recovery_codes: updatedCodes })
       .eq('id', req.user.id);
 
-    const token = generateToken(profile as UserProfile, req.user.email, true);
+    const departmentId = await resolveDepartmentId(profile.employee_id);
+    const token = generateAccessToken(profile as UserProfile, req.user.email, true, departmentId);
+    const refreshToken = generateRefreshToken(profile.id, req.user.email);
+    setSessionCookies(res, token, refreshToken);
 
     await auditService.logFromRequest(req, req.user.id, '2FA_VERIFIED', {
       details: { method: 'recovery_code', remaining_codes: updatedCodes.length },
@@ -114,6 +126,7 @@ export const useRecoveryCode = async (req: AuthenticatedRequest, res: Response):
     res.json({
       success: true,
       token,
+      refresh_token: refreshToken,
       remaining_recovery_codes: updatedCodes.length,
       user: {
         id: profile.id,

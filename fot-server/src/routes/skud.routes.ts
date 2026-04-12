@@ -39,13 +39,6 @@ const upload = multer({
 // Все роуты требуют аутентификации
 router.use(authenticate);
 
-// GET /api/skud/organizations - организации с событиями СКУД (super_admin)
-router.get(
-  '/organizations',
-  requirePageAccess('/skud-settings', 'view'),
-  skudController.getOrganizations
-);
-
 // GET /api/skud/dashboard-stats - аналитика дашборда (header+, кэш 60с)
 router.get(
   '/dashboard-stats',
@@ -61,6 +54,12 @@ router.get(
   skudController.getDisciplineViolations
 );
 
+router.get(
+  '/discipline/export',
+  requirePageAccess('/discipline', 'view'),
+  skudController.exportDisciplineViolations
+);
+
 // GET /api/skud/daily-summary - дневные сводки (header+)
 router.get(
   '/daily-summary',
@@ -72,10 +71,19 @@ router.get(
 router.get(
   '/employee-events/:employeeId',
   requireAnyPageAccess(
-    ['/employee', '/employee/timesheet', '/employee/history', '/my-employees', '/tender', '/staff-control'],
+    ['/employee', '/employee/timesheet', '/employee/history', '/employees', '/staff-control'],
     'view',
   ),
   skudController.getEmployeeEvents
+);
+
+router.get(
+  '/employee-events/:employeeId/export',
+  requireAnyPageAccess(
+    ['/employee', '/employee/timesheet', '/employee/history', '/employees', '/staff-control'],
+    'view',
+  ),
+  skudController.exportEmployeeEvents
 );
 
 // GET /api/skud/events - события СКУД (header+)
@@ -95,7 +103,7 @@ router.get(
 // GET /api/skud/access-point-settings - настройки точек доступа для отдела (worker+)
 router.get(
   '/access-point-settings',
-  requireAnyPageAccess(['/employee', '/employee/timesheet', '/my-employees', '/tender', '/staff-control', '/skud-settings'], 'view'),
+  requireAnyPageAccess(['/employee', '/employee/timesheet', '/employees', '/staff-control', '/skud-settings'], 'view'),
   skudController.getAccessPointSettings
 );
 
@@ -186,7 +194,7 @@ router.post(
 // GET /api/skud/presence - статус присутствия сотрудников (header+, кэш 30с)
 router.get(
   '/presence',
-  requireAnyPageAccess(['/dashboard', '/my-employees', '/tender', '/staff-control'], 'view'),
+  requireAnyPageAccess(['/dashboard', '/employees', '/staff-control'], 'view'),
   presenceCache,
   skudController.getPresence
 );
@@ -204,7 +212,7 @@ router.post(
 // POST /api/skud/sync-employee - синхронизация событий одного сотрудника из Sigur (admin+)
 router.post(
   '/sync-employee',
-  requireAnyPageAccess(['/tender', '/staff-control'], 'edit'),
+  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
   skudController.syncEmployee
 );
 

@@ -4,7 +4,7 @@ import { AlertTriangle, RefreshCw, Route, Search } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useStructureTree } from '../../hooks/useStructure';
 import { travelTimeService } from '../../services/travelTimeService';
-import type { OrgDepartmentNode, TravelSegmentStatus } from '../../types';
+import type { ITravelSegment, OrgDepartmentNode, TravelSegmentStatus } from '../../types';
 import './TravelSegmentsPage.css';
 
 interface IDeptOption {
@@ -67,6 +67,7 @@ const statusClassName = (status: TravelSegmentStatus): string => {
       return 'travel-segments-status problem';
   }
 };
+const EMPTY_SEGMENTS: ITravelSegment[] = [];
 
 export const TravelSegmentsPage: FC = () => {
   const { hasPermission, profile } = useAuth();
@@ -104,7 +105,7 @@ export const TravelSegmentsPage: FC = () => {
     placeholderData: previousData => previousData,
   });
 
-  const segments = segmentsQuery.data || [];
+  const segments = segmentsQuery.data ?? EMPTY_SEGMENTS;
   const loading = scopePending || (segmentsQuery.isLoading && !segmentsQuery.data);
   const error = actionError || (segmentsQuery.error instanceof Error ? segmentsQuery.error.message : null);
 

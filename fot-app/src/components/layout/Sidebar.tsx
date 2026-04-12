@@ -43,8 +43,7 @@ const navGroups: INavGroup[] = [
   {
     label: 'Сотрудники и табель',
     items: [
-      { id: 'header-employees', path: '/my-employees', label: 'Сотрудники', icon: UsersIcon, requiredPage: '/my-employees' },
-      { id: 'employees', path: '/tender', label: 'Сотрудники', icon: UsersIcon, requiredPage: '/tender' },
+      { id: 'employees', path: '/employees', label: 'Сотрудники', icon: UsersIcon, requiredPage: '/employees' },
       { id: 'staff-control', path: '/staff-control', label: 'Управление кадрами', icon: UsersIcon, requiredPage: '/staff-control' },
       { id: 'timesheet', path: '/timesheet', label: 'Табель', icon: CalendarIcon, requiredPage: '/timesheet' },
       { id: 'timesheet-hr', path: '/timesheet-hr', label: 'Табели HR', icon: CalendarIcon, requiredPage: '/timesheet-hr' },

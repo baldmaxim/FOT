@@ -35,6 +35,7 @@ export interface UserProfile {
   id: string;
   full_name: string | null;
   position_type: EmployeePositionType;    // Заменяет role
+  system_role_id?: string | null;
   employee_id: number | null;              // Связь с employees
   department_id: string | null;            // org_department_id сотрудника
   supervisor_id: string | null;            // ID руководителя

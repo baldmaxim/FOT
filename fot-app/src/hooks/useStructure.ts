@@ -4,7 +4,7 @@ import type { OrgStructureResponse } from '../types';
 
 export const STRUCTURE_QUERY_KEY = ['structure', 'tree'] as const;
 
-export const useStructureTree = () => {
+export const useStructureTree = (enabled = true) => {
   return useQuery({
     queryKey: STRUCTURE_QUERY_KEY,
     queryFn: async () => {
@@ -12,6 +12,7 @@ export const useStructureTree = () => {
       if (res.error) throw new Error(res.error);
       return res.data as OrgStructureResponse;
     },
+    enabled,
     staleTime: 5 * 60_000,
   });
 };

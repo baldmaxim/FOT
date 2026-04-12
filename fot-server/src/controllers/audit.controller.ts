@@ -49,7 +49,7 @@ export const auditController = {
           .eq('is_archived', false),
         supabase
           .from('employee_assignments')
-          .select('employee_id, org_company_id, org_department_id, org_site_id, org_subdivision_id')
+          .select('employee_id, org_department_id, org_site_id')
           .is('effective_to', null),
         supabase
           .from('salary_history')
@@ -133,7 +133,7 @@ export const auditController = {
         'orphaned': async () => {
           const [e, a] = await Promise.all([
             supabase.from('employees').select('id, full_name').eq('is_archived', false),
-            supabase.from('employee_assignments').select('employee_id, org_company_id, org_department_id, org_site_id, org_subdivision_id').is('effective_to', null),
+            supabase.from('employee_assignments').select('employee_id, org_department_id, org_site_id').is('effective_to', null),
           ]);
           return checkOrphaned(e.data || [], a.data || []);
         },
@@ -213,7 +213,7 @@ function checkUnassigned(
 
 function checkOrphaned(
   employees: EmpRow[],
-  assignments: { employee_id: number; org_company_id: string | null; org_department_id: string | null; org_site_id: string | null; org_subdivision_id: string | null }[],
+  assignments: { employee_id: number; org_department_id: string | null; org_site_id: string | null }[],
 ): AuditCheckResult {
   const issues: AuditIssue[] = [];
   const empNames = new Map<number, string>();
@@ -225,12 +225,12 @@ function checkOrphaned(
 
   for (const a of assignments) {
     if (!activeEmpIds.has(a.employee_id)) continue;
-    if (!a.org_company_id && !a.org_department_id && !a.org_site_id && !a.org_subdivision_id) {
+    if (!a.org_department_id && !a.org_site_id) {
       issues.push({
         employee_id: a.employee_id,
         full_name: empNames.get(a.employee_id) || 'Неизвестно',
         issue_type: 'orphaned_assignment',
-        details: 'Назначение не связано ни с одним подразделением (возможно удалено)',
+        details: 'Назначение не связано ни с одним отделом или площадкой',
         severity: 'critical',
       });
     }

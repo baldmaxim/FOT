@@ -29,19 +29,20 @@ async function runStructureSyncCycle(): Promise<void> {
       await acquirePresencePollingLock();
       lockAcquired = true;
 
+      const connectionType = sigurService.getBackgroundConnectionType();
       const context: ISyncContext = {};
-      console.log('[structure-scheduler] starting hourly sync: departments + positions + employees');
+      console.log(`[structure-scheduler] starting hourly sync connection=${connectionType}: departments + positions + employees`);
 
-      await syncDepartmentsLogic(undefined, context);
-      await syncPositionsFromSigurLogic(undefined, context);
+      await syncDepartmentsLogic(connectionType, context);
+      await syncPositionsFromSigurLogic(connectionType, context);
       await seedPositionsLogic();
-      await syncEmployeesLogic(undefined, () => {}, context, false);
+      await syncEmployeesLogic(connectionType, () => {}, context, false);
 
       // Сбрасываем кэш структуры, чтобы карточка сотрудника не мигала
       // между старыми и новыми именами отделов/должностей
       invalidateStructureCache();
 
-      console.log('[structure-scheduler] hourly sync done');
+      console.log(`[structure-scheduler] hourly sync done connection=${connectionType}`);
     } catch (err) {
       if (err instanceof ManualSyncInProgressError) {
         console.log('[structure-scheduler] skipped: manual sync in progress');

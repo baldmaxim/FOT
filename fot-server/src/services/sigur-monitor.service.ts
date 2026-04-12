@@ -47,6 +47,7 @@ interface IRuntimeState {
   lastSignalAt: Date | null;
   lastSuccessfulSignalAt: Date | null;
   lastEventFlowAt: Date | null;
+  presencePollingInFlightStartedAt: Date | null;
   consecutiveFailures: number;
   consecutiveSuccesses: number;
   consecutiveEventFlowSuccesses: number;
@@ -87,6 +88,7 @@ let runtimeState: IRuntimeState = {
   lastSignalAt: null,
   lastSuccessfulSignalAt: null,
   lastEventFlowAt: null,
+  presencePollingInFlightStartedAt: null,
   consecutiveFailures: 0,
   consecutiveSuccesses: 0,
   consecutiveEventFlowSuccesses: 0,
@@ -313,6 +315,7 @@ async function ensureRuntimeStateLoaded(): Promise<void> {
       runtimeState.lastSignalAt = null;
       runtimeState.lastSuccessfulSignalAt = null;
       runtimeState.lastEventFlowAt = null;
+      runtimeState.presencePollingInFlightStartedAt = null;
       runtimeState.consecutiveFailures = 0;
       runtimeState.consecutiveSuccesses = 0;
       runtimeState.consecutiveEventFlowSuccesses = 0;
@@ -701,19 +704,22 @@ async function maybeDetectSilence(now = new Date()): Promise<void> {
 }
 
 async function performDirectProbe(now = new Date()): Promise<void> {
+  const connectionType = sigurService.getBackgroundConnectionType();
   const startedAt = Date.now();
-  const result = await sigurService.testConnection();
+  const result = await sigurService.testConnection(connectionType);
   const responseMs = Date.now() - startedAt;
+  const checkedAt = new Date();
 
   if (result.success) {
     await recordSigurMonitorSuccess({
       source: 'monitor_probe',
-      checkedAt: now,
+      checkedAt,
       connectionType: (result.connection || null) as SigurConnectionType,
       responseMs,
       eventsLastWindow: 0,
       meta: {
         probe: true,
+        probeStartedAt: now.toISOString(),
         message: result.message,
       },
     });
@@ -722,15 +728,24 @@ async function performDirectProbe(now = new Date()): Promise<void> {
 
   await recordSigurMonitorFailure({
     source: 'monitor_probe',
-    checkedAt: now,
+    checkedAt,
     connectionType: (result.connection || null) as SigurConnectionType,
     responseMs,
     errorMessage: result.message,
     meta: {
       probe: true,
+      probeStartedAt: now.toISOString(),
       message: result.message,
     },
   });
+}
+
+export function markPresencePollingCycleStarted(startedAt = new Date()): void {
+  runtimeState.presencePollingInFlightStartedAt = startedAt;
+}
+
+export function markPresencePollingCycleFinished(): void {
+  runtimeState.presencePollingInFlightStartedAt = null;
 }
 
 export async function recordSigurMonitorSuccess(input: IHealthSignalInput): Promise<void> {
@@ -974,7 +989,8 @@ export async function runSigurMonitorCycleNow(now = new Date()): Promise<void> {
   if (!settings.enabled || !sigurService.isConfigured()) return;
 
   const lastSignalAge = runtimeState.lastSignalAt ? now.getTime() - runtimeState.lastSignalAt.getTime() : Number.POSITIVE_INFINITY;
-  if (lastSignalAge >= MONITOR_STALE_SIGNAL_MS) {
+  const isPresencePollingInFlight = runtimeState.presencePollingInFlightStartedAt !== null;
+  if (!isPresencePollingInFlight && lastSignalAge >= MONITOR_STALE_SIGNAL_MS) {
     await performDirectProbe(now);
   }
 
@@ -1029,6 +1045,7 @@ export function resetSigurMonitorStateForTests(): void {
     lastSignalAt: null,
     lastSuccessfulSignalAt: null,
     lastEventFlowAt: null,
+    presencePollingInFlightStartedAt: null,
     consecutiveFailures: 0,
     consecutiveSuccesses: 0,
     consecutiveEventFlowSuccesses: 0,

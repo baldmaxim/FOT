@@ -70,7 +70,7 @@ export const EmpVirtualList: FC<IEmpVirtualListProps> = ({
               key={emp.id}
               className={`ep-emp-card ${selectedEmps.has(emp.id) ? 'selected' : ''}`}
               onClick={() => onEmpClick(emp)}
-              onMouseDown={e => { if (e.button === 1) { e.preventDefault(); window.open(`/tender/${emp.id}`, '_blank'); } }}
+              onMouseDown={e => { if (e.button === 1) { e.preventDefault(); window.open(`/employees/${emp.id}`, '_blank'); } }}
               style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vRow.start}px)` }}
             >
               <div

@@ -1,7 +1,7 @@
-import { type FC, useState, useEffect, useCallback } from 'react';
+import { type FC, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Zap } from 'lucide-react';
 import { apiClient } from '../../api/client';
-import { structureApi } from '../../api/structure';
+import { useStructureTree } from '../../hooks/useStructure';
 import type { OrgDepartmentNode } from '../../types/organization';
 import styles from './PayslipManagePage.module.css';
 
@@ -46,22 +46,15 @@ export const PayslipManagePage: FC = () => {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [departmentId, setDepartmentId] = useState('');
-  const [departments, setDepartments] = useState<IDeptFlat[]>([]);
   const [generating, setGenerating] = useState(false);
   const [result, setResult] = useState<IGeneratedPayslip[] | null>(null);
   const [generated, setGenerated] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
-
-  const loadDepts = useCallback(async () => {
-    try {
-      const res = await structureApi.getTree();
-      if (res.data?.departments) {
-        setDepartments(flattenDepts(res.data.departments));
-      }
-    } catch { /* ignore */ }
-  }, []);
-
-  useEffect(() => { loadDepts(); }, [loadDepts]);
+  const structureQuery = useStructureTree();
+  const departments = useMemo(
+    () => flattenDepts(structureQuery.data?.departments || []),
+    [structureQuery.data?.departments],
+  );
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -131,6 +124,10 @@ export const PayslipManagePage: FC = () => {
       </div>
 
       {error && <div className={styles.error}>{error}</div>}
+
+      {structureQuery.isError && (
+        <div className={styles.error}>Не удалось загрузить структуру подразделений</div>
+      )}
 
       {result && (
         <>

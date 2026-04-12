@@ -1,14 +1,17 @@
-import { useState, useCallback, useEffect } from 'react';
-import { employeeService } from '../services/employeeService';
-import { structureApi } from '../api/structure';
+import { useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { Employee } from '../types';
-import type { OrgDepartmentNode } from '../types/organization';
 import type { PaginatedMeta } from '../services/employeeService';
-
-/* ─── module-level dept cache ─── */
-let cachedDepartments: OrgDepartmentNode[] | null = null;
-let deptCacheTs = 0;
-const DEPT_CACHE_TTL = 120_000;
+import { useStructureTree } from './useStructure';
+import {
+  EMPTY_EMPLOYEE_COUNTS,
+  EMPTY_PAGINATED_META,
+  EMPTY_PAGINATED_RESPONSE,
+  employeeCountsQueryKey,
+  paginatedEmployeesQueryKey,
+  useEmployeeCountsQuery,
+  usePaginatedEmployeesQuery,
+} from './useEmployeeDirectory';
 
 interface IUseStaffDataParams {
   page: number;
@@ -19,51 +22,51 @@ interface IUseStaffDataParams {
 
 export const useStaffData = (params: IUseStaffDataParams) => {
   const { page, pageSize = 100, search, departmentId } = params;
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [departments, setDepartments] = useState<OrgDepartmentNode[]>(cachedDepartments ?? []);
-  const [loading, setLoading] = useState(true);
-  const [meta, setMeta] = useState<PaginatedMeta>({ page: 1, pageSize, total: 0, totalPages: 0 });
-  const [totalActive, setTotalActive] = useState(0);
+  const queryClient = useQueryClient();
+  const structureQuery = useStructureTree();
+  const employeesParams = {
+    page,
+    pageSize,
+    search: search || undefined,
+    departmentId: departmentId || undefined,
+    status: 'active' as const,
+    view: 'staff' as const,
+  };
+  const employeesQueryKey = paginatedEmployeesQueryKey(employeesParams);
+  const employeesQuery = usePaginatedEmployeesQuery(employeesParams);
+  const countsQuery = useEmployeeCountsQuery(false);
 
-  const loadDepts = useCallback(async () => {
-    if (cachedDepartments && Date.now() - deptCacheTs < DEPT_CACHE_TTL) {
-      setDepartments(cachedDepartments);
-      return;
-    }
-    const tree = await structureApi.getTree();
-    const deps = tree.data?.departments ?? [];
-    cachedDepartments = deps;
-    deptCacheTs = Date.now();
-    setDepartments(deps);
-  }, []);
-
-  const loadEmployees = useCallback(async () => {
-    setLoading(true);
-    const [result, counts] = await Promise.all([
-      employeeService.getPaginated({
-        page,
-        pageSize,
-        search: search || undefined,
-        departmentId: departmentId || undefined,
-        status: 'active',
-        view: 'staff',
-      }),
-      employeeService.getCounts(false).catch(() => ({ byDepartment: {}, byStatus: { active: 0, fired: 0 } })),
-    ]);
-    setEmployees(result.data);
-    setMeta(result.meta);
-    setTotalActive(counts.byStatus.active);
-    setLoading(false);
-  }, [page, pageSize, search, departmentId]);
-
-  useEffect(() => { loadDepts(); }, [loadDepts]);
-  useEffect(() => { loadEmployees(); }, [loadEmployees]);
+  const employeesResponse = employeesQuery.data || EMPTY_PAGINATED_RESPONSE;
+  const counts = countsQuery.data || EMPTY_EMPLOYEE_COUNTS;
+  const departments = structureQuery.data?.departments || [];
+  const meta: PaginatedMeta = employeesResponse.meta || EMPTY_PAGINATED_META;
 
   const patchEmployee = useCallback((id: number, patch: Partial<Employee>) => {
-    setEmployees(prev => prev.map(e => e.id === id ? { ...e, ...patch } : e));
-  }, []);
+    queryClient.setQueryData(employeesQueryKey, (previous: typeof employeesResponse | undefined) => {
+      if (!previous) return previous;
+      return {
+        ...previous,
+        data: previous.data.map(employee => (
+          employee.id === id ? { ...employee, ...patch } : employee
+        )),
+      };
+    });
+  }, [employeesQueryKey, queryClient]);
 
-  const refresh = useCallback(() => loadEmployees(), [loadEmployees]);
+  const refresh = useCallback(() => {
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: employeesQueryKey }),
+      queryClient.invalidateQueries({ queryKey: employeeCountsQueryKey(false) }),
+    ]);
+  }, [employeesQueryKey, queryClient]);
 
-  return { employees, departments, loading, meta, totalActive, refresh, patchEmployee };
+  return {
+    employees: employeesResponse.data,
+    departments,
+    loading: employeesQuery.isPending || structureQuery.isPending || countsQuery.isPending,
+    meta,
+    totalActive: counts.byStatus.active,
+    refresh,
+    patchEmployee,
+  };
 };

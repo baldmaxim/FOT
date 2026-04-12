@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Search, X, Database, RefreshCw, AlertCircle } from 'lucide-react';
+import { buildApiUrl, buildAuthHeaders } from '../../api/client';
 import '../../styles/SigurRawDataPage.css';
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 минут
@@ -87,9 +88,6 @@ export const SigurRawDataPage: React.FC = () => {
     setProgress(null);
     setFromCache(false);
 
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
-    const token = localStorage.getItem('access_token');
-
     try {
       const params = new URLSearchParams({ type: tabId });
       if (tabId === 'events') {
@@ -97,8 +95,9 @@ export const SigurRawDataPage: React.FC = () => {
         if (eventStartDate) params.append('startDate', eventStartDate);
         if (eventEndDate) params.append('endDate', eventEndDate);
       }
-      const response = await fetch(`${apiUrl}/sigur/stream?${params}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      const response = await fetch(buildApiUrl(`/sigur/stream?${params}`), {
+        credentials: 'include',
+        headers: buildAuthHeaders(),
         signal: controller.signal,
       });
 
@@ -149,7 +148,7 @@ export const SigurRawDataPage: React.FC = () => {
       setLoading(false);
       setProgress(null);
     }
-  }, []);
+  }, [employeeIdInput, eventEndDate, eventStartDate]);
 
   useEffect(() => {
     if (activeTab !== 'events') loadData(activeTab);

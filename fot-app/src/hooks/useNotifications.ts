@@ -2,8 +2,10 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { notificationApi } from '../services/notificationService';
 import type { INotification } from '../services/notificationService';
 import { wsService } from '../services/websocket';
+import { useAuth } from '../contexts/AuthContext';
 
-export const useNotifications = () => {
+export const useNotifications = (realtimeEnabled = true) => {
+  const { token, isAuthenticated, isApproved } = useAuth();
   const [notifications, setNotifications] = useState<INotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -15,6 +17,18 @@ export const useNotifications = () => {
       .then(res => setUnreadCount(res.data.count))
       .catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (realtimeEnabled && isAuthenticated && isApproved && token) {
+      wsService.connect(token, 'notifications');
+      return () => {
+        wsService.disconnect('notifications');
+      };
+    }
+
+    wsService.disconnect('notifications');
+    return undefined;
+  }, [isApproved, isAuthenticated, realtimeEnabled, token]);
 
   // Подписка на Socket.IO
   useEffect(() => {

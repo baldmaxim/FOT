@@ -1,25 +1,32 @@
-import { type FC, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { type FC, Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, ChevronDown, Download } from 'lucide-react';
 import { TimesheetStats } from '../../components/timesheet/TimesheetStats';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
-import { TimesheetSidePanel } from '../../components/timesheet/TimesheetSidePanel';
-import { TimesheetCorrectionModal } from '../../components/timesheet/TimesheetCorrectionModal';
-import { LateRatingModal } from '../../components/timesheet/LateRatingModal';
 import { timesheetService } from '../../services/timesheetService';
-import { apiClient } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
+import { useStructureTree } from '../../hooks/useStructure';
 import { getMonthLabel, formatDateRu } from '../../utils/calendarUtils';
 import type {
   TimesheetEntry,
   TimesheetEmployee,
   TimesheetStats as ITimesheetStats,
   TimesheetStatus,
-  IProductionCalendarMonth,
 } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
 import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
 import { getScheduleForTimesheetDay, getWorkHoursForDay } from '../../utils/scheduleUtils';
 import './TimesheetPage.css';
+
+const TimesheetSidePanel = lazy(() => import('../../components/timesheet/TimesheetSidePanel').then(module => ({
+  default: module.TimesheetSidePanel,
+})));
+const TimesheetCorrectionModal = lazy(() => import('../../components/timesheet/TimesheetCorrectionModal').then(module => ({
+  default: module.TimesheetCorrectionModal,
+})));
+const LateRatingModal = lazy(() => import('../../components/timesheet/LateRatingModal').then(module => ({
+  default: module.LateRatingModal,
+})));
 
 interface IDeptOption {
   id: string;
@@ -98,21 +105,16 @@ const DEFAULT_STATS: ITimesheetStats = {
   actualHours: 0,
   deviations: { late: 0, absent: 0, sick: 0 },
 };
+const EMPTY_SCHEDULES: Record<number, IResolvedSchedule> = {};
+const EMPTY_DAILY_SCHEDULES: Record<number, Record<string, IResolvedSchedule>> = {};
 
 export const TimesheetPage: FC = () => {
   const { hasPermission, profile } = useAuth();
+  const queryClient = useQueryClient();
   const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
-
-  const [employees, setEmployees] = useState<TimesheetEmployee[]>([]);
-  const [entries, setEntries] = useState<TimesheetEntry[]>([]);
-  const [stats, setStats] = useState<ITimesheetStats>(DEFAULT_STATS);
-  const [schedules, setSchedules] = useState<Record<number, IResolvedSchedule>>({});
-  const [dailySchedules, setDailySchedules] = useState<Record<number, Record<string, IResolvedSchedule>>>({});
-  const [calendar, setCalendar] = useState<IProductionCalendarMonth | null>(null);
-  const [loading, setLoading] = useState(false);
 
   // Mobile compact mode
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
@@ -126,7 +128,6 @@ export const TimesheetPage: FC = () => {
   // Schedule settings panel
 
   // Department selector
-  const [deptOptions, setDeptOptions] = useState<IDeptOption[]>([]);
   const [selectedDeptId, setSelectedDeptId] = useState<string | null>(null);
   const [deptOpen, setDeptOpen] = useState(false);
   const [deptSearch, setDeptSearch] = useState('');
@@ -145,21 +146,14 @@ export const TimesheetPage: FC = () => {
   const [modalDay, setModalDay] = useState<number>(1);
   const [modalEntry, setModalEntry] = useState<TimesheetEntry | null>(null);
 
-  // Load departments
-  useEffect(() => {
-    apiClient.get<{ success: boolean; data: { departments: IDbDepartment[] } }>('/structure')
-      .then(res => {
-        const deps = res.data?.departments || [];
-        const flat = sortDepartments(flattenTree(deps));
-        setDeptOptions(flat);
-
-        // Для header: автоматически выбрать свой отдел
-        if (isDepartmentScope && profile?.department_id && !selectedDeptId) {
-          setSelectedDeptId(profile.department_id);
-        }
-      })
-      .catch(() => {});
-  }, [isDepartmentScope, profile?.department_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const structureQuery = useStructureTree();
+  const deptOptions = useMemo(
+    () => sortDepartments(flattenTree(structureQuery.data?.departments ?? [])),
+    [structureQuery.data],
+  );
+  const effectiveSelectedDeptId = isDepartmentScope
+    ? (selectedDeptId || profile?.department_id || null)
+    : selectedDeptId;
 
   // Close dept dropdown on outside click
   useEffect(() => {
@@ -172,36 +166,30 @@ export const TimesheetPage: FC = () => {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // Load timesheet data
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const monthStr = `${year}-${String(month).padStart(2, '0')}`;
-      const res = await timesheetService.getAll({
-        month: monthStr,
-        department_id: selectedDeptId || undefined,
-      });
-      setEmployees(res.employees || []);
-      setEntries(res.entries || []);
-      setStats(res.stats || DEFAULT_STATS);
-      setSchedules(res.schedules || {});
-      setDailySchedules(res.daily_schedules || {});
-      setCalendar(res.calendar || null);
-    } catch {
-      setEmployees([]);
-      setEntries([]);
-      setStats(DEFAULT_STATS);
-      setSchedules({});
-      setDailySchedules({});
-      setCalendar(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [year, month, selectedDeptId]);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  const monthStr = useMemo(() => `${year}-${String(month).padStart(2, '0')}`, [year, month]);
+  const timesheetQuery = useQuery({
+    queryKey: ['timesheet-page', monthStr, effectiveSelectedDeptId ?? 'none'],
+    queryFn: () => timesheetService.getAll({
+      month: monthStr,
+      department_id: effectiveSelectedDeptId || undefined,
+    }),
+    enabled: Boolean(effectiveSelectedDeptId),
+    staleTime: 30_000,
+    placeholderData: previousData => previousData,
+  });
+  const employees = useMemo<TimesheetEmployee[]>(
+    () => timesheetQuery.data?.employees || [],
+    [timesheetQuery.data],
+  );
+  const entries = useMemo<TimesheetEntry[]>(
+    () => timesheetQuery.data?.entries || [],
+    [timesheetQuery.data],
+  );
+  const stats = timesheetQuery.data?.stats || DEFAULT_STATS;
+  const schedules = timesheetQuery.data?.schedules || EMPTY_SCHEDULES;
+  const dailySchedules = timesheetQuery.data?.daily_schedules || EMPTY_DAILY_SCHEDULES;
+  const calendar = timesheetQuery.data?.calendar || null;
+  const loading = Boolean(effectiveSelectedDeptId) && timesheetQuery.isLoading;
 
   // Month navigation
   const prevMonth = () => {
@@ -229,7 +217,7 @@ export const TimesheetPage: FC = () => {
   };
 
   // Save correction
-  const handleSaveCorrection = async (status: TimesheetStatus, hours: number | null, notes: string) => {
+  const handleSaveCorrection = useCallback(async (status: TimesheetStatus, hours: number | null, notes: string) => {
     if (!modalEmployee) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
@@ -245,11 +233,11 @@ export const TimesheetPage: FC = () => {
         });
       }
       setModalOpen(false);
-      await loadData();
+      await queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, effectiveSelectedDeptId ?? 'none'] });
     } catch (err) {
       console.error('Save correction error:', err);
     }
-  };
+  }, [modalEmployee, year, month, modalDay, modalEntry, queryClient, monthStr, effectiveSelectedDeptId]);
 
   // Export
   const handleExport = async () => {
@@ -257,7 +245,7 @@ export const TimesheetPage: FC = () => {
       const monthStr = `${year}-${String(month).padStart(2, '0')}`;
       const blob = await timesheetService.export({
         month: monthStr,
-        department_id: selectedDeptId || undefined,
+        department_id: effectiveSelectedDeptId || undefined,
       });
       const monthNames = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
         'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -286,8 +274,8 @@ export const TimesheetPage: FC = () => {
     return deptOptions.filter(d => d.name.toLowerCase().includes(q));
   }, [deptOptions, deptSearch]);
 
-  const selectedDeptName = selectedDeptId
-    ? deptOptions.find(d => d.id === selectedDeptId)?.name || 'Отдел'
+  const selectedDeptName = effectiveSelectedDeptId
+    ? deptOptions.find(d => d.id === effectiveSelectedDeptId)?.name || 'Отдел'
     : 'Все отделы';
 
   const modalDefaultHours = useMemo(() => {
@@ -355,7 +343,7 @@ export const TimesheetPage: FC = () => {
         </div>
         <div className="ts-header-right">
           <TimesheetApprovalBar
-            departmentId={selectedDeptId}
+            departmentId={effectiveSelectedDeptId}
             period={`${year}-${String(month).padStart(2, '0')}`}
           />
           <button className="ts-btn" onClick={handleExport}>
@@ -373,7 +361,7 @@ export const TimesheetPage: FC = () => {
         <div className="ts-table-container">
           <div className="ts-loading">Загрузка табеля...</div>
         </div>
-      ) : !selectedDeptId ? (
+      ) : !effectiveSelectedDeptId ? (
         <div className="ts-table-container">
           <div className="ts-loading">Выберите отдел для отображения табеля</div>
         </div>
@@ -393,45 +381,57 @@ export const TimesheetPage: FC = () => {
       )}
 
       {/* Side Panel */}
-      <TimesheetSidePanel
-        open={panelOpen}
-        onClose={() => setPanelOpen(false)}
-        employee={panelEmployee}
-        entries={panelEntries}
-        year={year}
-        month={month}
-        schedules={schedules}
-        dailySchedules={dailySchedules}
-        calendar={calendar}
-      />
+      {panelOpen && (
+        <Suspense fallback={null}>
+          <TimesheetSidePanel
+            open={panelOpen}
+            onClose={() => setPanelOpen(false)}
+            employee={panelEmployee}
+            entries={panelEntries}
+            year={year}
+            month={month}
+            schedules={schedules}
+            dailySchedules={dailySchedules}
+            calendar={calendar}
+          />
+        </Suspense>
+      )}
 
       {/* Late Rating Modal */}
-      <LateRatingModal
-        open={lateModalOpen}
-        onClose={() => setLateModalOpen(false)}
-        employees={employees}
-        entries={entries}
-        schedules={schedules}
-        dailySchedules={dailySchedules}
-      />
+      {lateModalOpen && (
+        <Suspense fallback={null}>
+          <LateRatingModal
+            open={lateModalOpen}
+            onClose={() => setLateModalOpen(false)}
+            employees={employees}
+            entries={entries}
+            schedules={schedules}
+            dailySchedules={dailySchedules}
+          />
+        </Suspense>
+      )}
 
       {/* Correction Modal */}
-      <TimesheetCorrectionModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        onSave={handleSaveCorrection}
-        initialStatus={modalEntry?.status || 'work'}
-        initialHours={modalDefaultHours}
-        dayLabel={`${formatDateRu(modalDay, month)}`}
-        employeeName={modalEmployee?.full_name}
-        employeeId={modalEmployee?.id}
-        workDate={`${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`}
-        correctionInfo={modalEntry?.is_correction ? {
-          is_correction: true,
-          corrected_at: modalEntry.corrected_at,
-          corrected_by_name: modalEntry.corrected_by_name,
-        } : null}
-      />
+      {modalOpen && (
+        <Suspense fallback={null}>
+          <TimesheetCorrectionModal
+            open={modalOpen}
+            onClose={() => setModalOpen(false)}
+            onSave={handleSaveCorrection}
+            initialStatus={modalEntry?.status || 'work'}
+            initialHours={modalDefaultHours}
+            dayLabel={`${formatDateRu(modalDay, month)}`}
+            employeeName={modalEmployee?.full_name}
+            employeeId={modalEmployee?.id}
+            workDate={`${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`}
+            correctionInfo={modalEntry?.is_correction ? {
+              is_correction: true,
+              corrected_at: modalEntry.corrected_at,
+              corrected_by_name: modalEntry.corrected_by_name,
+            } : null}
+          />
+        </Suspense>
+      )}
     </div>
   );
 };

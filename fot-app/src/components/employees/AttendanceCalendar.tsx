@@ -16,6 +16,9 @@ interface IAttendanceCalendarProps {
   onPrevMonth: () => void;
   onNextMonth: () => void;
   onDayClick?: (day: number) => void;
+  onDayPrefetch?: (day: number) => void;
+  selectedDay?: number | null;
+  loading?: boolean;
 }
 
 const formatWorkedTime = (totalSeconds: number): string => {
@@ -25,7 +28,7 @@ const formatWorkedTime = (totalSeconds: number): string => {
 };
 
 export const AttendanceCalendar: FC<IAttendanceCalendarProps> = ({
-  days, month, year, onPrevMonth, onNextMonth, onDayClick,
+  days, month, year, onPrevMonth, onNextMonth, onDayClick, onDayPrefetch, selectedDay = null, loading = false,
 }) => {
   const today = new Date();
   const isToday = (day: number) =>
@@ -76,33 +79,45 @@ export const AttendanceCalendar: FC<IAttendanceCalendarProps> = ({
           </div>
         </div>
 
-        <div className="ec-cal-grid">
-          {DAY_HEADERS.map(h => (
-            <div key={h} className="ec-cal-day-header">{h}</div>
-          ))}
-          {emptyCells}
-          {Array.from({ length: daysInMonth }, (_, i) => {
-            const day = i + 1;
-            const data = dayMap.get(day);
-            const status = data?.status || '';
-            const classes = ['ec-cal-day', status, isToday(day) ? 'today' : ''].filter(Boolean).join(' ');
+        {loading ? (
+          <div className="ec-loading">Загрузка табеля...</div>
+        ) : (
+          <div className="ec-cal-grid">
+            {DAY_HEADERS.map(h => (
+              <div key={h} className="ec-cal-day-header">{h}</div>
+            ))}
+            {emptyCells}
+            {Array.from({ length: daysInMonth }, (_, i) => {
+              const day = i + 1;
+              const data = dayMap.get(day);
+              const status = data?.status || '';
+              const classes = [
+                'ec-cal-day',
+                status,
+                isToday(day) ? 'today' : '',
+                selectedDay === day ? 'selected' : '',
+              ].filter(Boolean).join(' ');
 
-            const clickable = data && data.status !== 'future' && data.status !== 'weekend';
-            return (
-              <div
-                key={day}
-                className={`${classes}${clickable ? ' clickable' : ''}`}
-                onClick={() => clickable && onDayClick?.(day)}
-              >
-                {day}
-                {data && data.totalSeconds > 0 && (
-                  <span className="ec-time-badge">{formatWorkedTime(data.totalSeconds)}</span>
-                )}
-              </div>
-            );
-          })}
-          {trailingCells}
-        </div>
+              const clickable = data && data.status !== 'future' && data.status !== 'weekend';
+              return (
+                <div
+                  key={day}
+                  className={`${classes}${clickable ? ' clickable' : ''}`}
+                  onClick={() => clickable && onDayClick?.(day)}
+                  onMouseEnter={() => clickable && onDayPrefetch?.(day)}
+                  onFocus={() => clickable && onDayPrefetch?.(day)}
+                  onTouchStart={() => clickable && onDayPrefetch?.(day)}
+                >
+                  {day}
+                  {data && data.totalSeconds > 0 && (
+                    <span className="ec-time-badge">{formatWorkedTime(data.totalSeconds)}</span>
+                  )}
+                </div>
+              );
+            })}
+            {trailingCells}
+          </div>
+        )}
       </div>
     </div>
   );

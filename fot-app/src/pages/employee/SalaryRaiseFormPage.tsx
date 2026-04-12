@@ -1,4 +1,5 @@
-import { type FC, useState, useEffect, useCallback, useRef } from 'react';
+import { type FC, useState, useEffect, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   salaryRaiseService,
@@ -7,9 +8,9 @@ import {
   type IAchievement,
   type IResponsibilityChanges,
   type ISelfAssessment,
-  type ISalaryRaiseRequest,
   type ISalaryRaiseAttachment,
 } from '../../services/salaryRaiseService';
+import { useSalaryRaiseRequest } from '../../hooks/useSalaryRaiseData';
 import styles from './SalaryRaiseFormPage.module.css';
 
 const EMPTY_ACHIEVEMENT: IAchievement = {
@@ -50,10 +51,10 @@ export const SalaryRaiseFormPage: FC = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const isEdit = !!id;
+  const requestId = id ? Number(id) : null;
+  const queryClient = useQueryClient();
 
-  const [loading, setLoading] = useState(isEdit);
   const [saving, setSaving] = useState(false);
-  const [existing, setExisting] = useState<ISalaryRaiseRequest | null>(null);
 
   // Блок Б
   const [requestType, setRequestType] = useState<SalaryRaiseRequestType>('performance');
@@ -75,34 +76,34 @@ export const SalaryRaiseFormPage: FC = () => {
   const [uploading, setUploading] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadTargetIdx = useRef<number | null>(null);
+  const hydratedRequestId = useRef<number | null>(null);
+  const existingQuery = useSalaryRaiseRequest(requestId, isEdit && !!requestId);
+  const existing = existingQuery.data ?? null;
 
   const snapshot = existing?.employee_snapshot || null;
-  const currentSalary = snapshot?.salary_actual ?? snapshot?.current_salary ?? 0;
+  const currentSalary = snapshot?.current_salary ?? 0;
   const raisePercent = currentSalary > 0 && requestedSalary > 0
     ? (((requestedSalary - currentSalary) / currentSalary) * 100).toFixed(1)
     : '0';
 
-  const loadExisting = useCallback(async () => {
-    if (!id) return;
-    try {
-      const data = await salaryRaiseService.getById(Number(id));
-      setExisting(data);
-      setRequestType(data.request_type);
-      setRequestedSalary(data.requested_salary);
-      setDesiredDate(data.desired_effective_date);
-      setReasonBrief(data.reason_brief);
-      setAchievements(data.achievements.length > 0 ? data.achievements : [{ ...EMPTY_ACHIEVEMENT }]);
-      setResponsibility({ ...EMPTY_RESPONSIBILITY, ...data.responsibility_changes });
-      setSelfAssessment({ ...EMPTY_ASSESSMENT, ...data.self_assessment });
-      setAttachments(data.attachments || []);
-    } catch {
+  useEffect(() => {
+    if (existingQuery.isError) {
       navigate('/employee/salary-raise');
-    } finally {
-      setLoading(false);
     }
-  }, [id, navigate]);
+  }, [existingQuery.isError, navigate]);
 
-  useEffect(() => { loadExisting(); }, [loadExisting]);
+  useEffect(() => {
+    if (!existing || hydratedRequestId.current === existing.id) return;
+    hydratedRequestId.current = existing.id;
+    setRequestType(existing.request_type);
+    setRequestedSalary(existing.requested_salary);
+    setDesiredDate(existing.desired_effective_date);
+    setReasonBrief(existing.reason_brief);
+    setAchievements(existing.achievements.length > 0 ? existing.achievements : [{ ...EMPTY_ACHIEVEMENT }]);
+    setResponsibility({ ...EMPTY_RESPONSIBILITY, ...existing.responsibility_changes });
+    setSelfAssessment({ ...EMPTY_ASSESSMENT, ...existing.self_assessment });
+    setAttachments(existing.attachments || []);
+  }, [existing]);
 
   const handleSave = async (submit: boolean) => {
     setSaving(true);
@@ -131,6 +132,7 @@ export const SalaryRaiseFormPage: FC = () => {
         await salaryRaiseService.submit(savedId);
       }
 
+      await queryClient.invalidateQueries({ queryKey: ['salary-raise'] });
       navigate('/employee/salary-raise');
     } catch (err) {
       console.error('Save error:', err);
@@ -212,7 +214,7 @@ export const SalaryRaiseFormPage: FC = () => {
     return (bytes / (1024 * 1024)).toFixed(1) + ' МБ';
   };
 
-  if (loading) return <div className={styles.loading}>Загрузка...</div>;
+  if (isEdit && existingQuery.isLoading) return <div className={styles.loading}>Загрузка...</div>;
 
   return (
     <div className={styles.page}>
@@ -248,7 +250,7 @@ export const SalaryRaiseFormPage: FC = () => {
             </div>
             <div className={styles.snapshotItem}>
               <span className={styles.snapshotLabel}>Текущий оклад</span>
-              <span className={styles.snapshotValue}>{formatSalary(snapshot.salary_actual ?? snapshot.current_salary)}</span>
+              <span className={styles.snapshotValue}>{formatSalary(snapshot.current_salary ?? snapshot.salary_actual)}</span>
             </div>
             <div className={styles.snapshotItem}>
               <span className={styles.snapshotLabel}>Дата найма</span>

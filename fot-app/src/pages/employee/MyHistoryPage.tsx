@@ -1,27 +1,17 @@
-import { useState, useEffect, type FC } from 'react';
+import { type FC } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { employeeService } from '../../services/employeeService';
 import { EmployeeHistorySection } from '../../components/employees/EmployeeHistorySection';
+import { useEmployeeHistory } from '../../hooks/usePortalData';
 import type { EmployeeHistoryEvent } from '../../types';
+
+const EMPTY_HISTORY: EmployeeHistoryEvent[] = [];
 
 export const MyHistoryPage: FC = () => {
   const { profile } = useAuth();
-  const [history, setHistory] = useState<EmployeeHistoryEvent[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, isLoading } = useEmployeeHistory(profile?.employee_id ?? null, !!profile?.employee_id);
+  const history = data ?? EMPTY_HISTORY;
 
-  useEffect(() => {
-    if (!profile?.employee_id) {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    employeeService.getHistory(profile.employee_id)
-      .then(setHistory)
-      .catch(() => setHistory([]))
-      .finally(() => setLoading(false));
-  }, [profile?.employee_id]);
-
-  if (loading) {
+  if (isLoading) {
     return <div style={{ padding: 24, color: 'var(--text-tertiary)' }}>Загрузка...</div>;
   }
 
