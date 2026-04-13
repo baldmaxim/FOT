@@ -16,6 +16,27 @@ const WORK_START = '09:00:00';
 const WORK_END = '18:00:00';
 const LATE_THRESHOLD_DEFAULT = WORK_START;
 const SLIGHTLY_LATE_THRESHOLD_DEFAULT = '09:15:00';
+const DASHBOARD_PAGE_SIZE = 1000;
+
+type DashboardSummaryRow = {
+  employee_id: number;
+  date: string;
+  first_entry: string | null;
+  last_exit: string | null;
+  total_hours: number | null;
+  is_present: boolean;
+};
+
+type DashboardEventRow = {
+  event_date: string;
+  event_time: string;
+  employee_id: number;
+};
+
+type DashboardTodayEventRow = {
+  event_time: string;
+  employee_id: number;
+};
 
 // In-memory кэш по ключу (deptId, period, month).
 // TTL 60с — фронт опрашивает раз в 120с, так что реальный egress падает в разы при
@@ -25,6 +46,110 @@ const DASHBOARD_TTL_MS = 60_000;
 
 export function invalidateDashboardCache(): void {
   dashboardCache.clear();
+}
+
+async function fetchSummaryPages(
+  employeeIds: number[],
+  startDate: string,
+  endDate: string,
+): Promise<DashboardSummaryRow[]> {
+  if (employeeIds.length === 0) return [];
+
+  const rows: DashboardSummaryRow[] = [];
+  let offset = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('skud_daily_summary')
+      .select('employee_id, date, first_entry, last_exit, total_hours, is_present')
+      .in('employee_id', employeeIds)
+      .gte('date', startDate)
+      .lte('date', endDate)
+      .order('date', { ascending: true })
+      .order('employee_id', { ascending: true })
+      .range(offset, offset + DASHBOARD_PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const page = (data || []) as DashboardSummaryRow[];
+    if (page.length === 0) break;
+
+    rows.push(...page);
+    if (page.length < DASHBOARD_PAGE_SIZE) break;
+    offset += DASHBOARD_PAGE_SIZE;
+  }
+
+  return rows;
+}
+
+async function fetchEntryEventPages(
+  employeeIds: number[],
+  startDate: string,
+  endDate: string,
+): Promise<DashboardEventRow[]> {
+  if (employeeIds.length === 0) return [];
+
+  const rows: DashboardEventRow[] = [];
+  let offset = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('skud_events')
+      .select('event_date, event_time, employee_id')
+      .eq('direction', 'entry')
+      .in('employee_id', employeeIds)
+      .gte('event_date', startDate)
+      .lte('event_date', endDate)
+      .order('event_date', { ascending: true })
+      .order('employee_id', { ascending: true })
+      .order('event_time', { ascending: true })
+      .range(offset, offset + DASHBOARD_PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const page = (data || []) as DashboardEventRow[];
+    if (page.length === 0) break;
+
+    rows.push(...page);
+    if (page.length < DASHBOARD_PAGE_SIZE) break;
+    offset += DASHBOARD_PAGE_SIZE;
+  }
+
+  return rows;
+}
+
+async function fetchTodayEventPages(
+  employeeIds: number[],
+  date: string,
+  direction: 'entry' | 'exit',
+): Promise<DashboardTodayEventRow[]> {
+  if (employeeIds.length === 0) return [];
+
+  const rows: DashboardTodayEventRow[] = [];
+  let offset = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('skud_events')
+      .select('event_time, employee_id')
+      .eq('event_date', date)
+      .eq('direction', direction)
+      .in('employee_id', employeeIds)
+      .order('employee_id', { ascending: true })
+      .order('event_time', { ascending: true })
+      .range(offset, offset + DASHBOARD_PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const page = (data || []) as DashboardTodayEventRow[];
+    if (page.length === 0) break;
+
+    rows.push(...page);
+    if (page.length < DASHBOARD_PAGE_SIZE) break;
+    offset += DASHBOARD_PAGE_SIZE;
+  }
+
+  return rows;
 }
 
 export async function getDashboardStats(
@@ -157,30 +282,24 @@ export async function getDashboardStats(
   const fourWeeksAgo = new Date(monday);
   fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 21);
   const fourWeeksAgoStr = formatDateToISO(fourWeeksAgo);
+  const arrivalRangeStart = period === 'today' ? mondayStr : period === 'month' ? monthStartStr : fourWeeksAgoStr;
+  const arrivalRangeEnd = period === 'month' ? periodEndStr : todayStr;
+  const shouldFetchPeriodEvents = period !== 'today';
+  const canReusePeriodEventsForArrival = shouldFetchPeriodEvents
+    && arrivalRangeStart === periodStartStr
+    && arrivalRangeEnd === periodEndStr;
+  const periodEventsPromise = shouldFetchPeriodEvents
+    ? fetchEntryEventPages(empIds, periodStartStr, periodEndStr)
+    : Promise.resolve([]);
+  const arrivalEventsPromise = canReusePeriodEventsForArrival
+    ? periodEventsPromise
+    : fetchEntryEventPages(empIds, arrivalRangeStart, arrivalRangeEnd);
 
   // Параллельные запросы: daily_summary + 3 типа событий
-  const [summariesRes, todayEventsRes, todayExitEventsRes, recentEventsRes] = await Promise.all([
-    supabase
-      .from('skud_daily_summary')
-      .select('employee_id, date, first_entry, last_exit, total_hours, is_present')
-      .in('employee_id', empIds)
-      .gte('date', summaryStartDate)
-      .lte('date', summaryEndDate)
-      .limit(10000),
-    supabase
-      .from('skud_events')
-      .select('event_time, employee_id')
-      .eq('event_date', todayStr)
-      .eq('direction', 'entry')
-      .in('employee_id', empIds)
-      .limit(5000),
-    supabase
-      .from('skud_events')
-      .select('event_time, employee_id')
-      .eq('event_date', todayStr)
-      .eq('direction', 'exit')
-      .in('employee_id', empIds)
-      .limit(5000),
+  const [summaries, todayEvents, todayExitEvents, recentEventsRes, periodEvents, arrivalEvents] = await Promise.all([
+    fetchSummaryPages(empIds, summaryStartDate, summaryEndDate),
+    fetchTodayEventPages(empIds, todayStr, 'entry'),
+    fetchTodayEventPages(empIds, todayStr, 'exit'),
     supabase
       .from('skud_events')
       .select('event_time, employee_id, physical_person, access_point, direction')
@@ -188,11 +307,10 @@ export async function getDashboardStats(
       .in('employee_id', empIds)
       .order('event_time', { ascending: false })
       .limit(50),
+    periodEventsPromise,
+    arrivalEventsPromise,
   ]);
 
-  const summaries = summariesRes.data;
-  const todayEvents = todayEventsRes.data;
-  const todayExitEvents = todayExitEventsRes.data;
   const recentEventsRaw = recentEventsRes.data;
 
 
@@ -257,19 +375,6 @@ export async function getDashboardStats(
   };
 
   // Average arrival by weekday
-  const arrivalRangeStart = period === 'today' ? mondayStr : period === 'month' ? monthStartStr : fourWeeksAgoStr;
-  const arrivalRangeEnd = todayStr;
-  const arrivalEventsQuery = supabase
-    .from('skud_events')
-    .select('event_date, event_time, employee_id')
-    .eq('direction', 'entry')
-    .in('employee_id', empIds)
-    .gte('event_date', arrivalRangeStart)
-    .lte('event_date', arrivalRangeEnd)
-    .order('event_time', { ascending: true })
-    .limit(10000);
-  const { data: arrivalEvents } = await arrivalEventsQuery;
-
   const firstEntryMap = new Map<string, string>();
   for (const ev of arrivalEvents || []) {
     const key = `${ev.employee_id}:${ev.event_date}`;
@@ -343,16 +448,6 @@ export async function getDashboardStats(
       }
     }
   } else {
-    const periodEventsQuery = supabase
-      .from('skud_events')
-      .select('event_time, event_date')
-      .eq('direction', 'entry')
-      .in('employee_id', empIds)
-      .gte('event_date', periodStartStr)
-      .lte('event_date', periodEndStr)
-      .limit(10000);
-    const { data: periodEvents } = await periodEventsQuery;
-
     for (const evt of periodEvents || []) {
       if (!evt.event_time) continue;
       const hour = parseInt(evt.event_time.split(':')[0], 10);
@@ -438,7 +533,6 @@ export async function getDashboardStats(
   const topLate = [...topLateCountByEmp.entries()]
     .filter(([, count]) => count > 0)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
     .map(([empId, lateCnt]) => {
       const totalMin = avgArrivalByEmp.get(empId) || 0;
       const cnt = arrivalCountByEmp.get(empId) || 1;
@@ -472,7 +566,23 @@ export async function getDashboardStats(
     const pExpectedTotal = officeEmpIds.length * pWorkDays;
     const attendanceRate = pExpectedTotal > 0 ? Math.round((totalPresent / pExpectedTotal) * 100) : 0;
 
-    console.log('[dashboard-stats]', { period, periodStartStr, periodEndStr, pWorkDays, officeEmpCount: officeEmpIds.length, remoteCount: remoteEmpIds.size, totalEmp: empIds.length, totalPresent, avgPresent, dailyBreakdown: [...dailyPresent.entries()].map(([d, s]) => `${d}:${s.size}`) });
+    console.log('[dashboard-stats]', {
+      period,
+      periodStartStr,
+      periodEndStr,
+      pWorkDays,
+      officeEmpCount: officeEmpIds.length,
+      remoteCount: remoteEmpIds.size,
+      totalEmp: empIds.length,
+      summariesLoaded: summaries.length,
+      arrivalEventsLoaded: arrivalEvents.length,
+      periodEntryEventsLoaded: periodEvents.length,
+      todayEntryEventsLoaded: todayEvents.length,
+      todayExitEventsLoaded: todayExitEvents.length,
+      totalPresent,
+      avgPresent,
+      dailyBreakdown: [...dailyPresent.entries()].map(([d, s]) => `${d}:${s.size}`),
+    });
 
     const pLateCount = periodSummaries.filter(s => s.first_entry && !remoteEmpIds.has(s.employee_id) && s.first_entry > getLateThresholdFor(s.employee_id, s.date)).length;
     const prevLateCount = prevPeriodSummaries.filter(s => s.first_entry && !remoteEmpIds.has(s.employee_id) && s.first_entry > getLateThresholdFor(s.employee_id, s.date)).length;

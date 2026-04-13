@@ -395,7 +395,7 @@ export const DashboardPage: React.FC = () => {
       {/* Late rating modal */}
       {lateModalOpen && stats && (
         <div className="dash-modal-overlay" onClick={() => setLateModalOpen(false)}>
-          <div className="dash-modal" onClick={e => e.stopPropagation()}>
+          <div className={`dash-modal ${period !== 'today' ? 'dash-modal--period' : ''}`} onClick={e => e.stopPropagation()}>
             <div className="dash-modal-header">
               <span>Опоздания за {period === 'today' ? 'сегодня' : period === 'week' ? 'неделю' : 'месяц'}</span>
               <button className="dash-modal-close" onClick={() => setLateModalOpen(false)}>

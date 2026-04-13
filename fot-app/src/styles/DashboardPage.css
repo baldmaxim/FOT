@@ -504,6 +504,16 @@
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
 }
 
+.dash-modal--period {
+  height: min(640px, calc(100vh - 64px));
+}
+
+.dash-modal--period .dash-modal-body {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+
 .dash-modal-header {
   display: flex;
   align-items: center;
