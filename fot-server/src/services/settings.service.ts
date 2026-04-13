@@ -19,6 +19,20 @@ export interface ISigurMonitorSettings {
   timezone: string;
 }
 
+export interface ISkudTravelSettings {
+  limitMinutes: number | null;
+}
+
+export interface ITimesheetReminderSettings {
+  enabled: boolean;
+  timezone: string;
+  openingReminderHour: number;
+  deadlineMorningHour: number;
+  deadlineAfternoonHour: number;
+  escalationHour: number;
+  overdueHour: number;
+}
+
 export const DEFAULT_SIGUR_MONITOR_SETTINGS: ISigurMonitorSettings = {
   enabled: true,
   failureThreshold: 2,
@@ -30,9 +44,15 @@ export const DEFAULT_SIGUR_MONITOR_SETTINGS: ISigurMonitorSettings = {
   timezone: 'Europe/Moscow',
 };
 
-export interface ISkudTravelSettings {
-  limitMinutes: number | null;
-}
+export const DEFAULT_TIMESHEET_REMINDER_SETTINGS: ITimesheetReminderSettings = {
+  enabled: true,
+  timezone: 'Europe/Moscow',
+  openingReminderHour: 9,
+  deadlineMorningHour: 10,
+  deadlineAfternoonHour: 16,
+  escalationHour: 17,
+  overdueHour: 9,
+};
 
 let cache: Map<string, string | null> = new Map();
 let cacheLoadedAt = 0;
@@ -55,6 +75,11 @@ const parseNullablePositiveInt = (value: string | null | undefined): number | nu
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 };
 
+const parseHour = (value: string | null | undefined, fallback: number): number => {
+  if (value == null || value.trim() === '') return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 23 ? parsed : fallback;
+};
 const loadCache = async () => {
   if (Date.now() - cacheLoadedAt < CACHE_TTL && cache.size > 0) return;
   const { data } = await supabase.from('system_settings').select('key, value');
@@ -136,31 +161,6 @@ export const settingsService = {
       bucketName,
       enabled: !!(accountId && accessKeyId && secretAccessKey),
     };
-  },
-
-  async getSkudTravelConfig(): Promise<ISkudTravelSettings> {
-    const values = await this.getMultiple(['skud_travel_limit_minutes']);
-    return {
-      limitMinutes: parseNullablePositiveInt(values.skud_travel_limit_minutes),
-    };
-  },
-
-  async setSkudTravelConfig(config: Partial<ISkudTravelSettings>, userId: string): Promise<ISkudTravelSettings> {
-    const current = await this.getSkudTravelConfig();
-    const next: ISkudTravelSettings = {
-      limitMinutes: config.limitMinutes ?? current.limitMinutes,
-    };
-
-    await this.setMultiple([
-      {
-        key: 'skud_travel_limit_minutes',
-        value: next.limitMinutes != null ? String(next.limitMinutes) : null,
-        description: 'Единый лимит передвижения между объектами в минутах',
-      },
-    ], userId);
-
-    this.invalidateCache();
-    return this.getSkudTravelConfig();
   },
 
   async getSigurMonitorConfig(): Promise<ISigurMonitorSettings> {
@@ -245,6 +245,107 @@ export const settingsService = {
 
     this.invalidateCache();
     return this.getSigurMonitorConfig();
+  },
+
+  async getTimesheetReminderConfig(): Promise<ITimesheetReminderSettings> {
+    const values = await this.getMultiple([
+      'timesheet_reminders_enabled',
+      'timesheet_reminders_timezone',
+      'timesheet_reminders_opening_hour',
+      'timesheet_reminders_deadline_morning_hour',
+      'timesheet_reminders_deadline_afternoon_hour',
+      'timesheet_reminders_escalation_hour',
+      'timesheet_reminders_overdue_hour',
+    ]);
+
+    return {
+      enabled: parseBoolean(values.timesheet_reminders_enabled, DEFAULT_TIMESHEET_REMINDER_SETTINGS.enabled),
+      timezone: values.timesheet_reminders_timezone || DEFAULT_TIMESHEET_REMINDER_SETTINGS.timezone,
+      openingReminderHour: parseHour(values.timesheet_reminders_opening_hour, DEFAULT_TIMESHEET_REMINDER_SETTINGS.openingReminderHour),
+      deadlineMorningHour: parseHour(values.timesheet_reminders_deadline_morning_hour, DEFAULT_TIMESHEET_REMINDER_SETTINGS.deadlineMorningHour),
+      deadlineAfternoonHour: parseHour(values.timesheet_reminders_deadline_afternoon_hour, DEFAULT_TIMESHEET_REMINDER_SETTINGS.deadlineAfternoonHour),
+      escalationHour: parseHour(values.timesheet_reminders_escalation_hour, DEFAULT_TIMESHEET_REMINDER_SETTINGS.escalationHour),
+      overdueHour: parseHour(values.timesheet_reminders_overdue_hour, DEFAULT_TIMESHEET_REMINDER_SETTINGS.overdueHour),
+    };
+  },
+
+  async setTimesheetReminderConfig(config: Partial<ITimesheetReminderSettings>, userId: string): Promise<ITimesheetReminderSettings> {
+    const current = await this.getTimesheetReminderConfig();
+    const next: ITimesheetReminderSettings = {
+      enabled: config.enabled ?? current.enabled,
+      timezone: config.timezone ?? current.timezone,
+      openingReminderHour: config.openingReminderHour ?? current.openingReminderHour,
+      deadlineMorningHour: config.deadlineMorningHour ?? current.deadlineMorningHour,
+      deadlineAfternoonHour: config.deadlineAfternoonHour ?? current.deadlineAfternoonHour,
+      escalationHour: config.escalationHour ?? current.escalationHour,
+      overdueHour: config.overdueHour ?? current.overdueHour,
+    };
+
+    await this.setMultiple([
+      {
+        key: 'timesheet_reminders_enabled',
+        value: String(next.enabled),
+        description: 'Включить напоминания о подаче табеля',
+      },
+      {
+        key: 'timesheet_reminders_timezone',
+        value: next.timezone,
+        description: 'IANA timezone для табельных напоминаний',
+      },
+      {
+        key: 'timesheet_reminders_opening_hour',
+        value: String(next.openingReminderHour),
+        description: 'Час напоминания в день открытия периода табеля',
+      },
+      {
+        key: 'timesheet_reminders_deadline_morning_hour',
+        value: String(next.deadlineMorningHour),
+        description: 'Час утреннего напоминания в день дедлайна табеля',
+      },
+      {
+        key: 'timesheet_reminders_deadline_afternoon_hour',
+        value: String(next.deadlineAfternoonHour),
+        description: 'Час дневного напоминания в день дедлайна табеля',
+      },
+      {
+        key: 'timesheet_reminders_escalation_hour',
+        value: String(next.escalationHour),
+        description: 'Час эскалации резервному ответственному по табелю',
+      },
+      {
+        key: 'timesheet_reminders_overdue_hour',
+        value: String(next.overdueHour),
+        description: 'Час уведомления HR о просрочке подачи табеля',
+      },
+    ], userId);
+
+    this.invalidateCache();
+    return this.getTimesheetReminderConfig();
+  },
+
+  async getSkudTravelConfig(): Promise<ISkudTravelSettings> {
+    const values = await this.getMultiple([
+      'skud_travel_limit_minutes',
+    ]);
+
+    return {
+      limitMinutes: parseNullablePositiveInt(values.skud_travel_limit_minutes),
+    };
+  },
+
+  async setSkudTravelConfig(config: { limitMinutes: number }, userId: string): Promise<ISkudTravelSettings> {
+    const limitMinutes = Math.max(1, Math.min(1440, Math.trunc(config.limitMinutes)));
+
+    await this.setMultiple([
+      {
+        key: 'skud_travel_limit_minutes',
+        value: String(limitMinutes),
+        description: 'Единый лимит передвижения между объектами в минутах',
+      },
+    ], userId);
+
+    this.invalidateCache();
+    return this.getSkudTravelConfig();
   },
 
   invalidateCache() {

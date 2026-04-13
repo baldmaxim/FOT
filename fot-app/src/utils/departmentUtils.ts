@@ -54,7 +54,6 @@ export const compareDepartmentNames = (aName: string, bName: string): number => 
   if (aType && bType) {
     const typeDiff = departmentNameCollator.compare(aType, bType);
     if (typeDiff !== 0) return typeDiff;
-
     const baseNameDiff = departmentNameCollator.compare(
       getDepartmentBaseName(aName),
       getDepartmentBaseName(bName),
@@ -88,7 +87,6 @@ export const sortDepartmentTree = (nodes: OrgDepartmentNode[]): OrgDepartmentNod
 
 export const flattenDepartmentTree = (nodes: OrgDepartmentNode[], level = 0): IFlatDepartmentOption[] => {
   const result: IFlatDepartmentOption[] = [];
-
   for (const node of nodes) {
     if (isHiddenRootFolderForLists(node, level)) {
       if (node.children?.length) {
@@ -102,7 +100,6 @@ export const flattenDepartmentTree = (nodes: OrgDepartmentNode[], level = 0): IF
       result.push(...flattenDepartmentTree(node.children, level + 1));
     }
   }
-
   return result;
 };
 

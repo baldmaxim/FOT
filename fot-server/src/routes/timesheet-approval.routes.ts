@@ -6,6 +6,15 @@ const router = Router();
 
 router.use(authenticate);
 
+// GET /api/timesheet-approvals/responsibles — ответственные по отделу
+router.get('/responsibles', requirePageAccess('/admin/settings', 'view'), timesheetApprovalController.getResponsibles);
+
+// GET /api/timesheet-approvals/responsibles/candidates — кандидаты из отдела
+router.get('/responsibles/candidates', requirePageAccess('/admin/settings', 'view'), timesheetApprovalController.getResponsibleCandidates);
+
+// PUT /api/timesheet-approvals/responsibles — сохранить ответственных по отделу
+router.put('/responsibles', requirePageAccess('/admin/settings', 'edit'), timesheetApprovalController.saveResponsibles);
+
 // POST /api/timesheet-approvals/submit — header подтверждает
 router.post('/submit', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.submit);
 
@@ -18,10 +27,16 @@ router.get('/pending', requirePageAccess('/timesheet-hr', 'view'), timesheetAppr
 // GET /api/timesheet-approvals/list?status=... — hr: список по статусу
 router.get('/list', requirePageAccess('/timesheet-hr', 'view'), timesheetApprovalController.getByStatus);
 
+// GET /api/timesheet-approvals/:id/history — hr: история согласования
+router.get('/:id/history', requirePageAccess('/timesheet-hr', 'view'), timesheetApprovalController.getHistory);
+
 // POST /api/timesheet-approvals/:id/approve — hr утверждает
 router.post('/:id/approve', requirePageAccess('/timesheet-hr', 'edit'), timesheetApprovalController.approve);
 
 // POST /api/timesheet-approvals/:id/reject — hr отклоняет
 router.post('/:id/reject', requirePageAccess('/timesheet-hr', 'edit'), timesheetApprovalController.reject);
+
+// POST /api/timesheet-approvals/:id/return-to-rework — hr возвращает утверждённый табель на доработку
+router.post('/:id/return-to-rework', requirePageAccess('/timesheet-hr', 'edit'), timesheetApprovalController.returnToRework);
 
 export default router;

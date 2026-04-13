@@ -15,11 +15,17 @@ router.get('/r2/status', requirePageAccess('/admin/settings', 'view'), settingsC
 // GET /api/settings/sigur-monitor — настройки мониторинга Sigur
 router.get('/sigur-monitor', requirePageAccess('/admin/settings', 'view'), settingsController.getSigurMonitorSettings);
 
+// GET /api/settings/timesheet-reminders — настройки напоминаний табеля
+router.get('/timesheet-reminders', requirePageAccess('/admin/settings', 'view'), settingsController.getTimesheetReminderSettings);
+
 // PUT /api/settings/r2 — сохранить R2 настройки
 router.put('/r2', requirePageAccess('/admin/settings', 'edit'), settingsController.saveR2);
 
 // PUT /api/settings/sigur-monitor — сохранить настройки мониторинга Sigur
 router.put('/sigur-monitor', requirePageAccess('/admin/settings', 'edit'), settingsController.saveSigurMonitorSettings);
+
+// PUT /api/settings/timesheet-reminders — сохранить настройки напоминаний табеля
+router.put('/timesheet-reminders', requirePageAccess('/admin/settings', 'edit'), settingsController.saveTimesheetReminderSettings);
 
 // POST /api/settings/r2/test — тест подключения R2
 router.post('/r2/test', requirePageAccess('/admin/settings', 'edit'), settingsController.testR2);

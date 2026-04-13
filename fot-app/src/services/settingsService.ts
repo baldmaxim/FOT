@@ -24,6 +24,16 @@ export interface ISigurMonitorSettings {
   timezone: string;
 }
 
+export interface ITimesheetReminderSettings {
+  enabled: boolean;
+  timezone: string;
+  openingReminderHour: number;
+  deadlineMorningHour: number;
+  deadlineAfternoonHour: number;
+  escalationHour: number;
+  overdueHour: number;
+}
+
 interface ApiResponse<T> {
   data: T;
 }
@@ -56,6 +66,16 @@ export const settingsService = {
 
   saveSigurMonitorSettings: async (data: ISigurMonitorSettings): Promise<ISigurMonitorSettings> => {
     const res = await apiClient.put<ApiResponse<ISigurMonitorSettings>>('/settings/sigur-monitor', data);
+    return res.data;
+  },
+
+  getTimesheetReminderSettings: async (): Promise<ITimesheetReminderSettings> => {
+    const res = await apiClient.get<ApiResponse<ITimesheetReminderSettings>>('/settings/timesheet-reminders');
+    return res.data;
+  },
+
+  saveTimesheetReminderSettings: async (data: ITimesheetReminderSettings): Promise<ITimesheetReminderSettings> => {
+    const res = await apiClient.put<ApiResponse<ITimesheetReminderSettings>>('/settings/timesheet-reminders', data);
     return res.data;
   },
 };

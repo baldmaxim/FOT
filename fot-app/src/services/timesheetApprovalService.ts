@@ -1,6 +1,9 @@
 import { apiClient } from '../api/client';
 
-export type TimesheetApprovalStatus = 'draft' | 'submitted' | 'approved' | 'rejected';
+export type TimesheetApprovalStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'returned';
+export type TimesheetApprovalHalf = 'H1' | 'H2';
+export type TimesheetApprovalEventAction = 'submitted' | 'approved' | 'rejected' | 'returned_to_rework';
+export type TimesheetResolvedApprovalStatus = 'submitted' | 'approved' | 'rejected' | 'returned';
 
 export interface ITimesheetApproval {
   id: number;
@@ -16,11 +19,45 @@ export interface ITimesheetApproval {
   updated_at: string;
 }
 
+export interface ITimesheetApprovalEvent {
+  id: number;
+  approval_id: number;
+  department_id: string;
+  period: string;
+  action: TimesheetApprovalEventAction;
+  from_status: TimesheetApprovalStatus | null;
+  to_status: TimesheetResolvedApprovalStatus;
+  actor_user_id: string;
+  actor_full_name: string | null;
+  actor_position_name: string | null;
+  comment: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ITimesheetResponsible {
+  department_id: string;
+  user_id: string;
+  role: 'primary' | 'backup';
+  is_active: boolean;
+  full_name: string | null;
+  position_type: string | null;
+  employee_id: number | null;
+}
+
+export interface ITimesheetResponsibleCandidate {
+  user_id: string;
+  full_name: string | null;
+  position_type: string | null;
+  employee_id: number | null;
+}
+
 export const APPROVAL_STATUS_LABELS: Record<TimesheetApprovalStatus, string> = {
   draft: 'Черновик',
   submitted: 'На проверке',
   approved: 'Утверждён',
   rejected: 'Отклонён',
+  returned: 'На доработке',
 };
 
 interface ApiResponse<T> {
@@ -35,7 +72,26 @@ export const timesheetApprovalService = {
   },
 
   getStatus: async (department_id: string, period: string) => {
-    const res = await apiClient.get<ApiResponse<ITimesheetApproval | null>>(`/timesheet-approvals/status?department_id=${department_id}&period=${period}`);
+    const res = await apiClient.get<ApiResponse<ITimesheetApproval | null>>(`/timesheet-approvals/status?department_id=${encodeURIComponent(department_id)}&period=${encodeURIComponent(period)}`);
+    return res.data;
+  },
+
+  getResponsibles: async (department_id: string) => {
+    const res = await apiClient.get<ApiResponse<ITimesheetResponsible[]>>(`/timesheet-approvals/responsibles?department_id=${encodeURIComponent(department_id)}`);
+    return res.data;
+  },
+
+  getResponsibleCandidates: async (department_id: string) => {
+    const res = await apiClient.get<ApiResponse<ITimesheetResponsibleCandidate[]>>(`/timesheet-approvals/responsibles/candidates?department_id=${encodeURIComponent(department_id)}`);
+    return res.data;
+  },
+
+  saveResponsibles: async (data: {
+    department_id: string;
+    primary_user_id: string | null;
+    backup_user_id: string | null;
+  }) => {
+    const res = await apiClient.put<ApiResponse<ITimesheetResponsible[]>>('/timesheet-approvals/responsibles', data);
     return res.data;
   },
 
@@ -45,7 +101,12 @@ export const timesheetApprovalService = {
   },
 
   getByStatus: async (status: string) => {
-    const res = await apiClient.get<ApiResponse<ITimesheetApproval[]>>(`/timesheet-approvals/list?status=${status}`);
+    const res = await apiClient.get<ApiResponse<ITimesheetApproval[]>>(`/timesheet-approvals/list?status=${encodeURIComponent(status)}`);
+    return res.data;
+  },
+
+  getHistory: async (id: number) => {
+    const res = await apiClient.get<ApiResponse<ITimesheetApprovalEvent[]>>(`/timesheet-approvals/${id}/history`);
     return res.data;
   },
 
@@ -56,6 +117,11 @@ export const timesheetApprovalService = {
 
   reject: async (id: number, comment?: string) => {
     const res = await apiClient.post<ApiResponse<ITimesheetApproval>>(`/timesheet-approvals/${id}/reject`, { comment });
+    return res.data;
+  },
+
+  returnToRework: async (id: number, comment?: string) => {
+    const res = await apiClient.post<ApiResponse<ITimesheetApproval>>(`/timesheet-approvals/${id}/return-to-rework`, { comment });
     return res.data;
   },
 };

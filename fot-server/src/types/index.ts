@@ -498,7 +498,10 @@ export interface IProductionCalendarMonth {
 }
 
 // Согласование табелей
-export type TimesheetApprovalStatus = 'draft' | 'submitted' | 'approved' | 'rejected';
+export type TimesheetApprovalStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'returned';
+export type TimesheetApprovalHalf = 'H1' | 'H2';
+export type TimesheetResponsibleRole = 'primary' | 'backup';
+export type TimesheetApprovalEventAction = 'submitted' | 'approved' | 'rejected' | 'returned_to_rework';
 
 export interface TimesheetApproval {
   id: number;
@@ -512,4 +515,30 @@ export interface TimesheetApproval {
   review_comment: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface TimesheetApprovalEvent {
+  id: number;
+  approval_id: number;
+  department_id: string;
+  period: string;
+  action: TimesheetApprovalEventAction;
+  from_status: TimesheetApprovalStatus | null;
+  to_status: Exclude<TimesheetApprovalStatus, 'draft'>;
+  actor_user_id: string;
+  actor_full_name: string | null;
+  actor_position_name: string | null;
+  comment: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface TimesheetResponsible {
+  department_id: string;
+  user_id: string;
+  role: TimesheetResponsibleRole;
+  is_active: boolean;
+  full_name: string | null;
+  position_type: string | null;
+  employee_id: number | null;
 }
