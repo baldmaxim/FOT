@@ -141,6 +141,45 @@ const saveSigurMonitorSettings = async (req: AuthenticatedRequest, res: Response
   }
 };
 
+const getTimesheetReminderSettings = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const config = await settingsService.getTimesheetReminderConfig();
+    res.json({ success: true, data: config });
+  } catch (err) {
+    console.error('settings.getTimesheetReminderSettings error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения настроек напоминаний табеля' });
+  }
+};
+
+const saveTimesheetReminderSettings = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const {
+      enabled,
+      timezone,
+      openingReminderHour,
+      deadlineMorningHour,
+      deadlineAfternoonHour,
+      escalationHour,
+      overdueHour,
+    } = req.body as Record<string, unknown>;
+
+    const config = await settingsService.setTimesheetReminderConfig({
+      enabled: typeof enabled === 'boolean' ? enabled : undefined,
+      timezone: typeof timezone === 'string' ? timezone : undefined,
+      openingReminderHour: typeof openingReminderHour === 'number' ? openingReminderHour : undefined,
+      deadlineMorningHour: typeof deadlineMorningHour === 'number' ? deadlineMorningHour : undefined,
+      deadlineAfternoonHour: typeof deadlineAfternoonHour === 'number' ? deadlineAfternoonHour : undefined,
+      escalationHour: typeof escalationHour === 'number' ? escalationHour : undefined,
+      overdueHour: typeof overdueHour === 'number' ? overdueHour : undefined,
+    }, req.user.id);
+
+    res.json({ success: true, data: config });
+  } catch (err) {
+    console.error('settings.saveTimesheetReminderSettings error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка сохранения настроек напоминаний табеля' });
+  }
+};
+
 export const settingsController = {
   getAll,
   getR2Status,
@@ -148,4 +187,6 @@ export const settingsController = {
   testR2,
   getSigurMonitorSettings,
   saveSigurMonitorSettings,
+  getTimesheetReminderSettings,
+  saveTimesheetReminderSettings,
 };

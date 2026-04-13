@@ -24,6 +24,10 @@ interface IChatNotificationPayload {
   conversationId: string;
 }
 
+interface IGenericNotificationPayload {
+  [key: string]: unknown;
+}
+
 const LEAVE_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск',
   sick_leave: 'Больничный',
@@ -173,5 +177,45 @@ export const pushService = {
         }
       }),
     );
+  },
+
+  async sendGenericNotification(
+    targetUserIds: string[],
+    title: string,
+    body: string,
+    payload: IGenericNotificationPayload = {},
+  ): Promise<string[]> {
+    if (!vapidReady || targetUserIds.length === 0) return targetUserIds;
+
+    const notification = JSON.stringify({
+      title,
+      body,
+      ...payload,
+    });
+
+    const { data: subscriptions } = await supabase
+      .from('push_subscriptions')
+      .select('endpoint, p256dh, auth')
+      .in('user_id', targetUserIds);
+
+    await Promise.allSettled(
+      (subscriptions || []).map(async (sub) => {
+        try {
+          await webpush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            notification,
+          );
+        } catch (err: unknown) {
+          if (err && typeof err === 'object' && 'statusCode' in err && (err as { statusCode: number }).statusCode === 410) {
+            await supabase
+              .from('push_subscriptions')
+              .delete()
+              .eq('endpoint', sub.endpoint);
+          }
+        }
+      }),
+    );
+
+    return targetUserIds;
   },
 };

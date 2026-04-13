@@ -1,6 +1,7 @@
 import { type FC, Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, ChevronDown, Download } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { TimesheetStats } from '../../components/timesheet/TimesheetStats';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { timesheetService } from '../../services/timesheetService';
@@ -16,6 +17,7 @@ import type {
 import type { IResolvedSchedule } from '../../types/schedule';
 import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
 import { getScheduleForTimesheetDay, getWorkHoursForDay } from '../../utils/scheduleUtils';
+import { getSortedDepartmentOptions } from '../../utils/departmentUtils';
 import './TimesheetPage.css';
 
 const TimesheetSidePanel = lazy(() => import('../../components/timesheet/TimesheetSidePanel').then(module => ({
@@ -33,71 +35,6 @@ interface IDeptOption {
   name: string;
 }
 
-interface IDbDepartment {
-  id: string;
-  name: string;
-  children: IDbDepartment[];
-}
-
-const DEPARTMENT_TYPE_PRIORITY = ['ТО', 'ОСП'] as const;
-const departmentNameCollator = new Intl.Collator('ru', {
-  sensitivity: 'base',
-  ignorePunctuation: true,
-  numeric: true,
-});
-
-const flattenTree = (nodes: IDbDepartment[]): IDeptOption[] => {
-  const result: IDeptOption[] = [];
-  for (const node of nodes) {
-    result.push({ id: node.id, name: node.name });
-    if (node.children && node.children.length > 0) {
-      result.push(...flattenTree(node.children));
-    }
-  }
-  return result;
-};
-
-const getDepartmentType = (name: string): string | null => {
-  const match = name.trim().match(/\(([^()]+)\)\s*$/u);
-  return match ? match[1].trim().toUpperCase() : null;
-};
-
-const getDepartmentBaseName = (name: string): string => (
-  name.replace(/\s*\([^()]+\)\s*$/u, '').trim()
-);
-
-const getDepartmentPriority = (type: string | null): number => {
-  if (!type) return DEPARTMENT_TYPE_PRIORITY.length + 1;
-  const index = DEPARTMENT_TYPE_PRIORITY.findIndex(marker => marker === type);
-  return index === -1 ? DEPARTMENT_TYPE_PRIORITY.length : index;
-};
-
-const sortDepartments = (departments: IDeptOption[]): IDeptOption[] => (
-  [...departments].sort((a, b) => {
-    const aType = getDepartmentType(a.name);
-    const bType = getDepartmentType(b.name);
-
-    const priorityDiff = getDepartmentPriority(aType) - getDepartmentPriority(bType);
-    if (priorityDiff !== 0) return priorityDiff;
-
-    if (aType && bType) {
-      const typeDiff = departmentNameCollator.compare(aType, bType);
-      if (typeDiff !== 0) return typeDiff;
-    }
-
-    const baseNameDiff = departmentNameCollator.compare(
-      getDepartmentBaseName(a.name),
-      getDepartmentBaseName(b.name),
-    );
-    if (baseNameDiff !== 0) return baseNameDiff;
-
-    const nameDiff = departmentNameCollator.compare(a.name.trim(), b.name.trim());
-    if (nameDiff !== 0) return nameDiff;
-
-    return a.id.localeCompare(b.id, 'ru');
-  })
-);
-
 const DEFAULT_STATS: ITimesheetStats = {
   employeeCount: 0,
   workingDays: 0,
@@ -111,10 +48,26 @@ const EMPTY_DAILY_SCHEDULES: Record<number, Record<string, IResolvedSchedule>> =
 export const TimesheetPage: FC = () => {
   const { hasPermission, profile } = useAuth();
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
   const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
   const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
+  const queryMonth = searchParams.get('month');
+  const [year, setYear] = useState(() => (
+    /^\d{4}-\d{2}$/.test(queryMonth || '')
+      ? Number.parseInt((queryMonth as string).slice(0, 4), 10)
+      : now.getFullYear()
+  ));
+  const [month, setMonth] = useState(() => (
+    /^\d{4}-\d{2}$/.test(queryMonth || '')
+      ? Number.parseInt((queryMonth as string).slice(5, 7), 10)
+      : now.getMonth() + 1
+  ));
+
+  useEffect(() => {
+    if (!/^\d{4}-\d{2}$/.test(queryMonth || '')) return;
+    setYear(Number.parseInt((queryMonth as string).slice(0, 4), 10));
+    setMonth(Number.parseInt((queryMonth as string).slice(5, 7), 10));
+  }, [queryMonth]);
 
   // Mobile compact mode
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
@@ -148,7 +101,7 @@ export const TimesheetPage: FC = () => {
 
   const structureQuery = useStructureTree();
   const deptOptions = useMemo(
-    () => sortDepartments(flattenTree(structureQuery.data?.departments ?? [])),
+    () => getSortedDepartmentOptions(structureQuery.data?.departments ?? []) as IDeptOption[],
     [structureQuery.data],
   );
   const effectiveSelectedDeptId = isDepartmentScope
@@ -287,74 +240,75 @@ export const TimesheetPage: FC = () => {
 
   return (
     <div className="ts-page">
-      {/* Header */}
-      <div className="ts-header">
-        <div className="ts-header-left">
-          <h1 className="ts-title">Табель</h1>
-          <div className="ts-month-nav">
-            <button className="ts-month-btn" onClick={prevMonth}>
-              <ChevronLeft size={16} />
-            </button>
-            <span className="ts-month-label">{getMonthLabel(year, month)}</span>
-            <button className="ts-month-btn" onClick={nextMonth}>
-              <ChevronRight size={16} />
-            </button>
-          </div>
-          <div className="ts-dept-wrap" ref={deptRef}>
-            {isDepartmentScope ? (
-              <button className="ts-dept-btn" style={{ cursor: 'default', opacity: 0.8 }}>
-                {selectedDeptName}
+      <section className="ts-top-panel">
+        <div className="ts-header">
+          <div className="ts-header-left">
+            <h1 className="ts-title">Табель</h1>
+            <div className="ts-month-nav">
+              <button className="ts-month-btn" onClick={prevMonth}>
+                <ChevronLeft size={16} />
               </button>
-            ) : (
-              <>
-                <button className="ts-dept-btn" onClick={() => setDeptOpen(!deptOpen)}>
+              <span className="ts-month-label">{getMonthLabel(year, month)}</span>
+              <button className="ts-month-btn" onClick={nextMonth}>
+                <ChevronRight size={16} />
+              </button>
+            </div>
+            <div className="ts-dept-wrap" ref={deptRef}>
+              {isDepartmentScope ? (
+                <button className="ts-dept-btn" style={{ cursor: 'default', opacity: 0.8 }}>
                   {selectedDeptName}
-                  <ChevronDown size={16} />
                 </button>
-                {deptOpen && (
-                  <div className="ts-dept-dropdown">
-                    <input
-                      className="ts-dept-search"
-                      placeholder="Поиск отдела..."
-                      value={deptSearch}
-                      onChange={e => setDeptSearch(e.target.value)}
-                      autoFocus
-                    />
-                    <div
-                      className={`ts-dept-item ${!selectedDeptId ? 'ts-dept-item--active' : ''}`}
-                      onClick={() => { setSelectedDeptId(null); setDeptOpen(false); }}
-                    >
-                      Все отделы
-                    </div>
-                    {filteredDepts.map(d => (
+              ) : (
+                <>
+                  <button className="ts-dept-btn" onClick={() => setDeptOpen(!deptOpen)}>
+                    {selectedDeptName}
+                    <ChevronDown size={16} />
+                  </button>
+                  {deptOpen && (
+                    <div className="ts-dept-dropdown">
+                      <input
+                        className="ts-dept-search"
+                        placeholder="Поиск отдела..."
+                        value={deptSearch}
+                        onChange={e => setDeptSearch(e.target.value)}
+                        autoFocus
+                      />
                       <div
-                        key={d.id}
-                        className={`ts-dept-item ${selectedDeptId === d.id ? 'ts-dept-item--active' : ''}`}
-                        onClick={() => { setSelectedDeptId(d.id); setDeptOpen(false); }}
+                        className={`ts-dept-item ${!selectedDeptId ? 'ts-dept-item--active' : ''}`}
+                        onClick={() => { setSelectedDeptId(null); setDeptOpen(false); }}
                       >
-                        {d.name}
+                        Все отделы
                       </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
+                      {filteredDepts.map(d => (
+                        <div
+                          key={d.id}
+                          className={`ts-dept-item ${selectedDeptId === d.id ? 'ts-dept-item--active' : ''}`}
+                          onClick={() => { setSelectedDeptId(d.id); setDeptOpen(false); }}
+                        >
+                          {d.name}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+
+          <TimesheetStats stats={stats} onLateClick={() => setLateModalOpen(true)} />
+
+          <div className="ts-header-right">
+            <TimesheetApprovalBar
+              departmentId={effectiveSelectedDeptId}
+              month={`${year}-${String(month).padStart(2, '0')}`}
+            />
+            <button className="ts-btn" onClick={handleExport}>
+              <Download size={16} />
+              Экспорт
+            </button>
           </div>
         </div>
-        <div className="ts-header-right">
-          <TimesheetApprovalBar
-            departmentId={effectiveSelectedDeptId}
-            period={`${year}-${String(month).padStart(2, '0')}`}
-          />
-          <button className="ts-btn" onClick={handleExport}>
-            <Download size={16} />
-            Экспорт
-          </button>
-        </div>
-      </div>
-
-      {/* Stats */}
-      <TimesheetStats stats={stats} onLateClick={() => setLateModalOpen(true)} />
+      </section>
 
       {/* Grid */}
       {loading ? (

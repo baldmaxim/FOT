@@ -2,44 +2,59 @@
 .ts-page {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 8px;
   height: 100%;
-  padding: 24px 28px;
+  padding: 0;
   box-sizing: border-box;
 }
 
 @media (max-width: 768px) {
   .ts-page {
-    padding: 16px;
+    gap: 10px;
   }
 }
 
 @media (max-width: 430px) {
   .ts-page {
-    padding: 12px;
+    gap: 8px;
   }
 }
 
 /* --- Header --- */
+.ts-top-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: linear-gradient(180deg, var(--surface) 0%, var(--bg-secondary) 100%);
+}
+
 .ts-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 6px 10px;
 }
 
 .ts-header-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 6px 8px;
   flex-wrap: wrap;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .ts-title {
-  font-size: 18px;
+  margin: 0;
+  font-size: 14px;
   font-weight: 700;
   color: var(--text-primary);
+  line-height: 1.2;
+  margin-right: 2px;
 }
 
 .ts-back-btn {
@@ -67,12 +82,12 @@
 .ts-month-nav {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
 }
 
 .ts-month-btn {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface);
@@ -90,17 +105,23 @@
 }
 
 .ts-month-label {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
-  min-width: 150px;
+  min-width: 122px;
   text-align: center;
   color: var(--text-primary);
+  line-height: 1.2;
 }
 
 .ts-header-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
 }
 
 /* Department selector */
@@ -111,12 +132,13 @@
 .ts-dept-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 10px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   color: var(--text-primary);
@@ -209,13 +231,13 @@
 
 /* Buttons */
 .ts-btn {
-  height: 36px;
-  padding: 0 14px;
+  height: 32px;
+  padding: 0 10px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   display: flex;
@@ -242,27 +264,30 @@
 /* --- Stats --- */
 .ts-stats-row {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
+  align-items: center;
+  flex: 1 1 240px;
+  min-width: 220px;
 }
 
 .ts-stat-card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 8px 14px;
+  padding: 4px 10px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .ts-stat-label {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-tertiary);
 }
 
 .ts-stat-value {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -1553,29 +1578,36 @@
 }
 
 @media (max-width: 768px) {
+  .ts-top-panel {
+    padding: 8px 10px;
+    border-radius: 16px;
+  }
+
   .ts-header {
     flex-direction: column;
     align-items: flex-start;
-    position: sticky;
-    top: 0;
-    z-index: 20;
-    background: var(--bg-primary);
-    padding: 10px 16px;
-    margin: -16px -16px 0 -16px;
+    position: static;
+    padding: 0;
+    margin: 0;
+    background: transparent;
   }
   .ts-header-left {
     width: 100%;
-    justify-content: space-between;
+    justify-content: flex-start;
+  }
+  .ts-stats-row {
+    width: 100%;
+    min-width: 0;
+    order: 3;
   }
   .ts-month-nav {
-    flex: 1;
-    justify-content: center;
+    justify-content: flex-start;
   }
   .ts-header-right {
     width: 100%;
-    flex-wrap: wrap;
+    justify-content: flex-start;
     gap: 6px;
-    overflow-x: auto;
+    overflow-x: visible;
   }
   .ts-dept-btn {
     font-size: 12px;
@@ -1626,22 +1658,20 @@
 }
 
 @media (max-width: 430px) {
+  .ts-top-panel {
+    padding: 8px;
+    border-radius: 14px;
+  }
+
   .ts-stat-value {
     font-size: 13px;
-  }
-  .ts-stats-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-  }
-  .ts-stat-card {
-    flex: 1;
   }
   .ts-month-label {
     font-size: 13px;
     min-width: 120px;
   }
   .ts-header-left {
-    gap: 8px;
+    gap: 6px;
   }
   .ts-title {
     font-size: 16px;
