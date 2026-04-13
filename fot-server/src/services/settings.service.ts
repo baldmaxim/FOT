@@ -30,6 +30,10 @@ export const DEFAULT_SIGUR_MONITOR_SETTINGS: ISigurMonitorSettings = {
   timezone: 'Europe/Moscow',
 };
 
+export interface ISkudTravelSettings {
+  limitMinutes: number | null;
+}
+
 let cache: Map<string, string | null> = new Map();
 let cacheLoadedAt = 0;
 const CACHE_TTL = 60_000; // 60 сек
@@ -43,6 +47,12 @@ const parsePositiveInt = (value: string | null | undefined, fallback: number): n
   if (value == null || value.trim() === '') return fallback;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const parseNullablePositiveInt = (value: string | null | undefined): number | null => {
+  if (value == null || value.trim() === '') return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 };
 
 const loadCache = async () => {
@@ -126,6 +136,31 @@ export const settingsService = {
       bucketName,
       enabled: !!(accountId && accessKeyId && secretAccessKey),
     };
+  },
+
+  async getSkudTravelConfig(): Promise<ISkudTravelSettings> {
+    const values = await this.getMultiple(['skud_travel_limit_minutes']);
+    return {
+      limitMinutes: parseNullablePositiveInt(values.skud_travel_limit_minutes),
+    };
+  },
+
+  async setSkudTravelConfig(config: Partial<ISkudTravelSettings>, userId: string): Promise<ISkudTravelSettings> {
+    const current = await this.getSkudTravelConfig();
+    const next: ISkudTravelSettings = {
+      limitMinutes: config.limitMinutes ?? current.limitMinutes,
+    };
+
+    await this.setMultiple([
+      {
+        key: 'skud_travel_limit_minutes',
+        value: next.limitMinutes != null ? String(next.limitMinutes) : null,
+        description: 'Единый лимит передвижения между объектами в минутах',
+      },
+    ], userId);
+
+    this.invalidateCache();
+    return this.getSkudTravelConfig();
   },
 
   async getSigurMonitorConfig(): Promise<ISigurMonitorSettings> {
