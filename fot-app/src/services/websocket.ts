@@ -1,4 +1,5 @@
 import type { Socket } from 'socket.io-client';
+import { API_ORIGIN } from '../api/client';
 
 type MessageHandler = (payload: unknown) => void;
 type SocketModule = typeof import('socket.io-client');
@@ -52,11 +53,7 @@ class WebSocketService {
         return;
       }
 
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
-      const url = new URL(apiUrl);
-      const baseUrl = `${url.protocol}//${url.host}`;
-
-      const nextSocket = io(baseUrl, {
+      const nextSocket = io(API_ORIGIN, {
         auth: { token },
         transports: ['polling', 'websocket'],
         reconnection: true,

@@ -1,4 +1,40 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
+
+const resolveApiUrl = (): string => {
+  const configured = trimTrailingSlash(import.meta.env.VITE_API_URL || '');
+
+  if (typeof window !== 'undefined') {
+    const sameOriginApiUrl = `${window.location.origin}/api`;
+
+    if (!configured) {
+      return sameOriginApiUrl;
+    }
+
+    try {
+      const resolved = new URL(configured, window.location.origin);
+      const sameHost = resolved.hostname === window.location.hostname;
+      const samePathFamily = resolved.pathname === '/api' || resolved.pathname.startsWith('/api/');
+
+      // When the bundle is opened on the same host but the configured API points
+      // to a different scheme or port, prefer the page origin to avoid CORS/cookie
+      // breakage caused by cross-origin redirects.
+      if (sameHost && samePathFamily && resolved.origin !== window.location.origin) {
+        return `${window.location.origin}${resolved.pathname}`;
+      }
+
+      return trimTrailingSlash(resolved.toString());
+    } catch {
+      return configured;
+    }
+  }
+
+  return configured || 'http://localhost:3000/api';
+};
+
+export const API_URL = resolveApiUrl();
+export const API_ORIGIN = typeof window !== 'undefined'
+  ? new URL(API_URL, window.location.origin).origin
+  : new URL(API_URL).origin;
 
 let sessionToken: string | null = null;
 let refreshPromise: Promise<boolean> | null = null;
