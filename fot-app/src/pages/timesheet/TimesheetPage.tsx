@@ -18,6 +18,7 @@ import type { IResolvedSchedule } from '../../types/schedule';
 import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
 import { getScheduleForTimesheetDay, getWorkHoursForDay } from '../../utils/scheduleUtils';
 import { getSortedDepartmentOptions } from '../../utils/departmentUtils';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import './TimesheetPage.css';
 
 const TimesheetSidePanel = lazy(() => import('../../components/timesheet/TimesheetSidePanel').then(module => ({
@@ -69,14 +70,11 @@ export const TimesheetPage: FC = () => {
     setMonth(Number.parseInt((queryMonth as string).slice(5, 7), 10));
   }, [queryMonth]);
 
-  // Mobile compact mode
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
+  const isMobile = useIsMobile(768);
+  const [mobileApprovalOpen, setMobileApprovalOpen] = useState(false);
   useEffect(() => {
-    const mq = window.matchMedia('(max-width: 768px)');
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
-  }, []);
+    if (!isMobile) setMobileApprovalOpen(false);
+  }, [isMobile]);
 
   // Schedule settings panel
 
@@ -238,77 +236,119 @@ export const TimesheetPage: FC = () => {
     return getWorkHoursForDay(sched, year, month, modalDay);
   }, [modalEntry, modalEmployee, schedules, dailySchedules, year, month, modalDay]);
 
+  const monthNavigation = (
+    <div className="ts-month-nav">
+      <button type="button" className="ts-month-btn" onClick={prevMonth}>
+        <ChevronLeft size={16} />
+      </button>
+      <span className="ts-month-label">{getMonthLabel(year, month)}</span>
+      <button type="button" className="ts-month-btn" onClick={nextMonth}>
+        <ChevronRight size={16} />
+      </button>
+    </div>
+  );
+
+  const departmentControl = (
+    <div className="ts-dept-wrap" ref={deptRef}>
+      {isDepartmentScope ? (
+        <button type="button" className="ts-dept-btn" style={{ cursor: 'default', opacity: 0.8 }}>
+          {selectedDeptName}
+        </button>
+      ) : (
+        <>
+          <button type="button" className="ts-dept-btn" onClick={() => setDeptOpen(!deptOpen)}>
+            {selectedDeptName}
+            <ChevronDown size={16} />
+          </button>
+          {deptOpen && (
+            <div className="ts-dept-dropdown">
+              <input
+                className="ts-dept-search"
+                placeholder="Поиск отдела..."
+                value={deptSearch}
+                onChange={e => setDeptSearch(e.target.value)}
+                autoFocus
+              />
+              <div
+                className={`ts-dept-item ${!selectedDeptId ? 'ts-dept-item--active' : ''}`}
+                onClick={() => { setSelectedDeptId(null); setDeptOpen(false); }}
+              >
+                Все отделы
+              </div>
+              {filteredDepts.map(d => (
+                <div
+                  key={d.id}
+                  className={`ts-dept-item ${selectedDeptId === d.id ? 'ts-dept-item--active' : ''}`}
+                  onClick={() => { setSelectedDeptId(d.id); setDeptOpen(false); }}
+                >
+                  {d.name}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+
   return (
     <div className="ts-page">
-      <section className="ts-top-panel">
-        <div className="ts-header">
-          <div className="ts-header-left">
+      {isMobile ? (
+        <section className="ts-top-panel ts-top-panel--mobile">
+          <div className="ts-mobile-header-row">
             <h1 className="ts-title">Табель</h1>
-            <div className="ts-month-nav">
-              <button className="ts-month-btn" onClick={prevMonth}>
-                <ChevronLeft size={16} />
+            <div className="ts-mobile-header-actions">
+              <button
+                type="button"
+                className={`ts-btn ts-btn--chip${mobileApprovalOpen ? ' ts-btn--active' : ''}`}
+                onClick={() => setMobileApprovalOpen(open => !open)}
+              >
+                {mobileApprovalOpen ? 'Скрыть согласование' : 'Согласование'}
               </button>
-              <span className="ts-month-label">{getMonthLabel(year, month)}</span>
-              <button className="ts-month-btn" onClick={nextMonth}>
-                <ChevronRight size={16} />
+              <button type="button" className="ts-btn ts-btn--icon" onClick={handleExport} aria-label="Экспорт табеля">
+                <Download size={16} />
               </button>
             </div>
-            <div className="ts-dept-wrap" ref={deptRef}>
-              {isDepartmentScope ? (
-                <button className="ts-dept-btn" style={{ cursor: 'default', opacity: 0.8 }}>
-                  {selectedDeptName}
-                </button>
-              ) : (
-                <>
-                  <button className="ts-dept-btn" onClick={() => setDeptOpen(!deptOpen)}>
-                    {selectedDeptName}
-                    <ChevronDown size={16} />
-                  </button>
-                  {deptOpen && (
-                    <div className="ts-dept-dropdown">
-                      <input
-                        className="ts-dept-search"
-                        placeholder="Поиск отдела..."
-                        value={deptSearch}
-                        onChange={e => setDeptSearch(e.target.value)}
-                        autoFocus
-                      />
-                      <div
-                        className={`ts-dept-item ${!selectedDeptId ? 'ts-dept-item--active' : ''}`}
-                        onClick={() => { setSelectedDeptId(null); setDeptOpen(false); }}
-                      >
-                        Все отделы
-                      </div>
-                      {filteredDepts.map(d => (
-                        <div
-                          key={d.id}
-                          className={`ts-dept-item ${selectedDeptId === d.id ? 'ts-dept-item--active' : ''}`}
-                          onClick={() => { setSelectedDeptId(d.id); setDeptOpen(false); }}
-                        >
-                          {d.name}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
+          </div>
+          <div className="ts-mobile-header-row ts-mobile-header-row--controls">
+            {monthNavigation}
+            {departmentControl}
+          </div>
+          <TimesheetStats stats={stats} onLateClick={() => setLateModalOpen(true)} compact />
+          {mobileApprovalOpen && (
+            <div className="ts-mobile-approval-panel">
+              <TimesheetApprovalBar
+                departmentId={effectiveSelectedDeptId}
+                month={`${year}-${String(month).padStart(2, '0')}`}
+                compact
+              />
+            </div>
+          )}
+        </section>
+      ) : (
+        <section className="ts-top-panel">
+          <div className="ts-header">
+            <div className="ts-header-left">
+              <h1 className="ts-title">Табель</h1>
+              {monthNavigation}
+              {departmentControl}
+            </div>
+
+            <TimesheetStats stats={stats} onLateClick={() => setLateModalOpen(true)} />
+
+            <div className="ts-header-right">
+              <TimesheetApprovalBar
+                departmentId={effectiveSelectedDeptId}
+                month={`${year}-${String(month).padStart(2, '0')}`}
+              />
+              <button type="button" className="ts-btn" onClick={handleExport}>
+                <Download size={16} />
+                Экспорт
+              </button>
             </div>
           </div>
-
-          <TimesheetStats stats={stats} onLateClick={() => setLateModalOpen(true)} />
-
-          <div className="ts-header-right">
-            <TimesheetApprovalBar
-              departmentId={effectiveSelectedDeptId}
-              month={`${year}-${String(month).padStart(2, '0')}`}
-            />
-            <button className="ts-btn" onClick={handleExport}>
-              <Download size={16} />
-              Экспорт
-            </button>
-          </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* Grid */}
       {loading ? (

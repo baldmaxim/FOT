@@ -2,10 +2,20 @@
 
 ## Сервер
 - **IP:** 80.74.28.233
-- **SSH:** `ssh root@80.74.28.233`
+- **SSH:** `ssh vds`
 - **OS:** Ubuntu 24.04
 - **Node:** 22.x
 - **PM2:** процесс `fot-server`
+
+Локально используется SSH alias `vds` из `~/.ssh/config`:
+```sshconfig
+Host vds
+  HostName 80.74.28.233
+  User root
+  Port 22
+  IdentityFile ~/.ssh/id_ed25519_nas_deploy
+  IdentitiesOnly yes
+```
 
 ## Структура на сервере
 ```
@@ -22,14 +32,14 @@
 
 ## Быстрый деплой (фронтенд)
 ```bash
-ssh root@80.74.28.233
+ssh vds
 cd /var/www/fot && git pull
 cd fot-app && NODE_OPTIONS='--max-old-space-size=1024' npm run build
 ```
 
 ## Быстрый деплой (бэкенд)
 ```bash
-ssh root@80.74.28.233
+ssh vds
 cd /var/www/fot && git pull
 cd fot-server && npm run build
 pm2 restart fot-server
@@ -37,7 +47,7 @@ pm2 restart fot-server
 
 ## Полный деплой (оба)
 ```bash
-ssh root@80.74.28.233
+ssh vds
 cd /var/www/fot && git pull
 cd fot-server && npm ci && npm run build && pm2 restart fot-server
 cd ../fot-app && npm ci && NODE_OPTIONS='--max-old-space-size=1024' npm run build

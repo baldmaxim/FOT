@@ -1,6 +1,7 @@
 import { sigurService } from './sigur.service.js';
 import { supabase } from '../config/database.js';
 import {
+  expandDepartmentIdsToAncestors,
   getDepartmentsRaw,
   getWhitelistedDepartmentIdsCached,
   isSystemDepartment,
@@ -110,27 +111,19 @@ export async function syncDepartmentsLogic(
   }
 
   // Whitelist: если задан фильтр, пропускаем отделы вне whitelist
-  const whitelist = await getWhitelistedDepartmentIdsCached(context);
+  const whitelist = await getWhitelistedDepartmentIdsCached(connection, context);
   if (whitelist) {
-    // Расширяем whitelist родительскими отделами для сохранения иерархии
-    const parentMap = new Map<number, number>();
+    const allowedSigurIds = expandDepartmentIdsToAncestors(new Set(whitelist), departments);
+
+    // Добавляем в filteredSigurIds всё, что не входит в выбранное subtree плюс путь к нему
     for (const dept of departments) {
-      if (dept.parentId) parentMap.set(dept.id, dept.parentId);
-    }
-    for (const id of [...whitelist]) {
-      let current = parentMap.get(id);
-      while (current && !whitelist.has(current)) {
-        whitelist.add(current);
-        current = parentMap.get(current);
-      }
-    }
-    // Добавляем в filteredSigurIds всё, что не в whitelist
-    for (const dept of departments) {
-      if (!whitelist.has(dept.id)) {
+      if (!allowedSigurIds.has(dept.id)) {
         filteredSigurIds.add(dept.id);
       }
     }
-    console.log(`[syncDepartments] whitelist active: ${whitelist.size} departments allowed`);
+    console.log(
+      `[syncDepartments] whitelist active: ${whitelist.size} subtree departments allowed, ${allowedSigurIds.size} with ancestors`,
+    );
   }
 
   // Pass 1: Upsert отделов (без parent_id)

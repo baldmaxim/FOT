@@ -15,6 +15,11 @@ interface ITreeNode {
   children: ITreeNode[];
 }
 
+interface IDepartmentHierarchyMaps {
+  childIdsByParentId: Map<number, number[]>;
+  parentIdById: Map<number, number | null>;
+}
+
 interface ISyncFilterTabProps {
   connected: boolean | null;
   canEdit: boolean;
@@ -60,6 +65,62 @@ const getAllDescendantIds = (node: ITreeNode): number[] => {
   return ids;
 };
 
+const buildDepartmentHierarchyMaps = (depts: ISigurDepartment[]): IDepartmentHierarchyMaps => {
+  const deptIds = new Set<number>(depts.map(dept => dept.id));
+  const childIdsByParentId = new Map<number, number[]>();
+  const parentIdById = new Map<number, number | null>();
+
+  for (const dept of depts) {
+    const parentId = typeof dept.parentId === 'number' && deptIds.has(dept.parentId)
+      ? dept.parentId
+      : null;
+    parentIdById.set(dept.id, parentId);
+
+    if (parentId === null) continue;
+    const childIds = childIdsByParentId.get(parentId) || [];
+    childIds.push(dept.id);
+    childIdsByParentId.set(parentId, childIds);
+  }
+
+  return { childIdsByParentId, parentIdById };
+};
+
+const expandSelectedIdsToSubtree = (
+  selectedIds: Set<number>,
+  hierarchy: IDepartmentHierarchyMaps,
+): Set<number> => {
+  if (selectedIds.size === 0) return new Set();
+
+  const expanded = new Set<number>();
+  const queue = [...selectedIds];
+
+  while (queue.length > 0) {
+    const currentId = queue.pop()!;
+    if (expanded.has(currentId)) continue;
+
+    expanded.add(currentId);
+    const childIds = hierarchy.childIdsByParentId.get(currentId) || [];
+    for (const childId of childIds) {
+      if (!expanded.has(childId)) queue.push(childId);
+    }
+  }
+
+  return expanded;
+};
+
+const hasSelectedAncestor = (
+  id: number,
+  selectedIds: Set<number>,
+  parentIdById: Map<number, number | null>,
+): boolean => {
+  let currentId = parentIdById.get(id) ?? null;
+  while (currentId !== null) {
+    if (selectedIds.has(currentId)) return true;
+    currentId = parentIdById.get(currentId) ?? null;
+  }
+  return false;
+};
+
 const getMatchingIdsWithAncestors = (depts: ISigurDepartment[], query: string): Set<number> | null => {
   if (!query.trim()) return null;
   const q = query.toLowerCase();
@@ -87,26 +148,37 @@ interface ITreeNodeRowProps {
   depth: number;
   selectedIds: Set<number>;
   expandedIds: Set<number>;
+  parentIdById: Map<number, number | null>;
   canEdit: boolean;
   visibleIds: Set<number> | null;
   onToggleSelect: (id: number, descendants: number[]) => void;
   onToggleExpand: (id: number) => void;
 }
 
-const TreeNodeRow = ({ node, depth, selectedIds, expandedIds, canEdit, visibleIds, onToggleSelect, onToggleExpand }: ITreeNodeRowProps) => {
+const TreeNodeRow = ({
+  node,
+  depth,
+  selectedIds,
+  expandedIds,
+  parentIdById,
+  canEdit,
+  visibleIds,
+  onToggleSelect,
+  onToggleExpand,
+}: ITreeNodeRowProps) => {
   const { dept, children } = node;
   const hasChildren = children.length > 0;
   const isExpanded = expandedIds.has(dept.id);
   const isSelected = selectedIds.has(dept.id);
+  const isLockedByAncestor = hasSelectedAncestor(dept.id, selectedIds, parentIdById);
 
   if (visibleIds && !visibleIds.has(dept.id)) return null;
 
   const allDescendants = getAllDescendantIds(node);
-  const allChildrenSelected = hasChildren && allDescendants.length > 0 && allDescendants.every(id => selectedIds.has(id));
   const someChildrenSelected = hasChildren && allDescendants.some(id => selectedIds.has(id));
 
   const handleToggleSelect = () => {
-    if (!canEdit) return;
+    if (!canEdit || isLockedByAncestor) return;
     onToggleSelect(dept.id, allDescendants);
   };
 
@@ -125,6 +197,7 @@ const TreeNodeRow = ({ node, depth, selectedIds, expandedIds, canEdit, visibleId
         className={`sync-tree-row ${isSelected ? 'selected' : ''}`}
         style={{ paddingLeft: `${12 + depth * 24}px` }}
         onClick={handleToggleSelect}
+        title={isLockedByAncestor ? 'Отдел уже включён через выбранную родительскую папку' : undefined}
       >
         <span className="sync-tree-expand" onClick={hasChildren ? handleExpandClick : undefined}>
           {hasChildren ? (
@@ -135,12 +208,12 @@ const TreeNodeRow = ({ node, depth, selectedIds, expandedIds, canEdit, visibleId
         <input
           type="checkbox"
           className="sync-filter-checkbox"
-          checked={isSelected && (!hasChildren || allChildrenSelected)}
+          checked={isSelected}
           ref={el => {
-            if (el) el.indeterminate = isSelected && hasChildren && someChildrenSelected && !allChildrenSelected;
+            if (el) el.indeterminate = !isSelected && hasChildren && someChildrenSelected;
           }}
           onChange={handleToggleSelect}
-          disabled={!canEdit}
+          disabled={!canEdit || isLockedByAncestor}
           onClick={e => e.stopPropagation()}
         />
 
@@ -161,6 +234,7 @@ const TreeNodeRow = ({ node, depth, selectedIds, expandedIds, canEdit, visibleId
           depth={depth + 1}
           selectedIds={selectedIds}
           expandedIds={expandedIds}
+          parentIdById={parentIdById}
           canEdit={canEdit}
           visibleIds={visibleIds}
           onToggleSelect={onToggleSelect}
@@ -183,6 +257,8 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
   const [sortMode, setSortMode] = useState<SortMode>('alpha');
   const [error, setError] = useState('');
 
+  const hierarchy = useMemo(() => buildDepartmentHierarchyMaps(sigurDepts), [sigurDepts]);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -197,6 +273,7 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
         name: (d.name as string) || '',
         parentId: d.parentId as number | undefined,
       })).filter(d => d.name.trim());
+      const deptHierarchy = buildDepartmentHierarchyMaps(depts);
 
       setSigurDepts(depts);
 
@@ -210,9 +287,10 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
       const filterIds = new Set<number>(
         (filterRes || []).map(f => f.sigur_department_id)
       );
-      setSelectedIds(filterIds);
-      setInitialIds(filterIds);
-      onFilterCountChange?.(filterIds.size);
+      const expandedFilterIds = expandSelectedIdsToSubtree(filterIds, deptHierarchy);
+      setSelectedIds(expandedFilterIds);
+      setInitialIds(expandedFilterIds);
+      onFilterCountChange?.(expandedFilterIds.size);
     } catch {
       setError('Ошибка загрузки данных');
     } finally {
@@ -252,6 +330,9 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
 
   const handleToggleSelect = (id: number, descendants: number[]) => {
     setSelectedIds(prev => {
+      if (hasSelectedAncestor(id, prev, hierarchy.parentIdById)) {
+        return prev;
+      }
       const next = new Set(prev);
       if (next.has(id)) {
         // Deselect this + all descendants
@@ -426,6 +507,7 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
               depth={0}
               selectedIds={selectedIds}
               expandedIds={expandedIds}
+              parentIdById={hierarchy.parentIdById}
               canEdit={canEdit}
               visibleIds={visibleIds}
               onToggleSelect={handleToggleSelect}

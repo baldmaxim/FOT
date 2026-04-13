@@ -14,6 +14,7 @@ import { buildTimesheetApprovalPeriod, formatTimesheetHalfLabel, type TimesheetA
 interface IProps {
   departmentId: string | null;
   month: string; // YYYY-MM
+  compact?: boolean;
 }
 
 const STATUS_COLORS: Record<TimesheetApprovalStatus, string> = {
@@ -37,6 +38,7 @@ interface IPeriodCardProps {
   canSubmitDepartment: boolean;
   canReviewHr: boolean;
   comment: string;
+  compact: boolean;
   half: TimesheetApprovalHalf;
   loading: boolean;
   month: string;
@@ -51,6 +53,7 @@ const PeriodCard: FC<IPeriodCardProps> = ({
   canSubmitDepartment,
   canReviewHr,
   comment,
+  compact,
   half,
   loading,
   month,
@@ -66,24 +69,19 @@ const PeriodCard: FC<IPeriodCardProps> = ({
   const submitLabel = status === 'returned' || status === 'rejected' ? 'Переподать' : 'Подать';
 
   return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: 6,
-      padding: '6px 8px',
-      border: '1px solid var(--border)',
-      borderRadius: 9,
-      background: 'var(--bg-secondary)',
-      flexWrap: 'wrap',
-      minWidth: 190,
-    }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-        <strong style={{ fontSize: 12, lineHeight: 1.2 }}>{formatTimesheetHalfLabel(half, year, monthNumber)}</strong>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: STATUS_COLORS[status], fontSize: 11, fontWeight: 500, lineHeight: 1.2 }}>
+    <div className={`ts-approval-card${compact ? ' ts-approval-card--compact' : ''}`}>
+      <div className="ts-approval-card-info">
+        <strong className="ts-approval-period">
+          {formatTimesheetHalfLabel(half, year, monthNumber)}
+        </strong>
+        <span
+          className="ts-approval-status"
+          style={{ color: STATUS_COLORS[status] }}
+        >
           <Icon size={14} /> {APPROVAL_STATUS_LABELS[status]}
         </span>
         {approval?.review_comment && (
-          <span style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.3 }}>
+          <span className="ts-approval-comment-preview">
             {approval.review_comment}
           </span>
         )}
@@ -94,7 +92,7 @@ const PeriodCard: FC<IPeriodCardProps> = ({
           className="ts-btn"
           onClick={onSubmit}
           disabled={loading}
-          style={{ marginLeft: 'auto' }}
+          type="button"
         >
           <Send size={14} /> {submitLabel}
         </button>
@@ -103,33 +101,31 @@ const PeriodCard: FC<IPeriodCardProps> = ({
       {canReviewHr && status === 'submitted' && (
         <>
           {showComment ? (
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
+            <div className="ts-approval-actions">
               <input
-                style={{
-                  padding: '5px 8px',
-                  borderRadius: 6,
-                  border: '1px solid var(--border)',
-                  background: 'var(--bg-primary)',
-                  color: 'var(--text-primary)',
-                  fontSize: 12,
-                }}
+                className="ts-approval-input"
                 placeholder="Комментарий..."
                 value={comment}
                 onChange={e => onCommentChange(e.target.value)}
               />
-              <button className="ts-btn" onClick={onApprove} disabled={loading} style={{ background: '#22c55e', color: 'white' }}>
+              <button className="ts-btn ts-btn--success" onClick={onApprove} disabled={loading} type="button">
                 <Check size={14} /> Утвердить
               </button>
-              <button className="ts-btn" onClick={onReject} disabled={loading} style={{ background: '#ef4444', color: 'white' }}>
+              <button className="ts-btn ts-btn--danger" onClick={onReject} disabled={loading} type="button">
                 <X size={14} /> Отклонить
               </button>
             </div>
           ) : (
-            <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-              <button className="ts-btn" onClick={onApprove} disabled={loading} style={{ background: '#22c55e', color: 'white' }}>
+            <div className="ts-approval-actions">
+              <button className="ts-btn ts-btn--success" onClick={onApprove} disabled={loading} type="button">
                 <Check size={14} /> Утвердить
               </button>
-              <button className="ts-btn" onClick={() => setShowComment(true)} disabled={loading} style={{ background: '#ef4444', color: 'white' }}>
+              <button
+                className="ts-btn ts-btn--danger"
+                onClick={() => setShowComment(true)}
+                disabled={loading}
+                type="button"
+              >
                 <X size={14} /> Отклонить
               </button>
             </div>
@@ -140,7 +136,7 @@ const PeriodCard: FC<IPeriodCardProps> = ({
   );
 };
 
-export const TimesheetApprovalBar: FC<IProps> = ({ departmentId, month }) => {
+export const TimesheetApprovalBar: FC<IProps> = ({ departmentId, month, compact = false }) => {
   const { canEditPage } = useAuth();
   const canSubmitDepartment = canEditPage('/timesheet');
   const canReviewHr = canEditPage('/timesheet-hr');
@@ -186,9 +182,11 @@ export const TimesheetApprovalBar: FC<IProps> = ({ departmentId, month }) => {
   };
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', minWidth: 0 }}>
-      <div style={{ fontSize: 10, color: 'var(--text-secondary)', lineHeight: 1.2, whiteSpace: 'nowrap' }}>Согласование табеля</div>
-      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+    <div className={`ts-approval-bar${compact ? ' ts-approval-bar--compact' : ''}`}>
+      <div className="ts-approval-title">
+        {compact ? 'Периоды согласования' : 'Согласование табеля'}
+      </div>
+      <div className="ts-approval-list">
         {(['H1', 'H2'] as TimesheetApprovalHalf[]).map(half => (
           <PeriodCard
             key={half}
@@ -196,6 +194,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({ departmentId, month }) => {
             canSubmitDepartment={canSubmitDepartment}
             canReviewHr={canReviewHr}
             comment={comments[half]}
+            compact={compact}
             half={half}
             loading={loadingHalf === half}
             month={month}

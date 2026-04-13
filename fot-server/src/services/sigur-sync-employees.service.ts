@@ -180,9 +180,9 @@ export async function syncEmployeesLogic(
 
   // Всегда загружаем полный список — чтобы обновлять отдел у существующих сотрудников
   // даже если они переехали за пределы whitelist-отделов
-  const whitelist = await getWhitelistedDepartmentIdsCached(context);
+  const whitelist = await getWhitelistedDepartmentIdsCached(connection, context);
   if (whitelist) {
-    console.log(`[syncEmployees] whitelist active: ${whitelist.size} departments (applies to inserts only)`);
+    console.log(`[syncEmployees] whitelist active: ${whitelist.size} subtree departments (applies to inserts only)`);
   }
   const sigurEmployeesRaw = await sigurService.getEmployeesCached(connection);
   console.log('[syncEmployees] got', sigurEmployeesRaw.length, 'employees from Sigur');

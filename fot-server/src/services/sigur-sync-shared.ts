@@ -31,6 +31,75 @@ export interface INormalizedDept {
   parentId: number | null;
 }
 
+interface IDepartmentHierarchyCache {
+  childIdsByParentId: Map<number, number[]>;
+  parentIdById: Map<number, number | null>;
+}
+
+function buildDepartmentHierarchy(departments: INormalizedDept[]): IDepartmentHierarchyCache {
+  const deptIds = new Set<number>(departments.map(dept => dept.id));
+  const childIdsByParentId = new Map<number, number[]>();
+  const parentIdById = new Map<number, number | null>();
+
+  for (const dept of departments) {
+    const parentId = typeof dept.parentId === 'number' && deptIds.has(dept.parentId)
+      ? dept.parentId
+      : null;
+    parentIdById.set(dept.id, parentId);
+
+    if (parentId === null) continue;
+    const siblings = childIdsByParentId.get(parentId) || [];
+    siblings.push(dept.id);
+    childIdsByParentId.set(parentId, siblings);
+  }
+
+  return { childIdsByParentId, parentIdById };
+}
+
+export function expandDepartmentIdsToDescendants(
+  selectedIds: Set<number>,
+  departments: INormalizedDept[],
+): Set<number> {
+  if (selectedIds.size === 0) return new Set();
+
+  const { childIdsByParentId } = buildDepartmentHierarchy(departments);
+  const expanded = new Set<number>();
+  const queue = [...selectedIds];
+
+  while (queue.length > 0) {
+    const currentId = queue.pop()!;
+    if (expanded.has(currentId)) continue;
+
+    expanded.add(currentId);
+    const childIds = childIdsByParentId.get(currentId) || [];
+    for (const childId of childIds) {
+      if (!expanded.has(childId)) queue.push(childId);
+    }
+  }
+
+  return expanded;
+}
+
+export function expandDepartmentIdsToAncestors(
+  selectedIds: Set<number>,
+  departments: INormalizedDept[],
+): Set<number> {
+  if (selectedIds.size === 0) return new Set();
+
+  const { parentIdById } = buildDepartmentHierarchy(departments);
+  const expanded = new Set<number>(selectedIds);
+
+  for (const deptId of selectedIds) {
+    let parentId = parentIdById.get(deptId) ?? null;
+    while (parentId !== null && !expanded.has(parentId)) {
+      expanded.add(parentId);
+      parentId = parentIdById.get(parentId) ?? null;
+    }
+  }
+
+  return expanded;
+}
+
 export function normalizeDepartment(raw: Record<string, unknown>): INormalizedDept {
   return {
     id: resolveField<number>(raw, 'id', 'ID', 'Id') ?? 0,
@@ -103,8 +172,11 @@ export interface IWhitelistedEmployeesCache {
 
 export interface ISyncContext {
   departmentsRaw?: Record<string, unknown>[];
+  normalizedDepartments?: INormalizedDept[];
+  departmentHierarchy?: IDepartmentHierarchyCache;
   positionsRaw?: Record<string, unknown>[] | null;
   whitelistDepartmentIds?: Set<number> | null;
+  expandedWhitelistDepartmentIds?: Set<number> | null;
   whitelistedSigurEmployees?: IWhitelistedEmployeesCache | null;
 }
 
@@ -138,18 +210,66 @@ export async function getPositionsRaw(
   return positions;
 }
 
+async function getNormalizedDepartmentsCached(
+  connection?: 'external' | 'internal',
+  context?: ISyncContext,
+): Promise<INormalizedDept[]> {
+  if (context?.normalizedDepartments) {
+    return context.normalizedDepartments;
+  }
+
+  const departments = (await getDepartmentsRaw(connection, context)).map(normalizeDepartment);
+  if (context) {
+    context.normalizedDepartments = departments;
+  }
+  return departments;
+}
+
+async function getDepartmentHierarchyCached(
+  connection?: 'external' | 'internal',
+  context?: ISyncContext,
+): Promise<IDepartmentHierarchyCache> {
+  if (context?.departmentHierarchy) {
+    return context.departmentHierarchy;
+  }
+
+  const departments = await getNormalizedDepartmentsCached(connection, context);
+  const hierarchy = buildDepartmentHierarchy(departments);
+  if (context) {
+    context.departmentHierarchy = hierarchy;
+  }
+  return hierarchy;
+}
+
 export async function getWhitelistedDepartmentIdsCached(
+  connection?: 'external' | 'internal',
   context?: ISyncContext,
 ): Promise<Set<number> | null> {
-  if (context && context.whitelistDepartmentIds !== undefined) {
-    return context.whitelistDepartmentIds;
+  if (context && context.expandedWhitelistDepartmentIds !== undefined) {
+    return context.expandedWhitelistDepartmentIds;
   }
 
   const whitelist = await getWhitelistedDepartmentIds();
+  if (!whitelist || whitelist.size === 0) {
+    if (context) {
+      context.whitelistDepartmentIds = whitelist;
+      context.expandedWhitelistDepartmentIds = whitelist;
+    }
+    return whitelist;
+  }
+
   if (context) {
     context.whitelistDepartmentIds = whitelist;
   }
-  return whitelist;
+
+  const departments = await getNormalizedDepartmentsCached(connection, context);
+  const expandedWhitelist = expandDepartmentIdsToDescendants(whitelist, departments);
+  await getDepartmentHierarchyCached(connection, context);
+
+  if (context) {
+    context.expandedWhitelistDepartmentIds = expandedWhitelist;
+  }
+  return expandedWhitelist;
 }
 
 export function buildWhitelistedEmployeesCache(data: Record<string, unknown>[]): IWhitelistedEmployeesCache {
@@ -238,7 +358,7 @@ export async function getWhitelistedSigurEmployees(
   onProgress?: (data: Record<string, unknown>) => void,
 ): Promise<Record<string, unknown>[]> {
   const send = onProgress || (() => {});
-  const whitelist = await getWhitelistedDepartmentIdsCached(context);
+  const whitelist = await getWhitelistedDepartmentIdsCached(connection, context);
 
   if (!whitelist || whitelist.size === 0) {
     return sigurService.getEmployeesCached(connection);

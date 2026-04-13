@@ -68,7 +68,7 @@ export async function syncEventsLogic(
   }
 
   // 2. Whitelist
-  const whitelist = await getWhitelistedDepartmentIdsCached(context);
+  const whitelist = await getWhitelistedDepartmentIdsCached(connection, context);
   let allowedNames: Set<string> | null = null;
   let allowedSigurIds: Set<number> | null = null;
 

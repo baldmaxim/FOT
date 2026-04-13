@@ -1,7 +1,8 @@
-import { type FC, useMemo } from 'react';
+import { type FC, useEffect, useMemo, useState } from 'react';
 import type { TimesheetEntry, TimesheetEmployee, TimesheetStatus } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
 import type { IProductionCalendarMonth } from '../../types/timesheet';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import {
   getDaysInMonth,
   isWeekend,
@@ -155,6 +156,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
 }) => {
   const daysCount = getDaysInMonth(year, month);
   const days = Array.from({ length: daysCount }, (_, i) => i + 1);
+  const [expandedEmployeeId, setExpandedEmployeeId] = useState<number | null>(null);
   const rows: IRowData[] = useMemo(() => {
     const dc = getDaysInMonth(year, month);
     const entryMap = new Map<string, TimesheetEntry>();
@@ -192,25 +194,35 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     });
   }, [employees, entries, year, month, schedules, dailySchedules, calendar]);
 
+  useEffect(() => {
+    if (expandedEmployeeId == null) return;
+    if (!rows.some(row => row.employee.id === expandedEmployeeId)) {
+      setExpandedEmployeeId(null);
+    }
+  }, [expandedEmployeeId, rows]);
+
   if (compact) {
     return (
       <div className="ts-table-container">
-        <div className="ts-table-header-bar">
-          <h3 className="ts-table-title">Табель учёта рабочего времени</h3>
+        <div className="ts-table-header-bar ts-table-header-bar--mobile">
+          <h3 className="ts-table-title">Сотрудники</h3>
+          <div className="ts-mobile-list-hint">
+            {rows.length > 0 ? `${rows.length} чел. • откройте дни по сотруднику` : 'Нет данных за месяц'}
+          </div>
         </div>
 
         <div className="ts-mobile-list">
           {rows.map(row => {
             const diff = row.factHours - row.normHours;
             const hasVacation = Array.from(row.days.values()).some(e => e.status === 'vacation');
+            const expanded = expandedEmployeeId === row.employee.id;
 
             return (
-              <article key={row.employee.id} className="ts-mobile-card">
-                <button
-                  type="button"
-                  className="ts-mobile-card-header"
-                  onClick={() => onEmployeeClick(row.employee)}
-                >
+              <article
+                key={row.employee.id}
+                className={`ts-mobile-card${expanded ? ' ts-mobile-card--expanded' : ''}`}
+              >
+                <div className="ts-mobile-card-header">
                   <div className="ts-mobile-card-meta">
                     <div className="ts-mobile-card-name">{row.employee.full_name}</div>
                     <div className="ts-mobile-card-role">{row.employee.position_name || '—'}</div>
@@ -232,37 +244,65 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         : `${diff >= 0 ? '+' : '−'}${formatHM(Math.abs(diff))}`}
                     </span>
                   </div>
-                </button>
-
-                <div className="ts-mobile-days">
-                  {days.map(d => {
-                    const sched = getScheduleForTimesheetDay(schedules, dailySchedules, row.employee.id, year, month, d);
-                    const dayOff = isScheduleDayOff(sched, calendar, year, month, d);
-                    const today = isToday(year, month, d);
-                    const future = isFutureDay(year, month, d);
-                    const entry = row.days.get(d) || null;
-                    const thresholdHours = getFullDayThresholdHoursForDay(sched, calendar, year, month, d);
-                    const cls = getDayCellClass(entry, dayOff, today, future, thresholdHours);
-                    const text = getDayCellText(entry, dayOff);
-                    const title = getDayCellTitle(entry, dayOff);
-
-                    return (
-                      <button
-                        key={d}
-                        type="button"
-                        className={`${cls} ts-mobile-day-btn`}
-                        title={title}
-                        onClick={() => onDayClick(row.employee, d, entry)}
-                      >
-                        <span className="ts-mobile-day-head">
-                          <span className="ts-mobile-day-num">{d}</span>
-                          <span className="ts-mobile-day-weekday">{getWeekdayShort(year, month, d)}</span>
-                        </span>
-                        <span className="ts-mobile-day-value">{text || '·'}</span>
-                      </button>
-                    );
-                  })}
                 </div>
+
+                <div className="ts-mobile-card-actions">
+                  <button
+                    type="button"
+                    className="ts-mobile-action-btn"
+                    onClick={() => setExpandedEmployeeId(current => (
+                      current === row.employee.id ? null : row.employee.id
+                    ))}
+                    aria-expanded={expanded}
+                  >
+                    {expanded ? 'Скрыть дни' : 'Показать дни'}
+                    {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </button>
+                  <button
+                    type="button"
+                    className="ts-mobile-action-btn ts-mobile-action-btn--secondary"
+                    onClick={() => onEmployeeClick(row.employee)}
+                  >
+                    Детализация
+                  </button>
+                </div>
+
+                {expanded && (
+                  <div className="ts-mobile-days-wrap">
+                    <div className="ts-mobile-days-caption">
+                      Нажмите на день, чтобы посмотреть или скорректировать отметку
+                    </div>
+                    <div className="ts-mobile-days">
+                      {days.map(d => {
+                        const sched = getScheduleForTimesheetDay(schedules, dailySchedules, row.employee.id, year, month, d);
+                        const dayOff = isScheduleDayOff(sched, calendar, year, month, d);
+                        const today = isToday(year, month, d);
+                        const future = isFutureDay(year, month, d);
+                        const entry = row.days.get(d) || null;
+                        const thresholdHours = getFullDayThresholdHoursForDay(sched, calendar, year, month, d);
+                        const cls = getDayCellClass(entry, dayOff, today, future, thresholdHours);
+                        const text = getDayCellText(entry, dayOff);
+                        const title = getDayCellTitle(entry, dayOff);
+
+                        return (
+                          <button
+                            key={d}
+                            type="button"
+                            className={`${cls} ts-mobile-day-btn`}
+                            title={title}
+                            onClick={() => onDayClick(row.employee, d, entry)}
+                          >
+                            <span className="ts-mobile-day-head">
+                              <span className="ts-mobile-day-num">{d}</span>
+                              <span className="ts-mobile-day-weekday">{getWeekdayShort(year, month, d)}</span>
+                            </span>
+                            <span className="ts-mobile-day-value">{text || '·'}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </article>
             );
           })}
