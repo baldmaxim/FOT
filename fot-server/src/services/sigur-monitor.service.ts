@@ -2,6 +2,16 @@ import { supabase } from '../config/database.js';
 import { sigurService } from './sigur.service.js';
 import { notificationService } from './notification.service.js';
 import { settingsService, type ISigurMonitorSettings } from './settings.service.js';
+import {
+  SIGUR_MONITOR_LEASE_TTL_SECONDS,
+  SIGUR_MONITOR_STATE_KEY,
+  SIGUR_POLLING_STATE_KEY,
+  getSigurRuntimeOwner,
+  getSigurRuntimeState,
+  releaseSigurRuntimeLease,
+  startSigurRuntimeLeaseHeartbeat,
+  tryAcquireSigurRuntimeLease,
+} from './sigur-runtime-state.service.js';
 
 type SigurConnectionType = 'internal' | 'external' | null;
 export type SigurMonitorSource = 'presence_polling' | 'monitor_probe' | 'silence_detector';
@@ -83,6 +93,7 @@ let startupTimeout: ReturnType<typeof setTimeout> | null = null;
 let cycleInFlight: Promise<void> | null = null;
 let monitorStorageAvailable = true;
 let monitorStorageWarningLogged = false;
+const MONITOR_LEASE_OWNER = getSigurRuntimeOwner(SIGUR_MONITOR_STATE_KEY);
 let runtimeState: IRuntimeState = {
   initialized: false,
   lastSignalAt: null,
@@ -183,6 +194,15 @@ function computeMedian(values: number[]): number {
   }
 
   return Math.round((sorted[middle - 1] + sorted[middle]) / 2);
+}
+
+function parseOptionalIsoDate(value: unknown): Date | null {
+  if (typeof value !== 'string' || value.length === 0) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function buildLookbackDates(localDate: string, localWeekday: number, lookbackDays: number): string[] {
@@ -344,6 +364,36 @@ async function ensureRuntimeStateLoaded(): Promise<void> {
   }
 
   runtimeState.initialized = true;
+}
+
+async function refreshRuntimeStateFromPollingState(now = new Date(), timezone?: string): Promise<{
+  lastSignalAt: Date | null;
+  lastSuccessfulSignalAt: Date | null;
+  lastEventFlowAt: Date | null;
+  isPresencePollingInFlight: boolean;
+}> {
+  const pollingState = await getSigurRuntimeState(SIGUR_POLLING_STATE_KEY);
+  const pollingMeta = pollingState?.meta || {};
+  const lastSignalAt = parseOptionalIsoDate(pollingMeta.lastSignalAt) || runtimeState.lastSignalAt;
+  const lastSuccessfulSignalAt = parseOptionalIsoDate(pollingMeta.lastSuccessAt) || runtimeState.lastSuccessfulSignalAt;
+  const sharedLastEventFlowAt = parseOptionalIsoDate(pollingMeta.lastEventFlowAt);
+  const lastEventFlowAt = sharedLastEventFlowAt || runtimeState.lastEventFlowAt || (timezone ? await getLatestEventFlowAt(timezone) : null);
+  const leaseExpiresAt = parseOptionalIsoDate(pollingState?.lease_expires_at);
+  const isPresencePollingInFlight = !!(pollingState?.lease_owner && leaseExpiresAt && leaseExpiresAt.getTime() > now.getTime());
+
+  runtimeState.lastSignalAt = lastSignalAt;
+  runtimeState.lastSuccessfulSignalAt = lastSuccessfulSignalAt;
+  runtimeState.lastEventFlowAt = lastEventFlowAt;
+  runtimeState.presencePollingInFlightStartedAt = isPresencePollingInFlight
+    ? (parseOptionalIsoDate(pollingMeta.inFlightStartedAt) || now)
+    : null;
+
+  return {
+    lastSignalAt,
+    lastSuccessfulSignalAt,
+    lastEventFlowAt,
+    isPresencePollingInFlight,
+  };
 }
 
 async function insertHealthCheck(row: Omit<ISigurHealthCheck, 'id' | 'checked_at'> & { checked_at?: string }): Promise<ISigurHealthCheck> {
@@ -756,11 +806,16 @@ export async function recordSigurMonitorSuccess(input: IHealthSignalInput): Prom
 
   const checkedAt = input.checkedAt || new Date();
   const eventsLastWindow = input.eventsLastWindow ?? 0;
+  const lastEventFlowAtFromMeta = parseOptionalIsoDate(input.meta?.lastEventFlowAt)
+    || parseOptionalIsoDate(input.meta?.latestObservedEventAt);
   runtimeState.lastSignalAt = checkedAt;
   runtimeState.lastSuccessfulSignalAt = checkedAt;
   runtimeState.consecutiveFailures = 0;
   runtimeState.consecutiveSuccesses += 1;
-  if (eventsLastWindow > 0) {
+  if (lastEventFlowAtFromMeta) {
+    runtimeState.lastEventFlowAt = lastEventFlowAtFromMeta;
+    runtimeState.consecutiveEventFlowSuccesses += 1;
+  } else if (eventsLastWindow > 0) {
     runtimeState.lastEventFlowAt = checkedAt;
     runtimeState.consecutiveEventFlowSuccesses += 1;
   } else {
@@ -988,13 +1043,64 @@ export async function runSigurMonitorCycleNow(now = new Date()): Promise<void> {
   const settings = await settingsService.getSigurMonitorConfig();
   if (!settings.enabled || !sigurService.isConfigured()) return;
 
-  const lastSignalAge = runtimeState.lastSignalAt ? now.getTime() - runtimeState.lastSignalAt.getTime() : Number.POSITIVE_INFINITY;
-  const isPresencePollingInFlight = runtimeState.presencePollingInFlightStartedAt !== null;
+  const pollingSnapshot = await refreshRuntimeStateFromPollingState(now, settings.timezone);
+  const lastSignalAge = pollingSnapshot.lastSignalAt
+    ? now.getTime() - pollingSnapshot.lastSignalAt.getTime()
+    : Number.POSITIVE_INFINITY;
+  const isPresencePollingInFlight = pollingSnapshot.isPresencePollingInFlight;
   if (!isPresencePollingInFlight && lastSignalAge >= MONITOR_STALE_SIGNAL_MS) {
     await performDirectProbe(now);
   }
 
+  if (isPresencePollingInFlight) {
+    return;
+  }
+
   await maybeDetectSilence(now);
+}
+
+async function runSigurMonitorCycleAsLeader(now = new Date()): Promise<void> {
+  const leaseStartedAtIso = now.toISOString();
+  const lease = await tryAcquireSigurRuntimeLease({
+    key: SIGUR_MONITOR_STATE_KEY,
+    owner: MONITOR_LEASE_OWNER,
+    ttlSeconds: SIGUR_MONITOR_LEASE_TTL_SECONDS,
+    meta: {
+      leaseMode: 'monitor',
+      inFlightStartedAt: leaseStartedAtIso,
+      leaderOwner: MONITOR_LEASE_OWNER,
+    },
+  });
+
+  if (!lease.acquired) {
+    return;
+  }
+
+  const stopHeartbeat = startSigurRuntimeLeaseHeartbeat({
+    key: SIGUR_MONITOR_STATE_KEY,
+    owner: MONITOR_LEASE_OWNER,
+    ttlSeconds: SIGUR_MONITOR_LEASE_TTL_SECONDS,
+    getMeta: () => ({
+      leaseMode: 'monitor',
+      inFlightStartedAt: leaseStartedAtIso,
+      leaderOwner: MONITOR_LEASE_OWNER,
+    }),
+    onError: error => {
+      console.error('[sigur-monitor] lease heartbeat error:', error.message);
+    },
+  });
+
+  try {
+    await runSigurMonitorCycleNow(now);
+  } finally {
+    stopHeartbeat();
+    await releaseSigurRuntimeLease({
+      key: SIGUR_MONITOR_STATE_KEY,
+      owner: MONITOR_LEASE_OWNER,
+    }).catch(error => {
+      console.error('[sigur-monitor] lease release error:', (error as Error).message);
+    });
+  }
 }
 
 export function startSigurMonitor(): void {
@@ -1007,14 +1113,14 @@ export function startSigurMonitor(): void {
   console.log('[sigur-monitor] started (interval: 60s)');
   startupTimeout = setTimeout(() => {
     startupTimeout = null;
-    void runSigurMonitorCycleNow().catch(error => {
+    void runSigurMonitorCycleAsLeader().catch(error => {
       console.error('[sigur-monitor] startup error:', (error as Error).message);
     });
   }, MONITOR_STARTUP_DELAY_MS);
 
   monitorTimer = setInterval(() => {
     if (cycleInFlight) return;
-    cycleInFlight = runSigurMonitorCycleNow()
+    cycleInFlight = runSigurMonitorCycleAsLeader()
       .catch(error => {
         console.error('[sigur-monitor] cycle error:', (error as Error).message);
       })

@@ -33,6 +33,47 @@ const mockedState = vi.hoisted(() => ({
     recordSigurMonitorSuccess: vi.fn(async () => undefined),
     recordSigurMonitorFailure: vi.fn(async () => undefined),
   },
+  runtimeStateMock: {
+    pollingState: null as null | {
+      key: string;
+      checkpoint_at: string | null;
+      lease_owner: string | null;
+      lease_expires_at: string | null;
+      heartbeat_at: string | null;
+      meta: Record<string, unknown>;
+      updated_at: string;
+    },
+    getSigurRuntimeState: vi.fn(async () => mockedState.runtimeStateMock.pollingState),
+    tryAcquireSigurRuntimeLease: vi.fn(async () => ({ acquired: true, row: mockedState.runtimeStateMock.pollingState })),
+    mergeSigurRuntimeState: vi.fn(async (params: {
+      key: string;
+      checkpointAt?: Date | null;
+      meta?: Record<string, unknown>;
+      owner?: string | null;
+    }) => {
+      const current = mockedState.runtimeStateMock.pollingState;
+      const currentCheckpointMs = current?.checkpoint_at ? Date.parse(current.checkpoint_at) : Number.NEGATIVE_INFINITY;
+      const nextCheckpointMs = params.checkpointAt ? params.checkpointAt.getTime() : currentCheckpointMs;
+      const checkpoint_at = Number.isFinite(Math.max(currentCheckpointMs, nextCheckpointMs))
+        ? new Date(Math.max(currentCheckpointMs, nextCheckpointMs)).toISOString()
+        : null;
+      mockedState.runtimeStateMock.pollingState = {
+        key: params.key,
+        checkpoint_at,
+        lease_owner: current?.lease_owner || null,
+        lease_expires_at: current?.lease_expires_at || null,
+        heartbeat_at: current?.heartbeat_at || null,
+        meta: {
+          ...(current?.meta || {}),
+          ...(params.meta || {}),
+        },
+        updated_at: new Date('2026-03-27T10:00:00.000Z').toISOString(),
+      };
+      return mockedState.runtimeStateMock.pollingState;
+    }),
+    releaseSigurRuntimeLease: vi.fn(async () => true),
+    startSigurRuntimeLeaseHeartbeat: vi.fn(() => vi.fn()),
+  },
 }));
 
 function createBuilder(table: string) {
@@ -100,6 +141,17 @@ vi.mock('./sigur-monitor.service.js', () => ({
   recordSigurMonitorFailure: mockedState.sigurMonitorMock.recordSigurMonitorFailure,
 }));
 
+vi.mock('./sigur-runtime-state.service.js', () => ({
+  SIGUR_POLLING_LEASE_TTL_SECONDS: 180,
+  SIGUR_POLLING_STATE_KEY: 'sigur_presence_polling',
+  getSigurRuntimeOwner: (scope: string) => `owner:${scope}`,
+  getSigurRuntimeState: mockedState.runtimeStateMock.getSigurRuntimeState,
+  tryAcquireSigurRuntimeLease: mockedState.runtimeStateMock.tryAcquireSigurRuntimeLease,
+  mergeSigurRuntimeState: mockedState.runtimeStateMock.mergeSigurRuntimeState,
+  releaseSigurRuntimeLease: mockedState.runtimeStateMock.releaseSigurRuntimeLease,
+  startSigurRuntimeLeaseHeartbeat: mockedState.runtimeStateMock.startSigurRuntimeLeaseHeartbeat,
+}));
+
 import {
   POLL_OVERLAP_MS,
   pollEventsOnce,
@@ -155,6 +207,12 @@ describe('presence-polling.service', () => {
     mockedState.sigurMonitorMock.markPresencePollingCycleFinished.mockClear();
     mockedState.sigurMonitorMock.recordSigurMonitorSuccess.mockClear();
     mockedState.sigurMonitorMock.recordSigurMonitorFailure.mockClear();
+    mockedState.runtimeStateMock.pollingState = null;
+    mockedState.runtimeStateMock.getSigurRuntimeState.mockClear();
+    mockedState.runtimeStateMock.tryAcquireSigurRuntimeLease.mockClear();
+    mockedState.runtimeStateMock.mergeSigurRuntimeState.mockClear();
+    mockedState.runtimeStateMock.releaseSigurRuntimeLease.mockClear();
+    mockedState.runtimeStateMock.startSigurRuntimeLeaseHeartbeat.mockClear();
     resetPresencePollingStateForTests();
   });
 
@@ -189,7 +247,7 @@ describe('presence-polling.service', () => {
 
     expect(mockedState.sigurServiceMock.getEvents).toHaveBeenCalledWith(
       '2026-03-27T08:08:00',
-      '2026-03-27T12:00:00',
+      '2026-03-27T08:18:00',
       'external',
       'PASS_DETECTED',
     );
@@ -199,7 +257,7 @@ describe('presence-polling.service', () => {
     }));
   });
 
-  it('does not cut the recovery window at the current day boundary', async () => {
+  it('keeps recovering from the previous day but caps the catch-up window length', async () => {
     const now = new Date(2026, 2, 27, 10, 0, 0);
 
     mockedState.queryResolver = (query) => {
@@ -226,13 +284,13 @@ describe('presence-polling.service', () => {
 
     expect(mockedState.sigurServiceMock.getEvents).toHaveBeenCalledWith(
       '2026-03-26T23:56:00',
-      '2026-03-27T10:00:00',
+      '2026-03-27T00:06:00',
       'external',
       'PASS_DETECTED',
     );
   });
 
-  it('moves the in-memory checkpoint even when the cycle returns no events', async () => {
+  it('advances the shared checkpoint even when the cycle returns no events', async () => {
     const firstNow = new Date(2026, 2, 27, 10, 0, 0);
     const secondNow = new Date(2026, 2, 27, 10, 5, 0);
 
@@ -259,17 +317,22 @@ describe('presence-polling.service', () => {
     expect(mockedState.sigurServiceMock.getEvents).toHaveBeenNthCalledWith(
       1,
       '2026-03-27T07:58:00',
-      '2026-03-27T10:00:00',
+      '2026-03-27T08:08:00',
       'external',
       'PASS_DETECTED',
     );
     expect(mockedState.sigurServiceMock.getEvents).toHaveBeenNthCalledWith(
       2,
-      '2026-03-27T09:58:00',
-      '2026-03-27T10:05:00',
+      '2026-03-27T08:06:00',
+      '2026-03-27T08:16:00',
       'external',
       'PASS_DETECTED',
     );
+    expect(mockedState.runtimeStateMock.mergeSigurRuntimeState).toHaveBeenCalledWith(expect.objectContaining({
+      key: 'sigur_presence_polling',
+      checkpointAt: expect.any(Date),
+      owner: 'owner:sigur_presence_polling',
+    }));
   });
 
   it('does not advance the checkpoint when persisting events fails', async () => {
@@ -302,19 +365,28 @@ describe('presence-polling.service', () => {
     ] as Array<Record<string, unknown>>);
 
     await pollEventsOnce(firstNow);
+    expect(mockedState.runtimeStateMock.mergeSigurRuntimeState).toHaveBeenCalledTimes(1);
+    expect(mockedState.runtimeStateMock.mergeSigurRuntimeState).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      key: 'sigur_presence_polling',
+      owner: 'owner:sigur_presence_polling',
+      meta: expect.objectContaining({
+        lastError: 'Failed to persist Sigur events: temporary insert failure',
+      }),
+    }));
+
     await pollEventsOnce(secondNow);
 
     expect(mockedState.sigurServiceMock.getEvents).toHaveBeenNthCalledWith(
       1,
       '2026-03-27T08:58:00',
-      '2026-03-27T10:00:00',
+      '2026-03-27T09:08:00',
       'external',
       'PASS_DETECTED',
     );
     expect(mockedState.sigurServiceMock.getEvents).toHaveBeenNthCalledWith(
       2,
       '2026-03-27T08:58:00',
-      '2026-03-27T10:05:00',
+      '2026-03-27T09:08:00',
       'external',
       'PASS_DETECTED',
     );
@@ -345,7 +417,7 @@ describe('presence-polling.service', () => {
 
     expect(mockedState.sigurServiceMock.getEvents).toHaveBeenCalledWith(
       '2026-03-27T00:00:00',
-      '2026-03-27T09:30:00',
+      '2026-03-27T00:10:00',
       'external',
       'PASS_DETECTED',
     );

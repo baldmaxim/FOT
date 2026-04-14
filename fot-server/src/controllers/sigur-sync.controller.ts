@@ -123,7 +123,7 @@ export const sigurSyncController = {
       }
     } finally {
       if (lockAcquired) {
-        releasePresencePollingLock();
+        await releasePresencePollingLock();
       }
     }
   },
@@ -149,7 +149,7 @@ export const sigurSyncController = {
       res.status(500).json({ success: false, error: 'Ошибка импорта сотрудников из Sigur' });
     } finally {
       if (lockAcquired) {
-        releasePresencePollingLock();
+        await releasePresencePollingLock();
       }
     }
   },
@@ -176,7 +176,7 @@ export const sigurSyncController = {
       res.status(500).json({ success: false, error: 'Ошибка импорта отделов из Sigur' });
     } finally {
       if (lockAcquired) {
-        releasePresencePollingLock();
+        await releasePresencePollingLock();
       }
     }
   },
@@ -203,7 +203,7 @@ export const sigurSyncController = {
       res.status(500).json({ success: false, error: 'Ошибка импорта должностей из Sigur' });
     } finally {
       if (lockAcquired) {
-        releasePresencePollingLock();
+        await releasePresencePollingLock();
       }
     }
   },
@@ -259,7 +259,7 @@ export const sigurSyncController = {
       res.status(500).json({ success: false, error: 'Ошибка удаления событий' });
     } finally {
       if (lockAcquired) {
-        releasePresencePollingLock();
+        await releasePresencePollingLock();
       }
     }
   },
@@ -390,7 +390,7 @@ export const sigurSyncController = {
       }
     } finally {
       if (lockAcquired) {
-        releasePresencePollingLock();
+        await releasePresencePollingLock();
       }
     }
   },

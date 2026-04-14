@@ -13,18 +13,32 @@ import {
   recordSigurMonitorFailure,
   recordSigurMonitorSuccess,
 } from './sigur-monitor.service.js';
+import {
+  SIGUR_POLLING_LEASE_TTL_SECONDS,
+  SIGUR_POLLING_STATE_KEY,
+  getSigurRuntimeOwner,
+  getSigurRuntimeState,
+  mergeSigurRuntimeState,
+  releaseSigurRuntimeLease,
+  startSigurRuntimeLeaseHeartbeat,
+  tryAcquireSigurRuntimeLease,
+} from './sigur-runtime-state.service.js';
 import type { ConnectionType } from './sigur.service.js';
 
 const POLL_INTERVAL = 60_000;
 const EMPLOYEE_CACHE_TTL = 10 * 60_000;
 const BATCH_SIZE = 500;
 export const POLL_OVERLAP_MS = 2 * 60_000;
+const POLL_MAX_WINDOW_MS = 10 * 60_000;
 
 let pollingTimer: ReturnType<typeof setInterval> | null = null;
 let startupTimeout: ReturnType<typeof setTimeout> | null = null;
 let manualSyncLocks = 0;
 let pollInFlight: Promise<void> | null = null;
-let lastSuccessfulPollAt: Date | null = null;
+let manualSyncLeaseHeartbeatStop: (() => void) | null = null;
+
+const POLLING_LEASE_OWNER = getSigurRuntimeOwner(SIGUR_POLLING_STATE_KEY);
+const MANUAL_SYNC_LEASE_OWNER = `${POLLING_LEASE_OWNER}:manual`;
 
 export class ManualSyncInProgressError extends Error {
   readonly code = 'SYNC_IN_PROGRESS';
@@ -49,14 +63,17 @@ interface EmployeeMaps {
   byUniqueName: Map<string, { id: number }>;
 }
 
-type PollCheckpointSource = 'memory' | 'db' | 'fallback';
+type PollCheckpointSource = 'runtime_state' | 'stored_events' | 'fallback';
 
 interface PollingWindow {
+  startAt: Date;
+  endAt: Date;
   startTime: string;
   endTime: string;
   startDate: string;
   endDate: string;
   checkpointSource: PollCheckpointSource;
+  windowTruncated: boolean;
 }
 
 function pad(n: number): string {
@@ -137,14 +154,21 @@ async function getLatestStoredEventTimestamp(): Promise<Date | null> {
 
 export async function resolvePollingWindow(now = new Date()): Promise<PollingWindow> {
   let checkpointSource: PollCheckpointSource = 'fallback';
-  let checkpoint = lastSuccessfulPollAt;
+  let checkpoint: Date | null = null;
 
-  if (checkpoint) {
-    checkpointSource = 'memory';
-  } else {
+  const runtimeState = await getSigurRuntimeState(SIGUR_POLLING_STATE_KEY);
+  if (runtimeState?.checkpoint_at) {
+    const parsed = new Date(runtimeState.checkpoint_at);
+    if (!Number.isNaN(parsed.getTime())) {
+      checkpoint = parsed;
+      checkpointSource = 'runtime_state';
+    }
+  }
+
+  if (!checkpoint) {
     checkpoint = await getLatestStoredEventTimestamp();
     if (checkpoint) {
-      checkpointSource = 'db';
+      checkpointSource = 'stored_events';
     }
   }
 
@@ -161,9 +185,12 @@ export async function resolvePollingWindow(now = new Date()): Promise<PollingWin
     ? new Date(checkpoint.getTime() - POLL_OVERLAP_MS)
     : todayStart;
   const start = rawStart.getTime() > now.getTime() ? new Date(now) : rawStart;
+  const maxEnd = new Date(start.getTime() + POLL_MAX_WINDOW_MS);
+  const end = maxEnd.getTime() < now.getTime() ? maxEnd : now;
+  const windowTruncated = end.getTime() < now.getTime();
 
   // Лог catch-up при значительном gap
-  if (checkpoint && checkpointSource === 'db') {
+  if (checkpoint && checkpointSource !== 'fallback') {
     const gapMinutes = Math.round((now.getTime() - checkpoint.getTime()) / 60_000);
     if (gapMinutes > 5) {
       console.log(`[presence-polling] catch-up: recovering ${gapMinutes}m gap from ${formatLocalDateTime(checkpoint)} to ${formatLocalDateTime(now)}`);
@@ -171,11 +198,14 @@ export async function resolvePollingWindow(now = new Date()): Promise<PollingWin
   }
 
   return {
+    startAt: start,
+    endAt: end,
     startTime: formatLocalDateTime(start),
-    endTime: formatLocalDateTime(now),
+    endTime: formatLocalDateTime(end),
     startDate: formatLocalDate(start),
-    endDate: formatLocalDate(now),
+    endDate: formatLocalDate(end),
     checkpointSource,
+    windowTruncated,
   };
 }
 
@@ -192,12 +222,16 @@ export function resetPresencePollingStateForTests(): void {
 
   manualSyncLocks = 0;
   pollInFlight = null;
-  lastSuccessfulPollAt = null;
+  if (manualSyncLeaseHeartbeatStop) {
+    manualSyncLeaseHeartbeatStop();
+    manualSyncLeaseHeartbeatStop = null;
+  }
   employeeCache = null;
 }
 
 export async function pollEventsOnce(now = new Date()): Promise<void> {
   const cycleStartedAt = Date.now();
+  const cycleStartedAtIso = new Date(cycleStartedAt).toISOString();
   let window: PollingWindow | null = null;
   let connectionType: ConnectionType | null = null;
 
@@ -236,10 +270,16 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     }> = [];
     const summariesToUpdate = new Set<string>();
     let storedUnmatched = 0;
+    let latestObservedEventAt: Date | null = null;
 
     for (const raw of rawEvents) {
       const mapped = mapSigurEvent(raw as Record<string, unknown>);
       if (!mapped || !mapped.physicalPerson) continue;
+      const eventAt = buildMoscowEventTimestamp(mapped.eventDate, mapped.eventTime);
+      const observedAt = new Date(eventAt);
+      if (!Number.isNaN(observedAt.getTime()) && (!latestObservedEventAt || observedAt.getTime() > latestObservedEventAt.getTime())) {
+        latestObservedEventAt = observedAt;
+      }
 
       const dedupHash = computeDedupHash(
         mapped.physicalPerson,
@@ -268,7 +308,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         card_number: mapped.cardNumber || null,
         event_date: mapped.eventDate,
         event_time: mapped.eventTime,
-        event_at: buildMoscowEventTimestamp(mapped.eventDate, mapped.eventTime),
+        event_at: eventAt,
         access_point: mapped.accessPoint,
         direction: mapped.direction,
         employee_id: emp?.id || null,
@@ -319,8 +359,37 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       invalidateDashboardCache();
     }
 
-    lastSuccessfulPollAt = now;
     const monitorCheckedAt = new Date();
+    const cycleFinishedAt = new Date();
+    const cycleMeta = {
+      connectionType,
+      checkpointSource: window.checkpointSource,
+      windowStart: window.startTime,
+      windowEnd: window.endTime,
+      windowStartUtc: window.startAt.toISOString(),
+      windowEndUtc: window.endAt.toISOString(),
+      windowTruncated: window.windowTruncated,
+      cycleStartedAt: cycleStartedAtIso,
+      cycleFinishedAt: cycleFinishedAt.toISOString(),
+      leaseOwner: POLLING_LEASE_OWNER,
+      fetched: rawEvents.length,
+      inserted: totalInserted,
+      unmatched: storedUnmatched,
+      summaries: summariesToUpdate.size,
+      latestObservedEventAt: latestObservedEventAt?.toISOString() || null,
+    };
+    await mergeSigurRuntimeState({
+      key: SIGUR_POLLING_STATE_KEY,
+      owner: POLLING_LEASE_OWNER,
+      checkpointAt: window.endAt,
+      meta: {
+        lastSignalAt: monitorCheckedAt.toISOString(),
+        lastSuccessAt: monitorCheckedAt.toISOString(),
+        lastCycle: cycleMeta,
+        lastError: null,
+        ...(latestObservedEventAt ? { lastEventFlowAt: latestObservedEventAt.toISOString() } : {}),
+      },
+    });
     console.log(
       `[presence-polling] cycle done source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} fetched=${rawEvents.length} inserted=${totalInserted} unmatched=${storedUnmatched} summaries=${summariesToUpdate.size}`,
     );
@@ -331,14 +400,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       responseMs: Date.now() - cycleStartedAt,
       eventsLastWindow: rawEvents.length,
       meta: {
-        connectionType,
-        checkpointSource: window.checkpointSource,
-        windowStart: window.startTime,
-        windowEnd: window.endTime,
-        fetched: rawEvents.length,
-        inserted: totalInserted,
-        unmatched: storedUnmatched,
-        summaries: summariesToUpdate.size,
+        ...cycleMeta,
       },
     }).catch(error => {
       console.error('[presence-polling] monitor success hook error:', (error as Error).message);
@@ -346,6 +408,30 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
   } catch (error) {
     console.error('[presence-polling] error:', (error as Error).message);
     const monitorCheckedAt = new Date();
+    const cycleFinishedAt = new Date();
+    await mergeSigurRuntimeState({
+      key: SIGUR_POLLING_STATE_KEY,
+      owner: POLLING_LEASE_OWNER,
+      meta: {
+        lastSignalAt: monitorCheckedAt.toISOString(),
+        lastFailureAt: monitorCheckedAt.toISOString(),
+        lastError: (error as Error).message,
+        lastFailedCycle: {
+          connectionType,
+          checkpointSource: window?.checkpointSource || null,
+          windowStart: window?.startTime || null,
+          windowEnd: window?.endTime || null,
+          windowStartUtc: window?.startAt.toISOString() || null,
+          windowEndUtc: window?.endAt.toISOString() || null,
+          windowTruncated: window?.windowTruncated || false,
+          cycleStartedAt: cycleStartedAtIso,
+          cycleFinishedAt: cycleFinishedAt.toISOString(),
+          leaseOwner: POLLING_LEASE_OWNER,
+        },
+      },
+    }).catch(runtimeError => {
+      console.error('[presence-polling] runtime state failure hook error:', (runtimeError as Error).message);
+    });
     void recordSigurMonitorFailure({
       source: 'presence_polling',
       checkedAt: monitorCheckedAt,
@@ -357,6 +443,12 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         checkpointSource: window?.checkpointSource || null,
         windowStart: window?.startTime || null,
         windowEnd: window?.endTime || null,
+        windowStartUtc: window?.startAt.toISOString() || null,
+        windowEndUtc: window?.endAt.toISOString() || null,
+        windowTruncated: window?.windowTruncated || false,
+        cycleStartedAt: cycleStartedAtIso,
+        cycleFinishedAt: cycleFinishedAt.toISOString(),
+        leaseOwner: POLLING_LEASE_OWNER,
       },
     }).catch(monitorError => {
       console.error('[presence-polling] monitor failure hook error:', (monitorError as Error).message);
@@ -377,14 +469,70 @@ async function runPollCycle(): Promise<void> {
   }
 
   pollInFlight = (async () => {
-    markPresencePollingCycleStarted(new Date());
+    let leaseAcquired = false;
+    let leaseStartedAt: Date | null = null;
+    let stopHeartbeat: (() => void) | null = null;
+
     try {
+      leaseStartedAt = new Date();
+      const leaseStartedAtIso = leaseStartedAt.toISOString();
+      const lease = await tryAcquireSigurRuntimeLease({
+        key: SIGUR_POLLING_STATE_KEY,
+        owner: POLLING_LEASE_OWNER,
+        ttlSeconds: SIGUR_POLLING_LEASE_TTL_SECONDS,
+        meta: {
+          leaseMode: 'background_poll',
+          inFlightStartedAt: leaseStartedAtIso,
+          leaderOwner: POLLING_LEASE_OWNER,
+        },
+      });
+      if (!lease.acquired) {
+        return;
+      }
+
+      leaseAcquired = true;
+      markPresencePollingCycleStarted(leaseStartedAt);
+      stopHeartbeat = startSigurRuntimeLeaseHeartbeat({
+        key: SIGUR_POLLING_STATE_KEY,
+        owner: POLLING_LEASE_OWNER,
+        ttlSeconds: SIGUR_POLLING_LEASE_TTL_SECONDS,
+        getMeta: () => ({
+          leaseMode: 'background_poll',
+          inFlightStartedAt: leaseStartedAtIso,
+          leaderOwner: POLLING_LEASE_OWNER,
+        }),
+        onError: error => {
+          console.error('[presence-polling] lease heartbeat error:', error.message);
+        },
+      });
+
       await pollEvents();
       await backfillUnmatchedEvents();
     } catch (err) {
       console.error('[presence-polling] cycle error:', (err as Error).message);
     } finally {
-      markPresencePollingCycleFinished();
+      if (stopHeartbeat) {
+        stopHeartbeat();
+      }
+      if (leaseAcquired) {
+        await mergeSigurRuntimeState({
+          key: SIGUR_POLLING_STATE_KEY,
+          owner: POLLING_LEASE_OWNER,
+          meta: {
+            inFlightStartedAt: null,
+            lastLeaseReleasedAt: new Date().toISOString(),
+          },
+        }).catch(error => {
+          console.error('[presence-polling] runtime state release hook error:', (error as Error).message);
+        });
+        await releaseSigurRuntimeLease({
+          key: SIGUR_POLLING_STATE_KEY,
+          owner: POLLING_LEASE_OWNER,
+        }).catch(error => {
+          console.error('[presence-polling] lease release error:', (error as Error).message);
+        });
+        markPresencePollingCycleFinished();
+      }
       pollInFlight = null;
     }
   })();
@@ -430,16 +578,75 @@ export async function acquirePresencePollingLock(): Promise<void> {
   }
 
   manualSyncLocks = 1;
-  stopPresencePolling();
-  if (pollInFlight) {
-    await pollInFlight;
+
+  try {
+    stopPresencePolling();
+    if (pollInFlight) {
+      await pollInFlight;
+    }
+
+    const lockedAt = new Date().toISOString();
+    const lease = await tryAcquireSigurRuntimeLease({
+      key: SIGUR_POLLING_STATE_KEY,
+      owner: MANUAL_SYNC_LEASE_OWNER,
+      ttlSeconds: SIGUR_POLLING_LEASE_TTL_SECONDS,
+      meta: {
+        leaseMode: 'manual_sync',
+        manualSyncLockedAt: lockedAt,
+        leaderOwner: MANUAL_SYNC_LEASE_OWNER,
+      },
+    });
+
+    if (!lease.acquired) {
+      throw new ManualSyncInProgressError('Фоновая синхронизация Sigur уже выполняется. Дождитесь завершения текущего запуска.');
+    }
+
+    manualSyncLeaseHeartbeatStop = startSigurRuntimeLeaseHeartbeat({
+      key: SIGUR_POLLING_STATE_KEY,
+      owner: MANUAL_SYNC_LEASE_OWNER,
+      ttlSeconds: SIGUR_POLLING_LEASE_TTL_SECONDS,
+      getMeta: () => ({
+        leaseMode: 'manual_sync',
+        manualSyncLockedAt: lockedAt,
+        leaderOwner: MANUAL_SYNC_LEASE_OWNER,
+      }),
+      onError: error => {
+        console.error('[presence-polling] manual sync lease heartbeat error:', error.message);
+      },
+    });
+  } catch (error) {
+    manualSyncLocks = 0;
+    startPresencePolling();
+    throw error;
   }
 }
 
-export function releasePresencePollingLock(): void {
+export async function releasePresencePollingLock(): Promise<void> {
   if (manualSyncLocks === 0) {
     return;
   }
+
+  if (manualSyncLeaseHeartbeatStop) {
+    manualSyncLeaseHeartbeatStop();
+    manualSyncLeaseHeartbeatStop = null;
+  }
+
+  await mergeSigurRuntimeState({
+    key: SIGUR_POLLING_STATE_KEY,
+    owner: MANUAL_SYNC_LEASE_OWNER,
+    meta: {
+      manualSyncLockedAt: null,
+      lastManualSyncReleasedAt: new Date().toISOString(),
+    },
+  }).catch(error => {
+    console.error('[presence-polling] manual sync release hook error:', (error as Error).message);
+  });
+  await releaseSigurRuntimeLease({
+    key: SIGUR_POLLING_STATE_KEY,
+    owner: MANUAL_SYNC_LEASE_OWNER,
+  }).catch(error => {
+    console.error('[presence-polling] manual sync lease release error:', (error as Error).message);
+  });
 
   manualSyncLocks = 0;
   if (manualSyncLocks === 0) {

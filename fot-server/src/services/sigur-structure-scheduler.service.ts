@@ -50,7 +50,7 @@ async function runStructureSyncCycle(): Promise<void> {
         console.error('[structure-scheduler] error:', (err as Error).message);
       }
     } finally {
-      if (lockAcquired) releasePresencePollingLock();
+      if (lockAcquired) await releasePresencePollingLock();
       syncInFlight = null;
     }
   })();

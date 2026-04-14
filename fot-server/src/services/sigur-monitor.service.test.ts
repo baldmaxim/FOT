@@ -53,6 +53,21 @@ const mockedState = vi.hoisted(() => ({
       connection: 'external',
     })),
   },
+  runtimeStateMock: {
+    pollingState: null as null | {
+      key: string;
+      checkpoint_at: string | null;
+      lease_owner: string | null;
+      lease_expires_at: string | null;
+      heartbeat_at: string | null;
+      meta: Record<string, unknown>;
+      updated_at: string;
+    },
+    getSigurRuntimeState: vi.fn(async () => mockedState.runtimeStateMock.pollingState),
+    tryAcquireSigurRuntimeLease: vi.fn(async () => ({ acquired: true, row: null })),
+    releaseSigurRuntimeLease: vi.fn(async () => true),
+    startSigurRuntimeLeaseHeartbeat: vi.fn(() => vi.fn()),
+  },
 }));
 
 function cloneRow<T extends IRow>(row: T): T {
@@ -232,9 +247,18 @@ vi.mock('./sigur.service.js', () => ({
   sigurService: mockedState.sigurServiceMock,
 }));
 
+vi.mock('./sigur-runtime-state.service.js', () => ({
+  SIGUR_MONITOR_LEASE_TTL_SECONDS: 180,
+  SIGUR_MONITOR_STATE_KEY: 'sigur_monitor',
+  SIGUR_POLLING_STATE_KEY: 'sigur_presence_polling',
+  getSigurRuntimeOwner: (scope: string) => `owner:${scope}`,
+  getSigurRuntimeState: mockedState.runtimeStateMock.getSigurRuntimeState,
+  tryAcquireSigurRuntimeLease: mockedState.runtimeStateMock.tryAcquireSigurRuntimeLease,
+  releaseSigurRuntimeLease: mockedState.runtimeStateMock.releaseSigurRuntimeLease,
+  startSigurRuntimeLeaseHeartbeat: mockedState.runtimeStateMock.startSigurRuntimeLeaseHeartbeat,
+}));
+
 import {
-  markPresencePollingCycleFinished,
-  markPresencePollingCycleStarted,
   recordSigurMonitorFailure,
   recordSigurMonitorSuccess,
   resetSigurMonitorStateForTests,
@@ -256,6 +280,11 @@ describe('sigur-monitor.service', () => {
       message: 'ok',
       connection: 'external',
     });
+    mockedState.runtimeStateMock.pollingState = null;
+    mockedState.runtimeStateMock.getSigurRuntimeState.mockClear();
+    mockedState.runtimeStateMock.tryAcquireSigurRuntimeLease.mockClear();
+    mockedState.runtimeStateMock.releaseSigurRuntimeLease.mockClear();
+    mockedState.runtimeStateMock.startSigurRuntimeLeaseHeartbeat.mockClear();
     mockedState.settings = {
       enabled: true,
       failureThreshold: 2,
@@ -394,17 +423,68 @@ describe('sigur-monitor.service', () => {
   });
 
   it('skips direct probe while presence polling cycle is still in flight', async () => {
+    mockedState.runtimeStateMock.pollingState = {
+      key: 'sigur_presence_polling',
+      checkpoint_at: '2026-04-11T07:00:00.000Z',
+      lease_owner: 'owner:sigur_presence_polling',
+      lease_expires_at: '2026-04-11T07:04:00.000Z',
+      heartbeat_at: '2026-04-11T07:01:30.000Z',
+      updated_at: '2026-04-11T07:01:30.000Z',
+      meta: {
+        inFlightStartedAt: '2026-04-11T07:01:00.000Z',
+        lastSignalAt: '2026-04-11T07:00:00.000Z',
+        lastSuccessAt: '2026-04-11T07:00:00.000Z',
+        lastEventFlowAt: '2026-04-11T07:00:00.000Z',
+      },
+    };
+
     await recordSigurMonitorSuccess({
       source: 'presence_polling',
       checkedAt: new Date('2026-04-11T07:00:00.000Z'),
       eventsLastWindow: 3,
     });
 
-    markPresencePollingCycleStarted(new Date('2026-04-11T07:01:00.000Z'));
     await runSigurMonitorCycleNow(new Date('2026-04-11T07:03:00.000Z'));
-    markPresencePollingCycleFinished();
 
     expect(mockedState.sigurServiceMock.testConnection).not.toHaveBeenCalled();
+    expect(mockedState.tables.sigur_health_checks).toHaveLength(1);
+    expect(mockedState.tables.sigur_health_checks[0]?.source).toBe('presence_polling');
+  });
+
+  it('does not open a silence incident while presence polling is still in flight', async () => {
+    const historicalDates = ['2026-04-03', '2026-03-27', '2026-03-20', '2026-03-13'];
+    mockedState.tables.skud_events = historicalDates.flatMap((date, index) => (
+      Array.from({ length: 6 }, (_, offset) => ({
+        id: 200 + index * 10 + offset,
+        event_date: date,
+        event_time: `10:${String(30 + offset).padStart(2, '0')}:00`,
+      }))
+    ));
+    mockedState.runtimeStateMock.pollingState = {
+      key: 'sigur_presence_polling',
+      checkpoint_at: '2026-04-10T07:39:00.000Z',
+      lease_owner: 'owner:sigur_presence_polling',
+      lease_expires_at: '2026-04-10T07:42:00.000Z',
+      heartbeat_at: '2026-04-10T07:40:30.000Z',
+      updated_at: '2026-04-10T07:40:30.000Z',
+      meta: {
+        inFlightStartedAt: '2026-04-10T07:40:00.000Z',
+        lastSignalAt: '2026-04-10T07:39:00.000Z',
+        lastSuccessAt: '2026-04-10T07:39:00.000Z',
+        lastEventFlowAt: '2026-04-10T07:00:00.000Z',
+      },
+    };
+
+    await recordSigurMonitorSuccess({
+      source: 'presence_polling',
+      checkedAt: new Date('2026-04-10T07:39:00.000Z'),
+      eventsLastWindow: 0,
+    });
+
+    await runSigurMonitorCycleNow(new Date('2026-04-10T07:40:00.000Z'));
+
+    expect(mockedState.sigurServiceMock.testConnection).not.toHaveBeenCalled();
+    expect(mockedState.tables.sigur_incidents).toHaveLength(0);
     expect(mockedState.tables.sigur_health_checks).toHaveLength(1);
     expect(mockedState.tables.sigur_health_checks[0]?.source).toBe('presence_polling');
   });
