@@ -1,38 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
-import { sigurMonitorService } from '../services/sigurMonitorService';
+import { sigurMonitorService, type SigurHealthCheckFilter } from '../services/sigurMonitorService';
 import { skudService } from '../services/skudService';
 
-export const getSkudMonitorDashboardQueryKey = (
-  incidentFilter: 'all' | 'open' | 'resolved',
-  checkFilter: 'all' | 'success' | 'failure' | 'silence',
-) => ['skud-monitor', 'dashboard', incidentFilter, checkFilter] as const;
-
-export const getSkudMonitorIncidentQueryKey = (incidentId: number | null) => ['skud-monitor', 'incident', incidentId] as const;
+export const getSkudMonitorLogsQueryKey = (checkFilter: SigurHealthCheckFilter) => ['skud-monitor', 'logs', checkFilter] as const;
 export const getSkudSupabaseEventsQueryKey = (startDate: string, endDate: string, searchQuery: string) => ['skud-supabase', 'events', startDate, endDate, searchQuery] as const;
 export const getSkudSupabaseSummaryQueryKey = (startDate: string) => ['skud-supabase', 'summary', startDate] as const;
 
-export const useSkudMonitorDashboard = (
-  incidentFilter: 'all' | 'open' | 'resolved',
-  checkFilter: 'all' | 'success' | 'failure' | 'silence',
-) => useQuery({
-  queryKey: getSkudMonitorDashboardQueryKey(incidentFilter, checkFilter),
-  queryFn: async () => {
-    const [status, incidents, checks] = await Promise.all([
-      sigurMonitorService.getStatus(),
-      sigurMonitorService.getIncidents({ limit: 20, status: incidentFilter }),
-      sigurMonitorService.getChecks({ limit: 30, status: checkFilter }),
-    ]);
-    return { status, incidents, checks };
-  },
+export const useSkudMonitorLogs = (checkFilter: SigurHealthCheckFilter) => useQuery({
+  queryKey: getSkudMonitorLogsQueryKey(checkFilter),
+  queryFn: () => sigurMonitorService.getChecks({ limit: 20, status: checkFilter }),
   staleTime: 30_000,
   placeholderData: previousData => previousData,
-});
-
-export const useSkudMonitorIncident = (incidentId: number | null) => useQuery({
-  queryKey: getSkudMonitorIncidentQueryKey(incidentId),
-  queryFn: () => sigurMonitorService.getIncident(incidentId as number),
-  enabled: !!incidentId,
-  staleTime: 30_000,
 });
 
 export const useSkudSupabaseEvents = (

@@ -10,11 +10,10 @@ import {
   isToday,
 } from '../../utils/calendarUtils';
 import {
-  getEffectiveLateThresholdForDay,
   getScheduleForTimesheetDay,
-  getWorkHoursForDay,
   isScheduleDayOff,
 } from '../../utils/scheduleUtils';
+import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 
 interface ISidePanelProps {
   open: boolean;
@@ -26,6 +25,7 @@ interface ISidePanelProps {
   schedules?: Record<number, IResolvedSchedule>;
   dailySchedules?: Record<number, Record<string, IResolvedSchedule>>;
   calendar?: IProductionCalendarMonth | null;
+  visibleDays?: number[];
 }
 
 interface IDayEvents {
@@ -109,7 +109,7 @@ const groupEventsByDay = (events: SkudEvent[], internalPoints: Set<string>): Map
 
     // Calculate from external events; fallback to all if external gives 0
     let totalSeconds = calcPairSeconds(extEvents, date);
-    if (totalSeconds === 0 && dayEvents.length > 0) {
+    if (totalSeconds === 0 && extEvents.length === 0 && dayEvents.length > 0) {
       totalSeconds = calcPairSeconds(dayEvents, date);
     }
 
@@ -140,6 +140,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
   schedules = {},
   dailySchedules = {},
   calendar = null,
+  visibleDays,
 }) => {
   const [expandedDays, setExpandedDays] = useState<Set<number>>(new Set());
   const [skudEvents, setSkudEvents] = useState<Map<string, IDayEvents>>(new Map());
@@ -157,9 +158,10 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
     if (!employee || !open) return;
     setLoadingSkud(true);
     try {
-      const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
-      const lastDay = getDaysInMonth(year, month);
-      const endDate = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      const firstVisibleDay = visibleDays?.[0] || 1;
+      const lastVisibleDay = visibleDays?.[visibleDays.length - 1] || getDaysInMonth(year, month);
+      const startDate = `${year}-${String(month).padStart(2, '0')}-${String(firstVisibleDay).padStart(2, '0')}`;
+      const endDate = `${year}-${String(month).padStart(2, '0')}-${String(lastVisibleDay).padStart(2, '0')}`;
       const events = await skudService.getEmployeeEvents(employee.id, startDate, endDate);
       setSkudEvents(groupEventsByDay(events, internalPoints));
     } catch {
@@ -167,7 +169,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
     } finally {
       setLoadingSkud(false);
     }
-  }, [employee, open, year, month, internalPoints]);
+  }, [employee, open, year, month, internalPoints, visibleDays]);
 
   useEffect(() => {
     if (open && employee) {
@@ -187,14 +189,13 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
 
   const dayDetails = useMemo(() => {
     if (!employee) return [];
-    const daysCount = getDaysInMonth(year, month);
     const details: Array<{
       day: number;
       entry: TimesheetEntry | null;
       isWeekend: boolean;
     }> = [];
 
-    for (let d = 1; d <= daysCount; d++) {
+    for (const d of (visibleDays || Array.from({ length: getDaysInMonth(year, month) }, (_, index) => index + 1))) {
       const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
       const entry = entries.find(e => e.work_date === dateStr) || null;
       const sched = getScheduleForTimesheetDay(schedules, dailySchedules, employee.id, year, month, d);
@@ -210,44 +211,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
     }
 
     return details;
-  }, [employee, entries, year, month, schedules, dailySchedules, calendar]);
-
-  const stats = useMemo(() => {
-    const normHours = employee ? (() => {
-      const daysCount = getDaysInMonth(year, month);
-      let total = 0;
-      const now = new Date();
-      now.setHours(23, 59, 59, 999);
-
-      for (let d = 1; d <= daysCount; d++) {
-        const dayDate = new Date(year, month - 1, d);
-        if (dayDate > now) continue;
-
-        const sched = getScheduleForTimesheetDay(schedules, dailySchedules, employee.id, year, month, d);
-        if (isScheduleDayOff(sched, calendar, year, month, d)) continue;
-        total += getWorkHoursForDay(sched, year, month, d);
-      }
-
-      return total;
-    })() : 0;
-    let factHours = 0;
-    let lateCount = 0;
-    let absentCount = 0;
-
-    for (const entry of entries) {
-      if (entry.hours_worked) factHours += entry.hours_worked;
-      if (entry.status === 'absent') absentCount++;
-      if (entry.status === 'work' && entry.first_entry) {
-        const [entryYear, entryMonth, entryDay] = entry.work_date.split('-').map(Number);
-        const sched = getScheduleForTimesheetDay(schedules, dailySchedules, entry.employee_id, entryYear, entryMonth, entryDay);
-        const threshold = getEffectiveLateThresholdForDay(sched, entryYear, entryMonth, entryDay);
-        const firstEntry = entry.first_entry.length === 5 ? `${entry.first_entry}:00` : entry.first_entry;
-        if (firstEntry > threshold) lateCount++;
-      }
-    }
-
-    return { factHours, normHours, lateCount, absentCount };
-  }, [entries, year, month, employee, schedules, dailySchedules, calendar]);
+  }, [employee, entries, year, month, schedules, dailySchedules, calendar, visibleDays]);
 
   const getHoursClass = (entry: TimesheetEntry | null): string => {
     if (!entry) return 'ts-day-detail-hours--absent';
@@ -289,6 +253,8 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
 
   if (!employee) return null;
 
+  const displayName = formatTimesheetEmployeeName(employee.full_name);
+
   return (
     <>
       <div
@@ -306,33 +272,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
           <div className="ts-panel-employee">
             <div className="ts-panel-avatar">{getInitials(employee.full_name)}</div>
             <div>
-              <div className="ts-panel-emp-name">{employee.full_name}</div>
-              <div className="ts-panel-emp-role">{employee.position_name || '—'}</div>
-            </div>
-          </div>
-
-          <div className="ts-panel-stats">
-            <div className="ts-panel-stat">
-              <div className="ts-panel-stat-value" style={{ color: 'var(--success)' }}>
-                {formatHM(stats.factHours)}
-              </div>
-              <div className="ts-panel-stat-label">Отработано</div>
-            </div>
-            <div className="ts-panel-stat">
-              <div className="ts-panel-stat-value">{stats.normHours}ч</div>
-              <div className="ts-panel-stat-label">Норма</div>
-            </div>
-            <div className="ts-panel-stat">
-              <div className="ts-panel-stat-value" style={{ color: 'var(--warning)' }}>
-                {stats.lateCount}
-              </div>
-              <div className="ts-panel-stat-label">Опозданий</div>
-            </div>
-            <div className="ts-panel-stat">
-              <div className="ts-panel-stat-value" style={{ color: 'var(--error)' }}>
-                {stats.absentCount}
-              </div>
-              <div className="ts-panel-stat-label">Неявок</div>
+              <div className="ts-panel-emp-name">{displayName}</div>
             </div>
           </div>
 
@@ -343,6 +283,11 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
               const dayEventsData = skudEvents.get(dateStr);
               const expanded = expandedDays.has(day);
               const hasEvents = dayEventsData && dayEventsData.events.length > 0;
+              const summaryFirstEntry = entry?.first_entry || dayEventsData?.firstEntry || null;
+              const summaryLastExit = entry?.last_exit || dayEventsData?.lastExit || null;
+              const summaryTotalSeconds = entry?.hours_worked != null
+                ? Math.max(0, Math.round(entry.hours_worked * 3600))
+                : (dayEventsData?.totalSeconds || 0);
 
               return (
                 <div key={day} className="ts-day-detail-wrap">
@@ -363,14 +308,14 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                       </div>
                     </div>
                     <div className="ts-day-detail-right">
-                      {entry?.first_entry && (
+                      {summaryFirstEntry && (
                         <span className="ts-day-detail-time-badge entry">
-                          {formatTime(entry.first_entry)}
+                          {formatTime(summaryFirstEntry)}
                         </span>
                       )}
-                      {entry?.last_exit && (
+                      {summaryLastExit && (
                         <span className="ts-day-detail-time-badge exit">
-                          {formatTime(entry.last_exit)}
+                          {formatTime(summaryLastExit)}
                         </span>
                       )}
                       <div className={`ts-day-detail-hours ${getHoursClass(entry)}`}>
@@ -417,20 +362,20 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                             </div>
                             );
                           })}
-                          {dayEventsData.totalSeconds > 0 && (
+                          {summaryTotalSeconds > 0 && (
                             <div className="ts-day-events-summary">
-                              {dayEventsData.firstEntry && (
+                              {summaryFirstEntry && (
                                 <span className="skud-time-badge entry">
-                                  <LogIn size={11} /> {formatTime(dayEventsData.firstEntry)}
+                                  <LogIn size={11} /> {formatTime(summaryFirstEntry)}
                                 </span>
                               )}
-                              {dayEventsData.lastExit && (
+                              {summaryLastExit && (
                                 <span className="skud-time-badge exit">
-                                  <LogOut size={11} /> {formatTime(dayEventsData.lastExit)}
+                                  <LogOut size={11} /> {formatTime(summaryLastExit)}
                                 </span>
                               )}
                               <span className="skud-time-badge duration">
-                                <Timer size={11} /> {formatDuration(dayEventsData.totalSeconds)}
+                                <Timer size={11} /> {formatDuration(summaryTotalSeconds)}
                               </span>
                             </div>
                           )}

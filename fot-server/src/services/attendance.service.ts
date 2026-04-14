@@ -2,6 +2,8 @@ import { supabase } from '../config/database.js';
 import type { IProductionCalendarMonth, IResolvedSchedule, TimeStatus } from '../types/index.js';
 import { getTravelHoursSummaryForRange } from './skud-travel.service.js';
 import { getScheduleForDate, isWorkingDay, needsSkudCheck } from './schedule.service.js';
+import { getInternalAccessPoints } from './skud-shared.service.js';
+import { formatDateToISO } from '../utils/date.utils.js';
 
 const ADJUSTMENT_PRIORITY: Record<string, number> = {
   manual: 300,
@@ -71,6 +73,14 @@ interface ISummaryRow {
   total_minutes?: number | null;
 }
 
+interface IRawEventRow {
+  employee_id: number | null;
+  event_date: string;
+  event_time: string;
+  access_point: string | null;
+  direction: 'entry' | 'exit' | null;
+}
+
 function roundHours(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -80,6 +90,67 @@ function getSummaryHours(summary: ISummaryRow): number {
     return roundHours(summary.total_minutes / 60);
   }
   return roundHours(summary.total_hours || 0);
+}
+
+function timeToSeconds(value: string): number {
+  const [hours, minutes, seconds = 0] = value.split(':').map(Number);
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+function buildRawFallbackSummary(
+  events: IRawEventRow[],
+  internalPoints: Set<string>,
+  workDate: string,
+  todayStr: string,
+): ISummaryRow | null {
+  const externalEvents = events.filter(event => !event.access_point || !internalPoints.has(event.access_point));
+  const summaryEvents = externalEvents.length > 0 ? externalEvents : events;
+
+  if (summaryEvents.length === 0) return null;
+
+  const sortedEvents = [...summaryEvents].sort((left, right) => left.event_time.localeCompare(right.event_time));
+  let totalSeconds = 0;
+  let openEntrySeconds: number | null = null;
+
+  for (const event of sortedEvents) {
+    if (event.direction === 'entry') {
+      if (openEntrySeconds === null) {
+        openEntrySeconds = timeToSeconds(event.event_time);
+      }
+      continue;
+    }
+
+    if (event.direction === 'exit' && openEntrySeconds !== null) {
+      totalSeconds += Math.max(0, timeToSeconds(event.event_time) - openEntrySeconds);
+      openEntrySeconds = null;
+    }
+  }
+
+  if (openEntrySeconds !== null && workDate === todayStr) {
+    const now = new Date();
+    const nowSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+    if (nowSeconds > openEntrySeconds) {
+      totalSeconds += nowSeconds - openEntrySeconds;
+    }
+  }
+
+  const firstEntry = sortedEvents.find(event => event.direction === 'entry')?.event_time ?? null;
+  const exitEvents = sortedEvents.filter(event => event.direction === 'exit');
+  const lastExit = exitEvents.length > 0 ? exitEvents[exitEvents.length - 1].event_time : null;
+  const totalMinutes = Math.round(totalSeconds / 60);
+
+  if (!firstEntry && !lastExit && totalMinutes === 0) {
+    return null;
+  }
+
+  return {
+    employee_id: Number(sortedEvents[0].employee_id || 0),
+    date: workDate,
+    first_entry: firstEntry,
+    last_exit: lastExit,
+    total_hours: roundHours(totalMinutes / 60),
+    total_minutes: totalMinutes,
+  };
 }
 
 function getAdjustmentPriority(sourceType: string): number {
@@ -182,6 +253,60 @@ async function loadDailySummaries(
   return rows;
 }
 
+async function loadRawEventFallbackSummaries(
+  employeeIds: number[],
+  startDate: string,
+  endDate: string,
+  todayStr: string,
+): Promise<Map<number, Map<string, ISummaryRow>>> {
+  const result = new Map<number, Map<string, ISummaryRow>>();
+  if (employeeIds.length === 0) return result;
+
+  const internalPoints = await getInternalAccessPoints();
+  const rawEvents: IRawEventRow[] = [];
+
+  for (let index = 0; index < employeeIds.length; index += BATCH_SIZE) {
+    const batch = employeeIds.slice(index, index + BATCH_SIZE);
+    const { data, error } = await supabase
+      .from('skud_events')
+      .select('employee_id, event_date, event_time, access_point, direction')
+      .in('employee_id', batch)
+      .gte('event_date', startDate)
+      .lte('event_date', endDate)
+      .order('employee_id', { ascending: true })
+      .order('event_date', { ascending: true })
+      .order('event_time', { ascending: true });
+
+    if (error) throw error;
+    rawEvents.push(...((data || []) as IRawEventRow[]));
+  }
+
+  const eventsByEmployeeDate = new Map<string, IRawEventRow[]>();
+  for (const event of rawEvents) {
+    if (!event.employee_id) continue;
+    const key = `${event.employee_id}_${event.event_date}`;
+    const bucket = eventsByEmployeeDate.get(key) || [];
+    bucket.push(event);
+    eventsByEmployeeDate.set(key, bucket);
+  }
+
+  for (const [key, events] of eventsByEmployeeDate) {
+    const separatorIndex = key.indexOf('_');
+    const employeeId = Number(key.slice(0, separatorIndex));
+    const workDate = key.slice(separatorIndex + 1);
+    const summary = buildRawFallbackSummary(events, internalPoints, workDate, todayStr);
+
+    if (!summary) continue;
+
+    if (!result.has(employeeId)) {
+      result.set(employeeId, new Map());
+    }
+    result.get(employeeId)!.set(workDate, summary);
+  }
+
+  return result;
+}
+
 export async function buildAttendanceEntries(params: {
   employees: IAttendanceEmployee[];
   startDate: string;
@@ -191,7 +316,7 @@ export async function buildAttendanceEntries(params: {
   todayStr?: string;
 }): Promise<IAttendanceBuildResult> {
   const { employees, startDate, endDate, dailySchedulesMap, calendarMonth } = params;
-  const todayStr = params.todayStr ?? new Date().toISOString().slice(0, 10);
+  const todayStr = params.todayStr ?? formatDateToISO(new Date());
   const employeeIds = employees.map((employee) => employee.id);
 
   const [summaries, adjustments, travelSummaries] = await Promise.all([
@@ -220,6 +345,9 @@ export async function buildAttendanceEntries(params: {
     }
     skudMap.get(summary.employee_id)!.set(summary.date, { hours, corrected: false });
   }
+
+  const summaryKeys = new Set(summaries.map(summary => `${summary.employee_id}_${summary.date}`));
+  const adjustmentKeys = new Set(adjustments.map(adjustment => `${adjustment.employee_id}_${adjustment.work_date}`));
 
   const sortedAdjustments = [...adjustments].sort((left, right) => {
     const priorityDiff = getAdjustmentPriority(right.source_type) - getAdjustmentPriority(left.source_type);
@@ -296,6 +424,34 @@ export async function buildAttendanceEntries(params: {
 
   const [year, month] = startDate.split('-').map(Number);
   const daysInRange = new Date(year, month, 0).getDate();
+  let missingSkudDayDetected = false;
+
+  for (const employee of employees) {
+    for (let day = 1; day <= daysInRange; day++) {
+      const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      if (workDate < startDate || workDate > endDate) continue;
+      if (workDate > todayStr) continue;
+
+      const schedule = dailySchedulesMap.get(employee.id)?.get(workDate);
+      if (!schedule) continue;
+
+      const dateObject = new Date(year, month - 1, day);
+      if (!isWorkingDay(schedule, dateObject, calendarMonth)) continue;
+
+      const key = `${employee.id}_${workDate}`;
+      if (summaryKeys.has(key) || adjustmentKeys.has(key)) continue;
+      if (!needsSkudCheck(schedule, dateObject, calendarMonth)) continue;
+
+      missingSkudDayDetected = true;
+      break;
+    }
+
+    if (missingSkudDayDetected) break;
+  }
+
+  const rawFallbackSummaries = missingSkudDayDetected
+    ? await loadRawEventFallbackSummaries(employeeIds, startDate, endDate, todayStr)
+    : new Map<number, Map<string, ISummaryRow>>();
 
   for (const employee of employees) {
     for (let day = 1; day <= daysInRange; day++) {
@@ -309,7 +465,60 @@ export async function buildAttendanceEntries(params: {
 
       const dateObject = new Date(year, month - 1, day);
       if (!isWorkingDay(schedule, dateObject, calendarMonth)) continue;
-      if (needsSkudCheck(schedule, dateObject, calendarMonth)) continue;
+
+      const key = `${employee.id}_${workDate}`;
+      const travelSummary = travelSummaries.get(key);
+
+      if (needsSkudCheck(schedule, dateObject, calendarMonth)) {
+        const rawSummary = rawFallbackSummaries.get(employee.id)?.get(workDate) || null;
+
+        if (rawSummary) {
+          const plannedHours = getScheduleForDate(schedule, dateObject).work_hours;
+          const baseHours = getSummaryHours(rawSummary);
+          const hoursWorked = roundHours(Math.min(baseHours, plannedHours));
+          const isPresent = baseHours > 0 || rawSummary.first_entry !== null;
+
+          if (!skudMap.has(employee.id)) {
+            skudMap.set(employee.id, new Map());
+          }
+          skudMap.get(employee.id)!.set(workDate, { hours: hoursWorked, corrected: false });
+
+          pushEntry({
+            id: null,
+            employee_id: employee.id,
+            work_date: workDate,
+            status: isPresent ? 'work' : 'absent',
+            hours_worked: isPresent ? hoursWorked : 0,
+            base_hours_worked: baseHours,
+            travel_minutes_credited: 0,
+            travel_hours_credited: 0,
+            travel_delay_minutes: travelSummary?.delayMinutes || 0,
+            travel_segments_count: travelSummary?.segmentsCount || 0,
+            travel_problematic_segments: travelSummary?.problematicSegmentsCount || 0,
+            is_correction: false,
+            first_entry: rawSummary.first_entry,
+            last_exit: rawSummary.last_exit,
+          });
+        } else {
+          pushEntry({
+            id: null,
+            employee_id: employee.id,
+            work_date: workDate,
+            status: 'absent',
+            hours_worked: 0,
+            base_hours_worked: 0,
+            travel_minutes_credited: 0,
+            travel_hours_credited: 0,
+            travel_delay_minutes: travelSummary?.delayMinutes || 0,
+            travel_segments_count: travelSummary?.segmentsCount || 0,
+            travel_problematic_segments: travelSummary?.problematicSegmentsCount || 0,
+            is_correction: false,
+            first_entry: null,
+            last_exit: null,
+          });
+        }
+        continue;
+      }
 
       const plannedHours = getScheduleForDate(schedule, dateObject).work_hours;
       pushEntry({
@@ -321,9 +530,9 @@ export async function buildAttendanceEntries(params: {
         base_hours_worked: plannedHours,
         travel_minutes_credited: 0,
         travel_hours_credited: 0,
-        travel_delay_minutes: 0,
-        travel_segments_count: 0,
-        travel_problematic_segments: 0,
+        travel_delay_minutes: travelSummary?.delayMinutes || 0,
+        travel_segments_count: travelSummary?.segmentsCount || 0,
+        travel_problematic_segments: travelSummary?.problematicSegmentsCount || 0,
         is_correction: false,
         first_entry: null,
         last_exit: null,

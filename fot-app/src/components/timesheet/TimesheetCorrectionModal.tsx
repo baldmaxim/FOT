@@ -1,7 +1,8 @@
 import { type FC, useState, useEffect, useCallback } from 'react';
 import { X, LogIn, LogOut, Timer } from 'lucide-react';
-import type { TimesheetStatus, SkudEvent } from '../../types';
+import type { TimesheetEntry, TimesheetStatus, SkudEvent } from '../../types';
 import { skudService } from '../../services/skudService';
+import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 
 interface ICorrectionModalProps {
   open: boolean;
@@ -9,11 +10,16 @@ interface ICorrectionModalProps {
   onSave: (status: TimesheetStatus, hours: number | null, notes: string) => void;
   initialStatus?: TimesheetStatus;
   initialHours?: number | null;
+  title?: string;
+  subtitle?: string;
+  confirmLabel?: string;
   dayLabel?: string;
   employeeName?: string;
   employeeId?: number;
   workDate?: string;
   hideCorrectionTab?: boolean;
+  hideSkudTab?: boolean;
+  timesheetEntry?: Pick<TimesheetEntry, 'first_entry' | 'last_exit' | 'hours_worked'> | null;
   correctionInfo?: {
     is_correction: boolean;
     corrected_at?: string | null;
@@ -28,6 +34,7 @@ interface ITypeOption {
 }
 
 type ModalTab = 'events' | 'correction';
+const HOURS_EDITABLE_STATUSES = new Set<TimesheetStatus>(['work', 'manual']);
 
 const formatHM = (decimal: number): string => {
   const h = Math.floor(decimal);
@@ -59,6 +66,7 @@ const formatDuration = (seconds: number): string => {
 
 const TYPE_OPTIONS: ITypeOption[] = [
   { status: 'work', icon: '✔', label: 'Присутствие' },
+  { status: 'remote', icon: '🏠', label: 'Удалёнка' },
   { status: 'sick', icon: '🏥', label: 'Больничный' },
   { status: 'vacation', icon: '🏖', label: 'Отпуск' },
   { status: 'business_trip', icon: '✈️', label: 'Командировка' },
@@ -66,7 +74,11 @@ const TYPE_OPTIONS: ITypeOption[] = [
   { status: 'manual', icon: '✏️', label: 'Ручная корр.' },
 ];
 
-const EventsTab: FC<{ employeeId: number; workDate: string }> = ({ employeeId, workDate }) => {
+const EventsTab: FC<{
+  employeeId: number;
+  workDate: string;
+  timesheetEntry?: Pick<TimesheetEntry, 'first_entry' | 'last_exit' | 'hours_worked'> | null;
+}> = ({ employeeId, workDate, timesheetEntry }) => {
   const [events, setEvents] = useState<SkudEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -96,6 +108,8 @@ const EventsTab: FC<{ employeeId: number; workDate: string }> = ({ employeeId, w
   useEffect(() => { loadEvents(); }, [loadEvents]);
 
   const extEvents = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
+  const summaryEvents = extEvents.length > 0 ? extEvents : events;
+
   const calcPairs = (evts: SkudEvent[]): number => {
     let total = 0;
     let entry: number | null = null;
@@ -116,12 +130,14 @@ const EventsTab: FC<{ employeeId: number; workDate: string }> = ({ employeeId, w
     return total;
   };
 
-  let totalSec = calcPairs(extEvents);
-  if (totalSec === 0 && events.length > 0) totalSec = calcPairs(events);
-
-  const srcEvents = calcPairs(extEvents) > 0 ? extEvents : events;
-  const firstEntry = srcEvents.find(e => e.direction === 'entry');
-  const lastExit = [...srcEvents].reverse().find(e => e.direction === 'exit');
+  const fallbackTotalSec = calcPairs(summaryEvents);
+  const fallbackFirstEntry = summaryEvents.find(e => e.direction === 'entry');
+  const fallbackLastExit = [...summaryEvents].reverse().find(e => e.direction === 'exit');
+  const totalSec = timesheetEntry?.hours_worked != null
+    ? Math.max(0, Math.round(timesheetEntry.hours_worked * 3600))
+    : fallbackTotalSec;
+  const firstEntry = timesheetEntry?.first_entry || fallbackFirstEntry?.event_time || null;
+  const lastExit = timesheetEntry?.last_exit || fallbackLastExit?.event_time || null;
 
   if (loading) return <div className="ts-modal-events-empty">Загрузка...</div>;
   if (error) return <div className="ts-modal-events-empty">{error}</div>;
@@ -152,12 +168,12 @@ const EventsTab: FC<{ employeeId: number; workDate: string }> = ({ employeeId, w
       <div className="ts-modal-events-summary">
         {firstEntry && (
           <span className="skud-time-badge entry">
-            <LogIn size={12} /> {formatTime(firstEntry.event_time)}
+            <LogIn size={12} /> {formatTime(firstEntry)}
           </span>
         )}
         {lastExit && (
           <span className="skud-time-badge exit">
-            <LogOut size={12} /> {formatTime(lastExit.event_time)}
+            <LogOut size={12} /> {formatTime(lastExit)}
           </span>
         )}
         {totalSec > 0 && (
@@ -175,13 +191,14 @@ const CorrectionTab: FC<{
   onSave: (status: TimesheetStatus, hours: number | null, notes: string) => void;
   initialStatus: TimesheetStatus;
   initialHours: number;
-}> = ({ onClose, onSave, initialStatus, initialHours }) => {
+  confirmLabel?: string;
+}> = ({ onClose, onSave, initialStatus, initialHours, confirmLabel }) => {
   const [selectedStatus, setSelectedStatus] = useState<TimesheetStatus>(initialStatus);
   const [hours, setHours] = useState<number>(initialHours);
   const [notes, setNotes] = useState('');
 
   const handleSave = () => {
-    const needsHours = selectedStatus === 'work' || selectedStatus === 'manual';
+    const needsHours = HOURS_EDITABLE_STATUSES.has(selectedStatus);
     onSave(selectedStatus, needsHours ? hours : null, notes);
   };
 
@@ -192,19 +209,24 @@ const CorrectionTab: FC<{
           <label className="ts-form-label">Тип записи</label>
           <div className="ts-type-options">
             {TYPE_OPTIONS.map(opt => (
-              <div
+              <button
                 key={opt.status}
+                type="button"
                 className={`ts-type-option ${selectedStatus === opt.status ? 'ts-type-option--selected' : ''}`}
                 onClick={() => setSelectedStatus(opt.status)}
               >
                 <div className="ts-type-option-icon">{opt.icon}</div>
                 <div className="ts-type-option-label">{opt.label}</div>
-              </div>
+              </button>
             ))}
           </div>
         </div>
 
-        {(selectedStatus === 'work' || selectedStatus === 'manual') && (
+        {selectedStatus === 'remote' && (
+          <div className="ts-hours-hint">Для удалёнки автоматически будет проставлен полный день по графику.</div>
+        )}
+
+        {HOURS_EDITABLE_STATUSES.has(selectedStatus) && (
           <div className="ts-form-group">
             <label className="ts-form-label">Часы</label>
             <input
@@ -233,7 +255,7 @@ const CorrectionTab: FC<{
       </div>
       <div className="ts-modal-footer">
         <button className="ts-btn" onClick={onClose}>Отмена</button>
-        <button className="ts-btn ts-btn--primary" onClick={handleSave}>Сохранить</button>
+        <button className="ts-btn ts-btn--primary" onClick={handleSave}>{confirmLabel || 'Сохранить'}</button>
       </div>
     </>
   );
@@ -249,29 +271,34 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   onSave,
   initialStatus = 'work',
   initialHours = 8,
+  title,
+  subtitle,
+  confirmLabel,
   dayLabel,
   employeeName,
   employeeId,
   workDate,
   hideCorrectionTab,
+  hideSkudTab,
+  timesheetEntry,
   correctionInfo,
 }) => {
-  const [tab, setTab] = useState<ModalTab>('events');
-
-  // Формат "Голотин Д.С." из полного ФИО
-  const shortName = employeeName ? (() => {
-    const parts = employeeName.trim().split(/\s+/);
-    if (parts.length >= 3) return `${parts[0]} ${parts[1][0]}.${parts[2][0]}.`;
-    if (parts.length === 2) return `${parts[0]} ${parts[1][0]}.`;
-    return parts[0];
-  })() : null;
+  const showEventsTab = !hideSkudTab;
+  const showCorrectionTab = !hideCorrectionTab;
+  const [tab, setTab] = useState<ModalTab>(() => {
+    if (!showEventsTab && showCorrectionTab) return 'correction';
+    return 'events';
+  });
+  const shortName = employeeName ? formatTimesheetEmployeeName(employeeName) : null;
+  const headerTitle = title || dayLabel || 'День';
+  const headerSubtitle = subtitle || shortName;
 
   return (
     <div className="ts-modal" onClick={e => e.stopPropagation()}>
       <div className="ts-modal-header">
         <h3 className="ts-modal-title">
-          {dayLabel || 'День'}
-          {shortName && <div style={{ fontSize: 13, fontWeight: 400, color: 'var(--text-secondary)', marginTop: 2 }}>{shortName}</div>}
+          {headerTitle}
+          {headerSubtitle && <div className="ts-modal-subtitle">{headerSubtitle}</div>}
         </h3>
         <button className="ts-panel-close" onClick={onClose}>
           <X size={18} />
@@ -287,39 +314,40 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
         </div>
       )}
 
-      <div className="ts-modal-tabs">
-        <button
-          className={`ts-modal-tab ${tab === 'events' ? 'ts-modal-tab--active' : ''}`}
-          onClick={() => setTab('events')}
-        >
-          События СКУД
-        </button>
-        {!hideCorrectionTab && (
+      {showEventsTab && showCorrectionTab && (
+        <div className="ts-modal-tabs">
+          <button
+            className={`ts-modal-tab ${tab === 'events' ? 'ts-modal-tab--active' : ''}`}
+            onClick={() => setTab('events')}
+          >
+            События СКУД
+          </button>
           <button
             className={`ts-modal-tab ${tab === 'correction' ? 'ts-modal-tab--active' : ''}`}
             onClick={() => setTab('correction')}
           >
             Корректировка
           </button>
-        )}
-      </div>
-
-      {tab === 'events' && employeeId && workDate ? (
-        <div className="ts-modal-body">
-          <EventsTab employeeId={employeeId} workDate={workDate} />
         </div>
-      ) : tab === 'events' ? (
+      )}
+
+      {tab === 'events' && showEventsTab && employeeId && workDate ? (
+        <div className="ts-modal-body">
+          <EventsTab employeeId={employeeId} workDate={workDate} timesheetEntry={timesheetEntry} />
+        </div>
+      ) : tab === 'events' && showEventsTab ? (
         <div className="ts-modal-body">
           <div className="ts-modal-events-empty">Нет данных</div>
         </div>
-      ) : (
+      ) : showCorrectionTab ? (
         <CorrectionTab
           onClose={onClose}
           onSave={onSave}
           initialStatus={initialStatus}
           initialHours={initialHours ?? 8}
+          confirmLabel={confirmLabel}
         />
-      )}
+      ) : null}
     </div>
   );
 };

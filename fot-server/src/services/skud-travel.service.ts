@@ -3,7 +3,7 @@ import { getInternalAccessPoints } from './skud-shared.service.js';
 import { settingsService } from './settings.service.js';
 import { createCache } from '../utils/cache.js';
 
-const DEFAULT_CREDIT_MULTIPLIER = 1.5;
+const ROUTE_CREDIT_MULTIPLIER = 1;
 const BATCH_SIZE = 500;
 const TRAVEL_SEGMENTS_CACHE_TTL_MS = 60_000;
 const TRAVEL_LIMIT_REQUIRED_MESSAGE = 'Не задан единый лимит передвижения. Сохраните его в настройках СКУД.';
@@ -324,6 +324,14 @@ const fetchTravelRoutesRaw = async (): Promise<ITravelRouteRow[]> => {
   if (error) throw formatTravelFeatureError(error);
   return (data || []) as ITravelRouteRow[];
 };
+
+const toTravelRoute = (route: ITravelRouteRow, objectNameById: Map<string, string>): ITravelRoute => ({
+  ...route,
+  from_object_name: objectNameById.get(route.from_object_id) || null,
+  to_object_name: objectNameById.get(route.to_object_id) || null,
+  credit_multiplier: ROUTE_CREDIT_MULTIPLIER,
+  max_credit_minutes: route.travel_minutes,
+});
 
 const fetchEmployeeScope = async ({
   departmentId,
@@ -772,16 +780,7 @@ export const listTravelRoutes = async (): Promise<ITravelRoute[]> => {
     objectNameById.set(object.id, object.name);
   }
 
-  return routes.map(route => {
-    const multiplier = route.credit_multiplier ?? DEFAULT_CREDIT_MULTIPLIER;
-    return {
-      ...route,
-      from_object_name: objectNameById.get(route.from_object_id) || null,
-      to_object_name: objectNameById.get(route.to_object_id) || null,
-      credit_multiplier: multiplier,
-      max_credit_minutes: Math.ceil(route.travel_minutes * multiplier),
-    };
-  });
+  return routes.map(route => toTravelRoute(route, objectNameById));
 };
 
 export const getTravelConfig = async (): Promise<{ limit_minutes: number | null }> => {
@@ -820,7 +819,7 @@ export const createTravelRoute = async ({
       from_object_id: fromObjectId,
       to_object_id: toObjectId,
       travel_minutes: travelMinutes,
-      credit_multiplier: DEFAULT_CREDIT_MULTIPLIER,
+      credit_multiplier: ROUTE_CREDIT_MULTIPLIER,
       is_active: true,
     })
     .select('id, from_object_id, to_object_id, travel_minutes, credit_multiplier, is_active, created_at, updated_at')
@@ -831,16 +830,9 @@ export const createTravelRoute = async ({
   const route = data as ITravelRouteRow;
   const [objects] = await Promise.all([fetchTravelObjectsRaw()]);
   const objectNameById = new Map<string, string>(objects.map(object => [object.id, object.name]));
-  const multiplier = route.credit_multiplier ?? DEFAULT_CREDIT_MULTIPLIER;
   invalidateTravelSegmentsCache();
 
-  return {
-    ...route,
-    from_object_name: objectNameById.get(route.from_object_id) || null,
-    to_object_name: objectNameById.get(route.to_object_id) || null,
-    credit_multiplier: multiplier,
-    max_credit_minutes: Math.ceil(route.travel_minutes * multiplier),
-  };
+  return toTravelRoute(route, objectNameById);
 };
 
 export const updateTravelRoute = async ({

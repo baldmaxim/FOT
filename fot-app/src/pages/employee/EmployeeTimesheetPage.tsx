@@ -124,11 +124,9 @@ export const EmployeeTimesheetPage: FC = () => {
     const sched = employeeId ? schedules[employeeId] : undefined;
 
     let normDays = 0;
-    let normHours = 0;
     for (let d = 1; d <= daysCount; d++) {
       if (!isScheduleDayOff(sched, calendar, year, month, d)) {
         normDays++;
-        normHours += getWorkHoursForDay(sched, year, month, d);
       }
     }
 
@@ -137,7 +135,7 @@ export const EmployeeTimesheetPage: FC = () => {
     const dailyRate = normDays > 0 ? salary / normDays : 0;
     const accrued = dailyRate * workedDays;
 
-    return { salary, normDays, workedDays, dailyRate, accrued, actualHours, normHours };
+    return { salary, normDays, workedDays, dailyRate, accrued, actualHours };
   }, [employee, entries, schedules, employeeId, calendar, year, month, daysCount]);
 
   const prevMonth = () => {
@@ -226,7 +224,6 @@ export const EmployeeTimesheetPage: FC = () => {
 
   const totalHours = salaryData.actualHours;
   const totalAccrued = salaryData.accrued;
-  const diff = salaryData.actualHours - salaryData.normHours;
 
   if (loading) {
     return (
@@ -270,22 +267,6 @@ export const EmployeeTimesheetPage: FC = () => {
                 {day}
               </button>
             ))}
-          </div>
-          <div className={s.compactSummary}>
-            <div className={s.summaryItem}>
-              <div className={s.summaryValue}>{formatHM(salaryData.actualHours)}</div>
-              <div className={s.summaryLabel}>Факт</div>
-            </div>
-            <div className={s.summaryItem}>
-              <div className={s.summaryValue}>{formatHM(salaryData.normHours)}</div>
-              <div className={s.summaryLabel}>Норма</div>
-            </div>
-            <div className={s.summaryItem}>
-              <div className={`${s.summaryValue} ${diff >= 0 ? s.summaryValuePositive : s.summaryValueNegative}`}>
-                {diff >= 0 ? '+' : '−'}{formatHM(Math.abs(diff))}
-              </div>
-              <div className={s.summaryLabel}>+/−</div>
-            </div>
           </div>
         </div>
         <div className={s.legend}>
@@ -416,6 +397,7 @@ export const EmployeeTimesheetPage: FC = () => {
         employeeName={modalEmployee?.full_name}
         employeeId={modalEmployee?.id}
         workDate={`${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`}
+        timesheetEntry={modalEntry}
         correctionInfo={modalEntry?.is_correction ? {
           is_correction: true,
           corrected_at: modalEntry.corrected_at,

@@ -15,6 +15,10 @@ const mockedState = vi.hoisted(() => ({
   queryLog: [] as QueryRecord[],
   resolver: (() => ({ data: [], error: null })) as (query: QueryRecord) => QueryResponse | Promise<QueryResponse>,
   travelSummary: new Map<string, { creditedMinutes: number; delayMinutes: number; segmentsCount: number; problematicSegmentsCount: number }>(),
+  internalPoints: new Set<string>(),
+  scheduleWorkHours: 8,
+  isWorkingDay: true,
+  needsSkudCheck: false,
 }));
 
 function createBuilder(table: string) {
@@ -74,9 +78,13 @@ vi.mock('./skud-travel.service.js', () => ({
 }));
 
 vi.mock('./schedule.service.js', () => ({
-  getScheduleForDate: vi.fn(() => ({ work_hours: 8 })),
-  isWorkingDay: vi.fn(() => true),
-  needsSkudCheck: vi.fn(() => false),
+  getScheduleForDate: vi.fn(() => ({ work_hours: mockedState.scheduleWorkHours })),
+  isWorkingDay: vi.fn(() => mockedState.isWorkingDay),
+  needsSkudCheck: vi.fn(() => mockedState.needsSkudCheck),
+}));
+
+vi.mock('./skud-shared.service.js', () => ({
+  getInternalAccessPoints: vi.fn(async () => mockedState.internalPoints),
 }));
 
 import {
@@ -88,6 +96,10 @@ describe('attendance.service', () => {
   beforeEach(() => {
     mockedState.queryLog.length = 0;
     mockedState.travelSummary = new Map();
+    mockedState.internalPoints = new Set();
+    mockedState.scheduleWorkHours = 8;
+    mockedState.isWorkingDay = true;
+    mockedState.needsSkudCheck = false;
     mockedState.resolver = () => ({ data: [], error: null });
   });
 
@@ -234,6 +246,110 @@ describe('attendance.service', () => {
       travel_hours_credited: 0,
       travel_delay_minutes: 20,
       travel_problematic_segments: 1,
+    });
+  });
+
+  it('builds a work entry from raw skud events when daily summary is missing', async () => {
+    mockedState.needsSkudCheck = true;
+
+    mockedState.resolver = (query) => {
+      if (
+        query.table === 'skud_daily_summary'
+        || query.table === 'attendance_adjustments'
+        || query.table === 'user_profiles'
+        || query.table === 'employees'
+      ) {
+        return { data: [], error: null };
+      }
+
+      if (query.table === 'skud_events') {
+        return {
+          data: [
+            {
+              employee_id: 1,
+              event_date: '2026-04-01',
+              event_time: '09:00:00',
+              access_point: 'Главный вход',
+              direction: 'entry',
+            },
+            {
+              employee_id: 1,
+              event_date: '2026-04-01',
+              event_time: '18:00:00',
+              access_point: 'Главный вход',
+              direction: 'exit',
+            },
+          ],
+          error: null,
+        };
+      }
+
+      throw new Error(`Unexpected query for table ${query.table}`);
+    };
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
+      startDate: '2026-04-01',
+      endDate: '2026-04-01',
+      dailySchedulesMap: new Map([
+        [1, new Map([['2026-04-01', {} as IResolvedSchedule]])],
+      ]),
+      calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-03',
+    });
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      employee_id: 1,
+      work_date: '2026-04-01',
+      status: 'work',
+      hours_worked: 8,
+      base_hours_worked: 9,
+      first_entry: '09:00:00',
+      last_exit: '18:00:00',
+      is_correction: false,
+    });
+    expect(result.skudMap.get(1)?.get('2026-04-01')).toEqual({ hours: 8, corrected: false });
+  });
+
+  it('marks a scheduled skud day as absent when both summary and raw events are missing', async () => {
+    mockedState.needsSkudCheck = true;
+
+    mockedState.resolver = (query) => {
+      if (
+        query.table === 'skud_daily_summary'
+        || query.table === 'attendance_adjustments'
+        || query.table === 'user_profiles'
+        || query.table === 'employees'
+        || query.table === 'skud_events'
+      ) {
+        return { data: [], error: null };
+      }
+
+      throw new Error(`Unexpected query for table ${query.table}`);
+    };
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
+      startDate: '2026-04-01',
+      endDate: '2026-04-01',
+      dailySchedulesMap: new Map([
+        [1, new Map([['2026-04-01', {} as IResolvedSchedule]])],
+      ]),
+      calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-03',
+    });
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      employee_id: 1,
+      work_date: '2026-04-01',
+      status: 'absent',
+      hours_worked: 0,
+      base_hours_worked: 0,
+      first_entry: null,
+      last_exit: null,
+      is_correction: false,
     });
   });
 

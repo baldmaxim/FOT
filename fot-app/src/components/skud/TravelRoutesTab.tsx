@@ -129,7 +129,7 @@ export const TravelRoutesTab: FC<ITravelRoutesTabProps> = ({ canEdit, setError }
         <div>
           <h3 className="sigur-section-title">Маршруты между объектами</h3>
           <div className="travel-config-hint">
-            Для расчёта используется лимит 1.5 x T. В табель добавляется только засчитываемая часть дороги.
+            Для расчёта используется указанное время маршрута без дополнительного коэффициента.
           </div>
         </div>
         <button className="sigur-btn" onClick={() => void loadData()} disabled={loading || saving}>
@@ -178,8 +178,7 @@ export const TravelRoutesTab: FC<ITravelRoutesTabProps> = ({ canEdit, setError }
               <thead>
                 <tr>
                   <th>Маршрут</th>
-                  <th>T</th>
-                  <th>1.5 x T</th>
+                  <th>Лимит</th>
                   <th>Действия</th>
                 </tr>
               </thead>
@@ -188,7 +187,6 @@ export const TravelRoutesTab: FC<ITravelRoutesTabProps> = ({ canEdit, setError }
                   <tr key={route.id}>
                     <td>{route.from_object_name || '—'} {'->'} {route.to_object_name || '—'}</td>
                     <td>{route.travel_minutes} мин</td>
-                    <td>{route.max_credit_minutes} мин</td>
                     <td className="travel-config-table-actions">
                       <button className="sigur-btn" onClick={() => handleEdit(route)} disabled={!canEdit || saving}>
                         <Save size={14} />
@@ -203,7 +201,7 @@ export const TravelRoutesTab: FC<ITravelRoutesTabProps> = ({ canEdit, setError }
                 ))}
                 {sortedRoutes.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="travel-config-empty">Маршруты ещё не созданы</td>
+                    <td colSpan={3} className="travel-config-empty">Маршруты ещё не созданы</td>
                   </tr>
                 )}
               </tbody>

@@ -13,6 +13,11 @@ interface ApiResponse<T> {
   error?: string;
 }
 
+interface BulkTimesheetCorrectionResult {
+  processed: number;
+  employees: number;
+}
+
 export const timesheetService = {
   async getAll(filters: TimesheetFilters): Promise<TimesheetResponse> {
     const params = new URLSearchParams();
@@ -39,6 +44,20 @@ export const timesheetService = {
   async update(id: number, data: Partial<Pick<TimesheetEntry, 'status' | 'hours_worked' | 'notes'>>): Promise<TimesheetEntry> {
     const res = await apiClient.put<ApiResponse<TimesheetEntry>>(`/timesheet/${id}`, data);
     if (!res.data) throw new Error(res.error || 'Ошибка обновления записи');
+    return res.data;
+  },
+
+  async bulkCorrect(data: {
+    items: Array<{
+      employee_id: number;
+      work_date: string;
+    }>;
+    status: TimesheetStatus;
+    hours_worked?: number | null;
+    notes?: string | null;
+  }): Promise<BulkTimesheetCorrectionResult> {
+    const res = await apiClient.post<ApiResponse<BulkTimesheetCorrectionResult>>('/timesheet/bulk', data);
+    if (!res.data) throw new Error(res.error || 'Ошибка массового обновления табеля');
     return res.data;
   },
 

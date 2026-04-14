@@ -34,6 +34,13 @@ router.post(
   timesheetController.create
 );
 
+// POST /api/timesheet/bulk
+router.post(
+  '/bulk',
+  requireAnyPageAccess(['/employee/timesheet', '/timesheet', '/timesheet-hr'], 'edit'),
+  timesheetController.bulkSave
+);
+
 // PUT /api/timesheet/:id
 router.put(
   '/:id',

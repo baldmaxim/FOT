@@ -26,6 +26,10 @@ function createBuilder(table: string) {
       query.operations.push({ method: 'select', args });
       return builder;
     },
+    eq: (...args: unknown[]) => {
+      query.operations.push({ method: 'eq', args });
+      return builder;
+    },
     in: (...args: unknown[]) => {
       query.operations.push({ method: 'in', args });
       return builder;
@@ -74,7 +78,7 @@ vi.mock('./settings.service.js', () => ({
   },
 }));
 
-import { calculateAndSyncTravelSegments } from './skud-travel.service.js';
+import { calculateAndSyncTravelSegments, listTravelRoutes } from './skud-travel.service.js';
 
 describe('skud-travel.service', () => {
   beforeEach(() => {
@@ -159,6 +163,49 @@ describe('skud-travel.service', () => {
       segmentsCount: 1,
       problematicSegmentsCount: 0,
     });
+  });
+
+  it('returns route limits without applying the legacy 1.5 multiplier', async () => {
+    mockedState.resolver = (query) => {
+      if (query.table === 'skud_objects') {
+        return {
+          data: [
+            { id: 'obj-a', name: 'Объект A', is_active: true, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
+            { id: 'obj-b', name: 'Объект B', is_active: true, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
+          ],
+          error: null,
+        };
+      }
+
+      if (query.table === 'skud_object_routes') {
+        return {
+          data: [
+            {
+              id: 'route-1',
+              from_object_id: 'obj-a',
+              to_object_id: 'obj-b',
+              travel_minutes: 40,
+              credit_multiplier: 1.5,
+              is_active: true,
+              created_at: '2026-04-01T00:00:00Z',
+              updated_at: '2026-04-01T00:00:00Z',
+            },
+          ],
+          error: null,
+        };
+      }
+
+      throw new Error(`Unexpected query for table ${query.table}`);
+    };
+
+    await expect(listTravelRoutes()).resolves.toEqual([
+      expect.objectContaining({
+        id: 'route-1',
+        travel_minutes: 40,
+        credit_multiplier: 1,
+        max_credit_minutes: 40,
+      }),
+    ]);
   });
 
   it('marks a segment as delayed when actual travel exceeds the configured limit', async () => {

@@ -1,4 +1,4 @@
-import { type FC, useEffect, useMemo, useState } from 'react';
+import { type FC, useMemo, useState } from 'react';
 import type { TimesheetEntry, TimesheetEmployee, TimesheetStatus } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
 import type { IProductionCalendarMonth } from '../../types/timesheet';
@@ -12,10 +12,10 @@ import {
 } from '../../utils/calendarUtils';
 import {
   getScheduleForTimesheetDay,
-  getWorkHoursForDay,
   getFullDayThresholdHoursForDay,
   isScheduleDayOff,
 } from '../../utils/scheduleUtils';
+import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 
 interface ITimesheetGridProps {
   employees: TimesheetEmployee[];
@@ -26,6 +26,16 @@ interface ITimesheetGridProps {
   dailySchedules?: Record<number, Record<string, IResolvedSchedule>>;
   calendar?: IProductionCalendarMonth | null;
   compact?: boolean;
+  bulkEditMode?: boolean;
+  visibleDays?: number[];
+  selectedEmployeeIds?: Set<number>;
+  selectedDays?: Set<number>;
+  selectedCellKeys?: Set<string>;
+  allEmployeesSelected?: boolean;
+  onToggleEmployeeSelection?: (employeeId: number) => void;
+  onToggleDaySelection?: (day: number) => void;
+  onToggleAllEmployees?: () => void;
+  onToggleCellSelection?: (employeeId: number, day: number) => void;
   onEmployeeClick: (employee: TimesheetEmployee) => void;
   onDayClick: (employee: TimesheetEmployee, day: number, entry: TimesheetEntry | null) => void;
 }
@@ -33,9 +43,11 @@ interface ITimesheetGridProps {
 interface IRowData {
   employee: TimesheetEmployee;
   days: Map<number, TimesheetEntry>;
-  factHours: number;
-  normHours: number;
 }
+
+const EMPTY_SELECTION = new Set<number>();
+const EMPTY_CELL_SELECTION = new Set<string>();
+const getBulkCellKey = (employeeId: number, day: number): string => `${employeeId}:${day}`;
 
 /** Format decimal hours to "Xч Yм" */
 const formatHM = (decimal: number): string => {
@@ -63,12 +75,6 @@ const STATUS_CELL_TEXT: Record<TimesheetStatus, string> = {
   remote: 'У',
   unpaid: 'НО',
   manual: '',
-};
-
-const abbreviateName = (fullName: string): string => {
-  const parts = fullName.trim().split(/\s+/);
-  if (parts.length < 2) return fullName;
-  return `${parts[0]} ${parts.slice(1).map(p => p[0] ? p[0] + '.' : '').join('')}`;
 };
 
 const getDayCellClass = (entry: TimesheetEntry | null, weekend: boolean, today: boolean, future: boolean, thresholdHours = 8): string => {
@@ -151,11 +157,21 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   dailySchedules = {},
   calendar = null,
   compact = false,
+  bulkEditMode = false,
+  visibleDays,
+  selectedEmployeeIds = EMPTY_SELECTION,
+  selectedDays = EMPTY_SELECTION,
+  selectedCellKeys = EMPTY_CELL_SELECTION,
+  allEmployeesSelected = false,
+  onToggleEmployeeSelection,
+  onToggleDaySelection,
+  onToggleAllEmployees,
+  onToggleCellSelection,
   onEmployeeClick,
   onDayClick,
 }) => {
   const daysCount = getDaysInMonth(year, month);
-  const days = Array.from({ length: daysCount }, (_, i) => i + 1);
+  const days = visibleDays || Array.from({ length: daysCount }, (_, i) => i + 1);
   const [expandedEmployeeId, setExpandedEmployeeId] = useState<number | null>(null);
   const rows: IRowData[] = useMemo(() => {
     const dc = getDaysInMonth(year, month);
@@ -164,42 +180,25 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       entryMap.set(`${entry.employee_id}_${entry.work_date}`, entry);
     }
 
-    const now = new Date();
-    const todayDate = now.getDate();
-    const isCurrentMonth = now.getFullYear() === year && now.getMonth() + 1 === month;
-
     return employees.map(emp => {
       const dayMap = new Map<number, TimesheetEntry>();
-      let factHours = 0;
-      let normHours = 0;
 
       for (let d = 1; d <= dc; d++) {
         const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
         const entry = entryMap.get(`${emp.id}_${dateStr}`);
         if (entry) {
           dayMap.set(d, entry);
-          if (entry.hours_worked) factHours += entry.hours_worked;
-        }
-
-        // Считаем норму часов до сегодня с учётом day_overrides
-        const sched = getScheduleForTimesheetDay(schedules, dailySchedules, emp.id, year, month, d);
-        const dayOff = isScheduleDayOff(sched, calendar, year, month, d);
-        const isPast = !isCurrentMonth || d <= todayDate;
-        if (!dayOff && isPast) {
-          normHours += getWorkHoursForDay(sched, year, month, d);
         }
       }
 
-      return { employee: emp, days: dayMap, factHours, normHours };
+      return { employee: emp, days: dayMap };
     });
-  }, [employees, entries, year, month, schedules, dailySchedules, calendar]);
+  }, [employees, entries, year, month]);
 
-  useEffect(() => {
-    if (expandedEmployeeId == null) return;
-    if (!rows.some(row => row.employee.id === expandedEmployeeId)) {
-      setExpandedEmployeeId(null);
-    }
-  }, [expandedEmployeeId, rows]);
+  const activeExpandedEmployeeId = expandedEmployeeId != null
+    && rows.some(row => row.employee.id === expandedEmployeeId)
+    ? expandedEmployeeId
+    : null;
 
   if (compact) {
     return (
@@ -212,10 +211,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
         </div>
 
         <div className="ts-mobile-list">
-          {rows.map(row => {
-            const diff = row.factHours - row.normHours;
-            const hasVacation = Array.from(row.days.values()).some(e => e.status === 'vacation');
-            const expanded = expandedEmployeeId === row.employee.id;
+          {rows.map((row, index) => {
+            const expanded = activeExpandedEmployeeId === row.employee.id;
+            const employeeIndex = index + 1;
+            const displayName = formatTimesheetEmployeeName(row.employee.full_name);
 
             return (
               <article
@@ -224,25 +223,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
               >
                 <div className="ts-mobile-card-header">
                   <div className="ts-mobile-card-meta">
-                    <div className="ts-mobile-card-name">{row.employee.full_name}</div>
-                    <div className="ts-mobile-card-role">{row.employee.position_name || '—'}</div>
-                  </div>
-                  <div className="ts-mobile-summary">
-                    <span className="ts-mobile-summary-chip">Факт {formatHM(row.factHours)}</span>
-                    <span className="ts-mobile-summary-chip">Норма {formatHM(row.normHours)}</span>
-                    <span
-                      className={`ts-mobile-summary-chip ${
-                        hasVacation && row.factHours === 0
-                          ? ''
-                          : diff >= 0
-                            ? 'ts-mobile-summary-chip--positive'
-                            : 'ts-mobile-summary-chip--negative'
-                      }`}
-                    >
-                      {hasVacation && row.factHours === 0
-                        ? 'Отпуск'
-                        : `${diff >= 0 ? '+' : '−'}${formatHM(Math.abs(diff))}`}
-                    </span>
+                    <div className="ts-mobile-card-name-row">
+                      <span className="ts-employee-index">{employeeIndex}.</span>
+                      <div className="ts-mobile-card-name">{displayName}</div>
+                    </div>
                   </div>
                 </div>
 
@@ -354,40 +338,85 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
         <table className="ts-table">
           <thead>
             <tr>
-              <th className="ts-col-sticky">Сотрудник</th>
+              <th className="ts-col-sticky">
+                {bulkEditMode ? (
+                  <label className="ts-bulk-header-label">
+                    <input
+                      type="checkbox"
+                      className="ts-bulk-checkbox"
+                      checked={allEmployeesSelected}
+                      onChange={() => onToggleAllEmployees?.()}
+                    />
+                    <span className="ts-col-sticky-label">Сотрудник</span>
+                  </label>
+                ) : 'Сотрудник'}
+              </th>
               {days.map(d => {
                 const weekend = isWeekend(year, month, d);
                 const today = isToday(year, month, d);
+                const daySelected = bulkEditMode && selectedDays.has(d);
                 let cls = '';
                 if (today) cls = 'ts-th--today';
                 else if (weekend) cls = 'ts-th--weekend';
                 return (
-                  <th key={d} className={cls}>
-                    {d}<br />
-                    <span style={{ fontWeight: 400 }}>{getWeekdayShort(year, month, d)}</span>
+                  <th key={d} className={`${cls}${bulkEditMode ? ' ts-bulk-day-head' : ''}${daySelected ? ' ts-bulk-day-head--selected' : ''}`}>
+                    {bulkEditMode ? (
+                      <label className="ts-bulk-day-select">
+                        <input
+                          type="checkbox"
+                          className="ts-bulk-checkbox ts-bulk-checkbox--day"
+                          checked={daySelected}
+                          onChange={() => onToggleDaySelection?.(d)}
+                        />
+                        <span className="ts-bulk-day-label">
+                          <span>{d}</span>
+                          <span className="ts-bulk-day-weekday">{getWeekdayShort(year, month, d)}</span>
+                        </span>
+                      </label>
+                    ) : (
+                      <>
+                        {d}<br />
+                        <span style={{ fontWeight: 400 }}>{getWeekdayShort(year, month, d)}</span>
+                      </>
+                    )}
                   </th>
                 );
               })}
-              <th>Факт</th>
-              <th>Норма</th>
-              <th>+/−</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map(row => {
-              const diff = row.factHours - row.normHours;
-              const hasVacation = Array.from(row.days.values()).some(e => e.status === 'vacation');
+            {rows.map((row, index) => {
+              const employeeIndex = index + 1;
+              const displayName = formatTimesheetEmployeeName(row.employee.full_name);
+              const employeeSelected = bulkEditMode && selectedEmployeeIds.has(row.employee.id);
 
               return (
                 <tr key={row.employee.id}>
                   <td
-                    className="ts-col-sticky ts-employee-cell"
-                    onClick={() => onEmployeeClick(row.employee)}
+                    className={`ts-col-sticky ts-employee-cell${bulkEditMode ? ' ts-employee-cell--bulk' : ''}${employeeSelected ? ' ts-employee-cell--selected' : ''}`}
+                    onClick={bulkEditMode ? undefined : () => onEmployeeClick(row.employee)}
                   >
-                    <div className="ts-employee-name" title={row.employee.full_name}>
-                      {compact ? abbreviateName(row.employee.full_name) : row.employee.full_name}
-                    </div>
-                    {!compact && <div className="ts-employee-role">{row.employee.position_name || '—'}</div>}
+                    {bulkEditMode ? (
+                      <label className="ts-employee-select-label">
+                        <input
+                          type="checkbox"
+                          className="ts-bulk-checkbox"
+                          checked={employeeSelected}
+                          onChange={() => onToggleEmployeeSelection?.(row.employee.id)}
+                        />
+                        <span className="ts-employee-index">{employeeIndex}.</span>
+                        <div className="ts-employee-name" title={row.employee.full_name}>
+                          {displayName}
+                        </div>
+                      </label>
+                    ) : (
+                      <div className="ts-employee-name-row">
+                        <span className="ts-employee-index">{employeeIndex}.</span>
+                        <div className="ts-employee-name" title={row.employee.full_name}>
+                          {displayName}
+                        </div>
+                      </div>
+                    )}
                   </td>
                   {days.map(d => {
                     const sched = getScheduleForTimesheetDay(schedules, dailySchedules, row.employee.id, year, month, d);
@@ -396,35 +425,34 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     const future = isFutureDay(year, month, d);
                     const entry = row.days.get(d) || null;
                     const thresholdHours = getFullDayThresholdHoursForDay(sched, calendar, year, month, d);
-                    const cls = getDayCellClass(entry, dayOff, today, future, thresholdHours);
+                    const directSelected = bulkEditMode && selectedCellKeys.has(getBulkCellKey(row.employee.id, d));
+                    const targeted = bulkEditMode && (directSelected || (employeeSelected && selectedDays.has(d)));
+                    const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours)}${targeted ? ' ts-day--bulk-target' : ''}${directSelected ? ' ts-day--bulk-direct' : ''}`;
                     const text = getDayCellText(entry, dayOff);
                     const title = getDayCellTitle(entry, dayOff);
+                    const bulkTitle = bulkEditMode
+                      ? [title, directSelected ? 'Нажмите, чтобы снять точечный выбор' : 'Нажмите, чтобы выбрать ячейку для массовой корректировки']
+                        .filter(Boolean)
+                        .join(' • ')
+                      : title;
 
                     return (
                       <td
                         key={d}
                         className={cls}
-                        title={title}
-                        onClick={() => onDayClick(row.employee, d, entry)}
+                        title={bulkTitle}
+                        onClick={bulkEditMode ? () => onToggleCellSelection?.(row.employee.id, d) : () => onDayClick(row.employee, d, entry)}
                       >
                         {text}
                       </td>
                     );
                   })}
-                  <td className="ts-summary ts-summary--total">{formatHM(row.factHours)}</td>
-                  <td className="ts-summary">{formatHM(row.normHours)}</td>
-                  <td className={`ts-summary ${hasVacation && row.factHours === 0 ? '' : diff >= 0 ? 'ts-summary--positive' : 'ts-summary--negative'}`}>
-                    {hasVacation && row.factHours === 0
-                      ? 'отпуск'
-                      : `${diff >= 0 ? '+' : '−'}${formatHM(Math.abs(diff))}`
-                    }
-                  </td>
                 </tr>
               );
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={daysCount + 4} className="ts-loading">
+                <td colSpan={days.length + 1} className="ts-loading">
                   Нет сотрудников для отображения
                 </td>
               </tr>

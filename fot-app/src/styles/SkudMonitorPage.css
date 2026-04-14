@@ -22,9 +22,16 @@
   color: var(--text-secondary);
 }
 
-.skud-monitor-refresh {
+.skud-monitor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.skud-monitor-action {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -36,17 +43,29 @@
   transition: background var(--transition), border-color var(--transition), box-shadow var(--transition);
 }
 
-.skud-monitor-refresh:hover:not(:disabled) {
+.skud-monitor-action.primary {
+  border-color: rgba(59, 130, 246, 0.24);
+  background: rgba(59, 130, 246, 0.08);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.skud-monitor-action:hover:not(:disabled) {
   background: var(--surface-hover);
   border-color: var(--primary);
 }
 
-.skud-monitor-refresh:focus-visible {
+.skud-monitor-action.primary:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.34);
+}
+
+.skud-monitor-action:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px var(--primary-light);
 }
 
-.skud-monitor-refresh:disabled {
+.skud-monitor-action:disabled {
   opacity: 0.6;
   cursor: default;
 }
@@ -58,89 +77,23 @@
   color: var(--text-secondary);
 }
 
-.skud-monitor-error,
-.skud-monitor-banner {
+.skud-monitor-error {
   display: flex;
   align-items: flex-start;
   gap: 10px;
   border-radius: 16px;
   padding: 14px 16px;
-}
-
-.skud-monitor-error {
   border: 1px solid rgba(239, 68, 68, 0.28);
   background: var(--error-muted);
   color: var(--error);
 }
 
-.skud-monitor-banner.warning {
-  border: 1px solid rgba(245, 158, 11, 0.28);
-  background: var(--warning-muted);
-  color: var(--warning);
-}
-
-.skud-monitor-banner.critical {
-  border: 1px solid rgba(239, 68, 68, 0.28);
-  background: var(--error-muted);
-  color: var(--error);
-}
-
-.skud-monitor-summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.skud-monitor-card,
 .skud-monitor-panel {
   border: 1px solid var(--border);
   border-radius: 18px;
   background: var(--surface);
   box-shadow: var(--shadow-md);
-}
-
-.skud-monitor-card {
-  padding: 16px;
-}
-
-.skud-monitor-card.ok {
-  border-color: rgba(34, 197, 94, 0.28);
-}
-
-.skud-monitor-card.danger {
-  border-color: rgba(239, 68, 68, 0.28);
-}
-
-.skud-monitor-card.muted {
-  border-color: var(--border-light);
-}
-
-.skud-monitor-card-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-secondary);
-  margin-bottom: 12px;
-}
-
-.skud-monitor-card-value {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.skud-monitor-grid {
-  display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-  gap: 18px;
-}
-
-.skud-monitor-panel {
   padding: 18px;
-}
-
-.skud-monitor-panel.details {
-  min-height: 420px;
 }
 
 .skud-monitor-panel-header {
@@ -151,9 +104,19 @@
   margin-bottom: 16px;
 }
 
+.skud-monitor-panel-header > div {
+  min-width: 0;
+}
+
 .skud-monitor-panel-header h2 {
   margin: 0;
   font-size: 18px;
+}
+
+.skud-monitor-panel-subtitle {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 14px;
 }
 
 .skud-monitor-panel-header select {
@@ -164,47 +127,46 @@
   color: var(--text-primary);
 }
 
-.skud-monitor-list {
+.skud-monitor-log-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
-.skud-monitor-incident {
-  width: 100%;
+.skud-monitor-log {
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 12px;
+  border-radius: 16px;
+  padding: 14px;
   background: var(--surface);
-  text-align: left;
-  cursor: pointer;
-  color: inherit;
-  transition: background var(--transition), border-color var(--transition), box-shadow var(--transition);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.skud-monitor-incident:hover {
-  background: var(--surface-hover);
-  border-color: var(--border-light);
+.skud-monitor-log.success {
+  border-left: 4px solid var(--success);
 }
 
-.skud-monitor-incident.warning {
-  border-left: 4px solid var(--warning);
-}
-
-.skud-monitor-incident.critical {
+.skud-monitor-log.failure {
   border-left: 4px solid var(--error);
 }
 
-.skud-monitor-incident.active {
-  background: var(--surface-hover);
-  border-color: rgba(59, 130, 246, 0.3);
-  box-shadow: inset 0 0 0 1px var(--primary-light);
+.skud-monitor-log.silence {
+  border-left: 4px solid var(--warning);
 }
 
-.skud-monitor-incident-top {
+.skud-monitor-log-top {
   display: flex;
-  gap: 8px;
-  margin-bottom: 8px;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.skud-monitor-log-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .badge {
@@ -217,90 +179,84 @@
   border: 1px solid transparent;
 }
 
-.badge.open {
-  background: var(--warning-muted);
-  color: var(--warning);
-  border-color: rgba(245, 158, 11, 0.24);
-}
-
-.badge.resolved {
+.badge.success {
   background: var(--success-muted);
   color: var(--success);
   border-color: rgba(34, 197, 94, 0.24);
 }
 
-.badge.severity-warning {
-  background: var(--warning-muted);
-  color: var(--warning);
-  border-color: rgba(245, 158, 11, 0.24);
-}
-
-.badge.severity-critical {
+.badge.failure {
   background: var(--error-muted);
   color: var(--error);
   border-color: rgba(239, 68, 68, 0.24);
 }
 
-.muted,
-.skud-monitor-detail-block .label,
-.skud-monitor-detail-grid .label {
+.badge.silence {
+  background: var(--warning-muted);
+  color: var(--warning);
+  border-color: rgba(245, 158, 11, 0.24);
+}
+
+.skud-monitor-log-time {
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.skud-monitor-log-description {
   color: var(--text-secondary);
 }
 
-.skud-monitor-details {
+.skud-monitor-log-metrics {
   display: flex;
-  flex-direction: column;
-  gap: 18px;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
-.skud-monitor-detail-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.skud-monitor-detail-grid div,
-.skud-monitor-detail-block {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.skud-monitor-detail-block p {
-  margin: 0;
-}
-
-.skud-monitor-table-wrap {
-  overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: var(--surface);
-}
-
-.skud-monitor-table {
-  width: 100%;
-  border-collapse: collapse;
-  min-width: 720px;
-}
-
-.skud-monitor-table th,
-.skud-monitor-table td {
-  border-bottom: 1px solid var(--border);
-  padding: 10px 12px;
-  text-align: left;
-  vertical-align: top;
-}
-
-.skud-monitor-table th {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-secondary);
+.skud-monitor-log-metrics span {
+  border-radius: 999px;
+  padding: 6px 10px;
   background: var(--surface-hover);
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
-.skud-monitor-table tbody tr:hover td {
-  background: var(--bg-secondary);
+.skud-monitor-log-metrics strong {
+  color: var(--text-primary);
+}
+
+.skud-monitor-log-error {
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+
+.skud-monitor-log-error.has-error {
+  background: var(--error-muted);
+  color: var(--error);
+}
+
+.skud-monitor-log-json {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.skud-monitor-log-json summary {
+  cursor: pointer;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.skud-monitor-log-json pre {
+  margin: 12px 0 0;
+  padding: 14px;
+  border-radius: 14px;
+  background: #0f172a;
+  color: #dbeafe;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: auto;
 }
 
 .spinning {
@@ -312,83 +268,23 @@
   to { transform: rotate(360deg); }
 }
 
-@media (max-width: 1100px) {
-  .skud-monitor-summary,
-  .skud-monitor-grid,
-  .skud-monitor-detail-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
 @media (max-width: 768px) {
   .skud-monitor {
     padding: 16px;
   }
 
-  .skud-monitor-header {
+  .skud-monitor-header,
+  .skud-monitor-panel-header,
+  .skud-monitor-log-top {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .skud-monitor-table {
-    min-width: 0;
-  }
-
-  .skud-monitor-table thead {
-    display: none;
-  }
-
-  .skud-monitor-table,
-  .skud-monitor-table tbody,
-  .skud-monitor-table tr,
-  .skud-monitor-table td {
-    display: block;
+  .skud-monitor-action {
     width: 100%;
   }
 
-  .skud-monitor-table tbody {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 12px;
-  }
-
-  .skud-monitor-table tr {
-    display: grid;
-    gap: 8px;
-    padding: 12px;
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    background: var(--surface);
-  }
-
-  .skud-monitor-table td {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 0;
-    border: none;
-    text-align: right;
-  }
-
-  .skud-monitor-table td::before {
-    content: attr(data-label);
-    flex: 0 0 45%;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-secondary);
-    text-align: left;
-  }
-
-  .skud-monitor-table td.skud-monitor-empty {
-    display: block;
-    text-align: center;
-  }
-
-  .skud-monitor-table td.skud-monitor-empty::before {
-    content: none;
+  .skud-monitor-log-time {
+    white-space: normal;
   }
 }
