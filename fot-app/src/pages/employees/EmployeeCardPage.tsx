@@ -282,6 +282,8 @@ export const EmployeeCardPage: FC = () => {
         schedules: timesheetData.schedules,
         dailySchedules: timesheetData.daily_schedules,
         calendar: timesheetData.calendar || null,
+        liveDayEvents: todayEvents,
+        internalPoints,
       });
     }
 
@@ -302,6 +304,7 @@ export const EmployeeCardPage: FC = () => {
     empIdNum,
     calYear,
     calMonth,
+    todayEvents,
     skudEvents,
     internalPoints,
   ]);

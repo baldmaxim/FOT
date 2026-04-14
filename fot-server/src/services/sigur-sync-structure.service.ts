@@ -7,9 +7,10 @@ import {
   isSystemDepartment,
   logSampleAndWarn,
   normalizeDepartment,
+  normalizeDepartmentLookupName,
   type ISyncContext,
 } from './sigur-sync-shared.js';
-import { invalidateDeptTreeCache } from './skud-shared.service.js';
+import { invalidateDeptTreeCache, invalidateSyncFilterCache } from './skud-shared.service.js';
 
 // ─── Типы результатов ───
 
@@ -21,6 +22,39 @@ export interface ISyncDepartmentsResult {
   total: number;
   parentLinksSet: number;
   errors: string[];
+}
+
+interface IExistingDepartmentRow {
+  id: string;
+  sigur_department_id: number | null;
+  name: string | null;
+}
+
+function buildReusableDepartmentNameMap(
+  existingDepartments: IExistingDepartmentRow[],
+  currentSigurDepartmentIds: Set<number>,
+  rootDepartmentName: string,
+): Map<string, IExistingDepartmentRow[]> {
+  const byName = new Map<string, IExistingDepartmentRow[]>();
+
+  for (const department of existingDepartments) {
+    const normalizedName = normalizeDepartmentLookupName(department.name);
+    if (!normalizedName || normalizedName === normalizeDepartmentLookupName(rootDepartmentName)) {
+      continue;
+    }
+
+    const hasCurrentSigurBinding = department.sigur_department_id != null
+      && currentSigurDepartmentIds.has(department.sigur_department_id);
+    if (hasCurrentSigurBinding) {
+      continue;
+    }
+
+    const bucket = byName.get(normalizedName) || [];
+    bucket.push(department);
+    byName.set(normalizedName, bucket);
+  }
+
+  return byName;
 }
 
 // ─── Чистые функции синхронизации ───
@@ -42,17 +76,26 @@ export async function syncDepartmentsLogic(
   }
 
   const departments = rawDepartments.map(normalizeDepartment);
+  const currentSigurDepartmentIds = new Set<number>(departments.map(dept => dept.id));
+  const ROOT_DEPT_NAME = 'Объект';
 
   const { data: existingDepts } = await supabase
     .from('org_departments')
     .select('id, sigur_department_id, name');
 
+  const typedExistingDepts = (existingDepts || []) as IExistingDepartmentRow[];
+
   const sigurIdToDbId = new Map<number, string>();
-  for (const d of existingDepts || []) {
+  for (const d of typedExistingDepts) {
     if (d.sigur_department_id != null) {
       sigurIdToDbId.set(d.sigur_department_id, d.id);
     }
   }
+  const reusableDepartmentsByName = buildReusableDepartmentNameMap(
+    typedExistingDepts,
+    currentSigurDepartmentIds,
+    ROOT_DEPT_NAME,
+  );
 
   let imported = 0;
   let updated = 0;
@@ -61,10 +104,9 @@ export async function syncDepartmentsLogic(
   const errors: string[] = [];
 
   // Создаём/находим корневой отдел «Объект» (виртуальный корень Sigur, не возвращается API)
-  const ROOT_DEPT_NAME = 'Объект';
   let rootDeptId: string | null = null;
 
-  const existingRoot = (existingDepts || []).find(d => {
+  const existingRoot = typedExistingDepts.find(d => {
     return (d.name || '').trim() === ROOT_DEPT_NAME;
   });
 
@@ -154,6 +196,30 @@ export async function syncDepartmentsLogic(
       }
       sigurToDbMap.set(dept.id, dbId);
     } else {
+      const reusableKey = normalizeDepartmentLookupName(dept.name);
+      const reusableCandidates = reusableDepartmentsByName.get(reusableKey) || [];
+
+      if (reusableCandidates.length === 1) {
+        const reusableDepartment = reusableCandidates[0];
+        const { error: reuseError } = await supabase
+          .from('org_departments')
+          .update({
+            name: dept.name,
+            sigur_department_id: dept.id,
+          })
+          .eq('id', reusableDepartment.id);
+
+        if (reuseError) {
+          errors.push(`rebind ${dept.name}: ${reuseError.message}`);
+        } else {
+          updated++;
+          sigurIdToDbId.set(dept.id, reusableDepartment.id);
+          sigurToDbMap.set(dept.id, reusableDepartment.id);
+          reusableDepartmentsByName.delete(reusableKey);
+        }
+        continue;
+      }
+
       const { data: created, error: insertError } = await supabase
         .from('org_departments')
         .insert({
@@ -198,5 +264,6 @@ export async function syncDepartmentsLogic(
 
   console.log(`[syncDepartments] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${filtered} filtered, ${parentLinksSet} parent links`);
   invalidateDeptTreeCache();
+  invalidateSyncFilterCache();
   return { imported, updated, skipped, filtered, total: departments.length, parentLinksSet, errors };
 }

@@ -272,6 +272,58 @@ describe('presence-polling.service', () => {
     );
   });
 
+  it('does not advance the checkpoint when persisting events fails', async () => {
+    const firstNow = new Date(2026, 2, 27, 10, 0, 0);
+    const secondNow = new Date(2026, 2, 27, 10, 5, 0);
+    let upsertCalls = 0;
+
+    mockedState.queryResolver = (query) => {
+      if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
+        return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
+      }
+      if (query.table === 'employees') {
+        return {
+          data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }],
+          error: null,
+        };
+      }
+      if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
+        upsertCalls += 1;
+        if (upsertCalls === 1) {
+          return { data: null, error: { message: 'temporary insert failure' } };
+        }
+        return { data: null, error: null };
+      }
+      throw new Error(`Unexpected query: ${query.table}`);
+    };
+
+    mockedState.sigurServiceMock.getEvents.mockResolvedValue([
+      makeEvent({ timestamp: '2026-03-27T09:15:00+03:00' }),
+    ] as Array<Record<string, unknown>>);
+
+    await pollEventsOnce(firstNow);
+    await pollEventsOnce(secondNow);
+
+    expect(mockedState.sigurServiceMock.getEvents).toHaveBeenNthCalledWith(
+      1,
+      '2026-03-27T08:58:00',
+      '2026-03-27T10:00:00',
+      'external',
+      'PASS_DETECTED',
+    );
+    expect(mockedState.sigurServiceMock.getEvents).toHaveBeenNthCalledWith(
+      2,
+      '2026-03-27T08:58:00',
+      '2026-03-27T10:05:00',
+      'external',
+      'PASS_DETECTED',
+    );
+    expect(mockedState.sigurMonitorMock.recordSigurMonitorFailure).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'presence_polling',
+      errorMessage: 'Failed to persist Sigur events: temporary insert failure',
+    }));
+  });
+
   it('falls back to the start of the current day when the database has no events', async () => {
     const now = new Date(2026, 2, 27, 9, 30, 0);
 

@@ -876,12 +876,17 @@
     width: 280px;
   }
 
-  .ep-emp-actions {
+  .ep-emp-meta {
     display: none;
   }
 
-  .ep-emp-meta {
-    display: none;
+  .ep-emp-actions {
+    gap: 6px;
+  }
+
+  .ep-action-btn {
+    padding: 7px 10px;
+    font-size: 11px;
   }
 }
 

@@ -1,5 +1,6 @@
 import { sigurService } from './sigur.service.js';
 import { supabase } from '../config/database.js';
+import { invalidateSyncFilterCache } from './skud-shared.service.js';
 
 /** Системные папки Sigur — больше не фильтруем, синхронизируем все */
 const SIGUR_SYSTEM_DEPARTMENTS: string[] = [];
@@ -29,6 +30,12 @@ export interface INormalizedDept {
   id: number;
   name: string;
   parentId: number | null;
+}
+
+export interface ISyncFilterDepartmentRow {
+  id?: string;
+  sigur_department_id: number;
+  sigur_department_name: string | null;
 }
 
 interface IDepartmentHierarchyCache {
@@ -108,6 +115,14 @@ export function normalizeDepartment(raw: Record<string, unknown>): INormalizedDe
   };
 }
 
+export function normalizeDepartmentLookupName(name: string | null | undefined): string {
+  return (name || '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
 export interface INormalizedEmployee {
   id: number | undefined;
   name: string;
@@ -146,14 +161,193 @@ export function isSystemDepartment(name: string): boolean {
   return SIGUR_SYSTEM_DEPARTMENTS.includes(name.toLowerCase().trim());
 }
 
-/** Загружает whitelist отделов из skud_sync_department_filter. null = фильтр не задан (синхронизировать все) */
-export async function getWhitelistedDepartmentIds(): Promise<Set<number> | null> {
-  const { data } = await supabase
-    .from('skud_sync_department_filter')
-    .select('sigur_department_id');
+function buildDepartmentNameMap(departments: INormalizedDept[]): Map<string, INormalizedDept[]> {
+  const byName = new Map<string, INormalizedDept[]>();
 
-  if (!data || data.length === 0) return null;
-  return new Set(data.map(d => d.sigur_department_id));
+  for (const dept of departments) {
+    const key = normalizeDepartmentLookupName(dept.name);
+    if (!key) continue;
+    const bucket = byName.get(key) || [];
+    bucket.push(dept);
+    byName.set(key, bucket);
+  }
+
+  return byName;
+}
+
+export function reconcileSyncFilterDepartments(
+  rows: ISyncFilterDepartmentRow[],
+  departments: INormalizedDept[],
+): {
+  effectiveIds: Set<number> | null;
+  persistedRows: Array<{ sigur_department_id: number; sigur_department_name: string | null }>;
+  unresolvedRows: ISyncFilterDepartmentRow[];
+  changed: boolean;
+} {
+  if (rows.length === 0) {
+    return {
+      effectiveIds: null,
+      persistedRows: [],
+      unresolvedRows: [],
+      changed: false,
+    };
+  }
+
+  const currentById = new Map<number, INormalizedDept>();
+  for (const dept of departments) {
+    currentById.set(dept.id, dept);
+  }
+
+  const byName = buildDepartmentNameMap(departments);
+  const effectiveIds = new Set<number>();
+  const persistedRows: Array<{ sigur_department_id: number; sigur_department_name: string | null }> = [];
+  const persistedIds = new Set<number>();
+  const unresolvedRows: ISyncFilterDepartmentRow[] = [];
+  let changed = false;
+
+  const pushPersistedRow = (sigurDepartmentId: number, sigurDepartmentName: string | null) => {
+    if (persistedIds.has(sigurDepartmentId)) {
+      changed = true;
+      return;
+    }
+    persistedIds.add(sigurDepartmentId);
+    persistedRows.push({
+      sigur_department_id: sigurDepartmentId,
+      sigur_department_name: sigurDepartmentName,
+    });
+  };
+
+  for (const row of rows) {
+    const currentByExactId = currentById.get(row.sigur_department_id);
+    if (currentByExactId) {
+      effectiveIds.add(currentByExactId.id);
+      pushPersistedRow(currentByExactId.id, currentByExactId.name || row.sigur_department_name || null);
+      if (row.sigur_department_name !== currentByExactId.name) {
+        changed = true;
+      }
+      continue;
+    }
+
+    const lookupName = normalizeDepartmentLookupName(row.sigur_department_name);
+    const nameCandidates = lookupName ? (byName.get(lookupName) || []) : [];
+
+    if (nameCandidates.length === 1) {
+      const matchedDepartment = nameCandidates[0];
+      effectiveIds.add(matchedDepartment.id);
+      pushPersistedRow(matchedDepartment.id, matchedDepartment.name);
+      changed = true;
+      continue;
+    }
+
+    unresolvedRows.push(row);
+    pushPersistedRow(row.sigur_department_id, row.sigur_department_name || null);
+  }
+
+  const fallbackIds = effectiveIds.size > 0
+    ? effectiveIds
+    : new Set(rows.map(row => row.sigur_department_id));
+
+  return {
+    effectiveIds: fallbackIds.size > 0 ? fallbackIds : null,
+    persistedRows,
+    unresolvedRows,
+    changed,
+  };
+}
+
+async function loadSyncFilterRows(context?: ISyncContext): Promise<ISyncFilterDepartmentRow[]> {
+  if (context?.syncFilterRows !== undefined) {
+    return context.syncFilterRows ?? [];
+  }
+
+  const { data, error } = await supabase
+    .from('skud_sync_department_filter')
+    .select('id, sigur_department_id, sigur_department_name')
+    .order('sigur_department_name', { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to load sync filter: ${error.message}`);
+  }
+
+  const rows = ((data || []) as ISyncFilterDepartmentRow[]).filter(
+    row => typeof row.sigur_department_id === 'number',
+  );
+
+  if (context) {
+    context.syncFilterRows = rows;
+  }
+
+  return rows;
+}
+
+async function persistSyncFilterRows(
+  rows: Array<{ sigur_department_id: number; sigur_department_name: string | null }>,
+  context?: ISyncContext,
+): Promise<void> {
+  const { error: deleteError } = await supabase
+    .from('skud_sync_department_filter')
+    .delete()
+    .neq('id', '00000000-0000-0000-0000-000000000000');
+
+  if (deleteError) {
+    throw new Error(`Failed to rewrite sync filter: ${deleteError.message}`);
+  }
+
+  if (rows.length > 0) {
+    const { error: insertError } = await supabase
+      .from('skud_sync_department_filter')
+      .insert(rows);
+
+    if (insertError) {
+      throw new Error(`Failed to save reconciled sync filter: ${insertError.message}`);
+    }
+  }
+
+  invalidateSyncFilterCache();
+
+  if (context) {
+    context.syncFilterRows = rows.map(row => ({ ...row }));
+  }
+}
+
+/** Загружает whitelist отделов из skud_sync_department_filter. null = фильтр не задан (синхронизировать все) */
+export async function getWhitelistedDepartmentIds(
+  connection?: 'external' | 'internal',
+  context?: ISyncContext,
+): Promise<Set<number> | null> {
+  if (context && context.whitelistDepartmentIds !== undefined) {
+    return context.whitelistDepartmentIds;
+  }
+
+  const rows = await loadSyncFilterRows(context);
+  if (rows.length === 0) {
+    if (context) {
+      context.whitelistDepartmentIds = null;
+    }
+    return null;
+  }
+
+  const departments = await getNormalizedDepartmentsCached(connection, context);
+  const reconciled = reconcileSyncFilterDepartments(rows, departments);
+
+  if (reconciled.changed) {
+    await persistSyncFilterRows(reconciled.persistedRows, context);
+  }
+
+  if (reconciled.unresolvedRows.length > 0) {
+    console.warn(
+      `[sync-filter] unresolved departments kept as-is: ${reconciled.unresolvedRows
+        .slice(0, 10)
+        .map(row => `${row.sigur_department_name || 'без названия'} (${row.sigur_department_id})`)
+        .join(', ')}`,
+    );
+  }
+
+  if (context) {
+    context.whitelistDepartmentIds = reconciled.effectiveIds;
+  }
+
+  return reconciled.effectiveIds;
 }
 
 export const SYNC_ALL_STEP_ORDER = [
@@ -175,6 +369,7 @@ export interface ISyncContext {
   normalizedDepartments?: INormalizedDept[];
   departmentHierarchy?: IDepartmentHierarchyCache;
   positionsRaw?: Record<string, unknown>[] | null;
+  syncFilterRows?: ISyncFilterDepartmentRow[] | null;
   whitelistDepartmentIds?: Set<number> | null;
   expandedWhitelistDepartmentIds?: Set<number> | null;
   whitelistedSigurEmployees?: IWhitelistedEmployeesCache | null;
@@ -249,7 +444,7 @@ export async function getWhitelistedDepartmentIdsCached(
     return context.expandedWhitelistDepartmentIds;
   }
 
-  const whitelist = await getWhitelistedDepartmentIds();
+  const whitelist = await getWhitelistedDepartmentIds(connection, context);
   if (!whitelist || whitelist.size === 0) {
     if (context) {
       context.whitelistDepartmentIds = whitelist;

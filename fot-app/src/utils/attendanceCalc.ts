@@ -367,6 +367,8 @@ export const calculateAttendanceFromTimesheet = (params: {
   schedules?: Record<number, IResolvedSchedule>;
   dailySchedules?: Record<number, Record<string, IResolvedSchedule>>;
   calendar?: IProductionCalendarMonth | null;
+  liveDayEvents?: SkudEvent[];
+  internalPoints?: Set<string>;
 }) => {
   const {
     employeeId,
@@ -376,12 +378,27 @@ export const calculateAttendanceFromTimesheet = (params: {
     schedules,
     dailySchedules,
     calendar,
+    liveDayEvents,
+    internalPoints,
   } = params;
 
   const today = new Date();
   const todayDate = today.getDate();
   const isCurrentMonth = today.getFullYear() === year && today.getMonth() === month;
   const daysInMonth = getDaysInMonth(year, month);
+  const liveInternalPoints = internalPoints ?? new Set<string>();
+  const liveTodayEvents = isCurrentMonth
+    ? (liveDayEvents ?? [])
+      .filter(event => {
+        const eventDate = new Date(`${event.event_date}T00:00:00`);
+        return eventDate.getFullYear() === year
+          && eventDate.getMonth() === month
+          && eventDate.getDate() === todayDate;
+      })
+      .sort((a, b) => a.event_time.localeCompare(b.event_time))
+    : [];
+  const liveTodayAttendanceEvents = liveTodayEvents
+    .filter(event => !event.access_point || !liveInternalPoints.has(event.access_point));
 
   const entryByDay = new Map<number, TimesheetEntry>();
   for (const entry of entries) {
@@ -410,13 +427,14 @@ export const calculateAttendanceFromTimesheet = (params: {
     const scheduledStartMinutes = getScheduledStartMinutes(schedule, year, month, day);
     const entry = entryByDay.get(day);
     const isScheduledDayOff = plannedHours <= 0;
+    const shouldUseLiveTodayEvents = isCurrentMonth && day === todayDate && liveTodayAttendanceEvents.length > 0;
 
     if (isCurrentMonth && day > todayDate) {
       days.push({ day, status: 'future', totalSeconds: 0, plannedHours, scheduledStartMinutes });
       continue;
     }
 
-    if (isScheduledDayOff && !entry) {
+    if (isScheduledDayOff && !entry && !shouldUseLiveTodayEvents) {
       days.push({ day, status: 'weekend', totalSeconds: 0, plannedHours: 0, scheduledStartMinutes });
       continue;
     }
@@ -426,14 +444,26 @@ export const calculateAttendanceFromTimesheet = (params: {
       totalPlannedHours += plannedHours;
     }
 
-    if (!entry) {
+    if (!entry && !shouldUseLiveTodayEvents) {
       days.push({ day, status: 'absent', totalSeconds: 0, plannedHours, scheduledStartMinutes });
       continue;
     }
+    const liveTodayExternalEvents = shouldUseLiveTodayEvents
+      ? liveTodayAttendanceEvents
+      : [];
+    const liveTodayEntries = liveTodayExternalEvents
+      .filter(event => event.direction === 'entry')
+      .sort((a, b) => a.event_time.localeCompare(b.event_time));
 
-    const totalSeconds = Math.max(0, Math.round((entry.hours_worked ?? 0) * 3600));
-    const arrivalTime = entry.first_entry?.slice(0, 5);
-    const hasActualPresence = totalSeconds > 0 || Boolean(entry.first_entry) || Boolean(entry.last_exit) || workedLikeStatuses.has(entry.status);
+    const totalSeconds = shouldUseLiveTodayEvents
+      ? calcWorkSeconds(liveTodayEvents, liveInternalPoints, true)
+      : Math.max(0, Math.round((entry?.hours_worked ?? 0) * 3600));
+    const arrivalTime = shouldUseLiveTodayEvents
+      ? liveTodayEntries[0]?.event_time.slice(0, 5)
+      : entry?.first_entry?.slice(0, 5);
+    const hasActualPresence = shouldUseLiveTodayEvents
+      ? totalSeconds > 0 || liveTodayExternalEvents.length > 0
+      : totalSeconds > 0 || Boolean(entry?.first_entry) || Boolean(entry?.last_exit) || Boolean(entry?.status && workedLikeStatuses.has(entry.status));
     let isLate = false;
 
     if (arrivalTime && !isScheduledDayOff) {
@@ -451,11 +481,13 @@ export const calculateAttendanceFromTimesheet = (params: {
 
     const fullDayThresholdHours = getFullDayThresholdHoursForDay(schedule, calendar ?? null, year, month + 1, day);
     let status: IDayAttendance['status'];
-    if (entry.status === 'absent' || entry.status === 'unpaid') {
+    if (!shouldUseLiveTodayEvents && (entry?.status === 'absent' || entry?.status === 'unpaid')) {
       status = 'absent';
     } else if (hasActualPresence) {
-      status = (entry.hours_worked ?? 0) < fullDayThresholdHours ? 'underwork' : 'present';
-    } else if (isScheduledDayOff && entry.status === 'dayoff') {
+      status = plannedHours <= 0 || totalSeconds >= Math.round(fullDayThresholdHours * 3600)
+        ? 'present'
+        : 'underwork';
+    } else if (isScheduledDayOff && entry?.status === 'dayoff') {
       status = 'weekend';
     } else {
       status = 'present';

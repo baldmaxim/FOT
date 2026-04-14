@@ -283,6 +283,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     }
 
     let totalInserted = 0;
+    const persistenceErrors: string[] = [];
     for (let i = 0; i < inserts.length; i += BATCH_SIZE) {
       const batch = inserts.slice(i, i + BATCH_SIZE);
       const { error } = await supabase
@@ -290,9 +291,14 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         .upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true });
       if (error) {
         console.error('[presence-polling] insert error:', error.message);
+        persistenceErrors.push(error.message);
       } else {
         totalInserted += batch.length;
       }
+    }
+
+    if (persistenceErrors.length > 0) {
+      throw new Error(`Failed to persist Sigur events: ${persistenceErrors[0]}`);
     }
 
     if (summariesToUpdate.size > 0) {
@@ -300,7 +306,10 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         const [empId, date] = key.split(':');
         return { emp_id: parseInt(empId, 10), date };
       });
-      await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: pairs });
+      const { error: summaryError } = await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: pairs });
+      if (summaryError) {
+        throw new Error(`[presence-polling] summary recalc error: ${summaryError.message}`);
+      }
     }
 
     // После успешного цикла сбрасываем кэши presence/dashboard, чтобы пользователи

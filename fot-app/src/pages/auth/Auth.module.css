@@ -463,6 +463,8 @@
   .authPanel {
     flex: 1;
     height: 100dvh;
+    flex-direction: column;
+    align-items: center;
     padding: 32px 24px;
     overflow-y: auto;
     justify-content: flex-start;
@@ -471,6 +473,12 @@
 
   .mobileLogo {
     display: flex;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .authContainer {
+    width: min(100%, 380px);
   }
 
   .formInput {

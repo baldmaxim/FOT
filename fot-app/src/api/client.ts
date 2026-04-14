@@ -1,4 +1,6 @@
 const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
+const isLocalHostname = (hostname: string): boolean =>
+  hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 
 const resolveApiUrl = (): string => {
   const configured = trimTrailingSlash(import.meta.env.VITE_API_URL || '');
@@ -14,11 +16,12 @@ const resolveApiUrl = (): string => {
       const resolved = new URL(configured, window.location.origin);
       const sameHost = resolved.hostname === window.location.hostname;
       const samePathFamily = resolved.pathname === '/api' || resolved.pathname.startsWith('/api/');
+      const shouldKeepExplicitDevUrl = import.meta.env.DEV || isLocalHostname(window.location.hostname);
 
       // When the bundle is opened on the same host but the configured API points
       // to a different scheme or port, prefer the page origin to avoid CORS/cookie
       // breakage caused by cross-origin redirects.
-      if (sameHost && samePathFamily && resolved.origin !== window.location.origin) {
+      if (sameHost && samePathFamily && resolved.origin !== window.location.origin && !shouldKeepExplicitDevUrl) {
         return `${window.location.origin}${resolved.pathname}`;
       }
 
