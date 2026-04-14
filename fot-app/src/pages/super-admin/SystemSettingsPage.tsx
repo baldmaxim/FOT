@@ -5,14 +5,17 @@ import {
   type IR2Status,
   type ISigurMonitorSettings,
   type ITimesheetReminderSettings,
+  type ITimesheetTeamManagementSettings,
 } from '../../services/settingsService';
 import {
   getR2StatusQueryKey,
   getSigurMonitorSettingsQueryKey,
   getTimesheetReminderSettingsQueryKey,
+  getTimesheetTeamManagementSettingsQueryKey,
   useR2Status,
   useSigurMonitorSettings,
   useTimesheetReminderSettings,
+  useTimesheetTeamManagementSettings,
 } from '../../hooks/useSettingsData';
 import {
   getTimesheetResponsibleCandidatesQueryKey,
@@ -30,6 +33,7 @@ export const SystemSettingsPage: FC = () => {
   const r2StatusQuery = useR2Status();
   const monitorSettingsQuery = useSigurMonitorSettings();
   const reminderSettingsQuery = useTimesheetReminderSettings();
+  const teamManagementSettingsQuery = useTimesheetTeamManagementSettings();
   const structureQuery = useStructureTree();
   const status: IR2Status | null = r2StatusQuery.data ?? null;
 
@@ -66,6 +70,11 @@ export const SystemSettingsPage: FC = () => {
   const [backupUserId, setBackupUserId] = useState('');
   const [responsiblesSaving, setResponsiblesSaving] = useState(false);
   const [responsiblesResult, setResponsiblesResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [teamManagementSettings, setTeamManagementSettings] = useState<ITimesheetTeamManagementSettings>({
+    enabled: false,
+  });
+  const [teamManagementSaving, setTeamManagementSaving] = useState(false);
+  const [teamManagementResult, setTeamManagementResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   const departments = useMemo(() => {
     const flatten = (nodes: Array<{ id: string; name: string; children?: unknown[] }>): Array<{ id: string; name: string }> => {
@@ -97,7 +106,11 @@ export const SystemSettingsPage: FC = () => {
   });
 
   const candidates: ITimesheetResponsibleCandidate[] = candidatesQuery.data ?? [];
-  const loading = r2StatusQuery.isLoading || monitorSettingsQuery.isLoading || reminderSettingsQuery.isLoading || structureQuery.isLoading;
+  const loading = r2StatusQuery.isLoading
+    || monitorSettingsQuery.isLoading
+    || reminderSettingsQuery.isLoading
+    || teamManagementSettingsQuery.isLoading
+    || structureQuery.isLoading;
 
   useEffect(() => {
     if (status?.bucket_name) {
@@ -116,6 +129,12 @@ export const SystemSettingsPage: FC = () => {
       setReminderSettings(reminderSettingsQuery.data);
     }
   }, [reminderSettingsQuery.data]);
+
+  useEffect(() => {
+    if (teamManagementSettingsQuery.data) {
+      setTeamManagementSettings(teamManagementSettingsQuery.data);
+    }
+  }, [teamManagementSettingsQuery.data]);
 
   useEffect(() => {
     if (!selectedDepartmentId && departments.length > 0) {
@@ -205,6 +224,21 @@ export const SystemSettingsPage: FC = () => {
       setReminderResult({ ok: false, msg: 'Ошибка сохранения настроек напоминаний' });
     } finally {
       setReminderSaving(false);
+    }
+  };
+
+  const handleSaveTeamManagementSettings = async () => {
+    setTeamManagementSaving(true);
+    setTeamManagementResult(null);
+    try {
+      const next = await settingsService.saveTimesheetTeamManagementSettings(teamManagementSettings);
+      setTeamManagementSettings(next);
+      queryClient.setQueryData(getTimesheetTeamManagementSettingsQueryKey(), next);
+      setTeamManagementResult({ ok: true, msg: 'Настройки управления составом табеля сохранены' });
+    } catch {
+      setTeamManagementResult({ ok: false, msg: 'Ошибка сохранения настроек управления составом табеля' });
+    } finally {
+      setTeamManagementSaving(false);
     }
   };
 
@@ -592,6 +626,42 @@ export const SystemSettingsPage: FC = () => {
         {responsiblesResult && (
           <div className={`${styles.testResult} ${responsiblesResult.ok ? styles.testSuccess : styles.testError}`}>
             {responsiblesResult.msg}
+          </div>
+        )}
+      </div>
+
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <h2 className={styles.sectionTitle}>Управление составом табеля</h2>
+          <span className={`${styles.statusBadge} ${teamManagementSettings.enabled ? styles.statusConnected : styles.statusDisconnected}`}>
+            {teamManagementSettings.enabled ? 'Разрешено' : 'Закрыто'}
+          </span>
+        </div>
+
+        <p className={styles.description}>
+          Если настройка включена, руководители смогут на странице табеля вручную исключать сотрудников во внутренний архив и добавлять людей поиском с переводом в текущий отдел.
+        </p>
+
+        <div className={styles.checkboxRow}>
+          <label className={styles.checkboxLabel}>
+            <input
+              type="checkbox"
+              checked={teamManagementSettings.enabled}
+              onChange={e => setTeamManagementSettings({ enabled: e.target.checked })}
+            />
+            <span>Разрешить ручное управление составом сотрудников в табеле</span>
+          </label>
+        </div>
+
+        <div className={styles.actions}>
+          <button className={styles.btnPrimary} onClick={handleSaveTeamManagementSettings} disabled={teamManagementSaving}>
+            {teamManagementSaving ? 'Сохранение...' : 'Сохранить настройку'}
+          </button>
+        </div>
+
+        {teamManagementResult && (
+          <div className={`${styles.testResult} ${teamManagementResult.ok ? styles.testSuccess : styles.testError}`}>
+            {teamManagementResult.msg}
           </div>
         )}
       </div>

@@ -162,6 +162,7 @@ describe('skud-travel.service', () => {
       delayMinutes: 0,
       segmentsCount: 1,
       problematicSegmentsCount: 0,
+      objectProblemSegmentsCount: 0,
     });
   });
 
@@ -256,6 +257,7 @@ describe('skud-travel.service', () => {
       delayMinutes: 20,
       segmentsCount: 1,
       problematicSegmentsCount: 1,
+      objectProblemSegmentsCount: 0,
     });
   });
 
@@ -306,6 +308,7 @@ describe('skud-travel.service', () => {
       delayMinutes: 0,
       segmentsCount: 1,
       problematicSegmentsCount: 1,
+      objectProblemSegmentsCount: 1,
     });
   });
 

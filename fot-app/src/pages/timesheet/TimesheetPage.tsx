@@ -1,11 +1,11 @@
-import { type FC, Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { type FC, Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, ChevronDown, Download } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronDown, Download, UserPlus } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { TimesheetStats } from '../../components/timesheet/TimesheetStats';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
+import { TimesheetTeamManagementModal } from '../../components/timesheet/TimesheetTeamManagementModal';
 import { timesheetService } from '../../services/timesheetService';
-import { useTimesheetApprovalStatuses } from '../../hooks/useTimesheetApprovalData';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useStructureTree } from '../../hooks/useStructure';
@@ -13,8 +13,10 @@ import { getMonthLabel, formatDateRu, getDaysInMonth } from '../../utils/calenda
 import type {
   TimesheetEntry,
   TimesheetEmployee,
+  TimesheetObjectEntry,
   TimesheetStats as ITimesheetStats,
   TimesheetStatus,
+  TimesheetTeamManagementCandidate,
 } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
 import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
@@ -53,8 +55,13 @@ interface IBulkCorrectionTarget {
   entry: TimesheetEntry | null;
 }
 
+interface IObjectModalTarget {
+  object_key: string;
+  object_id: string | null;
+  object_name: string;
+}
+
 type TimesheetDisplaySegment = TimesheetApprovalHalf | 'FULL';
-const getBulkCellKey = (employeeId: number, day: number): string => `${employeeId}:${day}`;
 
 const parseMonthParam = (value: string | null): { year: number; month: number } | null => {
   if (!/^\d{4}-\d{2}$/.test(value || '')) return null;
@@ -74,11 +81,13 @@ const fromMonthIndex = (index: number): { year: number; month: number } => ({
 });
 
 export const TimesheetPage: FC = () => {
-  const { hasPermission, profile } = useAuth();
+  const { hasPermission, profile, canEditPage } = useAuth();
   const toast = useToast();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
+  const isSuperAdmin = profile?.position_type === 'super_admin';
+  const canManageAllDepartments = isSuperAdmin || hasPermission('data.scope.all');
+  const isDepartmentScope = !canManageAllDepartments && hasPermission('data.scope.department');
   const queryMonth = searchParams.get('month');
   const queryHalf = searchParams.get('half');
   const now = useMemo(() => new Date(), []);
@@ -118,11 +127,17 @@ export const TimesheetPage: FC = () => {
   const [modalEmployee, setModalEmployee] = useState<TimesheetEmployee | null>(null);
   const [modalDay, setModalDay] = useState<number>(1);
   const [modalEntry, setModalEntry] = useState<TimesheetEntry | null>(null);
+  const [modalMode, setModalMode] = useState<'day' | 'object' | 'split-view'>('day');
+  const [modalObjectEntry, setModalObjectEntry] = useState<TimesheetObjectEntry | null>(null);
+  const [modalObjectTarget, setModalObjectTarget] = useState<IObjectModalTarget | null>(null);
+  const [modalSplitEntries, setModalSplitEntries] = useState<TimesheetObjectEntry[]>([]);
+  const [modalSplitMessage, setModalSplitMessage] = useState<string | null>(null);
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
-  const [bulkSelectedEmployeeIds, setBulkSelectedEmployeeIds] = useState<Set<number>>(new Set());
-  const [bulkSelectedDays, setBulkSelectedDays] = useState<Set<number>>(new Set());
   const [bulkSelectedCellKeys, setBulkSelectedCellKeys] = useState<Set<string>>(new Set());
+  const [teamManagementOpen, setTeamManagementOpen] = useState(false);
+  const [teamSearch, setTeamSearch] = useState('');
+  const [teamPendingEmployeeId, setTeamPendingEmployeeId] = useState<number | null>(null);
 
   const structureQuery = useStructureTree();
   const deptOptions = useMemo(
@@ -155,6 +170,11 @@ export const TimesheetPage: FC = () => {
     staleTime: 30_000,
     placeholderData: previousData => previousData,
   });
+  const teamManagementConfigQuery = useQuery({
+    queryKey: ['timesheet-team-management-config'],
+    queryFn: () => timesheetService.getTeamManagementConfig(),
+    staleTime: 60_000,
+  });
   const employees = useMemo<TimesheetEmployee[]>(
     () => timesheetQuery.data?.employees || [],
     [timesheetQuery.data],
@@ -163,24 +183,35 @@ export const TimesheetPage: FC = () => {
     () => timesheetQuery.data?.entries || [],
     [timesheetQuery.data],
   );
+  const objectEntries = useMemo<TimesheetObjectEntry[]>(
+    () => timesheetQuery.data?.object_entries || [],
+    [timesheetQuery.data],
+  );
   const stats = timesheetQuery.data?.stats || DEFAULT_STATS;
   const schedules = timesheetQuery.data?.schedules || EMPTY_SCHEDULES;
   const dailySchedules = timesheetQuery.data?.daily_schedules || EMPTY_DAILY_SCHEDULES;
   const calendar = timesheetQuery.data?.calendar || null;
   const loading = Boolean(effectiveSelectedDeptId) && timesheetQuery.isLoading;
-  const { data: approvalsByHalf } = useTimesheetApprovalStatuses(effectiveSelectedDeptId, monthStr);
+  const deferredTeamSearch = useDeferredValue(teamSearch.trim());
+  const teamSearchQuery = useQuery({
+    queryKey: ['timesheet-team-search', effectiveSelectedDeptId ?? 'none', deferredTeamSearch],
+    queryFn: () => timesheetService.searchTeamEmployees({
+      department_id: effectiveSelectedDeptId as string,
+      q: deferredTeamSearch,
+    }),
+    enabled: teamManagementOpen && Boolean(effectiveSelectedDeptId) && deferredTeamSearch.length >= 2,
+    staleTime: 30_000,
+    placeholderData: previousData => previousData,
+  });
   const daysInMonth = useMemo(() => getDaysInMonth(year, month), [year, month]);
-  const monthEnded = resolvedMonthIndex < currentMonthIndex;
-  const canShowFullMonth = monthEnded
-    && approvalsByHalf.H1?.status === 'approved'
-    && approvalsByHalf.H2?.status === 'approved';
+  const isPastMonth = resolvedMonthIndex < currentMonthIndex;
   const activeSegment = useMemo<TimesheetDisplaySegment>(() => {
-    if (queryHalf === 'FULL' && canShowFullMonth) return 'FULL';
+    if (queryHalf === 'FULL') return 'FULL';
     if (queryHalf === 'H1' || queryHalf === 'H2') return queryHalf;
-    if (canShowFullMonth) return 'FULL';
+    if (isPastMonth) return 'FULL';
     if (resolvedMonthIndex === currentMonthIndex && currentDay > 15) return 'H2';
     return 'H1';
-  }, [queryHalf, canShowFullMonth, resolvedMonthIndex, currentMonthIndex, currentDay]);
+  }, [queryHalf, isPastMonth, resolvedMonthIndex, currentMonthIndex, currentDay]);
   const visibleDays = useMemo(() => {
     if (activeSegment === 'FULL') {
       return Array.from({ length: daysInMonth }, (_, index) => index + 1);
@@ -197,19 +228,45 @@ export const TimesheetPage: FC = () => {
     }
     return map;
   }, [entries]);
+  const objectEntriesByEmployeeDate = useMemo(() => {
+    const map = new Map<number, Map<string, TimesheetObjectEntry[]>>();
+    for (const entry of objectEntries) {
+      if (!map.has(entry.employee_id)) {
+        map.set(entry.employee_id, new Map());
+      }
+      const byDate = map.get(entry.employee_id)!;
+      const items = byDate.get(entry.work_date) || [];
+      items.push(entry);
+      byDate.set(entry.work_date, items);
+    }
+    return map;
+  }, [objectEntries]);
+  const splitDayKeys = useMemo(() => new Set(
+    entries
+      .filter(entry => entry.object_detail_mode === 'available' || entry.object_detail_mode === 'legacy_blocked')
+      .map(entry => `${entry.employee_id}_${entry.work_date}`),
+  ), [entries]);
   const employeeOrder = useMemo(() => (
     new Map(employees.map((employee, index) => [employee.id, index]))
   ), [employees]);
   const employeeMap = useMemo(() => (
     new Map(employees.map(employee => [employee.id, employee]))
   ), [employees]);
-  const visibleDaySet = useMemo(() => new Set(visibleDays), [visibleDays]);
+  const canManageTeam = Boolean(
+    effectiveSelectedDeptId
+    && canEditPage('/timesheet')
+    && teamManagementConfigQuery.data?.enabled
+    && teamManagementConfigQuery.data?.can_manage,
+  );
+  const canUseTeamManagement = Boolean(
+    canEditPage('/timesheet')
+    && teamManagementConfigQuery.data?.enabled
+    && teamManagementConfigQuery.data?.can_manage,
+  );
   const bulkModeEnabled = bulkMode && !isMobile;
   const clearBulkState = useCallback(() => {
     setBulkMode(false);
     setBulkModalOpen(false);
-    setBulkSelectedEmployeeIds(new Set());
-    setBulkSelectedDays(new Set());
     setBulkSelectedCellKeys(new Set());
   }, []);
 
@@ -227,6 +284,9 @@ export const TimesheetPage: FC = () => {
   // Month navigation
   const updateMonthParam = useCallback((nextYear: number, nextMonth: number) => {
     clearBulkState();
+    setTeamManagementOpen(false);
+    setTeamSearch('');
+    setTeamPendingEmployeeId(null);
     setSearchParams(current => {
       const next = new URLSearchParams(current);
       next.set('month', `${nextYear}-${String(nextMonth).padStart(2, '0')}`);
@@ -260,14 +320,65 @@ export const TimesheetPage: FC = () => {
     setPanelOpen(true);
   };
 
+  const closeModal = useCallback(() => {
+    setModalOpen(false);
+    setModalMode('day');
+    setModalObjectEntry(null);
+    setModalObjectTarget(null);
+    setModalSplitEntries([]);
+    setModalSplitMessage(null);
+  }, []);
+
   // Day click -> modal
   const handleDayClick = (emp: TimesheetEmployee, day: number, entry: TimesheetEntry | null) => {
     if (bulkModeEnabled) return;
+    const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const dayObjectEntries = objectEntriesByEmployeeDate.get(emp.id)?.get(workDate) || [];
     setModalEmployee(emp);
     setModalDay(day);
     setModalEntry(entry);
+    if (entry?.object_detail_mode === 'available' && dayObjectEntries.length > 0) {
+      setModalMode('split-view');
+      setModalSplitEntries(dayObjectEntries);
+      setModalSplitMessage(null);
+      setModalObjectEntry(null);
+      setModalObjectTarget(null);
+      setModalOpen(true);
+      return;
+    }
+    if (entry?.object_detail_mode === 'legacy_blocked') {
+      setModalMode('split-view');
+      setModalSplitEntries([]);
+      setModalSplitMessage(entry.object_detail_message || 'Объектная детализация временно недоступна для этого дня.');
+      setModalObjectEntry(null);
+      setModalObjectTarget(null);
+      setModalOpen(true);
+      return;
+    }
+    setModalMode('day');
+    setModalSplitEntries([]);
+    setModalSplitMessage(null);
+    setModalObjectEntry(null);
+    setModalObjectTarget(null);
     setModalOpen(true);
   };
+
+  const handleObjectDayClick = useCallback((
+    emp: TimesheetEmployee,
+    day: number,
+    target: IObjectModalTarget,
+    objectEntry: TimesheetObjectEntry | null,
+  ) => {
+    setModalEmployee(emp);
+    setModalDay(day);
+    setModalEntry(entryMap.get(`${emp.id}_${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`) || null);
+    setModalMode('object');
+    setModalObjectEntry(objectEntry);
+    setModalObjectTarget(target);
+    setModalSplitEntries([]);
+    setModalSplitMessage(null);
+    setModalOpen(true);
+  }, [entryMap, year, month]);
 
   // Save correction
   const handleSaveCorrection = useCallback(async (status: TimesheetStatus, hours: number | null, notes: string) => {
@@ -285,12 +396,50 @@ export const TimesheetPage: FC = () => {
           notes,
         });
       }
-      setModalOpen(false);
+      closeModal();
       await queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, effectiveSelectedDeptId ?? 'none'] });
     } catch (err) {
       console.error('Save correction error:', err);
     }
-  }, [modalEmployee, year, month, modalDay, modalEntry, queryClient, monthStr, effectiveSelectedDeptId]);
+  }, [modalEmployee, year, month, modalDay, modalEntry, closeModal, queryClient, monthStr, effectiveSelectedDeptId]);
+
+  const handleSaveObjectCorrection = useCallback(async (_status: TimesheetStatus, hours: number | null, notes: string) => {
+    if (!modalEmployee || !modalObjectTarget || hours == null) return;
+    try {
+      const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
+      await timesheetService.upsertObjectEntry({
+        employee_id: modalEmployee.id,
+        work_date: workDate,
+        object_key: modalObjectTarget.object_key,
+        object_id: modalObjectTarget.object_id,
+        object_name: modalObjectTarget.object_name,
+        hours_worked: hours,
+        notes,
+      });
+      closeModal();
+      await queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, effectiveSelectedDeptId ?? 'none'] });
+    } catch (error) {
+      console.error('Save object correction error:', error);
+      toast.error(error instanceof Error ? error.message : 'Не удалось сохранить корректировку по объекту');
+    }
+  }, [modalEmployee, modalObjectTarget, year, month, modalDay, closeModal, queryClient, monthStr, effectiveSelectedDeptId, toast]);
+
+  const handleDeleteObjectCorrection = useCallback(async () => {
+    if (!modalEmployee || !modalObjectTarget || !modalObjectEntry?.adjustment_id) return;
+    try {
+      const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
+      await timesheetService.deleteObjectEntry({
+        employee_id: modalEmployee.id,
+        work_date: workDate,
+        object_key: modalObjectTarget.object_key,
+      });
+      closeModal();
+      await queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, effectiveSelectedDeptId ?? 'none'] });
+    } catch (error) {
+      console.error('Delete object correction error:', error);
+      toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку по объекту');
+    }
+  }, [modalEmployee, modalObjectTarget, modalObjectEntry?.adjustment_id, year, month, modalDay, closeModal, queryClient, monthStr, effectiveSelectedDeptId, toast]);
 
   // Export
   const handleExport = async () => {
@@ -299,10 +448,14 @@ export const TimesheetPage: FC = () => {
       const blob = await timesheetService.export({
         month: monthStr,
         department_id: effectiveSelectedDeptId || undefined,
+        half: activeSegment,
       });
       const monthNames = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
         'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
-      const filename = `${selectedDeptName}_${monthNames[month]}_${year}.xlsx`;
+      const segmentSuffix = activeSegment === 'FULL'
+        ? ''
+        : `_${activeSegment === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
+      const filename = `${selectedDeptName}_${monthNames[month]}_${year}${segmentSuffix}.xlsx`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -330,6 +483,73 @@ export const TimesheetPage: FC = () => {
   const selectedDeptName = effectiveSelectedDeptId
     ? deptOptions.find(d => d.id === effectiveSelectedDeptId)?.name || 'Отдел'
     : 'Все отделы';
+  const teamSearchResults = teamSearchQuery.data || [];
+  const openTeamManagement = useCallback(() => {
+    if (!canUseTeamManagement || !effectiveSelectedDeptId) return;
+    setPanelOpen(false);
+    setModalOpen(false);
+    clearBulkState();
+    setTeamSearch('');
+    setTeamManagementOpen(true);
+  }, [canUseTeamManagement, effectiveSelectedDeptId, clearBulkState]);
+
+  const closeTeamManagement = useCallback(() => {
+    setTeamManagementOpen(false);
+    setTeamSearch('');
+    setTeamPendingEmployeeId(null);
+  }, []);
+
+  const handleAddEmployeeToDepartment = useCallback(async (candidate: TimesheetTeamManagementCandidate) => {
+    if (!effectiveSelectedDeptId) return;
+    setTeamPendingEmployeeId(candidate.id);
+    try {
+      await timesheetService.addEmployeeToDepartment({
+        employee_id: candidate.id,
+        department_id: effectiveSelectedDeptId,
+      });
+      toast.success(`Сотрудник ${candidate.full_name} переведён в отдел ${selectedDeptName}`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, effectiveSelectedDeptId] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-team-search'] }),
+      ]);
+      setTeamSearch('');
+    } catch (error) {
+      console.error('Add employee to department error:', error);
+      toast.error(error instanceof Error ? error.message : 'Не удалось добавить сотрудника в отдел');
+    } finally {
+      setTeamPendingEmployeeId(null);
+    }
+  }, [effectiveSelectedDeptId, monthStr, queryClient, selectedDeptName, toast]);
+
+  const handleExcludeEmployeeFromDepartment = useCallback(async (employee: TimesheetEmployee) => {
+    if (!effectiveSelectedDeptId) return;
+    if (!window.confirm(
+      `Исключить ${employee.full_name} из табеля?\n\nСотрудник исчезнет с портала и будет отправлен во внутренний архив.`,
+    )) {
+      return;
+    }
+    setTeamPendingEmployeeId(employee.id);
+    try {
+      await timesheetService.excludeEmployeeFromDepartment({
+        employee_id: employee.id,
+        department_id: effectiveSelectedDeptId,
+      });
+      if (panelEmployee?.id === employee.id) {
+        setPanelOpen(false);
+        setPanelEmployee(null);
+      }
+      toast.success(`Сотрудник ${employee.full_name} исключён из табеля и отправлен во внутренний архив`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, effectiveSelectedDeptId] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-team-search'] }),
+      ]);
+    } catch (error) {
+      console.error('Exclude employee from department error:', error);
+      toast.error(error instanceof Error ? error.message : 'Не удалось исключить сотрудника из табеля');
+    } finally {
+      setTeamPendingEmployeeId(null);
+    }
+  }, [effectiveSelectedDeptId, monthStr, panelEmployee?.id, queryClient, toast]);
 
   const modalDefaultHours = useMemo(() => {
     if (modalEntry?.hours_worked != null) return modalEntry.hours_worked;
@@ -349,85 +569,38 @@ export const TimesheetPage: FC = () => {
     setBulkMode(true);
   }, [bulkModeEnabled, clearBulkState]);
 
-  const toggleBulkEmployeeSelection = useCallback((employeeId: number) => {
-    setBulkSelectedEmployeeIds(prev => {
-      const next = new Set(prev);
-      if (next.has(employeeId)) next.delete(employeeId);
-      else next.add(employeeId);
-      return next;
-    });
+  const handleBulkSelectionChange = useCallback((cellKeys: Set<string>) => {
+    setBulkSelectedCellKeys(new Set(cellKeys));
   }, []);
 
-  const toggleBulkDaySelection = useCallback((day: number) => {
-    setBulkSelectedDays(prev => {
-      const next = new Set(prev);
-      if (next.has(day)) next.delete(day);
-      else next.add(day);
-      return next;
-    });
-  }, []);
-
-  const toggleAllBulkEmployees = useCallback(() => {
-    setBulkSelectedEmployeeIds(prev => (
-      prev.size === employees.length
-        ? new Set()
-        : new Set(employees.map(employee => employee.id))
-    ));
-  }, [employees]);
-
-  const toggleAllBulkDays = useCallback(() => {
-    setBulkSelectedDays(prev => (
-      prev.size === visibleDays.length
-        ? new Set()
-        : new Set(visibleDays)
-    ));
-  }, [visibleDays]);
-  const toggleBulkCellSelection = useCallback((employeeId: number, day: number) => {
-    setBulkSelectedCellKeys(prev => {
-      const next = new Set(prev);
-      const key = getBulkCellKey(employeeId, day);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
+  const handleBulkBlockedSelectionAttempt = useCallback(() => {
+    toast.info('Ячейки с разбивкой по объектам корректируются только точечно внутри строк объектов');
+  }, [toast]);
 
   const bulkTargets = useMemo<IBulkCorrectionTarget[]>(() => {
     if (!bulkModeEnabled) return [];
 
     const targets = new Map<string, IBulkCorrectionTarget>();
-    const addTarget = (employee: TimesheetEmployee, day: number) => {
+    bulkSelectedCellKeys.forEach(cellKey => {
+      const [employeeIdPart, dayPart] = cellKey.split(':');
+      const employeeId = Number.parseInt(employeeIdPart, 10);
+      const day = Number.parseInt(dayPart, 10);
+      if (!Number.isFinite(employeeId) || !Number.isFinite(day)) return;
+
+      const employee = employeeMap.get(employeeId);
+      if (!employee) return;
+
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       const key = `${employee.id}_${workDate}`;
-      if (targets.has(key)) return;
+      if (splitDayKeys.has(key) || targets.has(key)) return;
+
       targets.set(key, {
         employee,
         day,
         workDate,
         entry: entryMap.get(key) || null,
       });
-    };
-
-    if (bulkSelectedEmployeeIds.size > 0 && bulkSelectedDays.size > 0) {
-      const sortedDays = [...bulkSelectedDays].sort((left, right) => left - right);
-      employees
-        .filter(employee => bulkSelectedEmployeeIds.has(employee.id))
-        .forEach(employee => {
-          sortedDays.forEach(day => addTarget(employee, day));
-        });
-    }
-
-    if (bulkSelectedCellKeys.size > 0) {
-      bulkSelectedCellKeys.forEach(cellKey => {
-        const [employeeIdPart, dayPart] = cellKey.split(':');
-        const employeeId = Number.parseInt(employeeIdPart, 10);
-        const day = Number.parseInt(dayPart, 10);
-        if (!Number.isFinite(employeeId) || !Number.isFinite(day) || !visibleDaySet.has(day)) return;
-        const employee = employeeMap.get(employeeId);
-        if (!employee) return;
-        addTarget(employee, day);
-      });
-    }
+    });
 
     return [...targets.values()].sort((left, right) => {
       const employeeDiff = (employeeOrder.get(left.employee.id) ?? 0) - (employeeOrder.get(right.employee.id) ?? 0);
@@ -435,16 +608,13 @@ export const TimesheetPage: FC = () => {
     });
   }, [
     bulkModeEnabled,
-    bulkSelectedEmployeeIds,
-    bulkSelectedDays,
     bulkSelectedCellKeys,
-    employees,
     year,
     month,
     entryMap,
     employeeMap,
     employeeOrder,
-    visibleDaySet,
+    splitDayKeys,
   ]);
 
   const bulkInitialStatus = useMemo<TimesheetStatus>(() => {
@@ -471,7 +641,7 @@ export const TimesheetPage: FC = () => {
 
   const handleOpenBulkModal = useCallback(() => {
     if (bulkTargets.length === 0) {
-      toast.info('Сначала выберите сотрудников и дни для корректировки');
+      toast.info('Зажмите левую кнопку мыши и выделите диапазон ячеек без объектной разбивки');
       return;
     }
     setBulkModalOpen(true);
@@ -499,12 +669,15 @@ export const TimesheetPage: FC = () => {
     }
   }, [bulkTargets, clearBulkState, queryClient, monthStr, effectiveSelectedDeptId, toast]);
 
-  const allEmployeesSelected = employees.length > 0 && bulkSelectedEmployeeIds.size === employees.length;
-  const allDaysSelected = visibleDays.length > 0 && bulkSelectedDays.size === visibleDays.length;
+  const bulkSelectedEmployeesCount = useMemo(() => (
+    new Set([...bulkSelectedCellKeys].map(key => Number.parseInt(key.split(':')[0] || '', 10)).filter(Number.isFinite)).size
+  ), [bulkSelectedCellKeys]);
+  const bulkSelectedDaysCount = useMemo(() => (
+    new Set([...bulkSelectedCellKeys].map(key => Number.parseInt(key.split(':')[1] || '', 10)).filter(Number.isFinite)).size
+  ), [bulkSelectedCellKeys]);
   const bulkSelectionSummary = [
-    `${bulkSelectedEmployeeIds.size} сотрудников`,
-    `${bulkSelectedDays.size} дней`,
-    bulkSelectedCellKeys.size > 0 ? `точечно ${bulkSelectedCellKeys.size}` : null,
+    `${bulkSelectedEmployeesCount} сотрудников`,
+    `${bulkSelectedDaysCount} дней`,
     `${bulkTargets.length} ячеек`,
   ].filter(Boolean).join(' • ');
 
@@ -553,7 +726,7 @@ export const TimesheetPage: FC = () => {
               />
               <div
                 className={`ts-dept-item ${!selectedDeptId ? 'ts-dept-item--active' : ''}`}
-                onClick={() => { clearBulkState(); setSelectedDeptId(null); setDeptOpen(false); }}
+                onClick={() => { clearBulkState(); closeTeamManagement(); setSelectedDeptId(null); setDeptOpen(false); }}
               >
                 Все отделы
               </div>
@@ -561,7 +734,7 @@ export const TimesheetPage: FC = () => {
                 <div
                   key={d.id}
                   className={`ts-dept-item ${selectedDeptId === d.id ? 'ts-dept-item--active' : ''}`}
-                  onClick={() => { clearBulkState(); setSelectedDeptId(d.id); setDeptOpen(false); }}
+                  onClick={() => { clearBulkState(); closeTeamManagement(); setSelectedDeptId(d.id); setDeptOpen(false); }}
                 >
                   {d.name}
                 </div>
@@ -588,117 +761,160 @@ export const TimesheetPage: FC = () => {
           </span>
         </button>
       ))}
-      {canShowFullMonth && (
-        <button
-          type="button"
-          className={`ts-half-chip ${activeSegment === 'FULL' ? ' ts-half-chip--active' : ''}`}
-          onClick={() => handleSegmentChange('FULL')}
-        >
-          <span className="ts-half-chip-label">Весь месяц</span>
-          <span className="ts-half-chip-subtitle">Полный табель</span>
-        </button>
-      )}
+      <button
+        type="button"
+        className={`ts-half-chip ${activeSegment === 'FULL' ? ' ts-half-chip--active' : ''}`}
+        onClick={() => handleSegmentChange('FULL')}
+      >
+        <span className="ts-half-chip-label">Весь месяц</span>
+        <span className="ts-half-chip-subtitle">Полный табель</span>
+      </button>
     </section>
+  ) : null;
+
+  const modalWorkDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
+  const splitDayContent = modalMode === 'split-view' ? (
+    <div className="ts-split-day-view">
+      {modalSplitMessage && (
+        <div className="ts-split-day-message">{modalSplitMessage}</div>
+      )}
+      {modalSplitEntries.length > 0 ? (
+        <div className="ts-split-day-list">
+          {modalSplitEntries.map(objectEntry => (
+            <button
+              key={objectEntry.object_key}
+              type="button"
+              className="ts-split-day-item"
+              onClick={() => {
+                if (!modalEmployee) return;
+                handleObjectDayClick(modalEmployee, modalDay, {
+                  object_key: objectEntry.object_key,
+                  object_id: objectEntry.object_id,
+                  object_name: objectEntry.object_name,
+                }, objectEntry);
+              }}
+            >
+              <span className="ts-split-day-item-name">{objectEntry.object_name}</span>
+              <span className="ts-split-day-item-hours">{objectEntry.hours_worked.toFixed(2)} ч</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        !modalSplitMessage && <div className="ts-split-day-message">Для этого дня нет доступной объектной детализации.</div>
+      )}
+    </div>
   ) : null;
 
   return (
     <div className="ts-page">
-      {isMobile ? (
-        <section className="ts-top-panel ts-top-panel--mobile">
-          <div className="ts-mobile-header-row">
-            <h1 className="ts-title">Табель</h1>
-            <div className="ts-mobile-header-actions">
-              <button
-                type="button"
-                className={`ts-btn ts-btn--chip${mobileApprovalVisible ? ' ts-btn--active' : ''}`}
-                onClick={() => setMobileApprovalOpen(open => !open)}
-              >
-                {mobileApprovalVisible ? 'Скрыть согласование' : 'Согласование'}
-              </button>
-              <button type="button" className="ts-btn ts-btn--icon" onClick={handleExport} aria-label="Экспорт табеля">
-                <Download size={16} />
-              </button>
-            </div>
-          </div>
-          <div className="ts-mobile-header-row ts-mobile-header-row--controls">
-            {monthNavigation}
-            {departmentControl}
-          </div>
-          <TimesheetStats stats={stats} compact />
-          {mobileApprovalVisible && (
-            <div className="ts-mobile-approval-panel">
-              <TimesheetApprovalBar
-                departmentId={effectiveSelectedDeptId}
-                month={`${year}-${String(month).padStart(2, '0')}`}
-                compact
-              />
-            </div>
-          )}
-        </section>
-      ) : (
-        <section className="ts-top-panel">
-          <div className="ts-header">
-            <div className="ts-header-left">
+      <div className="ts-page-header">
+        {isMobile ? (
+          <section className="ts-top-panel ts-top-panel--mobile">
+            <div className="ts-mobile-header-row">
               <h1 className="ts-title">Табель</h1>
+              <div className="ts-mobile-header-actions">
+                {canUseTeamManagement && (
+                  <button
+                    type="button"
+                    className="ts-btn ts-btn--chip"
+                    onClick={openTeamManagement}
+                    disabled={!effectiveSelectedDeptId}
+                    title={!effectiveSelectedDeptId ? 'Сначала выберите отдел' : undefined}
+                  >
+                    <UserPlus size={16} />
+                    Добавить сотрудника
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={`ts-btn ts-btn--chip${mobileApprovalVisible ? ' ts-btn--active' : ''}`}
+                  onClick={() => setMobileApprovalOpen(open => !open)}
+                >
+                  {mobileApprovalVisible ? 'Скрыть согласование' : 'Согласование'}
+                </button>
+                <button type="button" className="ts-btn ts-btn--icon" onClick={handleExport} aria-label="Экспорт табеля">
+                  <Download size={16} />
+                </button>
+              </div>
+            </div>
+            <div className="ts-mobile-header-row ts-mobile-header-row--controls">
               {monthNavigation}
               {departmentControl}
             </div>
+            <TimesheetStats stats={stats} compact />
+            {mobileApprovalVisible && (
+              <div className="ts-mobile-approval-panel">
+                <TimesheetApprovalBar
+                  departmentId={effectiveSelectedDeptId}
+                  month={`${year}-${String(month).padStart(2, '0')}`}
+                  compact
+                />
+              </div>
+            )}
+          </section>
+        ) : (
+          <section className="ts-top-panel">
+            <div className="ts-header">
+              <div className="ts-header-left">
+                <h1 className="ts-title">Табель</h1>
+                {monthNavigation}
+                {departmentControl}
+              </div>
 
-            <TimesheetStats stats={stats} />
+              <TimesheetStats stats={stats} />
 
-            <div className="ts-header-right">
-              {!isMobile && effectiveSelectedDeptId && (
-                <button
-                  type="button"
-                  className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}
-                  onClick={handleBulkModeToggle}
-                >
-                  Режим корректировок
+              <div className="ts-header-right">
+                {canUseTeamManagement && (
+                  <button
+                    type="button"
+                    className="ts-btn ts-btn--primary"
+                    onClick={openTeamManagement}
+                    disabled={!effectiveSelectedDeptId}
+                    title={!effectiveSelectedDeptId ? 'Сначала выберите отдел' : undefined}
+                  >
+                    <UserPlus size={16} />
+                    Добавить сотрудника
+                  </button>
+                )}
+                {!isMobile && effectiveSelectedDeptId && (
+                  <button
+                    type="button"
+                    className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}
+                    onClick={handleBulkModeToggle}
+                  >
+                    Режим корректировок
+                  </button>
+                )}
+                <TimesheetApprovalBar
+                  departmentId={effectiveSelectedDeptId}
+                  month={`${year}-${String(month).padStart(2, '0')}`}
+                />
+                <button type="button" className="ts-btn" onClick={handleExport}>
+                  <Download size={16} />
+                  Экспорт
                 </button>
-              )}
-              <TimesheetApprovalBar
-                departmentId={effectiveSelectedDeptId}
-                month={`${year}-${String(month).padStart(2, '0')}`}
-              />
-              <button type="button" className="ts-btn" onClick={handleExport}>
-                <Download size={16} />
-                Экспорт
-              </button>
+              </div>
             </div>
-          </div>
-        </section>
-      )}
+          </section>
+        )}
 
-      {segmentControl}
+        {segmentControl}
+      </div>
 
       {!isMobile && bulkModeEnabled && effectiveSelectedDeptId && (
         <section className="ts-bulk-bar">
           <div className="ts-bulk-info">
             <div className="ts-bulk-title">Массовая корректировка</div>
             <div className="ts-bulk-hint">
-              Отмечайте сотрудников слева, дни сверху или нажимайте прямо на нужные ячейки. {bulkSelectionSummary}
+              Зажмите левую кнопку мыши и протяните по таблице нужный диапазон. {bulkSelectionSummary}
             </div>
           </div>
           <div className="ts-bulk-actions">
-            <button type="button" className="ts-btn" onClick={toggleAllBulkEmployees}>
-              {allEmployeesSelected ? 'Снять сотрудников' : 'Все сотрудники'}
-            </button>
-            <button type="button" className="ts-btn" onClick={toggleAllBulkDays}>
-              {allDaysSelected ? 'Снять дни' : 'Все дни'}
-            </button>
             <button
               type="button"
               className="ts-btn"
-              onClick={() => {
-                setBulkSelectedEmployeeIds(new Set());
-                setBulkSelectedDays(new Set());
-                setBulkSelectedCellKeys(new Set());
-              }}
-              disabled={
-                bulkSelectedEmployeeIds.size === 0
-                && bulkSelectedDays.size === 0
-                && bulkSelectedCellKeys.size === 0
-              }
+              onClick={() => setBulkSelectedCellKeys(new Set())}
+              disabled={bulkSelectedCellKeys.size === 0}
             >
               Сбросить
             </button>
@@ -727,6 +943,7 @@ export const TimesheetPage: FC = () => {
         <TimesheetGrid
           employees={employees}
           entries={entries}
+          objectEntries={objectEntries}
           year={year}
           month={month}
           schedules={schedules}
@@ -735,16 +952,30 @@ export const TimesheetPage: FC = () => {
           compact={isMobile}
           bulkEditMode={bulkModeEnabled}
           visibleDays={visibleDays}
-          selectedEmployeeIds={bulkSelectedEmployeeIds}
-          selectedDays={bulkSelectedDays}
           selectedCellKeys={bulkSelectedCellKeys}
-          allEmployeesSelected={allEmployeesSelected}
-          onToggleEmployeeSelection={toggleBulkEmployeeSelection}
-          onToggleDaySelection={toggleBulkDaySelection}
-          onToggleAllEmployees={toggleAllBulkEmployees}
-          onToggleCellSelection={toggleBulkCellSelection}
+          splitDayKeys={splitDayKeys}
+          canManageTeam={canManageTeam}
+          pendingEmployeeId={teamPendingEmployeeId}
+          onBulkSelectionChange={handleBulkSelectionChange}
+          onBulkBlockedSelectionAttempt={handleBulkBlockedSelectionAttempt}
           onEmployeeClick={handleEmployeeClick}
+          onExcludeEmployee={handleExcludeEmployeeFromDepartment}
           onDayClick={handleDayClick}
+          onObjectDayClick={handleObjectDayClick}
+        />
+      )}
+
+      {teamManagementOpen && (
+        <TimesheetTeamManagementModal
+          open={teamManagementOpen}
+          onClose={closeTeamManagement}
+          departmentName={selectedDeptName}
+          searchQuery={teamSearch}
+          searchLoading={teamSearchQuery.isFetching}
+          searchResults={teamSearchResults}
+          pendingEmployeeId={teamPendingEmployeeId}
+          onSearchQueryChange={setTeamSearch}
+          onAddEmployee={handleAddEmployeeToDepartment}
         />
       )}
 
@@ -771,15 +1002,24 @@ export const TimesheetPage: FC = () => {
         <Suspense fallback={null}>
           <TimesheetCorrectionModal
             open={modalOpen}
-            onClose={() => setModalOpen(false)}
-            onSave={handleSaveCorrection}
-            initialStatus={modalEntry?.status || 'work'}
-            initialHours={modalDefaultHours}
+            onClose={closeModal}
+            onSave={modalMode === 'object' ? handleSaveObjectCorrection : handleSaveCorrection}
+            onDelete={modalMode === 'object' && modalObjectEntry?.adjustment_id ? handleDeleteObjectCorrection : undefined}
+            initialStatus={modalMode === 'object' ? 'manual' : (modalEntry?.status || 'work')}
+            initialHours={modalMode === 'object' ? (modalObjectEntry?.hours_worked ?? modalObjectEntry?.base_hours_worked ?? 0) : modalDefaultHours}
+            initialNotes={modalMode === 'object' ? (modalObjectEntry?.notes ?? '') : ''}
             dayLabel={`${formatDateRu(modalDay, month)}`}
-            employeeName={modalEmployee?.full_name}
+            title={modalMode === 'object' ? modalObjectTarget?.object_name : undefined}
+            subtitle={modalMode === 'object' ? `${modalEmployee?.full_name || ''} • ${formatDateRu(modalDay, month)}` : undefined}
+            employeeName={modalMode === 'object' ? undefined : modalEmployee?.full_name}
             employeeId={modalEmployee?.id}
-            workDate={`${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`}
-            hideSkudTab
+            workDate={modalWorkDate}
+            hideSkudTab={modalMode !== 'day'}
+            hideCorrectionTab={modalMode === 'split-view'}
+            allowedStatuses={modalMode === 'object' ? ['manual'] : undefined}
+            confirmLabel={modalMode === 'object' ? 'Сохранить по объекту' : undefined}
+            deleteLabel={modalMode === 'object' ? 'Снять корректировку' : undefined}
+            customContent={splitDayContent}
             timesheetEntry={modalEntry}
             correctionInfo={modalEntry?.is_correction ? {
               is_correction: true,

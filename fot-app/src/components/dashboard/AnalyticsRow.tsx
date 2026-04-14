@@ -1,5 +1,5 @@
 import type { FC } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Clock, BarChart3, AlertTriangle } from 'lucide-react';
 import type { IDashboardStats, DashboardPeriod } from '../../types';
 import styles from './AnalyticsRow.module.css';
@@ -125,6 +125,11 @@ export const AvgArrivalCard: FC<{ data: IDashboardStats['avgArrivalByDay']; peri
 
 export const RisksCard: FC<{ risks: IDashboardStats['risks']; period: DashboardPeriod }> = ({ risks, period }) => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const employeeCardBackState = {
+    label: 'Обзор',
+    from: `${location.pathname}${location.search}${location.hash}`,
+  };
 
   return (
     <div className={styles.card}>
@@ -140,7 +145,7 @@ export const RisksCard: FC<{ risks: IDashboardStats['risks']; period: DashboardP
             <div
               key={risk.employee_id}
               className={`${styles.riskItem} ${styles[risk.severity]} ${styles.clickable}`}
-              onClick={() => navigate(`/employees/${risk.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } })}
+              onClick={() => navigate(`/employees/${risk.employee_id}`, { state: employeeCardBackState })}
             >
               <div className={styles.riskAvatar}>{getInitials(risk.full_name)}</div>
               <div className={styles.riskInfo}>

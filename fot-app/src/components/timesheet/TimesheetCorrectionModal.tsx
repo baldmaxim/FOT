@@ -1,4 +1,4 @@
-import { type FC, useState, useEffect, useCallback } from 'react';
+import { type FC, type ReactNode, useState, useEffect, useCallback } from 'react';
 import { X, LogIn, LogOut, Timer } from 'lucide-react';
 import type { TimesheetEntry, TimesheetStatus, SkudEvent } from '../../types';
 import { skudService } from '../../services/skudService';
@@ -8,17 +8,23 @@ interface ICorrectionModalProps {
   open: boolean;
   onClose: () => void;
   onSave: (status: TimesheetStatus, hours: number | null, notes: string) => void;
+  onDelete?: () => void;
   initialStatus?: TimesheetStatus;
   initialHours?: number | null;
+  initialNotes?: string | null;
   title?: string;
   subtitle?: string;
   confirmLabel?: string;
+  deleteLabel?: string;
   dayLabel?: string;
   employeeName?: string;
   employeeId?: number;
   workDate?: string;
   hideCorrectionTab?: boolean;
   hideSkudTab?: boolean;
+  allowedStatuses?: TimesheetStatus[];
+  customContent?: ReactNode;
+  customContentFooterLabel?: string;
   timesheetEntry?: Pick<TimesheetEntry, 'first_entry' | 'last_exit' | 'hours_worked'> | null;
   correctionInfo?: {
     is_correction: boolean;
@@ -189,13 +195,29 @@ const EventsTab: FC<{
 const CorrectionTab: FC<{
   onClose: () => void;
   onSave: (status: TimesheetStatus, hours: number | null, notes: string) => void;
+  onDelete?: () => void;
   initialStatus: TimesheetStatus;
   initialHours: number;
+  initialNotes?: string | null;
   confirmLabel?: string;
-}> = ({ onClose, onSave, initialStatus, initialHours, confirmLabel }) => {
+  deleteLabel?: string;
+  allowedStatuses?: TimesheetStatus[];
+}> = ({
+  onClose,
+  onSave,
+  onDelete,
+  initialStatus,
+  initialHours,
+  initialNotes,
+  confirmLabel,
+  deleteLabel,
+  allowedStatuses,
+}) => {
   const [selectedStatus, setSelectedStatus] = useState<TimesheetStatus>(initialStatus);
   const [hours, setHours] = useState<number>(initialHours);
-  const [notes, setNotes] = useState('');
+  const [notes, setNotes] = useState(initialNotes || '');
+  const statusOptions = TYPE_OPTIONS.filter(option => !allowedStatuses || allowedStatuses.includes(option.status));
+  const showStatusPicker = statusOptions.length > 1;
 
   const handleSave = () => {
     const needsHours = HOURS_EDITABLE_STATUSES.has(selectedStatus);
@@ -205,22 +227,24 @@ const CorrectionTab: FC<{
   return (
     <>
       <div className="ts-modal-body">
-        <div className="ts-form-group">
-          <label className="ts-form-label">Тип записи</label>
-          <div className="ts-type-options">
-            {TYPE_OPTIONS.map(opt => (
-              <button
-                key={opt.status}
-                type="button"
-                className={`ts-type-option ${selectedStatus === opt.status ? 'ts-type-option--selected' : ''}`}
-                onClick={() => setSelectedStatus(opt.status)}
-              >
-                <div className="ts-type-option-icon">{opt.icon}</div>
-                <div className="ts-type-option-label">{opt.label}</div>
-              </button>
-            ))}
+        {showStatusPicker && (
+          <div className="ts-form-group">
+            <label className="ts-form-label">Тип записи</label>
+            <div className="ts-type-options">
+              {statusOptions.map(opt => (
+                <button
+                  key={opt.status}
+                  type="button"
+                  className={`ts-type-option ${selectedStatus === opt.status ? 'ts-type-option--selected' : ''}`}
+                  onClick={() => setSelectedStatus(opt.status)}
+                >
+                  <div className="ts-type-option-icon">{opt.icon}</div>
+                  <div className="ts-type-option-label">{opt.label}</div>
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {selectedStatus === 'remote' && (
           <div className="ts-hours-hint">Для удалёнки автоматически будет проставлен полный день по графику.</div>
@@ -255,6 +279,9 @@ const CorrectionTab: FC<{
       </div>
       <div className="ts-modal-footer">
         <button className="ts-btn" onClick={onClose}>Отмена</button>
+        {onDelete && (
+          <button className="ts-btn" onClick={onDelete}>{deleteLabel || 'Удалить'}</button>
+        )}
         <button className="ts-btn ts-btn--primary" onClick={handleSave}>{confirmLabel || 'Сохранить'}</button>
       </div>
     </>
@@ -280,8 +307,14 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   workDate,
   hideCorrectionTab,
   hideSkudTab,
+  allowedStatuses,
+  customContent,
+  customContentFooterLabel,
   timesheetEntry,
   correctionInfo,
+  onDelete,
+  initialNotes,
+  deleteLabel,
 }) => {
   const showEventsTab = !hideSkudTab;
   const showCorrectionTab = !hideCorrectionTab;
@@ -292,6 +325,32 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   const shortName = employeeName ? formatTimesheetEmployeeName(employeeName) : null;
   const headerTitle = title || dayLabel || 'День';
   const headerSubtitle = subtitle || shortName;
+
+  if (customContent) {
+    return (
+      <div className="ts-modal" onClick={e => e.stopPropagation()}>
+        <div className="ts-modal-header">
+          <h3 className="ts-modal-title">
+            {headerTitle}
+            {headerSubtitle && (
+              <div className="ts-modal-subtitle">{headerSubtitle}</div>
+            )}
+          </h3>
+          <button className="ts-panel-close" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+        <div className="ts-modal-body">
+          {customContent}
+        </div>
+        <div className="ts-modal-footer">
+          <button className="ts-btn ts-btn--primary" onClick={onClose}>
+            {customContentFooterLabel || 'Закрыть'}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="ts-modal" onClick={e => e.stopPropagation()}>
@@ -343,9 +402,13 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
         <CorrectionTab
           onClose={onClose}
           onSave={onSave}
+          onDelete={onDelete}
           initialStatus={initialStatus}
           initialHours={initialHours ?? 8}
+          initialNotes={initialNotes}
           confirmLabel={confirmLabel}
+          deleteLabel={deleteLabel}
+          allowedStatuses={allowedStatuses}
         />
       ) : null}
     </div>

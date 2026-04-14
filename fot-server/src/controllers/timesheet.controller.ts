@@ -7,13 +7,18 @@ import { exportTimesheet } from './timesheet-export.controller.js';
 import { exportTimesheetMass } from './timesheet-mass-export.controller.js';
 import { resolveSchedulesForPeriod, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, loadCalendarMonth } from '../services/schedule.service.js';
 import { canAccessEmployeeInScope, resolveRequestDataScope, resolveScopedDepartmentId } from '../services/data-scope.service.js';
+import { employeeChangesService } from '../services/employee-changes.service.js';
+import { employeeCache } from '../services/employee-cache.service.js';
+import { settingsService } from '../services/settings.service.js';
 import {
   buildAttendanceEntries,
+  deleteAttendanceAdjustmentBySource,
   getAttendanceAdjustmentById,
   updateAttendanceAdjustmentById,
   upsertAttendanceAdjustment,
 } from '../services/attendance.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
+import { OBJECT_ADJUSTMENT_SOURCE_TYPE } from '../services/timesheet-object.service.js';
 
 const validStatuses = ['work', 'vacation', 'dayoff', 'remote', 'unpaid', 'absent', 'sick', 'business_trip', 'manual'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
 
@@ -39,6 +44,32 @@ const bulkCorrectionSchema = z.object({
   status: z.enum(validStatuses),
   hours_worked: z.number().min(0).max(24).nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
+});
+
+const upsertObjectEntrySchema = z.object({
+  employee_id: z.number().int().positive(),
+  work_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  object_key: z.string().trim().min(1).max(255),
+  object_id: z.string().trim().min(1).max(255).nullable().optional(),
+  object_name: z.string().trim().min(1).max(255),
+  hours_worked: z.number().min(0).max(24),
+  notes: z.string().max(500).nullable().optional(),
+});
+
+const deleteObjectEntrySchema = z.object({
+  employee_id: z.number().int().positive(),
+  work_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  object_key: z.string().trim().min(1).max(255),
+});
+
+const teamManagementSearchSchema = z.object({
+  q: z.string().trim().min(2).max(100),
+  department_id: z.string().uuid(),
+});
+
+const teamManagementMutationSchema = z.object({
+  employee_id: z.number().int().positive(),
+  department_id: z.string().uuid(),
 });
 
 function getWorkingDaysInMonth(year: number, month: number): number {
@@ -112,6 +143,28 @@ async function resolveRemoteHoursByItems(items: Array<{ employee_id: number; wor
   }));
 }
 
+async function ensureTimesheetTeamManagementEnabled(): Promise<boolean> {
+  const config = await settingsService.getTimesheetTeamManagementConfig();
+  return config.enabled;
+}
+
+async function isTimesheetTeamManagementAvailable(req: AuthenticatedRequest): Promise<boolean> {
+  if (req.user.position_type === 'super_admin') {
+    return true;
+  }
+
+  return ensureTimesheetTeamManagementEnabled();
+}
+
+async function resolveManagedDepartmentId(
+  req: AuthenticatedRequest,
+  requestedDepartmentId: string,
+): Promise<string | null> {
+  const scope = await resolveRequestDataScope(req);
+  if (!scope || scope === 'self') return null;
+  return resolveScopedDepartmentId(req, requestedDepartmentId);
+}
+
 export const timesheetController = {
   /** GET /api/timesheet?month=YYYY-MM&department_id=...&employee_id=... */
   async getAll(req: AuthenticatedRequest, res: Response) {
@@ -155,6 +208,7 @@ export const timesheetController = {
           data: {
             employees: [],
             entries: [],
+            object_entries: [],
             stats: { employeeCount: 0, workingDays: getWorkingDaysUpToToday(year, mon), normHours: getWorkingDaysUpToToday(year, mon) * 8, actualHours: 0, deviations: { late: 0, absent: 0, sick: 0 } },
           },
         });
@@ -166,6 +220,7 @@ export const timesheetController = {
           data: {
             employees: [],
             entries: [],
+            object_entries: [],
             stats: { employeeCount: 0, workingDays: getWorkingDaysUpToToday(year, mon), normHours: getWorkingDaysUpToToday(year, mon) * 8, actualHours: 0, deviations: { late: 0, absent: 0, sick: 0 } },
           },
         });
@@ -219,7 +274,7 @@ export const timesheetController = {
         (positions || []).forEach((p: { id: string; name: string }) => posMap.set(p.id, p.name));
       }
 
-	      const { entries } = await buildAttendanceEntries({
+	      const { entries, objectEntries } = await buildAttendanceEntries({
 	        employees: (employees || []).map(employee => ({
 	          id: employee.id as number,
 	          full_name: (employee.full_name as string | null) || null,
@@ -300,6 +355,7 @@ export const timesheetController = {
         data: {
           employees: employeesWithNames,
           entries,
+          object_entries: objectEntries,
           schedules: schedulesObj,
           daily_schedules: dailySchedulesObj,
           calendar: calendarMonth,
@@ -390,6 +446,9 @@ export const timesheetController = {
 	      const existing = await getAttendanceAdjustmentById(id);
 	      if (!existing) {
 	        return res.status(404).json({ success: false, error: 'Запись не найдена' });
+	      }
+	      if (String(existing.source_type) === OBJECT_ADJUSTMENT_SOURCE_TYPE) {
+	        return res.status(409).json({ success: false, error: 'Для корректировки объекта используйте отдельный endpoint object-entry' });
 	      }
 	      const scope = await resolveRequestDataScope(req);
 	      if (scope === 'department') {
@@ -520,6 +579,332 @@ export const timesheetController = {
       }
       console.error('timesheet.bulkSave error:', err);
       res.status(500).json({ success: false, error: 'Ошибка массового обновления табеля' });
+    }
+  },
+
+  /** PUT /api/timesheet/object-entry */
+  async upsertObjectEntry(req: AuthenticatedRequest, res: Response) {
+    try {
+      const parsed = upsertObjectEntrySchema.parse(req.body);
+      const scope = await resolveRequestDataScope(req);
+      if (scope === 'department') {
+        const [yearStr, monthStr] = parsed.work_date.split('-');
+        if (!isDepartmentMonthAllowed(Number(yearStr), Number(monthStr))) {
+          return res.status(403).json({ success: false, error: 'Руководителю доступен только текущий и предыдущий месяц табеля' });
+        }
+      }
+      if (!(await canAccessEmployeeInScope(req, parsed.employee_id))) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
+
+      const raw = await upsertAttendanceAdjustment({
+        employee_id: parsed.employee_id,
+        work_date: parsed.work_date,
+        status: 'manual',
+        hours_override: parsed.hours_worked,
+        source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
+        source_id: parsed.object_key,
+        reason: parsed.notes ?? null,
+        created_by: req.user.id,
+        metadata: {
+          object_id: parsed.object_id ?? null,
+          object_name: parsed.object_name,
+        },
+      });
+
+      await auditService.logFromRequest(req, req.user.id, 'UPDATE_TIMESHEET_ENTRY', {
+        entityType: 'timesheet_object_entry',
+        entityId: `${parsed.employee_id}:${parsed.work_date}:${parsed.object_key}`,
+        details: {
+          employee_id: parsed.employee_id,
+          work_date: parsed.work_date,
+          object_key: parsed.object_key,
+          object_name: parsed.object_name,
+          hours_worked: parsed.hours_worked,
+        },
+      });
+
+      res.json({
+        success: true,
+        data: {
+          adjustment_id: Number(raw.id),
+          employee_id: parsed.employee_id,
+          work_date: parsed.work_date,
+          object_key: parsed.object_key,
+          object_id: parsed.object_id ?? null,
+          object_name: parsed.object_name,
+          hours_worked: parsed.hours_worked,
+          base_hours_worked: parsed.hours_worked,
+          is_correction: true,
+          notes: parsed.notes ?? null,
+        },
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+      }
+      console.error('timesheet.upsertObjectEntry error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка сохранения корректировки по объекту' });
+    }
+  },
+
+  /** GET /api/timesheet/team-management-config */
+  async getTeamManagementConfig(req: AuthenticatedRequest, res: Response) {
+    try {
+      const enabled = await isTimesheetTeamManagementAvailable(req);
+      const scope = await resolveRequestDataScope(req);
+      res.json({
+        success: true,
+        data: {
+          enabled,
+          scope,
+          can_manage: enabled && scope !== 'self',
+        },
+      });
+    } catch (err) {
+      console.error('timesheet.getTeamManagementConfig error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка загрузки настроек управления составом табеля' });
+    }
+  },
+
+  /** GET /api/timesheet/team-management/search-employees?q=...&department_id=... */
+  async searchTeamEmployees(req: AuthenticatedRequest, res: Response) {
+    try {
+      const enabled = await isTimesheetTeamManagementAvailable(req);
+      if (!enabled) {
+        return res.status(403).json({ success: false, error: 'Ручное управление составом табеля отключено администратором' });
+      }
+
+      const parsed = teamManagementSearchSchema.parse({
+        q: typeof req.query.q === 'string' ? req.query.q : '',
+        department_id: typeof req.query.department_id === 'string' ? req.query.department_id : '',
+      });
+
+      const targetDepartmentId = await resolveManagedDepartmentId(req, parsed.department_id);
+      if (!targetDepartmentId) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к управлению составом этого отдела' });
+      }
+
+      const { data: employees, error } = await supabase
+        .from('employees')
+        .select('id, full_name, org_department_id')
+        .ilike('full_name', `%${parsed.q}%`)
+        .eq('employment_status', 'active')
+        .eq('is_archived', false)
+        .neq('org_department_id', targetDepartmentId)
+        .order('full_name')
+        .limit(20);
+
+      if (error) throw error;
+
+      const departmentIds = [...new Set((employees || [])
+        .map(employee => employee.org_department_id)
+        .filter((value): value is string => Boolean(value)))];
+
+      const departmentNameById = new Map<string, string>();
+      if (departmentIds.length > 0) {
+        const { data: departments, error: departmentsError } = await supabase
+          .from('org_departments')
+          .select('id, name')
+          .in('id', departmentIds);
+
+        if (departmentsError) throw departmentsError;
+        for (const department of departments || []) {
+          departmentNameById.set(String(department.id), String(department.name || ''));
+        }
+      }
+
+      res.json({
+        success: true,
+        data: (employees || []).map(employee => ({
+          id: Number(employee.id),
+          full_name: String(employee.full_name || ''),
+          org_department_id: (employee.org_department_id as string | null) ?? null,
+          department_name: employee.org_department_id
+            ? departmentNameById.get(String(employee.org_department_id)) || null
+            : null,
+        })),
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+      }
+      console.error('timesheet.searchTeamEmployees error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка поиска сотрудников для табеля' });
+    }
+  },
+
+  /** POST /api/timesheet/team-management/add-employee */
+  async addEmployeeToDepartment(req: AuthenticatedRequest, res: Response) {
+    try {
+      const enabled = await isTimesheetTeamManagementAvailable(req);
+      if (!enabled) {
+        return res.status(403).json({ success: false, error: 'Ручное управление составом табеля отключено администратором' });
+      }
+
+      const parsed = teamManagementMutationSchema.parse(req.body);
+      const targetDepartmentId = await resolveManagedDepartmentId(req, parsed.department_id);
+      if (!targetDepartmentId) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к управлению составом этого отдела' });
+      }
+
+      const { data: employee, error } = await supabase
+        .from('employees')
+        .select('id, full_name, org_department_id, employment_status, is_archived')
+        .eq('id', parsed.employee_id)
+        .single();
+      if (error || !employee) {
+        return res.status(404).json({ success: false, error: 'Сотрудник не найден' });
+      }
+      if (employee.employment_status !== 'active' || employee.is_archived) {
+        return res.status(409).json({ success: false, error: 'Можно добавлять только активных сотрудников' });
+      }
+      if (employee.org_department_id === targetDepartmentId) {
+        return res.status(409).json({ success: false, error: 'Сотрудник уже находится в выбранном отделе' });
+      }
+
+      await employeeChangesService.changeDepartment(parsed.employee_id, targetDepartmentId, {
+        reason: 'Перевод из табеля',
+        createdBy: req.user.id,
+        lockDepartment: true,
+      });
+      employeeCache.invalidate(parsed.employee_id);
+
+      await auditService.logFromRequest(req, req.user.id, 'MOVE_EMPLOYEE_DEPARTMENT', {
+        entityType: 'employee',
+        entityId: String(parsed.employee_id),
+        details: {
+          source: 'timesheet_team_management',
+          from_department_id: employee.org_department_id,
+          to_department_id: targetDepartmentId,
+        },
+      });
+
+      res.json({
+        success: true,
+        data: {
+          employee_id: parsed.employee_id,
+          department_id: targetDepartmentId,
+        },
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+      }
+      console.error('timesheet.addEmployeeToDepartment error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка добавления сотрудника в отдел табеля' });
+    }
+  },
+
+  /** POST /api/timesheet/team-management/exclude-employee */
+  async excludeEmployeeFromDepartment(req: AuthenticatedRequest, res: Response) {
+    try {
+      const enabled = await isTimesheetTeamManagementAvailable(req);
+      if (!enabled) {
+        return res.status(403).json({ success: false, error: 'Ручное управление составом табеля отключено администратором' });
+      }
+
+      const parsed = teamManagementMutationSchema.parse(req.body);
+      const targetDepartmentId = await resolveManagedDepartmentId(req, parsed.department_id);
+      if (!targetDepartmentId) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к управлению составом этого отдела' });
+      }
+
+      const { data: employee, error } = await supabase
+        .from('employees')
+        .select('id, full_name, org_department_id, employment_status, is_archived')
+        .eq('id', parsed.employee_id)
+        .single();
+      if (error || !employee) {
+        return res.status(404).json({ success: false, error: 'Сотрудник не найден' });
+      }
+      if (employee.org_department_id !== targetDepartmentId) {
+        return res.status(409).json({ success: false, error: 'Сотрудник не относится к выбранному отделу' });
+      }
+      if (employee.is_archived) {
+        return res.status(409).json({ success: false, error: 'Сотрудник уже находится во внутреннем архиве' });
+      }
+      if (employee.employment_status !== 'active') {
+        return res.status(409).json({ success: false, error: 'Можно исключать только активных сотрудников' });
+      }
+
+      const archivedAt = new Date().toISOString();
+      const { error: updateError } = await supabase
+        .from('employees')
+        .update({
+          is_archived: true,
+          archived_at: archivedAt,
+          updated_at: archivedAt,
+        })
+        .eq('id', parsed.employee_id);
+      if (updateError) throw updateError;
+
+      employeeCache.invalidate(parsed.employee_id);
+
+      await auditService.logFromRequest(req, req.user.id, 'ARCHIVE_EMPLOYEE', {
+        entityType: 'employee',
+        entityId: String(parsed.employee_id),
+        details: {
+          source: 'timesheet_team_management',
+          department_id: targetDepartmentId,
+        },
+      });
+
+      res.json({
+        success: true,
+        data: {
+          employee_id: parsed.employee_id,
+          archived_at: archivedAt,
+        },
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+      }
+      console.error('timesheet.excludeEmployeeFromDepartment error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка исключения сотрудника из табеля' });
+    }
+  },
+
+  /** DELETE /api/timesheet/object-entry */
+  async deleteObjectEntry(req: AuthenticatedRequest, res: Response) {
+    try {
+      const parsed = deleteObjectEntrySchema.parse(req.body);
+      const scope = await resolveRequestDataScope(req);
+      if (scope === 'department') {
+        const [yearStr, monthStr] = parsed.work_date.split('-');
+        if (!isDepartmentMonthAllowed(Number(yearStr), Number(monthStr))) {
+          return res.status(403).json({ success: false, error: 'Руководителю доступен только текущий и предыдущий месяц табеля' });
+        }
+      }
+      if (!(await canAccessEmployeeInScope(req, parsed.employee_id))) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
+
+      await deleteAttendanceAdjustmentBySource({
+        employee_id: parsed.employee_id,
+        work_date: parsed.work_date,
+        source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
+        source_id: parsed.object_key,
+      });
+
+      await auditService.logFromRequest(req, req.user.id, 'UPDATE_TIMESHEET_ENTRY', {
+        entityType: 'timesheet_object_entry',
+        entityId: `${parsed.employee_id}:${parsed.work_date}:${parsed.object_key}`,
+        details: {
+          employee_id: parsed.employee_id,
+          work_date: parsed.work_date,
+          object_key: parsed.object_key,
+        },
+      });
+
+      res.json({ success: true, data: null });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+      }
+      console.error('timesheet.deleteObjectEntry error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка удаления корректировки по объекту' });
     }
   },
 

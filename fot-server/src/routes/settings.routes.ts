@@ -17,6 +17,8 @@ router.get('/sigur-monitor', requirePageAccess('/admin/settings', 'view'), setti
 
 // GET /api/settings/timesheet-reminders — настройки напоминаний табеля
 router.get('/timesheet-reminders', requirePageAccess('/admin/settings', 'view'), settingsController.getTimesheetReminderSettings);
+// GET /api/settings/timesheet-team-management — настройки управления составом табеля
+router.get('/timesheet-team-management', requirePageAccess('/admin/settings', 'view'), settingsController.getTimesheetTeamManagementSettings);
 
 // PUT /api/settings/r2 — сохранить R2 настройки
 router.put('/r2', requirePageAccess('/admin/settings', 'edit'), settingsController.saveR2);
@@ -26,6 +28,8 @@ router.put('/sigur-monitor', requirePageAccess('/admin/settings', 'edit'), setti
 
 // PUT /api/settings/timesheet-reminders — сохранить настройки напоминаний табеля
 router.put('/timesheet-reminders', requirePageAccess('/admin/settings', 'edit'), settingsController.saveTimesheetReminderSettings);
+// PUT /api/settings/timesheet-team-management — сохранить настройки управления составом табеля
+router.put('/timesheet-team-management', requirePageAccess('/admin/settings', 'edit'), settingsController.saveTimesheetTeamManagementSettings);
 
 // POST /api/settings/r2/test — тест подключения R2
 router.post('/r2/test', requirePageAccess('/admin/settings', 'edit'), settingsController.testR2);

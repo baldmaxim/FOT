@@ -1,13 +1,11 @@
 import ExcelJS from 'exceljs';
-import { isWorkingDay, getScheduleForDate } from './schedule.service.js';
+import { isWorkingDay } from './schedule.service.js';
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 
 const STATUS_LABELS: Record<string, string> = {
   work: '', sick: 'Б', vacation: 'ОТ', absent: 'Н',
   business_trip: 'К', dayoff: 'В', remote: 'УУ', unpaid: 'НО', manual: '',
 };
-
-const WORKED_STATUSES = new Set(['work', 'manual', 'remote', 'business_trip']);
 
 const thinBorder: Partial<ExcelJS.Borders> = {
   top: { style: 'thin' }, left: { style: 'thin' },
@@ -17,8 +15,6 @@ const thinBorder: Partial<ExcelJS.Borders> = {
 const headerFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC0C0C0' } };
 const docRowFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDE8DF' } };
 const correctedFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB3E5FC' } };
-// Подсветка недоработок в СКУД-строке (оранжево-жёлтая для контраста)
-const underworkFill: ExcelJS.Fill = { type: 'pattern', pattern: 'lightDown', fgColor: { argb: 'FFB3AC86' } };
 const statusFills: Record<string, ExcelJS.Fill> = {
   sick:          { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFCDD2' } },
   vacation:      { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBBDEFB' } },
@@ -45,25 +41,98 @@ const COL_TAB = 3;
 const COL_SOURCE = 4;
 const COL_DAY_START = 5;
 
+const groupObjectEntriesForExport = (data: IDepartmentTimesheetData): Map<number, Array<{
+  object_key: string;
+  object_name: string;
+  dayMap: Map<string, { hours: number; corrected: boolean }>;
+  hasCorrection: boolean;
+}>> => {
+  const exportDateSet = new Set(
+    data.exportDays.map(day => `${data.year}-${pad2(data.mon)}-${pad2(day)}`),
+  );
+  const grouped = new Map<number, Map<string, {
+    object_key: string;
+    object_name: string;
+    dayMap: Map<string, { hours: number; corrected: boolean }>;
+    hasCorrection: boolean;
+  }>>();
+
+  for (const entry of data.objectEntries) {
+    if (!exportDateSet.has(entry.work_date)) continue;
+    if (!grouped.has(entry.employee_id)) {
+      grouped.set(entry.employee_id, new Map());
+    }
+    const byObject = grouped.get(entry.employee_id)!;
+    const current = byObject.get(entry.object_key) || {
+      object_key: entry.object_key,
+      object_name: entry.object_name,
+      dayMap: new Map<string, { hours: number; corrected: boolean }>(),
+      hasCorrection: false,
+    };
+
+    current.dayMap.set(entry.work_date, {
+      hours: entry.hours_worked,
+      corrected: entry.is_correction,
+    });
+    current.hasCorrection = current.hasCorrection || entry.is_correction;
+    byObject.set(entry.object_key, current);
+  }
+
+  const result = new Map<number, Array<{
+    object_key: string;
+    object_name: string;
+    dayMap: Map<string, { hours: number; corrected: boolean }>;
+    hasCorrection: boolean;
+  }>>();
+
+  for (const [employeeId, byObject] of grouped) {
+    const values = [...byObject.values()];
+    const distinctObjects = new Set(values.map(item => item.object_key));
+    const shouldShowRows = distinctObjects.size > 1 || values.some(item => item.hasCorrection);
+    if (!shouldShowRows) continue;
+
+    result.set(employeeId, values.sort((left, right) => left.object_name.localeCompare(right.object_name, 'ru')));
+  }
+
+  return result;
+};
+
 export function buildTimesheetSheet(
   wb: ExcelJS.Workbook,
   sheetName: string,
   data: IDepartmentTimesheetData,
 ): void {
-  const { employees, schedulesMap, dailySchedulesMap, dataMap, skudMap, year, mon, daysInMonth, departmentName } = data;
+  const {
+    employees,
+    schedulesMap,
+    dailySchedulesMap,
+    dataMap,
+    year,
+    mon,
+    daysInMonth,
+    exportDays,
+    departmentName,
+  } = data;
+  const exportDaysCount = exportDays.length;
 
-  const colDays = COL_DAY_START + daysInMonth;       // first "Дней" col
+  const colDays = COL_DAY_START + exportDaysCount;   // first "Дней" col
   const colHours = colDays + 2;                        // first "Часов" col
   const totalCols = colHours + 1;                      // last col
 
   const ws = wb.addWorksheet(sheetName);
+  ws.properties.outlineLevelRow = 1;
+  ws.properties.outlineProperties = {
+    summaryBelow: false,
+    summaryRight: false,
+  };
+  const objectRowsByEmployee = groupObjectEntriesForExport(data);
 
   // Column widths
   ws.getColumn(COL_NUM).width = 6;
   ws.getColumn(COL_FIO).width = 30;
   ws.getColumn(COL_TAB).width = 12;
-  ws.getColumn(COL_SOURCE).width = 12;
-  for (let d = 0; d < daysInMonth; d++) ws.getColumn(COL_DAY_START + d).width = 7;
+  ws.getColumn(COL_SOURCE).width = 22;
+  for (let d = 0; d < exportDaysCount; d++) ws.getColumn(COL_DAY_START + d).width = 7;
   ws.getColumn(colDays).width = 5;
   ws.getColumn(colDays + 1).width = 5;
   ws.getColumn(colHours).width = 7;
@@ -82,8 +151,10 @@ export function buildTimesheetSheet(
   // --- Row 2: Title ---
   ws.mergeCells(2, 1, 2, totalCols);
   const r2 = ws.getCell(2, 1);
-  const startDateStr = `${pad2(1)}.${pad2(mon)}.${String(year).slice(2)}`;
-  const endDateStr = `${pad2(daysInMonth)}.${pad2(mon)}.${String(year).slice(2)}`;
+  const firstExportDay = exportDays[0] ?? 1;
+  const lastExportDay = exportDays[exportDays.length - 1] ?? daysInMonth;
+  const startDateStr = `${pad2(firstExportDay)}.${pad2(mon)}.${String(year).slice(2)}`;
+  const endDateStr = `${pad2(lastExportDay)}.${pad2(mon)}.${String(year).slice(2)}`;
   r2.value = `Табель учета отработанного времени (предварительная форма). За период с ${startDateStr} по ${endDateStr}`;
   r2.font = { bold: true, size: 10 };
   r2.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
@@ -117,13 +188,13 @@ export function buildTimesheetSheet(
 
   ws.mergeCells(4, COL_SOURCE, 5, COL_SOURCE);
   const hSrc = ws.getCell(4, COL_SOURCE);
-  hSrc.value = 'Источник';
+  hSrc.value = 'Строка';
   hSrc.font = { bold: true, size: 8 };
   hSrc.alignment = centerAlign;
   hSrc.fill = headerFill;
 
   // Days header merged across row 4
-  ws.mergeCells(4, COL_DAY_START, 4, COL_DAY_START + daysInMonth - 1);
+  ws.mergeCells(4, COL_DAY_START, 4, COL_DAY_START + exportDaysCount - 1);
   const hDays = ws.getCell(4, COL_DAY_START);
   hDays.value = 'Отметки о явках и неявках на работу по числам месяца';
   hDays.font = { bold: true, size: 8 };
@@ -139,9 +210,9 @@ export function buildTimesheetSheet(
   hWorked.fill = headerFill;
 
   // Row 5: day numbers + Дней/Часов
-  for (let d = 0; d < daysInMonth; d++) {
+  for (let d = 0; d < exportDaysCount; d++) {
     const cell = ws.getCell(5, COL_DAY_START + d);
-    cell.value = d + 1;
+    cell.value = exportDays[d];
     cell.font = { bold: true, size: 8 };
     cell.alignment = centerAlign;
     cell.fill = headerFill;
@@ -167,7 +238,7 @@ export function buildTimesheetSheet(
   row6.getCell(COL_FIO).value = 2;
   row6.getCell(COL_TAB).value = 3;
   row6.getCell(COL_SOURCE).value = 4;
-  ws.mergeCells(6, COL_DAY_START, 6, COL_DAY_START + daysInMonth - 1);
+  ws.mergeCells(6, COL_DAY_START, 6, COL_DAY_START + exportDaysCount - 1);
   row6.getCell(COL_DAY_START).value = 5;
   ws.mergeCells(6, colDays, 6, totalCols);
   row6.getCell(colDays).value = 6;
@@ -177,154 +248,135 @@ export function buildTimesheetSheet(
     cell.alignment = { horizontal: 'center', vertical: 'middle' };
   }
 
-  // --- Employee data: 2 rows per employee ---
+  // --- Employee data: fact row + hidden object details ---
   const DATA_START_ROW = 7;
 
   let grandDocDays = 0;
   let grandDocHours = 0;
-  let grandSkudDays = 0;
-  let grandSkudHours = 0;
+  let currentRow = DATA_START_ROW;
 
   employees.forEach((emp, idx) => {
     const sched = schedulesMap.get(emp.id);
-    const docRow = DATA_START_ROW + idx * 2;
-    const skudRow = docRow + 1;
-
-    // Merge A, B, C across 2 rows
-    ws.mergeCells(docRow, COL_NUM, skudRow, COL_NUM);
-    ws.mergeCells(docRow, COL_FIO, skudRow, COL_FIO);
-    ws.mergeCells(docRow, COL_TAB, skudRow, COL_TAB);
-
-    // № П/П
-    const numCell = ws.getCell(docRow, COL_NUM);
-    numCell.value = idx + 1;
-    numCell.alignment = centerAlign;
-
-    // ФИО
-    const fioCell = ws.getCell(docRow, COL_FIO);
-    fioCell.value = emp.full_name;
-    fioCell.alignment = { vertical: 'middle', wrapText: true };
-
-    // Таб. номер
-    const tabCell = ws.getCell(docRow, COL_TAB);
-    tabCell.value = emp.sigur_employee_id ?? '';
-    tabCell.alignment = centerAlign;
-
-    // Источник
-    const docSrcCell = ws.getCell(docRow, COL_SOURCE);
-    docSrcCell.value = 'Документ';
-    docSrcCell.alignment = centerAlign;
-    docSrcCell.font = { size: 8 };
-
-    const skudSrcCell = ws.getCell(skudRow, COL_SOURCE);
-    skudSrcCell.value = 'СКУД';
-    skudSrcCell.alignment = centerAlign;
-    skudSrcCell.font = { size: 8 };
-
     const empData = dataMap.get(emp.id);
-    const empSkud = skudMap.get(emp.id);
+    const objectRows = objectRowsByEmployee.get(emp.id) || [];
 
-    let docDaysCount = 0;
-    let docHoursSum = 0;
-    let skudDaysCount = 0;
-    let skudHoursSum = 0;
+    const rowDefinitions = [
+      { kind: 'summary' as const, label: 'Факт' },
+      ...objectRows.map(item => ({ kind: 'object' as const, label: `↳ ${item.object_name}`, item })),
+    ];
 
-    for (let d = 1; d <= daysInMonth; d++) {
-      const dateStr = `${year}-${pad2(mon)}-${pad2(d)}`;
-      const dateObj = new Date(year, mon - 1, d);
-      const daySched = dailySchedulesMap.get(emp.id)?.get(dateStr) || sched;
-      const col = COL_DAY_START + d - 1;
+    const blockStartRow = currentRow;
+    const blockEndRow = currentRow + rowDefinitions.length - 1;
 
-      const docCell = ws.getCell(docRow, col);
-      const skCell = ws.getCell(skudRow, col);
-      docCell.alignment = { horizontal: 'center', vertical: 'middle' };
-      skCell.alignment = { horizontal: 'center', vertical: 'middle' };
-      docCell.font = { size: 8 };
-      skCell.font = { size: 8 };
+    rowDefinitions.forEach((definition, rowIndex) => {
+      const rowNumber = blockStartRow + rowIndex;
+      const row = ws.getRow(rowNumber);
+      const sourceCell = ws.getCell(rowNumber, COL_SOURCE);
+      const isSummaryRow = definition.kind === 'summary';
+      const isObjectRow = definition.kind === 'object';
 
-      const isDayOff = daySched ? !isWorkingDay(daySched, dateObj) : (dateObj.getDay() === 0 || dateObj.getDay() === 6);
-
-      if (isDayOff) {
-        docCell.value = '';
-        skCell.value = '';
-        continue;
+      if (isSummaryRow) {
+        ws.getCell(rowNumber, COL_NUM).value = idx + 1;
+        ws.getCell(rowNumber, COL_NUM).alignment = centerAlign;
+        ws.getCell(rowNumber, COL_FIO).value = emp.full_name;
+        ws.getCell(rowNumber, COL_FIO).alignment = { vertical: 'middle', wrapText: true };
+        ws.getCell(rowNumber, COL_TAB).value = emp.sigur_employee_id ?? '';
+        ws.getCell(rowNumber, COL_TAB).alignment = centerAlign;
       }
 
-      // --- "Документ" row (бежевый фон по умолчанию) ---
-      docCell.fill = docRowFill;
-      const entry = empData?.get(dateStr);
-      if (entry) {
-        const label = STATUS_LABELS[entry.status];
-        if (label) {
-          docCell.value = label;
-          if (statusFills[entry.status]) docCell.fill = statusFills[entry.status];
-          if (WORKED_STATUSES.has(entry.status)) {
-            docDaysCount++;
-            docHoursSum += entry.hours;
+      if (isObjectRow) {
+        row.outlineLevel = 1;
+        row.hidden = true;
+      }
+
+      sourceCell.value = definition.label;
+      sourceCell.alignment = isObjectRow
+        ? { horizontal: 'left', vertical: 'middle', wrapText: true }
+        : centerAlign;
+      sourceCell.font = { size: 8, italic: isObjectRow };
+      sourceCell.fill = docRowFill;
+
+      let rowDaysCount = 0;
+      let rowHoursSum = 0;
+
+      exportDays.forEach((day, dayIndex) => {
+        const dateStr = `${year}-${pad2(mon)}-${pad2(day)}`;
+        const dateObj = new Date(year, mon - 1, day);
+        const daySched = dailySchedulesMap.get(emp.id)?.get(dateStr) || sched;
+        const col = COL_DAY_START + dayIndex;
+        const cell = ws.getCell(rowNumber, col);
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.font = { size: 8 };
+
+        const isDayOff = daySched ? !isWorkingDay(daySched, dateObj) : (dateObj.getDay() === 0 || dateObj.getDay() === 6);
+        if (isDayOff) {
+          cell.value = '';
+          return;
+        }
+
+        if (isSummaryRow) {
+          cell.fill = docRowFill;
+          const entry = empData?.get(dateStr);
+          if (!entry) {
+            cell.value = '';
+            return;
           }
-        } else {
-          const schedHours = daySched ? getScheduleForDate(daySched, dateObj).work_hours : 8;
-          docCell.value = schedHours;
-          docDaysCount++;
-          docHoursSum += schedHours;
-          if (entry.corrected) docCell.fill = correctedFill;
+
+          const label = STATUS_LABELS[entry.status];
+          if (label) {
+            cell.value = label;
+            if (statusFills[entry.status]) cell.fill = statusFills[entry.status];
+          } else if (entry.hours > 0) {
+            cell.value = formatHHMM(entry.hours);
+            rowDaysCount++;
+            rowHoursSum += entry.hours;
+            if (entry.corrected) cell.fill = correctedFill;
+          } else {
+            cell.value = '';
+          }
+          return;
         }
-      } else {
-        docCell.value = '';
-      }
 
-      // --- "СКУД" row (штриховка для недоработок) ---
-      const skudEntry = empSkud?.get(dateStr);
-      if (skudEntry && skudEntry.hours > 0) {
-        const timeStr = ` ${formatHHMM(skudEntry.hours)}`;
-        skCell.value = skudEntry.corrected ? `${timeStr}Кор` : timeStr;
-        // Подсветка недоработок: часы ниже нормы расписания
-        const normHours = daySched ? getScheduleForDate(daySched, dateObj).work_hours : 8;
-        if (skudEntry.hours < normHours) {
-          skCell.fill = underworkFill;
+        if (isObjectRow) {
+          cell.fill = docRowFill;
+          const objectEntry = definition.item.dayMap.get(dateStr);
+          if (!objectEntry || objectEntry.hours <= 0) {
+            cell.value = '';
+            return;
+          }
+
+          cell.value = formatHHMM(objectEntry.hours);
+          if (objectEntry.corrected) cell.fill = correctedFill;
+          rowDaysCount++;
+          rowHoursSum += objectEntry.hours;
         }
-        if (skudEntry.corrected) skCell.fill = correctedFill;
-        skudDaysCount++;
-        skudHoursSum += skudEntry.hours;
-      } else {
-        skCell.value = '';
+      });
+
+      ws.mergeCells(rowNumber, colDays, rowNumber, colDays + 1);
+      const daysCell = ws.getCell(rowNumber, colDays);
+      daysCell.value = rowDaysCount;
+      daysCell.alignment = centerAlign;
+      daysCell.fill = docRowFill;
+
+      ws.mergeCells(rowNumber, colHours, rowNumber, totalCols);
+      const hoursCell = ws.getCell(rowNumber, colHours);
+      hoursCell.value = rowHoursSum > 0 ? formatHHMM(rowHoursSum) : '0:00';
+      hoursCell.alignment = centerAlign;
+      hoursCell.fill = docRowFill;
+
+      if (isSummaryRow) {
+        grandDocDays += rowDaysCount;
+        grandDocHours += rowHoursSum;
       }
-    }
+    });
 
-    // --- Summary columns ---
-    // Дней (merged 2 cols per row, NOT merged across doc/skud rows)
-    ws.mergeCells(docRow, colDays, docRow, colDays + 1);
-    ws.mergeCells(skudRow, colDays, skudRow, colDays + 1);
-    const docDaysCell = ws.getCell(docRow, colDays);
-    docDaysCell.value = docDaysCount;
-    docDaysCell.alignment = centerAlign;
-    docDaysCell.fill = docRowFill;
-    const skudDaysCell = ws.getCell(skudRow, colDays);
-    skudDaysCell.value = skudDaysCount;
-    skudDaysCell.alignment = centerAlign;
-
-    // Часов (merged 2 cols per row)
-    ws.mergeCells(docRow, colHours, docRow, totalCols);
-    ws.mergeCells(skudRow, colHours, skudRow, totalCols);
-    const docHoursCell = ws.getCell(docRow, colHours);
-    docHoursCell.value = Math.round(docHoursSum);
-    docHoursCell.alignment = centerAlign;
-    docHoursCell.fill = docRowFill;
-    const skudHoursCell = ws.getCell(skudRow, colHours);
-    skudHoursCell.value = skudHoursSum > 0 ? formatHHMM(skudHoursSum) : '0:00';
-    skudHoursCell.alignment = centerAlign;
-
-    grandDocDays += docDaysCount;
-    grandDocHours += docHoursSum;
-    grandSkudDays += skudDaysCount;
-    grandSkudHours += skudHoursSum;
+    currentRow = blockEndRow + 1;
   });
 
-  // --- ИТОГО rows ---
-  const itogoDocRow = DATA_START_ROW + employees.length * 2;
-  const itogoSkudRow = itogoDocRow + 1;
+  // --- ИТОГО row ---
+  const itogoDocRow = currentRow;
 
-  ws.mergeCells(itogoDocRow, COL_NUM, itogoSkudRow, COL_SOURCE);
+  ws.mergeCells(itogoDocRow, COL_NUM, itogoDocRow, COL_SOURCE);
   const itogoCell = ws.getCell(itogoDocRow, COL_NUM);
   itogoCell.value = 'ИТОГО';
   itogoCell.font = { bold: true, size: 10 };
@@ -336,24 +388,14 @@ export function buildTimesheetSheet(
   ws.getCell(itogoDocRow, colDays).alignment = centerAlign;
   ws.getCell(itogoDocRow, colDays).font = { bold: true };
 
-  ws.mergeCells(itogoSkudRow, colDays, itogoSkudRow, colDays + 1);
-  ws.getCell(itogoSkudRow, colDays).value = grandSkudDays;
-  ws.getCell(itogoSkudRow, colDays).alignment = centerAlign;
-  ws.getCell(itogoSkudRow, colDays).font = { bold: true };
-
   // Часов итого
   ws.mergeCells(itogoDocRow, colHours, itogoDocRow, totalCols);
-  ws.getCell(itogoDocRow, colHours).value = Math.round(grandDocHours);
+  ws.getCell(itogoDocRow, colHours).value = formatHHMM(grandDocHours);
   ws.getCell(itogoDocRow, colHours).alignment = centerAlign;
   ws.getCell(itogoDocRow, colHours).font = { bold: true };
 
-  ws.mergeCells(itogoSkudRow, colHours, itogoSkudRow, totalCols);
-  ws.getCell(itogoSkudRow, colHours).value = formatHHMM(grandSkudHours);
-  ws.getCell(itogoSkudRow, colHours).alignment = centerAlign;
-  ws.getCell(itogoSkudRow, colHours).font = { bold: true };
-
   // --- Borders ---
-  const lastDataRow = itogoSkudRow;
+  const lastDataRow = itogoDocRow;
   for (let r = 4; r <= lastDataRow; r++) {
     const row = ws.getRow(r);
     for (let c = 1; c <= totalCols; c++) {

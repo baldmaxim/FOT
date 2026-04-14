@@ -5,6 +5,7 @@ import { settingsService } from '../services/settingsService';
 export const getR2StatusQueryKey = () => ['settings', 'r2-status'] as const;
 export const getSigurMonitorSettingsQueryKey = () => ['settings', 'sigur-monitor'] as const;
 export const getTimesheetReminderSettingsQueryKey = () => ['settings', 'timesheet-reminders'] as const;
+export const getTimesheetTeamManagementSettingsQueryKey = () => ['settings', 'timesheet-team-management'] as const;
 export const getProductionCalendarQueryKey = (year: number) => ['production-calendar', year] as const;
 
 export const useR2Status = () => useQuery({
@@ -22,6 +23,12 @@ export const useSigurMonitorSettings = () => useQuery({
 export const useTimesheetReminderSettings = () => useQuery({
   queryKey: getTimesheetReminderSettingsQueryKey(),
   queryFn: () => settingsService.getTimesheetReminderSettings(),
+  staleTime: 5 * 60_000,
+});
+
+export const useTimesheetTeamManagementSettings = () => useQuery({
+  queryKey: getTimesheetTeamManagementSettingsQueryKey(),
+  queryFn: () => settingsService.getTimesheetTeamManagementSettings(),
   staleTime: 5 * 60_000,
 });
 

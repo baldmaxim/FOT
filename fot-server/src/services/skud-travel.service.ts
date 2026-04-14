@@ -127,6 +127,7 @@ export interface ITravelDaySummary {
   delayMinutes: number;
   segmentsCount: number;
   problematicSegmentsCount: number;
+  objectProblemSegmentsCount: number;
 }
 
 interface ICalculatedTravelSegment {
@@ -605,12 +606,14 @@ const summarizeSegmentsByDay = (segments: ICalculatedTravelSegment[]): Map<strin
       delayMinutes: 0,
       segmentsCount: 0,
       problematicSegmentsCount: 0,
+      objectProblemSegmentsCount: 0,
     };
 
     current.creditedMinutes += segment.credited_minutes;
     current.delayMinutes += segment.delay_minutes;
     current.segmentsCount += 1;
     if (segment.status !== 'auto_approved') current.problematicSegmentsCount += 1;
+    if (segment.status === 'needs_object') current.objectProblemSegmentsCount += 1;
     summary.set(key, current);
   }
 

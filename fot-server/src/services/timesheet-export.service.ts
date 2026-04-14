@@ -2,6 +2,9 @@ import { supabase } from '../config/database.js';
 import { resolveSchedulesForPeriod } from './schedule.service.js';
 import type { IResolvedSchedule } from '../types/index.js';
 import { buildAttendanceEntries } from './attendance.service.js';
+import type { IAttendanceObjectEntry } from './timesheet-object.service.js';
+
+export type TimesheetExportHalf = 'H1' | 'H2' | 'FULL';
 
 export interface IExportEmployee {
   id: number;
@@ -20,16 +23,35 @@ export interface IDepartmentTimesheetData {
   schedulesMap: Map<number, IResolvedSchedule>;
   dailySchedulesMap: Map<number, Map<string, IResolvedSchedule>>;
   dataMap: Map<number, Map<string, { status: string; hours: number; corrected?: boolean }>>;
+  objectEntries: IAttendanceObjectEntry[];
   skudMap: Map<number, Map<string, { hours: number; corrected: boolean }>>;
   posMap: Map<string, string>;
   year: number;
   mon: number;
   daysInMonth: number;
+  exportHalf: TimesheetExportHalf;
+  exportDays: number[];
 }
+
+export const resolveTimesheetExportDays = (
+  year: number,
+  mon: number,
+  half: TimesheetExportHalf,
+): number[] => {
+  const daysInMonth = new Date(year, mon, 0).getDate();
+  if (half === 'H1') {
+    return Array.from({ length: Math.min(15, daysInMonth) }, (_, index) => index + 1);
+  }
+  if (half === 'H2') {
+    return Array.from({ length: Math.max(0, daysInMonth - 15) }, (_, index) => index + 16);
+  }
+  return Array.from({ length: daysInMonth }, (_, index) => index + 1);
+};
 
 export async function fetchTimesheetDataForDepartment(
   month: string,
   departmentId: string | null,
+  exportHalf: TimesheetExportHalf = 'FULL',
 ): Promise<IDepartmentTimesheetData> {
   const [yearStr, monthStr] = month.split('-');
   const year = parseInt(yearStr);
@@ -39,6 +61,7 @@ export async function fetchTimesheetDataForDepartment(
   const endDate = `${month}-${daysInMonth}`;
   const today = new Date();
   const todayStr = today.toISOString().slice(0, 10);
+  const exportDays = resolveTimesheetExportDays(year, mon, exportHalf);
 
   // Имя отдела
   let departmentName = 'Все отделы';
@@ -125,10 +148,13 @@ export async function fetchTimesheetDataForDepartment(
     schedulesMap,
     dailySchedulesMap,
     dataMap,
+    objectEntries: attendance.objectEntries,
     skudMap,
     posMap,
     year,
     mon,
     daysInMonth,
+    exportHalf,
+    exportDays,
   };
 }

@@ -24,6 +24,35 @@ export interface TimesheetEntry {
   corrected_by_name?: string | null;
   created_at?: string;
   updated_at?: string;
+  object_detail_mode?: 'none' | 'available' | 'legacy_blocked';
+  object_detail_message?: string | null;
+  object_detail_count?: number;
+}
+
+export interface TimesheetObjectEntry {
+  adjustment_id: number | null;
+  employee_id: number;
+  work_date: string;
+  object_key: string;
+  object_id: string | null;
+  object_name: string;
+  hours_worked: number;
+  base_hours_worked: number;
+  is_correction: boolean;
+  notes?: string | null;
+}
+
+export interface TimesheetTeamManagementConfig {
+  enabled: boolean;
+  can_manage: boolean;
+  scope: 'self' | 'department' | 'all' | null;
+}
+
+export interface TimesheetTeamManagementCandidate {
+  id: number;
+  full_name: string;
+  org_department_id: string | null;
+  department_name: string | null;
 }
 
 export interface TimesheetStats {
@@ -55,6 +84,7 @@ export interface IProductionCalendarMonth {
 export interface TimesheetResponse {
   employees: TimesheetEmployee[];
   entries: TimesheetEntry[];
+  object_entries: TimesheetObjectEntry[];
   stats: TimesheetStats;
   schedules?: Record<number, IResolvedSchedule>;
   daily_schedules?: Record<number, Record<string, IResolvedSchedule>>;

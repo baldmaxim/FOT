@@ -11,6 +11,7 @@ type TabFilter = 'favorites' | 'all' | 'online' | 'offline' | 'absent';
 interface IActivityListProps {
   employees: IEmployeePresence[];
   loading: boolean;
+  employeeCardBackState: { label: string; from: string };
 }
 
 const getInitials = (name: string): string => {
@@ -78,7 +79,8 @@ const EmployeeRow = memo<{
   isFavorite: boolean;
   onToggleFavorite: (id: number) => void;
   tick: number;
-}>(({ employee, isFavorite, onToggleFavorite, tick }) => {
+  employeeCardBackState: { label: string; from: string };
+}>(({ employee, isFavorite, onToggleFavorite, tick, employeeCardBackState }) => {
   const navigate = useNavigate();
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -93,7 +95,7 @@ const EmployeeRow = memo<{
   const outsideWarning = outsideMin > 60;
 
   return (
-    <div className={styles.item} onClick={() => navigate(`/employees/${employee.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } })}>
+    <div className={styles.item} onClick={() => navigate(`/employees/${employee.employee_id}`, { state: employeeCardBackState })}>
       <button
         className={`${styles.starBtn} ${isFavorite ? styles.starActive : ''}`}
         onClick={e => { e.stopPropagation(); onToggleFavorite(employee.employee_id); }}
@@ -169,7 +171,7 @@ const EmployeeRow = memo<{
   );
 });
 
-export const ActivityList: FC<IActivityListProps> = ({ employees, loading }) => {
+export const ActivityList: FC<IActivityListProps> = ({ employees, loading, employeeCardBackState }) => {
   const [tab, setTab] = useState<TabFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const { favorites, toggle, isFavorite } = useFavorites();
@@ -281,6 +283,7 @@ export const ActivityList: FC<IActivityListProps> = ({ employees, loading }) => 
                 isFavorite={isFavorite(emp.employee_id)}
                 onToggleFavorite={toggle}
                 tick={tick}
+                employeeCardBackState={employeeCardBackState}
               />
             ))
           )}

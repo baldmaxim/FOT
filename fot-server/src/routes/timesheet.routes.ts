@@ -13,6 +13,30 @@ router.get(
   timesheetController.getAll
 );
 
+router.get(
+  '/team-management-config',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'view'),
+  timesheetController.getTeamManagementConfig
+);
+
+router.get(
+  '/team-management/search-employees',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
+  timesheetController.searchTeamEmployees
+);
+
+router.post(
+  '/team-management/add-employee',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
+  timesheetController.addEmployeeToDepartment
+);
+
+router.post(
+  '/team-management/exclude-employee',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
+  timesheetController.excludeEmployeeFromDepartment
+);
+
 // GET /api/timesheet/export?month=YYYY-MM&department_id=...
 router.get(
   '/export',
@@ -39,6 +63,20 @@ router.post(
   '/bulk',
   requireAnyPageAccess(['/employee/timesheet', '/timesheet', '/timesheet-hr'], 'edit'),
   timesheetController.bulkSave
+);
+
+// PUT /api/timesheet/object-entry
+router.put(
+  '/object-entry',
+  requireAnyPageAccess(['/employee/timesheet', '/timesheet', '/timesheet-hr'], 'edit'),
+  timesheetController.upsertObjectEntry
+);
+
+// DELETE /api/timesheet/object-entry
+router.delete(
+  '/object-entry',
+  requireAnyPageAccess(['/employee/timesheet', '/timesheet', '/timesheet-hr'], 'edit'),
+  timesheetController.deleteObjectEntry
 );
 
 // PUT /api/timesheet/:id

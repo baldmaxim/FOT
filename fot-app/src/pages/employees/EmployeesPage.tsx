@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, type FC } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { X, ChevronLeft, ChevronRight, FolderOpen } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, FolderOpen, Search } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
 import { useAuth } from '../../contexts/AuthContext';
 import { EmpVirtualList } from '../../components/employees/EmpVirtualList';
@@ -25,19 +25,21 @@ const EMPTY_DEPARTMENTS: OrgDepartmentNode[] = [];
 export const EmployeesPage: FC = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { canEditPage } = useAuth();
+  const { canEditPage, hasPermission, profile } = useAuth();
   const isMobile = useIsMobile(768);
   const canEdit = canEditPage('/employees') || canEditPage('/staff-control');
+  const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
+  const initialPage = Number.parseInt(searchParams.get('page') || '1', 10);
 
   const [error, setError] = useState('');
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(Number.isFinite(initialPage) && initialPage > 0 ? initialPage : 1);
 
   // Filters
   const [selectedDeptId, setSelectedDeptId] = useState<string | null>(searchParams.get('dept'));
   const [expandedDepts, setExpandedDepts] = useState<Set<string>>(new Set());
   const [unifiedSearch, setUnifiedSearch] = useState(searchParams.get('q') || '');
   const [debouncedSearch, setDebouncedSearch] = useState(unifiedSearch);
-  const [activeTab, setActiveTab] = useState<'all' | 'fired'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'fired'>(searchParams.get('tab') === 'fired' ? 'fired' : 'all');
   const [isDeptPanelOpen, setIsDeptPanelOpen] = useState(false);
 
   // Modals
@@ -60,19 +62,34 @@ export const EmployeesPage: FC = () => {
   useEffect(() => {
     const params = new URLSearchParams();
     if (unifiedSearch) params.set('q', unifiedSearch);
-    if (selectedDeptId) params.set('dept', selectedDeptId);
+    if (!isDepartmentScope && selectedDeptId) params.set('dept', selectedDeptId);
+    if (activeTab !== 'all') params.set('tab', activeTab);
+    if (page > 1) params.set('page', String(page));
     setSearchParams(params, { replace: true });
-  }, [unifiedSearch, selectedDeptId, setSearchParams]);
+  }, [activeTab, isDepartmentScope, page, unifiedSearch, selectedDeptId, setSearchParams]);
+
+  useEffect(() => {
+    if (isDepartmentScope) {
+      setIsDeptPanelOpen(false);
+    }
+  }, [isDepartmentScope]);
 
   // Resolve department_id for server (selected dept + children for header filtering)
   const serverDeptId = useMemo(() => {
-    // Для серверной пагинации передаём только выбранный отдел
+    // Для department-scope всегда работаем в рамках отдела пользователя.
+    // Для серверной пагинации передаём только выбранный отдел.
     // Дочерние отделы будут включены, т.к. backend фильтрует по org_department_id
-    return selectedDeptId || undefined;
-  }, [selectedDeptId]);
+    if (isDepartmentScope) {
+      return profile?.department_id || undefined;
+    }
 
-  const structureQuery = useStructureTree();
-  const departments = structureQuery.data?.departments ?? EMPTY_DEPARTMENTS;
+    return selectedDeptId || undefined;
+  }, [isDepartmentScope, profile?.department_id, selectedDeptId]);
+
+  const structureQuery = useStructureTree(!isDepartmentScope);
+  const departments = isDepartmentScope
+    ? EMPTY_DEPARTMENTS
+    : structureQuery.data?.departments ?? EMPTY_DEPARTMENTS;
 
   // Detect if query matches any department name (dept-search mode)
   const matchesDept = useMemo(() => {
@@ -91,17 +108,17 @@ export const EmployeesPage: FC = () => {
     departmentId: serverDeptId,
   });
   const countsQuery = useEmployeeCountsQuery(false);
-  const presenceQuery = usePresenceQuery(selectedDeptId, {
+  const presenceQuery = usePresenceQuery(serverDeptId ?? null, {
     enabled: activeTab !== 'fired',
     refetchInterval: activeTab === 'fired' ? false : 30_000,
   });
   const employees = (employeesQuery.data || EMPTY_PAGINATED_RESPONSE).data;
   const meta = (employeesQuery.data || EMPTY_PAGINATED_RESPONSE).meta || EMPTY_PAGINATED_META;
   const counts = countsQuery.data || EMPTY_EMPLOYEE_COUNTS;
-  const loading = employeesQuery.isPending || structureQuery.isPending || countsQuery.isPending;
+  const loading = employeesQuery.isPending || countsQuery.isPending || (!isDepartmentScope && structureQuery.isPending);
   const queryError = employeesQuery.isError
     ? 'Ошибка загрузки сотрудников'
-    : structureQuery.isError
+    : (!isDepartmentScope && structureQuery.isError)
       ? 'Ошибка загрузки структуры'
       : countsQuery.isError
         ? 'Ошибка загрузки сотрудников'
@@ -188,6 +205,18 @@ export const EmployeesPage: FC = () => {
   const flatDepts = useMemo(() => {
     return getSortedFlatDepartments(departments);
   }, [departments]);
+  const employeeCardBackState = useMemo(() => {
+    const params = new URLSearchParams();
+    if (unifiedSearch) params.set('q', unifiedSearch);
+    if (!isDepartmentScope && selectedDeptId) params.set('dept', selectedDeptId);
+    if (activeTab !== 'all') params.set('tab', activeTab);
+    if (page > 1) params.set('page', String(page));
+    const query = params.toString();
+    return {
+      label: 'Сотрудники',
+      from: `/employees${query ? `?${query}` : ''}`,
+    };
+  }, [activeTab, isDepartmentScope, page, unifiedSearch, selectedDeptId]);
 
   // Selected department info
   const selectedDeptInfo = useMemo(() => {
@@ -214,7 +243,7 @@ export const EmployeesPage: FC = () => {
 
   const handleEmpClick = (emp: Employee) => {
     if (isMobile) setIsDeptPanelOpen(false);
-    navigate(`/employees/${emp.id}`);
+    navigate(`/employees/${emp.id}`, { state: employeeCardBackState });
   };
 
   const refetchDirectory = async () => {
@@ -271,8 +300,10 @@ export const EmployeesPage: FC = () => {
   // Pagination helpers
   const canPrev = page > 1;
   const canNext = page < meta.totalPages;
-  const selectedDeptLabel = selectedDeptInfo?.name || 'Все сотрудники';
-  const departmentPanelNode = (
+  const selectedDeptLabel = isDepartmentScope
+    ? employees.find(emp => emp.department)?.department || 'Сотрудники'
+    : selectedDeptInfo?.name || 'Все сотрудники';
+  const departmentPanelNode = !isDepartmentScope ? (
     <DepartmentPanel
       departments={departments}
       selectedDeptId={selectedDeptId}
@@ -292,11 +323,11 @@ export const EmployeesPage: FC = () => {
       onToggleDept={toggleDept}
       onRefresh={handleRefreshDepartments}
     />
-  );
+  ) : null;
 
   return (
     <div className="employees-page">
-      {isMobile ? (
+      {!isDepartmentScope && isMobile ? (
         <>
           <div
             className={`ep-dept-mobile-overlay ${isDeptPanelOpen ? 'open' : ''}`}
@@ -306,15 +337,15 @@ export const EmployeesPage: FC = () => {
             {departmentPanelNode}
           </div>
         </>
-      ) : (
+      ) : !isDepartmentScope ? (
         departmentPanelNode
-      )}
+      ) : null}
 
       {/* Employees Panel */}
       <div className="ep-emp-panel">
         <div className="ep-emp-header">
           <div className="ep-emp-head-main">
-            {isMobile && (
+            {isMobile && !isDepartmentScope && (
               <button
                 className="ep-mobile-filter-btn"
                 onClick={() => setIsDeptPanelOpen(true)}
@@ -350,6 +381,24 @@ export const EmployeesPage: FC = () => {
           </div>
         </div>
 
+        {isDepartmentScope && (
+          <div className="ep-emp-toolbar">
+            <div className="ep-toolbar-search">
+              <Search size={14} />
+              <input
+                type="text"
+                value={unifiedSearch}
+                onChange={(e) => setUnifiedSearch(e.target.value)}
+                placeholder="Поиск по сотруднику..."
+              />
+              {unifiedSearch && (
+                <button className="ep-search-clear" onClick={() => setUnifiedSearch('')}>
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {visibleError && (
           <div className="ep-error">

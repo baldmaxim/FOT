@@ -14,11 +14,31 @@ type QueryResponse = {
 const mockedState = vi.hoisted(() => ({
   queryLog: [] as QueryRecord[],
   resolver: (() => ({ data: [], error: null })) as (query: QueryRecord) => QueryResponse | Promise<QueryResponse>,
-  travelSummary: new Map<string, { creditedMinutes: number; delayMinutes: number; segmentsCount: number; problematicSegmentsCount: number }>(),
+  travelSummary: new Map<string, {
+    creditedMinutes: number;
+    delayMinutes: number;
+    segmentsCount: number;
+    problematicSegmentsCount: number;
+    objectProblemSegmentsCount: number;
+  }>(),
   internalPoints: new Set<string>(),
   scheduleWorkHours: 8,
   isWorkingDay: true,
   needsSkudCheck: false,
+  objectAttendanceData: {
+    objectEntries: [],
+    objectEntriesByEmployeeDate: new Map<number, Map<string, []>>(),
+    employeeDistinctObjectKeys: new Map<number, Set<string>>(),
+    legacyBlockedDays: new Map<string, string>(),
+    rawFallbackSummaries: new Map<number, Map<string, {
+      employee_id: number;
+      date: string;
+      first_entry: string | null;
+      last_exit: string | null;
+      total_hours: number | null;
+      total_minutes?: number | null;
+    }>>(),
+  },
 }));
 
 function createBuilder(table: string) {
@@ -87,6 +107,11 @@ vi.mock('./skud-shared.service.js', () => ({
   getInternalAccessPoints: vi.fn(async () => mockedState.internalPoints),
 }));
 
+vi.mock('./timesheet-object.service.js', () => ({
+  OBJECT_ADJUSTMENT_SOURCE_TYPE: 'manual_object',
+  buildObjectAttendanceData: vi.fn(async () => mockedState.objectAttendanceData),
+}));
+
 import {
   buildAttendanceEntries,
   upsertAttendanceAdjustment,
@@ -100,6 +125,13 @@ describe('attendance.service', () => {
     mockedState.scheduleWorkHours = 8;
     mockedState.isWorkingDay = true;
     mockedState.needsSkudCheck = false;
+    mockedState.objectAttendanceData = {
+      objectEntries: [],
+      objectEntriesByEmployeeDate: new Map(),
+      employeeDistinctObjectKeys: new Map(),
+      legacyBlockedDays: new Map(),
+      rawFallbackSummaries: new Map(),
+    };
     mockedState.resolver = () => ({ data: [], error: null });
   });
 
@@ -110,6 +142,7 @@ describe('attendance.service', () => {
         delayMinutes: 5,
         segmentsCount: 2,
         problematicSegmentsCount: 1,
+        objectProblemSegmentsCount: 1,
       }],
     ]);
 
@@ -193,6 +226,7 @@ describe('attendance.service', () => {
       corrected_by_name: 'HR Admin',
     });
     expect(result.skudMap.get(1)?.get('2026-04-01')).toEqual({ hours: 7.5, corrected: true });
+    expect(result.objectEntries).toEqual([]);
   });
 
   it('does not add travel time to summary hours but keeps delay metadata', async () => {
@@ -202,6 +236,7 @@ describe('attendance.service', () => {
         delayMinutes: 20,
         segmentsCount: 1,
         problematicSegmentsCount: 1,
+        objectProblemSegmentsCount: 0,
       }],
     ]);
 
@@ -245,8 +280,9 @@ describe('attendance.service', () => {
       travel_minutes_credited: 0,
       travel_hours_credited: 0,
       travel_delay_minutes: 20,
-      travel_problematic_segments: 1,
+      travel_problematic_segments: 0,
     });
+    expect(result.objectEntries).toEqual([]);
   });
 
   it('builds a work entry from raw skud events when daily summary is missing', async () => {
@@ -262,30 +298,19 @@ describe('attendance.service', () => {
         return { data: [], error: null };
       }
 
-      if (query.table === 'skud_events') {
-        return {
-          data: [
-            {
-              employee_id: 1,
-              event_date: '2026-04-01',
-              event_time: '09:00:00',
-              access_point: 'Главный вход',
-              direction: 'entry',
-            },
-            {
-              employee_id: 1,
-              event_date: '2026-04-01',
-              event_time: '18:00:00',
-              access_point: 'Главный вход',
-              direction: 'exit',
-            },
-          ],
-          error: null,
-        };
-      }
-
       throw new Error(`Unexpected query for table ${query.table}`);
     };
+
+    mockedState.objectAttendanceData.rawFallbackSummaries = new Map([
+      [1, new Map([['2026-04-01', {
+        employee_id: 1,
+        date: '2026-04-01',
+        first_entry: '09:00:00',
+        last_exit: '18:00:00',
+        total_hours: 9,
+        total_minutes: 540,
+      }]])],
+    ]);
 
     const result = await buildAttendanceEntries({
       employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
@@ -321,7 +346,6 @@ describe('attendance.service', () => {
         || query.table === 'attendance_adjustments'
         || query.table === 'user_profiles'
         || query.table === 'employees'
-        || query.table === 'skud_events'
       ) {
         return { data: [], error: null };
       }

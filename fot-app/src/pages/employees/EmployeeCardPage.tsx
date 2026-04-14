@@ -1,5 +1,5 @@
 import { Suspense, lazy, useState, useEffect, useCallback, useMemo, type FC } from 'react';
-import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useLocation, useSearchParams, useNavigationType } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Edit3, Archive, RotateCcw, Trash2,
@@ -123,21 +123,43 @@ export const EmployeeCardPage: FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const navigationType = useNavigationType();
   const [searchParams] = useSearchParams();
   const locState = location.state as { label?: string; from?: string } | null;
   const savedBack = (() => {
+    if (!id) return null;
     try { return JSON.parse(sessionStorage.getItem(`ec-back-${id}`) || 'null'); } catch { return null; }
   })() as { label?: string; from?: string } | null;
-  const backLabel = locState?.label || savedBack?.label || 'Сотрудники';
-  const backPath = locState?.from || savedBack?.from;
+  const resolvedBackState = locState?.from
+    ? locState
+    : navigationType === 'POP'
+      ? savedBack
+      : null;
+  const backLabel = resolvedBackState?.label || 'Сотрудники';
+  const backPath = resolvedBackState?.from;
 
   useEffect(() => {
-    if (locState?.from) sessionStorage.setItem(`ec-back-${id}`, JSON.stringify({ label: locState.label, from: locState.from }));
-  }, [id, locState]);
+    if (!id) return;
+    if (locState?.from) {
+      sessionStorage.setItem(`ec-back-${id}`, JSON.stringify({ label: locState.label, from: locState.from }));
+      return;
+    }
+    if (navigationType !== 'POP') {
+      sessionStorage.removeItem(`ec-back-${id}`);
+    }
+  }, [id, locState?.from, locState?.label, navigationType]);
 
   const handleBack = () => {
-    if (backPath) return navigate(backPath);
-    navigate(-1);
+    const historyIndex = typeof window !== 'undefined' ? window.history.state?.idx : undefined;
+    if (typeof historyIndex === 'number' && historyIndex > 0) {
+      navigate(-1);
+      return;
+    }
+    if (backPath) {
+      navigate(backPath, { replace: true });
+      return;
+    }
+    navigate('/employees', { replace: true });
   };
   const { canEditPage } = useAuth();
   const canEdit = canEditPage('/employees') || canEditPage('/staff-control');
@@ -422,7 +444,7 @@ export const EmployeeCardPage: FC = () => {
 
   const handleDelete = async () => {
     if (!employee || !confirm('Удалить сотрудника? Это действие необратимо.')) return;
-    try { await employeeService.delete(employee.id); navigate(-1); }
+    try { await employeeService.delete(employee.id); handleBack(); }
     catch { setError('Ошибка удаления'); }
   };
 
@@ -434,8 +456,8 @@ export const EmployeeCardPage: FC = () => {
       <div className="ec-content">
         <div className="ec-error">
           <p>{error}</p>
-          <button className="btn-back-link" onClick={() => navigate(-1)}>
-            <ArrowLeft size={16} /> Назад к списку
+          <button className="btn-back-link" onClick={handleBack}>
+            <ArrowLeft size={16} /> {backLabel}
           </button>
         </div>
       </div>

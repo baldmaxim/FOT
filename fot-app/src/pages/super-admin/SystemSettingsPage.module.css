@@ -161,6 +161,23 @@
   margin-top: 4px;
 }
 
+.checkboxRow {
+  margin-top: 4px;
+}
+
+.checkboxLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--text-primary, #111827);
+}
+
+.checkboxLabel input {
+  width: 16px;
+  height: 16px;
+}
+
 @media (max-width: 768px) {
   .page { padding: 16px; }
   .formGrid { grid-template-columns: 1fr; }

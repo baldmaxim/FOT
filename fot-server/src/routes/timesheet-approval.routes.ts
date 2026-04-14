@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { timesheetApprovalController } from '../controllers/timesheet-approval.controller.js';
-import { authenticate, requirePageAccess } from '../middleware/auth.js';
+import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -30,13 +30,13 @@ router.get('/list', requirePageAccess('/timesheet-hr', 'view'), timesheetApprova
 // GET /api/timesheet-approvals/:id/history — hr: история согласования
 router.get('/:id/history', requirePageAccess('/timesheet-hr', 'view'), timesheetApprovalController.getHistory);
 
-// POST /api/timesheet-approvals/:id/approve — hr утверждает
-router.post('/:id/approve', requirePageAccess('/timesheet-hr', 'edit'), timesheetApprovalController.approve);
+// POST /api/timesheet-approvals/:id/approve — утверждение табеля ответственным/HR
+router.post('/:id/approve', requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'), timesheetApprovalController.approve);
 
-// POST /api/timesheet-approvals/:id/reject — hr отклоняет
-router.post('/:id/reject', requirePageAccess('/timesheet-hr', 'edit'), timesheetApprovalController.reject);
+// POST /api/timesheet-approvals/:id/reject — отклонение табеля ответственным/HR
+router.post('/:id/reject', requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'), timesheetApprovalController.reject);
 
-// POST /api/timesheet-approvals/:id/return-to-rework — hr возвращает утверждённый табель на доработку
-router.post('/:id/return-to-rework', requirePageAccess('/timesheet-hr', 'edit'), timesheetApprovalController.returnToRework);
+// POST /api/timesheet-approvals/:id/return-to-rework — возврат табеля на доработку ответственным/HR
+router.post('/:id/return-to-rework', requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'), timesheetApprovalController.returnToRework);
 
 export default router;

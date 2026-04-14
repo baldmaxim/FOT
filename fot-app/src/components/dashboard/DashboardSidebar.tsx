@@ -1,5 +1,5 @@
 import type { FC } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { TrendingUp, TrendingDown } from 'lucide-react';
 import type { IDashboardStats, DashboardPeriod } from '../../types';
 import styles from './DashboardSidebar.module.css';
@@ -120,6 +120,11 @@ export const ComparisonCard: FC<{ comparison: IDashboardStats['weekComparison'];
 
 export const TopLateCard: FC<{ data: IDashboardStats['topLate']; period: DashboardPeriod }> = ({ data, period }) => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const employeeCardBackState = {
+    label: 'Обзор',
+    from: `${location.pathname}${location.search}${location.hash}`,
+  };
 
   return (
     <div className={styles.card}>
@@ -131,7 +136,7 @@ export const TopLateCard: FC<{ data: IDashboardStats['topLate']; period: Dashboa
           <div
             key={item.employee_id}
             className={`${styles.lateItem} ${styles.clickable}`}
-            onClick={() => navigate(`/employees/${item.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } })}
+            onClick={() => navigate(`/employees/${item.employee_id}`, { state: employeeCardBackState })}
           >
             <span className={styles.lateRank}>{i + 1}</span>
             <div className={styles.lateAvatar}>{getInitials(item.full_name)}</div>

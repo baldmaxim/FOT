@@ -69,17 +69,34 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
     const map = new Map<string, string>();
     for (const object of objects) {
       for (const point of object.access_points) {
-        map.set(normalizePoint(point), object.name);
+        const normalizedPoint = normalizePoint(point);
+        if (!normalizedPoint) continue;
+        map.set(normalizedPoint, object.id);
       }
     }
     return map;
   }, [objects]);
 
+  const availableAccessPoints = useMemo(() => {
+    if (!selectedObject) return [];
+
+    const points = [...new Set([...accessPoints, ...draftAccessPoints].map(normalizePoint).filter(Boolean))];
+    return points.filter(point => {
+      const owner = ownershipMap.get(point);
+      return !owner || owner === selectedObject.id;
+    });
+  }, [accessPoints, draftAccessPoints, ownershipMap, selectedObject]);
+
+  const unassignedAccessPointsCount = useMemo(
+    () => accessPoints.filter(point => !ownershipMap.has(point)).length,
+    [accessPoints, ownershipMap],
+  );
+
   const filteredAccessPoints = useMemo(() => {
-    if (!search.trim()) return accessPoints;
+    if (!search.trim()) return availableAccessPoints;
     const query = search.trim().toLowerCase();
-    return accessPoints.filter(point => point.toLowerCase().includes(query));
-  }, [accessPoints, search]);
+    return availableAccessPoints.filter(point => point.toLowerCase().includes(query));
+  }, [availableAccessPoints, search]);
 
   const selectedSet = useMemo(() => new Set(draftAccessPoints), [draftAccessPoints]);
   const selectedObjectNameChanged = useMemo(
@@ -194,7 +211,7 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
         <div>
           <h3 className="sigur-section-title">Объекты и точки доступа</h3>
           <div className="travel-config-hint">
-            Каждая точка доступа привязывается к одному объекту. При сохранении пересечения переназначаются.
+            В списке показываются нераспределённые точки доступа. Для выбранного объекта также видны уже привязанные к нему точки.
           </div>
         </div>
         <button className="sigur-btn" onClick={() => void loadData()} disabled={loading || saving}>
@@ -296,15 +313,13 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
                     onChange={event => setSearch(event.target.value)}
                   />
                   <div className="travel-config-hint">
-                    Выбрано: {draftAccessPoints.length}
+                    Нераспределённых: {unassignedAccessPointsCount} · Выбрано: {draftAccessPoints.length}
                   </div>
                 </div>
 
                 <div className="travel-config-points">
                   {filteredAccessPoints.map(point => {
-                    const owner = ownershipMap.get(point);
                     const selected = selectedSet.has(point);
-                    const foreignOwner = owner && owner !== selectedObject.name ? owner : null;
                     return (
                       <label key={point} className={`travel-config-point ${selected ? 'selected' : ''}`}>
                         <input
@@ -314,14 +329,15 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
                           disabled={!canEdit || saving}
                         />
                         <span className="travel-config-point-name">{point}</span>
-                        {foreignOwner && (
-                          <span className="travel-config-owner">сейчас: {foreignOwner}</span>
-                        )}
                       </label>
                     );
                   })}
                   {filteredAccessPoints.length === 0 && (
-                    <div className="travel-config-empty">Нет точек доступа по текущему фильтру</div>
+                    <div className="travel-config-empty">
+                      {search.trim()
+                        ? 'Нет точек доступа по текущему фильтру'
+                        : 'Нет нераспределённых точек доступа'}
+                    </div>
                   )}
                 </div>
               </>

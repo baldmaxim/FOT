@@ -59,10 +59,18 @@ export const DashboardPage: React.FC = () => {
 
   // Для header: сразу ставим отдел в URL без ожидания загрузки структуры
   useEffect(() => {
-    if (isDepartmentScope && profile?.department_id && !searchParams.get('dept')) {
-      setSearchParams({ dept: profile.department_id }, { replace: true });
+    if (!isDepartmentScope || !profile?.department_id) {
+      return;
     }
-  }, [isDepartmentScope, profile?.department_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const next = new URLSearchParams(searchParams);
+    if (next.get('dept') === profile.department_id) {
+      return;
+    }
+
+    next.set('dept', profile.department_id);
+    setSearchParams(next, { replace: true });
+  }, [isDepartmentScope, profile?.department_id, searchParams, setSearchParams]);
 
   const deptOptions = useMemo(() => {
     if (isDepartmentScope) return [];
@@ -90,15 +98,34 @@ export const DashboardPage: React.FC = () => {
     return deptOptions.filter(d => d.name.toLowerCase().includes(q));
   }, [deptOptions, deptSearchQuery]);
 
-  // Period toggle
-  const [period, setPeriod] = useState<DashboardPeriod>('today');
-
   // Month picker (YYYY-MM)
   const getCurrentMonth = () => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   };
-  const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth);
+
+  // Period toggle
+  const [period, setPeriod] = useState<DashboardPeriod>(() => {
+    const urlPeriod = searchParams.get('period');
+    return urlPeriod === 'week' || urlPeriod === 'month' ? urlPeriod : 'today';
+  });
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const urlMonth = searchParams.get('month');
+    return urlMonth && /^\d{4}-\d{2}$/.test(urlMonth) ? urlMonth : getCurrentMonth();
+  });
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    if (period === 'today') next.delete('period');
+    else next.set('period', period);
+
+    if (period === 'month') next.set('month', selectedMonth);
+    else next.delete('month');
+
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [period, searchParams, selectedMonth, setSearchParams]);
 
   const shiftMonth = (delta: number) => {
     const [y, m] = selectedMonth.split('-').map(Number);
@@ -113,6 +140,17 @@ export const DashboardPage: React.FC = () => {
   };
 
   const isFutureMonth = selectedMonth >= getCurrentMonth();
+  const employeeCardBackState = useMemo(() => {
+    const params = new URLSearchParams();
+    if (effectiveSelectedDeptId) params.set('dept', effectiveSelectedDeptId);
+    if (period !== 'today') params.set('period', period);
+    if (period === 'month') params.set('month', selectedMonth);
+    const query = params.toString();
+    return {
+      label: 'Обзор',
+      from: `/dashboard${query ? `?${query}` : ''}`,
+    };
+  }, [effectiveSelectedDeptId, period, selectedMonth]);
 
   // Data
   const { employees, loading } = usePresence(effectiveSelectedDeptId);
@@ -144,7 +182,9 @@ export const DashboardPage: React.FC = () => {
   };
 
   const handleDeptSelect = (deptId: string) => {
-    setSearchParams({ dept: deptId }, { replace: true });
+    const next = new URLSearchParams(searchParams);
+    next.set('dept', deptId);
+    setSearchParams(next, { replace: true });
     setDeptDropdownOpen(false);
     setDeptSearchQuery('');
     deptInputRef.current?.blur();
@@ -245,7 +285,7 @@ export const DashboardPage: React.FC = () => {
           <div className="dashboard-columns">
             <div className="col-activity">
               <Suspense fallback={<DashboardSectionFallback />}>
-                <ActivityList employees={employees} loading={loading} />
+                <ActivityList employees={employees} loading={loading} employeeCardBackState={employeeCardBackState} />
               </Suspense>
             </div>
 
@@ -411,7 +451,7 @@ export const DashboardPage: React.FC = () => {
                             className="dash-late-detail-link"
                             onClick={() => {
                               setLateModalOpen(false);
-                              navigate(`/employees/${item.employee_id}`, { state: { from: '/dashboard', label: 'Обзор' } });
+                              navigate(`/employees/${item.employee_id}`, { state: employeeCardBackState });
                             }}
                           >
                             Открыть карточку →

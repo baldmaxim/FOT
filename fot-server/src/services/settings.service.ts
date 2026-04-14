@@ -33,6 +33,10 @@ export interface ITimesheetReminderSettings {
   overdueHour: number;
 }
 
+export interface ITimesheetTeamManagementSettings {
+  enabled: boolean;
+}
+
 export const DEFAULT_SIGUR_MONITOR_SETTINGS: ISigurMonitorSettings = {
   enabled: true,
   failureThreshold: 2,
@@ -52,6 +56,10 @@ export const DEFAULT_TIMESHEET_REMINDER_SETTINGS: ITimesheetReminderSettings = {
   deadlineAfternoonHour: 16,
   escalationHour: 17,
   overdueHour: 9,
+};
+
+export const DEFAULT_TIMESHEET_TEAM_MANAGEMENT_SETTINGS: ITimesheetTeamManagementSettings = {
+  enabled: false,
 };
 
 let cache: Map<string, string | null> = new Map();
@@ -346,6 +354,40 @@ export const settingsService = {
 
     this.invalidateCache();
     return this.getSkudTravelConfig();
+  },
+
+  async getTimesheetTeamManagementConfig(): Promise<ITimesheetTeamManagementSettings> {
+    const values = await this.getMultiple([
+      'timesheet_team_management_enabled',
+    ]);
+
+    return {
+      enabled: parseBoolean(
+        values.timesheet_team_management_enabled,
+        DEFAULT_TIMESHEET_TEAM_MANAGEMENT_SETTINGS.enabled,
+      ),
+    };
+  },
+
+  async setTimesheetTeamManagementConfig(
+    config: Partial<ITimesheetTeamManagementSettings>,
+    userId: string,
+  ): Promise<ITimesheetTeamManagementSettings> {
+    const current = await this.getTimesheetTeamManagementConfig();
+    const next: ITimesheetTeamManagementSettings = {
+      enabled: config.enabled ?? current.enabled,
+    };
+
+    await this.setMultiple([
+      {
+        key: 'timesheet_team_management_enabled',
+        value: String(next.enabled),
+        description: 'Разрешить ручное управление составом отдела на странице табеля',
+      },
+    ], userId);
+
+    this.invalidateCache();
+    return this.getTimesheetTeamManagementConfig();
   },
 
   invalidateCache() {

@@ -36,7 +36,7 @@ const STATUS_ICONS: Record<TimesheetApprovalStatus, FC<{ size?: number }>> = {
 interface IPeriodCardProps {
   approval: ITimesheetApproval | null;
   canSubmitDepartment: boolean;
-  canReviewHr: boolean;
+  canReviewApproval: boolean;
   comment: string;
   compact: boolean;
   half: TimesheetApprovalHalf;
@@ -51,7 +51,7 @@ interface IPeriodCardProps {
 const PeriodCard: FC<IPeriodCardProps> = ({
   approval,
   canSubmitDepartment,
-  canReviewHr,
+  canReviewApproval,
   comment,
   compact,
   half,
@@ -98,7 +98,7 @@ const PeriodCard: FC<IPeriodCardProps> = ({
         </button>
       )}
 
-      {canReviewHr && status === 'submitted' && (
+      {canReviewApproval && status === 'submitted' && (
         <>
           {showComment ? (
             <div className="ts-approval-actions">
@@ -139,7 +139,7 @@ const PeriodCard: FC<IPeriodCardProps> = ({
 export const TimesheetApprovalBar: FC<IProps> = ({ departmentId, month, compact = false }) => {
   const { canEditPage } = useAuth();
   const canSubmitDepartment = canEditPage('/timesheet');
-  const canReviewHr = canEditPage('/timesheet-hr');
+  const canReviewApproval = canEditPage('/timesheet') || canEditPage('/timesheet-hr');
   const queryClient = useQueryClient();
   const { data: approvalsByHalf } = useTimesheetApprovalStatuses(departmentId, month);
   const [loadingHalf, setLoadingHalf] = useState<TimesheetApprovalHalf | null>(null);
@@ -192,7 +192,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({ departmentId, month, compact 
             key={half}
             approval={approvalsByHalf[half]}
             canSubmitDepartment={canSubmitDepartment}
-            canReviewHr={canReviewHr}
+            canReviewApproval={canReviewApproval}
             comment={comments[half]}
             compact={compact}
             half={half}
