@@ -461,7 +461,7 @@ export async function buildAttendanceEntries(params: {
       continue;
     }
 
-    if (!employeesWithMultiObjects.has(entry.employee_id) || dayObjectEntries.length === 0) {
+    if (dayObjectEntries.length === 0) {
       entry.object_detail_mode = 'none';
       entry.object_detail_message = null;
       entry.object_detail_count = 0;
@@ -475,9 +475,9 @@ export async function buildAttendanceEntries(params: {
     entry.display_hours_worked = totalHours;
     entry.base_hours_worked = totalBaseHours;
     entry.is_correction = entry.is_correction || dayObjectEntries.some(item => item.is_correction);
-    entry.object_detail_mode = 'available';
+    entry.object_detail_mode = employeesWithMultiObjects.has(entry.employee_id) ? 'available' : 'none';
     entry.object_detail_message = null;
-    entry.object_detail_count = dayObjectEntries.length;
+    entry.object_detail_count = employeesWithMultiObjects.has(entry.employee_id) ? dayObjectEntries.length : 0;
   }
 
   if (displayMode === 'capped_to_schedule') {

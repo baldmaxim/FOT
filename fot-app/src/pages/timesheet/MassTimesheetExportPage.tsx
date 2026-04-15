@@ -9,6 +9,8 @@ import { filterDepartmentTree, sortDepartmentTree } from '../../utils/department
 import './MassTimesheetExportPage.css';
 
 type TimesheetDisplaySegment = TimesheetApprovalHalf | 'FULL';
+type TimesheetGroupingMode = 'employees' | 'objects';
+type TimesheetExportPresentation = 'hr' | 'manager';
 
 const collectAllIds = (nodes: OrgDepartmentNode[]): string[] => {
   const ids: string[] = [];
@@ -108,6 +110,9 @@ export const MassTimesheetExportPage: FC = () => {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [segmentOverride, setSegmentOverride] = useState<TimesheetDisplaySegment | null>(null);
+  const [groupBy, setGroupBy] = useState<TimesheetGroupingMode>('employees');
+  const [exportAs1C, setExportAs1C] = useState(false);
+  const [presentation, setPresentation] = useState<TimesheetExportPresentation>('hr');
   const [searchQuery, setSearchQuery] = useState('');
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -189,8 +194,10 @@ export const MassTimesheetExportPage: FC = () => {
     return [...checkedIds];
   }, [checkedIds]);
 
-  const handleExport = async () => {
+  const handleExport = async (presentationOverride?: TimesheetExportPresentation) => {
     if (selectedDeptIds.length === 0) return;
+    const effectivePresentation = presentationOverride ?? presentation;
+    setPresentation(effectivePresentation);
     setExporting(true);
     setError(null);
     try {
@@ -199,6 +206,9 @@ export const MassTimesheetExportPage: FC = () => {
         month: monthStr,
         department_ids: selectedDeptIds,
         half: activeSegment,
+        group_by: groupBy,
+        presentation: effectivePresentation,
+        export_as_1c: exportAs1C,
       });
       const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
         'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -206,7 +216,10 @@ export const MassTimesheetExportPage: FC = () => {
       const segmentSuffix = activeSegment === 'FULL'
         ? ''
         : `_${activeSegment === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
-      const filename = `Табели_${MONTH_NAMES[month]}_${year}${segmentSuffix}.zip`;
+      const groupingSuffix = groupBy === 'objects' ? '_по_объектам' : '';
+      const templateSuffix = exportAs1C ? '_1С' : '';
+      const presentationSuffix = effectivePresentation === 'manager' ? '_Руководитель' : '';
+      const filename = `Табели${groupingSuffix}${templateSuffix}_${MONTH_NAMES[month]}_${year}${segmentSuffix}${presentationSuffix}.zip`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -258,6 +271,40 @@ export const MassTimesheetExportPage: FC = () => {
           <span className="mte-half-chip-label">Весь месяц</span>
           <span className="mte-half-chip-subtitle">Полный табель</span>
         </button>
+      </section>
+
+      <section className="mte-mode-switch" aria-label="Формат выгрузки">
+        <button
+          type="button"
+          className={`mte-mode-chip ${groupBy === 'employees' ? ' mte-mode-chip--active' : ''}`}
+          onClick={() => setGroupBy('employees')}
+        >
+          <span className="mte-mode-chip-label">По сотрудникам</span>
+          <span className="mte-mode-chip-subtitle">Один файл на выбранный отдел</span>
+        </button>
+        <button
+          type="button"
+          className={`mte-mode-chip ${groupBy === 'objects' ? ' mte-mode-chip--active' : ''}`}
+          onClick={() => setGroupBy('objects')}
+        >
+          <span className="mte-mode-chip-label">По объектам</span>
+          <span className="mte-mode-chip-subtitle">Отдельный файл на каждый объект</span>
+        </button>
+      </section>
+
+      <section className="mte-export-options" aria-label="Дополнительные параметры экспорта">
+        <label className={`mte-checkbox ${exportAs1C ? 'mte-checkbox--checked' : ''}`}>
+          <input
+            type="checkbox"
+            checked={exportAs1C}
+            onChange={e => setExportAs1C(e.target.checked)}
+          />
+          <span className="mte-checkbox-box" aria-hidden="true" />
+          <span className="mte-checkbox-content">
+            <span className="mte-checkbox-label">Экспорт как в 1С</span>
+            <span className="mte-checkbox-subtitle">Шаблон 1С, только целые часы без доп. символов</span>
+          </span>
+        </label>
       </section>
 
       <div className="mte-body">
@@ -313,12 +360,22 @@ export const MassTimesheetExportPage: FC = () => {
 
         <div className="mte-footer">
           <button
-            className="mte-export-btn"
-            onClick={handleExport}
+            className={`mte-export-btn ${presentation === 'hr' ? 'mte-export-btn--active' : ''}`}
+            onClick={() => handleExport('hr')}
             disabled={exporting || checkedIds.size === 0}
           >
             <Download size={16} />
-            {exporting ? 'Экспорт...' : `Экспорт (${checkedIds.size})`}
+            {exporting && presentation === 'hr' ? 'Экспорт HR...' : `Экспорт HR (${checkedIds.size})`}
+          </button>
+          <button
+            className={`mte-export-btn mte-export-btn--secondary ${presentation === 'manager' ? 'mte-export-btn--active' : ''}`}
+            onClick={() => handleExport('manager')}
+            disabled={exporting || checkedIds.size === 0}
+          >
+            <Download size={16} />
+            {exporting && presentation === 'manager'
+              ? 'Экспорт для руководителя...'
+              : `Экспорт для руководителя (${checkedIds.size})`}
           </button>
         </div>
       </div>

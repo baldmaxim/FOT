@@ -1,6 +1,6 @@
 import { supabase } from '../config/database.js';
-import { resolveSchedulesForPeriod } from './schedule.service.js';
-import type { IResolvedSchedule } from '../types/index.js';
+import { loadCalendarMonth, resolveSchedulesForPeriod } from './schedule.service.js';
+import type { IProductionCalendarMonth, IResolvedSchedule } from '../types/index.js';
 import { buildAttendanceEntries } from './attendance.service.js';
 import type { IAttendanceObjectEntry } from './timesheet-object.service.js';
 import {
@@ -9,6 +9,8 @@ import {
 } from './timesheet-department-assignments.service.js';
 
 export type TimesheetExportHalf = 'H1' | 'H2' | 'FULL';
+export type TimesheetExportGrouping = 'employees' | 'objects';
+export type TimesheetExportPresentation = 'hr' | 'manager';
 
 export interface IExportEmployee {
   id: number;
@@ -26,6 +28,7 @@ export interface IDepartmentTimesheetData {
   employees: IExportEmployee[];
   schedulesMap: Map<number, IResolvedSchedule>;
   dailySchedulesMap: Map<number, Map<string, IResolvedSchedule>>;
+  calendarMonth: IProductionCalendarMonth | null;
   dataMap: Map<number, Map<string, { status: string; hours: number; corrected?: boolean }>>;
   objectEntries: IAttendanceObjectEntry[];
   skudMap: Map<number, Map<string, { hours: number; corrected: boolean }>>;
@@ -108,7 +111,10 @@ export async function fetchTimesheetDataForDepartment(
   }));
   // Графики
   const empList = empArr.map(e => ({ id: e.id, work_category: e.work_category }));
-  const dailySchedulesMap = await resolveSchedulesForPeriod(empList, startDate, endDate);
+  const [dailySchedulesMap, calendarMonth] = await Promise.all([
+    resolveSchedulesForPeriod(empList, startDate, endDate),
+    loadCalendarMonth(year, mon),
+  ]);
   const referenceDate = todayStr < startDate ? startDate : (todayStr > endDate ? endDate : todayStr);
   const schedulesMap = new Map<number, IResolvedSchedule>();
   for (const [employeeId, dailyMap] of dailySchedulesMap) {
@@ -125,7 +131,7 @@ export async function fetchTimesheetDataForDepartment(
     startDate,
     endDate,
     dailySchedulesMap,
-    calendarMonth: null,
+    calendarMonth,
     todayStr,
     displayMode,
   });
@@ -161,6 +167,7 @@ export async function fetchTimesheetDataForDepartment(
     employees: empArr,
     schedulesMap,
     dailySchedulesMap,
+    calendarMonth,
     dataMap,
     objectEntries: attendance.objectEntries,
     skudMap,

@@ -11,6 +11,7 @@ router.get('/', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'vi
 router.get('/employees', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'view'), scheduleController.listEmployeeAssignments);
 router.put('/employee/:employeeId', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.assignEmployee);
 router.delete('/employee/:employeeId', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.removeEmployeeAssignment);
+router.post('/brigades/bulk', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.bulkApplyToBrigades);
 router.post('/', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.create);
 router.put('/:id', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.update);
 router.delete('/:id', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.remove);

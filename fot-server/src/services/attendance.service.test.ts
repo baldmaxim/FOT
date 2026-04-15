@@ -419,6 +419,74 @@ describe('attendance.service', () => {
     expect(mockedState.queryLog.map(item => item.table)).toEqual(['attendance_adjustments']);
   });
 
+  it('reconciles summary hours with backend object rows even for a single object day', async () => {
+    const singleObjectEntry = {
+      adjustment_id: null,
+      employee_id: 1,
+      work_date: '2026-04-02',
+      object_key: 'obj-a',
+      object_id: 'obj-a',
+      object_name: 'Объект A',
+      hours_worked: 8,
+      display_hours_worked: 8,
+      base_hours_worked: 8,
+      is_correction: false,
+    };
+
+    mockedState.objectAttendanceData = {
+      objectEntries: [singleObjectEntry],
+      objectEntriesByEmployeeDate: new Map([
+        [1, new Map([['2026-04-02', [singleObjectEntry]]])],
+      ]),
+      employeeDistinctObjectKeys: new Map([[1, new Set(['obj-a'])]]),
+      legacyBlockedDays: new Map(),
+      rawFallbackSummaries: new Map(),
+    };
+
+    mockedState.resolver = (query) => {
+      if (query.table === 'skud_daily_summary') {
+        return {
+          data: [{
+            employee_id: 1,
+            date: '2026-04-02',
+            first_entry: '09:00:00',
+            last_exit: '17:02:00',
+            total_hours: 8.03,
+            total_minutes: 482,
+          }],
+          error: null,
+        };
+      }
+
+      if (query.table === 'attendance_adjustments' || query.table === 'user_profiles' || query.table === 'employees') {
+        return { data: [], error: null };
+      }
+
+      throw new Error(`Unexpected query for table ${query.table}`);
+    };
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
+      startDate: '2026-04-02',
+      endDate: '2026-04-02',
+      dailySchedulesMap: new Map([
+        [1, new Map([['2026-04-02', {} as IResolvedSchedule]])],
+      ]),
+      calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-02',
+    });
+
+    expect(result.entries[0]).toMatchObject({
+      employee_id: 1,
+      work_date: '2026-04-02',
+      hours_worked: 8,
+      display_hours_worked: 8,
+      base_hours_worked: 8,
+      object_detail_mode: 'none',
+      object_detail_count: 0,
+    });
+  });
+
   it('caps manager-facing display hours to schedule and redistributes object rows proportionally', async () => {
     const objectEntryA = {
       adjustment_id: 1,

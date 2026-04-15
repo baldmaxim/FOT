@@ -8,7 +8,7 @@ const MassTimesheetExportPage = lazy(() => import('./MassTimesheetExportPage').t
   default: module.MassTimesheetExportPage,
 })));
 
-const TABS = ['Проверка', 'Экспорт'];
+const TABS = ['Экспорт', 'Проверка'];
 
 export const TimesheetHrPage: FC = () => {
   const { hasPermission } = useAuth();
@@ -35,11 +35,11 @@ export const TimesheetHrPage: FC = () => {
 
         <div className={styles.workspaceBody}>
           {active === 0 ? (
-            <TimesheetReviewPage />
-          ) : (
             <Suspense fallback={<div className={styles.loadingState}>Загрузка экспорта...</div>}>
               <MassTimesheetExportPage />
             </Suspense>
+          ) : (
+            <TimesheetReviewPage />
           )}
         </div>
       </section>

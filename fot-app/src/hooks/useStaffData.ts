@@ -63,6 +63,7 @@ export const useStaffData = (params: IUseStaffDataParams) => {
   return {
     employees: employeesResponse.data,
     departments,
+    countsByDepartment: counts.byDepartment,
     loading: employeesQuery.isPending || structureQuery.isPending || countsQuery.isPending,
     meta,
     totalActive: counts.byStatus.active,

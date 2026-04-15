@@ -16,6 +16,8 @@ interface TimesheetFilters {
 }
 
 type TimesheetExportHalf = 'H1' | 'H2' | 'FULL';
+type TimesheetExportGrouping = 'employees' | 'objects';
+type TimesheetExportPresentation = 'hr' | 'manager';
 
 interface TimesheetExportFilters extends TimesheetFilters {
   half?: TimesheetExportHalf;
@@ -137,7 +139,14 @@ export const timesheetService = {
     if (res.error) throw new Error(res.error || 'Ошибка исключения сотрудника');
   },
 
-  async exportMass(filters: { month: string; department_ids: string[]; half?: TimesheetExportHalf }): Promise<Blob> {
+  async exportMass(filters: {
+    month: string;
+    department_ids: string[];
+    half?: TimesheetExportHalf;
+    group_by?: TimesheetExportGrouping;
+    presentation?: TimesheetExportPresentation;
+    export_as_1c?: boolean;
+  }): Promise<Blob> {
     const response = await fetch(
       buildApiUrl('/timesheet/export-mass'),
       {

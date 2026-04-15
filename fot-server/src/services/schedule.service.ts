@@ -104,6 +104,33 @@ export const getNetHours = (schedule: Pick<IResolvedSchedule, 'work_hours' | 'lu
   return Math.max(0, schedule.work_hours - schedule.lunch_minutes / 60);
 };
 
+/** Порог полного дня для конкретной даты: как в UI табеля */
+export const getFullDayThresholdHoursForDate = (
+  schedule: IResolvedSchedule,
+  date: Date,
+  calendar: IProductionCalendarMonth | null = null,
+): number => {
+  const isDayOff = !isWorkingDay(schedule, date, calendar);
+  const daySchedule = getScheduleForDate(schedule, date);
+  const netFallbackMinutes = Math.max(0, Math.round(daySchedule.work_hours * 60) - (schedule.lunch_minutes || 0));
+
+  if (isDayOff) {
+    if (schedule.weekend_full_day_threshold_minutes != null) {
+      return schedule.weekend_full_day_threshold_minutes / 60;
+    }
+    if (schedule.full_day_threshold_minutes != null) {
+      return schedule.full_day_threshold_minutes / 60;
+    }
+    return netFallbackMinutes / 60;
+  }
+
+  if (schedule.full_day_threshold_minutes != null) {
+    return schedule.full_day_threshold_minutes / 60;
+  }
+
+  return netFallbackMinutes / 60;
+};
+
 /** Считает рабочие дни (будни по графику + minus праздники) */
 export const countWorkingDaysForSchedule = (
   year: number,
@@ -251,7 +278,7 @@ const isAssignmentActiveOnDate = (
   date: string,
 ): boolean => {
   if (!effectiveFrom || effectiveFrom > date) return false;
-  return effectiveTo == null || effectiveTo > date;
+  return effectiveTo == null || effectiveTo >= date;
 };
 
 const iterateDates = (startDate: string, endDate: string, cb: (date: string) => void): void => {
@@ -291,7 +318,7 @@ export const resolveSchedule = async (
     .select('schedule_id, work_schedules(*)')
     .eq('employee_id', employeeId)
     .lte('effective_from', date)
-    .or(`effective_to.is.null,effective_to.gt.${date}`)
+    .or(`effective_to.is.null,effective_to.gte.${date}`)
     .order('effective_from', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -308,7 +335,7 @@ export const resolveSchedule = async (
       .select('schedule_id, work_schedules(*)')
       .eq('category', workCategory)
       .lte('effective_from', date)
-      .or(`effective_to.is.null,effective_to.gt.${date}`)
+      .or(`effective_to.is.null,effective_to.gte.${date}`)
       .order('effective_from', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -351,7 +378,7 @@ export const resolveSchedulesBulk = async (
       .select('employee_id, effective_from, work_schedules(*)')
       .in('employee_id', employeeIds)
       .lte('effective_from', date)
-      .or(`effective_to.is.null,effective_to.gt.${date}`)
+      .or(`effective_to.is.null,effective_to.gte.${date}`)
       .order('effective_from', { ascending: false }),
 
     categories.length > 0
@@ -360,7 +387,7 @@ export const resolveSchedulesBulk = async (
           .select('category, effective_from, work_schedules(*)')
           .in('category', categories)
           .lte('effective_from', date)
-          .or(`effective_to.is.null,effective_to.gt.${date}`)
+          .or(`effective_to.is.null,effective_to.gte.${date}`)
           .order('effective_from', { ascending: false })
       : Promise.resolve({ data: [] as Record<string, unknown>[] }),
 
@@ -425,7 +452,7 @@ export const resolveSchedulesForPeriod = async (
       .select('employee_id, effective_from, effective_to, work_schedules(*)')
       .in('employee_id', employeeIds)
       .lte('effective_from', endDate)
-      .or(`effective_to.is.null,effective_to.gt.${startDate}`)
+      .or(`effective_to.is.null,effective_to.gte.${startDate}`)
       .order('effective_from', { ascending: false }),
 
     categories.length > 0
@@ -434,7 +461,7 @@ export const resolveSchedulesForPeriod = async (
           .select('category, effective_from, effective_to, work_schedules(*)')
           .in('category', categories)
           .lte('effective_from', endDate)
-          .or(`effective_to.is.null,effective_to.gt.${startDate}`)
+          .or(`effective_to.is.null,effective_to.gte.${startDate}`)
           .order('effective_from', { ascending: false })
       : Promise.resolve({ data: [] as Record<string, unknown>[] }),
 

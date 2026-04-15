@@ -85,7 +85,7 @@ const getLocalISODate = (): string => {
 };
 
 const isActiveScheduleAssignment = (effectiveFrom: string, effectiveTo: string | null, date: string): boolean =>
-  effectiveFrom <= date && (effectiveTo === null || effectiveTo > date);
+  effectiveFrom <= date && (effectiveTo === null || effectiveTo >= date);
 
 /** Длина смены по началу/концу (с учётом ночной смены) в десятичных часах */
 const computeShiftHours = (start: string, end: string): number => {

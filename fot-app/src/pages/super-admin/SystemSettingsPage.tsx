@@ -445,7 +445,7 @@ export const SystemSettingsPage: FC = () => {
             />
           </div>
           <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Просрочка в HR, час</label>
+            <label className={styles.formLabel}>Просрочка руководителю, час</label>
             <input
               className={styles.formInput}
               type="number"

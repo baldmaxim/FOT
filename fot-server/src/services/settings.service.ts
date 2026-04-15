@@ -517,7 +517,7 @@ export const settingsService = {
       {
         key: 'timesheet_reminders_overdue_hour',
         value: String(next.overdueHour),
-        description: 'Час уведомления HR о просрочке подачи табеля',
+        description: 'Час просроченного напоминания руководителю подразделения о подаче табеля',
       },
     ], userId);
 

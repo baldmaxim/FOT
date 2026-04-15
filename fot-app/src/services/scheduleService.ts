@@ -13,6 +13,19 @@ interface ApiResponse<T> {
   error?: string;
 }
 
+export interface IBulkBrigadeSchedulePayload {
+  department_ids: string[];
+  action: 'assign' | 'reset';
+  schedule_id?: string;
+  effective_date: string;
+}
+
+export interface IBulkBrigadeScheduleResult {
+  departments_processed: number;
+  employees_matched: number;
+  employees_updated: number;
+}
+
 export const scheduleService = {
   /** Список шаблонов графиков */
   async list(): Promise<IWorkSchedule[]> {
@@ -97,5 +110,12 @@ export const scheduleService = {
     const query = effectiveTo ? `?effective_to=${encodeURIComponent(effectiveTo)}` : '';
     const res = await apiClient.delete<ApiResponse<null>>(`/schedules/employee/${employeeId}${query}`);
     if (res.error) throw new Error(res.error);
+  },
+
+  /** Массово назначить или снять персональный график сотрудникам выбранных бригад */
+  async bulkApplyToBrigades(data: IBulkBrigadeSchedulePayload): Promise<IBulkBrigadeScheduleResult> {
+    const res = await apiClient.post<ApiResponse<IBulkBrigadeScheduleResult>>('/schedules/brigades/bulk', data);
+    if (!res.data) throw new Error(res.error || 'Ошибка массового назначения графика по бригадам');
+    return res.data;
   },
 };

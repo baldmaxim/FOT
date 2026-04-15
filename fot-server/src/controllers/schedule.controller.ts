@@ -5,6 +5,7 @@ import { Response } from 'express';
 import { z } from 'zod';
 import { supabase } from '../config/database.js';
 import { resolveSchedule, resolveSchedulesBulk } from '../services/schedule.service.js';
+import { resolveRequestDataScope } from '../services/data-scope.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const scheduleTypeEnum = z.enum(['office', 'remote', 'hybrid', 'shift']);
@@ -49,6 +50,45 @@ const assignCategorySchema = z.object({
 const employeeIdParamSchema = z.coerce.number().int().positive();
 const assignEmployeeSchema = assignCategorySchema;
 const effectiveDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const bulkBrigadeScheduleSchema = z.object({
+  department_ids: z.array(z.string().uuid()).min(1),
+  action: z.enum(['assign', 'reset']),
+  schedule_id: z.string().uuid().optional(),
+  effective_date: effectiveDateSchema,
+}).superRefine((value, ctx) => {
+  if (new Set(value.department_ids).size !== value.department_ids.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'department_ids должны быть уникальными',
+      path: ['department_ids'],
+    });
+  }
+
+  if (value.action === 'assign' && !value.schedule_id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'schedule_id обязателен для assign',
+      path: ['schedule_id'],
+    });
+  }
+});
+
+type EmployeeScheduleRow = {
+  id: string;
+  schedule_id: string;
+  effective_from: string;
+  effective_to: string | null;
+};
+
+const BRIGADE_PREFIX = 'бр.';
+
+const shiftIsoDate = (date: string, days: number): string => {
+  const cursor = new Date(`${date}T00:00:00Z`);
+  cursor.setUTCDate(cursor.getUTCDate() + days);
+  return cursor.toISOString().slice(0, 10);
+};
+
+const previousIsoDate = (date: string): string => shiftIsoDate(date, -1);
 
 /** Нормализация HH:MM → HH:MM:SS */
 const normalizeTime = (t: string): string => (t.length === 5 ? t + ':00' : t);
@@ -67,6 +107,106 @@ const normalizeDayOverrides = (
     };
   }
   return result;
+};
+
+const isBrigadeDepartmentName = (name: string | null | undefined): boolean => (
+  String(name || '').trim().toLowerCase().startsWith(BRIGADE_PREFIX)
+);
+
+const loadEmployeeScheduleRows = async (employeeId: number): Promise<EmployeeScheduleRow[]> => {
+  const { data, error } = await supabase
+    .from('employee_schedule_assignments')
+    .select('id, schedule_id, effective_from, effective_to')
+    .eq('employee_id', employeeId)
+    .order('effective_from', { ascending: true });
+
+  if (error) throw error;
+  return (data || []) as EmployeeScheduleRow[];
+};
+
+const assignEmployeeSchedule = async (
+  employeeId: number,
+  scheduleId: string,
+  effectiveFrom: string,
+  createdBy: number | null,
+  effectiveTo?: string | null,
+): Promise<unknown> => {
+  const rows = await loadEmployeeScheduleRows(employeeId);
+  const nowIso = new Date().toISOString();
+  const activeAtDate = rows.find(row => row.effective_from <= effectiveFrom && (row.effective_to === null || row.effective_to >= effectiveFrom)) || null;
+  const nextAssignment = rows.find(row => row.effective_from > effectiveFrom) || null;
+
+  if (activeAtDate?.effective_from === effectiveFrom) {
+    const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : activeAtDate.effective_to ?? null);
+    const { data, error } = await supabase
+      .from('employee_schedule_assignments')
+      .update({
+        schedule_id: scheduleId,
+        effective_to: nextEffectiveTo,
+        updated_at: nowIso,
+      })
+      .eq('id', activeAtDate.id)
+      .select('*, work_schedules(*)')
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
+
+  if (activeAtDate && activeAtDate.effective_from < effectiveFrom) {
+    const { error } = await supabase
+      .from('employee_schedule_assignments')
+      .update({ effective_to: previousIsoDate(effectiveFrom), updated_at: nowIso })
+      .eq('id', activeAtDate.id);
+    if (error) throw error;
+  }
+
+  const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : null);
+  const { data, error } = await supabase
+    .from('employee_schedule_assignments')
+    .insert({
+      employee_id: employeeId,
+      schedule_id: scheduleId,
+      effective_from: effectiveFrom,
+      effective_to: nextEffectiveTo,
+      created_by: createdBy,
+    })
+    .select('*, work_schedules(*)')
+    .single();
+
+  if (error) throw error;
+  return data;
+};
+
+const removeEmployeeSchedule = async (
+  employeeId: number,
+  effectiveDate: string,
+): Promise<boolean> => {
+  const rows = await loadEmployeeScheduleRows(employeeId);
+  const nowIso = new Date().toISOString();
+  const exactRow = rows.find(row => row.effective_from === effectiveDate) || null;
+  if (exactRow) {
+    const { error } = await supabase
+      .from('employee_schedule_assignments')
+      .delete()
+      .eq('id', exactRow.id);
+
+    if (error) throw error;
+    return true;
+  }
+
+  const activeAtDate = rows.find(row => row.effective_from < effectiveDate && (row.effective_to === null || row.effective_to >= effectiveDate)) || null;
+  if (!activeAtDate) {
+    return false;
+  }
+
+  const { error } = await supabase
+    .from('employee_schedule_assignments')
+    .update({ effective_to: previousIsoDate(effectiveDate), updated_at: nowIso })
+    .eq('id', activeAtDate.id);
+
+  if (error) throw error;
+  return true;
 };
 
 export const scheduleController = {
@@ -274,7 +414,7 @@ export const scheduleController = {
         .select('*, work_schedules(*)')
         .in('employee_id', employeeIds)
         .lte('effective_from', today)
-        .or(`effective_to.is.null,effective_to.gt.${today}`)
+        .or(`effective_to.is.null,effective_to.gte.${today}`)
         .order('employee_id')
         .order('effective_from', { ascending: false });
 
@@ -297,7 +437,7 @@ export const scheduleController = {
 
       await supabase
         .from('category_schedules')
-        .update({ effective_to: parsed.data.effective_from })
+        .update({ effective_to: previousIsoDate(parsed.data.effective_from) })
         .eq('category', parsedCat.data)
         .is('effective_to', null);
 
@@ -330,7 +470,7 @@ export const scheduleController = {
       const today = new Date().toISOString().slice(0, 10);
       const { error } = await supabase
         .from('category_schedules')
-        .update({ effective_to: today })
+        .update({ effective_to: previousIsoDate(today) })
         .eq('category', parsedCat.data)
         .is('effective_to', null);
 
@@ -353,71 +493,91 @@ export const scheduleController = {
       const parsed = assignEmployeeSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.issues });
 
-      const employeeId = parsedEmployeeId.data;
-      const effectiveFrom = parsed.data.effective_from;
-      const nowIso = new Date().toISOString();
+      const data = await assignEmployeeSchedule(
+        parsedEmployeeId.data,
+        parsed.data.schedule_id,
+        parsed.data.effective_from,
+        req.user.employee_id,
+        parsed.data.effective_to,
+      );
 
-      const { data: assignmentRows, error: assignmentError } = await supabase
-        .from('employee_schedule_assignments')
-        .select('id, schedule_id, effective_from, effective_to')
-        .eq('employee_id', employeeId)
-        .order('effective_from', { ascending: true });
-
-      if (assignmentError) throw assignmentError;
-
-      const rows = (assignmentRows || []) as Array<{
-        id: string;
-        schedule_id: string;
-        effective_from: string;
-        effective_to: string | null;
-      }>;
-
-      const activeAtDate = rows.find(row => row.effective_from <= effectiveFrom && (row.effective_to === null || row.effective_to > effectiveFrom)) || null;
-      const nextAssignment = rows.find(row => row.effective_from > effectiveFrom) || null;
-
-      if (activeAtDate?.effective_from === effectiveFrom) {
-        const nextEffectiveTo = parsed.data.effective_to ?? nextAssignment?.effective_from ?? activeAtDate.effective_to ?? null;
-        const { data, error } = await supabase
-          .from('employee_schedule_assignments')
-          .update({
-            schedule_id: parsed.data.schedule_id,
-            effective_to: nextEffectiveTo,
-            updated_at: nowIso,
-          })
-          .eq('id', activeAtDate.id)
-          .select('*, work_schedules(*)')
-          .single();
-
-        if (error) throw error;
-        return res.json({ success: true, data });
-      }
-
-      if (activeAtDate && activeAtDate.effective_from < effectiveFrom) {
-        const { error } = await supabase
-          .from('employee_schedule_assignments')
-          .update({ effective_to: effectiveFrom, updated_at: nowIso })
-          .eq('id', activeAtDate.id);
-        if (error) throw error;
-      }
-
-      const nextEffectiveTo = parsed.data.effective_to ?? nextAssignment?.effective_from ?? null;
-      const { data, error } = await supabase
-        .from('employee_schedule_assignments')
-        .insert({
-          employee_id: employeeId,
-          schedule_id: parsed.data.schedule_id,
-          effective_from: effectiveFrom,
-          effective_to: nextEffectiveTo,
-          created_by: req.user.employee_id,
-        })
-        .select('*, work_schedules(*)')
-        .single();
-
-      if (error) throw error;
       res.json({ success: true, data });
     } catch (err) {
       console.error('[schedules] assignEmployee error:', err);
       res.status(500).json({ success: false, error: 'Ошибка назначения персонального графика сотруднику' });
+    }
+  },
+
+  /** POST /api/schedules/brigades/bulk — массово назначить график сотрудникам выбранных бригад */
+  async bulkApplyToBrigades(req: AuthenticatedRequest, res: Response) {
+    try {
+      const scope = await resolveRequestDataScope(req);
+      if (!scope || scope === 'self') {
+        return res.status(403).json({ success: false, error: 'Недостаточно прав для массового назначения графика по бригадам' });
+      }
+
+      const parsed = bulkBrigadeScheduleSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.issues });
+
+      const { department_ids: departmentIds, action, schedule_id: scheduleId, effective_date: effectiveDate } = parsed.data;
+      if (scope === 'department') {
+        if (!req.user.department_id || departmentIds.some(id => id !== req.user.department_id)) {
+          return res.status(403).json({ success: false, error: 'Можно назначать график только по своей бригаде' });
+        }
+      }
+
+      const { data: departments, error: departmentsError } = await supabase
+        .from('org_departments')
+        .select('id, name')
+        .in('id', departmentIds);
+
+      if (departmentsError) throw departmentsError;
+
+      if ((departments || []).length !== departmentIds.length) {
+        return res.status(400).json({ success: false, error: 'Переданы несуществующие бригады' });
+      }
+
+      const invalidDepartments = (departments || []).filter(department => !isBrigadeDepartmentName(department.name as string | null | undefined));
+      if (invalidDepartments.length > 0) {
+        return res.status(400).json({ success: false, error: 'Можно выбирать только отделы-бригады' });
+      }
+
+      const { data: employees, error: employeesError } = await supabase
+        .from('employees')
+        .select('id')
+        .in('org_department_id', departmentIds)
+        .eq('is_archived', false)
+        .neq('employment_status', 'fired');
+
+      if (employeesError) throw employeesError;
+
+      const employeeIds = (employees || []).map(row => row.id as number);
+      let employeesUpdated = 0;
+      const CHUNK_SIZE = 20;
+
+      for (let index = 0; index < employeeIds.length; index += CHUNK_SIZE) {
+        const chunk = employeeIds.slice(index, index + CHUNK_SIZE);
+        const results = await Promise.all(chunk.map(async (employeeId) => {
+          if (action === 'assign') {
+            await assignEmployeeSchedule(employeeId, scheduleId!, effectiveDate, req.user.employee_id);
+            return true;
+          }
+          return removeEmployeeSchedule(employeeId, effectiveDate);
+        }));
+        employeesUpdated += results.filter(Boolean).length;
+      }
+
+      res.json({
+        success: true,
+        data: {
+          departments_processed: departmentIds.length,
+          employees_matched: employeeIds.length,
+          employees_updated: employeesUpdated,
+        },
+      });
+    } catch (err) {
+      console.error('[schedules] bulkApplyToBrigades error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка массового назначения графика по бригадам' });
     }
   },
 
@@ -436,34 +596,10 @@ export const scheduleController = {
         return res.status(400).json({ success: false, error: 'Некорректная дата effective_to' });
       }
 
-      const employeeId = parsedEmployeeId.data;
-      const effectiveTo = parsedEffectiveTo.data;
-      const nowIso = new Date().toISOString();
-
-      const { data: assignmentRows, error: assignmentError } = await supabase
-        .from('employee_schedule_assignments')
-        .select('id, effective_from, effective_to')
-        .eq('employee_id', employeeId)
-        .order('effective_from', { ascending: true });
-      if (assignmentError) throw assignmentError;
-
-      const rows = (assignmentRows || []) as Array<{
-        id: string;
-        effective_from: string;
-        effective_to: string | null;
-      }>;
-
-      const activeAtDate = rows.find(row => row.effective_from <= effectiveTo && (row.effective_to === null || row.effective_to > effectiveTo)) || null;
-      if (!activeAtDate) {
+      const updated = await removeEmployeeSchedule(parsedEmployeeId.data, parsedEffectiveTo.data);
+      if (!updated) {
         return res.json({ success: true });
       }
-
-      const { error } = await supabase
-        .from('employee_schedule_assignments')
-        .update({ effective_to: effectiveTo, updated_at: nowIso })
-        .eq('id', activeAtDate.id);
-
-      if (error) throw error;
       res.json({ success: true });
     } catch (err) {
       console.error('[schedules] removeEmployeeAssignment error:', err);

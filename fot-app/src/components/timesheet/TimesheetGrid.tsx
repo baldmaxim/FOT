@@ -368,11 +368,13 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     };
 
     const allocatedHoursByEmployeeDay = new Map<string, number>();
+    const backendObjectDayKeys = new Set<string>();
 
     for (const objectEntry of objectEntries) {
       if (!visibleDateSet.has(objectEntry.work_date)) continue;
       const employee = employeeById.get(objectEntry.employee_id);
       if (!employee) continue;
+      backendObjectDayKeys.add(`${objectEntry.employee_id}_${objectEntry.work_date}`);
 
       const normalizedName = objectEntry.object_name?.trim() || UNASSIGNED_OBJECT_NAME;
       const normalizedKey = normalizedName === UNASSIGNED_OBJECT_NAME ? UNASSIGNED_OBJECT_KEY : objectEntry.object_key;
@@ -405,6 +407,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
         if (!hasPositiveHours(visibleHours)) continue;
 
         const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        if (backendObjectDayKeys.has(`${row.employee.id}_${workDate}`)) continue;
         const allocatedHours = allocatedHoursByEmployeeDay.get(`${row.employee.id}_${workDate}`) || 0;
         const remainingHours = roundHours((visibleHours as number) - allocatedHours);
         if (remainingHours <= 0.001) continue;
