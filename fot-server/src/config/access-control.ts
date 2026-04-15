@@ -1,16 +1,28 @@
 export type AccessAction = 'view' | 'edit';
+export type AccessMode = 'none' | 'view' | 'edit';
+export type AccessPageSurface = 'page' | 'technical';
 export type EmployeePortalVariant = 'office' | 'object';
 export type DataScope = 'self' | 'department' | 'all';
 
-export interface AvailablePage {
-  path: string;
+export interface PageCatalogItem {
+  key: string;
   label: string;
+  group_code: string;
+  group_label: string;
+  surface: AccessPageSurface;
+  supports_edit: boolean;
+  requires_data_scope: boolean;
+  requires_employee_variant: boolean;
+  sort_order: number;
+  is_active: boolean;
+  is_system: boolean;
 }
 
 export interface PermissionOption {
   code: string;
   label: string;
   description: string;
+  sort_order: number;
 }
 
 export interface PermissionGroup {
@@ -18,6 +30,7 @@ export interface PermissionGroup {
   label: string;
   description: string;
   exclusive: boolean;
+  sort_order: number;
   options: PermissionOption[];
 }
 
@@ -30,23 +43,27 @@ export interface PageAccessEntry {
 
 export const EMPLOYEE_VARIANT_PREFIX = 'portal.employee.variant.';
 export const DATA_SCOPE_PREFIX = 'data.scope.';
+export const CRITICAL_ADMIN_PAGE_KEYS = ['/admin/roles', '/admin/users'] as const;
 
-export const PERMISSION_GROUPS: PermissionGroup[] = [
+export const DEFAULT_PERMISSION_GROUPS: PermissionGroup[] = [
   {
     code: 'portal.employee.variant',
     label: 'Вариант кабинета /employee',
     description: 'Определяет, какой личный кабинет открывать пользователю на маршруте /employee.',
     exclusive: true,
+    sort_order: 10,
     options: [
       {
         code: 'portal.employee.variant.office',
         label: 'Обычный кабинет',
         description: 'Обычный личный кабинет для офисных сотрудников и остальных ролей.',
+        sort_order: 10,
       },
       {
         code: 'portal.employee.variant.object',
         label: 'Кабинет рабочего',
         description: 'Отдельный личный кабинет рабочего на объекте.',
+        sort_order: 20,
       },
     ],
   },
@@ -55,83 +72,396 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     label: 'Область данных',
     description: 'Определяет, какие данные пользователя доступны внутри страниц.',
     exclusive: true,
+    sort_order: 20,
     options: [
       {
         code: 'data.scope.self',
         label: 'Только свои данные',
         description: 'Пользователь видит только свои данные и свои документы.',
+        sort_order: 10,
       },
       {
         code: 'data.scope.department',
         label: 'Только свой отдел',
         description: 'Пользователь видит данные своего отдела.',
+        sort_order: 20,
       },
       {
         code: 'data.scope.all',
         label: 'Все данные',
         description: 'Пользователь видит данные всей организации.',
+        sort_order: 30,
       },
     ],
   },
 ];
 
-export const AVAILABLE_PAGES: AvailablePage[] = [
-  { path: '/employee', label: 'Личный кабинет' },
-  { path: '/employee/requests', label: 'Мои заявления' },
-  { path: '/employee/payslips', label: 'Расчётные листки' },
-  { path: '/employee/payments', label: 'История выплат' },
-  { path: '/employee/documents', label: 'Мои документы' },
-  { path: '/employee/timesheet', label: 'Мой табель' },
-  { path: '/employee/history', label: 'Моя история' },
-  { path: '/employee/salary-raise', label: 'Повышение оклада' },
-  { path: '/dashboard', label: 'Дашборд' },
-  { path: '/timesheet', label: 'Табель' },
-  { path: '/timesheet-hr', label: 'Табели HR' },
-  { path: '/leave-requests', label: 'Заявления' },
-  { path: '/salary-raise-review', label: 'Проверка заявок на повышение' },
-  { path: '/discipline', label: 'Дисциплина' },
-  { path: '/skud-travel', label: 'Передвижения' },
-  { path: '/employees', label: 'Сотрудники' },
-  { path: '/skud-raw', label: 'Просмотр СКУД' },
-  { path: '/skud-db', label: 'СКУД (база)' },
-  { path: '/skud-monitor', label: 'Монитор Sigur' },
-  { path: '/staff-control', label: 'Управление кадрами' },
-  { path: '/skud-settings', label: 'Настройки СКУД' },
-  { path: '/admin/users', label: 'Управление пользователями' },
-  { path: '/admin/audit', label: 'Аудит данных' },
-  { path: '/admin/roles', label: 'Управление ролями' },
-  { path: '/admin/settings', label: 'Системные настройки' },
-  { path: '/admin/schedules', label: 'Графики работы' },
-  { path: '/admin/payslips', label: 'Управление расчётными листками' },
-  { path: '/admin/payments', label: 'Управление выплатами' },
+export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
+  {
+    key: '/employee',
+    label: 'Личный кабинет',
+    group_code: 'employee',
+    group_label: 'Личный кабинет',
+    surface: 'page',
+    supports_edit: false,
+    requires_data_scope: true,
+    requires_employee_variant: true,
+    sort_order: 10,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/employee/requests',
+    label: 'Мои заявления',
+    group_code: 'employee',
+    group_label: 'Личный кабинет',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 20,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/employee/payslips',
+    label: 'Расчётные листки',
+    group_code: 'employee',
+    group_label: 'Личный кабинет',
+    surface: 'page',
+    supports_edit: false,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 30,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/employee/payments',
+    label: 'История выплат',
+    group_code: 'employee',
+    group_label: 'Личный кабинет',
+    surface: 'page',
+    supports_edit: false,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 40,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/employee/documents',
+    label: 'Мои документы',
+    group_code: 'employee',
+    group_label: 'Личный кабинет',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 50,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/employee/timesheet',
+    label: 'Мой табель',
+    group_code: 'employee',
+    group_label: 'Личный кабинет',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 60,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/employee/history',
+    label: 'Моя история',
+    group_code: 'employee',
+    group_label: 'Личный кабинет',
+    surface: 'page',
+    supports_edit: false,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 70,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/employee/salary-raise',
+    label: 'Повышение оклада',
+    group_code: 'employee',
+    group_label: 'Личный кабинет',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 80,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/dashboard',
+    label: 'Дашборд',
+    group_code: 'operations',
+    group_label: 'Управление',
+    surface: 'page',
+    supports_edit: false,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 90,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/timesheet',
+    label: 'Табель',
+    group_code: 'operations',
+    group_label: 'Управление',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 100,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/timesheet-hr',
+    label: 'Табели HR',
+    group_code: 'operations',
+    group_label: 'Управление',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 110,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/leave-requests',
+    label: 'Заявления',
+    group_code: 'operations',
+    group_label: 'Управление',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 120,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/salary-raise-review',
+    label: 'Проверка заявок на повышение',
+    group_code: 'operations',
+    group_label: 'Управление',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 130,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/discipline',
+    label: 'Дисциплина',
+    group_code: 'operations',
+    group_label: 'Управление',
+    surface: 'page',
+    supports_edit: false,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 140,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/employees',
+    label: 'Сотрудники',
+    group_code: 'operations',
+    group_label: 'Управление',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 150,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/staff-control',
+    label: 'Управление кадрами',
+    group_code: 'operations',
+    group_label: 'Управление',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 160,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/skud-travel',
+    label: 'Передвижения',
+    group_code: 'skud',
+    group_label: 'СКУД',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 170,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/skud-raw',
+    label: 'Просмотр СКУД',
+    group_code: 'skud',
+    group_label: 'СКУД',
+    surface: 'page',
+    supports_edit: false,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 180,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/skud-db',
+    label: 'СКУД (база)',
+    group_code: 'skud',
+    group_label: 'СКУД',
+    surface: 'page',
+    supports_edit: false,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 190,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/skud-monitor',
+    label: 'Монитор Sigur',
+    group_code: 'skud',
+    group_label: 'СКУД',
+    surface: 'page',
+    supports_edit: false,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 200,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/skud-settings',
+    label: 'Настройки СКУД',
+    group_code: 'skud',
+    group_label: 'СКУД',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: false,
+    requires_employee_variant: false,
+    sort_order: 210,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/admin/users',
+    label: 'Управление пользователями',
+    group_code: 'admin',
+    group_label: 'Администрирование',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: false,
+    requires_employee_variant: false,
+    sort_order: 220,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/admin/audit',
+    label: 'Аудит данных',
+    group_code: 'admin',
+    group_label: 'Администрирование',
+    surface: 'page',
+    supports_edit: false,
+    requires_data_scope: false,
+    requires_employee_variant: false,
+    sort_order: 230,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/admin/roles',
+    label: 'Управление ролями',
+    group_code: 'admin',
+    group_label: 'Администрирование',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: false,
+    requires_employee_variant: false,
+    sort_order: 240,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/admin/settings',
+    label: 'Системные настройки',
+    group_code: 'admin',
+    group_label: 'Администрирование',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: false,
+    requires_employee_variant: false,
+    sort_order: 250,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/admin/schedules',
+    label: 'Графики работы',
+    group_code: 'admin',
+    group_label: 'Администрирование',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: false,
+    requires_employee_variant: false,
+    sort_order: 260,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/admin/payslips',
+    label: 'Управление расчётными листками',
+    group_code: 'admin',
+    group_label: 'Администрирование',
+    surface: 'page',
+    supports_edit: true,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 270,
+    is_active: true,
+    is_system: true,
+  },
+  {
+    key: '/admin/payments',
+    label: 'Управление выплатами',
+    group_code: 'technical',
+    group_label: 'Технические доступы',
+    surface: 'technical',
+    supports_edit: true,
+    requires_data_scope: true,
+    requires_employee_variant: false,
+    sort_order: 280,
+    is_active: true,
+    is_system: true,
+  },
 ];
-
-export const SCOPE_REQUIRED_PAGES = new Set<string>([
-  '/employee',
-  '/employee/requests',
-  '/employee/payslips',
-  '/employee/payments',
-  '/employee/documents',
-  '/employee/timesheet',
-  '/employee/history',
-  '/employee/salary-raise',
-  '/dashboard',
-  '/timesheet',
-  '/timesheet-hr',
-  '/leave-requests',
-  '/salary-raise-review',
-  '/discipline',
-  '/skud-travel',
-  '/employees',
-  '/skud-raw',
-  '/skud-db',
-  '/skud-monitor',
-  '/staff-control',
-  '/admin/payslips',
-  '/admin/payments',
-]);
-
-export const PAGE_ACCESS_KEYS = new Set(AVAILABLE_PAGES.map(page => page.path));
 
 export function normalizePermissions(permissions: string[] | null | undefined): string[] {
   return [...new Set((permissions || []).filter(Boolean))].sort();
@@ -141,19 +471,30 @@ export function normalizePageAccessEntry<T extends PageAccessEntry>(entry: T): T
   if (entry.can_edit && !entry.can_view) {
     return { ...entry, can_view: true };
   }
+
   return entry;
 }
 
+export function accessModeFromFlags(input: { can_view?: boolean; can_edit?: boolean } | null | undefined): AccessMode {
+  if (input?.can_edit) return 'edit';
+  if (input?.can_view) return 'view';
+  return 'none';
+}
+
+export function accessModeToFlags(mode: AccessMode): { can_view: boolean; can_edit: boolean } {
+  if (mode === 'edit') {
+    return { can_view: true, can_edit: true };
+  }
+
+  if (mode === 'view') {
+    return { can_view: true, can_edit: false };
+  }
+
+  return { can_view: false, can_edit: false };
+}
+
 function countByPrefix(permissions: string[], prefix: string): number {
-  return permissions.filter(permission => permission.startsWith(prefix)).length;
-}
-
-function pageAccessNeedsEmployeeVariant(pageAccess: Record<string, { can_view: boolean; can_edit: boolean }>): boolean {
-  return pageAccess['/employee']?.can_view === true;
-}
-
-function pageAccessNeedsDataScope(pageAccess: Record<string, { can_view: boolean; can_edit: boolean }>): boolean {
-  return Object.entries(pageAccess).some(([pagePath, access]) => access.can_view && SCOPE_REQUIRED_PAGES.has(pagePath));
+  return permissions.filter((permission) => permission.startsWith(prefix)).length;
 }
 
 export function resolveEmployeeVariantFromPermissions(
@@ -173,11 +514,7 @@ export function resolveDataScopeFromPermissions(permissions: string[] | null | u
   return null;
 }
 
-export function validateRoleConfiguration(
-  roleCode: string,
-  permissions: string[] | null | undefined,
-  pageAccess: Record<string, { can_view: boolean; can_edit: boolean }>,
-): string | null {
+export function validatePermissionSelections(roleCode: string, permissions: string[] | null | undefined): string | null {
   const normalized = normalizePermissions(permissions);
   const variantCount = countByPrefix(normalized, EMPLOYEE_VARIANT_PREFIX);
   const dataScopeCount = countByPrefix(normalized, DATA_SCOPE_PREFIX);
@@ -185,14 +522,9 @@ export function validateRoleConfiguration(
   if (variantCount > 1) {
     return `Роль ${roleCode}: можно выбрать только один вариант кабинета /employee`;
   }
+
   if (dataScopeCount > 1) {
     return `Роль ${roleCode}: можно выбрать только одну область данных`;
-  }
-  if (pageAccessNeedsEmployeeVariant(pageAccess) && variantCount !== 1) {
-    return `Роль ${roleCode}: для доступа к /employee нужно выбрать ровно один вариант кабинета`;
-  }
-  if (pageAccessNeedsDataScope(pageAccess) && dataScopeCount !== 1) {
-    return `Роль ${roleCode}: для доступа к страницам с данными нужно выбрать ровно одну область данных`;
   }
 
   return null;

@@ -85,8 +85,8 @@ export const TimesheetPage: FC = () => {
   const toast = useToast();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const isSuperAdmin = profile?.position_type === 'super_admin';
-  const canManageAllDepartments = isSuperAdmin || hasPermission('data.scope.all');
+  const canEditTimesheet = canEditPage('/timesheet') || canEditPage('/timesheet-hr');
+  const canManageAllDepartments = hasPermission('data.scope.all');
   const isDepartmentScope = !canManageAllDepartments && hasPermission('data.scope.department');
   const queryMonth = searchParams.get('month');
   const queryHalf = searchParams.get('half');
@@ -254,12 +254,12 @@ export const TimesheetPage: FC = () => {
   ), [employees]);
   const canManageTeam = Boolean(
     effectiveSelectedDeptId
-    && canEditPage('/timesheet')
+    && canEditTimesheet
     && teamManagementConfigQuery.data?.enabled
     && teamManagementConfigQuery.data?.can_manage,
   );
   const canUseTeamManagement = Boolean(
-    canEditPage('/timesheet')
+    canEditTimesheet
     && teamManagementConfigQuery.data?.enabled
     && teamManagementConfigQuery.data?.can_manage,
   );

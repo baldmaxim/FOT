@@ -1,22 +1,29 @@
-import { useState, useRef, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { rolesService } from '../../services/rolesService';
 import type {
-  RolePageAccessEntry,
-  AvailablePage,
+  AccessMode,
+  PageCatalogItem,
   PermissionGroup,
 } from '../../services/rolesService';
 import { useToast } from '../../contexts/ToastContext';
 import type { SystemRole } from '../../types';
 import styles from './RoleManagementPage.module.css';
 
-type Tab = 'roles' | 'access' | 'permissions';
+type Tab = 'roles' | 'access';
 
 interface INewRoleForm {
   code: string;
   name: string;
   level: string;
+}
+
+interface ICloneRoleForm {
+  code: string;
+  name: string;
+  level: string;
+  description: string;
 }
 
 interface IEditState {
@@ -25,193 +32,240 @@ interface IEditState {
   level: string;
 }
 
-interface IAccessCell {
-  can_view: boolean;
-  can_edit: boolean;
+interface IPageGroup {
+  code: string;
+  label: string;
+  pages: PageCatalogItem[];
 }
 
-type AccessMatrix = Record<string, Record<string, IAccessCell>>;
-type PermissionMatrix = Record<string, string[]>;
+const EMPTY_ROLES: SystemRole[] = [];
+const ACCESS_OPTIONS: AccessMode[] = ['none', 'view', 'edit'];
 
 const normalizePermissions = (permissions: string[] | undefined): string[] =>
   [...new Set(permissions ?? [])].sort();
 
-const areSamePermissions = (left: string[] | undefined, right: string[] | undefined): boolean => {
-  const leftNormalized = normalizePermissions(left);
-  const rightNormalized = normalizePermissions(right);
-  return JSON.stringify(leftNormalized) === JSON.stringify(rightNormalized);
+const serializePermissions = (permissions: string[] | undefined): string =>
+  JSON.stringify(normalizePermissions(permissions));
+
+const serializePageAccess = (pageAccess: Record<string, AccessMode> | undefined): string =>
+  JSON.stringify(
+    Object.entries(pageAccess ?? {})
+      .filter(([, mode]) => mode !== 'none')
+      .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey, 'ru')),
+  );
+
+const toRoleCode = (value: string): string => value.toLowerCase().replace(/[^a-z_]/g, '');
+
+const getPermissionSelection = (permissions: string[], group: PermissionGroup): string | null => {
+  const selectedOption = group.options.find((option) => permissions.includes(option.code));
+  return selectedOption?.code ?? null;
 };
 
-const emptyAccessCell = (): IAccessCell => ({ can_view: false, can_edit: false });
-const EMPTY_ROLES: SystemRole[] = [];
+const updatePermissionSelection = (
+  currentPermissions: string[],
+  group: PermissionGroup,
+  nextCode: string | null,
+): string[] => {
+  const optionCodes = new Set(group.options.map((option) => option.code));
+  const preserved = currentPermissions.filter((permission) => !optionCodes.has(permission));
+
+  if (!nextCode) {
+    return normalizePermissions(preserved);
+  }
+
+  if (group.exclusive) {
+    return normalizePermissions([...preserved, nextCode]);
+  }
+
+  const nextPermissions = currentPermissions.includes(nextCode)
+    ? currentPermissions.filter((permission) => permission !== nextCode)
+    : [...currentPermissions, nextCode];
+
+  return normalizePermissions(nextPermissions);
+};
 
 export const RoleManagementPage: FC = () => {
-  const { error: toastError, success: toastSuccess } = useToast();
+  const toast = useToast();
   const queryClient = useQueryClient();
-  const toastErrorRef = useRef(toastError);
-  const toastSuccessRef = useRef(toastSuccess);
-  toastErrorRef.current = toastError;
-  toastSuccessRef.current = toastSuccess;
 
   const [tab, setTab] = useState<Tab>('roles');
-
   const [showNewForm, setShowNewForm] = useState(false);
   const [newForm, setNewForm] = useState<INewRoleForm>({ code: '', name: '', level: '' });
   const [editState, setEditState] = useState<IEditState | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [savingRole, setSavingRole] = useState(false);
 
-  const [accessOverrides, setAccessOverrides] = useState<AccessMatrix>({});
+  const [roleSearch, setRoleSearch] = useState('');
+  const [selectedRoleCode, setSelectedRoleCode] = useState<string | null>(null);
+  const [draftPermissions, setDraftPermissions] = useState<string[]>([]);
+  const [draftPageAccess, setDraftPageAccess] = useState<Record<string, AccessMode>>({});
   const [savingAccess, setSavingAccess] = useState(false);
-
-  const [permissionOverrides, setPermissionOverrides] = useState<PermissionMatrix>({});
-  const [savingPermissions, setSavingPermissions] = useState(false);
-  const [permissionSearch, setPermissionSearch] = useState('');
-  const [expandedPermissionRoles, setExpandedPermissionRoles] = useState<Set<string>>(new Set());
+  const [showCloneForm, setShowCloneForm] = useState(false);
+  const [cloneForm, setCloneForm] = useState<ICloneRoleForm>({
+    code: '',
+    name: '',
+    level: '',
+    description: '',
+  });
 
   const rolesQuery = useQuery<SystemRole[]>({
     queryKey: ['roles', 'all'],
     queryFn: () => rolesService.getAll(),
     staleTime: 60_000,
   });
-  const accessQuery = useQuery<{ accessData: RolePageAccessEntry[]; pagesData: AvailablePage[] }>({
-    queryKey: ['roles', 'access-matrix'],
-    queryFn: async () => {
-      const [accessData, pagesData] = await Promise.all([
-        rolesService.getPageAccess(),
-        rolesService.getAvailablePages(),
-      ]);
-      return { accessData, pagesData };
-    },
+
+  const catalogQuery = useQuery({
+    queryKey: ['roles', 'catalog'],
+    queryFn: () => rolesService.getCatalog(),
     enabled: tab === 'access',
-    staleTime: 60_000,
-  });
-  const permissionCatalogQuery = useQuery<PermissionGroup[]>({
-    queryKey: ['roles', 'permission-catalog'],
-    queryFn: () => rolesService.getPermissionCatalog(),
-    enabled: tab === 'permissions',
     staleTime: 5 * 60_000,
   });
 
   const roles = rolesQuery.data ?? EMPTY_ROLES;
-  const loadingRoles = rolesQuery.isPending;
-  const loadingAccess = accessQuery.isPending;
-  const loadingPermissions = permissionCatalogQuery.isPending;
-  const pages = accessQuery.data?.pagesData ?? [];
-  const permissionGroups = permissionCatalogQuery.data ?? [];
-
   const sortedRoles = useMemo(
-    () => [...roles].sort((a, b) => a.level - b.level || a.name.localeCompare(b.name, 'ru')),
+    () => [...roles].sort((left, right) => left.level - right.level || left.name.localeCompare(right.name, 'ru')),
     [roles],
   );
 
-  const basePermissionMatrix = useMemo(() => {
-    const nextPermissionMatrix: PermissionMatrix = {};
-    for (const role of roles) {
-      nextPermissionMatrix[role.code] = normalizePermissions(role.permissions);
-    }
-    return nextPermissionMatrix;
-  }, [roles]);
-
-  const permissionMatrix = useMemo<PermissionMatrix>(
-    () => ({ ...basePermissionMatrix, ...permissionOverrides }),
-    [basePermissionMatrix, permissionOverrides],
-  );
-
-  const baseAccessMatrix = useMemo<AccessMatrix>(() => {
-    const nextMatrix: AccessMatrix = {};
-    const accessData = accessQuery.data?.accessData ?? [];
-    for (const entry of accessData) {
-      if (!nextMatrix[entry.role_code]) {
-        nextMatrix[entry.role_code] = {};
-      }
-      nextMatrix[entry.role_code][entry.page_path] = {
-        can_view: entry.can_view,
-        can_edit: entry.can_edit,
-      };
-    }
-    return nextMatrix;
-  }, [accessQuery.data?.accessData]);
-
-  const matrix = useMemo<AccessMatrix>(() => {
-    const merged: AccessMatrix = { ...baseAccessMatrix };
-    for (const [roleCode, roleCells] of Object.entries(accessOverrides)) {
-      merged[roleCode] = {
-        ...(merged[roleCode] ?? {}),
-        ...roleCells,
-      };
-    }
-    return merged;
-  }, [accessOverrides, baseAccessMatrix]);
-
-  const filteredPermissionRoles = useMemo(() => {
-    const query = permissionSearch.trim().toLowerCase();
-    if (!query) {
-      return sortedRoles;
-    }
-
-    return sortedRoles.filter(role =>
+  const filteredRoles = useMemo(() => {
+    const query = roleSearch.trim().toLowerCase();
+    if (!query) return sortedRoles;
+    return sortedRoles.filter((role) =>
       role.name.toLowerCase().includes(query) || role.code.toLowerCase().includes(query),
     );
-  }, [permissionSearch, sortedRoles]);
+  }, [roleSearch, sortedRoles]);
 
-  const areAllFilteredPermissionRolesExpanded = useMemo(
-    () =>
-      filteredPermissionRoles.length > 0 &&
-      filteredPermissionRoles.every(role => expandedPermissionRoles.has(role.code)),
-    [expandedPermissionRoles, filteredPermissionRoles],
+  useEffect(() => {
+    if (!sortedRoles.length) {
+      setSelectedRoleCode(null);
+      return;
+    }
+
+    if (!selectedRoleCode || !sortedRoles.some((role) => role.code === selectedRoleCode)) {
+      setSelectedRoleCode(sortedRoles[0].code);
+    }
+  }, [selectedRoleCode, sortedRoles]);
+
+  const selectedRole = useMemo(
+    () => sortedRoles.find((role) => role.code === selectedRoleCode) ?? null,
+    [selectedRoleCode, sortedRoles],
   );
+
+  const accessProfileQuery = useQuery({
+    queryKey: ['roles', 'access-profile', selectedRoleCode],
+    queryFn: () => rolesService.getAccessProfile(selectedRoleCode as string),
+    enabled: tab === 'access' && !!selectedRoleCode,
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    if (!accessProfileQuery.data) return;
+    setDraftPermissions(normalizePermissions(accessProfileQuery.data.permissions));
+    setDraftPageAccess(accessProfileQuery.data.page_access ?? {});
+  }, [accessProfileQuery.data]);
+
+  const capabilityGroups = catalogQuery.data?.capabilities ?? [];
+  const pages = catalogQuery.data?.pages ?? [];
+  const groupedPages = useMemo<IPageGroup[]>(() => {
+    const groups = new Map<string, IPageGroup>();
+
+    for (const page of pages.filter((item) => item.surface === 'page')) {
+      if (!groups.has(page.group_code)) {
+        groups.set(page.group_code, {
+          code: page.group_code,
+          label: page.group_label,
+          pages: [],
+        });
+      }
+
+      groups.get(page.group_code)!.pages.push(page);
+    }
+
+    return [...groups.values()];
+  }, [pages]);
+
+  const technicalPages = useMemo(
+    () => pages.filter((page) => page.surface === 'technical'),
+    [pages],
+  );
+
+  const accessSummary = useMemo(() => {
+    const visiblePages = pages.filter((page) => page.surface === 'page');
+    const viewCount = visiblePages.filter((page) => (draftPageAccess[page.key] ?? 'none') !== 'none').length;
+    const editCount = visiblePages.filter((page) => (draftPageAccess[page.key] ?? 'none') === 'edit').length;
+    const technicalCount = technicalPages.filter((page) => (draftPageAccess[page.key] ?? 'none') !== 'none').length;
+
+    return {
+      totalPages: visiblePages.length,
+      viewCount,
+      editCount,
+      technicalCount,
+    };
+  }, [draftPageAccess, pages, technicalPages]);
+
+  const isAccessDirty = useMemo(() => {
+    if (!accessProfileQuery.data) return false;
+    return (
+      serializePermissions(draftPermissions) !== serializePermissions(accessProfileQuery.data.permissions)
+      || serializePageAccess(draftPageAccess) !== serializePageAccess(accessProfileQuery.data.page_access)
+    );
+  }, [accessProfileQuery.data, draftPageAccess, draftPermissions]);
 
   const refreshRoles = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['roles', 'all'] }),
-      queryClient.invalidateQueries({ queryKey: ['roles', 'access-matrix'] }),
+      queryClient.invalidateQueries({ queryKey: ['roles', 'access-profile'] }),
     ]);
   };
 
   const handleCreateRole = async () => {
-    const level = parseInt(newForm.level, 10);
+    const level = Number.parseInt(newForm.level, 10);
     if (!newForm.code || !newForm.name || Number.isNaN(level)) {
-      toastErrorRef.current('Заполните все поля');
+      toast.error('Заполните код, название и уровень роли');
       return;
     }
 
-    setSaving(true);
+    setSavingRole(true);
     try {
-      await rolesService.create({ code: newForm.code, name: newForm.name, level });
-      toastSuccessRef.current('Роль создана');
+      const createdRole = await rolesService.create({
+        code: newForm.code,
+        name: newForm.name,
+        level,
+      });
+      toast.success('Роль создана');
       setNewForm({ code: '', name: '', level: '' });
       setShowNewForm(false);
-      setPermissionOverrides({});
+      setSelectedRoleCode(createdRole.code);
       await refreshRoles();
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Ошибка создания роли';
-      toastErrorRef.current(message);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка создания роли');
     } finally {
-      setSaving(false);
+      setSavingRole(false);
     }
   };
 
   const handleSaveEdit = async (code: string) => {
     if (!editState) return;
 
-    const level = parseInt(editState.level, 10);
+    const level = Number.parseInt(editState.level, 10);
     if (!editState.name || Number.isNaN(level)) {
-      toastErrorRef.current('Заполните все поля');
+      toast.error('Заполните название и уровень роли');
       return;
     }
 
-    setSaving(true);
+    setSavingRole(true);
     try {
-      await rolesService.update(code, { name: editState.name, level });
-      toastSuccessRef.current('Роль обновлена');
+      await rolesService.update(code, {
+        name: editState.name,
+        description: roles.find((role) => role.code === code)?.description,
+        level,
+      });
+      toast.success('Роль обновлена');
       setEditState(null);
-      setPermissionOverrides({});
       await refreshRoles();
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Ошибка сохранения';
-      toastErrorRef.current(message);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка сохранения роли');
     } finally {
-      setSaving(false);
+      setSavingRole(false);
     }
   };
 
@@ -223,11 +277,10 @@ export const RoleManagementPage: FC = () => {
         level: role.level,
         is_active: !role.is_active,
       });
-      toastSuccessRef.current(role.is_active ? 'Роль деактивирована' : 'Роль активирована');
+      toast.success(role.is_active ? 'Роль деактивирована' : 'Роль активирована');
       await refreshRoles();
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Ошибка изменения статуса';
-      toastErrorRef.current(message);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка изменения статуса роли');
     }
   };
 
@@ -236,157 +289,112 @@ export const RoleManagementPage: FC = () => {
 
     try {
       await rolesService.deleteRole(code);
-      toastSuccessRef.current('Роль удалена');
-      setAccessOverrides({});
-      setPermissionOverrides({});
+      toast.success('Роль удалена');
+      if (selectedRoleCode === code) {
+        setSelectedRoleCode(null);
+      }
       await refreshRoles();
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Ошибка удаления';
-      toastErrorRef.current(message);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка удаления роли');
     }
   };
 
-  const handleMatrixToggle = (roleCode: string, pagePath: string, action: 'view' | 'edit') => {
-    setAccessOverrides(prev => {
-      const current = (prev[roleCode]?.[pagePath] ?? matrix[roleCode]?.[pagePath]) ?? emptyAccessCell();
-      let next = current;
+  const handlePermissionChange = (group: PermissionGroup, nextCode: string | null) => {
+    setDraftPermissions((current) => updatePermissionSelection(current, group, nextCode));
+  };
 
-      if (action === 'view') {
-        next = current.can_view
-          ? emptyAccessCell()
-          : { ...current, can_view: true };
-      } else {
-        next = current.can_edit
-          ? { ...current, can_edit: false }
-          : { can_view: true, can_edit: true };
+  const handlePageModeChange = (page: PageCatalogItem, mode: AccessMode) => {
+    const nextMode = page.supports_edit ? mode : (mode === 'edit' ? 'view' : mode);
+    setDraftPageAccess((current) => {
+      if (nextMode === 'none') {
+        const next = { ...current };
+        delete next[page.key];
+        return next;
       }
 
       return {
-        ...prev,
-        [roleCode]: {
-          ...(prev[roleCode] ?? {}),
-          [pagePath]: next,
-        },
+        ...current,
+        [page.key]: nextMode,
       };
     });
   };
 
   const handleSaveAccess = async () => {
+    if (!selectedRoleCode) return;
+
     setSavingAccess(true);
     try {
-      const items: RolePageAccessEntry[] = [];
-      for (const role of sortedRoles) {
-        for (const page of pages) {
-          const cell = matrix[role.code]?.[page.path] ?? emptyAccessCell();
-          items.push({
-            role_code: role.code,
-            page_path: page.path,
-            can_view: cell.can_view,
-            can_edit: cell.can_edit,
-          });
-        }
-      }
-
-      await rolesService.updatePageAccess(items);
-      toastSuccessRef.current('Матрица доступа сохранена');
-      setAccessOverrides({});
-      await queryClient.invalidateQueries({ queryKey: ['roles', 'access-matrix'] });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Ошибка сохранения';
-      toastErrorRef.current(message);
+      await rolesService.updateAccessProfile(selectedRoleCode, {
+        permissions: draftPermissions,
+        page_access: draftPageAccess,
+      });
+      toast.success('Профиль доступа сохранён');
+      await refreshRoles();
+      await queryClient.invalidateQueries({ queryKey: ['roles', 'catalog'] });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка сохранения профиля доступа');
     } finally {
       setSavingAccess(false);
     }
   };
 
-  const handlePermissionChange = (roleCode: string, group: PermissionGroup, nextCode: string | null) => {
-    setPermissionOverrides(prev => {
-      const current = normalizePermissions(permissionMatrix[roleCode]);
-
-      if (group.exclusive) {
-        const optionCodes = new Set(group.options.map(option => option.code));
-        const nextPermissions = current.filter(permission => !optionCodes.has(permission));
-        if (nextCode) {
-          nextPermissions.push(nextCode);
-        }
-        return {
-          ...prev,
-          [roleCode]: normalizePermissions(nextPermissions),
-        };
-      }
-
-      const nextPermissions = current.includes(nextCode || '')
-        ? current.filter(permission => permission !== nextCode)
-        : [...current, ...(nextCode ? [nextCode] : [])];
-
-      return {
-        ...prev,
-        [roleCode]: normalizePermissions(nextPermissions),
-      };
+  const openCloneForm = () => {
+    if (!selectedRole) return;
+    setCloneForm({
+      code: '',
+      name: `${selectedRole.name} (копия)`,
+      level: String(selectedRole.level),
+      description: selectedRole.description ?? '',
     });
+    setShowCloneForm(true);
   };
 
-  const togglePermissionRole = (roleCode: string) => {
-    setExpandedPermissionRoles(prev => {
-      const next = new Set(prev);
-      if (next.has(roleCode)) {
-        next.delete(roleCode);
-      } else {
-        next.add(roleCode);
-      }
-      return next;
-    });
-  };
+  const handleCloneRole = async () => {
+    if (!selectedRole) return;
 
-  const toggleAllFilteredPermissionRoles = () => {
-    setExpandedPermissionRoles(prev => {
-      const next = new Set(prev);
-      if (areAllFilteredPermissionRolesExpanded) {
-        for (const role of filteredPermissionRoles) {
-          next.delete(role.code);
-        }
-      } else {
-        for (const role of filteredPermissionRoles) {
-          next.add(role.code);
-        }
-      }
-      return next;
-    });
-  };
-
-  const handleSavePermissions = async () => {
-    setSavingPermissions(true);
-    try {
-      const changedRoles = sortedRoles.filter(role =>
-        !areSamePermissions(role.permissions, permissionMatrix[role.code]),
-      );
-
-      if (changedRoles.length === 0) {
-        toastSuccessRef.current('Изменений в правах нет');
-        return;
-      }
-
-      await Promise.all(
-        changedRoles.map(role =>
-          rolesService.update(role.code, {
-            name: role.name,
-            description: role.description,
-            level: role.level,
-            is_active: role.is_active,
-            permissions: permissionMatrix[role.code] ?? [],
-          }),
-        ),
-      );
-
-      toastSuccessRef.current('Права ролей сохранены');
-      setPermissionOverrides({});
-      await queryClient.invalidateQueries({ queryKey: ['roles', 'all'] });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Ошибка сохранения прав';
-      toastErrorRef.current(message);
-    } finally {
-      setSavingPermissions(false);
+    const level = Number.parseInt(cloneForm.level, 10);
+    if (!cloneForm.code || !cloneForm.name || Number.isNaN(level)) {
+      toast.error('Заполните код, название и уровень для новой роли');
+      return;
     }
+
+    setSavingRole(true);
+    try {
+      const createdRole = await rolesService.cloneRole(selectedRole.code, {
+        code: cloneForm.code,
+        name: cloneForm.name,
+        description: cloneForm.description || null,
+        level,
+      });
+      toast.success('Роль-копия создана');
+      setShowCloneForm(false);
+      setSelectedRoleCode(createdRole.code);
+      await refreshRoles();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка клонирования роли');
+    } finally {
+      setSavingRole(false);
+    }
+  };
+
+  const renderAccessControl = (page: PageCatalogItem) => {
+    const currentMode = draftPageAccess[page.key] ?? 'none';
+    const options = page.supports_edit ? ACCESS_OPTIONS : ACCESS_OPTIONS.filter((mode) => mode !== 'edit');
+
+    return (
+      <div className={styles.segmentedControl}>
+        {options.map((mode) => (
+          <button
+            key={`${page.key}-${mode}`}
+            type="button"
+            className={`${styles.segmentedButton} ${currentMode === mode ? styles.segmentedButtonActive : ''}`}
+            onClick={() => handlePageModeChange(page, mode)}
+          >
+            {mode === 'none' ? 'Нет доступа' : mode === 'view' ? 'Просмотр' : 'Изменение'}
+          </button>
+        ))}
+      </div>
+    );
   };
 
   return (
@@ -404,12 +412,6 @@ export const RoleManagementPage: FC = () => {
         >
           Доступ к страницам
         </button>
-        <button
-          className={`${styles.tab} ${tab === 'permissions' ? styles.tabActive : ''}`}
-          onClick={() => setTab('permissions')}
-        >
-          Права
-        </button>
       </div>
 
       {rolesQuery.isError && (
@@ -419,22 +421,27 @@ export const RoleManagementPage: FC = () => {
       {tab === 'roles' && (
         <div className={styles.section}>
           <div className={styles.sectionHeader}>
-            <h2 className={styles.sectionTitle}>Системные роли</h2>
-            <button className={styles.addBtn} onClick={() => setShowNewForm(value => !value)}>
-              + Добавить роль
+            <div>
+              <h2 className={styles.sectionTitle}>Системные роли</h2>
+              <p className={styles.sectionHint}>
+                Управление справочником ролей. Доступы и поведение роли настраиваются на соседней вкладке.
+              </p>
+            </div>
+            <button className={styles.primaryButton} onClick={() => setShowNewForm((value) => !value)}>
+              {showNewForm ? 'Скрыть форму' : '+ Добавить роль'}
             </button>
           </div>
 
           {showNewForm && (
-            <div className={styles.newRoleForm}>
+            <div className={styles.inlineForm}>
               <input
                 className={styles.input}
-                placeholder="Код (напр. finance)"
+                placeholder="Код роли"
                 value={newForm.code}
-                onChange={event =>
-                  setNewForm(form => ({
-                    ...form,
-                    code: event.target.value.toLowerCase().replace(/[^a-z_]/g, ''),
+                onChange={(event) =>
+                  setNewForm((current) => ({
+                    ...current,
+                    code: toRoleCode(event.target.value),
                   }))
                 }
               />
@@ -442,29 +449,29 @@ export const RoleManagementPage: FC = () => {
                 className={styles.input}
                 placeholder="Название"
                 value={newForm.name}
-                onChange={event => setNewForm(form => ({ ...form, name: event.target.value }))}
+                onChange={(event) => setNewForm((current) => ({ ...current, name: event.target.value }))}
               />
               <input
-                className={styles.input}
-                placeholder="Уровень иерархии"
+                className={styles.inputSmall}
                 type="number"
-                min={1}
-                max={99}
+                min={0}
+                max={100}
+                placeholder="Уровень"
                 value={newForm.level}
-                onChange={event => setNewForm(form => ({ ...form, level: event.target.value }))}
+                onChange={(event) => setNewForm((current) => ({ ...current, level: event.target.value }))}
               />
               <div className={styles.formActions}>
-                <button className={styles.saveBtn} onClick={handleCreateRole} disabled={saving}>
+                <button className={styles.successButton} onClick={handleCreateRole} disabled={savingRole}>
                   Создать
                 </button>
-                <button className={styles.cancelBtn} onClick={() => setShowNewForm(false)}>
+                <button className={styles.secondaryButton} onClick={() => setShowNewForm(false)}>
                   Отмена
                 </button>
               </div>
             </div>
           )}
 
-          {loadingRoles ? (
+          {rolesQuery.isPending ? (
             <div className={styles.loading}>Загрузка...</div>
           ) : (
             <div className={styles.tableWrapper}>
@@ -480,18 +487,18 @@ export const RoleManagementPage: FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedRoles.map(role => (
+                  {sortedRoles.map((role) => (
                     <tr key={role.code} className={!role.is_active ? styles.rowInactive : ''}>
-                      <td data-label="Код">
+                      <td>
                         <code className={styles.code}>{role.code}</code>
                       </td>
-                      <td data-label="Название">
+                      <td>
                         {editState?.code === role.code ? (
                           <input
                             className={styles.inputInline}
                             value={editState.name}
-                            onChange={event =>
-                              setEditState(state => (state ? { ...state, name: event.target.value } : state))
+                            onChange={(event) =>
+                              setEditState((current) => (current ? { ...current, name: event.target.value } : current))
                             }
                             autoFocus
                           />
@@ -499,34 +506,31 @@ export const RoleManagementPage: FC = () => {
                           role.name
                         )}
                       </td>
-                      <td data-label="Уровень">
+                      <td>
                         {editState?.code === role.code ? (
                           <input
                             className={styles.inputInlineSmall}
                             type="number"
-                            min={1}
-                            max={99}
+                            min={0}
+                            max={100}
                             value={editState.level}
-                            onChange={event =>
-                              setEditState(state => (state ? { ...state, level: event.target.value } : state))
+                            onChange={(event) =>
+                              setEditState((current) => (current ? { ...current, level: event.target.value } : current))
                             }
                           />
                         ) : (
                           role.level
                         )}
                       </td>
-                      <td data-label="Тип">
-                        {role.is_system ? (
-                          <span className={styles.badgeSystem}>Системная</span>
-                        ) : (
-                          <span className={styles.badgeCustom}>Пользовательская</span>
-                        )}
+                      <td>
+                        <span className={role.is_system ? styles.badgeSystem : styles.badgeCustom}>
+                          {role.is_system ? 'Системная' : 'Пользовательская'}
+                        </span>
                       </td>
-                      <td data-label="Статус">
+                      <td>
                         <button
-                          className={role.is_active ? styles.toggleActive : styles.toggleInactive}
+                          className={role.is_active ? styles.statusActive : styles.statusInactive}
                           onClick={() => handleToggleActive(role)}
-                          title={role.is_active ? 'Деактивировать' : 'Активировать'}
                         >
                           {role.is_active ? 'Активна' : 'Неактивна'}
                         </button>
@@ -534,17 +538,17 @@ export const RoleManagementPage: FC = () => {
                       <td className={styles.actions}>
                         {editState?.code === role.code ? (
                           <>
-                            <button className={styles.saveBtn} onClick={() => handleSaveEdit(role.code)} disabled={saving}>
+                            <button className={styles.successButton} onClick={() => handleSaveEdit(role.code)} disabled={savingRole}>
                               Сохранить
                             </button>
-                            <button className={styles.cancelBtn} onClick={() => setEditState(null)}>
+                            <button className={styles.secondaryButton} onClick={() => setEditState(null)}>
                               Отмена
                             </button>
                           </>
                         ) : (
                           <>
                             <button
-                              className={styles.editBtn}
+                              className={styles.secondaryButton}
                               onClick={() =>
                                 setEditState({
                                   code: role.code,
@@ -556,7 +560,7 @@ export const RoleManagementPage: FC = () => {
                               Изменить
                             </button>
                             {!role.is_system && (
-                              <button className={styles.deleteBtn} onClick={() => handleDeleteRole(role.code)}>
+                              <button className={styles.dangerButton} onClick={() => handleDeleteRole(role.code)}>
                                 Удалить
                               </button>
                             )}
@@ -573,260 +577,238 @@ export const RoleManagementPage: FC = () => {
       )}
 
       {tab === 'access' && (
-        <div className={styles.section}>
-          <div className={styles.sectionHeader}>
-            <div>
-              <h2 className={styles.sectionTitle}>Матрица доступа к страницам</h2>
-              <p className={styles.sectionHint}>
-                `View` открывает страницу и read-only API. `Edit` разрешает действия изменения и автоматически включает `View`.
-              </p>
+        <div className={styles.accessLayout}>
+          <aside className={styles.roleSidebar}>
+            <div className={styles.sidebarHeader}>
+              <h2 className={styles.sectionTitle}>Роли</h2>
+              <span className={styles.sidebarCount}>{filteredRoles.length}</span>
             </div>
-            <button className={styles.saveBtn} onClick={handleSaveAccess} disabled={savingAccess || loadingAccess}>
-              {savingAccess ? 'Сохранение...' : 'Сохранить'}
-            </button>
-          </div>
 
-          <div className={styles.matrixLegend}>
-            <span className={styles.matrixLegendLabel}>Обозначения</span>
-            <span className={styles.matrixLegendPill}>Просмотр</span>
-            <span className={`${styles.matrixLegendPill} ${styles.matrixLegendPillEdit}`}>Изменение</span>
-          </div>
+            <input
+              className={styles.searchInput}
+              type="search"
+              value={roleSearch}
+              onChange={(event) => setRoleSearch(event.target.value)}
+              placeholder="Поиск по коду или названию"
+            />
 
-          {loadingAccess ? (
-            <div className={styles.loading}>Загрузка...</div>
-          ) : accessQuery.isError ? (
-            <div className={styles.loading}>Ошибка загрузки матрицы доступа</div>
-          ) : (
-            <div className={styles.matrixWrapper}>
-              <table className={styles.matrixTable}>
-                <thead>
-                  <tr>
-                    <th className={styles.matrixPageCol}>
-                      <div className={styles.matrixHeaderLabel}>Страница</div>
-                    </th>
-                    {sortedRoles.map(role => (
-                      <th key={role.code} className={styles.matrixRoleCol} title={role.code}>
-                        <div className={styles.matrixRoleCard}>
-                          <span className={styles.matrixRoleName}>{role.name}</span>
-                          <code className={styles.matrixRoleCode}>{role.code}</code>
-                          {!role.is_active && <span className={styles.inactiveTag}>Неактивна</span>}
-                        </div>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {pages.map(page => (
-                    <tr key={page.path}>
-                      <td className={styles.matrixPageLabel}>
-                        <span className={styles.pageLabel}>{page.label}</span>
-                        <code className={styles.pagePath}>{page.path}</code>
-                      </td>
-                      {sortedRoles.map(role => {
-                        const cell = matrix[role.code]?.[page.path] ?? emptyAccessCell();
+            <div className={styles.roleList}>
+              {filteredRoles.map((role) => (
+                <button
+                  key={role.code}
+                  type="button"
+                  className={`${styles.roleListItem} ${selectedRoleCode === role.code ? styles.roleListItemActive : ''}`}
+                  onClick={() => setSelectedRoleCode(role.code)}
+                >
+                  <div className={styles.roleListItemHeader}>
+                    <span className={styles.roleListName}>{role.name}</span>
+                    <span className={role.is_active ? styles.badgeActive : styles.badgeInactive}>
+                      {role.is_active ? 'Активна' : 'Неактивна'}
+                    </span>
+                  </div>
+                  <div className={styles.roleListMeta}>
+                    <code className={styles.code}>{role.code}</code>
+                    <span>Уровень {role.level}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          <section className={styles.section}>
+            {!selectedRole ? (
+              <div className={styles.loading}>Роль не выбрана</div>
+            ) : catalogQuery.isPending || accessProfileQuery.isPending ? (
+              <div className={styles.loading}>Загрузка профиля доступа...</div>
+            ) : catalogQuery.isError || accessProfileQuery.isError ? (
+              <div className={styles.loading}>Ошибка загрузки профиля доступа</div>
+            ) : (
+              <>
+                <div className={styles.sectionHeader}>
+                  <div>
+                    <h2 className={styles.sectionTitle}>{selectedRole.name}</h2>
+                    <p className={styles.sectionHint}>
+                      Редактирование выполняется по одной роли. View-only страницы не показывают режим изменения, а технические ключи вынесены отдельно.
+                    </p>
+                  </div>
+                  <div className={styles.toolbarActions}>
+                    <button className={styles.secondaryButton} onClick={openCloneForm}>
+                      Создать роль на основе этой
+                    </button>
+                    <button className={styles.successButton} onClick={handleSaveAccess} disabled={savingAccess || !isAccessDirty}>
+                      {savingAccess ? 'Сохранение...' : 'Сохранить'}
+                    </button>
+                  </div>
+                </div>
+
+                {showCloneForm && (
+                  <div className={styles.inlineForm}>
+                    <input
+                      className={styles.input}
+                      placeholder="Новый код роли"
+                      value={cloneForm.code}
+                      onChange={(event) =>
+                        setCloneForm((current) => ({
+                          ...current,
+                          code: toRoleCode(event.target.value),
+                        }))
+                      }
+                    />
+                    <input
+                      className={styles.input}
+                      placeholder="Новое название"
+                      value={cloneForm.name}
+                      onChange={(event) => setCloneForm((current) => ({ ...current, name: event.target.value }))}
+                    />
+                    <input
+                      className={styles.inputSmall}
+                      type="number"
+                      min={0}
+                      max={100}
+                      placeholder="Уровень"
+                      value={cloneForm.level}
+                      onChange={(event) => setCloneForm((current) => ({ ...current, level: event.target.value }))}
+                    />
+                    <input
+                      className={styles.input}
+                      placeholder="Описание (необязательно)"
+                      value={cloneForm.description}
+                      onChange={(event) => setCloneForm((current) => ({ ...current, description: event.target.value }))}
+                    />
+                    <div className={styles.formActions}>
+                      <button className={styles.successButton} onClick={handleCloneRole} disabled={savingRole}>
+                        Создать копию
+                      </button>
+                      <button className={styles.secondaryButton} onClick={() => setShowCloneForm(false)}>
+                        Отмена
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className={styles.summaryBar}>
+                  <div className={styles.summaryCard}>
+                    <span>Страниц</span>
+                    <strong>{accessSummary.totalPages}</strong>
+                  </div>
+                  <div className={styles.summaryCard}>
+                    <span>С просмотром</span>
+                    <strong>{accessSummary.viewCount}</strong>
+                  </div>
+                  <div className={styles.summaryCard}>
+                    <span>С изменением</span>
+                    <strong>{accessSummary.editCount}</strong>
+                  </div>
+                  <div className={styles.summaryCard}>
+                    <span>Технические</span>
+                    <strong>{accessSummary.technicalCount}</strong>
+                  </div>
+                </div>
+
+                <div className={styles.accessSections}>
+                  <div className={styles.card}>
+                    <div className={styles.cardHeader}>
+                      <h3 className={styles.cardTitle}>Поведение роли</h3>
+                      <p className={styles.cardHint}>
+                        Настройки capabilities, которые раньше жили на отдельной вкладке.
+                      </p>
+                    </div>
+
+                    <div className={styles.behaviorGroups}>
+                      {capabilityGroups.map((group) => {
+                        const selectedCode = getPermissionSelection(draftPermissions, group);
 
                         return (
-                          <td key={role.code} className={styles.matrixCell}>
-                            <div className={styles.matrixCellControls}>
-                              <button
-                                type="button"
-                                className={`${styles.matrixAction} ${cell.can_view ? styles.matrixActionActive : ''}`}
-                                onClick={() => handleMatrixToggle(role.code, page.path, 'view')}
-                                aria-pressed={cell.can_view}
-                                title="Разрешить просмотр"
-                              >
-                                <span className={styles.matrixActionText}>Просмотр</span>
-                              </button>
-                              <button
-                                type="button"
-                                className={`${styles.matrixAction} ${cell.can_edit ? styles.matrixActionEdit : ''}`}
-                                onClick={() => handleMatrixToggle(role.code, page.path, 'edit')}
-                                aria-pressed={cell.can_edit}
-                                title="Разрешить изменение"
-                              >
-                                <span className={styles.matrixActionText}>Изм.</span>
-                              </button>
+                          <div key={group.code} className={styles.behaviorGroup}>
+                            <div className={styles.behaviorGroupHeader}>
+                              <div>
+                                <div className={styles.behaviorGroupTitle}>{group.label}</div>
+                                <div className={styles.behaviorGroupDescription}>{group.description}</div>
+                              </div>
                             </div>
-                          </td>
+
+                            <div className={styles.segmentedControl}>
+                              <button
+                                type="button"
+                                className={`${styles.segmentedButton} ${selectedCode === null ? styles.segmentedButtonActive : ''}`}
+                                onClick={() => handlePermissionChange(group, null)}
+                              >
+                                Не выбрано
+                              </button>
+                              {group.options.map((option) => (
+                                <button
+                                  key={option.code}
+                                  type="button"
+                                  className={`${styles.segmentedButton} ${selectedCode === option.code ? styles.segmentedButtonActive : ''}`}
+                                  onClick={() => handlePermissionChange(group, option.code)}
+                                  title={option.description}
+                                >
+                                  {option.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                         );
                       })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
+                    </div>
+                  </div>
 
-      {tab === 'permissions' && (
-        <div className={styles.section}>
-          <div className={styles.sectionHeader}>
-            <div>
-              <h2 className={styles.sectionTitle}>Capability-права</h2>
-              <p className={styles.sectionHint}>
-                Вариант кабинета `/employee` и область данных настраиваются здесь, а не жёстко в коде.
-              </p>
-            </div>
-            <button
-              className={styles.saveBtn}
-              onClick={handleSavePermissions}
-              disabled={savingPermissions || loadingPermissions || loadingRoles}
-            >
-              {savingPermissions ? 'Сохранение...' : 'Сохранить'}
-            </button>
-          </div>
-
-          {loadingPermissions || loadingRoles ? (
-            <div className={styles.loading}>Загрузка...</div>
-          ) : permissionCatalogQuery.isError ? (
-            <div className={styles.loading}>Ошибка загрузки каталога прав</div>
-          ) : (
-            <div className={styles.permissionCards}>
-              <div className={styles.permissionToolbar}>
-                <label className={styles.permissionSearch}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                    <circle cx="11" cy="11" r="8" />
-                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                  </svg>
-                  <input
-                    type="text"
-                    value={permissionSearch}
-                    onChange={event => setPermissionSearch(event.target.value)}
-                    placeholder="Найти роль по названию или коду"
-                  />
-                </label>
-
-                <div className={styles.permissionToolbarActions}>
-                  <span className={styles.permissionResultCount}>
-                    {filteredPermissionRoles.length} из {sortedRoles.length}
-                  </span>
-                  <button type="button" className={styles.clearBtn} onClick={toggleAllFilteredPermissionRoles}>
-                    {areAllFilteredPermissionRolesExpanded ? 'Свернуть найденные' : 'Развернуть найденные'}
-                  </button>
-                </div>
-              </div>
-
-              {filteredPermissionRoles.length === 0 && (
-                <div className={styles.permissionEmpty}>
-                  По запросу ничего не найдено. Попробуй поиск по коду роли или части названия.
-                </div>
-              )}
-
-              {filteredPermissionRoles.map(role => {
-                const selectedPermissions = permissionMatrix[role.code] ?? [];
-                const isExpanded = expandedPermissionRoles.has(role.code);
-                const selectedSummaries = permissionGroups
-                  .map(group => {
-                    const selectedOptions = group.options.filter(option => selectedPermissions.includes(option.code));
-                    if (selectedOptions.length === 0) return null;
-                    return {
-                      group: group.label,
-                      value: selectedOptions.map(option => option.label).join(', '),
-                    };
-                  })
-                  .filter((item): item is { group: string; value: string } => item !== null);
-
-                return (
-                  <div
-                    key={role.code}
-                    className={`${styles.permissionCard} ${isExpanded ? styles.permissionCardExpanded : styles.permissionCardCollapsed}`}
-                  >
-                    <button
-                      type="button"
-                      className={styles.permissionCardHeader}
-                      onClick={() => togglePermissionRole(role.code)}
-                      aria-expanded={isExpanded}
-                    >
-                      <div className={styles.permissionCardHeaderMain}>
-                        <div>
-                          <div className={styles.permissionRoleTitle}>{role.name}</div>
-                          <div className={styles.permissionRoleCodeRow}>
-                            <code className={styles.code}>{role.code}</code>
-                            <span className={styles.permissionRoleInfo}>Уровень: {role.level}</span>
-                          </div>
-                        </div>
-
-                        <div className={styles.permissionSummary}>
-                          {selectedSummaries.length > 0 ? (
-                            selectedSummaries.map(summary => (
-                              <span key={`${role.code}-${summary.group}`} className={styles.permissionSummaryChip}>
-                                <strong>{summary.group}:</strong> {summary.value}
-                              </span>
-                            ))
-                          ) : (
-                            <span className={styles.permissionSummaryEmpty}>Права ещё не настроены</span>
-                          )}
-                        </div>
+                  {groupedPages.map((group) => (
+                    <div key={group.code} className={styles.card}>
+                      <div className={styles.cardHeader}>
+                        <h3 className={styles.cardTitle}>{group.label}</h3>
                       </div>
 
-                      <div className={styles.permissionRoleMeta}>
-                        <span className={role.is_active ? styles.toggleActive : styles.toggleInactive}>
-                          {role.is_active ? 'Активна' : 'Неактивна'}
-                        </span>
-                        <span className={styles.permissionSelectionCount}>
-                          {selectedPermissions.length} прав
-                        </span>
-                        <span className={`${styles.permissionChevron} ${isExpanded ? styles.permissionChevronOpen : ''}`}>
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                            <polyline points="6 9 12 15 18 9" />
-                          </svg>
-                        </span>
-                      </div>
-                    </button>
-
-                    {isExpanded && (
-                      <div className={styles.permissionCardBody}>
-                        {permissionGroups.map(group => (
-                          <div key={group.code} className={styles.permissionGroup}>
-                            <div className={styles.permissionGroupHeader}>
-                              <div>
-                                <div className={styles.permissionGroupTitle}>{group.label}</div>
-                                <div className={styles.permissionGroupDescription}>{group.description}</div>
+                      <div className={styles.pageRows}>
+                        {group.pages.map((page) => (
+                          <div key={page.key} className={styles.pageRow}>
+                            <div className={styles.pageInfo}>
+                              <div className={styles.pageLabelRow}>
+                                <span className={styles.pageLabel}>{page.label}</span>
+                                {!page.supports_edit && (
+                                  <span className={styles.readOnlyBadge}>Только просмотр</span>
+                                )}
                               </div>
-                              {group.exclusive && (
-                                <button
-                                  type="button"
-                                  className={styles.clearBtn}
-                                  onClick={() => handlePermissionChange(role.code, group, null)}
-                                >
-                                  Сбросить
-                                </button>
-                              )}
+                              <code className={styles.pagePath}>{page.key}</code>
                             </div>
-
-                            <div className={styles.permissionOptions}>
-                              {group.options.map(option => {
-                                const checked = selectedPermissions.includes(option.code);
-                                return (
-                                  <label
-                                    key={option.code}
-                                    className={`${styles.permissionOption} ${checked ? styles.permissionOptionActive : ''}`}
-                                  >
-                                    <input
-                                      type={group.exclusive ? 'radio' : 'checkbox'}
-                                      name={`${role.code}-${group.code}`}
-                                      checked={checked}
-                                      onChange={() => handlePermissionChange(role.code, group, option.code)}
-                                    />
-                                    <div>
-                                      <div className={styles.permissionOptionTitle}>{option.label}</div>
-                                      <div className={styles.permissionOptionDescription}>{option.description}</div>
-                                      <code className={styles.permissionCode}>{option.code}</code>
-                                    </div>
-                                  </label>
-                                );
-                              })}
-                            </div>
+                            {renderAccessControl(page)}
                           </div>
                         ))}
                       </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                    </div>
+                  ))}
+
+                  {technicalPages.length > 0 && (
+                    <details className={styles.card}>
+                      <summary className={styles.technicalSummary}>
+                        Технические доступы
+                        <span className={styles.technicalSummaryHint}>
+                          {accessSummary.technicalCount > 0
+                            ? `${accessSummary.technicalCount} активн.`
+                            : 'скрыты по умолчанию'}
+                        </span>
+                      </summary>
+
+                      <div className={styles.pageRows}>
+                        {technicalPages.map((page) => (
+                          <div key={page.key} className={styles.pageRow}>
+                            <div className={styles.pageInfo}>
+                              <div className={styles.pageLabelRow}>
+                                <span className={styles.pageLabel}>{page.label}</span>
+                                <span className={styles.technicalBadge}>Технический ключ</span>
+                              </div>
+                              <code className={styles.pagePath}>{page.key}</code>
+                            </div>
+                            {renderAccessControl(page)}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              </>
+            )}
+          </section>
         </div>
       )}
     </div>

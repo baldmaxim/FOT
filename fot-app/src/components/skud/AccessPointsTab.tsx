@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import type { FC } from 'react';
 import { Search, Save, Check, RefreshCw } from 'lucide-react';
 import { skudService } from '../../services/skudService';
-import type { IAccessPointSetting } from '../../types';
+import type { AccessPointOption, IAccessPointSetting } from '../../types';
 
 interface IAccessPointsTabProps {
   connected: boolean | null;
@@ -17,7 +17,7 @@ export const AccessPointsTab: FC<IAccessPointsTabProps> = ({
   selectedConnection,
   setError,
 }) => {
-  const [accessPoints, setAccessPoints] = useState<string[]>([]);
+  const [accessPoints, setAccessPoints] = useState<AccessPointOption[]>([]);
   const [apLoading, setApLoading] = useState(false);
   const [apSettings, setApSettings] = useState<Map<string, boolean>>(new Map());
   const [savingSettings, setSavingSettings] = useState(false);
@@ -28,7 +28,7 @@ export const AccessPointsTab: FC<IAccessPointsTabProps> = ({
 
   useEffect(() => {
     setApLoading(true);
-    skudService.getAccessPoints(selectedConnection)
+    skudService.getAccessPointOptions(selectedConnection)
       .then(setAccessPoints)
       .catch(() => setError('Ошибка загрузки точек доступа'))
       .finally(() => setApLoading(false));
@@ -37,7 +37,7 @@ export const AccessPointsTab: FC<IAccessPointsTabProps> = ({
       .then(settings => {
         const map = new Map<string, boolean>();
         for (const s of settings) {
-          map.set(s.access_point_name, s.is_internal);
+          map.set(s.access_point_name.trim(), s.is_internal);
         }
         setApSettings(map);
       })
@@ -47,7 +47,10 @@ export const AccessPointsTab: FC<IAccessPointsTabProps> = ({
   const filteredAccessPoints = useMemo(() => {
     if (!apSearch.trim()) return accessPoints;
     const q = apSearch.toLowerCase();
-    return accessPoints.filter(ap => ap.toLowerCase().includes(q));
+    return accessPoints.filter(ap => {
+      const label = ap.id == null ? ap.name : `${ap.name} (${ap.id})`;
+      return label.toLowerCase().includes(q);
+    });
   }, [accessPoints, apSearch]);
 
   const toggleApInternal = (apName: string) => {
@@ -64,8 +67,8 @@ export const AccessPointsTab: FC<IAccessPointsTabProps> = ({
     setSavingSettings(true);
     try {
       const settings: IAccessPointSetting[] = accessPoints.map(ap => ({
-        access_point_name: ap,
-        is_internal: apSettings.get(ap.trim()) || false,
+        access_point_name: ap.name,
+        is_internal: apSettings.get(ap.name.trim()) || false,
       }));
       await skudService.saveAccessPointSettings(settings);
       setSettingsSaved(true);
@@ -82,9 +85,14 @@ export const AccessPointsTab: FC<IAccessPointsTabProps> = ({
     setSyncAPResult(null);
     setError('');
     try {
-      const oldSet = new Set(accessPoints);
+      const oldSet = new Set(accessPoints.map(ap => ap.name));
       const result = await skudService.syncAccessPoints(selectedConnection);
-      setAccessPoints(result.accessPoints);
+      try {
+        const refreshed = await skudService.getAccessPointOptions(selectedConnection);
+        setAccessPoints(refreshed);
+      } catch {
+        setAccessPoints(result.accessPoints.map(name => ({ name, id: null })));
+      }
       if (result.removed.length > 0) {
         setApSettings(prev => {
           const next = new Map(prev);
@@ -170,16 +178,17 @@ export const AccessPointsTab: FC<IAccessPointsTabProps> = ({
             </thead>
             <tbody>
               {filteredAccessPoints.map((ap, idx) => {
-                const isInternal = apSettings.get(ap.trim()) || false;
+                const label = ap.id == null ? ap.name : `${ap.name} (${ap.id})`;
+                const isInternal = apSettings.get(ap.name.trim()) || false;
                 return (
-                  <tr key={ap}>
+                  <tr key={ap.name}>
                     <td style={{ width: 40, textAlign: 'center', color: 'var(--text-tertiary)' }}>{idx + 1}</td>
-                    <td>{ap}</td>
+                    <td>{label}</td>
                     <td>
                       {canEdit ? (
                         <button
                           className={`sigur-ap-type-btn ${isInternal ? 'internal' : 'external'}`}
-                          onClick={() => toggleApInternal(ap)}
+                          onClick={() => toggleApInternal(ap.name)}
                         >
                           {isInternal ? 'Внутренняя' : 'Внешняя'}
                         </button>

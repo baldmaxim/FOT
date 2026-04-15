@@ -25,7 +25,7 @@ import {
 import { skudWriteController } from './skud-write.controller.js';
 import { skudTravelController } from './skud-travel.controller.js';
 import { canAccessEmployeeInScope, resolveScopedDepartmentId, resolveRequestDataScope } from '../services/data-scope.service.js';
-import type { IDisciplineResult } from '../types/skud.types.js';
+import type { IAccessPointOption, IDisciplineResult } from '../types/skud.types.js';
 
 const MONTH_PATTERN = /^\d{4}-\d{2}$/;
 type DisciplineTab = 'all' | DisciplineViolationType;
@@ -33,6 +33,75 @@ type DisciplineTab = 'all' | DisciplineViolationType;
 function formatDisciplineDate(isoDate: string): string {
   const [year, month, day] = isoDate.split('-');
   return `${day}.${month}.${year}`;
+}
+
+function normalizeAccessPointName(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+function parseAccessPointNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+    return Number(value.trim());
+  }
+
+  return null;
+}
+
+function extractAccessPointNumber(row: Record<string, unknown> | { name: string; id: number | null }): number | null {
+  const candidate = row as Record<string, unknown>;
+  const directKeys = ['id', 'accessPointId', 'accesspointId', 'number', 'accessPointNumber', 'objectNumber', 'tabId'];
+
+  for (const key of directKeys) {
+    const parsed = parseAccessPointNumber(candidate[key]);
+    if (parsed != null) return parsed;
+  }
+
+  const nested = candidate.data;
+  if (nested && typeof nested === 'object') {
+    for (const key of directKeys) {
+      const parsed = parseAccessPointNumber((nested as Record<string, unknown>)[key]);
+      if (parsed != null) return parsed;
+    }
+  }
+
+  return null;
+}
+
+function sortAccessPointNames(names: Iterable<string>): string[] {
+  return [...names].sort((left, right) => left.localeCompare(right, 'ru'));
+}
+
+function buildAccessPointOptions(
+  rows: Array<Record<string, unknown> | { name: string; id: number | null }>,
+): IAccessPointOption[] {
+  const optionsByName = new Map<string, number | null>();
+
+  for (const row of rows) {
+    const name = normalizeAccessPointName(row.name);
+    if (!name) continue;
+
+    const id = extractAccessPointNumber(row);
+    if (!optionsByName.has(name) || (optionsByName.get(name) == null && id != null)) {
+      optionsByName.set(name, id);
+    }
+  }
+
+  return sortAccessPointNames(optionsByName.keys()).map(name => ({
+    name,
+    id: optionsByName.get(name) ?? null,
+  }));
+}
+
+function buildAccessPointOptionsFromNames(names: string[]): IAccessPointOption[] {
+  return buildAccessPointOptions(
+    names.map(name => ({ name, id: null })),
+  );
 }
 
 async function loadEmployeeEventsForRequest(
@@ -526,14 +595,12 @@ const skudReadController = {
   async getAccessPoints(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const connection = (req.query.connection as 'internal' | 'external') || undefined;
+      const includeMeta = req.query.includeMeta === '1' || req.query.includeMeta === 'true';
       if (sigurService.isConfigured()) {
         try {
           const sigurAPs = await sigurService.getAccessPoints(connection);
-          const names = (sigurAPs as Record<string, unknown>[])
-            .map(ap => ((ap.name as string) || '').trim())
-            .filter(Boolean);
-          const unique = [...new Set(names)].sort();
-          res.json({ success: true, data: unique });
+          const options = buildAccessPointOptions(sigurAPs as Record<string, unknown>[]);
+          res.json({ success: true, data: includeMeta ? options : options.map(option => option.name) });
           return;
         } catch (sigurErr) {
           console.warn('Sigur access points fallback to DB:', (sigurErr as Error).message);
@@ -543,7 +610,7 @@ const skudReadController = {
       const cacheKey = connection ? `__all__:${connection}` : '__all__';
       const cached = getAccessPointCacheEntry(cacheKey);
       if (cached) {
-        res.json({ success: true, data: cached });
+        res.json({ success: true, data: includeMeta ? buildAccessPointOptionsFromNames(cached) : cached });
         return;
       }
 
@@ -560,10 +627,16 @@ const skudReadController = {
         return;
       }
 
-      const unique = [...new Set((data || []).map((d: { access_point: string }) => d.access_point))].sort();
+      const unique = sortAccessPointNames(
+        new Set(
+          (data || [])
+            .map((row: { access_point: string | null }) => normalizeAccessPointName(row.access_point))
+            .filter((name): name is string => !!name),
+        ),
+      );
       setAccessPointCacheEntry(cacheKey, unique);
 
-      res.json({ success: true, data: unique });
+      res.json({ success: true, data: includeMeta ? buildAccessPointOptionsFromNames(unique) : unique });
     } catch (error) {
       console.error('Get access points error:', error);
       res.status(500).json({ success: false, error: 'Failed to fetch access points' });
@@ -597,7 +670,7 @@ const skudReadController = {
           res.json({
             success: true,
             data: (data || []).map(row => ({
-              access_point_name: row.access_point_name,
+              access_point_name: row.access_point_name.trim(),
               is_internal: row.is_internal,
             })),
           });
@@ -615,7 +688,7 @@ const skudReadController = {
         }
 
         const result = (data || []).map(row => ({
-          access_point_name: row.access_point_name,
+          access_point_name: row.access_point_name.trim(),
           is_internal: row.is_internal,
         }));
         res.json({ success: true, data: result });
@@ -635,7 +708,7 @@ const skudReadController = {
       }
 
       const result = (data || []).map(row => ({
-        access_point_name: row.access_point_name,
+        access_point_name: row.access_point_name.trim(),
         is_internal: row.is_internal,
       }));
 

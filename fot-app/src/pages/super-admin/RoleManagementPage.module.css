@@ -1,31 +1,25 @@
 .page {
   width: 100%;
   padding: 24px;
-  max-width: none;
-  margin: 0;
   min-width: 0;
 }
 
-/* Tabs */
 .tabs {
   display: flex;
-  gap: 4px;
-  border-bottom: 2px solid var(--border);
+  gap: 6px;
   margin-bottom: 24px;
-  width: 100%;
-  min-width: 0;
+  border-bottom: 1px solid var(--border);
 }
 
 .tab {
-  padding: 10px 20px;
-  background: none;
   border: none;
-  cursor: pointer;
-  font-size: 14px;
+  background: transparent;
   color: var(--text-secondary);
+  padding: 10px 16px;
+  cursor: pointer;
   border-bottom: 2px solid transparent;
-  margin-bottom: -2px;
-  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+  font-size: 14px;
 }
 
 .tab:hover {
@@ -35,174 +29,189 @@
 .tabActive {
   color: var(--primary);
   border-bottom-color: var(--primary);
-  font-weight: 500;
+  font-weight: 600;
 }
 
-/* Section */
 .section {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 16px;
   padding: 20px;
-  width: 100%;
   min-width: 0;
 }
 
 .sectionHeader {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 16px;
-  gap: 12px;
+  gap: 16px;
+  margin-bottom: 18px;
 }
 
 .sectionTitle {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
   margin: 0;
+  font-size: 18px;
+  color: var(--text-primary);
 }
 
 .sectionHint {
   margin: 6px 0 0;
-  font-size: 13px;
   color: var(--text-secondary);
+  font-size: 13px;
   line-height: 1.45;
 }
 
-/* Buttons */
-.addBtn {
-  padding: 8px 16px;
-  background: var(--primary);
-  color: #fff;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
+.toolbarActions,
+.formActions,
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.primaryButton,
+.successButton,
+.secondaryButton,
+.dangerButton,
+.statusActive,
+.statusInactive {
+  border-radius: 10px;
   font-size: 13px;
-  white-space: nowrap;
-}
-
-.addBtn:hover {
-  background: var(--primary-hover);
-}
-
-.saveBtn {
-  padding: 7px 14px;
-  background: var(--success);
-  color: #fff;
-  border: none;
-  border-radius: 6px;
   cursor: pointer;
-  font-size: 13px;
+  transition: opacity 0.15s ease, transform 0.15s ease;
 }
 
-.saveBtn:hover:not(:disabled) {
-  opacity: 0.85;
+.primaryButton,
+.successButton,
+.secondaryButton,
+.dangerButton {
+  padding: 9px 14px;
 }
 
-.saveBtn:disabled {
+.primaryButton:hover,
+.successButton:hover,
+.secondaryButton:hover,
+.dangerButton:hover,
+.statusActive:hover,
+.statusInactive:hover {
+  opacity: 0.9;
+}
+
+.primaryButton:disabled,
+.successButton:disabled,
+.secondaryButton:disabled,
+.dangerButton:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.cancelBtn {
-  padding: 7px 14px;
+.primaryButton {
+  background: var(--primary);
+  border: none;
+  color: #fff;
+}
+
+.successButton {
+  background: var(--success);
+  border: none;
+  color: #fff;
+}
+
+.secondaryButton {
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.dangerButton {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  color: var(--error);
+}
+
+.statusActive,
+.statusInactive {
+  padding: 5px 10px;
+  border: none;
+}
+
+.statusActive {
+  background: var(--success-muted);
+  color: var(--success);
+}
+
+.statusInactive {
   background: var(--surface-hover);
   color: var(--text-secondary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
 }
 
-.editBtn {
-  padding: 5px 10px;
-  background: none;
-  color: var(--primary);
-  border: 1px solid var(--primary);
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.editBtn:hover {
-  background: var(--primary-light);
-}
-
-.deleteBtn {
-  padding: 5px 10px;
-  background: none;
-  color: var(--error);
-  border: 1px solid var(--error);
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.deleteBtn:hover {
-  background: var(--error-muted);
-}
-
-/* New Role Form */
-.newRoleForm {
+.inlineForm {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 14px;
-  background: var(--surface-hover);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  margin-bottom: 16px;
   flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-hover);
 }
 
-.input {
-  padding: 8px 12px;
-  background: var(--bg-secondary);
+.input,
+.inputSmall,
+.inputInline,
+.inputInlineSmall,
+.searchInput {
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
   color: var(--text-primary);
   font-size: 13px;
-  min-width: 140px;
 }
 
-.input:focus {
+.input,
+.searchInput,
+.inputInline {
+  min-width: 180px;
+  padding: 10px 12px;
+}
+
+.inputSmall,
+.inputInlineSmall {
+  width: 96px;
+  padding: 10px 12px;
+}
+
+.input:focus,
+.inputSmall:focus,
+.inputInline:focus,
+.inputInlineSmall:focus,
+.searchInput:focus {
   outline: none;
   border-color: var(--primary);
 }
 
-.formActions {
-  display: flex;
-  gap: 8px;
-}
-
-/* Table */
 .tableWrapper {
-  width: 100%;
   overflow-x: auto;
 }
 
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  min-width: 720px;
 }
 
 .table th {
   text-align: left;
-  padding: 10px 12px;
   font-size: 12px;
-  font-weight: 500;
   color: var(--text-secondary);
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
-  white-space: nowrap;
 }
 
 .table td {
-  padding: 10px 12px;
+  padding: 12px;
   border-bottom: 1px solid var(--border);
   color: var(--text-primary);
-  vertical-align: middle;
 }
 
 .table tr:last-child td {
@@ -210,928 +219,349 @@
 }
 
 .rowInactive td {
-  opacity: 0.5;
+  opacity: 0.58;
 }
 
 .code {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--text-secondary);
   font-family: monospace;
   font-size: 12px;
-  padding: 2px 6px;
-  background: var(--surface-hover);
-  border-radius: 4px;
-  color: var(--text-primary);
 }
 
-.inputInline {
-  padding: 5px 8px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--primary);
-  border-radius: 5px;
-  color: var(--text-primary);
-  font-size: 13px;
-  width: 100%;
-  max-width: 200px;
-}
-
-.inputInlineSmall {
-  padding: 5px 8px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--primary);
-  border-radius: 5px;
-  color: var(--text-primary);
-  font-size: 13px;
-  width: 70px;
+.badgeSystem,
+.badgeCustom,
+.badgeActive,
+.badgeInactive,
+.readOnlyBadge,
+.technicalBadge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .badgeSystem {
-  font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 10px;
   background: rgba(234, 179, 8, 0.12);
-  color: #eab308;
+  color: #d97706;
 }
 
 .badgeCustom {
-  font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 10px;
-  background: var(--primary-light);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: var(--primary);
 }
 
-.toggleActive {
-  padding: 3px 10px;
-  border-radius: 10px;
-  border: none;
-  cursor: pointer;
-  font-size: 12px;
+.badgeActive {
   background: var(--success-muted);
   color: var(--success);
 }
 
-.toggleActive:hover {
-  opacity: 0.8;
-}
-
-.toggleInactive {
-  padding: 3px 10px;
-  border-radius: 10px;
-  border: none;
-  cursor: pointer;
-  font-size: 12px;
+.badgeInactive {
   background: var(--surface-hover);
   color: var(--text-secondary);
 }
 
-.toggleInactive:hover {
-  opacity: 0.8;
+.readOnlyBadge {
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
 }
 
-.actions {
-  display: flex;
-  gap: 6px;
-  white-space: nowrap;
+.technicalBadge {
+  background: rgba(148, 163, 184, 0.14);
+  color: var(--text-secondary);
 }
 
-/* Access Matrix */
-.matrixLegend {
+.accessLayout {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.roleSidebar {
+  position: sticky;
+  top: 24px;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.sidebarHeader {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sidebarCount {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.roleList {
+  display: grid;
   gap: 10px;
-  flex-wrap: wrap;
+  max-height: calc(100vh - 240px);
+  overflow: auto;
+}
+
+.roleListItem {
+  display: grid;
+  gap: 8px;
+  text-align: left;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface-hover);
+  cursor: pointer;
+}
+
+.roleListItemActive {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+}
+
+.roleListItemHeader,
+.roleListMeta,
+.pageLabelRow,
+.technicalSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.roleListName {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.roleListMeta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.summaryBar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.summaryCard {
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface-hover);
+}
+
+.summaryCard span {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.summaryCard strong {
+  font-size: 22px;
+  color: var(--text-primary);
+}
+
+.accessSections {
+  display: grid;
+  gap: 16px;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-hover);
+  padding: 16px;
+}
+
+.cardHeader {
   margin-bottom: 14px;
 }
 
-.matrixLegendLabel {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--text-tertiary);
-  text-transform: uppercase;
+.cardTitle {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text-primary);
 }
 
-.matrixLegendPill {
+.cardHint,
+.behaviorGroupDescription {
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.behaviorGroups {
+  display: grid;
+  gap: 14px;
+}
+
+.behaviorGroupHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.behaviorGroup {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.behaviorGroupTitle {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.segmentedControl {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 30px;
-  padding: 0 12px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--primary) 20%, var(--border));
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.segmentedButton {
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.segmentedButtonActive {
+  border-color: color-mix(in srgb, var(--primary) 46%, var(--border));
   background: color-mix(in srgb, var(--primary) 10%, var(--surface));
   color: var(--primary);
-  font-size: 12px;
   font-weight: 600;
 }
 
-.matrixLegendPillEdit {
-  border-color: color-mix(in srgb, var(--success) 28%, var(--border));
-  background: color-mix(in srgb, var(--success) 12%, var(--surface));
-  color: var(--success);
-}
-
-.matrixWrapper {
-  width: 100%;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-hover) 65%, transparent), transparent 90px),
-    var(--surface);
-  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.06);
-}
-
-.matrixTable {
-  width: max-content;
-  min-width: 100%;
-  table-layout: fixed;
-  border-collapse: separate;
-  border-spacing: 0;
-  font-size: 13px;
-}
-
-.matrixPageCol {
-  width: 260px;
-  text-align: left;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  left: 0;
-  background: var(--surface);
-  z-index: 3;
-}
-
-.matrixRoleCol {
-  text-align: center;
-  width: 156px;
-  padding: 12px 10px;
-  border-bottom: 1px solid var(--border);
-  background: transparent;
-}
-
-.matrixHeaderLabel {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.matrixRoleCard {
+.pageRows {
   display: grid;
-  gap: 4px;
+  gap: 10px;
+}
+
+.pageRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
   align-items: center;
-  justify-items: center;
-  min-height: 76px;
-  padding: 10px 12px;
-  border-radius: 14px;
-  border: 1px solid color-mix(in srgb, var(--primary) 10%, var(--border));
-  background: color-mix(in srgb, var(--surface-hover) 70%, var(--surface));
-}
-
-.matrixRoleName {
-  display: block;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-primary);
-  line-height: 1.25;
-}
-
-.matrixRoleCode {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
+  padding: 14px;
+  border-radius: 12px;
   background: var(--surface);
-  color: var(--text-tertiary);
+  border: 1px solid color-mix(in srgb, var(--surface-hover) 30%, var(--border));
 }
 
-.inactiveTag {
-  color: var(--warning);
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.matrixPageLabel {
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  left: 0;
-  background: var(--surface);
-  z-index: 2;
+.pageInfo {
+  min-width: 0;
 }
 
 .pageLabel {
-  display: block;
   color: var(--text-primary);
-  font-size: 13px;
   font-weight: 600;
-  line-height: 1.35;
 }
 
 .pagePath {
   display: block;
-  font-family: monospace;
-  font-size: 11px;
-  color: var(--text-tertiary);
   margin-top: 6px;
+  color: var(--text-secondary);
+  font-family: monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
-.matrixCell {
-  text-align: center;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-  background: transparent;
+.technicalSummary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
-.matrixCellControls {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+.technicalSummary::-webkit-details-marker {
+  display: none;
 }
 
-.matrixAction {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 38px;
-  width: 100%;
-  padding: 0 10px;
-  border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, var(--primary));
-  background: color-mix(in srgb, var(--surface-hover) 60%, var(--surface));
+.technicalSummaryHint {
   color: var(--text-secondary);
   font-size: 12px;
-  font-weight: 600;
-  transition: transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
-  cursor: pointer;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
-}
-
-.matrixAction:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--primary) 28%, var(--border));
-  color: var(--text-primary);
-}
-
-.matrixActionActive {
-  border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
-  background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 17%, white), color-mix(in srgb, var(--primary) 11%, var(--surface)));
-  color: var(--primary);
-  box-shadow: 0 10px 18px rgba(37, 99, 235, 0.12);
-}
-
-.matrixActionEdit {
-  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
-  background: linear-gradient(180deg, color-mix(in srgb, var(--success) 18%, white), color-mix(in srgb, var(--success) 12%, var(--surface)));
-  color: var(--success);
-  box-shadow: 0 10px 18px rgba(34, 197, 94, 0.12);
-}
-
-.matrixActionText {
-  white-space: nowrap;
-}
-
-.matrixTable tbody tr:nth-child(even) .matrixCell,
-.matrixTable tbody tr:nth-child(even) .matrixPageLabel {
-  background: color-mix(in srgb, var(--surface-hover) 42%, var(--surface));
-}
-
-.matrixTable tbody tr:hover .matrixCell,
-.matrixTable tbody tr:hover .matrixPageLabel {
-  background: color-mix(in srgb, var(--primary) 4%, var(--surface));
-}
-
-[data-theme="dark"] .matrixLegendLabel {
-  color: #b4b4bf;
-}
-
-[data-theme="dark"] .matrixLegendPill {
-  border-color: rgba(96, 165, 250, 0.35);
-  background: rgba(37, 99, 235, 0.16);
-  color: #bfdbfe;
-}
-
-[data-theme="dark"] .matrixLegendPillEdit {
-  border-color: rgba(74, 222, 128, 0.34);
-  background: rgba(21, 128, 61, 0.18);
-  color: #bbf7d0;
-}
-
-[data-theme="dark"] .matrixWrapper {
-  border-color: #34343b;
-  background:
-    linear-gradient(180deg, rgba(39, 39, 49, 0.96), rgba(20, 20, 25, 0.98) 88px),
-    #17171c;
-  box-shadow:
-    0 18px 40px rgba(0, 0, 0, 0.34),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
-}
-
-[data-theme="dark"] .matrixPageCol,
-[data-theme="dark"] .matrixPageLabel {
-  background: #17171c;
-}
-
-[data-theme="dark"] .matrixRoleCard {
-  border-color: rgba(96, 165, 250, 0.16);
-  background:
-    linear-gradient(180deg, rgba(37, 99, 235, 0.1), rgba(30, 30, 38, 0.96)),
-    #202028;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 8px 18px rgba(0, 0, 0, 0.22);
-}
-
-[data-theme="dark"] .matrixRoleCode {
-  background: rgba(15, 23, 42, 0.8);
-  color: #cbd5e1;
-}
-
-[data-theme="dark"] .matrixAction {
-  border-color: #3a3a44;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0)),
-    #212129;
-  color: #d4d4dc;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 1px 0 rgba(0, 0, 0, 0.35);
-}
-
-[data-theme="dark"] .matrixAction:hover {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0)),
-    #282834;
-  border-color: rgba(96, 165, 250, 0.42);
-  color: #f4f4f5;
-}
-
-[data-theme="dark"] .matrixActionActive {
-  border-color: rgba(96, 165, 250, 0.58);
-  background:
-    linear-gradient(180deg, rgba(59, 130, 246, 0.32), rgba(29, 78, 216, 0.12)),
-    #1d2633;
-  color: #dbeafe;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 10px 18px rgba(15, 23, 42, 0.32);
-}
-
-[data-theme="dark"] .matrixActionEdit {
-  border-color: rgba(74, 222, 128, 0.52);
-  background:
-    linear-gradient(180deg, rgba(34, 197, 94, 0.28), rgba(21, 128, 61, 0.1)),
-    #18251d;
-  color: #dcfce7;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 10px 18px rgba(0, 0, 0, 0.24);
-}
-
-[data-theme="dark"] .matrixTable tbody tr:nth-child(even) .matrixCell,
-[data-theme="dark"] .matrixTable tbody tr:nth-child(even) .matrixPageLabel {
-  background: #1d1d24;
-}
-
-[data-theme="dark"] .matrixTable tbody tr:hover .matrixCell,
-[data-theme="dark"] .matrixTable tbody tr:hover .matrixPageLabel {
-  background: #202733;
+  font-weight: 500;
 }
 
 .loading {
   text-align: center;
-  padding: 40px;
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-
-.permissionCards {
-  display: grid;
-  gap: 16px;
-  width: 100%;
-  min-width: 0;
-}
-
-.permissionToolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.permissionToolbarActions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.permissionResultCount {
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.permissionSearch {
-  flex: 1 1 320px;
-  max-width: 520px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  padding: 0 14px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
+  padding: 48px 24px;
   color: var(--text-secondary);
 }
 
-.permissionSearch svg {
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
+@media (max-width: 1100px) {
+  .accessLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .roleSidebar {
+    position: static;
+  }
+
+  .roleList {
+    max-height: none;
+  }
+
+  .summaryBar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
-.permissionSearch input {
-  flex: 1;
-  border: none;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 14px;
-  outline: none;
-}
-
-.permissionSearch input::placeholder {
-  color: var(--text-tertiary);
-}
-
-.permissionEmpty {
-  padding: 18px 20px;
-  border: 1px dashed var(--border);
-  border-radius: 12px;
-  background: var(--surface);
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-
-.permissionCard {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-secondary);
-  overflow: hidden;
-}
-
-.permissionCardExpanded {
-  box-shadow: var(--shadow-sm);
-}
-
-.permissionCardCollapsed {
-  background: var(--surface);
-}
-
-.permissionCardHeader {
-  width: 100%;
-  border: none;
-  background: transparent;
-  padding: 16px;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
-  text-align: left;
-  cursor: pointer;
-}
-
-.permissionCardHeader:hover {
-  background: color-mix(in srgb, var(--surface-hover) 60%, transparent);
-}
-
-.permissionCardHeaderMain {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-  flex: 1;
-}
-
-.permissionRoleTitle {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 4px;
-}
-
-.permissionRoleCodeRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.permissionRoleMeta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.permissionRoleInfo {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.permissionSelectionCount {
-  display: inline-flex;
-  align-items: center;
-  min-height: 26px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: var(--surface-hover);
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.permissionChevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-  background: var(--surface-hover);
-  color: var(--text-secondary);
-  transition: transform 0.15s ease, background-color 0.15s ease, color 0.15s ease;
-}
-
-.permissionChevron svg {
-  width: 16px;
-  height: 16px;
-}
-
-.permissionChevronOpen {
-  transform: rotate(180deg);
-  color: var(--primary);
-  background: var(--primary-light);
-}
-
-.permissionSummary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.permissionSummaryChip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 0 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-secondary);
-  font-size: 12px;
-  max-width: 100%;
-}
-
-.permissionSummaryChip strong {
-  color: var(--text-primary);
-  font-weight: 600;
-  margin-right: 4px;
-}
-
-.permissionSummaryEmpty {
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-
-.permissionCardBody {
-  display: grid;
-  gap: 14px;
-  padding: 0 16px 16px;
-  border-top: 1px solid var(--border);
-}
-
-.permissionGroup {
-  border-top: 1px solid var(--border);
-  padding-top: 14px;
-  display: grid;
-  gap: 12px;
-}
-
-.permissionGroupHeader {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
-}
-
-.permissionGroupTitle {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.permissionGroupDescription {
-  margin-top: 4px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-secondary);
-}
-
-.clearBtn {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text-secondary);
-  font-size: 12px;
-  padding: 6px 10px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.clearBtn:hover {
-  border-color: var(--primary);
-  color: var(--primary);
-}
-
-.permissionOptions {
-  display: grid;
-  gap: 10px;
-}
-
-.permissionOption {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  cursor: pointer;
-}
-
-.permissionOptionActive {
-  border-color: var(--primary);
-  background: var(--primary-light);
-}
-
-.permissionOption input {
-  margin-top: 2px;
-  accent-color: var(--primary);
-}
-
-.permissionOptionTitle {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.permissionOptionDescription {
-  margin-top: 4px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-secondary);
-}
-
-.permissionCode {
-  display: inline-block;
-  margin-top: 6px;
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
-[data-theme="dark"] .permissionSearch {
-  border-color: #34343b;
-  background: #1b1b21;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-}
-
-[data-theme="dark"] .permissionSearch:focus-within {
-  border-color: rgba(96, 165, 250, 0.48);
-  box-shadow:
-    0 0 0 3px rgba(59, 130, 246, 0.14),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
-}
-
-[data-theme="dark"] .permissionCardCollapsed,
-[data-theme="dark"] .permissionCardExpanded {
-  background: #19191f;
-  border-color: #34343b;
-}
-
-[data-theme="dark"] .permissionEmpty {
-  border-color: #34343b;
-  background: #1b1b21;
-}
-
-[data-theme="dark"] .permissionCardHeader:hover {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-[data-theme="dark"] .permissionSelectionCount,
-[data-theme="dark"] .permissionChevron {
-  background: #25252d;
-  color: #c4c4cf;
-}
-
-[data-theme="dark"] .permissionChevronOpen {
-  background: rgba(59, 130, 246, 0.18);
-  color: #dbeafe;
-}
-
-[data-theme="dark"] .permissionSummaryChip {
-  border-color: #3a3a44;
-  background: #22222a;
-  color: #d4d4dc;
-}
-
-[data-theme="dark"] .permissionSummaryEmpty {
-  color: #9494a3;
-}
-
-[data-theme="dark"] .permissionCardBody {
-  border-top-color: #30303a;
-}
-
-/* Tablet */
-@media (max-width: 768px) {
+@media (max-width: 720px) {
   .page {
-    padding: 16px 12px;
+    padding: 16px;
   }
 
-  .tab {
-    padding: 8px 14px;
-    font-size: 13px;
-  }
-
-  .section {
-    padding: 14px 12px;
+  .section,
+  .roleSidebar {
+    padding: 16px;
   }
 
   .sectionHeader {
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .matrixLegend {
-    gap: 8px;
-  }
-
-  .newRoleForm {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .input {
-    min-width: unset;
-    width: 100%;
-  }
-
-  .matrixRoleCol {
-    width: 148px;
-    padding: 10px 8px;
-  }
-
-  .matrixCell {
-    padding: 10px 8px;
-  }
-
-  .matrixPageCol {
-    width: 220px;
-    padding: 12px;
-  }
-
-  .matrixPageLabel {
-    padding: 12px;
-  }
-
-  .permissionCardHeader,
-  .permissionGroupHeader {
     flex-direction: column;
   }
 
-  .permissionToolbarActions {
+  .summaryBar {
+    grid-template-columns: 1fr;
+  }
+
+  .pageRow {
+    grid-template-columns: 1fr;
+  }
+
+  .segmentedControl {
     width: 100%;
-    justify-content: space-between;
   }
 
-  .permissionCardHeader {
-    padding: 14px;
-  }
-
-  .permissionCardBody {
-    padding: 0 14px 14px;
-  }
-
-  .matrixAction {
-    min-height: 34px;
-    padding: 0 8px;
-  }
-}
-
-/* Mobile — карточки вместо таблицы ролей */
-@media (max-width: 640px) {
-  .tableWrapper {
-    overflow-x: visible;
+  .segmentedButton {
+    flex: 1 1 140px;
   }
 
   .table {
-    display: block;
-  }
-
-  .table thead {
-    display: none;
-  }
-
-  .table tbody {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .table tr {
-    display: block;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 12px;
-    background: var(--surface);
-  }
-
-  .table td {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 5px 0;
-    border: none;
-    font-size: 13px;
-    gap: 8px;
-  }
-
-  .table td::before {
-    content: attr(data-label);
-    font-size: 11px;
-    color: var(--text-tertiary);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-    min-width: 72px;
-    flex-shrink: 0;
-  }
-
-  .actions {
-    justify-content: flex-end;
-    flex-wrap: wrap;
-    padding-top: 8px;
-    margin-top: 4px;
-    border-top: 1px solid var(--border);
-  }
-
-  .actions::before {
-    display: none;
-  }
-
-  .inputInline {
-    max-width: 100%;
-    width: 100%;
-  }
-
-  .editBtn,
-  .deleteBtn,
-  .saveBtn,
-  .cancelBtn,
-  .toggleActive,
-  .toggleInactive {
-    padding: 8px 14px;
-    font-size: 13px;
-    min-height: 36px;
-  }
-
-  .permissionOption {
-    grid-template-columns: 18px minmax(0, 1fr);
-  }
-
-  .matrixLegendLabel {
-    width: 100%;
-  }
-}
-
-/* iPhone */
-@media (max-width: 430px) {
-  .page {
-    padding: 12px 10px;
-  }
-
-  .section {
-    padding: 12px 10px;
-  }
-
-  .tab {
-    padding: 7px 10px;
-    font-size: 12px;
+    min-width: 640px;
   }
 }

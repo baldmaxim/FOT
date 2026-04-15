@@ -5,6 +5,7 @@ import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest, ChatInboundMode, UserProfile } from '../types/index.js';
 import { logSupabaseError } from './admin-helpers.js';
 import { getRoleByCode } from '../services/roles-cache.service.js';
+import { ensureCriticalAdminAccess } from '../services/critical-admin-access.service.js';
 
 const approveUserSchema = z.object({
   position_type: z.string().min(1),
@@ -267,15 +268,15 @@ export const adminUsersController = {
   async deleteUser(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-
-      const { data: profile } = await supabase
-        .from('user_profiles')
-        .select('position_type')
-        .eq('id', id)
-        .single();
-
-      if (profile?.position_type === 'super_admin') {
-        res.status(403).json({ success: false, error: 'Cannot delete super_admin' });
+      try {
+        await ensureCriticalAdminAccess({
+          removedUserIds: [id],
+        });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Нельзя удалить последнего администратора с критичными правами',
+        });
         return;
       }
 
@@ -347,14 +348,15 @@ export const adminUsersController = {
         return;
       }
 
-      const { data: profile } = await supabase
-        .from('user_profiles')
-        .select('position_type')
-        .eq('id', id)
-        .single();
-
-      if (profile?.position_type === 'super_admin') {
-        res.status(403).json({ success: false, error: 'Cannot change super_admin position' });
+      try {
+        await ensureCriticalAdminAccess({
+          userRoleById: { [id]: position_type },
+        });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Нельзя снять последний критичный административный доступ',
+        });
         return;
       }
 

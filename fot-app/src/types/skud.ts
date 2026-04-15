@@ -38,3 +38,8 @@ export interface IAccessPointSetting {
   access_point_name: string;
   is_internal: boolean;
 }
+
+export interface AccessPointOption {
+  name: string;
+  id: number | null;
+}

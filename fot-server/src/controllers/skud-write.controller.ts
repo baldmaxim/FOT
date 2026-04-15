@@ -62,6 +62,7 @@ export const skudWriteController = {
       const { error: deleteError } = await supabase
         .from('skud_access_point_settings')
         .delete()
+        .eq('department_id', targetDeptId)
         .select('id');
 
       if (deleteError) {

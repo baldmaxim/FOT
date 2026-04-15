@@ -157,6 +157,11 @@ export interface IAccessPointSettingsRow {
   is_internal: boolean;
 }
 
+export interface IAccessPointOption {
+  name: string;
+  id: number | null;
+}
+
 export interface ISaveAccessPointSettingsParams {
   departmentId: string | null;
   settings: { access_point_name: string; is_internal: boolean }[];

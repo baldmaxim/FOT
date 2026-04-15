@@ -2,7 +2,7 @@ import { type FC, type KeyboardEvent, useCallback, useEffect, useMemo, useState 
 import { Pencil, Plus, Save, Trash2 } from 'lucide-react';
 import { skudService } from '../../services/skudService';
 import { travelTimeService } from '../../services/travelTimeService';
-import type { ITravelObject } from '../../types';
+import type { AccessPointOption, ITravelObject } from '../../types';
 import '../../styles/TravelSettings.css';
 
 interface ITravelObjectsTabProps {
@@ -18,7 +18,7 @@ const arraysEqual = (left: string[], right: string[]): boolean => (
 
 export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selectedConnection, setError }) => {
   const [objects, setObjects] = useState<ITravelObject[]>([]);
-  const [accessPoints, setAccessPoints] = useState<string[]>([]);
+  const [accessPoints, setAccessPoints] = useState<AccessPointOption[]>([]);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
   const [draftAccessPoints, setDraftAccessPoints] = useState<string[]>([]);
@@ -32,10 +32,14 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
     try {
       const [loadedObjects, loadedAccessPoints] = await Promise.all([
         travelTimeService.getObjects(),
-        skudService.getAccessPoints(selectedConnection),
+        skudService.getAccessPointOptions(selectedConnection),
       ]);
       setObjects(loadedObjects);
-      setAccessPoints([...new Set(loadedAccessPoints.map(normalizePoint))]);
+      setAccessPoints(
+        loadedAccessPoints
+          .map(point => ({ ...point, name: normalizePoint(point.name) }))
+          .filter(point => !!point.name),
+      );
       setSelectedObjectId(current => current && loadedObjects.some(object => object.id === current)
         ? current
         : loadedObjects[0]?.id || null);
@@ -77,25 +81,43 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
     return map;
   }, [objects]);
 
+  const accessPointOptionsByName = useMemo(() => {
+    const map = new Map<string, AccessPointOption>();
+    for (const point of accessPoints) {
+      if (!point.name || map.has(point.name)) continue;
+      map.set(point.name, point);
+    }
+    return map;
+  }, [accessPoints]);
+
   const availableAccessPoints = useMemo(() => {
     if (!selectedObject) return [];
 
-    const points = [...new Set([...accessPoints, ...draftAccessPoints].map(normalizePoint).filter(Boolean))];
-    return points.filter(point => {
-      const owner = ownershipMap.get(point);
-      return !owner || owner === selectedObject.id;
-    });
-  }, [accessPoints, draftAccessPoints, ownershipMap, selectedObject]);
+    const pointNames = [...new Set([
+      ...accessPoints.map(point => normalizePoint(point.name)),
+      ...draftAccessPoints.map(normalizePoint),
+    ].filter(Boolean))];
+
+    return pointNames
+      .filter(point => {
+        const owner = ownershipMap.get(point);
+        return !owner || owner === selectedObject.id;
+      })
+      .map(point => accessPointOptionsByName.get(point) || { name: point, id: null });
+  }, [accessPointOptionsByName, accessPoints, draftAccessPoints, ownershipMap, selectedObject]);
 
   const unassignedAccessPointsCount = useMemo(
-    () => accessPoints.filter(point => !ownershipMap.has(point)).length,
+    () => accessPoints.filter(point => !ownershipMap.has(point.name)).length,
     [accessPoints, ownershipMap],
   );
 
   const filteredAccessPoints = useMemo(() => {
     if (!search.trim()) return availableAccessPoints;
     const query = search.trim().toLowerCase();
-    return availableAccessPoints.filter(point => point.toLowerCase().includes(query));
+    return availableAccessPoints.filter(point => {
+      const label = point.id == null ? point.name : `${point.name} (${point.id})`;
+      return label.toLowerCase().includes(query);
+    });
   }, [availableAccessPoints, search]);
 
   const selectedSet = useMemo(() => new Set(draftAccessPoints), [draftAccessPoints]);
@@ -319,16 +341,17 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
 
                 <div className="travel-config-points">
                   {filteredAccessPoints.map(point => {
-                    const selected = selectedSet.has(point);
+                    const label = point.id == null ? point.name : `${point.name} (${point.id})`;
+                    const selected = selectedSet.has(point.name);
                     return (
-                      <label key={point} className={`travel-config-point ${selected ? 'selected' : ''}`}>
+                      <label key={point.name} className={`travel-config-point ${selected ? 'selected' : ''}`}>
                         <input
                           type="checkbox"
                           checked={selected}
-                          onChange={() => togglePoint(point)}
+                          onChange={() => togglePoint(point.name)}
                           disabled={!canEdit || saving}
                         />
-                        <span className="travel-config-point-name">{point}</span>
+                        <span className="travel-config-point-name">{label}</span>
                       </label>
                     );
                   })}

@@ -197,24 +197,6 @@ export const requirePageAccess = (pagePath: string, action: AccessAction = 'view
   };
 };
 
-export const requireSuperAdminOrPageAccess = (pagePath: string, action: AccessAction = 'view') => {
-  const pageAccessMiddleware = requirePageAccess(pagePath, action);
-
-  return async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
-    if (!req.user) {
-      res.status(401).json({ success: false, error: 'Authentication required' });
-      return;
-    }
-
-    if (req.user.position_type === 'super_admin') {
-      next();
-      return;
-    }
-
-    await pageAccessMiddleware(req, res, next);
-  };
-};
-
 export const requireAnyPageAccess = (pagePaths: string[], action: AccessAction = 'view') => {
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     if (!req.user) {
@@ -273,26 +255,5 @@ export const requireMinPosition = (minPosition: EmployeePositionType) => {
       res.status(500).json({ success: false, error: 'Authorization check failed' });
     }
   };
-};
-
-/**
- * Middleware для проверки что пользователь - super_admin
- */
-export const requireSuperAdmin = (
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
-): void => {
-  if (!req.user) {
-    res.status(401).json({ success: false, error: 'Authentication required' });
-    return;
-  }
-
-  if (req.user.position_type !== 'super_admin') {
-    res.status(403).json({ success: false, error: 'Super admin access required' });
-    return;
-  }
-
-  next();
 };
 

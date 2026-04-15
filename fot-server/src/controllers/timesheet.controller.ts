@@ -149,7 +149,7 @@ async function ensureTimesheetTeamManagementEnabled(): Promise<boolean> {
 }
 
 async function isTimesheetTeamManagementAvailable(req: AuthenticatedRequest): Promise<boolean> {
-  if (req.user.position_type === 'super_admin') {
+  if ((await resolveRequestDataScope(req)) === 'all') {
     return true;
   }
 

@@ -49,8 +49,9 @@ export const sigurService = {
     return apiClient.get('/sigur/departments');
   },
 
-  async getAccessPoints(): Promise<{ data: unknown[]; count: number }> {
-    return apiClient.get('/sigur/access-points');
+  async getAccessPoints(connection?: 'internal' | 'external'): Promise<{ data: unknown[]; count: number }> {
+    const params = connection ? `?connection=${connection}` : '';
+    return apiClient.get(`/sigur/access-points${params}`);
   },
 
   async getCards(): Promise<{ data: unknown[]; count: number }> {

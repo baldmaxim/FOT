@@ -6,6 +6,7 @@ import {
   type DataScope,
   type EmployeePortalVariant,
 } from '../config/access-control.js';
+import { invalidateAccessCatalogCache } from './access-catalog.service.js';
 import { getRoleByCode, getRoleById, invalidateRolesCache } from './roles-cache.service.js';
 
 interface PageAccessPermission {
@@ -55,19 +56,19 @@ async function resolveRole(roleRef: string) {
   return (await getRoleById(roleRef)) ?? (await getRoleByCode(roleRef));
 }
 
-async function resolveRoleCacheKey(roleRef: string): Promise<string> {
-  const role = await resolveRole(roleRef);
-  return role?.id ?? roleRef;
-}
-
 export async function getRolePermissions(roleRef: string): Promise<string[]> {
   const role = await resolveRole(roleRef);
   return normalizePermissions(role?.permissions);
 }
 
 export async function getRolePageAccess(roleRef: string): Promise<Record<string, PageAccessPermission>> {
+  const role = await resolveRole(roleRef);
+  if (!role) {
+    return {};
+  }
+
   const cache = await loadPageAccessCache();
-  const entries = cache.get(await resolveRoleCacheKey(roleRef)) ?? new Map<string, PageAccessPermission>();
+  const entries = cache.get(role.id) ?? cache.get(role.code) ?? new Map<string, PageAccessPermission>();
 
   return Object.fromEntries(entries.entries());
 }
@@ -115,5 +116,6 @@ export async function resolveRoleDataScope(roleRef: string): Promise<DataScope |
 export function invalidateAccessControlCache(): void {
   pageAccessCache = null;
   pageAccessCacheExpiresAt = 0;
+  invalidateAccessCatalogCache();
   invalidateRolesCache();
 }

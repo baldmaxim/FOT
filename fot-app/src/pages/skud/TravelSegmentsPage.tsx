@@ -59,10 +59,11 @@ const statusClassName = (status: TravelSegmentStatus): string => {
 const EMPTY_SEGMENTS: ITravelSegment[] = [];
 
 export const TravelSegmentsPage: FC = () => {
-  const { hasPermission, profile } = useAuth();
+  const { hasPermission, profile, canEditPage } = useAuth();
   const queryClient = useQueryClient();
   const structureQuery = useStructureTree();
   const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
+  const canRebuild = canEditPage('/skud-travel');
   const scopePending = isDepartmentScope && !profile?.department_id;
   const now = new Date();
   const initialMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -148,7 +149,12 @@ export const TravelSegmentsPage: FC = () => {
           <h1>Передвижения между объектами</h1>
           <p>Система сравнивает фактическое передвижение с единым лимитом и выделяет превышения или проблемы с объектами.</p>
         </div>
-        <button className="travel-segments-btn travel-segments-btn-primary" onClick={handleRebuild} disabled={rebuilding}>
+        <button
+          className="travel-segments-btn travel-segments-btn-primary"
+          onClick={handleRebuild}
+          disabled={rebuilding || !canRebuild}
+          title={canRebuild ? undefined : 'Нужно право изменения страницы /skud-travel'}
+        >
           <RefreshCw size={16} className={rebuilding ? 'travel-spin' : ''} />
           {rebuilding ? 'Пересчёт...' : 'Пересчитать'}
         </button>

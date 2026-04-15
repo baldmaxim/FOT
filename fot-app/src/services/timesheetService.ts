@@ -134,7 +134,7 @@ export const timesheetService = {
     if (res.error) throw new Error(res.error || 'Ошибка исключения сотрудника');
   },
 
-  async exportMass(filters: { month: string; department_ids: string[] }): Promise<Blob> {
+  async exportMass(filters: { month: string; department_ids: string[]; half?: TimesheetExportHalf }): Promise<Blob> {
     const response = await fetch(
       buildApiUrl('/timesheet/export-mass'),
       {

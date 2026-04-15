@@ -2,15 +2,18 @@ import { Response } from 'express';
 import { z } from 'zod';
 import { supabase } from '../config/database.js';
 import {
-  AVAILABLE_PAGES,
-  PAGE_ACCESS_KEYS,
-  PERMISSION_GROUPS,
-  normalizePageAccessEntry,
   normalizePermissions,
-  validateRoleConfiguration,
+  type AccessMode,
 } from '../config/access-control.js';
-import type { AuthenticatedRequest } from '../types/index.js';
+import type { AuthenticatedRequest, SystemRole } from '../types/index.js';
 import { invalidateAccessControlCache } from '../services/access-control.service.js';
+import {
+  loadAccessCatalog,
+  normalizeKnownPageAccessModes,
+  pageAccessRowsToModes,
+  validateRoleConfiguration,
+} from '../services/access-catalog.service.js';
+import { ensureCriticalAdminAccess } from '../services/critical-admin-access.service.js';
 
 const createRoleSchema = z.object({
   code: z.string().min(1).max(50).regex(/^[a-z_]+$/, 'Только строчные буквы и подчёркивание'),
@@ -28,54 +31,147 @@ const updateRoleSchema = z.object({
   permissions: z.array(z.string()).optional(),
 });
 
-const pageAccessItemSchema = z.object({
-  role_code: z.string().min(1),
-  page_path: z.string().min(1),
-  can_view: z.boolean(),
-  can_edit: z.boolean().optional().default(false),
+const updateAccessProfileSchema = z.object({
+  permissions: z.array(z.string()).optional().default([]),
+  page_access: z.record(z.enum(['none', 'view', 'edit'])).optional().default({}),
 });
 
-async function loadRoleIdByCode(): Promise<Map<string, string>> {
+const cloneRoleSchema = z.object({
+  code: z.string().min(1).max(50).regex(/^[a-z_]+$/, 'Только строчные буквы и подчёркивание'),
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).nullable().optional(),
+  level: z.number().int().min(0).max(100).optional(),
+  is_active: z.boolean().optional(),
+});
+
+function isMissingFunctionError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+
+  const code = 'code' in error ? error.code : null;
+  const message = 'message' in error ? String(error.message || '') : '';
+
+  return (
+    code === '42883'
+    || code === 'PGRST202'
+    || /function .* does not exist/i.test(message)
+    || /schema cache/i.test(message)
+    || /Could not find the function/i.test(message)
+  );
+}
+
+async function loadRoleByCode(code: string): Promise<SystemRole | null> {
   const { data, error } = await supabase
     .from('system_roles')
-    .select('id, code');
+    .select('*')
+    .eq('code', code)
+    .single();
 
-  if (error) {
-    throw new Error(error.message);
+  if (error || !data) {
+    return null;
   }
 
-  return new Map((data || []).map(role => [role.code, role.id]));
+  return data as SystemRole;
 }
 
-async function loadPageAccessMatrix(): Promise<Record<string, Record<string, { can_view: boolean; can_edit: boolean }>>> {
+async function loadRoleAccessRows(roleCode: string) {
   const { data, error } = await supabase
     .from('role_page_access')
-    .select('role_code, system_role_id, page_path, can_view, can_edit');
+    .select('role_code, page_path, can_view, can_edit')
+    .eq('role_code', roleCode);
 
   if (error) {
+    throw new Error(`Failed to load role access: ${error.message}`);
+  }
+
+  return data || [];
+}
+
+async function loadRoleAccessModes(roleCode: string): Promise<Record<string, AccessMode>> {
+  const rows = await loadRoleAccessRows(roleCode);
+  return normalizeKnownPageAccessModes(
+    pageAccessRowsToModes(
+      rows.map((row) => ({
+        role_code: row.role_code,
+        page_path: row.page_path,
+        can_view: row.can_view,
+        can_edit: row.can_edit,
+      })),
+    ),
+  );
+}
+
+async function persistAccessProfileFallback(
+  roleCode: string,
+  roleId: string,
+  permissions: string[],
+  pageAccess: Record<string, AccessMode>,
+): Promise<void> {
+  const grantedEntries = Object.entries(pageAccess)
+    .filter(([, mode]) => mode !== 'none')
+    .map(([pagePath, mode]) => ({
+      role_code: roleCode,
+      system_role_id: roleId,
+      page_path: pagePath,
+      can_view: mode === 'view' || mode === 'edit',
+      can_edit: mode === 'edit',
+    }));
+
+  const { error: roleError } = await supabase
+    .from('system_roles')
+    .update({
+      permissions,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('code', roleCode);
+
+  if (roleError) {
+    throw new Error(roleError.message);
+  }
+
+  const { error: deleteError } = await supabase
+    .from('role_page_access')
+    .delete()
+    .eq('role_code', roleCode);
+
+  if (deleteError) {
+    throw new Error(deleteError.message);
+  }
+
+  if (grantedEntries.length === 0) {
+    return;
+  }
+
+  const { error: insertError } = await supabase
+    .from('role_page_access')
+    .insert(grantedEntries);
+
+  if (insertError) {
+    throw new Error(insertError.message);
+  }
+}
+
+async function persistAccessProfile(
+  roleCode: string,
+  roleId: string,
+  permissions: string[],
+  pageAccess: Record<string, AccessMode>,
+): Promise<void> {
+  const payload = Object.entries(pageAccess).map(([key, mode]) => ({ key, mode }));
+  const { error } = await supabase.rpc('replace_role_access_profile', {
+    p_role_code: roleCode,
+    p_permissions: permissions,
+    p_page_access: payload,
+  });
+
+  if (!error) {
+    return;
+  }
+
+  if (!isMissingFunctionError(error)) {
     throw new Error(error.message);
   }
 
-  const matrix: Record<string, Record<string, { can_view: boolean; can_edit: boolean }>> = {};
-  for (const entry of data || []) {
-    if (!matrix[entry.role_code]) {
-      matrix[entry.role_code] = {};
-    }
-    matrix[entry.role_code][entry.page_path] = {
-      can_view: !!entry.can_view || !!entry.can_edit,
-      can_edit: !!entry.can_edit,
-    };
-  }
-
-  return matrix;
-}
-
-function validatePageAccessItems(items: { role_code: string; page_path: string; can_view: boolean; can_edit: boolean }[]): string | null {
-  const invalidPage = items.find(item => !PAGE_ACCESS_KEYS.has(item.page_path));
-  if (invalidPage) {
-    return `Неизвестная страница в матрице доступа: ${invalidPage.page_path}`;
-  }
-  return null;
+  await persistAccessProfileFallback(roleCode, roleId, permissions, pageAccess);
 }
 
 export const rolesController = {
@@ -93,8 +189,35 @@ export const rolesController = {
     res.json({ success: true, data });
   },
 
-  async getPermissionCatalog(_req: AuthenticatedRequest, res: Response): Promise<void> {
-    res.json({ success: true, data: PERMISSION_GROUPS });
+  async getCatalog(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const data = await loadAccessCatalog();
+      res.json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Failed to load access catalog' });
+    }
+  },
+
+  async getAccessProfile(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const role = await loadRoleByCode(req.params.code);
+      if (!role) {
+        res.status(404).json({ success: false, error: 'Роль не найдена' });
+        return;
+      }
+
+      const page_access = await loadRoleAccessModes(role.code);
+      res.json({
+        success: true,
+        data: {
+          role,
+          permissions: normalizePermissions(role.permissions),
+          page_access,
+        },
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Failed to load access profile' });
+    }
   },
 
   async createRole(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -106,7 +229,7 @@ export const rolesController = {
 
     const { code, name, description, level } = parsed.data;
     const permissions = normalizePermissions(parsed.data.permissions);
-    const configError = validateRoleConfiguration(code, permissions, {});
+    const configError = await validateRoleConfiguration(code, permissions, {});
     if (configError) {
       res.status(400).json({ success: false, error: configError });
       return;
@@ -139,6 +262,61 @@ export const rolesController = {
     res.status(201).json({ success: true, data });
   },
 
+  async cloneRole(req: AuthenticatedRequest, res: Response): Promise<void> {
+    const { code: sourceCode } = req.params;
+    const parsed = cloneRoleSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: parsed.error.errors[0].message });
+      return;
+    }
+
+    try {
+      const sourceRole = await loadRoleByCode(sourceCode);
+      if (!sourceRole) {
+        res.status(404).json({ success: false, error: 'Исходная роль не найдена' });
+        return;
+      }
+
+      const page_access = await loadRoleAccessModes(sourceRole.code);
+      const permissions = normalizePermissions(sourceRole.permissions);
+      const targetCode = parsed.data.code;
+      const configError = await validateRoleConfiguration(targetCode, permissions, page_access);
+      if (configError) {
+        res.status(400).json({ success: false, error: configError });
+        return;
+      }
+
+      const { data: createdRole, error: createError } = await supabase
+        .from('system_roles')
+        .insert({
+          code: targetCode,
+          name: parsed.data.name,
+          description: parsed.data.description ?? sourceRole.description ?? null,
+          permissions,
+          level: parsed.data.level ?? sourceRole.level,
+          is_active: parsed.data.is_active ?? true,
+          is_system: false,
+        })
+        .select()
+        .single();
+
+      if (createError || !createdRole) {
+        if (createError?.code === '23505') {
+          res.status(409).json({ success: false, error: 'Роль с таким кодом уже существует' });
+        } else {
+          res.status(500).json({ success: false, error: createError?.message || 'Не удалось создать роль' });
+        }
+        return;
+      }
+
+      await persistAccessProfile(targetCode, createdRole.id, permissions, page_access);
+      invalidateAccessControlCache();
+      res.status(201).json({ success: true, data: createdRole });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Failed to clone role' });
+    }
+  },
+
   async updateRole(req: AuthenticatedRequest, res: Response): Promise<void> {
     const { code } = req.params;
     const parsed = updateRoleSchema.safeParse(req.body);
@@ -147,13 +325,8 @@ export const rolesController = {
       return;
     }
 
-    const { data: currentRole, error: fetchError } = await supabase
-      .from('system_roles')
-      .select('permissions')
-      .eq('code', code)
-      .single();
-
-    if (fetchError || !currentRole) {
+    const currentRole = await loadRoleByCode(code);
+    if (!currentRole) {
       res.status(404).json({ success: false, error: 'Роль не найдена' });
       return;
     }
@@ -162,21 +335,35 @@ export const rolesController = {
       ? normalizePermissions(parsed.data.permissions)
       : normalizePermissions(currentRole.permissions);
 
-    const pageAccessMatrix = await loadPageAccessMatrix();
-    const configError = validateRoleConfiguration(code, permissions, pageAccessMatrix[code] ?? {});
+    const pageAccess = await loadRoleAccessModes(code);
+    const configError = await validateRoleConfiguration(code, permissions, pageAccess);
     if (configError) {
       res.status(400).json({ success: false, error: configError });
       return;
     }
 
+    if (parsed.data.is_active === false && currentRole.is_active) {
+      try {
+        await ensureCriticalAdminAccess({
+          roleActiveByCode: { [code]: false },
+        });
+      } catch (error) {
+        res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Невозможно деактивировать последнюю администраторскую роль' });
+        return;
+      }
+    }
+
     const updates: Record<string, unknown> = {
       name: parsed.data.name,
+      description: parsed.data.description ?? null,
       level: parsed.data.level,
       permissions,
       updated_at: new Date().toISOString(),
     };
-    if (parsed.data.description !== undefined) updates.description = parsed.data.description;
-    if (parsed.data.is_active !== undefined) updates.is_active = parsed.data.is_active;
+
+    if (parsed.data.is_active !== undefined) {
+      updates.is_active = parsed.data.is_active;
+    }
 
     const { data, error } = await supabase
       .from('system_roles')
@@ -185,12 +372,8 @@ export const rolesController = {
       .select()
       .single();
 
-    if (error) {
-      res.status(500).json({ success: false, error: error.message });
-      return;
-    }
-    if (!data) {
-      res.status(404).json({ success: false, error: 'Роль не найдена' });
+    if (error || !data) {
+      res.status(500).json({ success: false, error: error?.message || 'Не удалось обновить роль' });
       return;
     }
 
@@ -198,22 +381,71 @@ export const rolesController = {
     res.json({ success: true, data });
   },
 
+  async updateAccessProfile(req: AuthenticatedRequest, res: Response): Promise<void> {
+    const { code } = req.params;
+    const parsed = updateAccessProfileSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: 'Неверный формат данных профиля доступа' });
+      return;
+    }
+
+    try {
+      const role = await loadRoleByCode(code);
+      if (!role) {
+        res.status(404).json({ success: false, error: 'Роль не найдена' });
+        return;
+      }
+
+      const permissions = normalizePermissions(parsed.data.permissions);
+      const page_access = Object.fromEntries(
+        Object.entries(parsed.data.page_access || {}).map(([pageKey, mode]) => [pageKey, mode as AccessMode]),
+      );
+
+      const configError = await validateRoleConfiguration(code, permissions, page_access);
+      if (configError) {
+        res.status(400).json({ success: false, error: configError });
+        return;
+      }
+
+      if (role.is_active) {
+        try {
+          await ensureCriticalAdminAccess({
+            rolePageAccessByCode: { [code]: page_access },
+          });
+        } catch (error) {
+          res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Нельзя снять последний критичный доступ администрирования' });
+          return;
+        }
+      }
+
+      await persistAccessProfile(code, role.id, permissions, page_access);
+      invalidateAccessControlCache();
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Не удалось сохранить профиль доступа' });
+    }
+  },
+
   async deleteRole(req: AuthenticatedRequest, res: Response): Promise<void> {
     const { code } = req.params;
+    const role = await loadRoleByCode(code);
 
-    const { data: role, error: fetchError } = await supabase
-      .from('system_roles')
-      .select('is_system')
-      .eq('code', code)
-      .single();
-
-    if (fetchError || !role) {
+    if (!role) {
       res.status(404).json({ success: false, error: 'Роль не найдена' });
       return;
     }
 
     if (role.is_system) {
       res.status(403).json({ success: false, error: 'Системную роль нельзя удалить' });
+      return;
+    }
+
+    try {
+      await ensureCriticalAdminAccess({
+        removedRoleCodes: [code],
+      });
+    } catch (error) {
+      res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Нельзя удалить последнюю администраторскую роль' });
       return;
     }
 
@@ -229,109 +461,5 @@ export const rolesController = {
 
     invalidateAccessControlCache();
     res.json({ success: true });
-  },
-
-  async getPageAccess(_req: AuthenticatedRequest, res: Response): Promise<void> {
-    const { data, error } = await supabase
-      .from('role_page_access')
-      .select('*')
-      .order('role_code', { ascending: true })
-      .order('page_path', { ascending: true });
-
-    if (error) {
-      res.status(500).json({ success: false, error: error.message });
-      return;
-    }
-
-    res.json({ success: true, data });
-  },
-
-  async updatePageAccess(req: AuthenticatedRequest, res: Response): Promise<void> {
-    const parsed = z.array(pageAccessItemSchema).safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ success: false, error: 'Неверный формат данных' });
-      return;
-    }
-
-    const items = parsed.data.map(item => normalizePageAccessEntry({
-      role_code: item.role_code,
-      page_path: item.page_path,
-      can_view: item.can_view,
-      can_edit: item.can_edit ?? false,
-    }));
-
-    const itemValidationError = validatePageAccessItems(items);
-    if (itemValidationError) {
-      res.status(400).json({ success: false, error: itemValidationError });
-      return;
-    }
-
-    let roleIdByCode: Map<string, string>;
-    try {
-      roleIdByCode = await loadRoleIdByCode();
-    } catch (error) {
-      res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Failed to load roles' });
-      return;
-    }
-
-    const unmappedRole = items.find(item => !roleIdByCode.has(item.role_code));
-    if (unmappedRole) {
-      res.status(400).json({ success: false, error: `Неизвестная роль в матрице доступа: ${unmappedRole.role_code}` });
-      return;
-    }
-
-    const currentMatrix = await loadPageAccessMatrix();
-    for (const item of items) {
-      if (!currentMatrix[item.role_code]) {
-        currentMatrix[item.role_code] = {};
-      }
-      currentMatrix[item.role_code][item.page_path] = {
-        can_view: item.can_view,
-        can_edit: item.can_edit,
-      };
-    }
-
-    const { data: roles, error: rolesError } = await supabase
-      .from('system_roles')
-      .select('code, permissions');
-
-    if (rolesError) {
-      res.status(500).json({ success: false, error: rolesError.message });
-      return;
-    }
-
-    for (const role of roles || []) {
-      const configError = validateRoleConfiguration(
-        role.code,
-        role.permissions,
-        currentMatrix[role.code] ?? {},
-      );
-      if (configError) {
-        res.status(400).json({ success: false, error: configError });
-        return;
-      }
-    }
-
-    const { error } = await supabase
-      .from('role_page_access')
-      .upsert(
-        items.map(item => ({
-          ...item,
-          system_role_id: roleIdByCode.get(item.role_code) ?? null,
-        })),
-        { onConflict: 'system_role_id,page_path' },
-      );
-
-    if (error) {
-      res.status(500).json({ success: false, error: error.message });
-      return;
-    }
-
-    invalidateAccessControlCache();
-    res.json({ success: true });
-  },
-
-  async getAvailablePages(_req: AuthenticatedRequest, res: Response): Promise<void> {
-    res.json({ success: true, data: AVAILABLE_PAGES });
   },
 };

@@ -1,5 +1,5 @@
 import { apiClient, buildApiUrl, buildAuthHeaders } from '../api/client';
-import type { SkudEvent, SkudDailySummary, IEmployeePresence, IAccessPointSetting, IDashboardStats } from '../types';
+import type { SkudEvent, SkudDailySummary, IEmployeePresence, IAccessPointSetting, IDashboardStats, AccessPointOption } from '../types';
 import { readSseResponse } from '../components/skud/sigur-settings.utils';
 
 interface ApiResponse<T> {
@@ -25,6 +25,78 @@ interface DownloadFileResult {
   blob: Blob;
   filename: string;
 }
+
+const normalizeAccessPointName = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized || null;
+};
+
+const parseAccessPointNumber = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+    return Number(value.trim());
+  }
+
+  return null;
+};
+
+const toAccessPointOption = (value: unknown): AccessPointOption | null => {
+  if (typeof value === 'string') {
+    const name = normalizeAccessPointName(value);
+    return name ? { name, id: null } : null;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const candidate = value as { name?: unknown; id?: unknown };
+  const name = normalizeAccessPointName(candidate.name);
+  if (!name) return null;
+
+  const record = value as Record<string, unknown>;
+  const directKeys = ['id', 'accessPointId', 'accesspointId', 'number', 'accessPointNumber', 'objectNumber', 'tabId'];
+  let parsedId: number | null = null;
+
+  for (const key of directKeys) {
+    parsedId = parseAccessPointNumber(record[key]);
+    if (parsedId != null) break;
+  }
+
+  if (parsedId == null && record.data && typeof record.data === 'object') {
+    for (const key of directKeys) {
+      parsedId = parseAccessPointNumber((record.data as Record<string, unknown>)[key]);
+      if (parsedId != null) break;
+    }
+  }
+
+  return {
+    name,
+    id: parsedId,
+  };
+};
+
+const normalizeAccessPointOptions = (value: unknown): AccessPointOption[] => {
+  if (!Array.isArray(value)) return [];
+
+  const byName = new Map<string, number | null>();
+  for (const item of value) {
+    const option = toAccessPointOption(item);
+    if (!option) continue;
+
+    if (!byName.has(option.name) || (byName.get(option.name) == null && option.id != null)) {
+      byName.set(option.name, option.id);
+    }
+  }
+
+  return [...byName.entries()]
+    .sort(([left], [right]) => left.localeCompare(right, 'ru'))
+    .map(([name, id]) => ({ name, id }));
+};
 
 const parseDownloadFilename = (contentDisposition: string | null, fallbackName: string): string => {
   if (!contentDisposition) return fallbackName;
@@ -108,8 +180,26 @@ export const skudService = {
 
   async getAccessPoints(connection?: 'internal' | 'external'): Promise<string[]> {
     const params = connection ? `?connection=${connection}` : '';
-    const response = await apiClient.get<ApiResponse<string[]>>(`/skud/access-points${params}`);
-    return response.data || [];
+    const response = await apiClient.get<ApiResponse<unknown>>(`/skud/access-points${params}`);
+    return normalizeAccessPointOptions(response.data).map(option => option.name);
+  },
+
+  async getAccessPointOptions(connection?: 'internal' | 'external'): Promise<AccessPointOption[]> {
+    try {
+      const sigurParams = connection ? `?connection=${connection}` : '';
+      const sigurResponse = await apiClient.get<{ data?: unknown }>(`/sigur/access-points${sigurParams}`);
+      const normalizedSigur = normalizeAccessPointOptions(sigurResponse.data);
+      if (normalizedSigur.length > 0) {
+        return normalizedSigur;
+      }
+    } catch {
+      // Fallback to cached SKUD access points when live Sigur list is unavailable.
+    }
+
+    const params = new URLSearchParams({ includeMeta: '1' });
+    if (connection) params.append('connection', connection);
+    const response = await apiClient.get<ApiResponse<unknown>>(`/skud/access-points?${params.toString()}`);
+    return normalizeAccessPointOptions(response.data);
   },
 
   async getPresence(departmentId?: string): Promise<IEmployeePresence[]> {

@@ -158,8 +158,8 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
       await adminService.updateUserPosition(userId, positionType);
       toast.success('Должность изменена');
       await onReload();
-    } catch {
-      toast.error('Ошибка изменения должности');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка изменения должности');
     }
   };
 
@@ -189,8 +189,8 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
       await adminService.deleteUser(userId);
       toast.success('Пользователь удалён');
       await onReload();
-    } catch {
-      toast.error('Ошибка удаления пользователя');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка удаления пользователя');
     }
   };
 
@@ -263,7 +263,23 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
 
         {filteredUsers.map(user => {
           const isExpanded = expandedUserId === user.id;
-          const isSuperAdmin = user.position_type === 'super_admin';
+          const assignableRoles = roles
+            .filter(role => role.is_active || role.code === user.position_type);
+
+          if (!assignableRoles.some(role => role.code === user.position_type)) {
+            assignableRoles.push({
+              id: `missing-${user.position_type}`,
+              code: user.position_type,
+              name: getRoleLabel(user.position_type),
+              description: null,
+              permissions: [],
+              level: Number.MAX_SAFE_INTEGER,
+              is_active: false,
+              is_system: false,
+              created_at: '',
+              updated_at: '',
+            });
+          }
 
           return (
             <div key={user.id} className={`${styles.userRow} ${isExpanded ? styles.expanded : ''}`}>
@@ -272,7 +288,6 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
                 <div className={styles.userRowInfo}>
                   <div className={styles.userRowName}>
                     {user.full_name || 'Без имени'}
-                    {isSuperAdmin && <span className={styles.adminBadge}>Super Admin</span>}
                   </div>
                   <div className={styles.userRowEmail}>
                     {user.email || ''}
@@ -347,97 +362,94 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
                     )}
                   </div>
 
-                  {!isSuperAdmin && (
-                    <>
-                      <div className={styles.controlGroup}>
-                        <label>Должность:</label>
-                        <select
-                          value={user.position_type}
-                          onChange={(e) => handlePositionChange(user.id, e.target.value as EmployeePositionType)}
-                        >
-                          {roles
-                            .filter(r => r.is_active && r.code !== 'super_admin')
-                            .sort((a, b) => a.level - b.level)
-                            .map(r => (
-                              <option key={r.code} value={r.code}>{r.name}</option>
-                            ))
-                          }
-                        </select>
-                      </div>
+                  <>
+                    <div className={styles.controlGroup}>
+                      <label>Должность:</label>
+                      <select
+                        value={user.position_type}
+                        onChange={(e) => handlePositionChange(user.id, e.target.value as EmployeePositionType)}
+                      >
+                        {assignableRoles
+                          .sort((a, b) => a.level - b.level)
+                          .map(role => (
+                            <option key={role.code} value={role.code}>{role.name}</option>
+                          ))
+                        }
+                      </select>
+                    </div>
 
-                      <div className={styles.controlGroup}>
-                        <label>Входящий чат:</label>
-                        <select
-                          value={user.chat_inbound_mode || 'open'}
-                          onChange={(e) => handleChatInboundModeChange(user.id, e.target.value as ChatInboundMode)}
-                        >
-                          <option value="open">Открыт</option>
-                          <option value="requests_only">Только по запросу</option>
-                          <option value="disabled">Запрещён</option>
-                        </select>
-                      </div>
+                    <div className={styles.controlGroup}>
+                      <label>Входящий чат:</label>
+                      <select
+                        value={user.chat_inbound_mode || 'open'}
+                        onChange={(e) => handleChatInboundModeChange(user.id, e.target.value as ChatInboundMode)}
+                      >
+                        <option value="open">Открыт</option>
+                        <option value="requests_only">Только по запросу</option>
+                        <option value="disabled">Запрещён</option>
+                      </select>
+                    </div>
 
-                      <div className={styles.controlGroup}>
-                        <label>Отдел:</label>
-                        <select
-                          value={user.department_id || ''}
-                          onChange={(e) => handleDeptChange(user.id, e.target.value)}
-                          disabled={!user.employee_id}
-                        >
-                          <option value="">
-                            {user.employee_id ? 'Выберите отдел' : 'Сначала привяжите СКУД'}
+                    <div className={styles.controlGroup}>
+                      <label>Отдел:</label>
+                      <select
+                        value={user.department_id || ''}
+                        onChange={(e) => handleDeptChange(user.id, e.target.value)}
+                        disabled={!user.employee_id}
+                      >
+                        <option value="">
+                          {user.employee_id ? 'Выберите отдел' : 'Сначала привяжите СКУД'}
+                        </option>
+                        {flatDepts.map(d => (
+                          <option key={d.id} value={d.id}>
+                            {'\u00A0\u00A0'.repeat(d.level)}{d.name}
                           </option>
-                          {flatDepts.map(d => (
-                            <option key={d.id} value={d.id}>
-                              {'\u00A0\u00A0'.repeat(d.level)}{d.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+                        ))}
+                      </select>
+                    </div>
 
-                      <div className={styles.controlGroup}>
-                        <label>Сотрудник СКУД:</label>
-                        {user.employee_id ? (
-                          <div className={styles.skudLinked}>
-                            <span className={styles.skudLinkedText}>
-                              ID {user.employee_id}
-                            </span>
-                            <button
-                              className={styles.skudUnlinkBtn}
-                              onClick={() => handleEmpLink(user.id, null)}
+                    <div className={styles.controlGroup}>
+                      <label>Сотрудник СКУД:</label>
+                      {user.employee_id ? (
+                        <div className={styles.skudLinked}>
+                          <span className={styles.skudLinkedText}>
+                            ID {user.employee_id}
+                          </span>
+                          <button
+                            className={styles.skudUnlinkBtn}
+                            onClick={() => handleEmpLink(user.id, null)}
+                          >
+                            Отвязать
+                          </button>
+                        </div>
+                      ) : (
+                        <span className={styles.skudNotLinked}>Не привязан</span>
+                      )}
+                      <input
+                        type="text"
+                        placeholder="Поиск по ФИО..."
+                        value={empSearch?.userId === user.id ? empSearch.query : ''}
+                        onChange={(e) => handleEmpSearchQuery(user.id, e.target.value)}
+                        className={`${styles.nameInput} ${styles.skudSearchInput}`}
+                      />
+                      {empSearch?.userId === user.id && empSearch.loading && (
+                        <div className={styles.skudSearchLoading}>Поиск...</div>
+                      )}
+                      {empSearch?.userId === user.id && empSearch.results.length > 0 && (
+                        <div className={styles.skudSearchResults}>
+                          {empSearch.results.map(emp => (
+                            <div
+                              key={emp.id}
+                              className={styles.skudSearchItem}
+                              onClick={() => handleEmpLink(user.id, emp.id, emp.full_name)}
                             >
-                              Отвязать
-                            </button>
-                          </div>
-                        ) : (
-                          <span className={styles.skudNotLinked}>Не привязан</span>
-                        )}
-                        <input
-                          type="text"
-                          placeholder="Поиск по ФИО..."
-                          value={empSearch?.userId === user.id ? empSearch.query : ''}
-                          onChange={(e) => handleEmpSearchQuery(user.id, e.target.value)}
-                          className={`${styles.nameInput} ${styles.skudSearchInput}`}
-                        />
-                        {empSearch?.userId === user.id && empSearch.loading && (
-                          <div className={styles.skudSearchLoading}>Поиск...</div>
-                        )}
-                        {empSearch?.userId === user.id && empSearch.results.length > 0 && (
-                          <div className={styles.skudSearchResults}>
-                            {empSearch.results.map(emp => (
-                              <div
-                                key={emp.id}
-                                className={styles.skudSearchItem}
-                                onClick={() => handleEmpLink(user.id, emp.id, emp.full_name)}
-                              >
-                                {emp.full_name}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </>
-                  )}
+                              {emp.full_name}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
 
                   <div className={styles.controlActions}>
                     {!user.email_confirmed && (
@@ -465,14 +477,12 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
                       </button>
                     )}
 
-                    {!isSuperAdmin && (
-                      <button
-                        className={styles.rejectBtn}
-                        onClick={() => handleDeleteUser(user.id)}
-                      >
-                        Удалить
-                      </button>
-                    )}
+                    <button
+                      className={styles.rejectBtn}
+                      onClick={() => handleDeleteUser(user.id)}
+                    >
+                      Удалить
+                    </button>
                   </div>
                 </div>
               )}
