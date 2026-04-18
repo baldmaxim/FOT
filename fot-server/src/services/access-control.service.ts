@@ -36,7 +36,7 @@ async function loadPageAccessCache(): Promise<RolePageAccessMap> {
 
   const { data, error } = await supabase
     .from('role_page_access')
-    .select('system_role_id, role_code, page_path, can_view, can_edit');
+    .select('role_code, page_path, can_view, can_edit');
 
   if (error) {
     throw new Error(`Failed to load role page access cache: ${error.message}`);
@@ -44,7 +44,8 @@ async function loadPageAccessCache(): Promise<RolePageAccessMap> {
 
   const cache: RolePageAccessMap = new Map();
   for (const entry of data || []) {
-    const key = entry.system_role_id || entry.role_code;
+    const key = entry.role_code;
+    if (!key) continue;
     if (!cache.has(key)) {
       cache.set(key, new Map());
     }
@@ -70,7 +71,7 @@ async function getStoredRolePageAccess(roleRef: string, role?: Awaited<ReturnTyp
   }
 
   const cache = await loadPageAccessCache();
-  const entries = cache.get(resolvedRole.id) ?? cache.get(resolvedRole.code) ?? new Map<string, PageAccessPermission>();
+  const entries = cache.get(resolvedRole.code) ?? new Map<string, PageAccessPermission>();
   return Object.fromEntries(entries.entries());
 }
 
@@ -166,9 +167,21 @@ export async function resolveRoleDataScope(roleRef: string): Promise<DataScope |
   return resolveDataScopeFromPermissions(await getRolePermissions(roleRef));
 }
 
-export function invalidateAccessControlCache(): void {
+export function invalidateRolePageAccessCache(): void {
   pageAccessCache = null;
   pageAccessCacheExpiresAt = 0;
-  invalidateAccessCatalogCache();
+}
+
+export function invalidateRoleListCache(): void {
   invalidateRolesCache();
+}
+
+export function invalidateAccessCatalog(): void {
+  invalidateAccessCatalogCache();
+}
+
+export function invalidateAccessControlCache(): void {
+  invalidateRolePageAccessCache();
+  invalidateAccessCatalog();
+  invalidateRoleListCache();
 }

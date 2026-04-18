@@ -99,7 +99,7 @@ const loadDocumentsByEmployeeId = async (employeeId: number): Promise<Record<str
 /** Получить presigned URL для загрузки */
 const getUploadUrl = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    if (!r2Service.isEnabled()) {
+    if (!(await r2Service.isEnabledAsync())) {
       res.status(503).json({ success: false, error: 'R2 хранилище не настроено' });
       return;
     }
@@ -179,7 +179,7 @@ const confirmUpload = async (req: AuthenticatedRequest, res: Response): Promise<
 /** Получить presigned URL для скачивания */
 const getDownloadUrl = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    if (!r2Service.isEnabled()) {
+    if (!(await r2Service.isEnabledAsync())) {
       res.status(503).json({ success: false, error: 'R2 хранилище не настроено' });
       return;
     }
@@ -267,8 +267,7 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    // Удаляем из R2
-    if (r2Service.isEnabled()) {
+    if (await r2Service.isEnabledAsync()) {
       try {
         await r2Service.deleteObject(doc.r2_key);
       } catch {

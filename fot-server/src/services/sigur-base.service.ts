@@ -20,6 +20,12 @@ interface SigurTokenInfo {
 
 const PAGE_SIZE = 3000;
 
+export const SIGUR_TIMEOUTS = {
+  auth: 30_000,
+  quick: 15_000,
+  bulk: 120_000,
+} as const;
+
 /**
  * Базовый сервис для взаимодействия с Sigur REST API.
  * Содержит ядро: авторизацию, запросы, пагинацию.
@@ -116,7 +122,7 @@ export class SigurServiceBase {
   private createClient(config: SigurConnectionConfig): AxiosInstance {
     return axios.create({
       baseURL: config.url,
-      timeout: 120000,
+      timeout: SIGUR_TIMEOUTS.auth,
       httpsAgent: new https.Agent({
         rejectUnauthorized: false,
       }),
@@ -155,7 +161,7 @@ export class SigurServiceBase {
 
     this.clients[connType] = axios.create({
       baseURL: config.url,
-      timeout: 120000,
+      timeout: SIGUR_TIMEOUTS.bulk,
       httpsAgent: new https.Agent({
         rejectUnauthorized: false,
       }),
@@ -209,7 +215,7 @@ export class SigurServiceBase {
 
       this.clients[connection] = axios.create({
         baseURL: config.url,
-        timeout: 120000,
+        timeout: SIGUR_TIMEOUTS.bulk,
         httpsAgent: new https.Agent({ rejectUnauthorized: false }),
         headers: {
           'Content-Type': 'application/json',
@@ -239,6 +245,7 @@ export class SigurServiceBase {
       params?: Record<string, any>;
       data?: unknown;
       headers?: Record<string, string>;
+      timeout?: number;
     } = {},
     connection?: ConnectionType,
   ): Promise<T> {
@@ -252,6 +259,7 @@ export class SigurServiceBase {
         params: options.params,
         data: options.data,
         headers: options.headers,
+        timeout: options.timeout,
       });
       return response.data;
     } catch (error) {
@@ -264,6 +272,7 @@ export class SigurServiceBase {
           params: options.params,
           data: options.data,
           headers: options.headers,
+          timeout: options.timeout,
         });
         return response.data;
       }
@@ -272,8 +281,13 @@ export class SigurServiceBase {
   }
 
   /** Выполняет GET-запрос с автоматической переавторизацией при 401. */
-  protected async request<T>(endpoint: string, params?: Record<string, any>, connection?: ConnectionType): Promise<T> {
-    return this.sendRequest<T>('get', endpoint, { params }, connection);
+  protected async request<T>(
+    endpoint: string,
+    params?: Record<string, any>,
+    connection?: ConnectionType,
+    timeout?: number,
+  ): Promise<T> {
+    return this.sendRequest<T>('get', endpoint, { params, timeout }, connection);
   }
 
   protected async mutate<T>(
@@ -283,11 +297,13 @@ export class SigurServiceBase {
     params?: Record<string, any>,
     connection?: ConnectionType,
     headers?: Record<string, string>,
+    timeout?: number,
   ): Promise<T> {
     return this.sendRequest<T>(method, endpoint, {
       params,
       data: body,
       headers,
+      timeout,
     }, connection);
   }
 

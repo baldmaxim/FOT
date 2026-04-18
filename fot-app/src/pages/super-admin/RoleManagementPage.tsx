@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FC } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rolesService } from '../../services/rolesService';
 import type {
   AccessMode,
@@ -120,14 +120,13 @@ export const RoleManagementPage: FC = () => {
   const rolesQuery = useQuery<SystemRole[]>({
     queryKey: ['roles', 'all'],
     queryFn: () => rolesService.getAll(),
-    staleTime: 60_000,
+    staleTime: 5 * 60_000,
   });
 
   const catalogQuery = useQuery({
     queryKey: ['roles', 'catalog'],
     queryFn: () => rolesService.getCatalog(),
-    enabled: tab === 'access',
-    staleTime: 5 * 60_000,
+    staleTime: 10 * 60_000,
   });
 
   const roles = rolesQuery.data ?? EMPTY_ROLES;
@@ -164,7 +163,8 @@ export const RoleManagementPage: FC = () => {
     queryKey: ['roles', 'access-profile', selectedRoleCode],
     queryFn: () => rolesService.getAccessProfile(selectedRoleCode as string),
     enabled: tab === 'access' && !!selectedRoleCode,
-    staleTime: 60_000,
+    staleTime: 2 * 60_000,
+    placeholderData: keepPreviousData,
   });
 
   useEffect(() => {
@@ -220,11 +220,21 @@ export const RoleManagementPage: FC = () => {
     );
   }, [accessProfileQuery.data, draftPageAccess, draftPermissions]);
 
-  const refreshRoles = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['roles', 'all'] }),
-      queryClient.invalidateQueries({ queryKey: ['roles', 'access-profile'] }),
-    ]);
+  const upsertRoleInCache = (role: SystemRole) => {
+    queryClient.setQueryData<SystemRole[]>(['roles', 'all'], (current) => {
+      const list = current ?? [];
+      const exists = list.some((item) => item.code === role.code);
+      return exists
+        ? list.map((item) => (item.code === role.code ? role : item))
+        : [...list, role];
+    });
+  };
+
+  const removeRoleFromCache = (code: string) => {
+    queryClient.setQueryData<SystemRole[]>(['roles', 'all'], (current) =>
+      (current ?? []).filter((item) => item.code !== code),
+    );
+    queryClient.removeQueries({ queryKey: ['roles', 'access-profile', code] });
   };
 
   const handleCreateRole = async () => {
@@ -245,7 +255,7 @@ export const RoleManagementPage: FC = () => {
       setNewForm({ code: '', name: '', level: '' });
       setShowNewForm(false);
       setSelectedRoleCode(createdRole.code);
-      await refreshRoles();
+      upsertRoleInCache(createdRole);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка создания роли');
     } finally {
@@ -264,14 +274,14 @@ export const RoleManagementPage: FC = () => {
 
     setSavingRole(true);
     try {
-      await rolesService.update(code, {
+      const updated = await rolesService.update(code, {
         name: editState.name,
         description: roles.find((role) => role.code === code)?.description,
         level,
       });
       toast.success('Роль обновлена');
       setEditState(null);
-      await refreshRoles();
+      upsertRoleInCache(updated);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка сохранения роли');
     } finally {
@@ -281,14 +291,14 @@ export const RoleManagementPage: FC = () => {
 
   const handleToggleActive = async (role: SystemRole) => {
     try {
-      await rolesService.update(role.code, {
+      const updated = await rolesService.update(role.code, {
         name: role.name,
         description: role.description,
         level: role.level,
         is_active: !role.is_active,
       });
       toast.success(role.is_active ? 'Роль деактивирована' : 'Роль активирована');
-      await refreshRoles();
+      upsertRoleInCache(updated);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка изменения статуса роли');
     }
@@ -303,7 +313,7 @@ export const RoleManagementPage: FC = () => {
       if (selectedRoleCode === code) {
         setSelectedRoleCode(null);
       }
-      await refreshRoles();
+      removeRoleFromCache(code);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка удаления роли');
     }
@@ -339,8 +349,9 @@ export const RoleManagementPage: FC = () => {
         page_access: draftPageAccess,
       });
       toast.success('Профиль доступа сохранён');
-      await refreshRoles();
-      await queryClient.invalidateQueries({ queryKey: ['roles', 'catalog'] });
+      await queryClient.invalidateQueries({
+        queryKey: ['roles', 'access-profile', selectedRoleCode],
+      });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка сохранения профиля доступа');
     } finally {
@@ -379,7 +390,7 @@ export const RoleManagementPage: FC = () => {
       toast.success('Роль-копия создана');
       setShowCloneForm(false);
       setSelectedRoleCode(createdRole.code);
-      await refreshRoles();
+      upsertRoleInCache(createdRole);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка клонирования роли');
     } finally {

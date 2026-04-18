@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import type { FC } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Wifi, WifiOff, RefreshCw, Eye, Search, ChevronDown, LockKeyhole, Pencil, Save } from 'lucide-react';
 import { sigurService } from '../../services/sigurService';
 import { sortDepartmentOptions } from '../../utils/departmentUtils';
@@ -127,19 +128,24 @@ export const ConnectionSettingsTab: FC<IConnectionSettingsTabProps> = ({
     };
   }, [setError]);
 
-  // Загрузка отделов из whitelist синхронизации
+  const syncFilterQuery = useQuery({
+    queryKey: ['sigur', 'sync-filter'],
+    queryFn: () => sigurService.getSyncFilter(),
+    enabled: connected === true,
+    staleTime: 5 * 60_000,
+  });
+
+  const filterDepartments = useMemo(() => {
+    if (!syncFilterQuery.data) return null;
+    return sortDepartmentOptions(syncFilterQuery.data.map((d) => ({
+      id: d.sigur_department_id,
+      name: d.sigur_department_name,
+    })));
+  }, [syncFilterQuery.data]);
+
   useEffect(() => {
-    if (!connected) return;
-    sigurService.getSyncFilter()
-      .then(items => {
-        const depts = sortDepartmentOptions(items.map(d => ({
-          id: d.sigur_department_id,
-          name: d.sigur_department_name,
-        })));
-        setDepartments(depts);
-      })
-      .catch(() => { /* ignore */ });
-  }, [connected]);
+    if (filterDepartments) setDepartments(filterDepartments);
+  }, [filterDepartments]);
 
   const handlePreview = async () => {
     if (!previewStart || !previewEnd) return;

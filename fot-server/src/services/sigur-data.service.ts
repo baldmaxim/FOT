@@ -1,4 +1,4 @@
-import { SigurServiceBase, ConnectionType } from './sigur-base.service.js';
+import { SigurServiceBase, ConnectionType, SIGUR_TIMEOUTS } from './sigur-base.service.js';
 
 export class SigurDataService extends SigurServiceBase {
   private employeeCache: { data: Record<string, unknown>[]; fetchedAt: number; complete: boolean } | null = null;
@@ -63,7 +63,7 @@ export class SigurDataService extends SigurServiceBase {
 
     try {
       await this.authenticate(connType);
-      await this.request('/api/v1/departments', { limit: 1 }, connType);
+      await this.request('/api/v1/departments', { limit: 1 }, connType, SIGUR_TIMEOUTS.quick);
       return {
         success: true,
         message: 'Подключение к Sigur успешно',

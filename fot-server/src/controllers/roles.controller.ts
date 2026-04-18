@@ -6,7 +6,11 @@ import {
   type AccessMode,
 } from '../config/access-control.js';
 import type { AuthenticatedRequest, SystemRole } from '../types/index.js';
-import { getRolePermissions, invalidateAccessControlCache } from '../services/access-control.service.js';
+import {
+  getRolePermissions,
+  invalidateRoleListCache,
+  invalidateRolePageAccessCache,
+} from '../services/access-control.service.js';
 import {
   loadAccessCatalog,
   normalizeKnownPageAccessModes,
@@ -102,7 +106,6 @@ async function loadRoleAccessModes(roleCode: string): Promise<Record<string, Acc
 
 async function persistAccessProfileFallback(
   roleCode: string,
-  roleId: string,
   permissions: string[],
   pageAccess: Record<string, AccessMode>,
 ): Promise<void> {
@@ -110,7 +113,6 @@ async function persistAccessProfileFallback(
     .filter(([, mode]) => mode !== 'none')
     .map(([pagePath, mode]) => ({
       role_code: roleCode,
-      system_role_id: roleId,
       page_path: pagePath,
       can_view: mode === 'view' || mode === 'edit',
       can_edit: mode === 'edit',
@@ -152,7 +154,6 @@ async function persistAccessProfileFallback(
 
 async function persistAccessProfile(
   roleCode: string,
-  roleId: string,
   permissions: string[],
   pageAccess: Record<string, AccessMode>,
 ): Promise<void> {
@@ -171,7 +172,7 @@ async function persistAccessProfile(
     throw new Error(error.message);
   }
 
-  await persistAccessProfileFallback(roleCode, roleId, permissions, pageAccess);
+  await persistAccessProfileFallback(roleCode, permissions, pageAccess);
 }
 
 export const rolesController = {
@@ -206,8 +207,11 @@ export const rolesController = {
         return;
       }
 
-      const page_access = await loadRoleAccessModes(role.code);
-      const permissions = await getRolePermissions(role.id);
+      const [page_access, permissions] = await Promise.all([
+        loadRoleAccessModes(role.code),
+        getRolePermissions(role.id),
+      ]);
+
       res.json({
         success: true,
         data: {
@@ -259,7 +263,7 @@ export const rolesController = {
       return;
     }
 
-    invalidateAccessControlCache();
+    invalidateRoleListCache();
     res.status(201).json({ success: true, data });
   },
 
@@ -310,8 +314,9 @@ export const rolesController = {
         return;
       }
 
-      await persistAccessProfile(targetCode, createdRole.id, permissions, page_access);
-      invalidateAccessControlCache();
+      await persistAccessProfile(targetCode, permissions, page_access);
+      invalidateRoleListCache();
+      invalidateRolePageAccessCache();
       res.status(201).json({ success: true, data: createdRole });
     } catch (error) {
       res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Failed to clone role' });
@@ -326,7 +331,10 @@ export const rolesController = {
       return;
     }
 
-    const currentRole = await loadRoleByCode(code);
+    const [currentRole, pageAccess] = await Promise.all([
+      loadRoleByCode(code),
+      loadRoleAccessModes(code),
+    ]);
     if (!currentRole) {
       res.status(404).json({ success: false, error: 'Роль не найдена' });
       return;
@@ -335,8 +343,6 @@ export const rolesController = {
     const permissions = parsed.data.permissions !== undefined
       ? normalizePermissions(parsed.data.permissions)
       : normalizePermissions(currentRole.permissions);
-
-    const pageAccess = await loadRoleAccessModes(code);
     const configError = await validateRoleConfiguration(code, permissions, pageAccess);
     if (configError) {
       res.status(400).json({ success: false, error: configError });
@@ -378,7 +384,7 @@ export const rolesController = {
       return;
     }
 
-    invalidateAccessControlCache();
+    invalidateRoleListCache();
     res.json({ success: true, data });
   },
 
@@ -419,8 +425,9 @@ export const rolesController = {
         }
       }
 
-      await persistAccessProfile(code, role.id, permissions, page_access);
-      invalidateAccessControlCache();
+      await persistAccessProfile(code, permissions, page_access);
+      invalidateRoleListCache();
+      invalidateRolePageAccessCache();
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Не удалось сохранить профиль доступа' });
@@ -460,7 +467,8 @@ export const rolesController = {
       return;
     }
 
-    invalidateAccessControlCache();
+    invalidateRoleListCache();
+    invalidateRolePageAccessCache();
     res.json({ success: true });
   },
 };

@@ -1,33 +1,24 @@
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { r2Client as staticClient, R2_BUCKET_NAME as staticBucket, r2Enabled as staticEnabled } from '../config/r2.js';
 import { settingsService } from './settings.service.js';
 import { randomUUID } from 'crypto';
 import path from 'path';
 
-const URL_EXPIRY = 3600; // 1 час
+const URL_EXPIRY = 3600;
 
-// Динамический клиент из БД (кэшируется)
-let dynamicClient: S3Client | null = null;
-let dynamicBucket: string = '';
-let dynamicConfigHash: string = '';
+let cachedClient: S3Client | null = null;
+let cachedBucket: string = '';
+let cachedHash: string = '';
 
 const getR2 = async (): Promise<{ client: S3Client | null; bucket: string; enabled: boolean }> => {
-  // Сначала пробуем статический конфиг (.env)
-  if (staticEnabled && staticClient) {
-    return { client: staticClient, bucket: staticBucket, enabled: true };
-  }
-
-  // Иначе пробуем из БД
   const cfg = await settingsService.getR2Config();
   if (!cfg.enabled) {
     return { client: null, bucket: '', enabled: false };
   }
 
-  // Пересоздаём клиент только если конфиг изменился
-  const hash = `${cfg.accountId}:${cfg.accessKeyId}:${cfg.secretAccessKey}`;
-  if (hash !== dynamicConfigHash) {
-    dynamicClient = new S3Client({
+  const hash = `${cfg.accountId}:${cfg.accessKeyId}:${cfg.secretAccessKey}:${cfg.bucketName}`;
+  if (hash !== cachedHash) {
+    cachedClient = new S3Client({
       region: 'auto',
       endpoint: `https://${cfg.accountId}.r2.cloudflarestorage.com`,
       credentials: {
@@ -35,17 +26,20 @@ const getR2 = async (): Promise<{ client: S3Client | null; bucket: string; enabl
         secretAccessKey: cfg.secretAccessKey,
       },
     });
-    dynamicBucket = cfg.bucketName;
-    dynamicConfigHash = hash;
+    cachedBucket = cfg.bucketName;
+    cachedHash = hash;
   }
 
-  return { client: dynamicClient, bucket: dynamicBucket, enabled: true };
+  return { client: cachedClient, bucket: cachedBucket, enabled: true };
 };
 
 export const r2Service = {
-  isEnabled: () => staticEnabled,
+  invalidateCachedConfig: (): void => {
+    cachedClient = null;
+    cachedBucket = '';
+    cachedHash = '';
+  },
 
-  /** Async проверка (включая БД) */
   isEnabledAsync: async (): Promise<boolean> => {
     const { enabled } = await getR2();
     return enabled;

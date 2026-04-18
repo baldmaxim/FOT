@@ -25,13 +25,32 @@ export interface SystemRole {
 export interface RolePageAccess {
   id: string;
   role_code: string;
-  system_role_id?: string | null;
   page_path: string;
   can_view: boolean;
   can_edit: boolean;
 }
 
-// Профиль пользователя
+// Форма профиля, которую бэк отправляет клиенту (без секретов и DB-полей).
+// Зеркально совпадает с fot-app/src/types/auth.ts::UserProfile.
+export interface UserProfileResponse {
+  id: string;
+  full_name: string | null;
+  position_type: EmployeePositionType;
+  system_role_id?: string | null;
+  employee_id: number | null;
+  department_id: string | null;
+  managed_department_ids: string[];
+  supervisor_id: string | null;
+  chat_inbound_mode: ChatInboundMode;
+  imported_position: string | null;
+  permissions: string[];
+  page_access: Record<string, { can_view: boolean; can_edit: boolean }>;
+  is_approved: boolean;
+  two_factor_enabled: boolean;
+}
+
+// Профиль пользователя в БД (полная форма, включая секреты).
+// Для ответов клиенту используйте UserProfileResponse.
 export interface UserProfile {
   id: string;
   full_name: string | null;

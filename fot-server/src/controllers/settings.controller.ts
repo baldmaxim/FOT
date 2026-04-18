@@ -1,6 +1,7 @@
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { settingsService } from '../services/settings.service.js';
+import { r2Service } from '../services/r2.service.js';
 
 /** Получить все настройки (секретные маскируются) */
 const getAll = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -56,6 +57,7 @@ const saveR2 = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     if (entries.length > 0) {
       await settingsService.setMultiple(entries, req.user.id);
       settingsService.invalidateCache();
+      r2Service.invalidateCachedConfig();
     }
 
     const cfg = await settingsService.getR2Config();
