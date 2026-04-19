@@ -249,6 +249,67 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
   }
 };
 
+/** Документы по заявке */
+const getByLeaveRequest = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const leaveRequestId = Number(req.params.leaveRequestId);
+    if (!leaveRequestId || Number.isNaN(leaveRequestId)) {
+      res.status(400).json({ success: false, error: 'Некорректный leave_request_id' });
+      return;
+    }
+
+    const { data: request, error: reqErr } = await supabase
+      .from('leave_requests')
+      .select('id, employee_id')
+      .eq('id', leaveRequestId)
+      .single();
+    if (reqErr || !request) {
+      res.status(404).json({ success: false, error: 'Заявка не найдена' });
+      return;
+    }
+    if (!(await canAccessEmployeeInScope(req, request.employee_id))) {
+      res.status(403).json({ success: false, error: 'Нет доступа' });
+      return;
+    }
+
+    const { data: links, error: linksError } = await supabase
+      .from('document_links')
+      .select('document_id')
+      .eq('entity_type', 'leave_request')
+      .eq('entity_id', String(leaveRequestId));
+    if (linksError) throw linksError;
+
+    const linkedIds = [...new Set((links || []).map(link => Number(link.document_id)).filter(Number.isFinite))];
+
+    const { data: legacyDocs, error: legacyErr } = await supabase
+      .from('documents')
+      .select(DOCUMENT_SELECT_COLUMNS)
+      .eq('leave_request_id', leaveRequestId)
+      .order('created_at', { ascending: false });
+    if (legacyErr) throw legacyErr;
+
+    const docIds = new Set<number>(linkedIds);
+    for (const doc of legacyDocs || []) docIds.add(Number(doc.id));
+
+    if (docIds.size === 0) {
+      res.json({ success: true, data: [] });
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('documents')
+      .select(DOCUMENT_SELECT_COLUMNS)
+      .in('id', [...docIds])
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    res.json({ success: true, data: data || [] });
+  } catch (err) {
+    console.error('documents.getByLeaveRequest error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения документов заявки' });
+  }
+};
+
 /** Документы сотрудника (header/hr/admin) */
 const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -314,5 +375,6 @@ export const documentsController = {
   getDownloadUrl,
   getMy,
   getByEmployee,
+  getByLeaveRequest,
   remove,
 };

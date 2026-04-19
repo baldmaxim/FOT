@@ -9,14 +9,14 @@ router.use(authenticate);
 // POST /api/documents/upload-url — получить presigned URL
 router.post(
   '/upload-url',
-  requirePageAccess('/employee/documents', 'edit'),
+  requireAnyPageAccess(['/employee/documents', '/employee/requests'], 'edit'),
   documentsController.getUploadUrl
 );
 
 // POST /api/documents/confirm — подтвердить загрузку
 router.post(
   '/confirm',
-  requirePageAccess('/employee/documents', 'edit'),
+  requireAnyPageAccess(['/employee/documents', '/employee/requests'], 'edit'),
   documentsController.confirmUpload
 );
 
@@ -32,6 +32,13 @@ router.get(
   '/employee/:empId',
   requireAnyPageAccess(['/employees', '/staff-control'], 'view'),
   documentsController.getByEmployee
+);
+
+// GET /api/documents/leave-request/:leaveRequestId — документы, прикреплённые к заявке
+router.get(
+  '/leave-request/:leaveRequestId',
+  requireAnyPageAccess(['/employee', '/employee/requests', '/leave-requests'], 'view'),
+  documentsController.getByLeaveRequest
 );
 
 // GET /api/documents/:id/download — скачать

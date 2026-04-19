@@ -26,11 +26,7 @@ export const CRITICAL_ADMIN_PAGE_KEYS = ['/admin/roles', '/admin/users'] as cons
 export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/employee',                   label: 'Личный кабинет',                 group_code: 'employee', group_label: 'Личный кабинет',       surface: 'page',      supports_edit: false, sort_order: 10,  is_active: true },
   { key: '/employee/requests',          label: 'Мои заявления',                  group_code: 'employee', group_label: 'Личный кабинет',       surface: 'page',      supports_edit: true,  sort_order: 20,  is_active: true },
-  { key: '/employee/payslips',          label: 'Расчётные листки',               group_code: 'employee', group_label: 'Личный кабинет',       surface: 'page',      supports_edit: false, sort_order: 30,  is_active: true },
-  { key: '/employee/payments',          label: 'История выплат',                 group_code: 'employee', group_label: 'Личный кабинет',       surface: 'page',      supports_edit: false, sort_order: 40,  is_active: true },
   { key: '/employee/documents',         label: 'Мои документы',                  group_code: 'employee', group_label: 'Личный кабинет',       surface: 'page',      supports_edit: true,  sort_order: 50,  is_active: true },
-  { key: '/employee/timesheet',         label: 'Мой табель',                     group_code: 'employee', group_label: 'Личный кабинет',       surface: 'page',      supports_edit: true,  sort_order: 60,  is_active: true },
-  { key: '/employee/history',           label: 'Моя история',                    group_code: 'employee', group_label: 'Личный кабинет',       surface: 'page',      supports_edit: false, sort_order: 70,  is_active: true },
   { key: '/employee/salary-raise',      label: 'Повышение оклада',               group_code: 'employee', group_label: 'Личный кабинет',       surface: 'page',      supports_edit: true,  sort_order: 80,  is_active: true },
   { key: '/dashboard',                  label: 'Дашборд',                        group_code: 'ops',      group_label: 'Управление',           surface: 'page',      supports_edit: false, sort_order: 90,  is_active: true },
   { key: '/timesheet',                  label: 'Табель',                         group_code: 'ops',      group_label: 'Управление',           surface: 'page',      supports_edit: true,  sort_order: 100, is_active: true },

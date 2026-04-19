@@ -20,6 +20,7 @@ export interface ILeaveRequest {
   created_at: string;
   updated_at: string;
   employee_name?: string | null;
+  reviewer?: { id: string; full_name: string | null } | null;
 }
 
 export const REQUEST_TYPE_LABELS: Record<LeaveRequestType, string> = {
@@ -60,6 +61,11 @@ export const leaveRequestService = {
 
   getMy: async () => {
     const res = await apiClient.get<ApiResponse<ILeaveRequest[]>>('/leave-requests/my');
+    return res.data;
+  },
+
+  getById: async (id: number) => {
+    const res = await apiClient.get<ApiResponse<ILeaveRequest>>(`/leave-requests/${id}`);
     return res.data;
   },
 

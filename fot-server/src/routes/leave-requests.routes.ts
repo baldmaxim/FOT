@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { leaveRequestsController } from '../controllers/leave-requests.controller.js';
-import { authenticate, requirePageAccess } from '../middleware/auth.js';
+import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -32,6 +32,13 @@ router.get(
   '/',
   requirePageAccess('/leave-requests', 'view'),
   leaveRequestsController.getAll
+);
+
+// GET /api/leave-requests/:id — детали заявки (автор или ревьюер)
+router.get(
+  '/:id',
+  requireAnyPageAccess(['/employee/requests', '/leave-requests'], 'view'),
+  leaveRequestsController.getById
 );
 
 // PATCH /api/leave-requests/:id/approve — одобрение (header/hr/admin)

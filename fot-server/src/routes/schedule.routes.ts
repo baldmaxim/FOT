@@ -25,7 +25,7 @@ router.put('/category/:category', requireAnyPageAccess(['/admin/schedules', '/st
 router.delete('/category/:category', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.removeCategoryAssignment);
 
 // Resolve
-router.get('/resolve/:empId', requireAnyPageAccess(['/employee/timesheet', '/timesheet', '/timesheet-hr', '/staff-control'], 'view'), scheduleController.resolve);
+router.get('/resolve/:empId', requireAnyPageAccess(['/employee', '/timesheet', '/timesheet-hr', '/staff-control'], 'view'), scheduleController.resolve);
 router.get('/resolve-bulk', requireAnyPageAccess(['/timesheet', '/timesheet-hr', '/staff-control'], 'view'), scheduleController.resolveBulk);
 
 export default router;

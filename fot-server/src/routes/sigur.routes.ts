@@ -183,14 +183,14 @@ router.get('/preview', requirePageAccess('/skud-settings', 'view'), sigurControl
 // GET /api/sigur/employees/:id/access-points — прямые точки доступа сотрудника
 router.get(
   '/employees/:id/profile',
-  requireAnyPageAccess(['/employee', '/employee/history', '/employees', '/staff-control', '/skud-settings'], 'view'),
+  requireAnyPageAccess(['/employee', '/employees', '/staff-control', '/skud-settings'], 'view'),
   sigurController.getEmployeeProfile,
 );
 
 // GET /api/sigur/employees/:id/access-points — прямые точки доступа сотрудника
 router.get(
   '/employees/:id/access-points',
-  requireAnyPageAccess(['/employee', '/employee/history', '/employees', '/staff-control', '/skud-settings'], 'view'),
+  requireAnyPageAccess(['/employee', '/employees', '/staff-control', '/skud-settings'], 'view'),
   sigurController.getEmployeeAccessPoints,
 );
 

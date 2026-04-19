@@ -1,78 +1,298 @@
-import type { FC } from 'react';
+import { type FC, useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { leaveRequestService, type LeaveRequestType } from '../../services/leaveRequestService';
+import { documentService } from '../../services/documentService';
+import { getMyLeaveRequestsQueryKey } from '../../hooks/usePortalData';
+import { useToast } from '../../contexts/ToastContext';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import styles from '../../pages/employee/EmployeeDashboard.module.css';
 
 type RequestType = 'vacation' | 'sick' | 'remote' | 'docs';
 
+const TYPE_TO_LEAVE: Record<Exclude<RequestType, 'docs'>, LeaveRequestType> = {
+  vacation: 'vacation',
+  sick: 'sick_leave',
+  remote: 'remote',
+};
+
+const TITLES: Record<RequestType, string> = {
+  vacation: 'Заявление на отпуск',
+  sick: 'Больничный лист',
+  remote: 'Удалённая работа',
+  docs: 'Запрос справки',
+};
+
+const ALLOWED_MIMES = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 МБ
+const ACCEPT_ATTR = '.pdf,application/pdf,image/jpeg,image/png';
+
+const formatBytes = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} МБ`;
+};
+
 interface IRequestModalProps {
   activeModal: RequestType;
   onClose: () => void;
+  employeeId: number | null;
+  presetDates?: { start: string; end: string } | null;
 }
 
-export const RequestModal: FC<IRequestModalProps> = ({ activeModal, onClose }) => (
-  <div className={styles.modalOverlay} onClick={onClose}>
-    <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
-      <div className={styles.modalHeader}>
-        <h2 className={styles.modalTitle}>
-          {activeModal === 'vacation' && 'Заявление на отпуск'}
-          {activeModal === 'sick' && 'Больничный лист'}
-          {activeModal === 'remote' && 'Удалённая работа'}
-          {activeModal === 'docs' && 'Запрос справки'}
-        </h2>
-        <button className={styles.modalClose} onClick={onClose}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
-      </div>
-      <div className={styles.modalBody}>
-        {activeModal === 'vacation' && (
-          <>
-            <div className={styles.formGroup}>
-              <label className={styles.formLabel}>Тип отпуска <span className={styles.required}>*</span></label>
-              <select className={styles.formSelect}><option>Ежегодный оплачиваемый</option><option>За свой счёт</option><option>Учебный</option></select>
-            </div>
-            <div className={styles.formRow}>
-              <div className={styles.formGroup}><label className={styles.formLabel}>Дата начала <span className={styles.required}>*</span></label><input type="date" className={styles.formInput} /></div>
-              <div className={styles.formGroup}><label className={styles.formLabel}>Дата окончания <span className={styles.required}>*</span></label><input type="date" className={styles.formInput} /></div>
-            </div>
-            <div className={styles.formGroup}><label className={styles.formLabel}>Комментарий</label><textarea className={styles.formTextarea} placeholder="Дополнительная информация..." /></div>
-          </>
-        )}
-        {activeModal === 'sick' && (
-          <>
-            <div className={styles.formRow}>
-              <div className={styles.formGroup}><label className={styles.formLabel}>Дата начала <span className={styles.required}>*</span></label><input type="date" className={styles.formInput} /></div>
-              <div className={styles.formGroup}><label className={styles.formLabel}>Дата окончания</label><input type="date" className={styles.formInput} /></div>
-            </div>
-            <div className={styles.formGroup}><label className={styles.formLabel}>Номер больничного листа</label><input type="text" className={styles.formInput} placeholder="Номер ЭЛН" /></div>
-            <div className={styles.formGroup}><label className={styles.formLabel}>Комментарий</label><textarea className={styles.formTextarea} placeholder="Дополнительная информация..." /></div>
-          </>
-        )}
-        {activeModal === 'remote' && (
-          <>
-            <div className={styles.formRow}>
-              <div className={styles.formGroup}><label className={styles.formLabel}>Дата <span className={styles.required}>*</span></label><input type="date" className={styles.formInput} /></div>
-              <div className={styles.formGroup}><label className={styles.formLabel}>До даты</label><input type="date" className={styles.formInput} /></div>
-            </div>
-            <div className={styles.formGroup}><label className={styles.formLabel}>Причина <span className={styles.required}>*</span></label><textarea className={styles.formTextarea} placeholder="Укажите причину работы из дома..." /></div>
-          </>
-        )}
-        {activeModal === 'docs' && (
-          <>
-            <div className={styles.formGroup}><label className={styles.formLabel}>Тип справки <span className={styles.required}>*</span></label><select className={styles.formSelect}><option>2-НДФЛ</option><option>Справка с места работы</option><option>Копия трудовой книжки</option><option>Справка о доходах</option></select></div>
-            <div className={styles.formGroup}><label className={styles.formLabel}>Период (для 2-НДФЛ)</label><select className={styles.formSelect}><option>2025 год</option><option>2024 год</option><option>2023 год</option></select></div>
-            <div className={styles.formGroup}><label className={styles.formLabel}>Комментарий</label><textarea className={styles.formTextarea} placeholder="Для чего нужна справка..." /></div>
-          </>
-        )}
-      </div>
-      <div className={styles.modalFooter}>
-        <button className={styles.btnSecondary} onClick={onClose}>Отмена</button>
-        <button className={styles.btnPrimary}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-          Отправить
-        </button>
+export const RequestModal: FC<IRequestModalProps> = ({ activeModal, onClose, employeeId, presetDates }) => {
+  const queryClient = useQueryClient();
+  const { showToast } = useToast();
+  const isMobile = useIsMobile();
+
+  const [startDate, setStartDate] = useState(presetDates?.start || '');
+  const [endDate, setEndDate] = useState(presetDates?.end || '');
+  const [reason, setReason] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (presetDates) {
+      setStartDate(presetDates.start);
+      setEndDate(presetDates.end);
+    }
+  }, [presetDates]);
+
+  const isLeaveType = activeModal !== 'docs';
+
+  const handleFiles = (incoming: FileList | null) => {
+    if (!incoming) return;
+    const next: File[] = [];
+    for (const file of Array.from(incoming)) {
+      if (!ALLOWED_MIMES.includes(file.type)) {
+        showToast('error', `${file.name}: разрешены только PDF, JPG, PNG`);
+        continue;
+      }
+      if (file.size > MAX_FILE_SIZE) {
+        showToast('error', `${file.name}: превышает 10 МБ`);
+        continue;
+      }
+      next.push(file);
+    }
+    if (next.length > 0) setFiles(prev => [...prev, ...next]);
+  };
+
+  const removeFile = (idx: number) => {
+    setFiles(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleSubmit = async () => {
+    if (activeModal === 'docs') {
+      showToast('info', 'Запрос справки пока не реализован');
+      return;
+    }
+    if (!isLeaveType) return;
+    if (!employeeId) {
+      showToast('error', 'Не найден ID сотрудника');
+      return;
+    }
+    if (!startDate || !endDate) {
+      showToast('error', 'Укажите даты');
+      return;
+    }
+    if (activeModal === 'sick' && files.length === 0) {
+      showToast('error', 'Для больничного приложите файл (PDF или фото)');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const created = await leaveRequestService.create({
+        request_type: TYPE_TO_LEAVE[activeModal as Exclude<RequestType, 'docs'>],
+        start_date: startDate,
+        end_date: endDate,
+        reason: reason.trim() || undefined,
+      });
+
+      if (files.length > 0) {
+        const uploads = await Promise.allSettled(
+          files.map(file => documentService.uploadFile(file, employeeId, 'scan', created.id)),
+        );
+        const failed = uploads.filter(u => u.status === 'rejected').length;
+        if (failed > 0) {
+          showToast('warning', `Заявка создана, но ${failed} файл(ов) не загрузились`);
+        }
+      }
+
+      await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
+      showToast('success', 'Заявление отправлено');
+      onClose();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Ошибка отправки';
+      showToast('error', message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className={styles.modalOverlay} onClick={onClose}>
+      <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+        <div className={styles.modalHeader}>
+          <h2 className={styles.modalTitle}>{TITLES[activeModal]}</h2>
+          <button className={styles.modalClose} onClick={onClose}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div className={styles.modalBody}>
+          {activeModal === 'docs' ? (
+            <>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Тип справки <span className={styles.required}>*</span></label>
+                <select className={styles.formSelect}>
+                  <option>2-НДФЛ</option>
+                  <option>Справка с места работы</option>
+                  <option>Копия трудовой книжки</option>
+                  <option>Справка о доходах</option>
+                </select>
+              </div>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Комментарий</label>
+                <textarea
+                  className={styles.formTextarea}
+                  placeholder="Для чего нужна справка..."
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className={styles.formRow}>
+                <div className={styles.formGroup}>
+                  <label className={styles.formLabel}>Дата начала <span className={styles.required}>*</span></label>
+                  <input
+                    type="date"
+                    className={styles.formInput}
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                  />
+                </div>
+                <div className={styles.formGroup}>
+                  <label className={styles.formLabel}>Дата окончания <span className={styles.required}>*</span></label>
+                  <input
+                    type="date"
+                    className={styles.formInput}
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>
+                  {activeModal === 'sick' ? 'Комментарий / номер ЭЛН' : 'Комментарий / причина'}
+                </label>
+                <textarea
+                  className={styles.formTextarea}
+                  placeholder={activeModal === 'remote' ? 'Укажите причину работы из дома...' : 'Дополнительная информация...'}
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                />
+              </div>
+
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>
+                  Прикреплённые файлы {activeModal === 'sick' && <span className={styles.required}>*</span>}
+                  <span style={{ fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 6, fontSize: 12 }}>
+                    (PDF, JPG, PNG до 10 МБ)
+                  </span>
+                </label>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                  <button
+                    type="button"
+                    className={styles.btnSecondary}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    Выбрать файлы
+                  </button>
+                  {isMobile && (
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={() => cameraInputRef.current?.click()}
+                    >
+                      Сделать фото
+                    </button>
+                  )}
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept={ACCEPT_ATTR}
+                  style={{ display: 'none' }}
+                  onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }}
+                />
+                <input
+                  ref={cameraInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  style={{ display: 'none' }}
+                  onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }}
+                />
+                {files.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {files.map((file, idx) => (
+                      <div
+                        key={`${file.name}-${idx}`}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '8px 12px',
+                          background: 'var(--bg-tertiary)',
+                          borderRadius: 8,
+                          fontSize: 13,
+                        }}
+                      >
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                          {file.name}
+                          <span style={{ color: 'var(--text-tertiary)', marginLeft: 8 }}>{formatBytes(file.size)}</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removeFile(idx)}
+                          style={{
+                            background: 'transparent',
+                            border: 0,
+                            color: 'var(--text-tertiary)',
+                            cursor: 'pointer',
+                            fontSize: 18,
+                            lineHeight: 1,
+                            padding: '0 4px',
+                          }}
+                          aria-label="Удалить файл"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+        <div className={styles.modalFooter}>
+          <button className={styles.btnSecondary} onClick={onClose} disabled={submitting}>
+            Отмена
+          </button>
+          <button className={styles.btnPrimary} onClick={handleSubmit} disabled={submitting}>
+            {submitting ? 'Отправка...' : 'Отправить'}
+          </button>
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 interface ITwoFAModalProps {
   twoFAData: { secret: string; qrCode: string; recoveryCodes: string[] };

@@ -72,6 +72,11 @@ export const documentService = {
     return res.data;
   },
 
+  getByLeaveRequest: async (leaveRequestId: number) => {
+    const res = await apiClient.get<ApiResponse<IDocument[]>>(`/documents/leave-request/${leaveRequestId}`);
+    return res.data;
+  },
+
   getDownloadUrl: async (id: number) => {
     const res = await apiClient.get<ApiResponse<{ download_url: string; file_name: string }>>(`/documents/${id}/download`);
     return res.data;

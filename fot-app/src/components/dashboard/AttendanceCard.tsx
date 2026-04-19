@@ -37,6 +37,7 @@ interface IAttendanceCardProps {
   setPeriodOffset: (fn: (o: number) => number) => void;
   periodLabel: string;
   isCurrentPeriod: boolean;
+  canGoBack?: boolean;
   dayGroups: IDayGroup[];
 }
 
@@ -154,6 +155,7 @@ export const AttendanceCard: FC<IAttendanceCardProps> = ({
   setPeriodOffset,
   periodLabel,
   isCurrentPeriod,
+  canGoBack = true,
   dayGroups,
 }) => {
   const [manualExpandedDays, setManualExpandedDays] = useState<Set<string>>(new Set());
@@ -189,7 +191,12 @@ export const AttendanceCard: FC<IAttendanceCardProps> = ({
           ))}
         </div>
         <div className={styles.periodNav}>
-          <button className={styles.periodNavBtn} onClick={() => setPeriodOffset(o => o - 1)}>
+          <button
+            className={styles.periodNavBtn}
+            onClick={() => setPeriodOffset(o => o - 1)}
+            disabled={!canGoBack}
+            title={!canGoBack ? 'Доступ только за текущий и прошлый месяц' : undefined}
+          >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
           <span className={styles.periodLabel}>{periodLabel}</span>

@@ -254,6 +254,61 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
+/** Получение одной заявки по ID (автор + ревьюер с правами) */
+const getById = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    const { data: request, error } = await supabase
+      .from('leave_requests')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error || !request) {
+      res.status(404).json({ success: false, error: 'Заявление не найдено' });
+      return;
+    }
+
+    const isOwner = request.employee_id === req.user.employee_id;
+    const canReviewOthers = await canAccessEmployeeInScope(req, request.employee_id);
+    if (!isOwner && !canReviewOthers) {
+      res.status(403).json({ success: false, error: 'Нет доступа к заявке' });
+      return;
+    }
+
+    // ФИО сотрудника
+    const { data: emp } = await supabase
+      .from('employees')
+      .select('id, full_name')
+      .eq('id', request.employee_id)
+      .maybeSingle();
+
+    // Данные ревьюера
+    let reviewer: { id: string; full_name: string | null } | null = null;
+    if (request.reviewer_id) {
+      const { data: reviewerProfile } = await supabase
+        .from('user_profiles')
+        .select('id, full_name')
+        .eq('id', request.reviewer_id)
+        .maybeSingle();
+      if (reviewerProfile) reviewer = reviewerProfile;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        ...request,
+        employee_name: emp?.full_name ?? null,
+        reviewer,
+      },
+    });
+  } catch (err) {
+    console.error('leave-requests.getById error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения заявки' });
+  }
+};
+
 /** Одобрение заявления */
 const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -440,6 +495,7 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 export const leaveRequestsController = {
   create,
   getMy,
+  getById,
   getDepartment,
   getAll,
   approve,

@@ -64,11 +64,8 @@ const StaffControlPage = lazy(() => import('./pages/StaffControlPage').then(m =>
 const EmployeeDashboardPage = lazy(() => import('./pages/employee/EmployeeDashboardPage').then(m => ({ default: m.EmployeeDashboardPage })));
 const ObjectWorkerDashboardPage = lazy(() => import('./pages/employee/ObjectWorkerDashboardPage').then(m => ({ default: m.ObjectWorkerDashboardPage })));
 const LeaveRequestsPage = lazy(() => import('./pages/employee/LeaveRequestsPage').then(m => ({ default: m.LeaveRequestsPage })));
-const PayslipsPage = lazy(() => import('./pages/employee/PayslipsPage').then(m => ({ default: m.PayslipsPage })));
-const PaymentsPage = lazy(() => import('./pages/employee/PaymentsPage').then(m => ({ default: m.PaymentsPage })));
+const LeaveRequestDetailPage = lazy(() => import('./pages/employee/LeaveRequestDetailPage').then(m => ({ default: m.LeaveRequestDetailPage })));
 const DocumentsPage = lazy(() => import('./pages/employee/DocumentsPage').then(m => ({ default: m.DocumentsPage })));
-const EmployeeTimesheetPage = lazy(() => import('./pages/employee/EmployeeTimesheetPage').then(m => ({ default: m.EmployeeTimesheetPage })));
-const MyHistoryPage = lazy(() => import('./pages/employee/MyHistoryPage').then(m => ({ default: m.MyHistoryPage })));
 const SalaryRaisePage = lazy(() => import('./pages/employee/SalaryRaisePage').then(m => ({ default: m.SalaryRaisePage })));
 const SalaryRaiseFormPage = lazy(() => import('./pages/employee/SalaryRaiseFormPage').then(m => ({ default: m.SalaryRaiseFormPage })));
 const SalaryRaiseViewPage = lazy(() => import('./pages/employee/SalaryRaiseViewPage').then(m => ({ default: m.SalaryRaiseViewPage })));
@@ -212,25 +209,11 @@ const AppRoutes = () => {
               </EmployeeLayout>
             }
           />
-        </Route>
-
-        <Route element={<ProtectedRoute requiredPage="/employee/payslips" />}>
           <Route
-            path="/employee/payslips"
+            path="/employee/requests/:id"
             element={
-              <EmployeeLayout title="Расчётные листки">
-                <PayslipsPage />
-              </EmployeeLayout>
-            }
-          />
-        </Route>
-
-        <Route element={<ProtectedRoute requiredPage="/employee/payments" />}>
-          <Route
-            path="/employee/payments"
-            element={
-              <EmployeeLayout title="История выплат">
-                <PaymentsPage />
+              <EmployeeLayout title="Заявление">
+                <LeaveRequestDetailPage />
               </EmployeeLayout>
             }
           />
@@ -242,28 +225,6 @@ const AppRoutes = () => {
             element={
               <EmployeeLayout title="Мои документы">
                 <DocumentsPage />
-              </EmployeeLayout>
-            }
-          />
-        </Route>
-
-        <Route element={<ProtectedRoute requiredPage="/employee/timesheet" />}>
-          <Route
-            path="/employee/timesheet"
-            element={
-              <EmployeeLayout title="Мой табель">
-                <EmployeeTimesheetPage />
-              </EmployeeLayout>
-            }
-          />
-        </Route>
-
-        <Route element={<ProtectedRoute requiredPage="/employee/history" />}>
-          <Route
-            path="/employee/history"
-            element={
-              <EmployeeLayout title="Моя история">
-                <MyHistoryPage />
               </EmployeeLayout>
             }
           />

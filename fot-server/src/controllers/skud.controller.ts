@@ -27,6 +27,8 @@ import { skudWriteController } from './skud-write.controller.js';
 import { skudTravelController } from './skud-travel.controller.js';
 import {
   canAccessEmployeeInScope,
+  getMinSelfHistoryDate,
+  isSelfEmployeeRequest,
   resolveManagedDepartmentIds,
   resolveRequestDataScope,
   resolveScopedDepartmentId,
@@ -487,6 +489,15 @@ const skudReadController = {
       }
 
       const { startDate, endDate } = req.query;
+      if (
+        isSelfEmployeeRequest(req, employeeId)
+        && typeof startDate === 'string'
+        && startDate < getMinSelfHistoryDate()
+      ) {
+        res.status(403).json({ success: false, error: 'Доступ только за текущий и прошлый месяц' });
+        return;
+      }
+
       const { events } = await loadEmployeeEventsForRequest(employeeId, startDate, endDate, {
         includeEmployeeName: false,
         preferFastSingleDay: true,
@@ -519,6 +530,11 @@ const skudReadController = {
       const endDate = typeof req.query.endDate === 'string' ? req.query.endDate : '';
       if (!startDate || !endDate) {
         res.status(400).json({ success: false, error: 'Параметры startDate и endDate обязательны' });
+        return;
+      }
+
+      if (isSelfEmployeeRequest(req, employeeId) && startDate < getMinSelfHistoryDate()) {
+        res.status(403).json({ success: false, error: 'Доступ только за текущий и прошлый месяц' });
         return;
       }
 

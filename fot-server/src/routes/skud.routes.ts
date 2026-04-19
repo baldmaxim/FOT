@@ -77,7 +77,7 @@ router.get(
 router.get(
   '/employee-events/:employeeId',
   requireAnyPageAccess(
-    ['/employee', '/employee/timesheet', '/employee/history', '/employees', '/staff-control'],
+    ['/employee', '/employees', '/staff-control'],
     'view',
   ),
   skudController.getEmployeeEvents
@@ -86,7 +86,7 @@ router.get(
 router.get(
   '/employee-events/:employeeId/export',
   requireAnyPageAccess(
-    ['/employee', '/employee/timesheet', '/employee/history', '/employees', '/staff-control'],
+    ['/employee', '/employees', '/staff-control'],
     'view',
   ),
   skudController.exportEmployeeEvents
@@ -109,7 +109,7 @@ router.get(
 // GET /api/skud/access-point-settings - настройки точек доступа для отдела (worker+)
 router.get(
   '/access-point-settings',
-  requireAnyPageAccess(['/employee', '/employee/timesheet', '/employees', '/staff-control', '/skud-settings'], 'view'),
+  requireAnyPageAccess(['/employee', '/employees', '/staff-control', '/skud-settings'], 'view'),
   skudController.getAccessPointSettings
 );
 

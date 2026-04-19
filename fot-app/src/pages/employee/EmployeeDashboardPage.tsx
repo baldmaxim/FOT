@@ -14,6 +14,7 @@ import styles from './EmployeeDashboard.module.css';
 const EmployeeInfoCards = lazy(() => import('../../components/dashboard/EmployeeInfoCards').then(m => ({ default: m.EmployeeInfoCards })));
 const RequestModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.RequestModal })));
 const TwoFAModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.TwoFAModal })));
+const MyMonthTimesheet = lazy(() => import('../../components/dashboard/MyMonthTimesheet').then(m => ({ default: m.MyMonthTimesheet })));
 
 type RequestType = 'vacation' | 'sick' | 'remote' | 'docs';
 type ViewPeriod = 'day' | 'week' | 'month';
@@ -155,6 +156,33 @@ const buildDayGroups = (
   return groups;
 };
 
+// Сотрудник в ЛК видит свои данные только за текущий и прошлый месяц.
+// Нижняя граница: первое число прошлого месяца.
+const getMinOffset = (period: ViewPeriod): number => {
+  const today = new Date();
+  const minDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+
+  if (period === 'month') return -1;
+  if (period === 'day') {
+    const msPerDay = 86_400_000;
+    const diff = Math.floor((today.getTime() - minDate.getTime()) / msPerDay);
+    return -diff;
+  }
+  // week
+  const currentDay = today.getDay() === 0 ? 6 : today.getDay() - 1;
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - currentDay);
+  const minDaysDiff = Math.floor((monday.getTime() - minDate.getTime()) / 86_400_000);
+  return -Math.ceil(minDaysDiff / 7);
+};
+
+const clampOffset = (period: ViewPeriod, offset: number): number => {
+  const min = getMinOffset(period);
+  if (offset < min) return min;
+  if (offset > 0) return 0;
+  return offset;
+};
+
 const getPeriodRange = (period: ViewPeriod, offset: number): { startDate: string; endDate: string; label: string } => {
   const today = new Date();
 
@@ -191,10 +219,16 @@ export const EmployeeDashboardPage: React.FC = () => {
   const { user, profile, refreshProfile, isTwoFactorEnabled } = useAuth();
   const { showToast } = useToast();
   const [activeModal, setActiveModal] = useState<RequestType | null>(null);
+  const [presetDates, setPresetDates] = useState<{ start: string; end: string } | null>(null);
 
   // Period navigation
   const [viewPeriod, setViewPeriod] = useState<ViewPeriod>('day');
-  const [periodOffset, setPeriodOffset] = useState(0);
+  const [periodOffsetRaw, setPeriodOffsetRaw] = useState(0);
+  const periodOffset = clampOffset(viewPeriod, periodOffsetRaw);
+  const canGoBack = periodOffset > getMinOffset(viewPeriod);
+  const setPeriodOffset = (updater: (o: number) => number) => {
+    setPeriodOffsetRaw(current => clampOffset(viewPeriod, updater(current)));
+  };
 
   // 2FA state
   const [show2FASetup, setShow2FASetup] = useState(false);
@@ -320,7 +354,7 @@ export const EmployeeDashboardPage: React.FC = () => {
       </div>
       <div className={styles.quickActionsGrid}>
         {(['vacation','sick','remote','docs'] as RequestType[]).map((type) => (
-          <div key={type} className={styles.quickActionCard} onClick={() => setActiveModal(type)}>
+          <div key={type} className={styles.quickActionCard} onClick={() => { setPresetDates(null); setActiveModal(type); }}>
             <div className={`${styles.quickActionIcon} ${styles[type]}`}>
               {type === 'vacation' && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>}
               {type === 'sick' && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>}
@@ -333,6 +367,17 @@ export const EmployeeDashboardPage: React.FC = () => {
         ))}
       </div>
 
+      {/* Месячный табель с возможностью подачи заявки на выбранные дни */}
+      <Suspense fallback={DashboardCardFallback}>
+        <MyMonthTimesheet
+          employeeId={employeeId}
+          onSubmitRequest={(dates) => {
+            setPresetDates({ start: dates[0], end: dates[dates.length - 1] });
+            setActiveModal('remote');
+          }}
+        />
+      </Suspense>
+
       {/* Content Grid */}
       <div className={styles.contentGrid}>
         <AttendanceCard
@@ -343,6 +388,7 @@ export const EmployeeDashboardPage: React.FC = () => {
           setPeriodOffset={setPeriodOffset}
           periodLabel={periodRange.label}
           isCurrentPeriod={isCurrentPeriod}
+          canGoBack={canGoBack}
           dayGroups={dayGroups}
         />
 
@@ -376,7 +422,12 @@ export const EmployeeDashboardPage: React.FC = () => {
 
       {activeModal && (
         <Suspense fallback={null}>
-          <RequestModal activeModal={activeModal} onClose={() => setActiveModal(null)} employeeId={employeeId} />
+          <RequestModal
+            activeModal={activeModal}
+            onClose={() => { setActiveModal(null); setPresetDates(null); }}
+            employeeId={employeeId}
+            presetDates={presetDates}
+          />
         </Suspense>
       )}
     </div>

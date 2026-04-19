@@ -86,7 +86,7 @@ router.get(
 // GET /api/employees/:id/history - история событий сотрудника (worker+)
 router.get(
   '/:id/history',
-  requireAnyPageAccess(['/employee/history', '/employees', '/staff-control'], 'view'),
+  requireAnyPageAccess(['/employee', '/employees', '/staff-control'], 'view'),
   employeesController.getHistory
 );
 

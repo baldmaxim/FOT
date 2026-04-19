@@ -1,7 +1,8 @@
 import type { FC } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import type { EmployeePositionType } from '../../types/auth';
+import { useMyEmployee } from '../../hooks/useMyEmployee';
+import { formatFioShort } from '../../utils/formatFio';
 import styles from './Sidebar.module.css';
 import {
   GridIcon,
@@ -82,7 +83,8 @@ interface ISidebarProps {
 export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { profile, logout, canViewPage, getRoleLabel } = useAuth();
+  const { profile, logout, canViewPage } = useAuth();
+  const { data: myEmployee } = useMyEmployee(!profile?.imported_position);
 
   const logoSrc = theme === 'dark' ? '/fot-logo-dark.svg' : '/fot-logo-light.svg';
 
@@ -135,11 +137,10 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose }) 
     return name.slice(0, 2).toUpperCase();
   };
 
-  const getPositionLabel = (positionType: EmployeePositionType | null, importedPosition: string | null) => {
-    if (importedPosition) return importedPosition;
-    if (!positionType) return 'Пользователь';
-    return getRoleLabel(positionType);
-  };
+  const positionLabel = profile?.imported_position
+    || myEmployee?.position_name
+    || 'Должность не указана';
+  const displayName = formatFioShort(profile?.full_name) || 'Пользователь';
 
   return (
     <aside className={`${styles.sidebar} ${isOpen ? styles.open : ''}`}>
@@ -186,8 +187,8 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose }) 
         <div className={styles.userCard}>
           <div className={styles.userAvatar}>{getInitials(profile?.full_name || null)}</div>
           <div className={styles.userInfo}>
-            <div className={styles.userName}>{profile?.full_name || 'Пользователь'}</div>
-            <div className={styles.userRole}>{getPositionLabel(profile?.position_type || null, profile?.imported_position || null)}</div>
+            <div className={styles.userName}>{displayName}</div>
+            <div className={styles.userRole}>{positionLabel}</div>
           </div>
         </div>
         <button

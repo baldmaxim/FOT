@@ -15,6 +15,8 @@ import { exportTimesheetMass } from './timesheet-mass-export.controller.js';
 import { exportTimesheetAssigned, listAssignedEmployees } from './timesheet-assigned-export.controller.js';
 import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, loadCalendarMonth } from '../services/schedule.service.js';
 import {
+  getMinSelfHistoryDate,
+  isSelfEmployeeRequest,
   resolveManagedDepartmentIds,
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
@@ -545,6 +547,14 @@ export const timesheetController = {
 
       if (hasEmployeeFilter && !(await canAccessEmployeeForTimesheetPeriod(req, requestedEmployeeId, startDate, endDate))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
+
+      if (
+        hasEmployeeFilter
+        && isSelfEmployeeRequest(req, requestedEmployeeId)
+        && startDate < getMinSelfHistoryDate()
+      ) {
+        return res.status(403).json({ success: false, error: 'Доступ только за текущий и прошлый месяц' });
       }
 
       if (scope === 'self' && !req.user.employee_id) {

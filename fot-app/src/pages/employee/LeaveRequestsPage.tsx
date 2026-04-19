@@ -1,6 +1,7 @@
 import { type FC, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Plus, X, Clock, CheckCircle, XCircle, Ban } from 'lucide-react';
+import { Plus, X, Clock, CheckCircle, XCircle, Ban, ChevronRight } from 'lucide-react';
 import {
   leaveRequestService,
   REQUEST_TYPE_LABELS,
@@ -31,6 +32,7 @@ const EMPTY_REQUESTS: ILeaveRequest[] = [];
 
 export const LeaveRequestsPage: FC = () => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const { data, isLoading } = useMyLeaveRequests();
@@ -175,8 +177,18 @@ export const LeaveRequestsPage: FC = () => {
         <div className="lr-list">
           {requests.map(r => {
             const Icon = STATUS_ICONS[r.status];
+            const handleCardClick = (e: React.MouseEvent) => {
+              if ((e.target as HTMLElement).closest('button')) return;
+              navigate(`/employee/requests/${r.id}`);
+            };
             return (
-              <div key={r.id} className="lr-card">
+              <div
+                key={r.id}
+                className="lr-card lr-card-clickable"
+                onClick={handleCardClick}
+                role="button"
+                tabIndex={0}
+              >
                 <div className="lr-card-left">
                   <div className="lr-card-type">{REQUEST_TYPE_LABELS[r.request_type]}</div>
                   {r.request_type === 'time_correction' && r.correction_date ? (
@@ -194,6 +206,7 @@ export const LeaveRequestsPage: FC = () => {
                   {r.status === 'pending' && (
                     <button className="lr-cancel-btn" onClick={() => handleCancel(r.id)}>Отменить</button>
                   )}
+                  <ChevronRight size={18} className="lr-card-chevron" />
                 </div>
               </div>
             );

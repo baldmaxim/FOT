@@ -109,3 +109,20 @@ export async function resolveManagedDepartmentIds(req: AuthenticatedRequest): Pr
   const accessible = await resolveAccessibleDepartmentIds(req);
   return accessible === 'all' ? [] : accessible;
 }
+
+/**
+ * Сотрудник в ЛК видит свои данные (табель, СКУД) только за текущий и прошлый месяц.
+ * Возвращает первое число прошлого месяца в формате YYYY-MM-DD (локальное время).
+ */
+export const SELF_HISTORY_MONTHS_BACK = 1;
+
+export function getMinSelfHistoryDate(): string {
+  const now = new Date();
+  const min = new Date(now.getFullYear(), now.getMonth() - SELF_HISTORY_MONTHS_BACK, 1);
+  return `${min.getFullYear()}-${String(min.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
+/** true, если запрос идёт от самого сотрудника (self-request). */
+export function isSelfEmployeeRequest(req: AuthenticatedRequest, employeeId: number | null | undefined): boolean {
+  return employeeId != null && req.user.employee_id === Number(employeeId);
+}

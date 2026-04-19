@@ -2,6 +2,8 @@ import type { FC, ReactNode } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useMyPresence } from '../../hooks/useMyPresence';
+import { useMyEmployee } from '../../hooks/useMyEmployee';
+import { formatFioShort } from '../../utils/formatFio';
 import styles from './EmployeeSidebar.module.css';
 
 interface INavItem {
@@ -51,32 +53,6 @@ const navGroups: INavGroup[] = [
           </svg>
         ),
       },
-      {
-        id: 'timesheet',
-        path: '/employee/timesheet',
-        label: 'Мой табель',
-        requiredPage: '/employee/timesheet',
-        icon: (
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <rect x="3" y="4" width="18" height="18" rx="2"/>
-            <line x1="16" y1="2" x2="16" y2="6"/>
-            <line x1="8" y1="2" x2="8" y2="6"/>
-            <line x1="3" y1="10" x2="21" y2="10"/>
-          </svg>
-        ),
-      },
-      {
-        id: 'history',
-        path: '/employee/history',
-        label: 'Моя история',
-        requiredPage: '/employee/history',
-        icon: (
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/>
-            <polyline points="16 7 22 7 22 13"/>
-          </svg>
-        ),
-      },
     ],
   },
   {
@@ -91,30 +67,6 @@ const navGroups: INavGroup[] = [
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
             <polyline points="17 6 23 6 23 12"/>
-          </svg>
-        ),
-      },
-      {
-        id: 'payslips',
-        path: '/employee/payslips',
-        label: 'Расчётные листки',
-        requiredPage: '/employee/payslips',
-        icon: (
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <rect x="2" y="6" width="20" height="12" rx="2"/>
-            <circle cx="12" cy="12" r="2"/>
-            <path d="M6 12h.01M18 12h.01"/>
-          </svg>
-        ),
-      },
-      {
-        id: 'payments',
-        path: '/employee/payments',
-        label: 'История выплат',
-        requiredPage: '/employee/payments',
-        icon: (
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
           </svg>
         ),
       },
@@ -149,6 +101,11 @@ export const EmployeeSidebar: FC<IEmployeeSidebarProps> = ({ isOpen, onClose, th
   const location = useLocation();
   const { profile, logout, canViewPage } = useAuth();
   const { status: presenceStatus } = useMyPresence();
+  const { data: myEmployee } = useMyEmployee(!profile?.imported_position);
+  const positionLabel = profile?.imported_position
+    || myEmployee?.position_name
+    || 'Должность не указана';
+  const displayName = formatFioShort(profile?.full_name) || 'Сотрудник';
 
   const logoSrc = theme === 'dark' ? '/fot-logo-dark.svg' : '/fot-logo-light.svg';
 
@@ -212,8 +169,8 @@ export const EmployeeSidebar: FC<IEmployeeSidebarProps> = ({ isOpen, onClose, th
             )}
           </div>
           <div className={styles.profileInfo}>
-            <h3>{profile?.full_name || 'Сотрудник'}</h3>
-            {profile?.imported_position && <p>{profile.imported_position}</p>}
+            <h3>{displayName}</h3>
+            <p>{positionLabel}</p>
           </div>
         </div>
       </div>
