@@ -1,6 +1,6 @@
 import { apiClient } from '../api/client';
 
-export type DocumentCategory = 'certificate' | 'scan' | 'approval' | 'payslip' | 'other';
+export type DocumentCategory = 'certificate' | 'scan' | 'approval' | 'payslip' | 'patent_check' | 'other';
 
 export interface IDocument {
   id: number;
@@ -20,6 +20,7 @@ export const CATEGORY_LABELS: Record<DocumentCategory, string> = {
   scan: 'Скан',
   approval: 'Подтверждение',
   payslip: 'Расчётный листок',
+  patent_check: 'Чек от патента',
   other: 'Другое',
 };
 

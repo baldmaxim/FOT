@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useSearchParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
@@ -95,14 +95,12 @@ const PositionBasedRedirect = () => {
 };
 
 const EmployeeHomeRoute = () => {
-  const { hasPermission } = useAuth();
+  const { hasPermission, positionType } = useAuth();
+  const [searchParams] = useSearchParams();
+  const previewAsWorker = positionType === 'super_admin' && searchParams.get('preview') === 'worker';
 
-  if (hasPermission('portal.employee.variant.object')) {
-    return (
-      <EmployeeLayout title="Личный кабинет">
-        <ObjectWorkerDashboardPage />
-      </EmployeeLayout>
-    );
+  if (previewAsWorker || hasPermission('portal.employee.variant.object')) {
+    return <ObjectWorkerDashboardPage />;
   }
 
   if (hasPermission('portal.employee.variant.office')) {

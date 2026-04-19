@@ -6,6 +6,7 @@ import { startPresencePolling } from './services/presence-polling.service.js';
 import { startSigurMonitor } from './services/sigur-monitor.service.js';
 import { startStructureSyncScheduler } from './services/sigur-structure-scheduler.service.js';
 import { startTimesheetReminderScheduler } from './services/timesheet-reminder.service.js';
+import { startPatentExpiryReminderScheduler } from './services/patent-expiry-reminder.service.js';
 import { setupChatSocket } from './socket/chatHandler.js';
 import { setIo } from './socket/io-instance.js';
 
@@ -32,4 +33,5 @@ httpServer.listen(PORT, () => {
   void startSigurMonitor();
   void startStructureSyncScheduler();
   startTimesheetReminderScheduler();
+  startPatentExpiryReminderScheduler();
 });

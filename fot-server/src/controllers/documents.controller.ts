@@ -4,8 +4,27 @@ import { r2Service } from '../services/r2.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
 
-const DOCUMENT_CATEGORIES = ['certificate', 'scan', 'approval', 'payslip', 'other'] as const;
 const DOCUMENT_SELECT_COLUMNS = 'id, employee_id, leave_request_id, category, file_name, file_size, mime_type, r2_key, uploaded_by, created_at';
+const CATEGORY_CACHE_TTL_MS = 60_000;
+let categoryCache: { codes: Set<string>; expiresAt: number } | null = null;
+
+const isValidCategory = async (category: string): Promise<boolean> => {
+  if (categoryCache && categoryCache.expiresAt > Date.now()) {
+    return categoryCache.codes.has(category);
+  }
+
+  const { data, error } = await supabase
+    .from('document_categories')
+    .select('code');
+
+  if (error) {
+    throw error;
+  }
+
+  const codes = new Set((data || []).map(row => String(row.code)));
+  categoryCache = { codes, expiresAt: Date.now() + CATEGORY_CACHE_TTL_MS };
+  return codes.has(category);
+};
 
 const ensureDocumentLinks = async (
   documentId: number,
@@ -109,7 +128,7 @@ const getUploadUrl = async (req: AuthenticatedRequest, res: Response): Promise<v
       res.status(400).json({ success: false, error: 'employee_id, file_name, content_type, category обязательны' });
       return;
     }
-    if (!DOCUMENT_CATEGORIES.includes(category)) {
+    if (!(await isValidCategory(String(category)))) {
       res.status(400).json({ success: false, error: 'Недопустимая категория документа' });
       return;
     }
@@ -145,6 +164,10 @@ const confirmUpload = async (req: AuthenticatedRequest, res: Response): Promise<
     const { r2_key, employee_id, file_name, file_size, mime_type, category, leave_request_id } = req.body;
     if (!r2_key || !employee_id || !file_name || !file_size || !mime_type || !category) {
       res.status(400).json({ success: false, error: 'Все поля обязательны' });
+      return;
+    }
+    if (!(await isValidCategory(String(category)))) {
+      res.status(400).json({ success: false, error: 'Недопустимая категория документа' });
       return;
     }
     if (!(await canAccessEmployeeInScope(req, Number(employee_id)))) {
