@@ -1,5 +1,5 @@
 import { Suspense, lazy, useState, useEffect, useCallback } from 'react';
-import { Settings, MapPin, Filter, Database, Users } from 'lucide-react';
+import { Settings, MapPin, Filter, Database, Users, ShieldCheck } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { sigurService } from '../../services/sigurService';
 import { useAuth } from '../../contexts/AuthContext';
@@ -24,6 +24,9 @@ const TravelConfigTab = lazy(() => import('../../components/skud/TravelConfigTab
 const SigurEmployeesTab = lazy(() => import('../../components/skud/employees/SigurEmployeesTab').then(module => ({
   default: module.SigurEmployeesTab,
 })));
+const SigurAdminTab = lazy(() => import('../../components/skud/sigur-admin/SigurAdminTab').then(module => ({
+  default: module.SigurAdminTab,
+})));
 
 const SETTINGS_TABS: SettingsTab[] = [
   'settings',
@@ -32,6 +35,7 @@ const SETTINGS_TABS: SettingsTab[] = [
   'objects',
   'travel-config',
   'sync-filter',
+  'sigur',
 ];
 
 const resolveSettingsTab = (value: string | null): SettingsTab => (
@@ -110,6 +114,7 @@ export const SigurSettingsPage = () => {
       const next = new URLSearchParams(prev);
       if (tab === 'settings') next.delete('tab');
       else next.set('tab', tab);
+      if (tab !== 'sigur') next.delete('sub');
       return next;
     }, { replace: true });
   }, [setSearchParams]);
@@ -175,6 +180,13 @@ export const SigurSettingsPage = () => {
         >
           <Filter size={14} />
           Синхронизация
+        </button>
+        <button
+          className={`sigur-tab ${activeTab === 'sigur' ? 'active' : ''}`}
+          onClick={() => setActiveTab('sigur')}
+        >
+          <ShieldCheck size={14} />
+          SIGUR
         </button>
       </div>
 
@@ -245,6 +257,16 @@ export const SigurSettingsPage = () => {
         <Suspense fallback={tabFallback}>
           <TravelConfigTab
             canEdit={canEdit}
+            setError={setError}
+          />
+        </Suspense>
+      )}
+
+      {activeTab === 'sigur' && (
+        <Suspense fallback={tabFallback}>
+          <SigurAdminTab
+            canEdit={canEdit}
+            selectedConnection="external"
             setError={setError}
           />
         </Suspense>

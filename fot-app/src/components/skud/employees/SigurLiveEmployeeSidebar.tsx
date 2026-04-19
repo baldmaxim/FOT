@@ -31,6 +31,7 @@ interface ISigurLiveEmployeeSidebarProps {
   canEdit: boolean;
   departments: SigurDepartmentNode[];
   positions: SigurPositionSummary[];
+  positionsLoading: boolean;
   onClose: () => void;
   onDirectoryChanged: () => Promise<void> | void;
   onPositionsChanged: () => Promise<void> | void;
@@ -166,6 +167,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   canEdit,
   departments,
   positions,
+  positionsLoading,
   onClose,
   onDirectoryChanged,
   onPositionsChanged,
@@ -633,12 +635,18 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                   className="ep-modal-select"
                   value={draft.positionId}
                   onChange={event => handleDraftChange('positionId', event.target.value)}
-                  disabled={!canEdit || savingProfile}
+                  disabled={!canEdit || savingProfile || (positionsLoading && positions.length === 0)}
                 >
-                  <option value="">—</option>
-                  {positions.map(position => (
-                    <option key={position.id} value={position.id}>{position.name}</option>
-                  ))}
+                  {positionsLoading && positions.length === 0 ? (
+                    <option value="" disabled>Загрузка...</option>
+                  ) : (
+                    <>
+                      <option value="">—</option>
+                      {positions.map(position => (
+                        <option key={position.id} value={position.id}>{position.name}</option>
+                      ))}
+                    </>
+                  )}
                 </select>
               </label>
               {canEdit && (

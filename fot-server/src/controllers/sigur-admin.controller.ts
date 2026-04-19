@@ -9,6 +9,7 @@ import {
   deleteSigurDepartmentRecursive,
   deleteSigurDepartment,
   deleteSigurEmployee,
+  deleteSigurPosition,
   getSigurEmployeeProfile,
   getSigurEmployeeCardStatuses,
   listSigurDepartmentCounts,
@@ -21,6 +22,7 @@ import {
   updateSigurDepartment,
   updateSigurEmployee,
   updateSigurEmployeeCardExpiration,
+  updateSigurPosition,
 } from '../services/sigur-live-admin.service.js';
 import { sigurService } from '../services/sigur.service.js';
 import {
@@ -348,6 +350,61 @@ export const sigurAdminController = {
       const status = getErrorStatus(error);
       console.error('Sigur admin createPosition error:', error);
       res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка создания должности Sigur') });
+    }
+  },
+
+  async updatePosition(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const sigurPositionId = parseInteger(req.params.sigurPositionId);
+      if (!sigurPositionId) {
+        res.status(400).json({ success: false, error: 'Некорректный ID должности' });
+        return;
+      }
+      const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
+      if (!name) {
+        res.status(400).json({ success: false, error: 'name обязателен' });
+        return;
+      }
+
+      const connection = parseConnection(req.body.connection);
+      const data = await updateSigurPosition(sigurPositionId, name, connection);
+
+      await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
+        entityType: 'sigur_position',
+        entityId: String(sigurPositionId),
+        details: { action: 'update', name: data.name },
+      });
+
+      res.json({ success: true, data });
+    } catch (error) {
+      const status = getErrorStatus(error);
+      console.error('Sigur admin updatePosition error:', error);
+      res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка редактирования должности Sigur') });
+    }
+  },
+
+  async deletePosition(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const sigurPositionId = parseInteger(req.params.sigurPositionId);
+      if (!sigurPositionId) {
+        res.status(400).json({ success: false, error: 'Некорректный ID должности' });
+        return;
+      }
+
+      const connection = parseConnection(req.query.connection);
+      await deleteSigurPosition(sigurPositionId, connection);
+
+      await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
+        entityType: 'sigur_position',
+        entityId: String(sigurPositionId),
+        details: { action: 'delete' },
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      const status = getErrorStatus(error);
+      console.error('Sigur admin deletePosition error:', error);
+      res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка удаления должности Sigur') });
     }
   },
 

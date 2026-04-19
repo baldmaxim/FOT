@@ -808,6 +808,37 @@ export class SigurDataService extends SigurServiceBase {
       .filter(position => Number.isFinite(position.id) && position.name)
       .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
 
+    if (data.length > 0) {
+      this.positionCache = { data, fetchedAt: Date.now() };
+      return data;
+    }
+
+    // Fallback: derive positions from employees when /api/v1/positions returns empty or not available
+    try {
+      const employees = await this.getEmployeesCached(connection);
+      const unique = new Map<number, string>();
+      for (const employee of employees) {
+        const rawId = employee.positionId;
+        const id = typeof rawId === 'number' ? rawId : Number(rawId);
+        const name = typeof employee.positionName === 'string' ? employee.positionName.trim() : '';
+        if (!Number.isFinite(id) || id <= 0 || !name) continue;
+        if (!unique.has(id)) unique.set(id, name);
+      }
+
+      const derived = [...unique.entries()]
+        .map(([id, name]) => ({ id, name }))
+        .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
+
+      if (derived.length > 0) {
+        console.log(`[sigur] positions derived from employees cache: ${derived.length} unique`);
+        // Shorter TTL so a restored /api/v1/positions endpoint is picked up quickly
+        this.positionCache = { data: derived, fetchedAt: Date.now() - (this.CACHE_TTL - 60_000) };
+        return derived;
+      }
+    } catch (error) {
+      console.warn('[sigur] positions fallback via employees failed:', (error as Error).message);
+    }
+
     this.positionCache = { data, fetchedAt: Date.now() };
     return data;
   }
@@ -871,6 +902,18 @@ export class SigurDataService extends SigurServiceBase {
     connection?: ConnectionType,
   ): Promise<Record<string, unknown>> {
     return this.mutate<Record<string, unknown>>('post', '/api/v1/positions', body, undefined, connection);
+  }
+
+  async updatePosition(
+    id: number,
+    body: Record<string, unknown>,
+    connection?: ConnectionType,
+  ): Promise<Record<string, unknown>> {
+    return this.mutate<Record<string, unknown>>('put', `/api/v1/positions/${id}`, body, undefined, connection);
+  }
+
+  async deletePosition(id: number, connection?: ConnectionType): Promise<void> {
+    await this.mutate<void>('delete', `/api/v1/positions/${id}`, undefined, undefined, connection);
   }
 
   async getEmployeeAccessPointBindings(

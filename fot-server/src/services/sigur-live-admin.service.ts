@@ -795,6 +795,51 @@ export async function createSigurPosition(
   };
 }
 
+export async function updateSigurPosition(
+  id: number,
+  name: string,
+  connection?: ConnectionType,
+): Promise<ISigurPositionSummary> {
+  if (!Number.isFinite(id) || id <= 0) {
+    throw new Error('Некорректный ID должности');
+  }
+  const normalizedName = name.trim();
+  if (!normalizedName) {
+    throw new Error('Название должности обязательно');
+  }
+
+  const existingPositions = await sigurService.getPositionOptionsCached(connection);
+  const duplicate = existingPositions.find(
+    position => position.id !== id
+      && position.name.toLocaleLowerCase('ru') === normalizedName.toLocaleLowerCase('ru'),
+  );
+  if (duplicate) {
+    throw new Error('Должность с таким названием уже существует');
+  }
+
+  const updated = await sigurService.updatePosition(id, { name: normalizedName }, connection);
+  sigurService.invalidatePositionCache();
+  const positionId = normalizeInt(resolveField(updated, 'id', 'ID', 'Id')) || id;
+  const positionName = String(resolveField<string>(updated, 'name', 'Name', 'title') || normalizedName).trim();
+
+  return {
+    id: positionId,
+    name: positionName,
+  };
+}
+
+export async function deleteSigurPosition(
+  id: number,
+  connection?: ConnectionType,
+): Promise<void> {
+  if (!Number.isFinite(id) || id <= 0) {
+    throw new Error('Некорректный ID должности');
+  }
+
+  await sigurService.deletePosition(id, connection);
+  sigurService.invalidatePositionCache();
+}
+
 export async function listSigurEmployees(
   filters: {
     departmentId?: number | null;

@@ -1338,6 +1338,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
             canEdit={canEdit}
             departments={departments}
             positions={positions}
+            positionsLoading={positionsQuery.isLoading}
             onClose={() => setSelectedEmployeeId(null)}
             onDirectoryChanged={refreshData}
             onPositionsChanged={refreshData}
@@ -1430,6 +1431,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
               canEdit={canEdit}
               departments={departments}
               positions={positions}
+              positionsLoading={positionsQuery.isLoading}
               onClose={() => setSelectedEmployeeId(null)}
               onDirectoryChanged={refreshData}
               onPositionsChanged={refreshData}

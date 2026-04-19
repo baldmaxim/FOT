@@ -145,6 +145,21 @@ export const sigurAdminService = {
     return response.data;
   },
 
+  async updatePosition(id: number, name: string, connection?: SigurConnectionScope): Promise<SigurPositionSummary> {
+    const response = await apiClient.put<ApiResponse<SigurPositionSummary>>(`/sigur/admin/positions/${id}`, {
+      name,
+      connection,
+    });
+    return response.data;
+  },
+
+  async deletePosition(id: number, connection?: SigurConnectionScope): Promise<void> {
+    const endpoint = connection
+      ? `/sigur/admin/positions/${id}?connection=${connection}`
+      : `/sigur/admin/positions/${id}`;
+    await apiClient.delete<ApiResponse<void>>(endpoint);
+  },
+
   async getEmployees(params?: {
     departmentId?: number | null;
     search?: string;

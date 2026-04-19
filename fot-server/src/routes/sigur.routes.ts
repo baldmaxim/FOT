@@ -63,6 +63,18 @@ router.post(
   requireCritical2FA,
   sigurAdminController.createPosition,
 );
+router.put(
+  '/admin/positions/:sigurPositionId',
+  requirePageAccess('/skud-settings', 'edit'),
+  requireCritical2FA,
+  sigurAdminController.updatePosition,
+);
+router.delete(
+  '/admin/positions/:sigurPositionId',
+  requirePageAccess('/skud-settings', 'edit'),
+  requireCritical2FA,
+  sigurAdminController.deletePosition,
+);
 
 router.post(
   '/admin/employees',
