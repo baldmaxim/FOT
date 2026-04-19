@@ -41,6 +41,8 @@ export interface Employee {
   schedule_override_id?: string | null;
   schedule_override_name?: string | null;
   schedule_override_effective_from?: string | null;
+  site_name?: string | null;
+  site_manager_full_name?: string | null;
 }
 
 // Типы для обогащения сотрудников из Excel

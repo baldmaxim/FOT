@@ -6,6 +6,8 @@ import { documentService } from '../../services/documentService';
 import { employeeService } from '../../services/employeeService';
 import { officialMemoService, MEMO_STATUS_LABELS, type IOfficialMemo } from '../../services/officialMemoService';
 import type { Employee } from '../../types/employee';
+import { ApiError } from '../../api/client';
+import { formatFioShort } from '../../utils/formatFio';
 
 const pageStyle: CSSProperties = {
   minHeight: '100vh',
@@ -52,12 +54,20 @@ const secondaryButton: CSSProperties = {
   border: '1px solid var(--border-primary)',
 };
 
-const dangerLinkButton: CSSProperties = {
-  ...secondaryButton,
-  borderColor: 'transparent',
-  color: 'var(--text-secondary)',
-  fontSize: 14,
-  padding: '10px 12px',
+const logoutButtonStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 10,
+  width: '100%',
+  padding: '14px 20px',
+  borderRadius: 14,
+  border: '1px solid #b23a48',
+  background: 'transparent',
+  color: '#b23a48',
+  fontSize: 16,
+  fontWeight: 600,
+  cursor: 'pointer',
 };
 
 const statusBadgeStyle = (status: IOfficialMemo['status']): CSSProperties => {
@@ -189,7 +199,8 @@ export const ObjectWorkerDashboardPage: FC = () => {
       toast.success('Чек от патента загружен');
     } catch (err) {
       console.error('patent check upload error:', err);
-      toast.error('Не удалось загрузить чек');
+      const detail = err instanceof ApiError ? err.message : null;
+      toast.error(detail ? `Не удалось загрузить чек: ${detail}` : 'Не удалось загрузить чек');
     } finally {
       setUploading(false);
     }
@@ -221,7 +232,8 @@ export const ObjectWorkerDashboardPage: FC = () => {
       reloadMemos();
     } catch (err) {
       console.error('memo create error:', err);
-      toast.error('Не удалось отправить записку');
+      const detail = err instanceof ApiError ? err.message : null;
+      toast.error(detail ? `Не удалось отправить записку: ${detail}` : 'Не удалось отправить записку');
     } finally {
       setMemoSubmitting(false);
     }
@@ -234,7 +246,15 @@ export const ObjectWorkerDashboardPage: FC = () => {
 
   const fullName = employee?.full_name || profile?.full_name || '—';
   const hireDate = employee?.hire_date ?? null;
-  const disableActions = !employeeId || isPreview;
+  const departmentName = employee?.department ?? null;
+  const siteDisplay = useMemo(() => {
+    const managerShort = formatFioShort(employee?.site_manager_full_name);
+    if (managerShort) return `Уч. ${managerShort}`;
+    if (employee?.site_name) return `Уч. ${employee.site_name}`;
+    return null;
+  }, [employee?.site_manager_full_name, employee?.site_name]);
+  const disableActions = !employeeId;
+  const noEmployeeBinding = !employeeId;
 
   return (
     <div style={pageStyle}>
@@ -243,7 +263,16 @@ export const ObjectWorkerDashboardPage: FC = () => {
           <div style={{ ...cardStyle, borderColor: '#b78103', background: '#b781031a' }}>
             <div style={{ fontWeight: 600 }}>Режим предпросмотра (super_admin)</div>
             <div style={labelStyle}>
-              Вы видите кабинет рабочего. Действия недоступны в этом режиме.
+              Вы видите кабинет рабочего. Все действия выполняются от имени вашего учёта super_admin и привязанного employee_id.
+            </div>
+          </div>
+        )}
+
+        {noEmployeeBinding && (
+          <div style={{ ...cardStyle, borderColor: '#b23a48', background: '#b23a481a' }}>
+            <div style={{ fontWeight: 600 }}>Аккаунт не привязан к сотруднику</div>
+            <div style={labelStyle}>
+              Обратитесь к администратору — загрузка чека и подача служебной записки пока недоступны.
             </div>
           </div>
         )}
@@ -254,6 +283,14 @@ export const ObjectWorkerDashboardPage: FC = () => {
             <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4 }}>
               {employeeLoading && !employee ? 'Загрузка…' : fullName}
             </div>
+          </div>
+          <div>
+            <div style={labelStyle}>Отдел</div>
+            <div style={valueStyle}>{departmentName || '—'}</div>
+          </div>
+          <div>
+            <div style={labelStyle}>Участок</div>
+            <div style={valueStyle}>{siteDisplay || '—'}</div>
           </div>
           <div>
             <div style={labelStyle}>Дата приёма на работу</div>
@@ -320,9 +357,22 @@ export const ObjectWorkerDashboardPage: FC = () => {
           </div>
         </section>
 
-        <button type="button" style={dangerLinkButton} onClick={handleLogout}>
-          Выйти из системы
-        </button>
+        <section style={cardStyle}>
+          <button
+            type="button"
+            style={logoutButtonStyle}
+            onClick={handleLogout}
+            onMouseEnter={(e) => { e.currentTarget.style.background = '#b23a4811'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+            Выйти из системы
+          </button>
+        </section>
       </div>
 
       {memoDialogOpen && (

@@ -160,6 +160,8 @@ export interface Employee {
   created_at: string;
   updated_at: string;
   work_category: string | null;
+  site_name?: string | null;
+  site_manager_full_name?: string | null;
 }
 
 // История зарплаты в БД

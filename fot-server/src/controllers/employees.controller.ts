@@ -330,6 +330,42 @@ export const employeesController = {
 
       const structureCache = await loadStructureCache();
       const employee = decryptEmployee(employeeResult.data as unknown as EmployeeEncrypted, structureCache);
+
+      // Подмешиваем активное назначение (участок + руководитель участка)
+      const today = new Date().toISOString().slice(0, 10);
+      const assignmentResult = await supabase
+        .from('employee_assignments')
+        .select('org_site_id, is_primary, effective_from, effective_to')
+        .eq('employee_id', idNum)
+        .lte('effective_from', today)
+        .or(`effective_to.is.null,effective_to.gte.${today}`)
+        .order('is_primary', { ascending: false, nullsFirst: false })
+        .order('effective_from', { ascending: false })
+        .limit(1);
+
+      const activeAssignment = assignmentResult.data?.[0] ?? null;
+      if (activeAssignment?.org_site_id) {
+        const siteResult = await supabase
+          .from('org_sites')
+          .select('name, manager_id')
+          .eq('id', activeAssignment.org_site_id)
+          .maybeSingle();
+
+        if (siteResult.data) {
+          employee.site_name = siteResult.data.name ?? null;
+          if (siteResult.data.manager_id) {
+            const managerResult = await supabase
+              .from('employees')
+              .select('full_name')
+              .eq('id', siteResult.data.manager_id)
+              .maybeSingle();
+            if (managerResult.data) {
+              employee.site_manager_full_name = managerResult.data.full_name ?? null;
+            }
+          }
+        }
+      }
+
       const entry = employeeCache.set(idNum, employee);
 
       res.setHeader('ETag', entry.etag);
