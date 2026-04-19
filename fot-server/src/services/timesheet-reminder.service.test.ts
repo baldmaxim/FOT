@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockedState = vi.hoisted(() => ({
   listTimesheetWorkflowRecipientIds: vi.fn(async () => ['user-1']),
+  listUserIdsAssignedToDepartment: vi.fn(async () => [] as string[]),
 }));
 
 vi.mock('../config/database.js', () => ({
@@ -46,12 +47,18 @@ vi.mock('./timesheet-workflow-recipients.service.js', () => ({
   listTimesheetWorkflowRecipientIds: mockedState.listTimesheetWorkflowRecipientIds,
 }));
 
+vi.mock('./department-access.service.js', () => ({
+  listUserIdsAssignedToDepartment: mockedState.listUserIdsAssignedToDepartment,
+}));
+
 import { listTimesheetReminderRecipientIds } from './timesheet-reminder.service.js';
 
 describe('timesheet-reminder.service', () => {
   beforeEach(() => {
     mockedState.listTimesheetWorkflowRecipientIds.mockClear();
     mockedState.listTimesheetWorkflowRecipientIds.mockResolvedValue(['user-1']);
+    mockedState.listUserIdsAssignedToDepartment.mockClear();
+    mockedState.listUserIdsAssignedToDepartment.mockResolvedValue([]);
   });
 
   it('uses submit recipients for filing reminders and excludes admin roles', async () => {
@@ -80,5 +87,15 @@ describe('timesheet-reminder.service', () => {
         includeDataScopes: ['department'],
       },
     );
+  });
+
+  it('unions workflow recipients with users assigned via employee_department_access and dedupes', async () => {
+    mockedState.listTimesheetWorkflowRecipientIds.mockResolvedValueOnce(['user-1', 'user-2']);
+    mockedState.listUserIdsAssignedToDepartment.mockResolvedValueOnce(['user-2', 'user-3']);
+
+    const recipients = await listTimesheetReminderRecipientIds('dept-a', 'deadline_morning');
+
+    expect(recipients.sort()).toEqual(['user-1', 'user-2', 'user-3']);
+    expect(mockedState.listUserIdsAssignedToDepartment).toHaveBeenCalledWith('dept-a');
   });
 });

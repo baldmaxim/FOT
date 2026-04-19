@@ -9,6 +9,7 @@ import {
   parseTimesheetApprovalPeriod,
 } from './timesheet-period.service.js';
 import { listTimesheetWorkflowRecipientIds } from './timesheet-workflow-recipients.service.js';
+import { listUserIdsAssignedToDepartment } from './department-access.service.js';
 
 const REMINDER_INTERVAL_MS = 15 * 60_000;
 const STARTUP_DELAY_MS = 45_000;
@@ -153,27 +154,21 @@ async function persistReminderLog(items: Array<{
 
 export async function listTimesheetReminderRecipientIds(
   departmentId: string,
-  stage: ITimesheetReminderEvent['stage'],
+  _stage: ITimesheetReminderEvent['stage'],
 ): Promise<string[]> {
-  if (stage === 'overdue') {
-    return listTimesheetWorkflowRecipientIds(
+  const [workflowIds, assignedIds] = await Promise.all([
+    listTimesheetWorkflowRecipientIds(
       departmentId,
       ['submit'],
       {
         excludeRoleCodes: [...REMINDER_EXCLUDED_ROLE_CODES],
         includeDataScopes: ['department'],
       },
-    );
-  }
+    ),
+    listUserIdsAssignedToDepartment(departmentId),
+  ]);
 
-  return listTimesheetWorkflowRecipientIds(
-    departmentId,
-    ['submit'],
-    {
-      excludeRoleCodes: [...REMINDER_EXCLUDED_ROLE_CODES],
-      includeDataScopes: ['department'],
-    },
-  );
+  return [...new Set([...workflowIds, ...assignedIds])];
 }
 
 async function processReminderEvent(event: ITimesheetReminderEvent): Promise<void> {

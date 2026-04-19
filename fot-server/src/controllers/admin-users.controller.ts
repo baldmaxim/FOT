@@ -6,7 +6,9 @@ import type { AuthenticatedRequest, ChatInboundMode, UserProfile } from '../type
 import { logSupabaseError } from './admin-helpers.js';
 import { getRoleByCode } from '../services/roles-cache.service.js';
 import { ensureCriticalAdminAccess } from '../services/critical-admin-access.service.js';
-import { loadExplicitDepartmentMap } from '../services/department-access.service.js';
+import { loadExplicitDepartmentMap, loadEmployeeAccessMap } from '../services/department-access.service.js';
+import { notificationService } from '../services/notification.service.js';
+import { pushService } from '../services/push.service.js';
 import {
   buildManagerDepartmentImportPreviewFromBuffer,
   saveManagerDepartmentImportAliases,
@@ -651,6 +653,42 @@ export const adminUsersController = {
         entityId: id,
         details: { position_type: roleAssignment.code },
       });
+
+      if (employee_id) {
+        try {
+          const accessMap = await loadEmployeeAccessMap([employee_id]);
+          const departmentIds = accessMap.get(employee_id) || [];
+
+          if (departmentIds.length > 0) {
+            const { data: departments } = await supabase
+              .from('org_departments')
+              .select('id, name')
+              .in('id', departmentIds);
+
+            const nameById = new Map<string, string>(
+              (departments || []).map(d => [d.id as string, (d.name as string) || 'Без названия']),
+            );
+            const names = departmentIds
+              .map(depId => nameById.get(depId) || 'Без названия')
+              .filter(Boolean);
+            const body = names.length === 1
+              ? `Отдел: ${names[0]}`
+              : `Отделы: ${names.join(', ')}`;
+            const title = 'Вы назначены ответственным по табелям';
+
+            await notificationService.createMany([{
+              userId: id,
+              type: 'timesheet_assigned_departments',
+              title,
+              body,
+              metadata: { departmentIds, path: '/timesheet-hr' },
+            }]);
+            await pushService.sendGenericNotification([id], title, body, { path: '/timesheet-hr' });
+          }
+        } catch (notifyError) {
+          console.error('approveUser: notify assigned departments error:', notifyError);
+        }
+      }
 
       res.json({ success: true, message: 'User approved successfully' });
     } catch (error) {

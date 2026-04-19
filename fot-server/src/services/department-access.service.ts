@@ -183,6 +183,48 @@ export async function loadExplicitDepartmentMap(
   return result;
 }
 
+export async function listUserIdsAssignedToDepartment(departmentId: string): Promise<string[]> {
+  if (!departmentId) return [];
+
+  const { data: accessRows, error: accessError } = await supabase
+    .from('employee_department_access')
+    .select('employee_id')
+    .eq('department_id', departmentId)
+    .eq('is_active', true);
+
+  if (accessError) {
+    if (isMissingTableError(accessError, 'employee_department_access')) {
+      warnMissingEmployeeDepartmentAccessTable();
+      return [];
+    }
+    throw accessError;
+  }
+
+  const employeeIds = [...new Set(
+    (accessRows || [])
+      .map(row => row.employee_id as number | null)
+      .filter((id): id is number => Number.isInteger(id)),
+  )];
+
+  if (employeeIds.length === 0) return [];
+
+  const { data: profiles, error: profileError } = await supabase
+    .from('user_profiles')
+    .select('id')
+    .in('employee_id', employeeIds)
+    .eq('is_approved', true);
+
+  if (profileError) {
+    throw profileError;
+  }
+
+  return [...new Set(
+    (profiles || [])
+      .map(row => row.id as string | null)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+  )];
+}
+
 export async function listExplicitDepartmentIdsForUser(
   userId: string,
   employeeId?: number | null,
