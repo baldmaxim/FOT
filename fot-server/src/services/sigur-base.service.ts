@@ -26,6 +26,38 @@ export const SIGUR_TIMEOUTS = {
   bulk: 120_000,
 } as const;
 
+const SIGUR_MAX_CONCURRENCY = Math.max(1, Number(process.env.SIGUR_MAX_CONCURRENCY) || 3);
+const SIGUR_RETRY_STATUSES = new Set([429, 502, 503, 504]);
+const SIGUR_RETRY_CODES = new Set(['ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN']);
+const SIGUR_RETRY_ATTEMPTS = 3;
+const SIGUR_RETRY_BASE_MS = 500;
+
+class SigurRequestLimiter {
+  private active = 0;
+  private queue: Array<() => void> = [];
+
+  constructor(private readonly max: number) {}
+
+  async acquire(): Promise<() => void> {
+    if (this.active < this.max) {
+      this.active++;
+      return () => this.release();
+    }
+    await new Promise<void>(resolve => this.queue.push(resolve));
+    this.active++;
+    return () => this.release();
+  }
+
+  private release(): void {
+    this.active--;
+    const next = this.queue.shift();
+    if (next) next();
+  }
+}
+
+const sigurLimiter = new SigurRequestLimiter(SIGUR_MAX_CONCURRENCY);
+let sigurLimiterLogged = false;
+
 /**
  * Базовый сервис для взаимодействия с Sigur REST API.
  * Содержит ядро: авторизацию, запросы, пагинацию.
@@ -249,23 +281,37 @@ export class SigurServiceBase {
     } = {},
     connection?: ConnectionType,
   ): Promise<T> {
+    if (!sigurLimiterLogged) {
+      sigurLimiterLogged = true;
+      console.log(`[sigur] request limiter initialized: concurrency=${SIGUR_MAX_CONCURRENCY}`);
+    }
+
+    const release = await sigurLimiter.acquire();
+    try {
+      return await this.sendRequestWithRetry<T>(method, endpoint, options, connection);
+    } finally {
+      release();
+    }
+  }
+
+  private async sendRequestWithRetry<T>(
+    method: 'get' | 'post' | 'put' | 'patch' | 'delete',
+    endpoint: string,
+    options: {
+      params?: Record<string, any>;
+      data?: unknown;
+      headers?: Record<string, string>;
+      timeout?: number;
+    },
+    connection?: ConnectionType,
+  ): Promise<T> {
     const connType = await this.resolveConnectionType(connection);
     let client = await this.getClient(connType);
+    let attempt = 0;
+    let lastError: unknown;
 
-    try {
-      const response = await client.request<T>({
-        method,
-        url: endpoint,
-        params: options.params,
-        data: options.data,
-        headers: options.headers,
-        timeout: options.timeout,
-      });
-      return response.data;
-    } catch (error) {
-      if (error instanceof AxiosError && error.response?.status === 401) {
-        await this.refreshTokens(connType);
-        client = this.clients[connType]!;
+    while (attempt <= SIGUR_RETRY_ATTEMPTS) {
+      try {
         const response = await client.request<T>({
           method,
           url: endpoint,
@@ -275,9 +321,46 @@ export class SigurServiceBase {
           timeout: options.timeout,
         });
         return response.data;
+      } catch (error) {
+        lastError = error;
+
+        if (error instanceof AxiosError && error.response?.status === 401) {
+          await this.refreshTokens(connType);
+          client = this.clients[connType]!;
+          const response = await client.request<T>({
+            method,
+            url: endpoint,
+            params: options.params,
+            data: options.data,
+            headers: options.headers,
+            timeout: options.timeout,
+          });
+          return response.data;
+        }
+
+        if (attempt >= SIGUR_RETRY_ATTEMPTS || !this.isRetryableError(error)) {
+          throw error;
+        }
+
+        const delay = SIGUR_RETRY_BASE_MS * Math.pow(2, attempt);
+        const status = error instanceof AxiosError ? error.response?.status : undefined;
+        const code = error instanceof AxiosError ? error.code : undefined;
+        console.warn(
+          `[sigur] retry ${attempt + 1}/${SIGUR_RETRY_ATTEMPTS} ${method.toUpperCase()} ${endpoint} after ${delay}ms (status=${status ?? '-'} code=${code ?? '-'})`,
+        );
+        await new Promise(resolve => setTimeout(resolve, delay));
+        attempt++;
       }
-      throw error;
     }
+
+    throw lastError;
+  }
+
+  private isRetryableError(error: unknown): boolean {
+    if (!(error instanceof AxiosError)) return false;
+    if (error.response?.status && SIGUR_RETRY_STATUSES.has(error.response.status)) return true;
+    if (error.code && SIGUR_RETRY_CODES.has(error.code)) return true;
+    return false;
   }
 
   /** Выполняет GET-запрос с автоматической переавторизацией при 401. */
