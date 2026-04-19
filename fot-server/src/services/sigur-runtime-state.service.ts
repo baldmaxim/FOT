@@ -38,6 +38,45 @@ const normalizeRpcRow = <T>(data: T | T[] | null): T | null => {
   return data || null;
 };
 
+const SUPABASE_RETRY_ATTEMPTS = 3;
+const SUPABASE_RETRY_BASE_MS = 500;
+const SUPABASE_RETRY_PATTERNS = [
+  '502', '503', '504',
+  'bad gateway', 'gateway timeout', 'service unavailable',
+  'fetch failed', 'network', 'econnreset', 'etimedout', 'eai_again',
+];
+
+function isTransientSupabaseError(error: { message?: string; code?: string } | null): boolean {
+  if (!error) return false;
+  const haystack = `${error.message || ''} ${error.code || ''}`.toLowerCase();
+  return SUPABASE_RETRY_PATTERNS.some(pattern => haystack.includes(pattern));
+}
+
+async function withSupabaseRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  let attempt = 0;
+  let lastError: unknown;
+
+  while (attempt <= SUPABASE_RETRY_ATTEMPTS) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      const err = error as { message?: string; code?: string } | null;
+      if (attempt >= SUPABASE_RETRY_ATTEMPTS || !isTransientSupabaseError(err)) {
+        throw error;
+      }
+      const delay = SUPABASE_RETRY_BASE_MS * Math.pow(2, attempt);
+      console.warn(
+        `[supabase] retry ${attempt + 1}/${SUPABASE_RETRY_ATTEMPTS} ${label} after ${delay}ms: ${err?.message?.slice(0, 120) || 'unknown'}`,
+      );
+      await new Promise(resolve => setTimeout(resolve, delay));
+      attempt++;
+    }
+  }
+
+  throw lastError;
+}
+
 const mapLeaseRowToState = (row: ISigurRuntimeLeaseRow): ISigurRuntimeStateRow => ({
   key: row.state_key || row.key || '',
   checkpoint_at: row.state_checkpoint_at ?? row.checkpoint_at ?? null,
@@ -53,18 +92,20 @@ export function getSigurRuntimeOwner(scope: string): string {
 }
 
 export async function getSigurRuntimeState(key: string): Promise<ISigurRuntimeStateRow | null> {
-  const { data, error } = await supabase
-    .from('sigur_runtime_state')
-    .select('*')
-    .eq('key', key)
-    .limit(1);
+  return withSupabaseRetry(`getSigurRuntimeState(${key})`, async () => {
+    const { data, error } = await supabase
+      .from('sigur_runtime_state')
+      .select('*')
+      .eq('key', key)
+      .limit(1);
 
-  if (error) {
-    throw new Error(`Failed to read Sigur runtime state "${key}": ${error.message}`);
-  }
+    if (error) {
+      throw new Error(`Failed to read Sigur runtime state "${key}": ${error.message}`);
+    }
 
-  const row = Array.isArray(data) ? data[0] || null : null;
-  return (row || null) as ISigurRuntimeStateRow | null;
+    const row = Array.isArray(data) ? data[0] || null : null;
+    return (row || null) as ISigurRuntimeStateRow | null;
+  });
 }
 
 export async function tryAcquireSigurRuntimeLease(params: {
@@ -73,22 +114,24 @@ export async function tryAcquireSigurRuntimeLease(params: {
   ttlSeconds: number;
   meta?: Record<string, unknown>;
 }): Promise<{ acquired: boolean; row: ISigurRuntimeStateRow | null }> {
-  const { data, error } = await supabase.rpc('try_acquire_sigur_runtime_lease', {
-    p_key: params.key,
-    p_owner: params.owner,
-    p_ttl_seconds: params.ttlSeconds,
-    p_meta: params.meta || {},
+  return withSupabaseRetry(`tryAcquireSigurRuntimeLease(${params.key})`, async () => {
+    const { data, error } = await supabase.rpc('try_acquire_sigur_runtime_lease', {
+      p_key: params.key,
+      p_owner: params.owner,
+      p_ttl_seconds: params.ttlSeconds,
+      p_meta: params.meta || {},
+    });
+
+    if (error) {
+      throw new Error(`Failed to acquire Sigur runtime lease "${params.key}": ${error.message}`);
+    }
+
+    const row = normalizeRpcRow(data as ISigurRuntimeLeaseRow[] | ISigurRuntimeLeaseRow | null);
+    return {
+      acquired: !!row?.acquired,
+      row: row ? mapLeaseRowToState(row) : null,
+    };
   });
-
-  if (error) {
-    throw new Error(`Failed to acquire Sigur runtime lease "${params.key}": ${error.message}`);
-  }
-
-  const row = normalizeRpcRow(data as ISigurRuntimeLeaseRow[] | ISigurRuntimeLeaseRow | null);
-  return {
-    acquired: !!row?.acquired,
-    row: row ? mapLeaseRowToState(row) : null,
-  };
 }
 
 export async function heartbeatSigurRuntimeLease(params: {
@@ -97,19 +140,21 @@ export async function heartbeatSigurRuntimeLease(params: {
   ttlSeconds: number;
   meta?: Record<string, unknown>;
 }): Promise<boolean> {
-  const { data, error } = await supabase.rpc('heartbeat_sigur_runtime_lease', {
-    p_key: params.key,
-    p_owner: params.owner,
-    p_ttl_seconds: params.ttlSeconds,
-    p_meta: params.meta || {},
+  return withSupabaseRetry(`heartbeatSigurRuntimeLease(${params.key})`, async () => {
+    const { data, error } = await supabase.rpc('heartbeat_sigur_runtime_lease', {
+      p_key: params.key,
+      p_owner: params.owner,
+      p_ttl_seconds: params.ttlSeconds,
+      p_meta: params.meta || {},
+    });
+
+    if (error) {
+      throw new Error(`Failed to heartbeat Sigur runtime lease "${params.key}": ${error.message}`);
+    }
+
+    const row = normalizeRpcRow(data as ISigurRuntimeLeaseRow[] | ISigurRuntimeLeaseRow | null);
+    return !!row?.refreshed;
   });
-
-  if (error) {
-    throw new Error(`Failed to heartbeat Sigur runtime lease "${params.key}": ${error.message}`);
-  }
-
-  const row = normalizeRpcRow(data as ISigurRuntimeLeaseRow[] | ISigurRuntimeLeaseRow | null);
-  return !!row?.refreshed;
 }
 
 export async function mergeSigurRuntimeState(params: {
@@ -118,34 +163,38 @@ export async function mergeSigurRuntimeState(params: {
   meta?: Record<string, unknown>;
   owner?: string | null;
 }): Promise<ISigurRuntimeStateRow | null> {
-  const { data, error } = await supabase.rpc('merge_sigur_runtime_state', {
-    p_key: params.key,
-    p_checkpoint_at: params.checkpointAt?.toISOString() || null,
-    p_meta: params.meta || {},
-    p_owner: params.owner || null,
+  return withSupabaseRetry(`mergeSigurRuntimeState(${params.key})`, async () => {
+    const { data, error } = await supabase.rpc('merge_sigur_runtime_state', {
+      p_key: params.key,
+      p_checkpoint_at: params.checkpointAt?.toISOString() || null,
+      p_meta: params.meta || {},
+      p_owner: params.owner || null,
+    });
+
+    if (error) {
+      throw new Error(`Failed to merge Sigur runtime state "${params.key}": ${error.message}`);
+    }
+
+    return normalizeRpcRow(data as ISigurRuntimeStateRow[] | ISigurRuntimeStateRow | null);
   });
-
-  if (error) {
-    throw new Error(`Failed to merge Sigur runtime state "${params.key}": ${error.message}`);
-  }
-
-  return normalizeRpcRow(data as ISigurRuntimeStateRow[] | ISigurRuntimeStateRow | null);
 }
 
 export async function releaseSigurRuntimeLease(params: {
   key: string;
   owner: string;
 }): Promise<boolean> {
-  const { data, error } = await supabase.rpc('release_sigur_runtime_lease', {
-    p_key: params.key,
-    p_owner: params.owner,
+  return withSupabaseRetry(`releaseSigurRuntimeLease(${params.key})`, async () => {
+    const { data, error } = await supabase.rpc('release_sigur_runtime_lease', {
+      p_key: params.key,
+      p_owner: params.owner,
+    });
+
+    if (error) {
+      throw new Error(`Failed to release Sigur runtime lease "${params.key}": ${error.message}`);
+    }
+
+    return !!data;
   });
-
-  if (error) {
-    throw new Error(`Failed to release Sigur runtime lease "${params.key}": ${error.message}`);
-  }
-
-  return !!data;
 }
 
 export function startSigurRuntimeLeaseHeartbeat(params: {
