@@ -53,6 +53,7 @@ export async function syncEventsLogic(
   send({ type: 'events_start', totalDays: days.length });
 
   // 1. Загружаем сотрудников
+  send({ type: 'events_preparing', phase: 'db_employees' });
   const { data: employeesData } = await supabase
     .from('employees')
     .select('id, full_name, sigur_employee_id')
@@ -68,6 +69,7 @@ export async function syncEventsLogic(
   }
 
   // 2. Whitelist
+  send({ type: 'events_preparing', phase: 'whitelist_db_cache' });
   const whitelist = await getWhitelistedDepartmentIdsCached(connection, context);
   let allowedNames: Set<string> | null = null;
   let allowedSigurIds: Set<number> | null = null;
@@ -82,6 +84,7 @@ export async function syncEventsLogic(
       );
     } else {
       console.log('[syncEvents] whitelist DB cache is empty, falling back to Sigur employees');
+      send({ type: 'events_preparing', phase: 'sigur_employees' });
       let whitelistCache = context?.whitelistedSigurEmployees || null;
       if (!whitelistCache) {
         const sigurEmployees = await getWhitelistedSigurEmployees(connection, context, send);

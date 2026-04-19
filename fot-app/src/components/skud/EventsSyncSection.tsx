@@ -31,9 +31,20 @@ export const EventsSyncSection: FC<IEventsSyncSectionProps> = ({
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<ISyncResult | null>(null);
   const [eventsProgress, setEventsProgress] = useState<IEventsProgressState | null>(null);
-  const [, setEmployeesProgress] = useState<IEmployeesProgressState | null>(null);
+  const [employeesProgress, setEmployeesProgress] = useState<IEmployeesProgressState | null>(null);
+  const [preparingMessage, setPreparingMessage] = useState<string | null>(null);
+  const [waitingMessage, setWaitingMessage] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [clearResult, setClearResult] = useState<{ deleted: number } | null>(null);
+
+  const preparingLabelByPhase: Record<string, string> = {
+    db_employees: 'Читаем сотрудников из БД…',
+    whitelist_db_cache: 'Строим whitelist из БД…',
+    sigur_employees: 'Готовим whitelist по Sigur…',
+    sigur_employees_all: 'Загружаем список сотрудников из Sigur…',
+    sigur_employees_fallback: 'Загрузка сотрудников по отделам (fallback)…',
+    loading_hashes: 'Читаем уже загруженные события за период…',
+  };
 
   const busy = syncing || clearing || externalBusy;
 
@@ -55,6 +66,8 @@ export const EventsSyncSection: FC<IEventsSyncSectionProps> = ({
     setClearResult(null);
     setError('');
     setEmployeesProgress(null);
+    setPreparingMessage(null);
+    setWaitingMessage(null);
 
     try {
       const response = await fetch(buildApiUrl('/sigur/sync'), {
@@ -67,6 +80,35 @@ export const EventsSyncSection: FC<IEventsSyncSectionProps> = ({
         body: JSON.stringify({ startDate: syncStartDate, endDate: syncEndDate }),
       });
       await readSseResponse(response, data => {
+        if (data.type === 'waiting') {
+          setWaitingMessage(String(data.message || 'Ожидание завершения фоновой синхронизации…'));
+          return;
+        }
+
+        if (data.type === 'events_preparing') {
+          const phase = String(data.phase || '');
+          setPreparingMessage(preparingLabelByPhase[phase] || `Подготовка: ${phase}…`);
+          setWaitingMessage(null);
+          return;
+        }
+
+        if (data.type === 'employees_progress') {
+          setEmployeesProgress({
+            percent: Number(data.percent || 0),
+            current: Number(data.current || 0),
+            total: Number(data.total || 0),
+            phase: String(data.status || ''),
+          });
+          setWaitingMessage(null);
+          return;
+        }
+
+        if (data.type === 'events_loading_hashes') {
+          setPreparingMessage(preparingLabelByPhase.loading_hashes);
+          setEmployeesProgress(null);
+          return;
+        }
+
         if (data.type === 'events_start') {
           setEventsProgress({
             percent: 0,
@@ -84,6 +126,8 @@ export const EventsSyncSection: FC<IEventsSyncSectionProps> = ({
             dayIndex: Number(data.dayIndex || 0),
             totalDays: Number(data.totalDays || 0),
           });
+          setPreparingMessage(null);
+          setEmployeesProgress(null);
           return;
         }
 
@@ -115,6 +159,8 @@ export const EventsSyncSection: FC<IEventsSyncSectionProps> = ({
       setSyncing(false);
       setEventsProgress(null);
       setEmployeesProgress(null);
+      setPreparingMessage(null);
+      setWaitingMessage(null);
     }
   };
 
@@ -192,7 +238,7 @@ export const EventsSyncSection: FC<IEventsSyncSectionProps> = ({
       {syncing && (
         <div className="sigur-sync-result">
           <div className="sigur-step-status">Выполняется синхронизация событий...</div>
-          {eventsProgress ? (
+          {eventsProgress && eventsProgress.day ? (
             <div className="sigur-events-progress">
               <div className="sigur-events-progress-bar">
                 <div className="sigur-events-progress-fill" style={{ width: `${eventsProgress.percent}%` }} />
@@ -200,9 +246,25 @@ export const EventsSyncSection: FC<IEventsSyncSectionProps> = ({
               <span className="sigur-events-progress-text">
                 {eventsProgress.day === 'Пересчёт сводок...'
                   ? eventsProgress.day
-                  : `${eventsProgress.day || 'Подготовка...'} - ${eventsProgress.percent}% (${Math.min(eventsProgress.dayIndex + 1, Math.max(eventsProgress.totalDays, 1))}/${Math.max(eventsProgress.totalDays, 1)})`}
+                  : `${eventsProgress.day} - ${eventsProgress.percent}% (${Math.min(eventsProgress.dayIndex + 1, Math.max(eventsProgress.totalDays, 1))}/${Math.max(eventsProgress.totalDays, 1)})`}
               </span>
             </div>
+          ) : employeesProgress ? (
+            <div className="sigur-events-progress">
+              <div className="sigur-events-progress-bar">
+                <div className="sigur-events-progress-fill" style={{ width: `${employeesProgress.percent}%` }} />
+              </div>
+              <span className="sigur-events-progress-text">
+                {preparingMessage || 'Загрузка сотрудников из Sigur…'}
+                {employeesProgress.total > 0
+                  ? ` — ${employeesProgress.current}/${employeesProgress.total} (${employeesProgress.percent}%)`
+                  : ''}
+              </span>
+            </div>
+          ) : preparingMessage ? (
+            <div className="sigur-events-progress-text">{preparingMessage}</div>
+          ) : waitingMessage ? (
+            <div className="sigur-events-progress-text">{waitingMessage}</div>
           ) : (
             <div className="sigur-events-progress-text">Подготовка данных...</div>
           )}

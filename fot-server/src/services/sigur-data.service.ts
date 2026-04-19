@@ -274,29 +274,48 @@ export class SigurDataService extends SigurServiceBase {
 
     console.log('[sigur] fetching employees (no cache)...');
     this.setEmployeeCache([], false);
-    this.employeeFetchPromise = this.getDepartmentIds(connection)
-      .then(async data => {
-        let employees: Record<string, unknown>[] = [];
+    this.employeeFetchPromise = (async () => {
+      let employees: Record<string, unknown>[] = [];
 
-        if (data.length > 0) {
-          console.log(`[sigur] building employee cache from ${data.length} departments`);
-          employees = await this.getEmployeesByDepartments(data, connection);
+      // Быстрый путь: один пагинированный запрос /api/v1/employees без departmentId
+      try {
+        const fullListTimeoutMs = 60_000;
+        const fullList = await Promise.race([
+          this.getEmployees(undefined, connection) as Promise<Record<string, unknown>[]>,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('full employees endpoint timeout')), fullListTimeoutMs),
+          ),
+        ]);
+        if (Array.isArray(fullList) && fullList.length > 0) {
+          employees = fullList;
+          console.log(`[sigur] employees fetched via full endpoint: ${employees.length}`);
         } else {
-          console.warn('[sigur] no departments found; falling back to full employees endpoint');
+          console.warn('[sigur] full employees endpoint returned 0; falling back to per-department scan');
         }
+      } catch (error) {
+        console.warn(
+          '[sigur] full employees endpoint failed, falling back to per-department scan:',
+          (error as Error).message,
+        );
+      }
 
-        if (employees.length === 0) {
-          console.warn('[sigur] department aggregation returned 0 employees; falling back to full employees endpoint');
-          employees = await this.getEmployees(undefined, connection) as Record<string, unknown>[];
+      // Медленный fallback: пагинация по каждому отделу
+      if (employees.length === 0) {
+        const departmentIds = await this.getDepartmentIds(connection);
+        if (departmentIds.length > 0) {
+          console.log(`[sigur] building employee cache from ${departmentIds.length} departments`);
+          employees = await this.getEmployeesByDepartments(departmentIds, connection);
+        } else {
+          console.warn('[sigur] no departments found; employee cache will be empty');
         }
+      }
 
-        this.setEmployeeCache(employees, true);
-        console.log('[sigur] cached', employees.length, 'employees');
-        return employees;
-      })
-      .finally(() => {
-        this.employeeFetchPromise = null;
-      });
+      this.setEmployeeCache(employees, true);
+      console.log('[sigur] cached', employees.length, 'employees');
+      return employees;
+    })().finally(() => {
+      this.employeeFetchPromise = null;
+    });
 
     return this.employeeFetchPromise;
   }

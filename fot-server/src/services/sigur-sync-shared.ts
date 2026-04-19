@@ -573,6 +573,7 @@ export async function getWhitelistedSigurEmployees(
   }
 
   try {
+    send({ type: 'events_preparing', phase: 'sigur_employees_all' });
     send({
       type: 'employees_progress',
       current: 0,
@@ -604,6 +605,7 @@ export async function getWhitelistedSigurEmployees(
     console.warn('[syncEmployees] full employee fetch failed, falling back to department scan:', (error as Error).message);
   }
 
+  send({ type: 'events_preparing', phase: 'sigur_employees_fallback' });
   send({
     type: 'employees_progress',
     current: 0,
