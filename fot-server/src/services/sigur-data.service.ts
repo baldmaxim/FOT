@@ -4,6 +4,7 @@ export class SigurDataService extends SigurServiceBase {
   private employeeCache: { data: Record<string, unknown>[]; fetchedAt: number; complete: boolean } | null = null;
   private employeeFetchPromise: Promise<Record<string, unknown>[]> | null = null;
   private employeeCountCache: { map: Map<number, number>; fetchedAt: number } | null = null;
+  private employeeCountFetchPromise: Promise<Map<number, number>> | null = null;
   private departmentListCache: { data: Record<string, unknown>[]; fetchedAt: number } | null = null;
   private departmentFetchPromise: Promise<Record<string, unknown>[]> | null = null;
   private departmentCache: { map: Map<number, string>; fetchedAt: number } | null = null;
@@ -19,6 +20,7 @@ export class SigurDataService extends SigurServiceBase {
     this.employeeCache = null;
     this.employeeFetchPromise = null;
     this.employeeCountCache = null;
+    this.employeeCountFetchPromise = null;
   }
 
   private setEmployeeCache(data: Record<string, unknown>[], complete: boolean): void {
@@ -34,6 +36,7 @@ export class SigurDataService extends SigurServiceBase {
     this.departmentFetchPromise = null;
     this.departmentCache = null;
     this.employeeCountCache = null;
+    this.employeeCountFetchPromise = null;
   }
 
   invalidateAccessPointCache(): void {
@@ -80,7 +83,12 @@ export class SigurDataService extends SigurServiceBase {
   }
 
   async getEmployees(filters?: Record<string, any>, connection?: ConnectionType) {
-    return this.fetchAllPaginated('/api/v1/employees', filters, connection, 3000);
+    return this.fetchAllPaginated(
+      '/api/v1/employees',
+      { excludeFields: 'photo', ...(filters || {}) },
+      connection,
+      3000,
+    );
   }
 
   async getEmployeesPage(
@@ -89,6 +97,7 @@ export class SigurDataService extends SigurServiceBase {
     connection?: ConnectionType,
   ): Promise<Record<string, unknown>[]> {
     const params = {
+      excludeFields: 'photo',
       ...(filters || {}),
       limit: Math.max(1, Math.min(3000, pagination?.limit || 200)),
       offset: Math.max(0, pagination?.offset || 0),
@@ -135,10 +144,21 @@ export class SigurDataService extends SigurServiceBase {
       return new Map(this.employeeCountCache.map);
     }
 
-    const rawCounts = await this.getEmployeesCount({ groupBy: 'departmentId' }, connection);
-    const map = this.normalizeEmployeeCountGroups(rawCounts);
-    this.employeeCountCache = { map: new Map(map), fetchedAt: Date.now() };
-    return map;
+    if (this.employeeCountFetchPromise) {
+      return new Map(await this.employeeCountFetchPromise);
+    }
+
+    this.employeeCountFetchPromise = this.getEmployeesCount({ groupBy: 'departmentId' }, connection)
+      .then(rawCounts => {
+        const map = this.normalizeEmployeeCountGroups(rawCounts);
+        this.employeeCountCache = { map: new Map(map), fetchedAt: Date.now() };
+        return map;
+      })
+      .finally(() => {
+        this.employeeCountFetchPromise = null;
+      });
+
+    return new Map(await this.employeeCountFetchPromise);
   }
 
   private async fetchEmployeesForDepartment(
@@ -158,7 +178,7 @@ export class SigurDataService extends SigurServiceBase {
 
         return await this.fetchAllPaginated<Record<string, unknown>>(
           '/api/v1/employees',
-          { departmentId },
+          { departmentId, excludeFields: 'photo' },
           connection,
           pageSize,
         );
@@ -229,7 +249,11 @@ export class SigurDataService extends SigurServiceBase {
   }
 
   async getEmployeesLimited(maxItems = 3000, connection?: ConnectionType) {
-    const response = await this.request<any>('/api/v1/employees', { limit: maxItems }, connection);
+    const response = await this.request<any>(
+      '/api/v1/employees',
+      { limit: maxItems, excludeFields: 'photo' },
+      connection,
+    );
     const items = response?.data || response || [];
     return Array.isArray(items) ? items : [];
   }

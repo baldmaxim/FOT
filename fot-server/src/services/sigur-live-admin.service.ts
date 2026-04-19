@@ -734,14 +734,18 @@ async function searchEmployeesDirectly(
 }
 
 export async function listSigurDepartmentsTree(connection?: ConnectionType): Promise<ISigurDepartmentNode[]> {
-  const departments = await getNormalizedDepartments(connection);
-  const directCounts = await getDirectDepartmentCounts(connection);
+  const [departments, directCounts] = await Promise.all([
+    getNormalizedDepartments(connection),
+    getDirectDepartmentCounts(connection),
+  ]);
   return buildSigurDepartmentTreeWithCounts(departments, directCounts, true);
 }
 
 export async function listSigurDepartmentCounts(connection?: ConnectionType): Promise<ISigurDepartmentCountsResult> {
-  const departments = await getNormalizedDepartments(connection);
-  const directCounts = await getDirectDepartmentCounts(connection);
+  const [departments, directCounts] = await Promise.all([
+    getNormalizedDepartments(connection),
+    getDirectDepartmentCounts(connection),
+  ]);
   const tree = buildSigurDepartmentTreeWithCounts(departments, directCounts, true);
 
   return {

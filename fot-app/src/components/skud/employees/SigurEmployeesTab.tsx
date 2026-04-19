@@ -16,7 +16,6 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import type { SigurDepartmentCountsResult } from '../../../services/sigurAdminService';
 import { sigurAdminService } from '../../../services/sigurAdminService';
 import { useIsMobile } from '../../../hooks/useIsMobile';
 import type { SigurDepartmentNode, SigurEmployeeCardAccessStatus, SigurEmployeeSummary } from '../../../types';
@@ -121,26 +120,6 @@ const getEmployeeStatusPresentation = (
 
   return { text: 'Нет данных', tone: 'muted' };
 };
-
-const areDepartmentCountsLoaded = (nodes: SigurDepartmentNode[]): boolean => (
-  nodes.every(node => (
-    node.employeeCountLoaded !== false
-    && areDepartmentCountsLoaded(node.children || [])
-  ))
-);
-
-const applyDepartmentCounts = (
-  nodes: SigurDepartmentNode[],
-  counts: Record<string, number>,
-  countsComplete: boolean,
-): SigurDepartmentNode[] => (
-  nodes.map(node => ({
-    ...node,
-    employeeCount: counts[String(node.id)] ?? node.employeeCount ?? 0,
-    employeeCountLoaded: countsComplete,
-    children: node.children ? applyDepartmentCounts(node.children, counts, countsComplete) : [],
-  }))
-);
 
 const flattenDepartments = (
   nodes: SigurDepartmentNode[],
@@ -399,15 +378,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
     queryFn: () => sigurAdminService.getDepartmentsTree(),
   });
 
-  const departmentCountsQuery = useQuery({
-    queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'department-counts'],
-    queryFn: () => sigurAdminService.getDepartmentCounts(),
-    refetchInterval: query => {
-      const payload = query.state.data as SigurDepartmentCountsResult | undefined;
-      return payload?.loading ? 3000 : false;
-    },
-  });
-
   const positionsQuery = useQuery({
     queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'positions'],
     queryFn: () => sigurAdminService.getPositions(),
@@ -432,12 +402,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
     placeholderData: previousData => previousData,
   });
 
-  const rawDepartments = departmentsQuery.data || [];
-  const departmentCounts = departmentCountsQuery.data;
-  const departments = useMemo(
-    () => applyDepartmentCounts(rawDepartments, departmentCounts?.byDepartment || {}, departmentCounts?.complete === true),
-    [departmentCounts?.byDepartment, departmentCounts?.complete, rawDepartments],
-  );
+  const departments = departmentsQuery.data || [];
   const departmentNodeMap = useMemo(() => buildDepartmentNodeMap(departments), [departments]);
   const departmentOptions = useMemo(() => flattenDepartments(departments), [departments]);
   const positions = positionsQuery.data || [];
@@ -467,7 +432,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
     [departments, visibleDepartmentIds],
   );
   const effectiveExpandedIds = departmentSearch.trim() ? searchExpandedIds : expandedIds;
-  const departmentCountsLoaded = useMemo(() => areDepartmentCountsLoaded(departments), [departments]);
   const totalEmployeesCount = useMemo(
     () => departments.reduce((sum, department) => sum + department.employeeCount, 0),
     [departments],
@@ -477,7 +441,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
   const selectedDepartmentTotal = employeesPayload?.meta.total
     ?? (isGlobalSearchMode || selectedDeptId != null ? employees.length : totalEmployeesCount);
   const totalEmployeePages = Math.max(1, Math.ceil(Math.max(1, selectedDepartmentTotal) / EMPLOYEES_PAGE_SIZE));
-  const loadError = departmentsQuery.error || departmentCountsQuery.error || employeesQuery.error || null;
+  const loadError = departmentsQuery.error || employeesQuery.error || null;
   const loadErrorMessage = loadError instanceof Error
     ? loadError.message
     : 'Не удалось загрузить live-данные Sigur';
@@ -608,7 +572,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
     setError('');
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'departments-tree'] }),
-      queryClient.invalidateQueries({ queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'department-counts'] }),
       queryClient.invalidateQueries({ queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'employees'] }),
       queryClient.invalidateQueries({ queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'positions'] }),
     ]);
@@ -974,9 +937,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
         >
           <Users size={16} className="ep-dept-icon" />
           <span className="ep-dept-name">Все отделы</span>
-          <span className="ep-dept-count">
-            {departmentCountsLoaded ? totalEmployeesCount : (totalEmployeesCount > 0 ? `${totalEmployeesCount}+` : '…')}
-          </span>
+          <span className="ep-dept-count">{totalEmployeesCount}</span>
         </div>
         {departments.map(node => (
           <DepartmentTreeNode
