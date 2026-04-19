@@ -133,6 +133,36 @@ const loadEmployeeScheduleRows = async (employeeId: number): Promise<EmployeeSch
   return (data || []) as EmployeeScheduleRow[];
 };
 
+const loadEmployeeScheduleRowsBatch = async (
+  employeeIds: number[],
+): Promise<Map<number, EmployeeScheduleRow[]>> => {
+  const result = new Map<number, EmployeeScheduleRow[]>();
+  if (!employeeIds.length) return result;
+  for (const id of employeeIds) result.set(id, []);
+
+  const { data, error } = await supabase
+    .from('employee_schedule_assignments')
+    .select('id, employee_id, schedule_id, effective_from, effective_to')
+    .in('employee_id', employeeIds)
+    .order('effective_from', { ascending: true });
+
+  if (error) throw error;
+
+  for (const row of data || []) {
+    const employeeId = Number((row as { employee_id?: unknown }).employee_id);
+    if (!Number.isFinite(employeeId)) continue;
+    const bucket = result.get(employeeId);
+    if (!bucket) continue;
+    bucket.push({
+      id: (row as EmployeeScheduleRow).id,
+      schedule_id: (row as EmployeeScheduleRow).schedule_id,
+      effective_from: (row as EmployeeScheduleRow).effective_from,
+      effective_to: (row as EmployeeScheduleRow).effective_to,
+    });
+  }
+  return result;
+};
+
 const loadObjectScheduleRows = async (objectId: string): Promise<ObjectScheduleRow[]> => {
   const { data, error } = await supabase
     .from('object_schedule_assignments')
@@ -150,8 +180,9 @@ const assignEmployeeSchedule = async (
   effectiveFrom: string,
   createdBy: number | null,
   effectiveTo?: string | null,
+  preloadedRows?: EmployeeScheduleRow[],
 ): Promise<unknown> => {
-  const rows = await loadEmployeeScheduleRows(employeeId);
+  const rows = preloadedRows ?? await loadEmployeeScheduleRows(employeeId);
   const nowIso = new Date().toISOString();
   const activeAtDate = rows.find(row => row.effective_from <= effectiveFrom && (row.effective_to === null || row.effective_to >= effectiveFrom)) || null;
   const nextAssignment = rows.find(row => row.effective_from > effectiveFrom) || null;
@@ -201,8 +232,9 @@ const assignEmployeeSchedule = async (
 const removeEmployeeSchedule = async (
   employeeId: number,
   effectiveDate: string,
+  preloadedRows?: EmployeeScheduleRow[],
 ): Promise<boolean> => {
-  const rows = await loadEmployeeScheduleRows(employeeId);
+  const rows = preloadedRows ?? await loadEmployeeScheduleRows(employeeId);
   const nowIso = new Date().toISOString();
   const exactRow = rows.find(row => row.effective_from === effectiveDate) || null;
   if (exactRow) {
@@ -711,14 +743,17 @@ export const scheduleController = {
       let employeesUpdated = 0;
       const CHUNK_SIZE = 20;
 
+      const preloadedByEmployee = await loadEmployeeScheduleRowsBatch(employeeIds);
+
       for (let index = 0; index < employeeIds.length; index += CHUNK_SIZE) {
         const chunk = employeeIds.slice(index, index + CHUNK_SIZE);
         const results = await Promise.all(chunk.map(async (employeeId) => {
+          const preloaded = preloadedByEmployee.get(employeeId) ?? [];
           if (action === 'assign') {
-            await assignEmployeeSchedule(employeeId, scheduleId!, effectiveDate, req.user.employee_id);
+            await assignEmployeeSchedule(employeeId, scheduleId!, effectiveDate, req.user.employee_id, undefined, preloaded);
             return true;
           }
-          return removeEmployeeSchedule(employeeId, effectiveDate);
+          return removeEmployeeSchedule(employeeId, effectiveDate, preloaded);
         }));
         employeesUpdated += results.filter(Boolean).length;
       }

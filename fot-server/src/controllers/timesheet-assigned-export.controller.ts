@@ -4,7 +4,6 @@ import archiver from 'archiver';
 import { supabase } from '../config/database.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { resolveRequestDataScope, resolveManagedDepartmentIds } from '../services/data-scope.service.js';
-import { loadEmployeeAccessMap } from '../services/department-access.service.js';
 import {
   fetchTimesheetDataForDepartment,
   type TimesheetExportGrouping,
@@ -49,36 +48,45 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
     return { error: { status: 403, message: 'Недостаточно прав для экспорта назначенных' } };
   }
 
-  const { data: rawEmployees, error: employeesError } = await supabase
-    .from('employees')
-    .select('id, full_name, employment_status, is_archived')
-    .eq('employment_status', 'active')
-    .eq('is_archived', false);
-  if (employeesError) throw employeesError;
+  let accessQuery = supabase
+    .from('employee_department_access')
+    .select('employee_id, department_id, employees!inner(id, full_name, employment_status, is_archived)')
+    .eq('is_active', true)
+    .eq('employees.employment_status', 'active')
+    .eq('employees.is_archived', false);
 
-  const employeeIds = (rawEmployees || []).map(row => Number(row.id)).filter(Number.isFinite);
-  const accessMap = await loadEmployeeAccessMap(employeeIds);
-
-  let managedDepartmentIdsSet: Set<string> | null = null;
   if (scope === 'department') {
     const managed = await resolveManagedDepartmentIds(req);
-    managedDepartmentIdsSet = new Set(managed);
-    if (managedDepartmentIdsSet.size === 0) {
+    if (managed.length === 0) {
       return { error: { status: 403, message: 'Нет доступных отделов в области видимости' } };
+    }
+    accessQuery = accessQuery.in('department_id', managed);
+  }
+
+  const { data: accessRows, error: accessError } = await accessQuery;
+  if (accessError) throw accessError;
+
+  const byEmployee = new Map<number, { full_name: string; department_ids: string[] }>();
+  for (const row of accessRows || []) {
+    const id = Number((row as { employee_id?: unknown }).employee_id);
+    const departmentId = (row as { department_id?: unknown }).department_id;
+    const employeeRel = (row as { employees?: { full_name?: unknown } | Array<{ full_name?: unknown }> }).employees;
+    const employeeRow = Array.isArray(employeeRel) ? employeeRel[0] : employeeRel;
+    const fullName = String(employeeRow?.full_name ?? '').trim();
+    if (!Number.isFinite(id) || typeof departmentId !== 'string' || !departmentId.trim()) continue;
+    const entry = byEmployee.get(id);
+    if (entry) {
+      if (!entry.department_ids.includes(departmentId)) entry.department_ids.push(departmentId);
+    } else {
+      byEmployee.set(id, { full_name: fullName, department_ids: [departmentId] });
     }
   }
 
-  const employees: IAssignedEmployee[] = [];
-  for (const row of rawEmployees || []) {
-    const id = Number(row.id);
-    const fullName = String(row.full_name || '').trim();
-    const deptIds = accessMap.get(id) || [];
-    const filteredDeptIds = managedDepartmentIdsSet
-      ? deptIds.filter(dId => managedDepartmentIdsSet!.has(dId))
-      : deptIds;
-    if (filteredDeptIds.length === 0) continue;
-    employees.push({ id, full_name: fullName, department_ids: filteredDeptIds });
-  }
+  const employees: IAssignedEmployee[] = Array.from(byEmployee.entries()).map(([id, value]) => ({
+    id,
+    full_name: value.full_name,
+    department_ids: value.department_ids,
+  }));
 
   employees.sort((a, b) => a.full_name.localeCompare(b.full_name, 'ru'));
   return { employees, scope: scope as 'all' | 'department' };

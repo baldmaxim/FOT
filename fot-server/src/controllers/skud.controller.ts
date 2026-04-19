@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { z } from 'zod';
 import { supabase } from '../config/database.js';
 import { sigurService } from '../services/sigur.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
@@ -383,18 +384,29 @@ function filterDisciplineEmployeeSummaries(
   return filtered;
 }
 
+const dashboardStatsQuerySchema = z.object({
+  department_id: z.string().optional(),
+  period: z.enum(['today', 'week', 'month']).default('today'),
+  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+});
+
 const skudReadController = {
   /**
    * GET /api/skud/dashboard-stats?department_id=uuid&period=today|week|month
    */
   async getDashboardStats(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      const parsed = dashboardStatsQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        res.status(400).json({ success: false, error: 'Некорректные параметры запроса', details: parsed.error.flatten() });
+        return;
+      }
+      const { period, month } = parsed.data;
+
       const departmentId = await resolveScopedDepartmentId(
         req,
-        typeof req.query.department_id === 'string' ? req.query.department_id : null,
+        parsed.data.department_id ?? null,
       );
-      const period = (req.query.period as string) || 'today';
-      const month = typeof req.query.month === 'string' ? req.query.month : undefined;
 
       if (!departmentId) {
         res.status(400).json({ success: false, error: 'department_id обязателен' });

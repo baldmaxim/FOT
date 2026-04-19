@@ -9,6 +9,11 @@ import { normalizePersonName } from './sigur-sync-shared.js';
 import { invalidatePresenceCache } from './skud-presence.service.js';
 import { invalidateDashboardCache } from './skud-dashboard.service.js';
 import {
+  getEmployeeCache,
+  setEmployeeCache,
+  invalidatePresencePollingEmployeeCache,
+} from './presence-polling-cache.service.js';
+import {
   markPresencePollingCycleFinished,
   markPresencePollingCycleStarted,
   recordSigurMonitorFailure,
@@ -62,18 +67,13 @@ export class ManualSyncInProgressError extends Error {
   }
 }
 
-let employeeCache: {
-  byName: Map<string, { id: number }>;
-  bySigurId: Map<number, { id: number }>;
-  byUniqueName: Map<string, { id: number }>;
-  fetchedAt: number;
-} | null = null;
-
 interface EmployeeMaps {
   byName: Map<string, { id: number }>;
   bySigurId: Map<number, { id: number }>;
   byUniqueName: Map<string, { id: number }>;
 }
+
+export { invalidatePresencePollingEmployeeCache };
 
 type PollCheckpointSource = 'runtime_state' | 'stored_events' | 'fallback';
 
@@ -118,8 +118,9 @@ function parseStoredEventTimestamp(eventDate: string, eventTime: string): Date |
 }
 
 async function getEmployeeMaps(): Promise<EmployeeMaps> {
-  if (employeeCache && (Date.now() - employeeCache.fetchedAt) < EMPLOYEE_CACHE_TTL) {
-    return employeeCache;
+  const existing = getEmployeeCache();
+  if (existing && (Date.now() - existing.fetchedAt) < EMPLOYEE_CACHE_TTL) {
+    return existing;
   }
 
   const { data } = await supabase
@@ -147,9 +148,10 @@ async function getEmployeeMaps(): Promise<EmployeeMaps> {
     }
   }
 
-  employeeCache = { byName, bySigurId, byUniqueName, fetchedAt: Date.now() };
+  const next = { byName, bySigurId, byUniqueName, fetchedAt: Date.now() };
+  setEmployeeCache(next);
   console.log(`[presence-polling] cached ${byName.size} employees`);
-  return employeeCache;
+  return next;
 }
 
 async function getLatestStoredEventTimestamp(): Promise<Date | null> {
@@ -192,12 +194,16 @@ export async function resolvePollingWindow(now = new Date()): Promise<PollingWin
     }
   }
 
-  // Если checkpoint старше 12 часов — начинаем от начала сегодня
+  // Если checkpoint старше 72 часов — ограничиваем catch-up последними 72ч.
+  // Раньше было 12ч с ресетом на startOfLocalDay, что теряло события ночной смены
+  // после длительного простоя Sigur. Backfill дотянет всё, что окажется unmatched.
   const todayStart = startOfLocalDay(now);
-  if (checkpoint && (now.getTime() - checkpoint.getTime()) > 12 * 60 * 60 * 1000) {
+  const MAX_CATCHUP_MS = 72 * 60 * 60 * 1000;
+  if (checkpoint && (now.getTime() - checkpoint.getTime()) > MAX_CATCHUP_MS) {
     const gapMinutes = Math.round((now.getTime() - checkpoint.getTime()) / 60_000);
-    console.log(`[presence-polling] catch-up: gap ${gapMinutes}m (>12h), starting from today`);
-    checkpoint = todayStart;
+    const floor = new Date(now.getTime() - MAX_CATCHUP_MS);
+    console.log(`[presence-polling] catch-up: gap ${gapMinutes}m (>72h), clamping start to ${formatLocalDateTime(floor)}`);
+    checkpoint = floor;
     checkpointSource = 'fallback';
   }
 
@@ -341,7 +347,7 @@ export function resetPresencePollingStateForTests(): void {
     structureSyncLeaseHeartbeatStop();
     structureSyncLeaseHeartbeatStop = null;
   }
-  employeeCache = null;
+  invalidatePresencePollingEmployeeCache();
 }
 
 export async function pollEventsOnce(now = new Date()): Promise<void> {
@@ -364,7 +370,27 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       `[presence-polling] fetched=${rawEvents.length} source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime}`,
     );
 
-    const { byName, bySigurId, byUniqueName } = await getEmployeeMaps();
+    let maps = await getEmployeeMaps();
+
+    // Lazy-refresh: если среди событий есть неизвестный physicalPerson и кэшу > 30с —
+    // инвалидируем и перечитываем один раз за цикл. Нужно, чтобы первые события нового
+    // сотрудника сразу попадали с employee_id, а не ждали истечения 10-минутного TTL.
+    const hasUnknown = rawEvents.some(raw => {
+      const m = mapSigurEvent(raw as Record<string, unknown>);
+      if (!m || !m.physicalPerson) return false;
+      if (m.employeeId != null && maps.bySigurId.get(m.employeeId)) return false;
+      const nk = normalizePersonName(m.physicalPerson);
+      return !maps.byUniqueName.get(nk) && !maps.byName.get(nk);
+    });
+    if (hasUnknown) {
+      const cached = getEmployeeCache();
+      const cacheAgeMs = cached ? Date.now() - cached.fetchedAt : Number.POSITIVE_INFINITY;
+      if (cacheAgeMs > 30_000) {
+        invalidatePresencePollingEmployeeCache();
+        maps = await getEmployeeMaps();
+      }
+    }
+    const { byName, bySigurId, byUniqueName } = maps;
 
     // Дедупликация выполняется на уровне БД через UNIQUE (dedup_hash, event_date)
     // + upsert с ignoreDuplicates: true (ниже). Пред-проверка убрана, так как

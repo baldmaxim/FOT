@@ -11,6 +11,7 @@ import {
 import { employeeChangesService } from './employee-changes.service.js';
 import { employeeCache } from './employee-cache.service.js';
 import { assignEmployeesToArchiveDepartment } from './employee-archive-department.service.js';
+import { invalidatePresencePollingEmployeeCache } from './presence-polling-cache.service.js';
 
 // ─── Типы результатов ───
 
@@ -548,5 +549,12 @@ export async function syncEmployeesLogic(
   }
 
   console.log(`[syncEmployees] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${unmatchedList.length} unmatched, ${autoFired} auto-fired`);
+
+  // Сбрасываем локальный кэш presence-polling, чтобы первые события нового/изменённого
+  // сотрудника сразу привязывались к employee_id без ожидания TTL кэша (10 мин).
+  if (imported > 0 || updated > 0 || autoFired > 0) {
+    invalidatePresencePollingEmployeeCache();
+  }
+
   return { imported, updated, skipped, total: sigurEmployeesRaw.length, errors, unmatched: unmatchedList, auto_fired: autoFired };
 }

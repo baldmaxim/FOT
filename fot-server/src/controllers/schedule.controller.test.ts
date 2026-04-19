@@ -202,15 +202,13 @@ describe('scheduleController.bulkApplyToBrigades', () => {
           };
         }
 
-        const employeeId = getOperationArg(query, 'eq', 'employee_id');
-        if (employeeId === 101) {
-          return { data: [], error: null };
-        }
-        if (employeeId === 102) {
+        const batchIn = query.operations.find(op => op.method === 'in' && op.args[0] === 'employee_id');
+        if (batchIn) {
           return {
             data: [
               {
                 id: 'existing-102',
+                employee_id: 102,
                 schedule_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
                 effective_from: '2026-04-01',
                 effective_to: null,
@@ -282,12 +280,13 @@ describe('scheduleController.bulkApplyToBrigades', () => {
           return { data: { id: 'existing-201' }, error: null };
         }
 
-        const employeeId = getOperationArg(query, 'eq', 'employee_id');
-        if (employeeId === 201) {
+        const batchIn = query.operations.find(op => op.method === 'in' && op.args[0] === 'employee_id');
+        if (batchIn) {
           return {
             data: [
               {
                 id: 'existing-201',
+                employee_id: 201,
                 schedule_id: SCHEDULE_ID,
                 effective_from: '2026-04-01',
                 effective_to: null,
@@ -295,9 +294,6 @@ describe('scheduleController.bulkApplyToBrigades', () => {
             ],
             error: null,
           };
-        }
-        if (employeeId === 202) {
-          return { data: [], error: null };
         }
       }
 

@@ -3,7 +3,7 @@
  */
 import { supabase } from '../config/database.js';
 import { formatDateToISO } from '../utils/date.utils.js';
-import { collectDeptIds, getMonday, DAY_NAMES, countWorkingDays, getInternalAccessPoints } from './skud-shared.service.js';
+import { collectDeptIds, DAY_NAMES, countWorkingDays, getInternalAccessPoints } from './skud-shared.service.js';
 import { resolveSchedulesBulk, getEffectiveLateThreshold, getScheduleForDate, needsSkudCheck } from './schedule.service.js';
 import type {
   IDashboardStatsParams,
@@ -215,15 +215,20 @@ export async function getDashboardStats(
   // Даты
   const today = new Date();
   const todayStr = formatDateToISO(today);
-  const monday = getMonday(today);
-  const lastMonday = new Date(monday);
-  lastMonday.setDate(lastMonday.getDate() - 7);
-  const lastFriday = new Date(lastMonday);
-  lastFriday.setDate(lastFriday.getDate() + 4);
+  // Rolling 7-day окно недели: симметричные current/previous — сравнение и усреднения
+  // считаются на одинаковом количестве дней вне зависимости от текущего дня недели.
+  const weekEnd = new Date(today);
+  const weekStart = new Date(today);
+  weekStart.setDate(weekStart.getDate() - 6);
+  const prevWeekEnd = new Date(weekStart);
+  prevWeekEnd.setDate(prevWeekEnd.getDate() - 1);
+  const prevWeekStart = new Date(prevWeekEnd);
+  prevWeekStart.setDate(prevWeekStart.getDate() - 6);
 
-  const mondayStr = formatDateToISO(monday);
-  const lastMondayStr = formatDateToISO(lastMonday);
-  const lastFridayStr = formatDateToISO(lastFriday);
+  const weekStartStr = formatDateToISO(weekStart);
+  const weekEndStr = formatDateToISO(weekEnd);
+  const prevWeekStartStr = formatDateToISO(prevWeekStart);
+  const prevWeekEndStr = formatDateToISO(prevWeekEnd);
 
   // Месяц: если передан month=YYYY-MM, используем его; иначе текущий
   let targetMonthYear = today.getFullYear();
@@ -264,10 +269,10 @@ export async function getDashboardStats(
     prevPeriodStartStr = prevMonthStartStr;
     prevPeriodEndStr = prevMonthEndStr;
   } else if (period === 'week') {
-    periodStartStr = mondayStr;
-    periodEndStr = todayStr;
-    prevPeriodStartStr = lastMondayStr;
-    prevPeriodEndStr = lastFridayStr;
+    periodStartStr = weekStartStr;
+    periodEndStr = weekEndStr;
+    prevPeriodStartStr = prevWeekStartStr;
+    prevPeriodEndStr = prevWeekEndStr;
   } else {
     periodStartStr = todayStr;
     periodEndStr = todayStr;
@@ -275,14 +280,14 @@ export async function getDashboardStats(
     prevPeriodEndStr = yesterdayStr;
   }
 
-  const summaryStartDate = period === 'month' ? prevPeriodStartStr : period === 'week' ? lastMondayStr : yesterdayStr;
+  const summaryStartDate = period === 'month' ? prevPeriodStartStr : period === 'week' ? prevWeekStartStr : yesterdayStr;
   const summaryEndDate = period === 'month' && !isCurrentMonth ? periodEndStr : todayStr;
 
-  // 4 недели назад
-  const fourWeeksAgo = new Date(monday);
-  fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 21);
+  // 4 недели назад (rolling 28 дней) — для графика «средний приход по дням недели» на week-вкладке.
+  const fourWeeksAgo = new Date(today);
+  fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 27);
   const fourWeeksAgoStr = formatDateToISO(fourWeeksAgo);
-  const arrivalRangeStart = period === 'today' ? mondayStr : period === 'month' ? monthStartStr : fourWeeksAgoStr;
+  const arrivalRangeStart = period === 'today' ? weekStartStr : period === 'month' ? monthStartStr : fourWeeksAgoStr;
   const arrivalRangeEnd = period === 'month' ? periodEndStr : todayStr;
   const shouldFetchPeriodEvents = period !== 'today';
   const canReusePeriodEventsForArrival = shouldFetchPeriodEvents

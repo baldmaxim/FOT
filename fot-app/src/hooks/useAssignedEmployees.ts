@@ -7,4 +7,6 @@ export const useAssignedEmployees = (enabled = true) =>
     queryKey: ['assigned-employees'],
     queryFn: () => timesheetService.listAssignedEmployees(),
     enabled,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
   });

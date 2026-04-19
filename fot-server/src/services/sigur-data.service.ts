@@ -669,23 +669,40 @@ export class SigurDataService extends SigurServiceBase {
         `[sigur chunk] window ${chunkIndex}: ${chunkParams.startTime} -> ${chunkParams.endTime}`,
       );
 
-      try {
-        const chunkEvents = await this.fetchAllByLastId<T>(
-          '/api/v1/events',
-          chunkParams,
-          connection,
-          pageSize,
-        );
-        console.log(`[sigur chunk] window ${chunkIndex} got ${chunkEvents.length} events`);
-        allEvents.push(...chunkEvents);
-      } catch (error) {
-        // Частичный успех: одно окно упало (сеть/тайм-аут Sigur), остальные продолжаем.
-        // Пропущенные события дотянет presence-polling с 30-мин overlap или следующий ручной sync.
-        failedChunks++;
-        const message = error instanceof Error ? error.message : String(error);
-        console.warn(
-          `[sigur chunk] window ${chunkIndex} FAILED (${chunkParams.startTime} -> ${chunkParams.endTime}): ${message}`,
-        );
+      // Retry chunk'а с exponential backoff: сетевые флапы Sigur не должны терять
+      // целое 2-часовое окно событий. После 3-х неудач chunk пропускается, а
+      // backfill за 7 дней подхватит всё, что окажется unmatched.
+      const CHUNK_MAX_ATTEMPTS = 3;
+      const CHUNK_RETRY_BASE_MS = 500;
+      let chunkDone = false;
+      for (let attempt = 1; attempt <= CHUNK_MAX_ATTEMPTS && !chunkDone; attempt++) {
+        try {
+          const chunkEvents = await this.fetchAllByLastId<T>(
+            '/api/v1/events',
+            chunkParams,
+            connection,
+            pageSize,
+          );
+          console.log(
+            `[sigur chunk] window ${chunkIndex} attempt ${attempt} got ${chunkEvents.length} events`,
+          );
+          allEvents.push(...chunkEvents);
+          chunkDone = true;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (attempt < CHUNK_MAX_ATTEMPTS) {
+            const backoff = CHUNK_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+            console.warn(
+              `[sigur chunk] window ${chunkIndex} attempt ${attempt} failed: ${message}. Retrying in ${backoff}ms`,
+            );
+            await new Promise(resolve => setTimeout(resolve, backoff));
+          } else {
+            failedChunks++;
+            console.warn(
+              `[sigur chunk] window ${chunkIndex} FAILED permanently after ${attempt} attempts (${chunkParams.startTime} -> ${chunkParams.endTime}): ${message}`,
+            );
+          }
+        }
       }
 
       if (chunkEnd >= rangeEnd) break;

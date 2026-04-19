@@ -11,7 +11,13 @@ const presenceCache = cacheResponse(
 );
 
 const dashboardCache = cacheResponse(
-  (req) => `dashboard:${req.query.department_id}:${req.query.period}:${req.query.month || ''}`,
+  (req) => {
+    const period = ['today', 'week', 'month'].includes(req.query.period as string)
+      ? (req.query.period as string)
+      : 'today';
+    const month = typeof req.query.month === 'string' ? req.query.month : '';
+    return `dashboard:${req.query.department_id ?? 'all'}:${period}:${month}`;
+  },
   60_000,
 );
 
