@@ -108,8 +108,14 @@ export interface TimesheetResponse {
   calendar?: IProductionCalendarMonth | null;
 }
 
+export interface IAssignedEmployeeDepartment {
+  id: string;
+  name: string;
+}
+
 export interface IAssignedEmployeeSummary {
   id: number;
   full_name: string;
   department_count: number;
+  departments?: IAssignedEmployeeDepartment[];
 }

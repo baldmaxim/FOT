@@ -5,7 +5,6 @@ import { useSearchParams } from 'react-router-dom';
 import { TimesheetStats } from '../../components/timesheet/TimesheetStats';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { TimesheetTeamManagementModal } from '../../components/timesheet/TimesheetTeamManagementModal';
-import { EmployeeTimesheetView } from '../../components/timesheet/EmployeeTimesheetView';
 import { timesheetService } from '../../services/timesheetService';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -154,6 +153,7 @@ export const TimesheetPage: FC = () => {
   const queryView = searchParams.get('view');
   const queryMode = searchParams.get('mode');
   const queryAssignee = searchParams.get('assignee');
+  const queryAssignedDept = searchParams.get('dept');
   const canUseAssignedMode = hasPermission('timesheet.workflow.monitor') || hasPermission('timesheet.workflow.review');
   const timesheetMode: 'department' | 'assigned' = (queryMode === 'assigned' && canUseAssignedMode) ? 'assigned' : 'department';
   const selectedAssigneeId = useMemo(() => {
@@ -161,6 +161,7 @@ export const TimesheetPage: FC = () => {
     const parsed = Number.parseInt(queryAssignee || '', 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   }, [timesheetMode, queryAssignee]);
+  const assignedExpandedDeptId = timesheetMode === 'assigned' ? queryAssignedDept : null;
   const now = useMemo(() => new Date(), []);
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
@@ -255,14 +256,15 @@ export const TimesheetPage: FC = () => {
     if (resolvedMonthIndex === currentMonthIndex && currentDay > 15) return 'H2';
     return 'H1';
   }, [queryHalf, isPastMonth, resolvedMonthIndex, currentMonthIndex, currentDay]);
+  const activeGridDeptId = timesheetMode === 'assigned' ? assignedExpandedDeptId : effectiveSelectedDeptId;
   const timesheetQuery = useQuery({
-    queryKey: ['timesheet-page', monthStr, activeSegment, effectiveSelectedDeptId ?? 'none'],
+    queryKey: ['timesheet-page', monthStr, activeSegment, activeGridDeptId ?? 'none'],
     queryFn: () => timesheetService.getAll({
       month: monthStr,
-      department_id: effectiveSelectedDeptId || undefined,
+      department_id: activeGridDeptId || undefined,
       half: activeSegment,
     }),
-    enabled: timesheetMode === 'department' && Boolean(effectiveSelectedDeptId),
+    enabled: Boolean(activeGridDeptId),
     staleTime: 30_000,
     placeholderData: previousData => previousData,
   });
@@ -1093,6 +1095,7 @@ export const TimesheetPage: FC = () => {
       } else {
         next.delete('mode');
         next.delete('assignee');
+        next.delete('dept');
       }
       return next;
     });
@@ -1101,6 +1104,9 @@ export const TimesheetPage: FC = () => {
   const handleSelectAssignee = useCallback((employeeId: number | null) => {
     setAssigneeOpen(false);
     setAssigneeSearch('');
+    clearBulkState();
+    setPanelOpen(false);
+    setModalOpen(false);
     setSearchParams(current => {
       const next = new URLSearchParams(current);
       next.set('mode', 'assigned');
@@ -1109,9 +1115,25 @@ export const TimesheetPage: FC = () => {
       } else {
         next.delete('assignee');
       }
+      next.delete('dept');
       return next;
     });
-  }, [setSearchParams]);
+  }, [clearBulkState, setSearchParams]);
+
+  const handleAssignedDeptToggle = useCallback((departmentId: string) => {
+    clearBulkState();
+    setPanelOpen(false);
+    setModalOpen(false);
+    setSearchParams(current => {
+      const next = new URLSearchParams(current);
+      if (next.get('dept') === departmentId) {
+        next.delete('dept');
+      } else {
+        next.set('dept', departmentId);
+      }
+      return next;
+    });
+  }, [clearBulkState, setSearchParams]);
 
   const assignedEmployees = useMemo(() => assigneesQuery.data || [], [assigneesQuery.data]);
   const filteredAssignees = useMemo(() => {
@@ -1124,6 +1146,22 @@ export const TimesheetPage: FC = () => {
     if (!selectedAssigneeId) return null;
     return assignedEmployees.find(emp => emp.id === selectedAssigneeId) || null;
   }, [selectedAssigneeId, assignedEmployees]);
+
+  // Auto-expand the only department when assignee has exactly one
+  useEffect(() => {
+    if (timesheetMode !== 'assigned') return;
+    if (!selectedAssignee) return;
+    if (assignedExpandedDeptId) return;
+    const depts = selectedAssignee.departments || [];
+    if (depts.length === 1) {
+      const only = depts[0];
+      setSearchParams(current => {
+        const next = new URLSearchParams(current);
+        next.set('dept', only.id);
+        return next;
+      }, { replace: true });
+    }
+  }, [timesheetMode, selectedAssignee, assignedExpandedDeptId, setSearchParams]);
 
   const assigneeButtonLabel = selectedAssignee
     ? formatTimesheetEmployeeName(selectedAssignee.full_name)
@@ -1244,7 +1282,7 @@ export const TimesheetPage: FC = () => {
   const selectorControl = timesheetMode === 'assigned' ? assigneeControl : departmentControl;
   const isAssignedMode = timesheetMode === 'assigned';
 
-  const segmentControl = (!isAssignedMode && effectiveSelectedDeptId) ? (
+  const segmentControl = (isAssignedMode ? selectedAssigneeId : effectiveSelectedDeptId) ? (
     <section className="ts-half-switch">
       {(['H1', 'H2'] as TimesheetApprovalHalf[]).map(half => (
         <button
@@ -1269,7 +1307,7 @@ export const TimesheetPage: FC = () => {
       </button>
     </section>
   ) : null;
-  const viewControl = (!isAssignedMode && effectiveSelectedDeptId) ? (
+  const viewControl = (isAssignedMode ? selectedAssigneeId : effectiveSelectedDeptId) ? (
     <section className="ts-view-switch">
       <button
         type="button"
@@ -1433,17 +1471,81 @@ export const TimesheetPage: FC = () => {
       </div>
 
       {isAssignedMode ? (
-        selectedAssigneeId ? (
-          <EmployeeTimesheetView
-            employeeId={selectedAssigneeId}
-            year={year}
-            month={month}
-            canEdit={canEditTimesheet}
-          />
-        ) : (
+        !selectedAssigneeId ? (
           <div className="ts-table-container">
             <div className="ts-loading">Выберите назначенного сотрудника</div>
           </div>
+        ) : !selectedAssignee ? (
+          <div className="ts-table-container">
+            <div className="ts-loading">Загрузка...</div>
+          </div>
+        ) : (selectedAssignee.departments?.length ?? 0) === 0 ? (
+          <div className="ts-table-container">
+            <div className="ts-loading">У сотрудника нет доступных отделов</div>
+          </div>
+        ) : (
+          <section className="ts-accordion">
+            {(selectedAssignee.departments || []).map(dept => {
+              const expanded = assignedExpandedDeptId === dept.id;
+              return (
+                <article key={dept.id} className={`ts-accordion-item${expanded ? ' ts-accordion-item--expanded' : ''}`}>
+                  <button
+                    type="button"
+                    className="ts-accordion-summary"
+                    onClick={() => handleAssignedDeptToggle(dept.id)}
+                  >
+                    <div className="ts-accordion-main">
+                      <div className="ts-accordion-name">{dept.name}</div>
+                    </div>
+                  </button>
+
+                  {expanded && (
+                    <div className="ts-accordion-detail">
+                      {!isMobile && (
+                        <div className="ts-accordion-detail-bar">
+                          <TimesheetApprovalBar
+                            departmentId={dept.id}
+                            month={`${year}-${String(month).padStart(2, '0')}`}
+                            allowReview={false}
+                          />
+                        </div>
+                      )}
+                      {timesheetQuery.isLoading ? (
+                        <div className="ts-table-container">
+                          <div className="ts-loading">Загрузка табеля...</div>
+                        </div>
+                      ) : (
+                        <TimesheetGrid
+                          employees={employees}
+                          entries={entries}
+                          objectEntries={objectEntries}
+                          year={year}
+                          month={month}
+                          viewMode={viewMode}
+                          schedules={schedules}
+                          dailySchedules={dailySchedules}
+                          calendar={calendar}
+                          compact={isMobile}
+                          bulkEditMode={false}
+                          visibleDays={visibleDays}
+                          selectedCellKeys={bulkSelectedCellKeys}
+                          splitDayKeys={splitDayKeys}
+                          canManageTeam={false}
+                          pendingEmployeeId={teamPendingEmployeeId}
+                          onBulkSelectionChange={handleBulkSelectionChange}
+                          onBulkBlockedSelectionAttempt={handleBulkBlockedSelectionAttempt}
+                          onEmployeeClick={handleEmployeeClick}
+                          onExcludeEmployee={handleExcludeEmployeeFromDepartment}
+                          onDayClick={handleDayClick}
+                          onObjectDayClick={handleObjectDayClick}
+                        />
+                      )}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </section>
         )
       ) : (
       <>

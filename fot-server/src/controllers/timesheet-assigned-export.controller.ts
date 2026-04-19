@@ -190,18 +190,42 @@ async function buildFilesForAssignedEmployee(params: {
   return files;
 }
 
-/** GET /api/timesheet/assigned-employees → [{ id, full_name, department_count }] */
+/** GET /api/timesheet/assigned-employees → [{ id, full_name, department_count, departments: [{id, name}] }] */
 export async function listAssignedEmployees(req: AuthenticatedRequest, res: Response) {
   try {
     const result = await collectAssignedEmployees(req);
     if ('error' in result) {
       return res.status(result.error.status).json({ success: false, error: result.error.message });
     }
-    const data = result.employees.map(employee => ({
-      id: employee.id,
-      full_name: employee.full_name,
-      department_count: employee.department_ids.length,
-    }));
+
+    const allDeptIds = Array.from(new Set(result.employees.flatMap(employee => employee.department_ids)));
+    const deptNameById = new Map<string, string>();
+    if (allDeptIds.length > 0) {
+      const { data: depts, error: deptsError } = await supabase
+        .from('org_departments')
+        .select('id, name')
+        .in('id', allDeptIds);
+      if (deptsError) throw deptsError;
+      for (const row of depts || []) {
+        const id = (row as { id?: unknown }).id;
+        const name = (row as { name?: unknown }).name;
+        if (typeof id === 'string' && typeof name === 'string') {
+          deptNameById.set(id, name);
+        }
+      }
+    }
+
+    const data = result.employees.map(employee => {
+      const departments = employee.department_ids
+        .map(id => ({ id, name: deptNameById.get(id) || 'Отдел' }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+      return {
+        id: employee.id,
+        full_name: employee.full_name,
+        department_count: employee.department_ids.length,
+        departments,
+      };
+    });
     return res.json({ success: true, data });
   } catch (err) {
     console.error('timesheet.listAssignedEmployees error:', err);
