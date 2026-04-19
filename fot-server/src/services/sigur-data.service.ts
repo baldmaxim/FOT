@@ -653,6 +653,7 @@ export class SigurDataService extends SigurServiceBase {
     const rangeEnd = endDate.getTime();
     let chunkStart = rangeStart;
     let chunkIndex = 0;
+    let failedChunks = 0;
 
     while (chunkStart <= rangeEnd) {
       chunkIndex++;
@@ -668,15 +669,24 @@ export class SigurDataService extends SigurServiceBase {
         `[sigur chunk] window ${chunkIndex}: ${chunkParams.startTime} -> ${chunkParams.endTime}`,
       );
 
-      const chunkEvents = await this.fetchAllByLastId<T>(
-        '/api/v1/events',
-        chunkParams,
-        connection,
-        pageSize,
-      );
-
-      console.log(`[sigur chunk] window ${chunkIndex} got ${chunkEvents.length} events`);
-      allEvents.push(...chunkEvents);
+      try {
+        const chunkEvents = await this.fetchAllByLastId<T>(
+          '/api/v1/events',
+          chunkParams,
+          connection,
+          pageSize,
+        );
+        console.log(`[sigur chunk] window ${chunkIndex} got ${chunkEvents.length} events`);
+        allEvents.push(...chunkEvents);
+      } catch (error) {
+        // Частичный успех: одно окно упало (сеть/тайм-аут Sigur), остальные продолжаем.
+        // Пропущенные события дотянет presence-polling с 30-мин overlap или следующий ручной sync.
+        failedChunks++;
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[sigur chunk] window ${chunkIndex} FAILED (${chunkParams.startTime} -> ${chunkParams.endTime}): ${message}`,
+        );
+      }
 
       if (chunkEnd >= rangeEnd) break;
 
@@ -688,7 +698,8 @@ export class SigurDataService extends SigurServiceBase {
 
     const dedupedEvents = this.dedupeEventsById(allEvents);
     console.log(
-      `[sigur chunk] combined ${allEvents.length} events into ${dedupedEvents.length} unique events`,
+      `[sigur chunk] combined ${allEvents.length} events into ${dedupedEvents.length} unique events` +
+        (failedChunks > 0 ? ` (failed chunks: ${failedChunks}/${chunkIndex})` : ''),
     );
 
     return dedupedEvents;

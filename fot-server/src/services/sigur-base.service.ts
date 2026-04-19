@@ -360,6 +360,13 @@ export class SigurServiceBase {
     if (!(error instanceof AxiosError)) return false;
     if (error.response?.status && SIGUR_RETRY_STATUSES.has(error.response.status)) return true;
     if (error.code && SIGUR_RETRY_CODES.has(error.code)) return true;
+    // axios v1 иногда прячет сетевой код в cause-цепочке (например, `cause: Error { code: 'ETIMEDOUT' }`)
+    let cause: unknown = (error as { cause?: unknown }).cause;
+    for (let depth = 0; depth < 3 && cause; depth++) {
+      const code = (cause as { code?: unknown }).code;
+      if (typeof code === 'string' && SIGUR_RETRY_CODES.has(code)) return true;
+      cause = (cause as { cause?: unknown }).cause;
+    }
     return false;
   }
 

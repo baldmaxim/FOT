@@ -6,7 +6,6 @@ import {
 import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
 import { skudService } from '../../services/skudService';
-import { EmployeeSigurAccessPointsCard } from './EmployeeSigurAccessPointsCard';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 import { DateInput } from '../ui/DateInput';
 import type { SkudEvent } from '../../types';
@@ -15,7 +14,6 @@ import { triggerBlobDownload } from '../../utils/download';
 interface IEmployeeSkudSectionProps {
   employeeId: number;
   employeeName: string;
-  sigurEmployeeId?: number | null;
   departmentId?: string;
   onSync?: () => void;
   focusDate?: string | null;
@@ -227,16 +225,15 @@ const getNavLabel = (mode: ViewMode, viewDate: Date): string => {
 
 
 export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
-  employeeId, sigurEmployeeId, focusDate, focusKey, externalViewMode,
+  employeeId, focusDate, focusKey, externalViewMode,
   externalRangeStart, externalRangeEnd, externalViewDate,
 }) => {
-  const { canViewPage, canEditPage } = useAuth();
+  const { canViewPage } = useAuth();
   const {
     canOpenAccessPointMap,
     openAccessPointMap,
     accessPointMapModal,
   } = useAccessPointMapViewer(canViewPage('/skud-settings'));
-  const canEditSigurAccessPoints = canEditPage('/employees') || canEditPage('/staff-control') || canEditPage('/skud-settings');
   const [groups, setGroups] = useState<IDayGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -379,13 +376,6 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
 
   return (
     <div className="skud-section">
-      <EmployeeSigurAccessPointsCard
-        employeeId={employeeId}
-        sigurEmployeeId={sigurEmployeeId ?? null}
-        canEdit={canEditSigurAccessPoints}
-        selectedConnection="external"
-      />
-
       {/* Navigation Bar */}
       <div className="skud-nav-bar">
         {!externalViewMode && (

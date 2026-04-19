@@ -687,7 +687,6 @@ export const EmployeeCardPage: FC = () => {
             employeeId={employee.id}
             employeeName={employee.full_name}
             departmentId={employee.org_department_id || undefined}
-            sigurEmployeeId={employee.sigur_employee_id}
             onSync={reloadSkudEvents}
             focusDate={skudFocusDate}
             focusKey={skudFocusKey}
