@@ -64,6 +64,13 @@ router.post(
   timesheetController.exportAssigned
 );
 
+// GET /api/timesheet/assigned-employees
+router.get(
+  '/assigned-employees',
+  requireAnyPermission(['timesheet.workflow.monitor', 'timesheet.workflow.review']),
+  timesheetController.listAssignedEmployees
+);
+
 // POST /api/timesheet
 router.post(
   '/',

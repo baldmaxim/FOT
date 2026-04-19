@@ -1,0 +1,209 @@
+import { type FC, useState, useMemo, useEffect } from 'react';
+import { Download, Search, CheckSquare, Square } from 'lucide-react';
+import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
+import { timesheetService } from '../../services/timesheetService';
+import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
+
+type TimesheetDisplaySegment = 'H1' | 'H2' | 'FULL';
+type TimesheetGroupingMode = 'employees' | 'objects';
+
+const ASSIGNED_STORAGE_KEY = 'timesheet_export_assigned_employees_v1';
+
+const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+
+const loadStoredAssignedIds = (): Set<number> => {
+  try {
+    const raw = localStorage.getItem(ASSIGNED_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((value): value is number => typeof value === 'number'));
+  } catch {
+    return new Set();
+  }
+};
+
+const saveStoredAssignedIds = (ids: Set<number>): void => {
+  try {
+    localStorage.setItem(ASSIGNED_STORAGE_KEY, JSON.stringify([...ids]));
+  } catch {
+    // QuotaExceededError / SecurityError — игнорируем
+  }
+};
+
+interface IMassTimesheetExportAssignedTabProps {
+  year: number;
+  month: number;
+  activeSegment: TimesheetDisplaySegment;
+  groupBy: TimesheetGroupingMode;
+  exportAs1C: boolean;
+}
+
+export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabProps> = ({
+  year,
+  month,
+  activeSegment,
+  groupBy,
+  exportAs1C,
+}) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [checkedIds, setCheckedIds] = useState<Set<number>>(() => loadStoredAssignedIds());
+  const [exporting, setExporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const { data, isLoading, isError } = useAssignedEmployees();
+  const employees = useMemo(() => data ?? [], [data]);
+
+  const filteredEmployees = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return employees;
+    return employees.filter(employee =>
+      employee.full_name.toLowerCase().includes(q),
+    );
+  }, [employees, searchQuery]);
+
+  useEffect(() => {
+    saveStoredAssignedIds(checkedIds);
+  }, [checkedIds]);
+
+  useEffect(() => {
+    if (!data) return;
+    const validIds = new Set(data.map(employee => employee.id));
+    setCheckedIds(prev => {
+      let changed = false;
+      const next = new Set<number>();
+      for (const id of prev) {
+        if (validIds.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [data]);
+
+  const toggleEmployee = (id: number) => {
+    setCheckedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = () => setCheckedIds(prev => {
+    const next = new Set(prev);
+    for (const employee of filteredEmployees) next.add(employee.id);
+    return next;
+  });
+
+  const deselectAll = () => setCheckedIds(prev => {
+    const next = new Set(prev);
+    for (const employee of filteredEmployees) next.delete(employee.id);
+    return next;
+  });
+
+  const handleExport = async () => {
+    if (checkedIds.size === 0) return;
+    setExporting(true);
+    setError(null);
+    try {
+      const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+      const blob = await timesheetService.exportAssigned({
+        month: monthStr,
+        half: activeSegment,
+        group_by: groupBy,
+        export_as_1c: exportAs1C,
+        employee_ids: [...checkedIds],
+      });
+      const daysInMonth = new Date(year, month, 0).getDate();
+      const segmentSuffix = activeSegment === 'FULL'
+        ? ''
+        : `_${activeSegment === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
+      const templateSuffix = exportAs1C ? '_1С' : '';
+      const filename = `Назначенные${templateSuffix}_${MONTH_NAMES[month]}_${year}${segmentSuffix}_Руководитель.zip`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Assigned export error:', err);
+      setError('Ошибка экспорта назначенных. Попробуйте ещё раз.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="mte-controls">
+        <div className="mte-search-wrap">
+          <Search size={16} className="mte-search-icon" />
+          <input
+            className="mte-search"
+            placeholder="Поиск по ФИО..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+          />
+        </div>
+        <div className="mte-bulk-actions">
+          <button className="mte-link-btn" onClick={selectAll}>Выбрать всех</button>
+          <button className="mte-link-btn" onClick={deselectAll}>Снять все</button>
+          <span className="mte-selected-count">Выбрано {checkedIds.size}</span>
+        </div>
+      </div>
+
+      <div className="mte-tree-container">
+        {isLoading ? (
+          <div className="mte-loading">Загрузка назначенных сотрудников...</div>
+        ) : isError ? (
+          <div className="mte-error">Не удалось загрузить список назначенных</div>
+        ) : filteredEmployees.length === 0 ? (
+          <div className="mte-empty">
+            {employees.length === 0 ? 'Назначенных сотрудников нет' : 'Никого не найдено'}
+          </div>
+        ) : (
+          filteredEmployees.map(employee => {
+            const isChecked = checkedIds.has(employee.id);
+            const CheckIcon = isChecked ? CheckSquare : Square;
+            return (
+              <div
+                key={employee.id}
+                className={`mte-tree-row mte-assigned-row ${isChecked ? 'mte-tree-row--checked' : ''}`}
+              >
+                <span className="mte-tree-expand mte-tree-expand--placeholder" />
+                <button className="mte-tree-check" onClick={() => toggleEmployee(employee.id)}>
+                  <CheckIcon size={18} className={isChecked ? 'mte-check-active' : 'mte-check-inactive'} />
+                </button>
+                <span className="mte-tree-name" onClick={() => toggleEmployee(employee.id)}>
+                  {formatTimesheetEmployeeName(employee.full_name)}
+                </span>
+                <span className="mte-assigned-badge">{employee.department_count} отд.</span>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {exporting && (
+        <div className="mte-progress">
+          <div className="mte-spinner" />
+          <span>Генерация табелей ({checkedIds.size} сотр.)... Это может занять некоторое время</span>
+        </div>
+      )}
+
+      {error && <div className="mte-error">{error}</div>}
+
+      <div className="mte-footer">
+        <button
+          className="mte-export-btn"
+          onClick={handleExport}
+          disabled={exporting || checkedIds.size === 0}
+        >
+          <Download size={16} />
+          {exporting ? 'Выгрузить назначенных...' : `Выгрузить назначенных (${checkedIds.size})`}
+        </button>
+      </div>
+    </>
+  );
+};

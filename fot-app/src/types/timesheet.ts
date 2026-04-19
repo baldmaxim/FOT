@@ -107,3 +107,9 @@ export interface TimesheetResponse {
   daily_schedules?: Record<number, Record<string, IResolvedSchedule>>;
   calendar?: IProductionCalendarMonth | null;
 }
+
+export interface IAssignedEmployeeSummary {
+  id: number;
+  full_name: string;
+  department_count: number;
+}

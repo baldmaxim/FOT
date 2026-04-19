@@ -1,5 +1,6 @@
 import { apiClient, buildApiUrl, buildAuthHeaders } from '../api/client';
 import type {
+  IAssignedEmployeeSummary,
   ManagedDepartmentTimesheetSummary,
   TimesheetEntry,
   TimesheetObjectEntry,
@@ -181,6 +182,7 @@ export const timesheetService = {
     half?: TimesheetExportHalf;
     group_by?: TimesheetExportGrouping;
     export_as_1c?: boolean;
+    employee_ids?: number[];
   }): Promise<Blob> {
     const response = await fetch(
       buildApiUrl('/timesheet/export-assigned'),
@@ -196,6 +198,12 @@ export const timesheetService = {
     );
     if (!response.ok) throw new Error('Ошибка экспорта назначенных');
     return response.blob();
+  },
+
+  async listAssignedEmployees(): Promise<IAssignedEmployeeSummary[]> {
+    const res = await apiClient.get<ApiResponse<IAssignedEmployeeSummary[]>>('/timesheet/assigned-employees');
+    if (!res.data) throw new Error(res.error || 'Ошибка загрузки назначенных сотрудников');
+    return res.data;
   },
 
   async export(filters: TimesheetExportFilters): Promise<Blob> {

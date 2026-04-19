@@ -1,61 +1,16 @@
 import { type FC, useState, useMemo, useCallback, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, ChevronDown, ChevronRight as ChevronR, Download, Search, CheckSquare, Square } from 'lucide-react';
-import { useStructureTree } from '../../hooks/useStructure';
-import { timesheetService } from '../../services/timesheetService';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { getMonthLabel } from '../../utils/calendarUtils';
 import { formatTimesheetHalfLabel, type TimesheetApprovalHalf } from '../../utils/timesheetApprovalPeriod';
-import type { OrgDepartmentNode } from '../../types';
-import { filterDepartmentTree, sortDepartmentTree } from '../../utils/departmentUtils';
+import { MassTimesheetExportDepartmentsTab } from './MassTimesheetExportDepartmentsTab';
+import { MassTimesheetExportAssignedTab } from './MassTimesheetExportAssignedTab';
 import './MassTimesheetExportPage.css';
 
 type TimesheetDisplaySegment = TimesheetApprovalHalf | 'FULL';
 type TimesheetGroupingMode = 'employees' | 'objects';
-type TimesheetExportPresentation = 'hr' | 'manager';
+type ExportTab = 'departments' | 'assigned';
 
-const collectAllIds = (nodes: OrgDepartmentNode[]): string[] => {
-  const ids: string[] = [];
-  for (const n of nodes) {
-    ids.push(n.id);
-    if (n.children?.length) ids.push(...collectAllIds(n.children));
-  }
-  return ids;
-};
-
-const collectBrigadeIds = (nodes: OrgDepartmentNode[]): string[] => {
-  const ids: string[] = [];
-  for (const node of nodes) {
-    if (node.name.toLowerCase().startsWith('бр.')) {
-      ids.push(node.id);
-    }
-    if (node.children?.length) {
-      ids.push(...collectBrigadeIds(node.children));
-    }
-  }
-  return ids;
-};
-const EMPTY_DEPARTMENTS: OrgDepartmentNode[] = [];
-
-const DEPARTMENTS_STORAGE_KEY = 'timesheet_export_departments_v1';
-
-const loadStoredDepartmentIds = (): Set<string> => {
-  try {
-    const raw = localStorage.getItem(DEPARTMENTS_STORAGE_KEY);
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return new Set();
-    return new Set(parsed.filter((value): value is string => typeof value === 'string'));
-  } catch {
-    return new Set();
-  }
-};
-
-const saveStoredDepartmentIds = (ids: Set<string>): void => {
-  try {
-    localStorage.setItem(DEPARTMENTS_STORAGE_KEY, JSON.stringify([...ids]));
-  } catch {
-    // QuotaExceededError / SecurityError — игнорируем
-  }
-};
+const ACTIVE_TAB_STORAGE_KEY = 'timesheet_export_active_tab_v1';
 
 const toMonthIndex = (year: number, month: number): number => year * 12 + month - 1;
 
@@ -71,60 +26,22 @@ const resolveDefaultSegment = (year: number, month: number, now: Date): Timeshee
   return 'H1';
 };
 
-interface IDeptTreeNodeProps {
-  node: OrgDepartmentNode;
-  checkedIds: Set<string>;
-  onToggle: (ids: string[], checked: boolean) => void;
-  expandedIds: Set<string>;
-  onToggleExpand: (id: string) => void;
-}
+const loadStoredActiveTab = (): ExportTab => {
+  try {
+    const raw = localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+    if (raw === 'departments' || raw === 'assigned') return raw;
+  } catch {
+    // ignore
+  }
+  return 'departments';
+};
 
-const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expandedIds, onToggleExpand }) => {
-  const isChecked = checkedIds.has(node.id);
-  const hasChildren = node.children && node.children.length > 0;
-  const isExpanded = expandedIds.has(node.id);
-  const isBrigade = node.name.toLowerCase().startsWith('бр.');
-
-  const handleCheck = () => {
-    onToggle([node.id], !isChecked);
-  };
-
-  const CheckIcon = isChecked ? CheckSquare : Square;
-
-  return (
-    <div className="mte-tree-node">
-      <div className={`mte-tree-row ${isChecked ? 'mte-tree-row--checked' : ''}`}>
-        {hasChildren ? (
-          <button className="mte-tree-expand" onClick={() => onToggleExpand(node.id)}>
-            {isExpanded ? <ChevronDown size={14} /> : <ChevronR size={14} />}
-          </button>
-        ) : (
-          <span className="mte-tree-expand mte-tree-expand--placeholder" />
-        )}
-        <button className="mte-tree-check" onClick={handleCheck}>
-          <CheckIcon size={18} className={isChecked ? 'mte-check-active' : 'mte-check-inactive'} />
-        </button>
-        <span className="mte-tree-name" onClick={handleCheck}>
-          {node.name}
-          {isBrigade && <span className="mte-badge-brigade">бр.</span>}
-        </span>
-      </div>
-      {hasChildren && isExpanded && (
-        <div className="mte-tree-children">
-          {node.children.map(c => (
-            <DeptTreeNode
-              key={c.id}
-              node={c}
-              checkedIds={checkedIds}
-              onToggle={onToggle}
-              expandedIds={expandedIds}
-              onToggleExpand={onToggleExpand}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
+const saveStoredActiveTab = (tab: ExportTab): void => {
+  try {
+    localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, tab);
+  } catch {
+    // ignore
+  }
 };
 
 export const MassTimesheetExportPage: FC = () => {
@@ -134,27 +51,8 @@ export const MassTimesheetExportPage: FC = () => {
   const [segmentOverride, setSegmentOverride] = useState<TimesheetDisplaySegment | null>(null);
   const [groupBy, setGroupBy] = useState<TimesheetGroupingMode>('employees');
   const [exportAs1C, setExportAs1C] = useState(false);
-  const [presentation, setPresentation] = useState<TimesheetExportPresentation>('hr');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [checkedIds, setCheckedIds] = useState<Set<string>>(() => loadStoredDepartmentIds());
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const [exporting, setExporting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<ExportTab>(() => loadStoredActiveTab());
 
-  const { data: structure, isLoading } = useStructureTree();
-  const departments = structure?.departments ?? EMPTY_DEPARTMENTS;
-  const sortedDepartments = useMemo(
-    () => sortDepartmentTree(departments),
-    [departments],
-  );
-
-  const filteredDepts = useMemo(
-    () => filterDepartmentTree(sortedDepartments, searchQuery.toLowerCase().trim()),
-    [sortedDepartments, searchQuery]
-  );
-
-  const filteredIds = useMemo(() => collectAllIds(filteredDepts), [filteredDepts]);
-  const filteredBrigadeIds = useMemo(() => collectBrigadeIds(filteredDepts), [filteredDepts]);
   const activeSegment = useMemo<TimesheetDisplaySegment>(
     () => segmentOverride ?? resolveDefaultSegment(year, month, now),
     [segmentOverride, year, month, now],
@@ -165,23 +63,8 @@ export const MassTimesheetExportPage: FC = () => {
   }, [year, month]);
 
   useEffect(() => {
-    saveStoredDepartmentIds(checkedIds);
-  }, [checkedIds]);
-
-  const allStructureIds = useMemo(() => collectAllIds(sortedDepartments), [sortedDepartments]);
-  useEffect(() => {
-    if (!structure || allStructureIds.length === 0) return;
-    setCheckedIds(prev => {
-      const validIds = new Set(allStructureIds);
-      let changed = false;
-      const next = new Set<string>();
-      for (const id of prev) {
-        if (validIds.has(id)) next.add(id);
-        else changed = true;
-      }
-      return changed ? next : prev;
-    });
-  }, [structure, allStructureIds]);
+    saveStoredActiveTab(activeTab);
+  }, [activeTab]);
 
   const prevMonth = useCallback(() => {
     if (month === 1) { setMonth(12); setYear(y => y - 1); }
@@ -193,120 +76,9 @@ export const MassTimesheetExportPage: FC = () => {
     else setMonth(m => m + 1);
   }, [month]);
 
-  const handleToggle = useCallback((ids: string[], checked: boolean) => {
-    setCheckedIds(prev => {
-      const next = new Set(prev);
-      for (const id of ids) {
-        if (checked) next.add(id); else next.delete(id);
-      }
-      return next;
-    });
-  }, []);
-
-  const handleToggleExpand = useCallback((id: string) => {
-    setExpandedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }, []);
   const handleSegmentChange = useCallback((segment: TimesheetDisplaySegment) => {
     setSegmentOverride(segment);
   }, []);
-
-  const selectAll = () => setCheckedIds(prev => {
-    const next = new Set(prev);
-    for (const id of filteredIds) next.add(id);
-    return next;
-  });
-  const selectBrigades = () => setCheckedIds(prev => {
-    const next = new Set(prev);
-    for (const id of filteredBrigadeIds) next.add(id);
-    return next;
-  });
-  const deselectAll = () => setCheckedIds(prev => {
-    const next = new Set(prev);
-    for (const id of filteredIds) next.delete(id);
-    return next;
-  });
-
-  // Собираем только leaf-отделы (без детей) или все отмеченные
-  const selectedDeptIds = useMemo(() => {
-    return [...checkedIds];
-  }, [checkedIds]);
-
-  const handleExportAssigned = async () => {
-    setExporting(true);
-    setError(null);
-    try {
-      const monthStr = `${year}-${String(month).padStart(2, '0')}`;
-      const blob = await timesheetService.exportAssigned({
-        month: monthStr,
-        half: activeSegment,
-        group_by: groupBy,
-        export_as_1c: exportAs1C,
-      });
-      const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
-      const daysInMonth = new Date(year, month, 0).getDate();
-      const segmentSuffix = activeSegment === 'FULL'
-        ? ''
-        : `_${activeSegment === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
-      const templateSuffix = exportAs1C ? '_1С' : '';
-      const filename = `Назначенные${templateSuffix}_${MONTH_NAMES[month]}_${year}${segmentSuffix}_Руководитель.zip`;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Assigned export error:', err);
-      setError('Ошибка экспорта назначенных. Попробуйте ещё раз.');
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const handleExport = async (presentationOverride?: TimesheetExportPresentation) => {
-    if (selectedDeptIds.length === 0) return;
-    const effectivePresentation = presentationOverride ?? presentation;
-    setPresentation(effectivePresentation);
-    setExporting(true);
-    setError(null);
-    try {
-      const monthStr = `${year}-${String(month).padStart(2, '0')}`;
-      const blob = await timesheetService.exportMass({
-        month: monthStr,
-        department_ids: selectedDeptIds,
-        half: activeSegment,
-        group_by: groupBy,
-        presentation: effectivePresentation,
-        export_as_1c: exportAs1C,
-      });
-      const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
-      const daysInMonth = new Date(year, month, 0).getDate();
-      const segmentSuffix = activeSegment === 'FULL'
-        ? ''
-        : `_${activeSegment === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
-      const groupingSuffix = groupBy === 'objects' ? '_по_объектам' : '';
-      const templateSuffix = exportAs1C ? '_1С' : '';
-      const presentationSuffix = effectivePresentation === 'manager' ? '_Руководитель' : '';
-      const filename = `Табели${groupingSuffix}${templateSuffix}_${MONTH_NAMES[month]}_${year}${segmentSuffix}${presentationSuffix}.zip`;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Mass export error:', err);
-      setError('Ошибка экспорта. Попробуйте ещё раз.');
-    } finally {
-      setExporting(false);
-    }
-  };
 
   return (
     <div className="mte-page">
@@ -381,86 +153,45 @@ export const MassTimesheetExportPage: FC = () => {
         </label>
       </section>
 
+      <div className="mte-tabs" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'departments'}
+          className={`mte-tab-button ${activeTab === 'departments' ? 'mte-tab-button--active' : ''}`}
+          onClick={() => setActiveTab('departments')}
+        >
+          По отделам
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'assigned'}
+          className={`mte-tab-button ${activeTab === 'assigned' ? 'mte-tab-button--active' : ''}`}
+          onClick={() => setActiveTab('assigned')}
+        >
+          Назначенные
+        </button>
+      </div>
+
       <div className="mte-body">
-        <div className="mte-controls">
-          <div className="mte-search-wrap">
-            <Search size={16} className="mte-search-icon" />
-            <input
-              className="mte-search"
-              placeholder="Поиск отдела..."
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-            />
-          </div>
-          <div className="mte-bulk-actions">
-            <button className="mte-link-btn" onClick={selectAll}>Выбрать все</button>
-            <button className="mte-link-btn" onClick={selectBrigades}>Выбрать бр.</button>
-            <button className="mte-link-btn" onClick={deselectAll}>Снять все</button>
-            <span className="mte-selected-count">
-              Выбрано {checkedIds.size}
-            </span>
-          </div>
-        </div>
-
-        <div className="mte-tree-container">
-          {isLoading ? (
-            <div className="mte-loading">Загрузка отделов...</div>
-          ) : filteredDepts.length === 0 ? (
-            <div className="mte-empty">Отделы не найдены</div>
-          ) : (
-            filteredDepts.map(d => (
-              <DeptTreeNode
-                key={d.id}
-                node={d}
-                checkedIds={checkedIds}
-                onToggle={handleToggle}
-                expandedIds={expandedIds}
-                onToggleExpand={handleToggleExpand}
-              />
-            ))
-          )}
-        </div>
-
-        {exporting && (
-          <div className="mte-progress">
-            <div className="mte-spinner" />
-            <span>Генерация табелей ({checkedIds.size} отд.)... Это может занять некоторое время</span>
-          </div>
+        {activeTab === 'departments' ? (
+          <MassTimesheetExportDepartmentsTab
+            year={year}
+            month={month}
+            activeSegment={activeSegment}
+            groupBy={groupBy}
+            exportAs1C={exportAs1C}
+          />
+        ) : (
+          <MassTimesheetExportAssignedTab
+            year={year}
+            month={month}
+            activeSegment={activeSegment}
+            groupBy={groupBy}
+            exportAs1C={exportAs1C}
+          />
         )}
-
-        {error && (
-          <div className="mte-error">{error}</div>
-        )}
-
-        <div className="mte-footer">
-          <button
-            className={`mte-export-btn ${presentation === 'hr' ? 'mte-export-btn--active' : ''}`}
-            onClick={() => handleExport('hr')}
-            disabled={exporting || checkedIds.size === 0}
-          >
-            <Download size={16} />
-            {exporting && presentation === 'hr' ? 'Выгрузить Факт...' : `Выгрузить Факт (${checkedIds.size})`}
-          </button>
-          <button
-            className={`mte-export-btn mte-export-btn--secondary ${presentation === 'manager' ? 'mte-export-btn--active' : ''}`}
-            onClick={() => handleExport('manager')}
-            disabled={exporting || checkedIds.size === 0}
-          >
-            <Download size={16} />
-            {exporting && presentation === 'manager'
-              ? 'Выгрузить урезанный...'
-              : `Выгрузить урезанный (${checkedIds.size})`}
-          </button>
-          <button
-            className="mte-export-btn mte-export-btn--secondary"
-            onClick={handleExportAssigned}
-            disabled={exporting}
-            title="Выгружает табели всех сотрудников с многоотдельными назначениями — один архив с вложенными архивами по каждому назначенному"
-          >
-            <Download size={16} />
-            {exporting ? 'Выгрузить назначенных...' : 'Выгрузить назначенных'}
-          </button>
-        </div>
       </div>
     </div>
   );

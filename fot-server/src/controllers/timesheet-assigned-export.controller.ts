@@ -40,6 +40,50 @@ interface IAssignedEmployee {
   department_ids: string[];
 }
 
+async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
+  employees: IAssignedEmployee[];
+  scope: 'all' | 'department';
+} | { error: { status: number; message: string } }> {
+  const scope = await resolveRequestDataScope(req);
+  if (!scope || scope === 'self') {
+    return { error: { status: 403, message: 'Недостаточно прав для экспорта назначенных' } };
+  }
+
+  const { data: rawEmployees, error: employeesError } = await supabase
+    .from('employees')
+    .select('id, full_name, employment_status, is_archived')
+    .eq('employment_status', 'active')
+    .eq('is_archived', false);
+  if (employeesError) throw employeesError;
+
+  const employeeIds = (rawEmployees || []).map(row => Number(row.id)).filter(Number.isFinite);
+  const accessMap = await loadEmployeeAccessMap(employeeIds);
+
+  let managedDepartmentIdsSet: Set<string> | null = null;
+  if (scope === 'department') {
+    const managed = await resolveManagedDepartmentIds(req);
+    managedDepartmentIdsSet = new Set(managed);
+    if (managedDepartmentIdsSet.size === 0) {
+      return { error: { status: 403, message: 'Нет доступных отделов в области видимости' } };
+    }
+  }
+
+  const employees: IAssignedEmployee[] = [];
+  for (const row of rawEmployees || []) {
+    const id = Number(row.id);
+    const fullName = String(row.full_name || '').trim();
+    const deptIds = accessMap.get(id) || [];
+    const filteredDeptIds = managedDepartmentIdsSet
+      ? deptIds.filter(dId => managedDepartmentIdsSet!.has(dId))
+      : deptIds;
+    if (filteredDeptIds.length === 0) continue;
+    employees.push({ id, full_name: fullName, department_ids: filteredDeptIds });
+  }
+
+  employees.sort((a, b) => a.full_name.localeCompare(b.full_name, 'ru'));
+  return { employees, scope: scope as 'all' | 'department' };
+}
+
 function dedupeName(usedNames: Set<string>, base: string): string {
   if (!usedNames.has(base)) {
     usedNames.add(base);
@@ -138,17 +182,32 @@ async function buildFilesForAssignedEmployee(params: {
   return files;
 }
 
-/** POST /api/timesheet/export-assigned  body: { month, half, group_by, export_as_1c } */
+/** GET /api/timesheet/assigned-employees → [{ id, full_name, department_count }] */
+export async function listAssignedEmployees(req: AuthenticatedRequest, res: Response) {
+  try {
+    const result = await collectAssignedEmployees(req);
+    if ('error' in result) {
+      return res.status(result.error.status).json({ success: false, error: result.error.message });
+    }
+    const data = result.employees.map(employee => ({
+      id: employee.id,
+      full_name: employee.full_name,
+      department_count: employee.department_ids.length,
+    }));
+    return res.json({ success: true, data });
+  } catch (err) {
+    console.error('timesheet.listAssignedEmployees error:', err);
+    return res.status(500).json({ success: false, error: 'Ошибка загрузки назначенных сотрудников' });
+  }
+}
+
+/** POST /api/timesheet/export-assigned  body: { month, half, group_by, export_as_1c, employee_ids? } */
 export async function exportTimesheetAssigned(req: AuthenticatedRequest, res: Response) {
   try {
-    const { month, half, group_by, export_as_1c } = req.body;
+    const { month, half, group_by, export_as_1c, employee_ids } = req.body;
 
     if (!month || typeof month !== 'string' || !/^\d{4}-\d{2}$/.test(month)) {
       return res.status(400).json({ success: false, error: 'Параметр month обязателен (формат YYYY-MM)' });
-    }
-    const scope = await resolveRequestDataScope(req);
-    if (!scope || scope === 'self') {
-      return res.status(403).json({ success: false, error: 'Недостаточно прав для экспорта назначенных' });
     }
 
     const [yearStr, monthStr] = month.split('-');
@@ -166,36 +225,20 @@ export async function exportTimesheetAssigned(req: AuthenticatedRequest, res: Re
     const templateSuffix = exportAs1C ? '_1С' : '';
     const presentationSuffix = '_Руководитель';
 
-    // Получаем всех активных сотрудников с ≥1 записью в employee_department_access
-    const { data: rawEmployees, error: employeesError } = await supabase
-      .from('employees')
-      .select('id, full_name, employment_status, is_archived')
-      .eq('employment_status', 'active')
-      .eq('is_archived', false);
-    if (employeesError) throw employeesError;
-
-    const employeeIds = (rawEmployees || []).map(row => Number(row.id)).filter(Number.isFinite);
-    const accessMap = await loadEmployeeAccessMap(employeeIds);
-
-    let managedDepartmentIdsSet: Set<string> | null = null;
-    if (scope === 'department') {
-      const managed = await resolveManagedDepartmentIds(req);
-      managedDepartmentIdsSet = new Set(managed);
-      if (managedDepartmentIdsSet.size === 0) {
-        return res.status(403).json({ success: false, error: 'Нет доступных отделов в области видимости' });
-      }
+    const collected = await collectAssignedEmployees(req);
+    if ('error' in collected) {
+      return res.status(collected.error.status).json({ success: false, error: collected.error.message });
     }
 
-    const assignedEmployees: IAssignedEmployee[] = [];
-    for (const row of rawEmployees || []) {
-      const id = Number(row.id);
-      const fullName = String(row.full_name || '').trim();
-      const deptIds = accessMap.get(id) || [];
-      const filteredDeptIds = managedDepartmentIdsSet
-        ? deptIds.filter(dId => managedDepartmentIdsSet!.has(dId))
-        : deptIds;
-      if (filteredDeptIds.length === 0) continue;
-      assignedEmployees.push({ id, full_name: fullName, department_ids: filteredDeptIds });
+    let assignedEmployees = collected.employees;
+
+    if (Array.isArray(employee_ids) && employee_ids.length > 0) {
+      const requested = new Set(
+        employee_ids
+          .map(value => Number(value))
+          .filter(value => Number.isInteger(value)),
+      );
+      assignedEmployees = assignedEmployees.filter(employee => requested.has(employee.id));
     }
 
     if (assignedEmployees.length === 0) {

@@ -12,7 +12,7 @@ import type {
 import type { DataScope } from '../config/access-control.js';
 import { exportTimesheet } from './timesheet-export.controller.js';
 import { exportTimesheetMass } from './timesheet-mass-export.controller.js';
-import { exportTimesheetAssigned } from './timesheet-assigned-export.controller.js';
+import { exportTimesheetAssigned, listAssignedEmployees } from './timesheet-assigned-export.controller.js';
 import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, loadCalendarMonth } from '../services/schedule.service.js';
 import {
   resolveManagedDepartmentIds,
@@ -1287,6 +1287,9 @@ export const timesheetController = {
   /** POST /api/timesheet/export-mass  body: { month, department_ids } */
   exportMass: exportTimesheetMass,
 
-  /** POST /api/timesheet/export-assigned  body: { month, half, group_by, export_as_1c } */
+  /** POST /api/timesheet/export-assigned  body: { month, half, group_by, export_as_1c, employee_ids? } */
   exportAssigned: exportTimesheetAssigned,
+
+  /** GET /api/timesheet/assigned-employees */
+  listAssignedEmployees,
 };
