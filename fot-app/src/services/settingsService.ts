@@ -6,6 +6,10 @@ export interface IR2Status {
   has_account_id: boolean;
   has_access_key: boolean;
   has_secret_key: boolean;
+  has_endpoint: boolean;
+  endpoint: string;
+  region: string;
+  force_path_style: boolean;
 }
 
 export interface IR2TestResult {
@@ -53,6 +57,9 @@ export const settingsService = {
     access_key_id?: string;
     secret_access_key?: string;
     bucket_name?: string;
+    endpoint?: string;
+    region?: string;
+    force_path_style?: boolean;
   }): Promise<{ enabled: boolean; bucket_name: string }> => {
     const res = await apiClient.put<ApiResponse<{ enabled: boolean; bucket_name: string }>>('/settings/r2', data);
     return res.data;

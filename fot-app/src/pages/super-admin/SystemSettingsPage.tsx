@@ -35,6 +35,9 @@ export const SystemSettingsPage: FC = () => {
   const [accessKeyId, setAccessKeyId] = useState('');
   const [secretAccessKey, setSecretAccessKey] = useState('');
   const [bucketName, setBucketName] = useState('fot-documents');
+  const [endpoint, setEndpoint] = useState('');
+  const [region, setRegion] = useState('');
+  const [forcePathStyle, setForcePathStyle] = useState(false);
   const [monitorSettings, setMonitorSettings] = useState<ISigurMonitorSettings>({
     enabled: true,
     failureThreshold: 2,
@@ -75,6 +78,14 @@ export const SystemSettingsPage: FC = () => {
   }, [status?.bucket_name]);
 
   useEffect(() => {
+    if (status) {
+      setEndpoint(status.endpoint || '');
+      setRegion(status.region || '');
+      setForcePathStyle(!!status.force_path_style);
+    }
+  }, [status?.endpoint, status?.region, status?.force_path_style]);
+
+  useEffect(() => {
     if (monitorSettingsQuery.data) {
       setMonitorSettings(monitorSettingsQuery.data);
     }
@@ -96,11 +107,22 @@ export const SystemSettingsPage: FC = () => {
     setSaving(true);
     setTestResult(null);
     try {
-      const data: Record<string, string> = {};
+      const data: {
+        account_id?: string;
+        access_key_id?: string;
+        secret_access_key?: string;
+        bucket_name?: string;
+        endpoint?: string;
+        region?: string;
+        force_path_style?: boolean;
+      } = {};
       if (accountId) data.account_id = accountId;
       if (accessKeyId) data.access_key_id = accessKeyId;
       if (secretAccessKey) data.secret_access_key = secretAccessKey;
       data.bucket_name = bucketName;
+      data.endpoint = endpoint;
+      data.region = region;
+      data.force_path_style = forcePathStyle;
 
       await settingsService.saveR2(data);
       await queryClient.invalidateQueries({ queryKey: getR2StatusQueryKey() });
@@ -188,30 +210,50 @@ export const SystemSettingsPage: FC = () => {
 
   return (
     <div className={styles.page}>
-      {/* R2 Storage */}
+      {/* S3-compatible Storage */}
       <div className={styles.section}>
         <div className={styles.sectionHeader}>
-          <h2 className={styles.sectionTitle}>Cloudflare R2 хранилище</h2>
+          <h2 className={styles.sectionTitle}>S3-совместимое хранилище (R2 / Cloud.ru / др.)</h2>
           <span className={`${styles.statusBadge} ${status?.enabled ? styles.statusConnected : styles.statusDisconnected}`}>
             {status?.enabled ? 'Подключено' : 'Не подключено'}
           </span>
         </div>
 
         <p className={styles.description}>
-          R2 используется для хранения файлов-вложений к заявкам и документам сотрудников.
-          Создайте API-токен в Cloudflare Dashboard → R2 → Manage R2 API Tokens.
+          Хранилище для файлов-вложений к заявкам и документам сотрудников.
+          Для Cloudflare R2 — укажите Account ID. Для Cloud.ru и других S3-совместимых провайдеров — укажите Endpoint URL, Region и включите Path-style URL.
         </p>
 
         <div className={styles.formGrid}>
+          <div className={styles.formGroupFull}>
+            <label className={styles.formLabel}>Endpoint URL</label>
+            <input
+              className={styles.formInput}
+              value={endpoint}
+              onChange={e => setEndpoint(e.target.value)}
+              placeholder="https://s3.cloud.ru (оставьте пустым для Cloudflare R2)"
+            />
+            <span className={styles.hint}>Для Cloud.ru: https://s3.cloud.ru. Для R2 — можно оставить пустым и указать Account ID.</span>
+          </div>
           <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Account ID</label>
+            <label className={styles.formLabel}>Account ID (для R2)</label>
             <input
               className={styles.formInput}
               value={accountId}
               onChange={e => setAccountId(e.target.value)}
               placeholder={status?.has_account_id ? '••• (установлен)' : 'Cloudflare Account ID'}
             />
-            <span className={styles.hint}>Cloudflare Dashboard → Overview → Account ID</span>
+            <span className={styles.hint}>Только для Cloudflare R2 (Dashboard → Overview → Account ID).</span>
+          </div>
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Region</label>
+            <input
+              className={styles.formInput}
+              value={region}
+              onChange={e => setRegion(e.target.value)}
+              placeholder="auto"
+            />
+            <span className={styles.hint}>R2: auto. Cloud.ru: уточните в консоли (например, ru-central-1).</span>
           </div>
           <div className={styles.formGroup}>
             <label className={styles.formLabel}>Bucket Name</label>
@@ -228,7 +270,7 @@ export const SystemSettingsPage: FC = () => {
               className={styles.formInput}
               value={accessKeyId}
               onChange={e => setAccessKeyId(e.target.value)}
-              placeholder={status?.has_access_key ? '••• (установлен)' : 'Access Key ID из R2 API Token'}
+              placeholder={status?.has_access_key ? '••• (установлен)' : 'S3 Access Key ID'}
             />
           </div>
           <div className={styles.formGroup}>
@@ -238,8 +280,20 @@ export const SystemSettingsPage: FC = () => {
               type="password"
               value={secretAccessKey}
               onChange={e => setSecretAccessKey(e.target.value)}
-              placeholder={status?.has_secret_key ? '••• (установлен)' : 'Secret Access Key из R2 API Token'}
+              placeholder={status?.has_secret_key ? '••• (установлен)' : 'S3 Secret Access Key'}
             />
+          </div>
+          <div className={styles.formGroupFull}>
+            <div className={styles.checkboxRow}>
+              <label className={styles.checkboxLabel}>
+                <input
+                  type="checkbox"
+                  checked={forcePathStyle}
+                  onChange={e => setForcePathStyle(e.target.checked)}
+                />
+                Path-style URL (включить для Cloud.ru и большинства не-R2 провайдеров)
+              </label>
+            </div>
           </div>
         </div>
 

@@ -1,7 +1,13 @@
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { settingsService } from '../services/settings.service.js';
-import { r2Service } from '../services/r2.service.js';
+import {
+  r2Service,
+  sanitizeS3Endpoint,
+  sanitizeS3Value,
+  buildS3Endpoint,
+  createS3Client,
+} from '../services/r2.service.js';
 
 /** Получить все настройки (секретные маскируются) */
 const getAll = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -14,7 +20,7 @@ const getAll = async (_req: AuthenticatedRequest, res: Response): Promise<void> 
   }
 };
 
-/** Получить R2 статус (подключено / не подключено) */
+/** Получить R2 / S3 статус (подключено / не подключено) */
 const getR2Status = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const cfg = await settingsService.getR2Config();
@@ -26,6 +32,10 @@ const getR2Status = async (_req: AuthenticatedRequest, res: Response): Promise<v
         has_account_id: !!cfg.accountId,
         has_access_key: !!cfg.accessKeyId,
         has_secret_key: !!cfg.secretAccessKey,
+        has_endpoint: !!cfg.endpoint,
+        endpoint: cfg.endpoint,
+        region: cfg.region,
+        force_path_style: cfg.forcePathStyle,
       },
     });
   } catch (err) {
@@ -34,24 +44,45 @@ const getR2Status = async (_req: AuthenticatedRequest, res: Response): Promise<v
   }
 };
 
-/** Сохранить R2 настройки */
+/** Сохранить R2 / S3 настройки */
 const saveR2 = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { account_id, access_key_id, secret_access_key, bucket_name } = req.body;
+    const {
+      account_id,
+      access_key_id,
+      secret_access_key,
+      bucket_name,
+      endpoint,
+      region,
+      force_path_style,
+    } = req.body;
 
     const entries: { key: string; value: string | null; description?: string }[] = [];
 
     if (account_id !== undefined) {
-      entries.push({ key: 'r2_account_id', value: account_id || null, description: 'Cloudflare R2 Account ID' });
+      const clean = typeof account_id === 'string' ? sanitizeS3Value(account_id) : '';
+      entries.push({ key: 'r2_account_id', value: clean || null, description: 'Cloudflare R2 Account ID' });
     }
     if (access_key_id !== undefined) {
-      entries.push({ key: 'r2_access_key_id', value: access_key_id || null, description: 'Cloudflare R2 Access Key ID' });
+      const clean = typeof access_key_id === 'string' ? sanitizeS3Value(access_key_id) : '';
+      entries.push({ key: 'r2_access_key_id', value: clean || null, description: 'S3 Access Key ID' });
     }
     if (secret_access_key !== undefined && secret_access_key !== '••••••••') {
-      entries.push({ key: 'r2_secret_access_key', value: secret_access_key || null, description: 'Cloudflare R2 Secret Access Key' });
+      entries.push({ key: 'r2_secret_access_key', value: secret_access_key || null, description: 'S3 Secret Access Key' });
     }
     if (bucket_name !== undefined) {
-      entries.push({ key: 'r2_bucket_name', value: bucket_name || 'fot-documents', description: 'Cloudflare R2 Bucket Name' });
+      entries.push({ key: 'r2_bucket_name', value: bucket_name || 'fot-documents', description: 'S3 Bucket Name' });
+    }
+    if (endpoint !== undefined) {
+      const clean = typeof endpoint === 'string' ? sanitizeS3Endpoint(endpoint) : '';
+      entries.push({ key: 'r2_endpoint', value: clean || null, description: 'S3 Endpoint URL (для Cloud.ru и других S3-совместимых провайдеров)' });
+    }
+    if (region !== undefined) {
+      const clean = typeof region === 'string' ? sanitizeS3Value(region) : '';
+      entries.push({ key: 'r2_region', value: clean || null, description: 'S3 Region' });
+    }
+    if (force_path_style !== undefined) {
+      entries.push({ key: 'r2_force_path_style', value: force_path_style ? 'true' : 'false', description: 'S3 Force Path Style URL' });
     }
 
     if (entries.length > 0) {
@@ -70,34 +101,40 @@ const saveR2 = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     });
   } catch (err) {
     console.error('settings.saveR2 error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка сохранения настроек R2' });
+    res.status(500).json({ success: false, error: 'Ошибка сохранения настроек S3' });
   }
 };
 
-/** Тест подключения R2 */
+/** Тест подключения R2 / S3 */
 const testR2 = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const cfg = await settingsService.getR2Config();
+
+  if (!cfg.enabled) {
+    res.json({ success: true, data: { connected: false, error: 'S3 не настроен — заполните Access Key, Secret Key и (Account ID или Endpoint URL)' } });
+    return;
+  }
+
   try {
-    const { S3Client, ListBucketsCommand } = await import('@aws-sdk/client-s3');
-    const cfg = await settingsService.getR2Config();
-
-    if (!cfg.enabled) {
-      res.json({ success: true, data: { connected: false, error: 'R2 не настроен — заполните все поля' } });
-      return;
-    }
-
-    const client = new S3Client({
-      region: 'auto',
-      endpoint: `https://${cfg.accountId}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: cfg.accessKeyId,
-        secretAccessKey: cfg.secretAccessKey,
-      },
+    const { ListBucketsCommand } = await import('@aws-sdk/client-s3');
+    const client = createS3Client({
+      accountId: cfg.accountId,
+      accessKeyId: cfg.accessKeyId,
+      secretAccessKey: cfg.secretAccessKey,
+      endpoint: cfg.endpoint,
+      region: cfg.region,
+      forcePathStyle: cfg.forcePathStyle,
     });
 
     await client.send(new ListBucketsCommand({}));
     res.json({ success: true, data: { connected: true } });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Неизвестная ошибка';
+    const raw = err instanceof Error ? err.message : 'Неизвестная ошибка';
+    const resolvedEndpoint = buildS3Endpoint(cfg);
+    console.error('[s3 test] endpoint=', resolvedEndpoint, 'error=', raw);
+    const isHandshake = raw.includes('EPROTO') || raw.includes('handshake failure');
+    const msg = isHandshake
+      ? `TLS handshake failed при подключении к ${resolvedEndpoint}. Проверьте Endpoint URL (для Cloud.ru: https://s3.cloud.ru), Account ID и регион.`
+      : raw;
     res.json({ success: true, data: { connected: false, error: msg } });
   }
 };

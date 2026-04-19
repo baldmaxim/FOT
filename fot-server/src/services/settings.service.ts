@@ -177,25 +177,34 @@ export const settingsService = {
     }));
   },
 
-  /** Получить R2 конфиг (из БД, фоллбэк на .env) */
+  /** Получить R2 / S3-совместимый конфиг (из БД, фоллбэк на .env) */
   async getR2Config(): Promise<{
     accountId: string;
     accessKeyId: string;
     secretAccessKey: string;
     bucketName: string;
+    endpoint: string;
+    region: string;
+    forcePathStyle: boolean;
     enabled: boolean;
   }> {
     await loadCache();
-    const accountId = cache.get('r2_account_id') || process.env.R2_ACCOUNT_ID || '';
-    const accessKeyId = cache.get('r2_access_key_id') || process.env.R2_ACCESS_KEY_ID || '';
+    const accountId = (cache.get('r2_account_id') || process.env.R2_ACCOUNT_ID || '').trim();
+    const accessKeyId = (cache.get('r2_access_key_id') || process.env.R2_ACCESS_KEY_ID || '').trim();
     const secretAccessKey = cache.get('r2_secret_access_key') || process.env.R2_SECRET_ACCESS_KEY || '';
     const bucketName = cache.get('r2_bucket_name') || process.env.R2_BUCKET_NAME || 'fot-documents';
+    const endpoint = (cache.get('r2_endpoint') || process.env.R2_ENDPOINT || '').trim();
+    const region = (cache.get('r2_region') || process.env.R2_REGION || 'auto').trim();
+    const forcePathStyle = (cache.get('r2_force_path_style') || process.env.R2_FORCE_PATH_STYLE || '') === 'true';
     return {
       accountId,
       accessKeyId,
       secretAccessKey,
       bucketName,
-      enabled: !!(accountId && accessKeyId && secretAccessKey),
+      endpoint,
+      region,
+      forcePathStyle,
+      enabled: !!(accessKeyId && secretAccessKey && (accountId || endpoint)),
     };
   },
 
