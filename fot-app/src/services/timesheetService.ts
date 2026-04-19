@@ -176,6 +176,28 @@ export const timesheetService = {
     return response.blob();
   },
 
+  async exportAssigned(filters: {
+    month: string;
+    half?: TimesheetExportHalf;
+    group_by?: TimesheetExportGrouping;
+    export_as_1c?: boolean;
+  }): Promise<Blob> {
+    const response = await fetch(
+      buildApiUrl('/timesheet/export-assigned'),
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildAuthHeaders(),
+        },
+        body: JSON.stringify(filters),
+      }
+    );
+    if (!response.ok) throw new Error('Ошибка экспорта назначенных');
+    return response.blob();
+  },
+
   async export(filters: TimesheetExportFilters): Promise<Blob> {
     const params = new URLSearchParams();
     params.append('month', filters.month);

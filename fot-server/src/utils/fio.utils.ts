@@ -17,3 +17,31 @@ export const parseFIO = (fullName: string): IParsedFIO => {
     middleName: parts.length > 2 ? parts.slice(2).join(' ') : null,
   };
 };
+
+/**
+ * Формат "Фамилия И. О." — возвращает фамилию и инициалы имени/отчества с точками.
+ * Порт из fot-app/src/utils/timesheetDisplay.ts::formatTimesheetEmployeeName.
+ */
+export const formatNameWithInitials = (fullName: string): string => {
+  const parts = fullName
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (parts.length === 0) return '';
+  if (parts.length === 1) return parts[0];
+
+  const [lastName, ...rest] = parts;
+  const initials = rest
+    .map(part => (part[0] ? `${part[0]}.` : ''))
+    .filter(Boolean)
+    .join(' ');
+
+  return initials ? `${lastName} ${initials}` : lastName;
+};
+
+/** Имя папки-архива "Уч. Фамилия И. О." для назначенного сотрудника. */
+export const formatAssignedFolderName = (fullName: string): string => {
+  const formatted = formatNameWithInitials(fullName);
+  return formatted ? `Уч. ${formatted}` : 'Уч. ?';
+};

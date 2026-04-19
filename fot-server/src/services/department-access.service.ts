@@ -118,7 +118,7 @@ async function loadUserAccessMap(userIds: string[]): Promise<Map<string, string[
   return result;
 }
 
-async function loadEmployeeAccessMap(employeeIds: number[]): Promise<Map<number, string[]>> {
+export async function loadEmployeeAccessMap(employeeIds: number[]): Promise<Map<number, string[]>> {
   const uniqueEmployeeIds = [...new Set(employeeIds.filter((value): value is number => Number.isInteger(value)))];
   const result = new Map<number, string[]>(
     uniqueEmployeeIds.map(employeeId => [employeeId, []]),

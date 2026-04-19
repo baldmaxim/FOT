@@ -35,6 +35,28 @@ const collectBrigadeIds = (nodes: OrgDepartmentNode[]): string[] => {
 };
 const EMPTY_DEPARTMENTS: OrgDepartmentNode[] = [];
 
+const DEPARTMENTS_STORAGE_KEY = 'timesheet_export_departments_v1';
+
+const loadStoredDepartmentIds = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem(DEPARTMENTS_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((value): value is string => typeof value === 'string'));
+  } catch {
+    return new Set();
+  }
+};
+
+const saveStoredDepartmentIds = (ids: Set<string>): void => {
+  try {
+    localStorage.setItem(DEPARTMENTS_STORAGE_KEY, JSON.stringify([...ids]));
+  } catch {
+    // QuotaExceededError / SecurityError — игнорируем
+  }
+};
+
 const toMonthIndex = (year: number, month: number): number => year * 12 + month - 1;
 
 const resolveDefaultSegment = (year: number, month: number, now: Date): TimesheetDisplaySegment => {
@@ -114,7 +136,7 @@ export const MassTimesheetExportPage: FC = () => {
   const [exportAs1C, setExportAs1C] = useState(false);
   const [presentation, setPresentation] = useState<TimesheetExportPresentation>('hr');
   const [searchQuery, setSearchQuery] = useState('');
-  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(() => loadStoredDepartmentIds());
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -141,6 +163,25 @@ export const MassTimesheetExportPage: FC = () => {
   useEffect(() => {
     setSegmentOverride(null);
   }, [year, month]);
+
+  useEffect(() => {
+    saveStoredDepartmentIds(checkedIds);
+  }, [checkedIds]);
+
+  const allStructureIds = useMemo(() => collectAllIds(sortedDepartments), [sortedDepartments]);
+  useEffect(() => {
+    if (!structure || allStructureIds.length === 0) return;
+    setCheckedIds(prev => {
+      const validIds = new Set(allStructureIds);
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (validIds.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [structure, allStructureIds]);
 
   const prevMonth = useCallback(() => {
     if (month === 1) { setMonth(12); setYear(y => y - 1); }
@@ -193,6 +234,39 @@ export const MassTimesheetExportPage: FC = () => {
   const selectedDeptIds = useMemo(() => {
     return [...checkedIds];
   }, [checkedIds]);
+
+  const handleExportAssigned = async () => {
+    setExporting(true);
+    setError(null);
+    try {
+      const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+      const blob = await timesheetService.exportAssigned({
+        month: monthStr,
+        half: activeSegment,
+        group_by: groupBy,
+        export_as_1c: exportAs1C,
+      });
+      const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+      const daysInMonth = new Date(year, month, 0).getDate();
+      const segmentSuffix = activeSegment === 'FULL'
+        ? ''
+        : `_${activeSegment === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
+      const templateSuffix = exportAs1C ? '_1С' : '';
+      const filename = `Назначенные${templateSuffix}_${MONTH_NAMES[month]}_${year}${segmentSuffix}_Руководитель.zip`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Assigned export error:', err);
+      setError('Ошибка экспорта назначенных. Попробуйте ещё раз.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const handleExport = async (presentationOverride?: TimesheetExportPresentation) => {
     if (selectedDeptIds.length === 0) return;
@@ -365,7 +439,7 @@ export const MassTimesheetExportPage: FC = () => {
             disabled={exporting || checkedIds.size === 0}
           >
             <Download size={16} />
-            {exporting && presentation === 'hr' ? 'Экспорт HR...' : `Экспорт HR (${checkedIds.size})`}
+            {exporting && presentation === 'hr' ? 'Выгрузить Факт...' : `Выгрузить Факт (${checkedIds.size})`}
           </button>
           <button
             className={`mte-export-btn mte-export-btn--secondary ${presentation === 'manager' ? 'mte-export-btn--active' : ''}`}
@@ -374,8 +448,17 @@ export const MassTimesheetExportPage: FC = () => {
           >
             <Download size={16} />
             {exporting && presentation === 'manager'
-              ? 'Экспорт для руководителя...'
-              : `Экспорт для руководителя (${checkedIds.size})`}
+              ? 'Выгрузить урезанный...'
+              : `Выгрузить урезанный (${checkedIds.size})`}
+          </button>
+          <button
+            className="mte-export-btn mte-export-btn--secondary"
+            onClick={handleExportAssigned}
+            disabled={exporting}
+            title="Выгружает табели всех сотрудников с многоотдельными назначениями — один архив с вложенными архивами по каждому назначенному"
+          >
+            <Download size={16} />
+            {exporting ? 'Выгрузить назначенных...' : 'Выгрузить назначенных'}
           </button>
         </div>
       </div>

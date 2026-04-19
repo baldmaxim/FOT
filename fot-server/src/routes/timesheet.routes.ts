@@ -57,6 +57,13 @@ router.post(
   timesheetController.exportMass
 );
 
+// POST /api/timesheet/export-assigned
+router.post(
+  '/export-assigned',
+  requireAnyPermission(['timesheet.workflow.monitor', 'timesheet.workflow.review']),
+  timesheetController.exportAssigned
+);
+
 // POST /api/timesheet
 router.post(
   '/',
