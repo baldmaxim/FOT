@@ -1,5 +1,5 @@
 import { apiClient } from '../api/client';
-import type { SystemRole } from '../types';
+import type { SystemRole, EmployeeVariant } from '../types';
 
 interface ApiResponse<T> {
   data: T;
@@ -16,37 +16,16 @@ export interface PageCatalogItem {
   group_label: string;
   surface: AccessPageSurface;
   supports_edit: boolean;
-  requires_data_scope: boolean;
-  requires_employee_variant: boolean;
   sort_order: number;
   is_active: boolean;
-  is_system: boolean;
-}
-
-export interface PermissionOption {
-  code: string;
-  label: string;
-  description: string;
-  sort_order: number;
-}
-
-export interface PermissionGroup {
-  code: string;
-  label: string;
-  description: string;
-  exclusive: boolean;
-  sort_order: number;
-  options: PermissionOption[];
 }
 
 export interface AccessCatalog {
   pages: PageCatalogItem[];
-  capabilities: PermissionGroup[];
 }
 
 export interface RoleAccessProfile {
   role: SystemRole;
-  permissions: string[];
   page_access: Record<string, AccessMode>;
 }
 
@@ -54,28 +33,28 @@ export interface CreateRoleData {
   code: string;
   name: string;
   description?: string | null;
-  level: number;
-  permissions?: string[];
+  is_admin?: boolean;
+  employee_variant?: EmployeeVariant | null;
 }
 
 export interface UpdateRoleData {
   name: string;
   description?: string | null;
-  level: number;
+  is_admin?: boolean;
+  employee_variant?: EmployeeVariant | null;
   is_active?: boolean;
-  permissions?: string[];
 }
 
 export interface CloneRoleData {
   code: string;
   name: string;
   description?: string | null;
-  level?: number;
+  is_admin?: boolean;
+  employee_variant?: EmployeeVariant | null;
   is_active?: boolean;
 }
 
 export interface UpdateAccessProfileData {
-  permissions: string[];
   page_access: Record<string, AccessMode>;
 }
 

@@ -4,11 +4,11 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { supabase, supabaseAuth } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
-import type { AuthenticatedRequest, UserProfile } from '../types/index.js';
+import type { AuthenticatedRequest, SystemRole, UserProfile, UserProfileResponse } from '../types/index.js';
 import { LOGIN_2FA_ENABLED } from '../config/features.js';
-import { getEffectiveAccess } from '../services/access-control.service.js';
+import { getRolePageAccess } from '../services/access-control.service.js';
+import { getRoleByCode, getRoleById } from '../services/roles-cache.service.js';
 import { listManagedDepartmentIdsForUser } from '../services/department-access.service.js';
-import { getRoleById } from '../services/roles-cache.service.js';
 import { verify2FA, useRecoveryCode } from './auth-2fa.controller.js';
 import {
   clearSessionCookies,
@@ -19,7 +19,8 @@ import {
   verifyRefreshToken,
 } from '../utils/auth-session.js';
 
-// Схемы валидации
+const DEFAULT_ROLE_CODE_FOR_NEW_USERS = 'office';
+
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
@@ -40,9 +41,6 @@ const resetPasswordSchema = z.object({
   password: z.string().min(8),
 });
 
-/**
- * Резолвит department_id из employees по employee_id
- */
 export async function resolveDepartmentId(employeeId: number | null): Promise<string | null> {
   if (!employeeId) return null;
   const { data } = await supabase
@@ -53,27 +51,48 @@ export async function resolveDepartmentId(employeeId: number | null): Promise<st
   return data?.org_department_id || null;
 }
 
-async function resolveProfileRoleCode(profile: Pick<UserProfile, 'position_type'> & { system_role_id?: string | null }): Promise<string> {
-  if (profile.system_role_id) {
-    const role = await getRoleById(profile.system_role_id);
-    if (role?.code) {
-      return role.code;
-    }
+async function buildProfileResponse(
+  profile: UserProfile,
+): Promise<{ role: SystemRole; response: UserProfileResponse; departmentId: string | null }> {
+  const role = await getRoleById(profile.system_role_id);
+  if (!role) {
+    throw new Error(`Role not found for user ${profile.id}: ${profile.system_role_id}`);
   }
-  return profile.position_type;
+
+  const [page_access, departmentId] = await Promise.all([
+    getRolePageAccess(role.code),
+    resolveDepartmentId(profile.employee_id),
+  ]);
+
+  const managed_department_ids = await listManagedDepartmentIdsForUser(
+    profile.id,
+    departmentId,
+    profile.employee_id,
+  );
+
+  const response: UserProfileResponse = {
+    id: profile.id,
+    full_name: profile.full_name,
+    system_role_id: profile.system_role_id,
+    role_code: role.code,
+    role_name: role.name,
+    position_type: role.code,
+    is_admin: role.is_admin,
+    employee_variant: role.employee_variant,
+    employee_id: profile.employee_id,
+    department_id: departmentId,
+    managed_department_ids,
+    supervisor_id: profile.supervisor_id,
+    chat_inbound_mode: profile.chat_inbound_mode || 'open',
+    imported_position: profile.imported_position,
+    page_access,
+    is_approved: profile.is_approved,
+    two_factor_enabled: profile.two_factor_enabled,
+  };
+
+  return { role, response, departmentId };
 }
 
-async function resolveManagedDepartmentIds(
-  profileId: string,
-  departmentId: string | null,
-  employeeId: number | null,
-): Promise<string[]> {
-  return listManagedDepartmentIdsForUser(profileId, departmentId, employeeId);
-}
-
-/**
- * POST /api/auth/register
- */
 async function register(req: Request, res: Response): Promise<void> {
   try {
     const { email, password, full_name } = registerSchema.parse(req.body);
@@ -94,10 +113,17 @@ async function register(req: Request, res: Response): Promise<void> {
       return;
     }
 
+    const defaultRole = await getRoleByCode(DEFAULT_ROLE_CODE_FOR_NEW_USERS);
+    if (!defaultRole) {
+      await supabase.auth.admin.deleteUser(authData.user.id);
+      res.status(500).json({ success: false, error: `Default role "${DEFAULT_ROLE_CODE_FOR_NEW_USERS}" not found` });
+      return;
+    }
+
     const { error: profileError } = await supabase.from('user_profiles').insert({
       id: authData.user.id,
       full_name,
-      position_type: 'worker_office',
+      system_role_id: defaultRole.id,
       is_approved: false,
       two_factor_enabled: false,
     });
@@ -123,9 +149,6 @@ async function register(req: Request, res: Response): Promise<void> {
   }
 }
 
-/**
- * POST /api/auth/login
- */
 async function login(req: Request, res: Response): Promise<void> {
   try {
     const { email, password } = loginSchema.parse(req.body);
@@ -154,21 +177,19 @@ async function login(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const { data: profile, error: profileError } = await supabase
+    const { data: profileRow, error: profileError } = await supabase
       .from('user_profiles')
       .select('*')
       .eq('id', authData.user.id)
       .single();
 
-    if (profileError || !profile) {
+    if (profileError || !profileRow) {
       res.status(404).json({ success: false, error: 'User profile not found' });
       return;
     }
 
-    const positionType = await resolveProfileRoleCode(profile as UserProfile & { system_role_id?: string | null });
-    const effectiveAccess = await getEffectiveAccess(profile.system_role_id ?? positionType);
-    const departmentId = await resolveDepartmentId(profile.employee_id);
-    const managedDepartmentIds = await resolveManagedDepartmentIds(profile.id, departmentId, profile.employee_id);
+    const profile = profileRow as UserProfile;
+    const { role, response, departmentId } = await buildProfileResponse(profile);
 
     if (!profile.is_approved) {
       res.status(403).json({
@@ -179,9 +200,8 @@ async function login(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Если 2FA включена, возвращаем промежуточный ответ
     if (LOGIN_2FA_ENABLED && profile.two_factor_enabled) {
-      const tempToken = generateAccessToken(profile as UserProfile, email, false);
+      const tempToken = generateAccessToken(profile, role, email, false, departmentId);
       setSessionCookies(res, tempToken, null);
 
       res.json({
@@ -189,31 +209,13 @@ async function login(req: Request, res: Response): Promise<void> {
         requires_2fa: true,
         access_token: tempToken,
         refresh_token: '',
-        user: {
-          id: profile.id,
-          email,
-        },
-        profile: {
-          id: profile.id,
-          full_name: profile.full_name,
-          position_type: positionType,
-          system_role_id: profile.system_role_id ?? null,
-          permissions: effectiveAccess.permissions,
-          page_access: effectiveAccess.page_access,
-          chat_inbound_mode: profile.chat_inbound_mode || 'open',
-          imported_position: profile.imported_position,
-          employee_id: profile.employee_id,
-          department_id: departmentId,
-          managed_department_ids: managedDepartmentIds,
-          supervisor_id: profile.supervisor_id,
-          is_approved: profile.is_approved,
-          two_factor_enabled: profile.two_factor_enabled,
-        },
+        user: { id: profile.id, email },
+        profile: response,
       });
       return;
     }
 
-    const accessToken = generateAccessToken(profile as UserProfile, email, true, departmentId);
+    const accessToken = generateAccessToken(profile, role, email, true, departmentId);
     const refreshToken = generateRefreshToken(profile.id, email);
     setSessionCookies(res, accessToken, refreshToken);
 
@@ -223,26 +225,8 @@ async function login(req: Request, res: Response): Promise<void> {
       success: true,
       access_token: accessToken,
       refresh_token: refreshToken,
-      user: {
-        id: profile.id,
-        email,
-      },
-      profile: {
-        id: profile.id,
-        full_name: profile.full_name,
-        position_type: positionType,
-        system_role_id: profile.system_role_id ?? null,
-        permissions: effectiveAccess.permissions,
-        page_access: effectiveAccess.page_access,
-        chat_inbound_mode: profile.chat_inbound_mode || 'open',
-        imported_position: profile.imported_position,
-        employee_id: profile.employee_id,
-        department_id: departmentId,
-        managed_department_ids: managedDepartmentIds,
-        supervisor_id: profile.supervisor_id,
-        is_approved: profile.is_approved,
-        two_factor_enabled: profile.two_factor_enabled,
-      },
+      user: { id: profile.id, email },
+      profile: response,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -254,9 +238,6 @@ async function login(req: Request, res: Response): Promise<void> {
   }
 }
 
-/**
- * POST /api/auth/forgot-password
- */
 async function forgotPassword(req: Request, res: Response): Promise<void> {
   try {
     const { email } = forgotPasswordSchema.parse(req.body);
@@ -318,9 +299,6 @@ async function forgotPassword(req: Request, res: Response): Promise<void> {
   }
 }
 
-/**
- * POST /api/auth/reset-password
- */
 async function resetPassword(req: Request, res: Response): Promise<void> {
   try {
     const { token, password } = resetPasswordSchema.parse(req.body);
@@ -380,30 +358,25 @@ async function resetPassword(req: Request, res: Response): Promise<void> {
   }
 }
 
-/**
- * GET /api/auth/me
- */
 async function getMe(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    const { data: profile, error } = await supabase
+    const { data: profileRow, error } = await supabase
       .from('user_profiles')
       .select('*')
       .eq('id', req.user.id)
       .single();
 
-    if (error || !profile) {
+    if (error || !profileRow) {
       res.status(404).json({ success: false, error: 'Profile not found' });
       return;
     }
 
-    const positionType = await resolveProfileRoleCode(profile as UserProfile & { system_role_id?: string | null });
-    const effectiveAccess = await getEffectiveAccess(profile.system_role_id ?? positionType);
-
-    const departmentId = await resolveDepartmentId(profile.employee_id);
-    const managedDepartmentIds = await resolveManagedDepartmentIds(profile.id, departmentId, profile.employee_id);
+    const profile = profileRow as UserProfile;
+    const { role, response, departmentId } = await buildProfileResponse(profile);
 
     const freshToken = generateAccessToken(
-      { ...profile, position_type: positionType } as UserProfile,
+      profile,
+      role,
       req.user.email,
       req.user.two_factor_verified,
       departmentId,
@@ -413,27 +386,8 @@ async function getMe(req: AuthenticatedRequest, res: Response): Promise<void> {
     res.json({
       success: true,
       access_token: freshToken,
-      user: {
-        id: profile.id,
-        email: req.user.email,
-      },
-      profile: {
-        id: profile.id,
-        full_name: profile.full_name,
-        position_type: positionType,
-        system_role_id: profile.system_role_id ?? null,
-        permissions: effectiveAccess.permissions,
-        page_access: effectiveAccess.page_access,
-        chat_inbound_mode: profile.chat_inbound_mode || 'open',
-        imported_position: profile.imported_position,
-        employee_id: profile.employee_id,
-        department_id: departmentId,
-        managed_department_ids: managedDepartmentIds,
-        supervisor_id: profile.supervisor_id,
-        is_approved: profile.is_approved,
-        two_factor_enabled: profile.two_factor_enabled,
-        created_at: profile.created_at,
-      },
+      user: { id: profile.id, email: req.user.email },
+      profile: { ...response, created_at: profile.created_at },
     });
   } catch (error) {
     console.error('Get me error:', error);
@@ -441,9 +395,6 @@ async function getMe(req: AuthenticatedRequest, res: Response): Promise<void> {
   }
 }
 
-/**
- * POST /api/auth/refresh
- */
 async function refresh(req: Request, res: Response): Promise<void> {
   try {
     const refreshToken = getRefreshTokenFromRequest(req);
@@ -460,28 +411,22 @@ async function refresh(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const { data: profile, error } = await supabase
+    const { data: profileRow, error } = await supabase
       .from('user_profiles')
       .select('*')
       .eq('id', decoded.sub)
       .single();
 
-    if (error || !profile || !profile.is_approved) {
+    if (error || !profileRow || !profileRow.is_approved) {
       clearSessionCookies(res);
       res.status(401).json({ success: false, error: 'Session is no longer valid' });
       return;
     }
 
-    const positionType = await resolveProfileRoleCode(profile as UserProfile & { system_role_id?: string | null });
-    const effectiveAccess = await getEffectiveAccess(profile.system_role_id ?? positionType);
-    const departmentId = await resolveDepartmentId(profile.employee_id);
-    const managedDepartmentIds = await resolveManagedDepartmentIds(profile.id, departmentId, profile.employee_id);
-    const accessToken = generateAccessToken(
-      { ...profile, position_type: positionType } as UserProfile,
-      decoded.email,
-      true,
-      departmentId,
-    );
+    const profile = profileRow as UserProfile;
+    const { role, response, departmentId } = await buildProfileResponse(profile);
+
+    const accessToken = generateAccessToken(profile, role, decoded.email, true, departmentId);
     const nextRefreshToken = generateRefreshToken(profile.id, decoded.email);
 
     setSessionCookies(res, accessToken, nextRefreshToken);
@@ -490,27 +435,8 @@ async function refresh(req: Request, res: Response): Promise<void> {
       success: true,
       access_token: accessToken,
       refresh_token: nextRefreshToken,
-      user: {
-        id: profile.id,
-        email: decoded.email,
-      },
-      profile: {
-        id: profile.id,
-        full_name: profile.full_name,
-        position_type: positionType,
-        system_role_id: profile.system_role_id ?? null,
-        permissions: effectiveAccess.permissions,
-        page_access: effectiveAccess.page_access,
-        chat_inbound_mode: profile.chat_inbound_mode || 'open',
-        imported_position: profile.imported_position,
-        employee_id: profile.employee_id,
-        department_id: departmentId,
-        managed_department_ids: managedDepartmentIds,
-        supervisor_id: profile.supervisor_id,
-        is_approved: profile.is_approved,
-        two_factor_enabled: profile.two_factor_enabled,
-        created_at: profile.created_at,
-      },
+      user: { id: profile.id, email: decoded.email },
+      profile: { ...response, created_at: profile.created_at },
     });
   } catch (error) {
     if (error instanceof jwt.TokenExpiredError || error instanceof jwt.JsonWebTokenError) {
@@ -523,9 +449,6 @@ async function refresh(req: Request, res: Response): Promise<void> {
   }
 }
 
-/**
- * POST /api/auth/logout
- */
 async function logout(_req: Request, res: Response): Promise<void> {
   clearSessionCookies(res);
   res.json({ success: true });

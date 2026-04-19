@@ -1,102 +1,61 @@
 import { supabase } from '../config/database.js';
-import {
-  TIMESHEET_WORKFLOW_MONITOR_PERMISSION,
-  TIMESHEET_WORKFLOW_REVIEW_PERMISSION,
-  TIMESHEET_WORKFLOW_SUBMIT_PERMISSION,
-  resolveDataScopeFromPermissions,
-  type DataScope,
-} from '../config/access-control.js';
-import { getEffectiveAccess } from './access-control.service.js';
+import { getRolePageAccess } from './access-control.service.js';
 import { loadManagedDepartmentMap } from './department-access.service.js';
-import { getRoleByCode, getRoleById } from './roles-cache.service.js';
+import { getRoleById } from './roles-cache.service.js';
 
 type WorkflowRecipientKind = 'submit' | 'review' | 'monitor';
 
 interface IUserProfileLite {
   id: string;
-  position_type: string | null;
-  system_role_id?: string | null;
+  system_role_id: string;
   employee_id: number | null;
 }
 
 interface IRoleWorkflowAccess {
   roleCode: string;
-  permissions: string[];
+  isAdmin: boolean;
   page_access: Record<string, { can_view: boolean; can_edit: boolean }>;
-  dataScope: DataScope | null;
 }
 
+// Какие страницы участвуют в workflow. Право на workflow выводится из can_view/can_edit.
 const WORKFLOW_RULES: Record<WorkflowRecipientKind, {
-  permission: string;
   pagePath: string;
   requiresEdit: boolean;
 }> = {
-  submit: {
-    permission: TIMESHEET_WORKFLOW_SUBMIT_PERMISSION,
-    pagePath: '/timesheet',
-    requiresEdit: true,
-  },
-  review: {
-    permission: TIMESHEET_WORKFLOW_REVIEW_PERMISSION,
-    pagePath: '/timesheet-hr',
-    requiresEdit: true,
-  },
-  monitor: {
-    permission: TIMESHEET_WORKFLOW_MONITOR_PERMISSION,
-    pagePath: '/timesheet-hr',
-    requiresEdit: false,
-  },
+  submit:  { pagePath: '/timesheet',    requiresEdit: true  },
+  review:  { pagePath: '/timesheet-hr', requiresEdit: true  },
+  monitor: { pagePath: '/timesheet-hr', requiresEdit: false },
 };
 
 function roleMatchesWorkflowKind(access: IRoleWorkflowAccess, kind: WorkflowRecipientKind): boolean {
   const rule = WORKFLOW_RULES[kind];
-  if (!access.permissions.includes(rule.permission)) {
-    return false;
-  }
-
   const pageAccess = access.page_access[rule.pagePath];
-  if (!pageAccess) {
-    return false;
-  }
-
-  return rule.requiresEdit
-    ? pageAccess.can_edit === true
-    : pageAccess.can_view === true || pageAccess.can_edit === true;
+  if (!pageAccess) return false;
+  return rule.requiresEdit ? !!pageAccess.can_edit : (!!pageAccess.can_view || !!pageAccess.can_edit);
 }
 
 async function loadDepartmentByEmployeeId(employeeIds: number[]): Promise<Map<number, string | null>> {
-  if (employeeIds.length === 0) {
-    return new Map();
-  }
+  if (employeeIds.length === 0) return new Map();
 
   const { data, error } = await supabase
     .from('employees')
     .select('id, org_department_id')
     .in('id', employeeIds);
 
-  if (error) {
-    throw error;
-  }
+  if (error) throw error;
 
-  return new Map(
-    (data || []).map((employee) => [employee.id as number, (employee.org_department_id as string | null) ?? null]),
-  );
+  return new Map((data || []).map(e => [e.id as number, (e.org_department_id as string | null) ?? null]));
 }
 
-async function loadRoleWorkflowAccess(roleRefs: string[]): Promise<Map<string, IRoleWorkflowAccess>> {
-  const uniqueRoleRefs = [...new Set(roleRefs.filter(Boolean))];
-  const entries = await Promise.all(uniqueRoleRefs.map(async (roleRef) => {
-    const effectiveAccess = await getEffectiveAccess(roleRef);
-    const resolvedRole = (await getRoleById(roleRef)) ?? (await getRoleByCode(roleRef));
-    return [
-      roleRef,
-      {
-        roleCode: resolvedRole?.code || roleRef,
-        permissions: effectiveAccess.permissions,
-        page_access: effectiveAccess.page_access,
-        dataScope: resolveDataScopeFromPermissions(effectiveAccess.permissions),
-      },
-    ] as const;
+async function loadRoleWorkflowAccess(roleIds: string[]): Promise<Map<string, IRoleWorkflowAccess>> {
+  const unique = [...new Set(roleIds.filter(Boolean))];
+  const entries = await Promise.all(unique.map(async (roleId) => {
+    const role = await getRoleById(roleId);
+    if (!role) {
+      return [roleId, { roleCode: roleId, isAdmin: false, page_access: {} }] as const;
+    }
+    const page_access = await getRolePageAccess(roleId);
+    return [roleId, { roleCode: role.code, isAdmin: !!role.is_admin, page_access }] as const;
   }));
 
   return new Map(entries);
@@ -107,91 +66,63 @@ export async function listTimesheetWorkflowRecipientIds(
   kinds: WorkflowRecipientKind[],
   options?: {
     excludeRoleCodes?: string[];
-    includeDataScopes?: DataScope[];
+    adminOnly?: boolean;
   },
 ): Promise<string[]> {
-  if (!departmentId || kinds.length === 0) {
-    return [];
-  }
+  if (!departmentId || kinds.length === 0) return [];
 
   const excludedRoleCodes = new Set(
-    (options?.excludeRoleCodes || [])
-      .map(code => code.trim())
-      .filter(Boolean),
+    (options?.excludeRoleCodes || []).map(code => code.trim()).filter(Boolean),
   );
-  const includedDataScopes = options?.includeDataScopes?.length
-    ? new Set(options.includeDataScopes)
-    : null;
 
   const { data, error } = await supabase
     .from('user_profiles')
-    .select('id, position_type, system_role_id, employee_id')
+    .select('id, system_role_id, employee_id')
     .eq('is_approved', true);
 
-  if (error) {
-    throw error;
-  }
+  if (error) throw error;
 
   const profiles = (data || []) as IUserProfileLite[];
-  if (profiles.length === 0) {
-    return [];
-  }
+  if (profiles.length === 0) return [];
 
   const departmentByEmployeeId = await loadDepartmentByEmployeeId(
     profiles
-      .map((profile) => profile.employee_id)
-      .filter((employeeId): employeeId is number => Number.isInteger(employeeId)),
+      .map(p => p.employee_id)
+      .filter((id): id is number => Number.isInteger(id)),
   );
+
   const managedDepartmentMap = await loadManagedDepartmentMap(
-    profiles.map(profile => ({
-      user_id: profile.id,
-      employee_id: profile.employee_id,
-      primary_department_id: profile.employee_id != null
-        ? (departmentByEmployeeId.get(profile.employee_id) ?? null)
+    profiles.map(p => ({
+      user_id: p.id,
+      employee_id: p.employee_id,
+      primary_department_id: p.employee_id != null
+        ? (departmentByEmployeeId.get(p.employee_id) ?? null)
         : null,
     })),
   );
-  const roleAccessByRef = await loadRoleWorkflowAccess(
-    profiles
-      .map((profile) => profile.system_role_id || profile.position_type)
-      .filter((roleRef): roleRef is string => typeof roleRef === 'string' && roleRef.length > 0),
+
+  const roleAccessById = await loadRoleWorkflowAccess(
+    profiles.map(p => p.system_role_id).filter((id): id is string => typeof id === 'string' && id.length > 0),
   );
 
   const recipients = new Set<string>();
 
   for (const profile of profiles) {
-    const roleRef = profile.system_role_id || profile.position_type;
-    if (!roleRef) {
-      continue;
-    }
+    const roleAccess = roleAccessById.get(profile.system_role_id);
+    if (!roleAccess) continue;
+    if (excludedRoleCodes.has(roleAccess.roleCode)) continue;
+    if (options?.adminOnly && !roleAccess.isAdmin) continue;
 
-    const roleAccess = roleAccessByRef.get(roleRef);
-    if (!roleAccess) {
-      continue;
-    }
+    if (!kinds.some(kind => roleMatchesWorkflowKind(roleAccess, kind))) continue;
 
-    if (excludedRoleCodes.has(roleAccess.roleCode)) {
-      continue;
-    }
-
-    if (includedDataScopes && (!roleAccess.dataScope || !includedDataScopes.has(roleAccess.dataScope))) {
-      continue;
-    }
-
-    if (!kinds.some((kind) => roleMatchesWorkflowKind(roleAccess, kind))) {
-      continue;
-    }
-
-    if (roleAccess.dataScope === 'all') {
+    if (roleAccess.isAdmin) {
       recipients.add(profile.id);
       continue;
     }
 
-    if (roleAccess.dataScope === 'department' && profile.employee_id != null) {
-      const managedDepartmentIds = managedDepartmentMap.get(profile.id)?.managed_department_ids || [];
-      if (managedDepartmentIds.includes(departmentId)) {
-        recipients.add(profile.id);
-      }
+    const managedDepartmentIds = managedDepartmentMap.get(profile.id)?.managed_department_ids || [];
+    if (managedDepartmentIds.includes(departmentId)) {
+      recipients.add(profile.id);
     }
   }
 

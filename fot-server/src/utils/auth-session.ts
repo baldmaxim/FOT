@@ -1,7 +1,7 @@
 import type { Request, Response, CookieOptions } from 'express';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
-import type { JWTPayload, UserProfile } from '../types/index.js';
+import type { JWTPayload, SystemRole, UserProfile } from '../types/index.js';
 
 export const ACCESS_TOKEN_COOKIE_NAME = 'fot_access_token';
 export const REFRESH_TOKEN_COOKIE_NAME = 'fot_refresh_token';
@@ -57,9 +57,8 @@ export function parseCookieHeader(cookieHeader?: string | null): Record<string, 
 }
 
 export function generateAccessToken(
-  profile: Pick<UserProfile, 'id' | 'position_type' | 'employee_id' | 'is_approved' | 'two_factor_enabled'> & {
-    system_role_id?: string | null;
-  },
+  profile: Pick<UserProfile, 'id' | 'system_role_id' | 'employee_id' | 'is_approved' | 'two_factor_enabled'>,
+  role: Pick<SystemRole, 'code' | 'is_admin' | 'employee_variant'>,
   email: string,
   twoFactorVerified: boolean,
   departmentId: string | null = null,
@@ -68,8 +67,10 @@ export function generateAccessToken(
     sub: profile.id,
     email,
     token_type: 'access',
-    position_type: profile.position_type,
-    system_role_id: profile.system_role_id ?? null,
+    system_role_id: profile.system_role_id,
+    role_code: role.code,
+    is_admin: !!role.is_admin,
+    employee_variant: role.employee_variant ?? null,
     employee_id: profile.employee_id,
     department_id: departmentId,
     is_approved: profile.is_approved,

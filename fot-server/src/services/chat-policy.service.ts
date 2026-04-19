@@ -1,6 +1,6 @@
 import { supabase } from '../config/database.js';
 import type { ChatInboundMode } from '../types/index.js';
-import { loadRolesCache } from './roles-cache.service.js';
+import { getRoleById } from './roles-cache.service.js';
 
 export type ChatAvailability = 'direct' | 'request' | 'forbidden';
 export type ChatRequestStatus = 'incoming_pending' | 'outgoing_pending' | null;
@@ -8,7 +8,8 @@ export type ChatRequestStatus = 'incoming_pending' | 'outgoing_pending' | null;
 export interface IChatUserContext {
   id: string;
   full_name: string | null;
-  position_type: string;
+  role_code: string;
+  is_admin: boolean;
   supervisor_id: string | null;
   employee_id: number | null;
   department_id: string | null;
@@ -26,8 +27,6 @@ export interface IChatPolicyDecision {
 type GrantState = {
   hasGrant: boolean;
 };
-
-const PRIVILEGED_DIRECT_ROLES = new Set(['hr', 'admin', 'super_admin']);
 
 const normalizePair = (left: string, right: string): [string, string] => {
   return left < right ? [left, right] : [right, left];
@@ -67,7 +66,7 @@ export const chatPolicyService = {
 
     const { data: profiles, error: profileError } = await supabase
       .from('user_profiles')
-      .select('id, full_name, position_type, supervisor_id, employee_id, chat_inbound_mode, is_approved')
+      .select('id, full_name, system_role_id, supervisor_id, employee_id, chat_inbound_mode, is_approved')
       .in('id', uniqueIds);
 
     if (profileError) {
@@ -76,7 +75,7 @@ export const chatPolicyService = {
 
     const employeeIds = (profiles || [])
       .map(profile => profile.employee_id)
-      .filter((employeeId): employeeId is number => typeof employeeId === 'number');
+      .filter((id): id is number => typeof id === 'number');
 
     const employeeDeptMap = new Map<number, string | null>();
     if (employeeIds.length > 0) {
@@ -95,18 +94,20 @@ export const chatPolicyService = {
     }
 
     const result = new Map<string, IChatUserContext>();
-    (profiles || []).forEach(profile => {
+    for (const profile of profiles || []) {
+      const role = await getRoleById(profile.system_role_id);
       result.set(profile.id, {
         id: profile.id,
         full_name: profile.full_name,
-        position_type: profile.position_type,
+        role_code: role?.code ?? '',
+        is_admin: !!role?.is_admin,
         supervisor_id: profile.supervisor_id,
         employee_id: profile.employee_id,
         department_id: profile.employee_id ? (employeeDeptMap.get(profile.employee_id) ?? null) : null,
         chat_inbound_mode: (profile.chat_inbound_mode || 'open') as ChatInboundMode,
         is_approved: !!profile.is_approved,
       });
-    });
+    }
 
     return result;
   },
@@ -193,10 +194,9 @@ export const chatPolicyService = {
       return buildDecision('forbidden', 'user_not_found', 'Пользователь недоступен для чата', null);
     }
 
-    const [grantState, requestStatuses, rolesCache] = await Promise.all([
+    const [grantState, requestStatuses] = await Promise.all([
       this.getGrantState(currentUserId, [targetUserId]),
       this.getPendingRequestStatuses(currentUserId, [targetUserId]),
-      loadRolesCache(),
     ]);
 
     return this.evaluatePair({
@@ -204,8 +204,6 @@ export const chatPolicyService = {
       targetUser,
       hasGrant: grantState.get(targetUserId)?.hasGrant ?? false,
       requestStatus: requestStatuses.get(targetUserId) ?? null,
-      headerLevel: rolesCache.get('header')?.level ?? 2,
-      targetLevel: rolesCache.get(targetUser.position_type)?.level ?? 0,
     });
   },
 
@@ -215,17 +213,14 @@ export const chatPolicyService = {
 
     if (uniqueIds.length === 0) return result;
 
-    const [contexts, grantState, requestStatuses, rolesCache] = await Promise.all([
+    const [contexts, grantState, requestStatuses] = await Promise.all([
       this.getUserContexts([currentUserId, ...uniqueIds]),
       this.getGrantState(currentUserId, uniqueIds),
       this.getPendingRequestStatuses(currentUserId, uniqueIds),
-      loadRolesCache(),
     ]);
 
     const currentUser = contexts.get(currentUserId);
     if (!currentUser) return result;
-
-    const headerLevel = rolesCache.get('header')?.level ?? 2;
 
     uniqueIds.forEach(targetUserId => {
       const targetUser = contexts.get(targetUserId);
@@ -236,8 +231,6 @@ export const chatPolicyService = {
         targetUser,
         hasGrant: grantState.get(targetUserId)?.hasGrant ?? false,
         requestStatus: requestStatuses.get(targetUserId) ?? null,
-        headerLevel,
-        targetLevel: rolesCache.get(targetUser.position_type)?.level ?? 0,
       }));
     });
 
@@ -249,17 +242,8 @@ export const chatPolicyService = {
     targetUser: IChatUserContext;
     hasGrant: boolean;
     requestStatus: ChatRequestStatus;
-    headerLevel: number;
-    targetLevel: number;
   }): IChatPolicyDecision {
-    const {
-      currentUser,
-      targetUser,
-      hasGrant,
-      requestStatus,
-      headerLevel,
-      targetLevel,
-    } = params;
+    const { currentUser, targetUser, hasGrant, requestStatus } = params;
 
     if (!targetUser.is_approved) {
       return buildDecision('forbidden', 'target_not_approved', 'Пользователь ещё не одобрен в системе', requestStatus);
@@ -269,8 +253,9 @@ export const chatPolicyService = {
       return buildDecision('direct', 'direct_grant', 'Контакт разрешён вручную', requestStatus);
     }
 
-    if (PRIVILEGED_DIRECT_ROLES.has(currentUser.position_type) || PRIVILEGED_DIRECT_ROLES.has(targetUser.position_type)) {
-      return buildDecision('direct', 'direct_privileged_role', 'Чат разрешён для HR и администраторов', requestStatus);
+    // Админы доступны всем напрямую.
+    if (currentUser.is_admin || targetUser.is_admin) {
+      return buildDecision('direct', 'direct_admin', 'Чат разрешён для администраторов', requestStatus);
     }
 
     if (targetUser.chat_inbound_mode === 'disabled') {
@@ -287,10 +272,6 @@ export const chatPolicyService = {
 
     if (targetUser.chat_inbound_mode === 'requests_only') {
       return buildDecision('request', 'request_requests_only', 'Этому пользователю нужно отправить запрос на контакт', requestStatus);
-    }
-
-    if (targetLevel >= headerLevel) {
-      return buildDecision('request', 'request_cross_department_manager', 'Руководителю другого подразделения можно писать только через запрос', requestStatus);
     }
 
     return buildDecision('forbidden', 'forbidden_cross_department', 'Новые чаты доступны только внутри отдела, по прямой иерархии или через разрешение', requestStatus);

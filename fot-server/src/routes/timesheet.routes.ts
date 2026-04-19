@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { timesheetController } from '../controllers/timesheet.controller.js';
-import { authenticate, requireAnyPageAccess, requireAnyPermission } from '../middleware/auth.js';
+import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -50,24 +50,24 @@ router.get(
   timesheetController.export
 );
 
-// POST /api/timesheet/export-mass
+// POST /api/timesheet/export-mass — доступ к очереди табелей HR.
 router.post(
   '/export-mass',
-  requireAnyPermission(['timesheet.workflow.monitor', 'timesheet.workflow.review']),
+  requirePageAccess('/timesheet-hr', 'view'),
   timesheetController.exportMass
 );
 
 // POST /api/timesheet/export-assigned
 router.post(
   '/export-assigned',
-  requireAnyPermission(['timesheet.workflow.monitor', 'timesheet.workflow.review']),
+  requirePageAccess('/timesheet-hr', 'view'),
   timesheetController.exportAssigned
 );
 
 // GET /api/timesheet/assigned-employees
 router.get(
   '/assigned-employees',
-  requireAnyPermission(['timesheet.workflow.monitor', 'timesheet.workflow.review']),
+  requirePageAccess('/timesheet-hr', 'view'),
   timesheetController.listAssignedEmployees
 );
 

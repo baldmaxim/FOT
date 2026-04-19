@@ -99,8 +99,8 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
         count: allUsers.filter(user => user.position_type === code).length,
       }))
       .sort((a, b) => {
-        const levelDiff = (a.role?.level ?? Number.MAX_SAFE_INTEGER) - (b.role?.level ?? Number.MAX_SAFE_INTEGER);
-        if (levelDiff !== 0) return levelDiff;
+        const adminDiff = Number(b.role?.is_admin ?? 0) - Number(a.role?.is_admin ?? 0);
+        if (adminDiff !== 0) return adminDiff;
         return getRoleLabel(a.code).localeCompare(getRoleLabel(b.code), 'ru');
       });
   }, [allUsers, getRoleLabel, roles]);
@@ -360,10 +360,9 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
               code: user.position_type,
               name: getRoleLabel(user.position_type),
               description: null,
-              permissions: [],
-              level: Number.MAX_SAFE_INTEGER,
+              is_admin: false,
+              employee_variant: null,
               is_active: false,
-              is_system: false,
               created_at: '',
               updated_at: '',
             });
@@ -458,7 +457,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
                         onChange={(e) => handlePositionChange(user.id, e.target.value as EmployeePositionType)}
                       >
                         {assignableRoles
-                          .sort((a, b) => a.level - b.level)
+                          .sort((a, b) => Number(b.is_admin) - Number(a.is_admin) || a.name.localeCompare(b.name, 'ru'))
                           .map(role => (
                             <option key={role.code} value={role.code}>{role.name}</option>
                           ))

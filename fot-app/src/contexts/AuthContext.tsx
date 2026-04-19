@@ -8,6 +8,7 @@ import type {
   LoginCredentials,
   RegisterData,
   EmployeePositionType,
+  EmployeeVariant,
   SystemRole,
 } from '../types';
 
@@ -28,20 +29,21 @@ interface RegisterResponse {
 interface AuthContextType extends AuthState {
   token: string | null;
   roles: SystemRole[];
+  isAdmin: boolean;
+  employeeVariant: EmployeeVariant | null;
   login: (credentials: LoginCredentials) => Promise<{ requires2FA: boolean }>;
   verify2FA: (code: string) => Promise<void>;
   register: (data: RegisterData) => Promise<RegisterResponse | null>;
   logout: () => void;
   refreshProfile: () => Promise<void>;
-  hasPosition: (positions: EmployeePositionType | EmployeePositionType[]) => boolean;
-  canAccess: (requiredPosition?: EmployeePositionType) => boolean;
-  hasPermission: (permission: string) => boolean;
   canViewPage: (pagePath: string) => boolean;
   canEditPage: (pagePath: string) => boolean;
   getRoleLabel: (code: string) => string;
-  // Deprecated aliases for compatibility
-  role: EmployeePositionType | null;
-  hasRole: (roles: EmployeePositionType | EmployeePositionType[]) => boolean;
+  /**
+   * @deprecated Используйте canViewPage/canEditPage или isAdmin.
+   * Оставлен как compat-shim для старых вызовов из timesheet/dashboard.
+   */
+  hasPermission: (permission: string) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -69,11 +71,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const response = await apiClient.get<{ data: SystemRole[] }>('/roles');
       setRoles(response.data ?? []);
     } catch {
-      // Не критично — используем пустой массив
+      // Не критично.
     }
   }, []);
 
-  // Check existing session on mount
   useEffect(() => {
     const checkAuth = async () => {
       const twoFactorVerified = sessionStorage.getItem('2fa_verified') === 'true';
@@ -97,7 +98,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           isApproved: profile.is_approved,
           isTwoFactorEnabled: profile.two_factor_enabled,
           isTwoFactorVerified: twoFactorVerified || !profile.two_factor_enabled,
-          positionType: profile.position_type,
+          positionType: profile.role_code,
           loading: false,
         });
       } catch {
@@ -118,8 +119,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setToken(response.access_token);
 
     if (response.requires_2fa) {
-      // Partially authenticated, needs 2FA
-      // Оставляем loading: true чтобы избежать мерцания UI при переходе на страницу 2FA
       setState({
         user: response.user,
         profile: response.profile,
@@ -127,13 +126,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isApproved: response.profile.is_approved,
         isTwoFactorEnabled: true,
         isTwoFactorVerified: false,
-        positionType: response.profile.position_type,
+        positionType: response.profile.role_code,
         loading: true,
       });
       return { requires2FA: true };
     }
 
-    // Fully authenticated
     sessionStorage.setItem('2fa_verified', 'true');
     await loadRoles();
     setState({
@@ -143,7 +141,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isApproved: response.profile.is_approved,
       isTwoFactorEnabled: response.profile.two_factor_enabled,
       isTwoFactorVerified: true,
-      positionType: response.profile.position_type,
+      positionType: response.profile.role_code,
       loading: false,
     });
 
@@ -159,11 +157,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     sessionStorage.setItem('2fa_verified', 'true');
-    setState(prev => ({
-      ...prev,
-      isTwoFactorVerified: true,
-      loading: false,
-    }));
+    setState(prev => ({ ...prev, isTwoFactorVerified: true, loading: false }));
   }, []);
 
   const register = useCallback(async (data: RegisterData): Promise<RegisterResponse | null> => {
@@ -194,7 +188,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         profile,
         isApproved: profile.is_approved,
         isTwoFactorEnabled: profile.two_factor_enabled,
-        positionType: profile.position_type,
+        positionType: profile.role_code,
       }));
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -203,77 +197,59 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [logout]);
 
-  const effectivePositionType = state.positionType;
-
-  // Check if user has one of the specified positions
-  const hasPosition = useCallback((positions: EmployeePositionType | EmployeePositionType[]): boolean => {
-    if (!effectivePositionType) return false;
-    const positionArray = Array.isArray(positions) ? positions : [positions];
-    return positionArray.includes(effectivePositionType);
-  }, [effectivePositionType]);
-
-  // Deprecated alias for backward compatibility
-  const hasRole = hasPosition;
-
-  const getRoleLevel = useCallback((code: string): number => {
-    return roles.find(r => r.code === code)?.level ?? 0;
-  }, [roles]);
-
   const getRoleLabel = useCallback((code: string): string => {
     return roles.find(r => r.code === code)?.name ?? code;
   }, [roles]);
 
-  const isSuperAdmin = effectivePositionType === 'super_admin';
+  const isAdmin = !!state.profile?.is_admin;
+  const employeeVariant = state.profile?.employee_variant ?? null;
 
-  const hasPermission = useCallback((permission: string): boolean => {
-    if (!state.isAuthenticated || !state.isApproved) return false;
-    if (state.isTwoFactorEnabled && !state.isTwoFactorVerified) return false;
-    if (isSuperAdmin) return true;
-    return state.profile?.permissions?.includes(permission) === true;
-  }, [isSuperAdmin, state.isAuthenticated, state.isApproved, state.isTwoFactorEnabled, state.isTwoFactorVerified, state.profile?.permissions]);
+  const ready = state.isAuthenticated && state.isApproved && (!state.isTwoFactorEnabled || state.isTwoFactorVerified);
 
   const canViewPage = useCallback((pagePath: string): boolean => {
-    if (!state.isAuthenticated || !state.isApproved) return false;
-    if (state.isTwoFactorEnabled && !state.isTwoFactorVerified) return false;
-    if (isSuperAdmin) return true;
+    if (!ready) return false;
+    if (state.profile?.is_admin) return true;
     return state.profile?.page_access?.[pagePath]?.can_view === true;
-  }, [isSuperAdmin, state.isAuthenticated, state.isApproved, state.isTwoFactorEnabled, state.isTwoFactorVerified, state.profile?.page_access]);
+  }, [ready, state.profile]);
 
   const canEditPage = useCallback((pagePath: string): boolean => {
-    if (!state.isAuthenticated || !state.isApproved) return false;
-    if (state.isTwoFactorEnabled && !state.isTwoFactorVerified) return false;
-    if (isSuperAdmin) return true;
+    if (!ready) return false;
+    if (state.profile?.is_admin) return true;
     return state.profile?.page_access?.[pagePath]?.can_edit === true;
-  }, [isSuperAdmin, state.isAuthenticated, state.isApproved, state.isTwoFactorEnabled, state.isTwoFactorVerified, state.profile?.page_access]);
+  }, [ready, state.profile]);
 
-  // Check if user can access based on position hierarchy (dynamic from system_roles)
-  const canAccess = useCallback((requiredPosition?: EmployeePositionType): boolean => {
-    if (!state.isAuthenticated || !state.isApproved) return false;
-    if (state.isTwoFactorEnabled && !state.isTwoFactorVerified) return false;
-    if (!requiredPosition) return true;
-    if (!effectivePositionType) return false;
-    return getRoleLevel(effectivePositionType) >= getRoleLevel(requiredPosition);
-  }, [state.isAuthenticated, state.isApproved, state.isTwoFactorEnabled, state.isTwoFactorVerified, effectivePositionType, getRoleLevel]);
+  const hasPermission = useCallback((permission: string): boolean => {
+    if (!ready) return false;
+    if (state.profile?.is_admin) return true;
+    switch (permission) {
+      case 'timesheet.workflow.submit':
+        return state.profile?.page_access?.['/timesheet']?.can_edit === true;
+      case 'timesheet.workflow.review':
+        return state.profile?.page_access?.['/timesheet-hr']?.can_edit === true;
+      case 'timesheet.workflow.monitor':
+        return state.profile?.page_access?.['/timesheet-hr']?.can_view === true;
+      case 'data.scope.all':
+        return !!state.profile?.is_admin;
+      default:
+        return false;
+    }
+  }, [ready, state.profile]);
 
   const value: AuthContextType = {
     ...state,
-    positionType: effectivePositionType,
     token,
     roles,
+    isAdmin,
+    employeeVariant,
     login,
     verify2FA,
     register,
     logout,
     refreshProfile,
-    hasPosition,
-    canAccess,
-    hasPermission,
     canViewPage,
     canEditPage,
     getRoleLabel,
-    // Deprecated aliases for compatibility
-    role: effectivePositionType,
-    hasRole,
+    hasPermission,
   };
 
   return (

@@ -16,7 +16,6 @@ import { exportTimesheetAssigned, listAssignedEmployees } from './timesheet-assi
 import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, loadCalendarMonth } from '../services/schedule.service.js';
 import {
   resolveManagedDepartmentIds,
-  resolveRequestDataScope,
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
 import { hasPageEdit, hasPageView } from '../services/access-control.service.js';
@@ -288,19 +287,13 @@ async function hasManagedTimesheetAccess(
   req: AuthenticatedRequest,
   action: 'view' | 'edit',
 ): Promise<boolean> {
-  const roleRef = req.user.system_role_id ?? req.user.position_type;
   const checker = action === 'edit' ? hasPageEdit : hasPageView;
-  const checks = await Promise.all(MANAGED_TIMESHEET_PAGE_KEYS.map(pageKey => checker(roleRef, pageKey)));
+  const checks = await Promise.all(MANAGED_TIMESHEET_PAGE_KEYS.map(pageKey => checker(req.user.role_code, pageKey)));
   return checks.some(Boolean);
 }
 
 async function resolveTimesheetScope(req: AuthenticatedRequest): Promise<DataScope | null> {
-  if (req.user.position_type === 'super_admin') {
-    return 'all';
-  }
-
-  const explicitScope = await resolveRequestDataScope(req);
-  if (explicitScope === 'all') {
+  if (req.user.is_admin) {
     return 'all';
   }
 
@@ -309,10 +302,6 @@ async function resolveTimesheetScope(req: AuthenticatedRequest): Promise<DataSco
     if (managedDepartmentIds.length > 0) {
       return 'department';
     }
-  }
-
-  if (explicitScope) {
-    return explicitScope;
   }
 
   if (req.user.employee_id) {
@@ -343,12 +332,11 @@ async function resolveTimesheetScopedDepartmentId(
 }
 
 async function isTimesheetTeamManagementAvailable(req: AuthenticatedRequest): Promise<boolean> {
-  if (req.user.position_type === 'super_admin') {
+  if (req.user.is_admin) {
     return true;
   }
 
-  const roleRef = req.user.system_role_id ?? req.user.position_type;
-  if (await hasPageEdit(roleRef, TIMESHEET_TEAM_MANAGEMENT_PAGE_KEY)) {
+  if (await hasPageEdit(req.user.role_code, TIMESHEET_TEAM_MANAGEMENT_PAGE_KEY)) {
     return hasManagedTimesheetAccess(req, 'view');
   }
 

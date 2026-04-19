@@ -14,13 +14,11 @@ interface IRoleSnapshot {
 interface IUserSnapshot {
   id: string;
   is_approved: boolean;
-  position_type: string;
-  system_role_id: string | null;
+  system_role_id: string;
 }
 
 interface IRoleAccessSnapshot {
   role_code: string;
-  system_role_id: string | null;
   page_path: string;
   can_view: boolean;
   can_edit: boolean;
@@ -34,35 +32,19 @@ interface ICriticalAccessMutation {
   removedUserIds?: string[];
 }
 
-function resolveUserRoleCode(user: IUserSnapshot, roleCodeById: Map<string, string>): string {
-  if (user.system_role_id) {
-    return roleCodeById.get(user.system_role_id) ?? user.position_type;
-  }
-
-  return user.position_type;
-}
-
 export async function ensureCriticalAdminAccess(mutation: ICriticalAccessMutation = {}): Promise<void> {
   const [{ data: roles, error: rolesError }, { data: users, error: usersError }, { data: accessRows, error: accessError }] = await Promise.all([
     supabase.from('system_roles').select('id, code, is_active'),
-    supabase.from('user_profiles').select('id, is_approved, position_type, system_role_id'),
-    supabase.from('role_page_access').select('role_code, system_role_id, page_path, can_view, can_edit'),
+    supabase.from('user_profiles').select('id, is_approved, system_role_id'),
+    supabase.from('role_page_access').select('role_code, page_path, can_view, can_edit'),
   ]);
 
-  if (rolesError) {
-    throw new Error(`Failed to load roles for access invariant: ${rolesError.message}`);
-  }
+  if (rolesError) throw new Error(`Failed to load roles for access invariant: ${rolesError.message}`);
+  if (usersError) throw new Error(`Failed to load users for access invariant: ${usersError.message}`);
+  if (accessError) throw new Error(`Failed to load role page access for invariant: ${accessError.message}`);
 
-  if (usersError) {
-    throw new Error(`Failed to load users for access invariant: ${usersError.message}`);
-  }
-
-  if (accessError) {
-    throw new Error(`Failed to load role page access for invariant: ${accessError.message}`);
-  }
-
-  const rolesByCode = new Map<string, IRoleSnapshot>((roles || []).map((role) => [role.code, role as IRoleSnapshot]));
-  const roleCodeById = new Map<string, string>((roles || []).map((role) => [role.id, role.code]));
+  const rolesByCode = new Map<string, IRoleSnapshot>((roles || []).map(role => [role.code, role as IRoleSnapshot]));
+  const roleCodeById = new Map<string, string>((roles || []).map(role => [role.id, role.code]));
   const roleActive = new Map<string, boolean>();
   const roleAccess = new Map<string, Map<string, AccessMode>>();
 
@@ -72,13 +54,11 @@ export async function ensureCriticalAdminAccess(mutation: ICriticalAccessMutatio
   }
 
   for (const row of (accessRows || []) as IRoleAccessSnapshot[]) {
-    const roleCode = row.role_code || (row.system_role_id ? roleCodeById.get(row.system_role_id) : null);
+    const roleCode = row.role_code;
     if (!roleCode) continue;
-
     if (!roleAccess.has(roleCode)) {
       roleAccess.set(roleCode, new Map());
     }
-
     roleAccess.get(roleCode)!.set(row.page_path, accessModeFromFlags(row));
   }
 
@@ -94,12 +74,10 @@ export async function ensureCriticalAdminAccess(mutation: ICriticalAccessMutatio
 
   for (const [roleCode, nextPageAccess] of Object.entries(mutation.rolePageAccessByCode || {})) {
     const map = new Map<string, AccessMode>();
-
     for (const [pageKey, mode] of Object.entries(nextPageAccess)) {
       if (mode === 'none') continue;
       map.set(pageKey, mode);
     }
-
     roleAccess.set(roleCode, map);
   }
 
@@ -107,29 +85,20 @@ export async function ensureCriticalAdminAccess(mutation: ICriticalAccessMutatio
 
   const hasCoverage = (users || []).some((rawUser) => {
     const user = rawUser as IUserSnapshot;
-    if (!user.is_approved || removedUserIds.has(user.id)) {
-      return false;
-    }
+    if (!user.is_approved || removedUserIds.has(user.id)) return false;
 
     const overriddenRoleCode = mutation.userRoleById?.[user.id];
     const roleCode = overriddenRoleCode === undefined
-      ? resolveUserRoleCode(user, roleCodeById)
+      ? roleCodeById.get(user.system_role_id) ?? null
       : overriddenRoleCode;
 
-    if (!roleCode) {
-      return false;
-    }
-
-    if (!roleActive.get(roleCode)) {
-      return false;
-    }
+    if (!roleCode) return false;
+    if (!roleActive.get(roleCode)) return false;
 
     const pageModes = roleAccess.get(roleCode);
-    if (!pageModes) {
-      return false;
-    }
+    if (!pageModes) return false;
 
-    return CRITICAL_ADMIN_PAGE_KEYS.every((pageKey) => pageModes.get(pageKey) === 'edit');
+    return CRITICAL_ADMIN_PAGE_KEYS.every(pageKey => pageModes.get(pageKey) === 'edit');
   });
 
   if (!hasCoverage) {

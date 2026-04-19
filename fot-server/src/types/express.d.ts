@@ -1,12 +1,13 @@
-import { EmployeePositionType } from './index.js';
-
 declare global {
   namespace Express {
     interface Request {
       user: {
         id: string;
         email: string;
-        position_type: EmployeePositionType;
+        system_role_id: string;
+        role_code: string;
+        is_admin: boolean;
+        employee_variant: 'object' | 'office' | null;
         employee_id: number | null;
         department_id: string | null;
         is_approved: boolean;
@@ -16,3 +17,5 @@ declare global {
     }
   }
 }
+
+export {};

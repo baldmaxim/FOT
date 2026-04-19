@@ -5,41 +5,38 @@ import { totpService } from '../services/totp.service.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest, UserProfile } from '../types/index.js';
 import { resolveDepartmentId } from './auth.controller.js';
+import { getRoleById } from '../services/roles-cache.service.js';
 import {
   generateAccessToken,
   generateRefreshToken,
   setSessionCookies,
 } from '../utils/auth-session.js';
 
-// Схемы валидации
 const verify2FASchema = z.object({
   code: z.string().length(6),
 });
 
 const recoveryCodeSchema = z.object({
-  code: z.string().min(8).max(9), // XXXX-XXXX или XXXXXXXX
+  code: z.string().min(8).max(9),
 });
 
-/**
- * POST /api/auth/verify-2fa
- * Верификация 2FA кода
- */
 export const verify2FA = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { code } = verify2FASchema.parse(req.body);
 
-    const { data: profile, error } = await supabase
+    const { data: profileRow, error } = await supabase
       .from('user_profiles')
       .select('*')
       .eq('id', req.user.id)
       .single();
 
-    if (error || !profile || !profile.totp_secret) {
+    if (error || !profileRow || !profileRow.totp_secret) {
       res.status(400).json({ success: false, error: '2FA not configured' });
       return;
     }
 
-    const isValid = totpService.verifyToken(profile.totp_secret, code);
+    const profile = profileRow as UserProfile;
+    const isValid = totpService.verifyToken(profile.totp_secret!, code);
 
     if (!isValid) {
       await auditService.logFromRequest(req, req.user.id, '2FA_FAILED');
@@ -47,8 +44,14 @@ export const verify2FA = async (req: AuthenticatedRequest, res: Response): Promi
       return;
     }
 
+    const role = await getRoleById(profile.system_role_id);
+    if (!role) {
+      res.status(500).json({ success: false, error: 'Роль пользователя не найдена' });
+      return;
+    }
+
     const departmentId = await resolveDepartmentId(profile.employee_id);
-    const token = generateAccessToken(profile as UserProfile, req.user.email, true, departmentId);
+    const token = generateAccessToken(profile, role, req.user.email, true, departmentId);
     const refreshToken = generateRefreshToken(profile.id, req.user.email);
     setSessionCookies(res, token, refreshToken);
 
@@ -62,7 +65,9 @@ export const verify2FA = async (req: AuthenticatedRequest, res: Response): Promi
         id: profile.id,
         email: req.user.email,
         full_name: profile.full_name,
-        position_type: profile.position_type,
+        role_code: role.code,
+        is_admin: role.is_admin,
+        employee_variant: role.employee_variant,
         imported_position: profile.imported_position,
         two_factor_enabled: profile.two_factor_enabled,
       },
@@ -77,26 +82,23 @@ export const verify2FA = async (req: AuthenticatedRequest, res: Response): Promi
   }
 };
 
-/**
- * POST /api/auth/recovery
- * Вход с кодом восстановления
- */
 export const useRecoveryCode = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { code } = recoveryCodeSchema.parse(req.body);
 
-    const { data: profile, error } = await supabase
+    const { data: profileRow, error } = await supabase
       .from('user_profiles')
       .select('*')
       .eq('id', req.user.id)
       .single();
 
-    if (error || !profile || !profile.recovery_codes) {
+    if (error || !profileRow || !profileRow.recovery_codes) {
       res.status(400).json({ success: false, error: 'Recovery codes not available' });
       return;
     }
 
-    const usedIndex = totpService.verifyRecoveryCode(profile.recovery_codes, code);
+    const profile = profileRow as UserProfile;
+    const usedIndex = totpService.verifyRecoveryCode(profile.recovery_codes!, code);
 
     if (usedIndex === -1) {
       await auditService.logFromRequest(req, req.user.id, '2FA_FAILED', {
@@ -106,7 +108,7 @@ export const useRecoveryCode = async (req: AuthenticatedRequest, res: Response):
       return;
     }
 
-    const updatedCodes = [...profile.recovery_codes];
+    const updatedCodes = [...profile.recovery_codes!];
     updatedCodes.splice(usedIndex, 1);
 
     await supabase
@@ -114,8 +116,14 @@ export const useRecoveryCode = async (req: AuthenticatedRequest, res: Response):
       .update({ recovery_codes: updatedCodes })
       .eq('id', req.user.id);
 
+    const role = await getRoleById(profile.system_role_id);
+    if (!role) {
+      res.status(500).json({ success: false, error: 'Роль пользователя не найдена' });
+      return;
+    }
+
     const departmentId = await resolveDepartmentId(profile.employee_id);
-    const token = generateAccessToken(profile as UserProfile, req.user.email, true, departmentId);
+    const token = generateAccessToken(profile, role, req.user.email, true, departmentId);
     const refreshToken = generateRefreshToken(profile.id, req.user.email);
     setSessionCookies(res, token, refreshToken);
 
@@ -132,7 +140,9 @@ export const useRecoveryCode = async (req: AuthenticatedRequest, res: Response):
         id: profile.id,
         email: req.user.email,
         full_name: profile.full_name,
-        position_type: profile.position_type,
+        role_code: role.code,
+        is_admin: role.is_admin,
+        employee_variant: role.employee_variant,
         two_factor_enabled: profile.two_factor_enabled,
       },
     });

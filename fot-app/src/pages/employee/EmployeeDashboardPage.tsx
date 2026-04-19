@@ -376,7 +376,7 @@ export const EmployeeDashboardPage: React.FC = () => {
 
       {activeModal && (
         <Suspense fallback={null}>
-          <RequestModal activeModal={activeModal} onClose={() => setActiveModal(null)} />
+          <RequestModal activeModal={activeModal} onClose={() => setActiveModal(null)} employeeId={employeeId} />
         </Suspense>
       )}
     </div>

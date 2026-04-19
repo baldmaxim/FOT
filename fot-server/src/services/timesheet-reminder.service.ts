@@ -162,7 +162,6 @@ export async function listTimesheetReminderRecipientIds(
       ['submit'],
       {
         excludeRoleCodes: [...REMINDER_EXCLUDED_ROLE_CODES],
-        includeDataScopes: ['department'],
       },
     ),
     listUserIdsAssignedToDepartment(departmentId),

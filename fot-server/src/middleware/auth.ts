@@ -3,40 +3,28 @@ import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
 import { CRITICAL_2FA_ENABLED } from '../config/features.js';
 import type { AccessAction } from '../config/access-control.js';
-import type { AuthenticatedRequest, JWTPayload, EmployeePositionType } from '../types/index.js';
-import {
-  hasAnyPermission,
-  hasPageEdit,
-  hasPageView,
-  hasPermission,
-} from '../services/access-control.service.js';
-import { getHierarchyLevel } from '../services/roles-cache.service.js';
+import type { AuthenticatedRequest, JWTPayload } from '../types/index.js';
+import { hasPageEdit, hasPageView } from '../services/access-control.service.js';
 import { getAccessTokenFromRequest } from '../utils/auth-session.js';
 
-/**
- * Middleware для проверки JWT токена
- */
 export const authenticate = async (
   req: AuthenticatedRequest,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): Promise<void> => {
   try {
     const token = getAccessTokenFromRequest(req);
-
     if (!token) {
       res.status(401).json({ success: false, error: 'Authorization token required' });
       return;
     }
 
-    // Верифицируем JWT
     const decoded = jwt.verify(token, env.JWT_SECRET) as JWTPayload;
     if (decoded.token_type === 'refresh') {
       res.status(401).json({ success: false, error: 'Invalid access token' });
       return;
     }
 
-    // Проверяем что пользователь одобрен
     if (!decoded.is_approved) {
       res.status(403).json({ success: false, error: 'Account not approved' });
       return;
@@ -45,8 +33,10 @@ export const authenticate = async (
     req.user = {
       id: decoded.sub,
       email: decoded.email,
-      position_type: decoded.position_type,
-      system_role_id: decoded.system_role_id ?? null,
+      system_role_id: decoded.system_role_id,
+      role_code: decoded.role_code,
+      is_admin: !!decoded.is_admin,
+      employee_variant: decoded.employee_variant ?? null,
       employee_id: decoded.employee_id ?? null,
       department_id: decoded.department_id ?? null,
       is_approved: decoded.is_approved,
@@ -69,21 +59,16 @@ export const authenticate = async (
   }
 };
 
-/**
- * Middleware для проверки 2FA
- * Используется для критичных операций
- */
 export const require2FA = (
   req: AuthenticatedRequest,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): void => {
   if (!req.user) {
     res.status(401).json({ success: false, error: 'Authentication required' });
     return;
   }
 
-  // Если 2FA включена, но не верифицирована в текущей сессии
   if (req.user.two_factor_enabled && !req.user.two_factor_verified) {
     res.status(403).json({ success: false, error: '2FA verification required' });
     return;
@@ -92,83 +77,16 @@ export const require2FA = (
   next();
 };
 
-/**
- * Middleware-обёртка: если CRITICAL_2FA_ENABLED=false — пропускает,
- * иначе ведёт себя как require2FA.
- */
 export const requireCritical2FA = (
   req: AuthenticatedRequest,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): void => {
   if (!CRITICAL_2FA_ENABLED) {
     next();
     return;
   }
   require2FA(req, res, next);
-};
-
-/**
- * Middleware для проверки должности пользователя
- */
-export const requirePosition = (...allowedPositions: EmployeePositionType[]) => {
-  return (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
-    if (!req.user) {
-      res.status(401).json({ success: false, error: 'Authentication required' });
-      return;
-    }
-
-    if (!allowedPositions.includes(req.user.position_type)) {
-      res.status(403).json({ success: false, error: 'Insufficient permissions' });
-      return;
-    }
-
-    next();
-  };
-};
-
-export const requirePermission = (permission: string) => {
-  return async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
-    if (!req.user) {
-      res.status(401).json({ success: false, error: 'Authentication required' });
-      return;
-    }
-
-    try {
-      const roleRef = req.user.system_role_id ?? req.user.position_type;
-      if (!(await hasPermission(roleRef, permission))) {
-        res.status(403).json({ success: false, error: 'Insufficient permissions' });
-        return;
-      }
-
-      next();
-    } catch (error) {
-      console.error('requirePermission error:', error);
-      res.status(500).json({ success: false, error: 'Authorization check failed' });
-    }
-  };
-};
-
-export const requireAnyPermission = (permissions: string[]) => {
-  return async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
-    if (!req.user) {
-      res.status(401).json({ success: false, error: 'Authentication required' });
-      return;
-    }
-
-    try {
-      const roleRef = req.user.system_role_id ?? req.user.position_type;
-      if (!(await hasAnyPermission(roleRef, permissions))) {
-        res.status(403).json({ success: false, error: 'Insufficient permissions' });
-        return;
-      }
-
-      next();
-    } catch (error) {
-      console.error('requireAnyPermission error:', error);
-      res.status(500).json({ success: false, error: 'Authorization check failed' });
-    }
-  };
 };
 
 export const requirePageAccess = (pagePath: string, action: AccessAction = 'view') => {
@@ -179,10 +97,9 @@ export const requirePageAccess = (pagePath: string, action: AccessAction = 'view
     }
 
     try {
-      const roleRef = req.user.system_role_id ?? req.user.position_type;
       const hasAccess = action === 'edit'
-        ? await hasPageEdit(roleRef, pagePath)
-        : await hasPageView(roleRef, pagePath);
+        ? await hasPageEdit(req.user.role_code, pagePath)
+        : await hasPageView(req.user.role_code, pagePath);
 
       if (!hasAccess) {
         res.status(403).json({ success: false, error: 'Insufficient permissions' });
@@ -205,12 +122,11 @@ export const requireAnyPageAccess = (pagePaths: string[], action: AccessAction =
     }
 
     try {
-      const roleRef = req.user.system_role_id ?? req.user.position_type;
       const checks = await Promise.all(
         pagePaths.map(pagePath => (
           action === 'edit'
-            ? hasPageEdit(roleRef, pagePath)
-            : hasPageView(roleRef, pagePath)
+            ? hasPageEdit(req.user.role_code, pagePath)
+            : hasPageView(req.user.role_code, pagePath)
         )),
       );
 
@@ -226,34 +142,3 @@ export const requireAnyPageAccess = (pagePaths: string[], action: AccessAction =
     }
   };
 };
-
-
-/**
- * Middleware для проверки должности пользователя по иерархии (динамически из system_roles)
- */
-export const requireMinPosition = (minPosition: EmployeePositionType) => {
-  return async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
-    if (!req.user) {
-      res.status(401).json({ success: false, error: 'Authentication required' });
-      return;
-    }
-
-    try {
-      const [userLevel, requiredLevel] = await Promise.all([
-        getHierarchyLevel(req.user.position_type),
-        getHierarchyLevel(minPosition),
-      ]);
-
-      if (userLevel < requiredLevel) {
-        res.status(403).json({ success: false, error: 'Insufficient permissions' });
-        return;
-      }
-
-      next();
-    } catch (error) {
-      console.error('requireMinPosition error:', error);
-      res.status(500).json({ success: false, error: 'Authorization check failed' });
-    }
-  };
-};
-

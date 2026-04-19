@@ -2,13 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import type { FC } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rolesService } from '../../services/rolesService';
-import type {
-  AccessMode,
-  PageCatalogItem,
-  PermissionGroup,
-} from '../../services/rolesService';
+import type { AccessMode, PageCatalogItem } from '../../services/rolesService';
 import { useToast } from '../../contexts/ToastContext';
-import type { SystemRole } from '../../types';
+import type { SystemRole, EmployeeVariant } from '../../types';
 import styles from './RoleManagementPage.module.css';
 
 type Tab = 'roles' | 'access';
@@ -16,20 +12,23 @@ type Tab = 'roles' | 'access';
 interface INewRoleForm {
   code: string;
   name: string;
-  level: string;
+  is_admin: boolean;
+  employee_variant: EmployeeVariant | '';
 }
 
 interface ICloneRoleForm {
   code: string;
   name: string;
-  level: string;
   description: string;
+  is_admin: boolean;
+  employee_variant: EmployeeVariant | '';
 }
 
 interface IEditState {
   code: string;
   name: string;
-  level: string;
+  is_admin: boolean;
+  employee_variant: EmployeeVariant | '';
 }
 
 interface IPageGroup {
@@ -41,57 +40,19 @@ interface IPageGroup {
 const EMPTY_ROLES: SystemRole[] = [];
 const ACCESS_OPTIONS: AccessMode[] = ['none', 'view', 'edit'];
 
-const normalizePermissions = (permissions: string[] | undefined): string[] =>
-  [...new Set(permissions ?? [])].sort();
-
-const serializePermissions = (permissions: string[] | undefined): string =>
-  JSON.stringify(normalizePermissions(permissions));
-
 const serializePageAccess = (pageAccess: Record<string, AccessMode> | undefined): string =>
   JSON.stringify(
     Object.entries(pageAccess ?? {})
       .filter(([, mode]) => mode !== 'none')
-      .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey, 'ru')),
+      .sort(([l], [r]) => l.localeCompare(r, 'ru')),
   );
 
 const toRoleCode = (value: string): string => value.toLowerCase().replace(/[^a-z_]/g, '');
 
-const getPermissionSelection = (permissions: string[], group: PermissionGroup): string | null => {
-  const selectedOption = group.options.find((option) => permissions.includes(option.code));
-  return selectedOption?.code ?? null;
-};
-
-const hasPermissionSelection = (permissions: string[], optionCode: string): boolean => (
-  permissions.includes(optionCode)
-);
-
-const TIMESHEET_ROLE_HINTS = [
-  'Бригадир: /timesheet edit + data.scope.department + Подача',
-  'Руководитель строительства: /timesheet-hr edit + data.scope.department|all + Проверка',
-  'HR по табелям: /timesheet-hr view|edit + data.scope.all + Мониторинг',
-];
-
-const updatePermissionSelection = (
-  currentPermissions: string[],
-  group: PermissionGroup,
-  nextCode: string | null,
-): string[] => {
-  const optionCodes = new Set(group.options.map((option) => option.code));
-  const preserved = currentPermissions.filter((permission) => !optionCodes.has(permission));
-
-  if (!nextCode) {
-    return normalizePermissions(preserved);
-  }
-
-  if (group.exclusive) {
-    return normalizePermissions([...preserved, nextCode]);
-  }
-
-  const nextPermissions = currentPermissions.includes(nextCode)
-    ? currentPermissions.filter((permission) => permission !== nextCode)
-    : [...currentPermissions, nextCode];
-
-  return normalizePermissions(nextPermissions);
+const employeeVariantLabel = (variant: EmployeeVariant | null): string => {
+  if (variant === 'object') return 'Рабочий (/employee, object)';
+  if (variant === 'office') return 'Офис (/employee, office)';
+  return '—';
 };
 
 export const RoleManagementPage: FC = () => {
@@ -100,21 +61,26 @@ export const RoleManagementPage: FC = () => {
 
   const [tab, setTab] = useState<Tab>('roles');
   const [showNewForm, setShowNewForm] = useState(false);
-  const [newForm, setNewForm] = useState<INewRoleForm>({ code: '', name: '', level: '' });
+  const [newForm, setNewForm] = useState<INewRoleForm>({
+    code: '',
+    name: '',
+    is_admin: false,
+    employee_variant: '',
+  });
   const [editState, setEditState] = useState<IEditState | null>(null);
   const [savingRole, setSavingRole] = useState(false);
 
   const [roleSearch, setRoleSearch] = useState('');
   const [selectedRoleCode, setSelectedRoleCode] = useState<string | null>(null);
-  const [draftPermissions, setDraftPermissions] = useState<string[]>([]);
   const [draftPageAccess, setDraftPageAccess] = useState<Record<string, AccessMode>>({});
   const [savingAccess, setSavingAccess] = useState(false);
   const [showCloneForm, setShowCloneForm] = useState(false);
   const [cloneForm, setCloneForm] = useState<ICloneRoleForm>({
     code: '',
     name: '',
-    level: '',
     description: '',
+    is_admin: false,
+    employee_variant: '',
   });
 
   const rolesQuery = useQuery<SystemRole[]>({
@@ -131,16 +97,14 @@ export const RoleManagementPage: FC = () => {
 
   const roles = rolesQuery.data ?? EMPTY_ROLES;
   const sortedRoles = useMemo(
-    () => [...roles].sort((left, right) => left.level - right.level || left.name.localeCompare(right.name, 'ru')),
+    () => [...roles].sort((l, r) => Number(r.is_admin) - Number(l.is_admin) || l.name.localeCompare(r.name, 'ru')),
     [roles],
   );
 
   const filteredRoles = useMemo(() => {
     const query = roleSearch.trim().toLowerCase();
     if (!query) return sortedRoles;
-    return sortedRoles.filter((role) =>
-      role.name.toLowerCase().includes(query) || role.code.toLowerCase().includes(query),
-    );
+    return sortedRoles.filter(r => r.name.toLowerCase().includes(query) || r.code.toLowerCase().includes(query));
   }, [roleSearch, sortedRoles]);
 
   useEffect(() => {
@@ -148,14 +112,13 @@ export const RoleManagementPage: FC = () => {
       setSelectedRoleCode(null);
       return;
     }
-
-    if (!selectedRoleCode || !sortedRoles.some((role) => role.code === selectedRoleCode)) {
+    if (!selectedRoleCode || !sortedRoles.some(r => r.code === selectedRoleCode)) {
       setSelectedRoleCode(sortedRoles[0].code);
     }
   }, [selectedRoleCode, sortedRoles]);
 
   const selectedRole = useMemo(
-    () => sortedRoles.find((role) => role.code === selectedRoleCode) ?? null,
+    () => sortedRoles.find(r => r.code === selectedRoleCode) ?? null,
     [selectedRoleCode, sortedRoles],
   );
 
@@ -169,90 +132,66 @@ export const RoleManagementPage: FC = () => {
 
   useEffect(() => {
     if (!accessProfileQuery.data) return;
-    setDraftPermissions(normalizePermissions(accessProfileQuery.data.permissions));
     setDraftPageAccess(accessProfileQuery.data.page_access ?? {});
   }, [accessProfileQuery.data]);
 
-  const capabilityGroups = catalogQuery.data?.capabilities ?? [];
   const pages = catalogQuery.data?.pages ?? [];
   const groupedPages = useMemo<IPageGroup[]>(() => {
     const groups = new Map<string, IPageGroup>();
-
-    for (const page of pages.filter((item) => item.surface === 'page')) {
+    for (const page of pages.filter(p => p.surface === 'page')) {
       if (!groups.has(page.group_code)) {
-        groups.set(page.group_code, {
-          code: page.group_code,
-          label: page.group_label,
-          pages: [],
-        });
+        groups.set(page.group_code, { code: page.group_code, label: page.group_label, pages: [] });
       }
-
       groups.get(page.group_code)!.pages.push(page);
     }
-
     return [...groups.values()];
   }, [pages]);
 
-  const technicalPages = useMemo(
-    () => pages.filter((page) => page.surface === 'technical'),
-    [pages],
-  );
+  const technicalPages = useMemo(() => pages.filter(p => p.surface === 'technical'), [pages]);
 
   const accessSummary = useMemo(() => {
-    const visiblePages = pages.filter((page) => page.surface === 'page');
-    const viewCount = visiblePages.filter((page) => (draftPageAccess[page.key] ?? 'none') !== 'none').length;
-    const editCount = visiblePages.filter((page) => (draftPageAccess[page.key] ?? 'none') === 'edit').length;
-    const technicalCount = technicalPages.filter((page) => (draftPageAccess[page.key] ?? 'none') !== 'none').length;
-
-    return {
-      totalPages: visiblePages.length,
-      viewCount,
-      editCount,
-      technicalCount,
-    };
+    const visible = pages.filter(p => p.surface === 'page');
+    const viewCount = visible.filter(p => (draftPageAccess[p.key] ?? 'none') !== 'none').length;
+    const editCount = visible.filter(p => (draftPageAccess[p.key] ?? 'none') === 'edit').length;
+    const techCount = technicalPages.filter(p => (draftPageAccess[p.key] ?? 'none') !== 'none').length;
+    return { totalPages: visible.length, viewCount, editCount, technicalCount: techCount };
   }, [draftPageAccess, pages, technicalPages]);
 
   const isAccessDirty = useMemo(() => {
     if (!accessProfileQuery.data) return false;
-    return (
-      serializePermissions(draftPermissions) !== serializePermissions(accessProfileQuery.data.permissions)
-      || serializePageAccess(draftPageAccess) !== serializePageAccess(accessProfileQuery.data.page_access)
-    );
-  }, [accessProfileQuery.data, draftPageAccess, draftPermissions]);
+    return serializePageAccess(draftPageAccess) !== serializePageAccess(accessProfileQuery.data.page_access);
+  }, [accessProfileQuery.data, draftPageAccess]);
 
   const upsertRoleInCache = (role: SystemRole) => {
     queryClient.setQueryData<SystemRole[]>(['roles', 'all'], (current) => {
       const list = current ?? [];
-      const exists = list.some((item) => item.code === role.code);
-      return exists
-        ? list.map((item) => (item.code === role.code ? role : item))
-        : [...list, role];
+      const exists = list.some(i => i.code === role.code);
+      return exists ? list.map(i => (i.code === role.code ? role : i)) : [...list, role];
     });
   };
 
   const removeRoleFromCache = (code: string) => {
     queryClient.setQueryData<SystemRole[]>(['roles', 'all'], (current) =>
-      (current ?? []).filter((item) => item.code !== code),
+      (current ?? []).filter(i => i.code !== code),
     );
     queryClient.removeQueries({ queryKey: ['roles', 'access-profile', code] });
   };
 
   const handleCreateRole = async () => {
-    const level = Number.parseInt(newForm.level, 10);
-    if (!newForm.code || !newForm.name || Number.isNaN(level)) {
-      toast.error('Заполните код, название и уровень роли');
+    if (!newForm.code || !newForm.name) {
+      toast.error('Заполните код и название роли');
       return;
     }
-
     setSavingRole(true);
     try {
       const createdRole = await rolesService.create({
         code: newForm.code,
         name: newForm.name,
-        level,
+        is_admin: newForm.is_admin,
+        employee_variant: newForm.employee_variant || null,
       });
       toast.success('Роль создана');
-      setNewForm({ code: '', name: '', level: '' });
+      setNewForm({ code: '', name: '', is_admin: false, employee_variant: '' });
       setShowNewForm(false);
       setSelectedRoleCode(createdRole.code);
       upsertRoleInCache(createdRole);
@@ -265,19 +204,17 @@ export const RoleManagementPage: FC = () => {
 
   const handleSaveEdit = async (code: string) => {
     if (!editState) return;
-
-    const level = Number.parseInt(editState.level, 10);
-    if (!editState.name || Number.isNaN(level)) {
-      toast.error('Заполните название и уровень роли');
+    if (!editState.name) {
+      toast.error('Заполните название роли');
       return;
     }
-
     setSavingRole(true);
     try {
       const updated = await rolesService.update(code, {
         name: editState.name,
-        description: roles.find((role) => role.code === code)?.description,
-        level,
+        description: roles.find(r => r.code === code)?.description,
+        is_admin: editState.is_admin,
+        employee_variant: editState.employee_variant || null,
       });
       toast.success('Роль обновлена');
       setEditState(null);
@@ -294,7 +231,8 @@ export const RoleManagementPage: FC = () => {
       const updated = await rolesService.update(role.code, {
         name: role.name,
         description: role.description,
-        level: role.level,
+        is_admin: role.is_admin,
+        employee_variant: role.employee_variant,
         is_active: !role.is_active,
       });
       toast.success(role.is_active ? 'Роль деактивирована' : 'Роль активирована');
@@ -305,22 +243,15 @@ export const RoleManagementPage: FC = () => {
   };
 
   const handleDeleteRole = async (code: string) => {
-    if (!confirm(`Удалить роль "${code}"? Это действие необратимо.`)) return;
-
+    if (!confirm(`Удалить роль "${code}"? Действие необратимо.`)) return;
     try {
       await rolesService.deleteRole(code);
       toast.success('Роль удалена');
-      if (selectedRoleCode === code) {
-        setSelectedRoleCode(null);
-      }
+      if (selectedRoleCode === code) setSelectedRoleCode(null);
       removeRoleFromCache(code);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка удаления роли');
     }
-  };
-
-  const handlePermissionChange = (group: PermissionGroup, nextCode: string | null) => {
-    setDraftPermissions((current) => updatePermissionSelection(current, group, nextCode));
   };
 
   const handlePageModeChange = (page: PageCatalogItem, mode: AccessMode) => {
@@ -331,27 +262,17 @@ export const RoleManagementPage: FC = () => {
         delete next[page.key];
         return next;
       }
-
-      return {
-        ...current,
-        [page.key]: nextMode,
-      };
+      return { ...current, [page.key]: nextMode };
     });
   };
 
   const handleSaveAccess = async () => {
     if (!selectedRoleCode) return;
-
     setSavingAccess(true);
     try {
-      await rolesService.updateAccessProfile(selectedRoleCode, {
-        permissions: draftPermissions,
-        page_access: draftPageAccess,
-      });
+      await rolesService.updateAccessProfile(selectedRoleCode, { page_access: draftPageAccess });
       toast.success('Профиль доступа сохранён');
-      await queryClient.invalidateQueries({
-        queryKey: ['roles', 'access-profile', selectedRoleCode],
-      });
+      await queryClient.invalidateQueries({ queryKey: ['roles', 'access-profile', selectedRoleCode] });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка сохранения профиля доступа');
     } finally {
@@ -364,28 +285,27 @@ export const RoleManagementPage: FC = () => {
     setCloneForm({
       code: '',
       name: `${selectedRole.name} (копия)`,
-      level: String(selectedRole.level),
       description: selectedRole.description ?? '',
+      is_admin: selectedRole.is_admin,
+      employee_variant: selectedRole.employee_variant ?? '',
     });
     setShowCloneForm(true);
   };
 
   const handleCloneRole = async () => {
     if (!selectedRole) return;
-
-    const level = Number.parseInt(cloneForm.level, 10);
-    if (!cloneForm.code || !cloneForm.name || Number.isNaN(level)) {
-      toast.error('Заполните код, название и уровень для новой роли');
+    if (!cloneForm.code || !cloneForm.name) {
+      toast.error('Заполните код и название для новой роли');
       return;
     }
-
     setSavingRole(true);
     try {
       const createdRole = await rolesService.cloneRole(selectedRole.code, {
         code: cloneForm.code,
         name: cloneForm.name,
         description: cloneForm.description || null,
-        level,
+        is_admin: cloneForm.is_admin,
+        employee_variant: cloneForm.employee_variant || null,
       });
       toast.success('Роль-копия создана');
       setShowCloneForm(false);
@@ -400,11 +320,10 @@ export const RoleManagementPage: FC = () => {
 
   const renderAccessControl = (page: PageCatalogItem) => {
     const currentMode = draftPageAccess[page.key] ?? 'none';
-    const options = page.supports_edit ? ACCESS_OPTIONS : ACCESS_OPTIONS.filter((mode) => mode !== 'edit');
-
+    const options = page.supports_edit ? ACCESS_OPTIONS : ACCESS_OPTIONS.filter(m => m !== 'edit');
     return (
       <div className={styles.segmentedControl}>
-        {options.map((mode) => (
+        {options.map(mode => (
           <button
             key={`${page.key}-${mode}`}
             type="button"
@@ -424,31 +343,25 @@ export const RoleManagementPage: FC = () => {
         <button
           className={`${styles.tab} ${tab === 'roles' ? styles.tabActive : ''}`}
           onClick={() => setTab('roles')}
-        >
-          Роли
-        </button>
+        >Роли</button>
         <button
           className={`${styles.tab} ${tab === 'access' ? styles.tabActive : ''}`}
           onClick={() => setTab('access')}
-        >
-          Доступ к страницам
-        </button>
+        >Доступ к страницам</button>
       </div>
 
-      {rolesQuery.isError && (
-        <div className={styles.loading}>Ошибка загрузки ролей</div>
-      )}
+      {rolesQuery.isError && <div className={styles.loading}>Ошибка загрузки ролей</div>}
 
       {tab === 'roles' && (
         <div className={styles.section}>
           <div className={styles.sectionHeader}>
             <div>
-              <h2 className={styles.sectionTitle}>Системные роли</h2>
+              <h2 className={styles.sectionTitle}>Роли</h2>
               <p className={styles.sectionHint}>
-                Управление справочником ролей. Доступы и поведение роли настраиваются на соседней вкладке.
+                Флаг «Админ» — видит все данные, обходит фильтр по отделам. «Вариант /employee» — какой личный кабинет открывать.
               </p>
             </div>
-            <button className={styles.primaryButton} onClick={() => setShowNewForm((value) => !value)}>
+            <button className={styles.primaryButton} onClick={() => setShowNewForm(v => !v)}>
               {showNewForm ? 'Скрыть форму' : '+ Добавить роль'}
             </button>
           </div>
@@ -457,30 +370,33 @@ export const RoleManagementPage: FC = () => {
             <div className={styles.inlineForm}>
               <input
                 className={styles.input}
-                placeholder="Код роли"
+                placeholder="Код роли (латиница, _)"
                 value={newForm.code}
-                onChange={(event) =>
-                  setNewForm((current) => ({
-                    ...current,
-                    code: toRoleCode(event.target.value),
-                  }))
-                }
+                onChange={e => setNewForm(s => ({ ...s, code: toRoleCode(e.target.value) }))}
               />
               <input
                 className={styles.input}
                 placeholder="Название"
                 value={newForm.name}
-                onChange={(event) => setNewForm((current) => ({ ...current, name: event.target.value }))}
+                onChange={e => setNewForm(s => ({ ...s, name: e.target.value }))}
               />
-              <input
-                className={styles.inputSmall}
-                type="number"
-                min={0}
-                max={100}
-                placeholder="Уровень"
-                value={newForm.level}
-                onChange={(event) => setNewForm((current) => ({ ...current, level: event.target.value }))}
-              />
+              <label className={styles.inlineCheckbox}>
+                <input
+                  type="checkbox"
+                  checked={newForm.is_admin}
+                  onChange={e => setNewForm(s => ({ ...s, is_admin: e.target.checked }))}
+                />
+                <span>Админ (видит все данные)</span>
+              </label>
+              <select
+                className={styles.input}
+                value={newForm.employee_variant}
+                onChange={e => setNewForm(s => ({ ...s, employee_variant: e.target.value as EmployeeVariant | '' }))}
+              >
+                <option value="">Без кабинета /employee</option>
+                <option value="office">Офис</option>
+                <option value="object">Рабочий (объект)</option>
+              </select>
               <div className={styles.formActions}>
                 <button className={styles.successButton} onClick={handleCreateRole} disabled={savingRole}>
                   Создать
@@ -501,52 +417,47 @@ export const RoleManagementPage: FC = () => {
                   <tr>
                     <th>Код</th>
                     <th>Название</th>
-                    <th>Уровень</th>
-                    <th>Тип</th>
+                    <th>Админ</th>
+                    <th>/employee</th>
                     <th>Статус</th>
                     <th></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedRoles.map((role) => (
+                  {sortedRoles.map(role => (
                     <tr key={role.code} className={!role.is_active ? styles.rowInactive : ''}>
-                      <td>
-                        <code className={styles.code}>{role.code}</code>
-                      </td>
+                      <td><code className={styles.code}>{role.code}</code></td>
                       <td>
                         {editState?.code === role.code ? (
                           <input
                             className={styles.inputInline}
                             value={editState.name}
-                            onChange={(event) =>
-                              setEditState((current) => (current ? { ...current, name: event.target.value } : current))
-                            }
+                            onChange={e => setEditState(s => (s ? { ...s, name: e.target.value } : s))}
                             autoFocus
                           />
-                        ) : (
-                          role.name
-                        )}
+                        ) : role.name}
                       </td>
                       <td>
                         {editState?.code === role.code ? (
                           <input
-                            className={styles.inputInlineSmall}
-                            type="number"
-                            min={0}
-                            max={100}
-                            value={editState.level}
-                            onChange={(event) =>
-                              setEditState((current) => (current ? { ...current, level: event.target.value } : current))
-                            }
+                            type="checkbox"
+                            checked={editState.is_admin}
+                            onChange={e => setEditState(s => (s ? { ...s, is_admin: e.target.checked } : s))}
                           />
-                        ) : (
-                          role.level
-                        )}
+                        ) : (role.is_admin ? '✓' : '—')}
                       </td>
                       <td>
-                        <span className={role.is_system ? styles.badgeSystem : styles.badgeCustom}>
-                          {role.is_system ? 'Системная' : 'Пользовательская'}
-                        </span>
+                        {editState?.code === role.code ? (
+                          <select
+                            className={styles.inputInline}
+                            value={editState.employee_variant}
+                            onChange={e => setEditState(s => (s ? { ...s, employee_variant: e.target.value as EmployeeVariant | '' } : s))}
+                          >
+                            <option value="">—</option>
+                            <option value="office">office</option>
+                            <option value="object">object</option>
+                          </select>
+                        ) : employeeVariantLabel(role.employee_variant)}
                       </td>
                       <td>
                         <button
@@ -574,17 +485,14 @@ export const RoleManagementPage: FC = () => {
                                 setEditState({
                                   code: role.code,
                                   name: role.name,
-                                  level: String(role.level),
+                                  is_admin: role.is_admin,
+                                  employee_variant: role.employee_variant ?? '',
                                 })
                               }
-                            >
-                              Изменить
+                            >Изменить</button>
+                            <button className={styles.dangerButton} onClick={() => handleDeleteRole(role.code)}>
+                              Удалить
                             </button>
-                            {!role.is_system && (
-                              <button className={styles.dangerButton} onClick={() => handleDeleteRole(role.code)}>
-                                Удалить
-                              </button>
-                            )}
                           </>
                         )}
                       </td>
@@ -604,17 +512,15 @@ export const RoleManagementPage: FC = () => {
               <h2 className={styles.sectionTitle}>Роли</h2>
               <span className={styles.sidebarCount}>{filteredRoles.length}</span>
             </div>
-
             <input
               className={styles.searchInput}
               type="search"
               value={roleSearch}
-              onChange={(event) => setRoleSearch(event.target.value)}
+              onChange={e => setRoleSearch(e.target.value)}
               placeholder="Поиск по коду или названию"
             />
-
             <div className={styles.roleList}>
-              {filteredRoles.map((role) => (
+              {filteredRoles.map(role => (
                 <button
                   key={role.code}
                   type="button"
@@ -629,7 +535,7 @@ export const RoleManagementPage: FC = () => {
                   </div>
                   <div className={styles.roleListMeta}>
                     <code className={styles.code}>{role.code}</code>
-                    <span>Уровень {role.level}</span>
+                    {role.is_admin && <span>• админ</span>}
                   </div>
                 </button>
               ))}
@@ -649,12 +555,12 @@ export const RoleManagementPage: FC = () => {
                   <div>
                     <h2 className={styles.sectionTitle}>{selectedRole.name}</h2>
                     <p className={styles.sectionHint}>
-                      Редактирование выполняется по одной роли. View-only страницы не показывают режим изменения, а технические ключи вынесены отдельно.
+                      Матрица доступа по страницам. Админы обходят этот фильтр автоматически.
                     </p>
                   </div>
                   <div className={styles.toolbarActions}>
                     <button className={styles.secondaryButton} onClick={openCloneForm}>
-                      Создать роль на основе этой
+                      Создать на основе этой
                     </button>
                     <button className={styles.successButton} onClick={handleSaveAccess} disabled={savingAccess || !isAccessDirty}>
                       {savingAccess ? 'Сохранение...' : 'Сохранить'}
@@ -668,33 +574,36 @@ export const RoleManagementPage: FC = () => {
                       className={styles.input}
                       placeholder="Новый код роли"
                       value={cloneForm.code}
-                      onChange={(event) =>
-                        setCloneForm((current) => ({
-                          ...current,
-                          code: toRoleCode(event.target.value),
-                        }))
-                      }
+                      onChange={e => setCloneForm(s => ({ ...s, code: toRoleCode(e.target.value) }))}
                     />
                     <input
                       className={styles.input}
                       placeholder="Новое название"
                       value={cloneForm.name}
-                      onChange={(event) => setCloneForm((current) => ({ ...current, name: event.target.value }))}
+                      onChange={e => setCloneForm(s => ({ ...s, name: e.target.value }))}
                     />
-                    <input
-                      className={styles.inputSmall}
-                      type="number"
-                      min={0}
-                      max={100}
-                      placeholder="Уровень"
-                      value={cloneForm.level}
-                      onChange={(event) => setCloneForm((current) => ({ ...current, level: event.target.value }))}
-                    />
+                    <label className={styles.inlineCheckbox}>
+                      <input
+                        type="checkbox"
+                        checked={cloneForm.is_admin}
+                        onChange={e => setCloneForm(s => ({ ...s, is_admin: e.target.checked }))}
+                      />
+                      <span>Админ</span>
+                    </label>
+                    <select
+                      className={styles.input}
+                      value={cloneForm.employee_variant}
+                      onChange={e => setCloneForm(s => ({ ...s, employee_variant: e.target.value as EmployeeVariant | '' }))}
+                    >
+                      <option value="">Без кабинета /employee</option>
+                      <option value="office">Офис</option>
+                      <option value="object">Рабочий</option>
+                    </select>
                     <input
                       className={styles.input}
                       placeholder="Описание (необязательно)"
                       value={cloneForm.description}
-                      onChange={(event) => setCloneForm((current) => ({ ...current, description: event.target.value }))}
+                      onChange={e => setCloneForm(s => ({ ...s, description: e.target.value }))}
                     />
                     <div className={styles.formActions}>
                       <button className={styles.successButton} onClick={handleCloneRole} disabled={savingRole}>
@@ -709,111 +618,32 @@ export const RoleManagementPage: FC = () => {
 
                 <div className={styles.summaryBar}>
                   <div className={styles.summaryCard}>
-                    <span>Страниц</span>
-                    <strong>{accessSummary.totalPages}</strong>
+                    <span>Страниц</span><strong>{accessSummary.totalPages}</strong>
                   </div>
                   <div className={styles.summaryCard}>
-                    <span>С просмотром</span>
-                    <strong>{accessSummary.viewCount}</strong>
+                    <span>С просмотром</span><strong>{accessSummary.viewCount}</strong>
                   </div>
                   <div className={styles.summaryCard}>
-                    <span>С изменением</span>
-                    <strong>{accessSummary.editCount}</strong>
+                    <span>С изменением</span><strong>{accessSummary.editCount}</strong>
                   </div>
                   <div className={styles.summaryCard}>
-                    <span>Технические</span>
-                    <strong>{accessSummary.technicalCount}</strong>
+                    <span>Технические</span><strong>{accessSummary.technicalCount}</strong>
                   </div>
                 </div>
 
                 <div className={styles.accessSections}>
-                  <div className={styles.card}>
-                    <div className={styles.cardHeader}>
-                      <h3 className={styles.cardTitle}>Поведение роли</h3>
-                      <p className={styles.cardHint}>
-                        Настройки capabilities, которые раньше жили на отдельной вкладке.
-                      </p>
-                    </div>
-
-                    <div className={styles.behaviorGroups}>
-                      {capabilityGroups.map((group) => {
-                        const selectedCode = getPermissionSelection(draftPermissions, group);
-
-                        return (
-                          <div key={group.code} className={styles.behaviorGroup}>
-                            <div className={styles.behaviorGroupHeader}>
-                              <div>
-                                <div className={styles.behaviorGroupTitle}>{group.label}</div>
-                                <div className={styles.behaviorGroupDescription}>{group.description}</div>
-                              </div>
-                            </div>
-
-                            {group.code === 'timesheet.workflow' && (
-                              <div className={styles.behaviorHintList}>
-                                {TIMESHEET_ROLE_HINTS.map((hint) => (
-                                  <div key={hint} className={styles.behaviorHintItem}>{hint}</div>
-                                ))}
-                              </div>
-                            )}
-
-                            <div className={styles.segmentedControl}>
-                              {group.exclusive && (
-                                <button
-                                  type="button"
-                                  className={`${styles.segmentedButton} ${selectedCode === null ? styles.segmentedButtonActive : ''}`}
-                                  onClick={() => handlePermissionChange(group, null)}
-                                >
-                                  Не выбрано
-                                </button>
-                              )}
-                              {!group.exclusive && (
-                                <button
-                                  type="button"
-                                  className={styles.segmentedButton}
-                                  onClick={() => handlePermissionChange(group, null)}
-                                >
-                                  Сбросить
-                                </button>
-                              )}
-                              {group.options.map((option) => {
-                                const isActive = group.exclusive
-                                  ? selectedCode === option.code
-                                  : hasPermissionSelection(draftPermissions, option.code);
-
-                                return (
-                                  <button
-                                    key={option.code}
-                                    type="button"
-                                    className={`${styles.segmentedButton} ${isActive ? styles.segmentedButtonActive : ''}`}
-                                    onClick={() => handlePermissionChange(group, option.code)}
-                                    title={option.description}
-                                  >
-                                    {option.label}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {groupedPages.map((group) => (
+                  {groupedPages.map(group => (
                     <div key={group.code} className={styles.card}>
                       <div className={styles.cardHeader}>
                         <h3 className={styles.cardTitle}>{group.label}</h3>
                       </div>
-
                       <div className={styles.pageRows}>
-                        {group.pages.map((page) => (
+                        {group.pages.map(page => (
                           <div key={page.key} className={styles.pageRow}>
                             <div className={styles.pageInfo}>
                               <div className={styles.pageLabelRow}>
                                 <span className={styles.pageLabel}>{page.label}</span>
-                                {!page.supports_edit && (
-                                  <span className={styles.readOnlyBadge}>Только просмотр</span>
-                                )}
+                                {!page.supports_edit && <span className={styles.readOnlyBadge}>Только просмотр</span>}
                               </div>
                               <code className={styles.pagePath}>{page.key}</code>
                             </div>
@@ -834,9 +664,8 @@ export const RoleManagementPage: FC = () => {
                             : 'скрыты по умолчанию'}
                         </span>
                       </summary>
-
                       <div className={styles.pageRows}>
-                        {technicalPages.map((page) => (
+                        {technicalPages.map(page => (
                           <div key={page.key} className={styles.pageRow}>
                             <div className={styles.pageInfo}>
                               <div className={styles.pageLabelRow}>

@@ -39,7 +39,7 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onRel
 
   const availableRoles = roles
     .filter(role => role.is_active)
-    .sort((a, b) => a.level - b.level || a.name.localeCompare(b.name, 'ru'));
+    .sort((a, b) => Number(b.is_admin) - Number(a.is_admin) || a.name.localeCompare(b.name, 'ru'));
 
   const openApprovalModal = (user: IPendingUser) => {
     setApprovalModal({

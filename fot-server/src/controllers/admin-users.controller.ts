@@ -4,7 +4,7 @@ import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest, ChatInboundMode, UserProfile } from '../types/index.js';
 import { logSupabaseError } from './admin-helpers.js';
-import { getRoleByCode } from '../services/roles-cache.service.js';
+import { getAllRoles, getRoleByCode } from '../services/roles-cache.service.js';
 import { ensureCriticalAdminAccess } from '../services/critical-admin-access.service.js';
 import { loadExplicitDepartmentMap, loadEmployeeAccessMap } from '../services/department-access.service.js';
 import { notificationService } from '../services/notification.service.js';
@@ -293,6 +293,9 @@ export const adminUsersController = {
         })),
       );
 
+      const allRoles = await getAllRoles();
+      const roleCodeById = new Map(allRoles.map(r => [r.id, r.code]));
+
       // Подгружаем email и статус подтверждения из Supabase Auth
       const authEmailMap: Record<string, { email: string; email_confirmed: boolean }> = {};
       try {
@@ -338,7 +341,7 @@ export const adminUsersController = {
           managed_department_ids: [...new Set(
             [deptId, ...additionalDepartmentIds].filter((value): value is string => Boolean(value)),
           )],
-          position_type: u.position_type,
+          position_type: roleCodeById.get(u.system_role_id) ?? '',
           imported_position: u.imported_position,
           employee_id: u.employee_id,
           supervisor_id: u.supervisor_id,
@@ -415,6 +418,9 @@ export const adminUsersController = {
         return;
       }
 
+      const allRoles = await getAllRoles();
+      const roleCodeById = new Map(allRoles.map(r => [r.id, r.code]));
+
       const usersWithEmail = await Promise.all(
         users.map(async (u: UserProfile) => {
           let email = '';
@@ -435,7 +441,7 @@ export const adminUsersController = {
             email,
             email_confirmed: emailConfirmed,
             full_name: u.full_name,
-            position_type: u.position_type,
+            position_type: roleCodeById.get(u.system_role_id) ?? '',
             imported_position: u.imported_position,
             created_at: u.created_at,
           };
@@ -629,7 +635,6 @@ export const adminUsersController = {
         is_approved: true,
         approved_by: req.user.id,
         approved_at: new Date().toISOString(),
-        position_type: roleAssignment.code,
         system_role_id: roleAssignment.id,
       };
 
@@ -832,7 +837,6 @@ export const adminUsersController = {
       const { error } = await supabase
         .from('user_profiles')
         .update({
-          position_type: roleAssignment.code,
           system_role_id: roleAssignment.id,
         })
         .eq('id', id);

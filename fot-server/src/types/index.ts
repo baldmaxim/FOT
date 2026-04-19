@@ -1,22 +1,18 @@
 import { Request } from 'express';
 
-// Тип должности (динамический, хранится в system_roles)
-export type EmployeePositionType = string;
 export type ChatInboundMode = 'open' | 'requests_only' | 'disabled';
+export type EmployeeVariant = 'object' | 'office';
 
-// Для обратной совместимости
-export type UserRole = EmployeePositionType;
-
-// Системная роль
+// Системная роль. Поведение роли задано её флагами (is_admin, employee_variant)
+// и матрицей role_page_access.
 export interface SystemRole {
   id: string;
   code: string;
   name: string;
   description: string | null;
-  permissions: string[];
-  level: number;
+  is_admin: boolean;
+  employee_variant: EmployeeVariant | null;
   is_active: boolean;
-  is_system: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -30,37 +26,37 @@ export interface RolePageAccess {
   can_edit: boolean;
 }
 
-// Форма профиля, которую бэк отправляет клиенту (без секретов и DB-полей).
-// Зеркально совпадает с fot-app/src/types/auth.ts::UserProfile.
+// Профиль, отправляемый клиенту (зеркало fot-app/src/types/auth.ts::UserProfile).
+// position_type оставлен как алиас role_code для обратной совместимости UI.
 export interface UserProfileResponse {
   id: string;
   full_name: string | null;
-  position_type: EmployeePositionType;
-  system_role_id?: string | null;
+  system_role_id: string;
+  role_code: string;
+  role_name: string;
+  position_type: string;
+  is_admin: boolean;
+  employee_variant: EmployeeVariant | null;
   employee_id: number | null;
   department_id: string | null;
   managed_department_ids: string[];
   supervisor_id: string | null;
   chat_inbound_mode: ChatInboundMode;
   imported_position: string | null;
-  permissions: string[];
   page_access: Record<string, { can_view: boolean; can_edit: boolean }>;
   is_approved: boolean;
   two_factor_enabled: boolean;
 }
 
-// Профиль пользователя в БД (полная форма, включая секреты).
-// Для ответов клиенту используйте UserProfileResponse.
+// Профиль пользователя в БД (включая секреты).
 export interface UserProfile {
   id: string;
   full_name: string | null;
-  position_type: EmployeePositionType;    // Заменяет role
-  system_role_id?: string | null;
-  employee_id: number | null;              // Связь с employees (заполняется админом)
-  managed_department_ids?: string[];       // Дополнительные управляемые отделы для API/UI
-  supervisor_id: string | null;            // ID руководителя
+  system_role_id: string;
+  employee_id: number | null;
+  supervisor_id: string | null;
   chat_inbound_mode: ChatInboundMode;
-  imported_position: string | null;        // Должность из импорта
+  imported_position: string | null;
   is_approved: boolean;
   approved_by: string | null;
   approved_at: string | null;
@@ -76,10 +72,12 @@ export interface AuthenticatedRequest extends Request {
   user: {
     id: string;
     email: string;
-    position_type: EmployeePositionType;  // Заменяет role
-    system_role_id?: string | null;
+    system_role_id: string;
+    role_code: string;
+    is_admin: boolean;
+    employee_variant: EmployeeVariant | null;
     employee_id: number | null;
-    department_id: string | null;         // org_department_id сотрудника
+    department_id: string | null;
     is_approved: boolean;
     two_factor_enabled: boolean;
     two_factor_verified: boolean;
@@ -164,7 +162,6 @@ export interface Employee {
   site_manager_full_name?: string | null;
 }
 
-// История зарплаты в БД
 export interface SalaryHistoryEncrypted {
   id: number;
   employee_id: number;
@@ -183,7 +180,6 @@ export interface SalaryHistory {
   created_at: string;
 }
 
-// Табель
 export type TimeStatus = 'work' | 'vacation' | 'dayoff' | 'remote' | 'unpaid' | 'absent' | 'sick' | 'business_trip' | 'manual';
 
 export interface TimeEntry {
@@ -197,7 +193,6 @@ export interface TimeEntry {
   updated_at: string;
 }
 
-// СКУД события в БД
 export interface SKUDEventEncrypted {
   id: number;
   employee_id: number;
@@ -232,7 +227,6 @@ export interface SKUDEvent {
   created_at: string;
 }
 
-// СКУД дневная сводка
 export interface SKUDDailySummary {
   id: number;
   employee_id: number;
@@ -247,7 +241,6 @@ export interface SKUDDailySummary {
   updated_at: string;
 }
 
-// Аудит логи
 export interface AuditLog {
   id: number;
   user_id: string;
@@ -260,7 +253,6 @@ export interface AuditLog {
   created_at: string;
 }
 
-// API ответы
 export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
@@ -270,13 +262,15 @@ export interface ApiResponse<T = unknown> {
 
 // JWT Payload
 export interface JWTPayload {
-  sub: string; // user id
+  sub: string;
   email: string;
   token_type?: 'access' | 'refresh';
-  position_type: EmployeePositionType;  // Заменяет role
-  system_role_id?: string | null;
+  system_role_id: string;
+  role_code: string;
+  is_admin: boolean;
+  employee_variant: EmployeeVariant | null;
   employee_id: number | null;
-  department_id: string | null;          // org_department_id сотрудника
+  department_id: string | null;
   is_approved: boolean;
   two_factor_enabled: boolean;
   two_factor_verified: boolean;
@@ -284,7 +278,6 @@ export interface JWTPayload {
   exp: number;
 }
 
-// Структура - Отдел в БД
 export interface OrgDepartmentEncrypted {
   id: string;
   parent_id: string | null;
@@ -297,7 +290,6 @@ export interface OrgDepartmentEncrypted {
   updated_at: string;
 }
 
-// Структура - Отдел для API
 export interface OrgDepartment {
   id: string;
   parent_id: string | null;
@@ -310,17 +302,14 @@ export interface OrgDepartment {
   updated_at: string;
 }
 
-// Узел дерева отделов (рекурсивный)
 export interface OrgDepartmentNode extends OrgDepartment {
   children: OrgDepartmentNode[];
 }
 
-// Полная структура для дерева
 export interface OrgStructureTree {
   departments: OrgDepartmentNode[];
 }
 
-// Типы заявлений
 export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'dayoff' | 'business_trip' | 'certificate';
 export type LeaveRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 
@@ -339,7 +328,6 @@ export interface LeaveRequest {
   updated_at: string;
 }
 
-// Заявка на повышение оклада
 export type SalaryRaiseStatus = 'draft' | 'admin_review' | 'approved' | 'rejected' | 'cancelled';
 export type SalaryRaiseRequestType = 'other';
 
@@ -392,7 +380,6 @@ export interface SalaryRaiseAttachment {
   created_at: string;
 }
 
-// Документы (R2)
 export type DocumentCategory = 'certificate' | 'scan' | 'approval' | 'payslip' | 'other';
 
 export interface Document {
@@ -408,7 +395,6 @@ export interface Document {
   created_at: string;
 }
 
-// Расчётные листки
 export interface Payslip {
   id: number;
   employee_id: number;
@@ -422,7 +408,6 @@ export interface Payslip {
   created_at: string;
 }
 
-// Выплаты
 export type PaymentType = 'salary' | 'advance' | 'bonus' | 'vacation_pay' | 'sick_pay' | 'other';
 
 export interface Payment {
@@ -437,10 +422,8 @@ export interface Payment {
   created_at: string;
 }
 
-// Графики работы
 export type ScheduleType = 'office' | 'remote' | 'hybrid' | 'shift';
 export type PatternType = '5+0' | '5+2' | '6+0' | 'custom';
-/** Код категории труда из work_categories.code — динамический, не enum */
 export type WorkCategory = string;
 
 export interface IWorkCategory {
@@ -541,7 +524,6 @@ export interface IProductionCalendarMonth {
   mandatory_holidays: string[];
 }
 
-// Согласование табелей
 export type TimesheetApprovalStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'returned';
 export type TimesheetApprovalHalf = 'H1' | 'H2';
 export type TimesheetResponsibleRole = 'primary' | 'backup';
@@ -583,6 +565,6 @@ export interface TimesheetResponsible {
   role: TimesheetResponsibleRole;
   is_active: boolean;
   full_name: string | null;
-  position_type: string | null;
+  role_code: string | null;
   employee_id: number | null;
 }

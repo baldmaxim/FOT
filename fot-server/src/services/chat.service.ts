@@ -31,7 +31,7 @@ export interface IChatMessage {
 export interface IChatUser {
   id: string;
   full_name: string | null;
-  position_type: string;
+  role_code: string;
   department_id: string | null;
   availability: ChatAvailability;
   availability_reason: string;
@@ -521,7 +521,7 @@ export const chatService = {
       results.push({
         id: context.id,
         full_name: context.full_name,
-        position_type: context.position_type,
+        role_code: context.role_code,
         department_id: context.department_id,
         availability: decision.availability,
         availability_reason: decision.availability_reason,

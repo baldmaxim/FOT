@@ -1,20 +1,19 @@
-// Тип должности (динамический, из system_roles)
 export type EmployeePositionType = string;
 export type ChatInboundMode = 'open' | 'requests_only' | 'disabled';
+export type EmployeeVariant = 'object' | 'office';
 
-// Для обратной совместимости (deprecated)
 export type UserRole = EmployeePositionType;
 
-// Системная роль (из БД system_roles)
+// Системная роль из БД system_roles.
+// Поведение роли задано флагами is_admin / employee_variant и матрицей page_access.
 export interface SystemRole {
   id: string;
   code: string;
   name: string;
   description: string | null;
-  permissions: string[];
-  level: number;
+  is_admin: boolean;
+  employee_variant: EmployeeVariant | null;
   is_active: boolean;
-  is_system: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -34,15 +33,19 @@ export interface User {
 export interface UserProfile {
   id: string;
   full_name: string | null;
-  position_type: EmployeePositionType;    // Заменяет role
-  system_role_id?: string | null;
-  employee_id: number | null;              // Связь с employees
-  department_id: string | null;            // org_department_id сотрудника
-  managed_department_ids: string[];        // Все управляемые отделы для department-scope
-  supervisor_id: string | null;            // ID руководителя
+  system_role_id: string;
+  role_code: string;
+  role_name: string;
+  // Алиас role_code — сохраняем для обратной совместимости UI.
+  position_type: EmployeePositionType;
+  is_admin: boolean;
+  employee_variant: EmployeeVariant | null;
+  employee_id: number | null;
+  department_id: string | null;
+  managed_department_ids: string[];
+  supervisor_id: string | null;
   chat_inbound_mode: ChatInboundMode;
-  imported_position: string | null;        // Должность из импорта (для worker)
-  permissions: string[];
+  imported_position: string | null;
   page_access: PageAccessMap;
   is_approved: boolean;
   two_factor_enabled: boolean;
@@ -56,7 +59,7 @@ export interface AuthState {
   isApproved: boolean;
   isTwoFactorEnabled: boolean;
   isTwoFactorVerified: boolean;
-  positionType: EmployeePositionType | null;  // Заменяет role
+  positionType: EmployeePositionType | null;
   loading: boolean;
 }
 
@@ -65,7 +68,6 @@ export interface LoginCredentials {
   password: string;
 }
 
-// Регистрация: email + пароль + ФИО
 export interface RegisterData {
   email: string;
   password: string;
@@ -78,7 +80,6 @@ export interface TwoFactorData {
   recoveryCodes: string[];
 }
 
-// Admin types
 export interface PendingUser {
   id: string;
   email: string;
