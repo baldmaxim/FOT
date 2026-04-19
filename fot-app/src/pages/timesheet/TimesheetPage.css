@@ -428,6 +428,80 @@
   color: var(--primary);
 }
 
+.ts-dept-item--muted {
+  color: var(--text-tertiary);
+  cursor: default;
+  text-align: center;
+}
+
+.ts-dept-item--muted:hover {
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+/* Assignee dropdown */
+.ts-assignee-dropdown {
+  min-width: 280px;
+}
+
+.ts-assignee-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ts-assignee-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-assignee-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+
+/* Mode switch (department / assigned) */
+.ts-mode-switch {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: 4px;
+}
+
+.ts-mode-chip {
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+  white-space: nowrap;
+}
+
+.ts-mode-chip:hover {
+  border-color: rgba(59, 130, 246, 0.25);
+  color: var(--text-primary);
+}
+
+.ts-mode-chip--active {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--primary);
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.12);
+}
+
 /* Status badge */
 .ts-status-badge {
   display: flex;

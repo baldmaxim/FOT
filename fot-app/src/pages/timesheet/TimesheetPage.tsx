@@ -5,9 +5,12 @@ import { useSearchParams } from 'react-router-dom';
 import { TimesheetStats } from '../../components/timesheet/TimesheetStats';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { TimesheetTeamManagementModal } from '../../components/timesheet/TimesheetTeamManagementModal';
+import { EmployeeTimesheetView } from '../../components/timesheet/EmployeeTimesheetView';
 import { timesheetService } from '../../services/timesheetService';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
+import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
+import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { getMonthLabel, formatDateRu, getDaysInMonth } from '../../utils/calendarUtils';
 import type {
   ManagedDepartmentTimesheetSummary,
@@ -149,6 +152,15 @@ export const TimesheetPage: FC = () => {
   const queryMonth = searchParams.get('month');
   const queryHalf = searchParams.get('half');
   const queryView = searchParams.get('view');
+  const queryMode = searchParams.get('mode');
+  const queryAssignee = searchParams.get('assignee');
+  const canUseAssignedMode = hasPermission('timesheet.workflow.monitor') || hasPermission('timesheet.workflow.review');
+  const timesheetMode: 'department' | 'assigned' = (queryMode === 'assigned' && canUseAssignedMode) ? 'assigned' : 'department';
+  const selectedAssigneeId = useMemo(() => {
+    if (timesheetMode !== 'assigned') return null;
+    const parsed = Number.parseInt(queryAssignee || '', 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }, [timesheetMode, queryAssignee]);
   const now = useMemo(() => new Date(), []);
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
@@ -176,6 +188,12 @@ export const TimesheetPage: FC = () => {
   const [deptOpen, setDeptOpen] = useState(false);
   const [deptSearch, setDeptSearch] = useState('');
   const deptRef = useRef<HTMLDivElement>(null);
+
+  // Assignee selector (assigned-mode)
+  const [assigneeOpen, setAssigneeOpen] = useState(false);
+  const [assigneeSearch, setAssigneeSearch] = useState('');
+  const assigneeRef = useRef<HTMLDivElement>(null);
+  const assigneesQuery = useAssignedEmployees(canUseAssignedMode && timesheetMode === 'assigned');
 
   // Side panel
   const [panelEmployee, setPanelEmployee] = useState<TimesheetEmployee | null>(null);
@@ -213,11 +231,14 @@ export const TimesheetPage: FC = () => {
     setSelectedDeptId(primaryDepartmentId || managedDepartmentIds[0] || null);
   }, [effectiveSelectedDeptId, isMultiDepartmentManager, managedDepartmentIds, primaryDepartmentId]);
 
-  // Close dept dropdown on outside click
+  // Close dept/assignee dropdown on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (deptRef.current && !deptRef.current.contains(e.target as Node)) {
         setDeptOpen(false);
+      }
+      if (assigneeRef.current && !assigneeRef.current.contains(e.target as Node)) {
+        setAssigneeOpen(false);
       }
     };
     document.addEventListener('mousedown', handler);
@@ -241,14 +262,14 @@ export const TimesheetPage: FC = () => {
       department_id: effectiveSelectedDeptId || undefined,
       half: activeSegment,
     }),
-    enabled: Boolean(effectiveSelectedDeptId),
+    enabled: timesheetMode === 'department' && Boolean(effectiveSelectedDeptId),
     staleTime: 30_000,
     placeholderData: previousData => previousData,
   });
   const overviewQuery = useQuery({
     queryKey: ['timesheet-overview', monthStr, activeSegment],
     queryFn: () => timesheetService.getOverview({ month: monthStr, half: activeSegment }),
-    enabled: isMultiDepartmentManager,
+    enabled: timesheetMode === 'department' && isMultiDepartmentManager,
     staleTime: 30_000,
     placeholderData: previousData => previousData,
   });
@@ -1058,6 +1079,56 @@ export const TimesheetPage: FC = () => {
     });
   }, [clearBulkState, setSearchParams]);
 
+  const handleTimesheetModeChange = useCallback((nextMode: 'department' | 'assigned') => {
+    clearBulkState();
+    setPanelOpen(false);
+    setModalOpen(false);
+    setDeptOpen(false);
+    setAssigneeOpen(false);
+    setAssigneeSearch('');
+    setSearchParams(current => {
+      const next = new URLSearchParams(current);
+      if (nextMode === 'assigned') {
+        next.set('mode', 'assigned');
+      } else {
+        next.delete('mode');
+        next.delete('assignee');
+      }
+      return next;
+    });
+  }, [clearBulkState, setSearchParams]);
+
+  const handleSelectAssignee = useCallback((employeeId: number | null) => {
+    setAssigneeOpen(false);
+    setAssigneeSearch('');
+    setSearchParams(current => {
+      const next = new URLSearchParams(current);
+      next.set('mode', 'assigned');
+      if (employeeId) {
+        next.set('assignee', String(employeeId));
+      } else {
+        next.delete('assignee');
+      }
+      return next;
+    });
+  }, [setSearchParams]);
+
+  const assignedEmployees = useMemo(() => assigneesQuery.data || [], [assigneesQuery.data]);
+  const filteredAssignees = useMemo(() => {
+    const q = assigneeSearch.trim().toLowerCase();
+    if (!q) return assignedEmployees;
+    return assignedEmployees.filter(emp => emp.full_name.toLowerCase().includes(q));
+  }, [assignedEmployees, assigneeSearch]);
+
+  const selectedAssignee = useMemo(() => {
+    if (!selectedAssigneeId) return null;
+    return assignedEmployees.find(emp => emp.id === selectedAssigneeId) || null;
+  }, [selectedAssigneeId, assignedEmployees]);
+
+  const assigneeButtonLabel = selectedAssignee
+    ? formatTimesheetEmployeeName(selectedAssignee.full_name)
+    : 'Выберите сотрудника';
+
   const monthNavigation = (
     <div className="ts-month-nav">
       <button type="button" className="ts-month-btn" onClick={prevMonth} disabled={!canGoPrevMonth}>
@@ -1113,7 +1184,67 @@ export const TimesheetPage: FC = () => {
     </div>
   );
 
-  const segmentControl = effectiveSelectedDeptId ? (
+  const assigneeControl = (
+    <div className="ts-dept-wrap" ref={assigneeRef}>
+      <button type="button" className="ts-dept-btn" onClick={() => setAssigneeOpen(!assigneeOpen)}>
+        {assigneeButtonLabel}
+        <ChevronDown size={16} />
+      </button>
+      {assigneeOpen && (
+        <div className="ts-dept-dropdown ts-assignee-dropdown">
+          <input
+            className="ts-dept-search"
+            placeholder="Поиск по ФИО..."
+            value={assigneeSearch}
+            onChange={e => setAssigneeSearch(e.target.value)}
+            autoFocus
+          />
+          {assigneesQuery.isLoading ? (
+            <div className="ts-dept-item ts-dept-item--muted">Загрузка...</div>
+          ) : assigneesQuery.isError ? (
+            <div className="ts-dept-item ts-dept-item--muted">Ошибка загрузки</div>
+          ) : filteredAssignees.length === 0 ? (
+            <div className="ts-dept-item ts-dept-item--muted">
+              {assignedEmployees.length === 0 ? 'Назначенных нет' : 'Никого не найдено'}
+            </div>
+          ) : filteredAssignees.map(emp => (
+            <div
+              key={emp.id}
+              className={`ts-dept-item ts-assignee-item ${selectedAssigneeId === emp.id ? 'ts-dept-item--active' : ''}`}
+              onClick={() => handleSelectAssignee(emp.id)}
+            >
+              <span className="ts-assignee-name">{formatTimesheetEmployeeName(emp.full_name)}</span>
+              <span className="ts-assignee-badge">{emp.department_count} отд.</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const modeControl = canUseAssignedMode ? (
+    <section className="ts-mode-switch">
+      <button
+        type="button"
+        className={`ts-mode-chip ${timesheetMode === 'department' ? 'ts-mode-chip--active' : ''}`}
+        onClick={() => handleTimesheetModeChange('department')}
+      >
+        По отделу
+      </button>
+      <button
+        type="button"
+        className={`ts-mode-chip ${timesheetMode === 'assigned' ? 'ts-mode-chip--active' : ''}`}
+        onClick={() => handleTimesheetModeChange('assigned')}
+      >
+        По назначенному
+      </button>
+    </section>
+  ) : null;
+
+  const selectorControl = timesheetMode === 'assigned' ? assigneeControl : departmentControl;
+  const isAssignedMode = timesheetMode === 'assigned';
+
+  const segmentControl = (!isAssignedMode && effectiveSelectedDeptId) ? (
     <section className="ts-half-switch">
       {(['H1', 'H2'] as TimesheetApprovalHalf[]).map(half => (
         <button
@@ -1138,7 +1269,7 @@ export const TimesheetPage: FC = () => {
       </button>
     </section>
   ) : null;
-  const viewControl = effectiveSelectedDeptId ? (
+  const viewControl = (!isAssignedMode && effectiveSelectedDeptId) ? (
     <section className="ts-view-switch">
       <button
         type="button"
@@ -1200,7 +1331,7 @@ export const TimesheetPage: FC = () => {
             <div className="ts-mobile-header-row">
               <h1 className="ts-title">Табель</h1>
               <div className="ts-mobile-header-actions">
-                {canUseTeamManagement && (
+                {!isAssignedMode && canUseTeamManagement && (
                   <button
                     type="button"
                     className="ts-btn ts-btn--chip"
@@ -1212,24 +1343,29 @@ export const TimesheetPage: FC = () => {
                     Добавить сотрудника
                   </button>
                 )}
-                <button
-                  type="button"
-                  className={`ts-btn ts-btn--chip${mobileApprovalVisible ? ' ts-btn--active' : ''}`}
-                  onClick={() => setMobileApprovalOpen(open => !open)}
-                >
-                  {mobileApprovalVisible ? 'Скрыть согласование' : 'Согласование'}
-                </button>
-                <button type="button" className="ts-btn ts-btn--icon" onClick={handleExport} aria-label="Экспорт табеля">
-                  <Download size={16} />
-                </button>
+                {!isAssignedMode && (
+                  <button
+                    type="button"
+                    className={`ts-btn ts-btn--chip${mobileApprovalVisible ? ' ts-btn--active' : ''}`}
+                    onClick={() => setMobileApprovalOpen(open => !open)}
+                  >
+                    {mobileApprovalVisible ? 'Скрыть согласование' : 'Согласование'}
+                  </button>
+                )}
+                {!isAssignedMode && (
+                  <button type="button" className="ts-btn ts-btn--icon" onClick={handleExport} aria-label="Экспорт табеля">
+                    <Download size={16} />
+                  </button>
+                )}
               </div>
             </div>
             <div className="ts-mobile-header-row ts-mobile-header-row--controls">
               {monthNavigation}
-              {departmentControl}
+              {selectorControl}
             </div>
-            <TimesheetStats stats={stats} compact />
-            {mobileApprovalVisible && !isMultiDepartmentManager && (
+            {modeControl}
+            {!isAssignedMode && <TimesheetStats stats={stats} compact />}
+            {mobileApprovalVisible && !isMultiDepartmentManager && !isAssignedMode && (
               <div className="ts-mobile-approval-panel">
                 <TimesheetApprovalBar
                   departmentId={effectiveSelectedDeptId}
@@ -1246,13 +1382,14 @@ export const TimesheetPage: FC = () => {
               <div className="ts-header-left">
                 <h1 className="ts-title">Табель</h1>
                 {monthNavigation}
-                {departmentControl}
+                {selectorControl}
+                {modeControl}
               </div>
 
-              <TimesheetStats stats={stats} />
+              {!isAssignedMode && <TimesheetStats stats={stats} />}
 
               <div className="ts-header-right">
-                {canUseTeamManagement && (
+                {!isAssignedMode && canUseTeamManagement && (
                   <button
                     type="button"
                     className="ts-btn ts-btn--primary"
@@ -1264,7 +1401,7 @@ export const TimesheetPage: FC = () => {
                     Добавить сотрудника
                   </button>
                 )}
-                {!isMobile && effectiveSelectedDeptId && (
+                {!isAssignedMode && !isMobile && effectiveSelectedDeptId && (
                   <button
                     type="button"
                     className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}
@@ -1273,17 +1410,19 @@ export const TimesheetPage: FC = () => {
                     Режим корректировок
                   </button>
                 )}
-                {!isMultiDepartmentManager && (
+                {!isAssignedMode && !isMultiDepartmentManager && (
                   <TimesheetApprovalBar
                     departmentId={effectiveSelectedDeptId}
                     month={`${year}-${String(month).padStart(2, '0')}`}
                     allowReview={false}
                   />
                 )}
-                <button type="button" className="ts-btn" onClick={handleExport}>
-                  <Download size={16} />
-                  Экспорт
-                </button>
+                {!isAssignedMode && (
+                  <button type="button" className="ts-btn" onClick={handleExport}>
+                    <Download size={16} />
+                    Экспорт
+                  </button>
+                )}
               </div>
             </div>
           </section>
@@ -1293,6 +1432,21 @@ export const TimesheetPage: FC = () => {
         {viewControl}
       </div>
 
+      {isAssignedMode ? (
+        selectedAssigneeId ? (
+          <EmployeeTimesheetView
+            employeeId={selectedAssigneeId}
+            year={year}
+            month={month}
+            canEdit={canEditTimesheet}
+          />
+        ) : (
+          <div className="ts-table-container">
+            <div className="ts-loading">Выберите назначенного сотрудника</div>
+          </div>
+        )
+      ) : (
+      <>
       {!isMobile && bulkModeEnabled && effectiveSelectedDeptId && (
         <section className="ts-bulk-bar">
           {viewMode === 'objects' ? (
@@ -1579,6 +1733,8 @@ export const TimesheetPage: FC = () => {
             allowedStatuses={viewMode === 'objects' ? ['manual'] : undefined}
           />
         </Suspense>
+      )}
+      </>
       )}
     </div>
   );
