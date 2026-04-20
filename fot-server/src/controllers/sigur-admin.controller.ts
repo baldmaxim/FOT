@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { AxiosError } from 'axios';
 import { auditService } from '../services/audit.service.js';
 import {
   batchMoveSigurDepartments,
@@ -66,6 +67,14 @@ function getErrorStatus(error: unknown): number {
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof AxiosError && error.response?.data) {
+    const data = error.response.data as Record<string, unknown> | string;
+    if (typeof data === 'string' && data.trim()) return data.trim();
+    if (typeof data === 'object') {
+      const msg = data.message ?? data.error ?? data.detail;
+      if (typeof msg === 'string' && msg.trim()) return msg.trim();
+    }
+  }
   return error instanceof Error && error.message ? error.message : fallback;
 }
 

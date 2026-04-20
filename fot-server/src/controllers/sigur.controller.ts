@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { AxiosError } from 'axios';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
@@ -1350,7 +1351,16 @@ export const sigurController = {
       });
     } catch (error) {
       console.error('Sigur update employee card expiration error:', error);
-      res.status(500).json({ success: false, error: 'Ошибка обновления срока действия пропуска' });
+      const status = error instanceof AxiosError && error.response?.status ? error.response.status : 500;
+      const data = error instanceof AxiosError ? error.response?.data as Record<string, unknown> | string | undefined : undefined;
+      let message = 'Ошибка обновления срока действия пропуска';
+      if (typeof data === 'string' && data.trim()) {
+        message = data.trim();
+      } else if (typeof data === 'object' && data) {
+        const msg = data.message ?? data.error ?? data.detail;
+        if (typeof msg === 'string' && msg.trim()) message = msg.trim();
+      }
+      res.status(status).json({ success: false, error: message });
     }
   },
 
