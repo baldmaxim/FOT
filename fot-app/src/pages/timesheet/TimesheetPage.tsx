@@ -140,7 +140,6 @@ export const TimesheetPage: FC = () => {
   const {
     isDepartmentScope,
     managedDepartmentIds,
-    managedDepartments,
     primaryDepartmentId,
     structureQuery,
   } = useManagedDepartments();
