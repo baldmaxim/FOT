@@ -349,10 +349,6 @@ export async function syncEmployeesLogic(
     if (!fullName) { skipped++; continue; }
 
     const sigurEmpId = emp.id;
-
-    // Пропускаем уволенных сотрудников
-    if (sigurEmpId && firedSigurIds.has(sigurEmpId)) { skipped++; continue; }
-
     const sigurDeptId = emp.departmentId;
     const orgDepartmentId = sigurDeptId ? sigurDeptToDbId.get(sigurDeptId) || null : null;
     const sigurPosId = emp.positionId;
@@ -369,6 +365,12 @@ export async function syncEmployeesLogic(
       const dbId = sigurIdToDbId.get(sigurEmpId)!;
       const updateFields: Record<string, unknown> = {};
       const prev = dbEmpById.get(dbId);
+
+      // Реактивация: сотрудник помечен уволенным в БД, но по-прежнему присутствует в Sigur
+      if (sigurEmpId && firedSigurIds.has(sigurEmpId)) {
+        updateFields.employment_status = 'active';
+        console.log(`[syncEmployees] reactivate: ${fullName} (sigurId=${sigurEmpId})`);
+      }
 
       if (orgDepartmentId) {
         updateFields.org_department_id = orgDepartmentId;
@@ -411,6 +413,8 @@ export async function syncEmployeesLogic(
       // Whitelist ограничивает только вставку новых сотрудников, не обновление существующих.
       // Вставляем только сотрудников из реально выбранных для sync отделов.
       if (whitelist && (sigurDeptId == null || !whitelist.has(sigurDeptId))) {
+        const deptName = (sigurDeptId ? sigurDeptToName.get(sigurDeptId) : null) || `sigurDeptId=${sigurDeptId ?? 'null'}`;
+        console.log(`[syncEmployees] skip insert (whitelist): ${fullName} | dept: ${deptName}`);
         skipped++;
         continue;
       }
@@ -421,6 +425,8 @@ export async function syncEmployeesLogic(
         first_name: fio.firstName || null,
         middle_name: fio.middleName || null,
         hire_date: new Date().toISOString().slice(0, 10),
+        employment_status: 'active',
+        is_archived: false,
         sigur_employee_id: sigurEmpId || null,
         org_department_id: orgDepartmentId,
         position_id: positionId,
