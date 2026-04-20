@@ -107,12 +107,12 @@ const daysUntil = (iso: string | null | undefined): number | null => {
 const PATENT_WARN_DAYS = 30;
 
 export const ObjectWorkerDashboardPage: FC = () => {
-  const { profile, logout, positionType } = useAuth();
+  const { profile, logout, isAdmin } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  const isPreview = positionType === 'super_admin' && searchParams.get('preview') === 'worker';
+  const isPreview = isAdmin && searchParams.get('preview') === 'worker';
   const employeeId = profile?.employee_id ?? null;
 
   const [employee, setEmployee] = useState<Employee | null>(null);
