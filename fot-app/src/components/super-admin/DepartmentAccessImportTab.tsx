@@ -10,7 +10,7 @@ import { useStructureTree } from '../../hooks/useStructure';
 import { useToast } from '../../contexts/ToastContext';
 import type { Employee } from '../../types';
 import type { IUserFromApi } from './AllUsersTab';
-import { getSortedFlatDepartments } from '../../utils/departmentUtils';
+import { getTreeFlatDepartments } from '../../utils/departmentUtils';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
 
 interface IDepartmentAccessImportTabProps {
@@ -153,7 +153,7 @@ export const DepartmentAccessImportTab: FC<IDepartmentAccessImportTabProps> = ({
     [employeeOptions],
   );
   const flatDepartments = useMemo(
-    () => getSortedFlatDepartments(structureQuery.data?.departments || []),
+    () => getTreeFlatDepartments(structureQuery.data?.departments || []),
     [structureQuery.data?.departments],
   );
   const departmentOptionMap = useMemo(
@@ -547,9 +547,11 @@ export const DepartmentAccessImportTab: FC<IDepartmentAccessImportTabProps> = ({
                           ? []
                           : flatDepartments
                               .filter(department => (
-                                normalizedQuery.length > 0
-                                  ? normalizeText(department.name).includes(normalizedQuery)
-                                  : true
+                                !department.hasChildren && (
+                                  normalizedQuery.length > 0
+                                    ? normalizeText(department.name).includes(normalizedQuery)
+                                    : true
+                                )
                               ))
                               .slice(0, MAX_MANUAL_DEPARTMENT_RESULTS);
 

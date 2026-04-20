@@ -7,7 +7,7 @@ import {
 import { useStructureTree } from '../../hooks/useStructure';
 import { useToast } from '../../contexts/ToastContext';
 import type { IUserFromApi } from './AllUsersTab';
-import { getSortedFlatDepartments } from '../../utils/departmentUtils';
+import { getTreeFlatDepartments } from '../../utils/departmentUtils';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
 
 interface IEmployeeDepartmentAssignmentsTabProps {
@@ -52,7 +52,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
   });
 
   const flatDepts = useMemo(
-    () => getSortedFlatDepartments(structureQuery.data?.departments || []),
+    () => getTreeFlatDepartments(structureQuery.data?.departments || []),
     [structureQuery.data?.departments],
   );
   const departmentMap = useMemo(
@@ -328,6 +328,17 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
                       <div className={styles.departmentAccessList}>
                         {filteredAdditionalDepartments.length > 0 ? (
                           filteredAdditionalDepartments.map(department => {
+                            if (department.hasChildren) {
+                              return (
+                                <div
+                                  key={department.id}
+                                  className={styles.departmentAccessGroupHeader}
+                                  style={{ paddingLeft: `${department.level * 14}px` }}
+                                >
+                                  {department.name}
+                                </div>
+                              );
+                            }
                             const checked = additionalDepartmentIds.includes(department.id);
                             return (
                               <label

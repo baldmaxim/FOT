@@ -9,6 +9,7 @@ export interface IDepartmentOption {
 export interface IFlatDepartmentOption extends IDepartmentOption {
   id: string;
   level: number;
+  hasChildren: boolean;
 }
 
 const departmentNameCollator = new Intl.Collator('ru', {
@@ -95,13 +96,16 @@ export const flattenDepartmentTree = (nodes: OrgDepartmentNode[], level = 0): IF
       continue;
     }
 
-    result.push({ id: node.id, name: node.name, level });
+    result.push({ id: node.id, name: node.name, level, hasChildren: (node.children?.length ?? 0) > 0 });
     if (node.children?.length) {
       result.push(...flattenDepartmentTree(node.children, level + 1));
     }
   }
   return result;
 };
+
+export const getTreeFlatDepartments = (nodes: OrgDepartmentNode[]): IFlatDepartmentOption[] =>
+  flattenDepartmentTree(sortDepartmentTree(nodes));
 
 export const getSortedDepartmentOptions = (nodes: OrgDepartmentNode[]): IDepartmentOption[] => (
   getSortedFlatDepartments(nodes).map(({ id, name }) => ({ id, name }))

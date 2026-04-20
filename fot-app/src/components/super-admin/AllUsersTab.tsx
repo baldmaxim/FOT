@@ -5,7 +5,7 @@ import { useStructureTree } from '../../hooks/useStructure';
 import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
 import type { ChatInboundMode, EmployeePositionType, TwoFactorData } from '../../types';
-import { getSortedFlatDepartments } from '../../utils/departmentUtils';
+import { getTreeFlatDepartments } from '../../utils/departmentUtils';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
 
 export interface IUserFromApi {
@@ -78,7 +78,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
     loading: false,
   });
   const flatDepts = useMemo(
-    () => getSortedFlatDepartments(structureQuery.data?.departments || []),
+    () => getTreeFlatDepartments(structureQuery.data?.departments || []),
     [structureQuery.data?.departments],
   );
   const departmentMap = useMemo(
@@ -488,7 +488,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
                           {user.employee_id ? 'Выберите отдел' : 'Сначала привяжите СКУД'}
                         </option>
                         {flatDepts.map(d => (
-                          <option key={d.id} value={d.id}>
+                          <option key={d.id} value={d.id} disabled={d.hasChildren}>
                             {'\u00A0\u00A0'.repeat(d.level)}{d.name}
                           </option>
                         ))}

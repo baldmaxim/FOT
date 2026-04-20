@@ -20,7 +20,7 @@ import { useToast } from '../contexts/ToastContext';
 import { DeptSelect } from '../components/staff/DeptSelect';
 import type { Employee, EmployeeHistoryEvent, EmployeeInput, EnrichPreview, ContactsEnrichPreview } from '../types';
 import type { IFlatDepartmentOption } from '../utils/departmentUtils';
-import { getSortedFlatDepartments } from '../utils/departmentUtils';
+import { getTreeFlatDepartments } from '../utils/departmentUtils';
 import '../styles/StaffControlPage.css';
 
 const HistoryPanel = lazy(() => import('../components/staff/HistoryPanel').then(m => ({ default: m.HistoryPanel })));
@@ -1130,7 +1130,7 @@ export const StaffControlPage: FC = () => {
 
   /* ─── memoized computations ─── */
 
-  const allDepts = useMemo(() => getSortedFlatDepartments(departments), [departments]);
+  const allDepts = useMemo(() => getTreeFlatDepartments(departments), [departments]);
   const brigadeOptions = useMemo<IBrigadeOption[]>(
     () => allDepts
       .filter(department => isBrigadeDepartmentName(department.name) && (countsByDepartment[department.id] || 0) > 0)

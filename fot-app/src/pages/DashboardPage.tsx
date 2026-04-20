@@ -7,7 +7,7 @@ import { usePresenceRealtime } from '../hooks/usePresenceRealtime';
 import { useStructureTree } from '../hooks/useStructure';
 import { useAuth } from '../contexts/AuthContext';
 import type { DashboardPeriod } from '../types';
-import { getSortedFlatDepartments } from '../utils/departmentUtils';
+import { getTreeFlatDepartments } from '../utils/departmentUtils';
 import '../styles/DashboardPage.css';
 
 const ActivityList = lazy(() => import('../components/dashboard/ActivityList').then(m => ({ default: m.ActivityList })));
@@ -75,7 +75,7 @@ export const DashboardPage: React.FC = () => {
 
   const deptOptions = useMemo(() => {
     if (isDepartmentScope) return [];
-    return getSortedFlatDepartments(structureQuery.data?.departments || []);
+    return getTreeFlatDepartments(structureQuery.data?.departments || []);
   }, [isDepartmentScope, structureQuery.data?.departments]);
 
   useEffect(() => {
@@ -245,13 +245,20 @@ export const DashboardPage: React.FC = () => {
         <div className={`dash-dept-menu ${!effectiveSelectedDeptId ? 'dash-dept-menu--center' : ''}`}>
           <div className="dash-dept-list">
             {filteredDeptOptions.map(dept => (
-              <div
-                key={dept.id}
-                className={`dash-dept-item ${effectiveSelectedDeptId === dept.id ? 'selected' : ''}`}
-                onClick={() => handleDeptSelect(dept.id)}
-              >
-                {dept.name}
-              </div>
+              dept.hasChildren ? (
+                <div key={dept.id} className="dash-dept-item dash-dept-item--header">
+                  {dept.name}
+                </div>
+              ) : (
+                <div
+                  key={dept.id}
+                  className={`dash-dept-item ${effectiveSelectedDeptId === dept.id ? 'selected' : ''}`}
+                  style={{ paddingLeft: `${12 + dept.level * 12}px` }}
+                  onClick={() => handleDeptSelect(dept.id)}
+                >
+                  {dept.name}
+                </div>
+              )
             ))}
             {filteredDeptOptions.length === 0 && (
               <div className="dash-dept-empty">Не найдено</div>

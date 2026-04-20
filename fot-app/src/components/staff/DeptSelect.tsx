@@ -1,14 +1,9 @@
 import { useState, useEffect, useMemo, useRef, useCallback, memo, type FC } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { sortDepartmentOptions } from '../../utils/departmentUtils';
-
-interface IDeptSelectOption {
-  id: string;
-  name: string;
-}
+import type { IFlatDepartmentOption } from '../../utils/departmentUtils';
 
 interface IDeptSelectProps {
-  departments: IDeptSelectOption[];
+  departments: IFlatDepartmentOption[];
   value: string;
   onChange: (id: string) => void;
 }
@@ -17,15 +12,14 @@ export const DeptSelect: FC<IDeptSelectProps> = memo(({ departments, value, onCh
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const ref = useRef<HTMLDivElement>(null);
-  const sortedDepartments = useMemo(() => sortDepartmentOptions(departments), [departments]);
 
-  const selected = useMemo(() => sortedDepartments.find(d => d.id === value), [sortedDepartments, value]);
+  const selected = useMemo(() => departments.find(d => d.id === value), [departments, value]);
 
   const filtered = useMemo(() => {
-    if (!q) return sortedDepartments;
+    if (!q) return departments;
     const qLower = q.toLowerCase();
-    return sortedDepartments.filter(d => d.name.toLowerCase().includes(qLower));
-  }, [sortedDepartments, q]);
+    return departments.filter(d => d.name.toLowerCase().includes(qLower));
+  }, [departments, q]);
 
   useEffect(() => {
     if (!open) return;
@@ -67,13 +61,20 @@ export const DeptSelect: FC<IDeptSelectProps> = memo(({ departments, value, onCh
               Все отделы
             </div>
             {filtered.map(d => (
-              <div
-                key={d.id}
-                className={`sc-dept-option ${d.id === value ? 'active' : ''}`}
-                onClick={() => pick(d.id)}
-              >
-                {d.name}
-              </div>
+              d.hasChildren ? (
+                <div key={d.id} className="sc-dept-option sc-dept-option--header">
+                  {d.name}
+                </div>
+              ) : (
+                <div
+                  key={d.id}
+                  className={`sc-dept-option ${d.id === value ? 'active' : ''}`}
+                  style={{ paddingLeft: `${12 + d.level * 12}px` }}
+                  onClick={() => pick(d.id)}
+                >
+                  {d.name}
+                </div>
+              )
             ))}
             {filtered.length === 0 && <div className="sc-dept-empty">Не найдено</div>}
           </div>

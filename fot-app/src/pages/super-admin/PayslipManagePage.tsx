@@ -2,7 +2,7 @@ import { type FC, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Zap } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useStructureTree } from '../../hooks/useStructure';
-import { getSortedFlatDepartments } from '../../utils/departmentUtils';
+import { getTreeFlatDepartments } from '../../utils/departmentUtils';
 import styles from './PayslipManagePage.module.css';
 
 interface IGeneratedPayslip {
@@ -35,7 +35,7 @@ export const PayslipManagePage: FC = () => {
   const [error, setError] = useState<string | null>(null);
   const structureQuery = useStructureTree();
   const departments = useMemo(
-    () => getSortedFlatDepartments(structureQuery.data?.departments || []),
+    () => getTreeFlatDepartments(structureQuery.data?.departments || []),
     [structureQuery.data?.departments],
   );
 
@@ -94,7 +94,7 @@ export const PayslipManagePage: FC = () => {
           >
             <option value="">Все отделы</option>
             {departments.map(d => (
-              <option key={d.id} value={d.id}>
+              <option key={d.id} value={d.id} disabled={d.hasChildren}>
                 {'\u00A0\u00A0'.repeat(d.level)}{d.name}
               </option>
             ))}
