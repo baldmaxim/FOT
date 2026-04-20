@@ -22,8 +22,9 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
   onClose,
   title = 'Импорт сотрудников — Превью',
 }) => {
-  const [showUnmatched, setShowUnmatched] = useState(false);
-  const [showAmbiguous, setShowAmbiguous] = useState(false);
+  const [showMatched, setShowMatched] = useState(false);
+  const [showUnmatched, setShowUnmatched] = useState(true);
+  const [showAmbiguous, setShowAmbiguous] = useState(true);
   const [showConflicts, setShowConflicts] = useState(true);
   const [conflictResolutions, setConflictResolutions] = useState<Map<number, boolean>>(new Map());
   const [decisions, setDecisions] = useState<Map<number, Decision>>(new Map());
@@ -147,36 +148,41 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
             )}
           </div>
 
-          {/* Таблица совпавших */}
+          {/* Совпавшие — схлопнуты по умолчанию */}
           {matched.length > 0 && (
-            <div className="enrich-section">
-              <h4>Будут обновлены ({matched.length})</h4>
-              <div className="enrich-table-wrap">
-                <table className="enrich-table">
-                  <thead>
-                    <tr>
-                      <th>ФИО</th>
-                      <th>Обновляемые поля</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {matched.map(item => (
-                      <tr key={item.id}>
-                        <td className="enrich-name">{item.fullName}</td>
-                        <td>
-                          <div className="enrich-updates">
-                            {Object.entries(item.updates).map(([field, val]) => (
-                              <span key={field} className="enrich-update-tag">
-                                {field}: {val.new}
-                              </span>
-                            ))}
-                          </div>
-                        </td>
+            <div className="enrich-section enrich-section--secondary">
+              <button className="enrich-toggle" onClick={() => setShowMatched(!showMatched)}>
+                {showMatched ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                Будут обновлены ({matched.length})
+              </button>
+              {showMatched && (
+                <div className="enrich-table-wrap">
+                  <table className="enrich-table">
+                    <thead>
+                      <tr>
+                        <th>ФИО</th>
+                        <th>Обновляемые поля</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {matched.map(item => (
+                        <tr key={item.id}>
+                          <td className="enrich-name">{item.fullName}</td>
+                          <td>
+                            <div className="enrich-updates">
+                              {Object.entries(item.updates).map(([field, val]) => (
+                                <span key={field} className="enrich-update-tag">
+                                  {field}: {val.new}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
 
