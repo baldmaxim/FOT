@@ -1,4 +1,5 @@
 import { useRef, type FC } from 'react';
+import { createPortal } from 'react-dom';
 import { X, FileText, Coins, History, Upload, Mail } from 'lucide-react';
 
 interface IImportModalProps {
@@ -74,7 +75,7 @@ export const ImportModal: FC<IImportModalProps> = ({ onClose, onEnrichFile, onSa
     option?.onFile(file);
   };
 
-  return (
+  return createPortal(
     <div className="ep-modal-overlay" onClick={onClose}>
       <div className="ep-modal import-modal" onClick={e => e.stopPropagation()}>
         <div className="ep-modal-header">
@@ -115,6 +116,7 @@ export const ImportModal: FC<IImportModalProps> = ({ onClose, onEnrichFile, onSa
           })}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
