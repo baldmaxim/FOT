@@ -57,7 +57,7 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
 }) => {
   const { pairs, totalSec, firstEntry, lastExit, absentSec } = useMemo(() => {
     const todayStr = new Date().toISOString().slice(0, 10);
-    const computedPairs: { entry: SkudEvent; exit: SkudEvent | null; durationMinutes: number }[] = [];
+    const computedPairs: { entry: SkudEvent; exit: SkudEvent | null; durationMinutes: number; absentAfterMinutes: number }[] = [];
     let totalSeconds = 0;
     let currentEntry: SkudEvent | null = null;
 
@@ -73,6 +73,7 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
           entry: currentEntry,
           exit: event,
           durationMinutes: Math.round(duration / 60),
+          absentAfterMinutes: 0,
         });
         currentEntry = null;
       }
@@ -89,6 +90,7 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
           entry: currentEntry,
           exit: null,
           durationMinutes: Math.round(duration / 60),
+          absentAfterMinutes: 0,
         });
       }
     }
@@ -97,7 +99,11 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
     for (let i = 0; i < computedPairs.length - 1; i += 1) {
       const exitTime = computedPairs[i].exit?.event_time;
       const nextEntry = computedPairs[i + 1].entry.event_time;
-      if (exitTime) totalAbsentSec += timeToSec(nextEntry) - timeToSec(exitTime);
+      if (exitTime) {
+        const absentSec = timeToSec(nextEntry) - timeToSec(exitTime);
+        totalAbsentSec += absentSec;
+        computedPairs[i].absentAfterMinutes = Math.round(absentSec / 60);
+      }
     }
 
     return {
@@ -153,6 +159,9 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
                 )}
                 {pair.durationMinutes > 0 && (
                   <div className="ec-pair-duration">{formatMinutes(pair.durationMinutes)}</div>
+                )}
+                {pair.absentAfterMinutes > 0 && (
+                  <div className="ec-absent-row">Отсутствие: {formatMinutes(pair.absentAfterMinutes)}</div>
                 )}
               </div>
             )) : showEvents.map((event, index) => (
