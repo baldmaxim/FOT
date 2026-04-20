@@ -76,8 +76,14 @@ export const ImportModal: FC<IImportModalProps> = ({ onClose, onEnrichFile, onSa
     option?.onFile(file);
   };
 
+  const mousedownTargetRef = useRef<EventTarget | null>(null);
+
   return createPortal(
-    <div className="ep-modal-overlay" onClick={onClose}>
+    <div
+      className="ep-modal-overlay"
+      onMouseDown={e => { mousedownTargetRef.current = e.target; }}
+      onClick={e => { if (mousedownTargetRef.current === e.currentTarget) onClose(); }}
+    >
       <div className="ep-modal import-modal" onClick={e => e.stopPropagation()}>
         <div className="ep-modal-header">
           <h3>Импорт данных</h3>
