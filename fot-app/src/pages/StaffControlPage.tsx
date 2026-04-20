@@ -18,7 +18,7 @@ import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useStaffData } from '../hooks/useStaffData';
 import { useToast } from '../contexts/ToastContext';
 import { DeptSelect } from '../components/staff/DeptSelect';
-import type { Employee, EmployeeHistoryEvent, EmployeeInput, EnrichPreview } from '../types';
+import type { Employee, EmployeeHistoryEvent, EmployeeInput, EnrichPreview, ContactsEnrichPreview } from '../types';
 import type { IFlatDepartmentOption } from '../utils/departmentUtils';
 import { getSortedFlatDepartments } from '../utils/departmentUtils';
 import '../styles/StaffControlPage.css';
@@ -1124,6 +1124,9 @@ export const StaffControlPage: FC = () => {
   const [salaryHistoryPreview, setSalaryHistoryPreview] = useState<EnrichPreview | null>(null);
   const [salaryHistoryFile, setSalaryHistoryFile] = useState<File | null>(null);
   const [salaryHistoryLoading, setSalaryHistoryLoading] = useState(false);
+  const [contactsPreview, setContactsPreview] = useState<ContactsEnrichPreview | null>(null);
+  const [contactsFile, setContactsFile] = useState<File | null>(null);
+  const [contactsLoading, setContactsLoading] = useState(false);
 
   /* ─── memoized computations ─── */
 
@@ -1423,6 +1426,33 @@ export const StaffControlPage: FC = () => {
     setSalaryHistoryFile(null);
   };
 
+  const handleContactsFile = async (file: File) => {
+    setShowImportModal(false);
+    setContactsLoading(true);
+    try {
+      const preview = await employeeService.contactsEnrichPreview(file);
+      setContactsPreview(preview);
+      setContactsFile(file);
+    } catch { /* ignore */ }
+    setContactsLoading(false);
+  };
+
+  const handleContactsApply = async (
+    manualMatches: Array<{ fullName: string; employeeId: number }> = [],
+    conflictResolutions?: Array<{ employeeId: number; overwrite: boolean }>,
+  ) => {
+    if (!contactsFile) return;
+    setContactsLoading(true);
+    try {
+      const r = await employeeService.contactsEnrichApply(contactsFile, manualMatches, conflictResolutions);
+      alert(`Обновлено: ${r.updated} сотрудников`);
+      refresh();
+    } catch { /* ignore */ }
+    setContactsLoading(false);
+    setContactsPreview(null);
+    setContactsFile(null);
+  };
+
   const handleAddEmployee = async () => {
     if (!addForm.full_name || !addForm.hire_date) return;
     await employeeService.create(addForm);
@@ -1620,6 +1650,7 @@ export const StaffControlPage: FC = () => {
             onEnrichFile={handleEnrichFile}
             onSalaryFile={handleSalaryFile}
             onSalaryHistoryFile={handleSalaryHistoryFile}
+            onContactsFile={handleContactsFile}
           />
         </Suspense>
       )}
@@ -1637,6 +1668,11 @@ export const StaffControlPage: FC = () => {
       {salaryHistoryPreview && (
         <Suspense fallback={null}>
           <EnrichPreviewModal preview={salaryHistoryPreview} loading={salaryHistoryLoading} onApply={handleSalaryHistoryApply} onClose={() => { setSalaryHistoryPreview(null); setSalaryHistoryFile(null); }} title="Импорт истории окладов — Превью" />
+        </Suspense>
+      )}
+      {contactsPreview && (
+        <Suspense fallback={null}>
+          <EnrichPreviewModal preview={contactsPreview} conflicts={contactsPreview.conflicts} loading={contactsLoading} onApply={handleContactsApply} onClose={() => { setContactsPreview(null); setContactsFile(null); }} title="Импорт email — Превью" />
         </Suspense>
       )}
 

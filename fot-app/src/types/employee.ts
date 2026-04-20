@@ -64,6 +64,18 @@ export interface EnrichResult {
   errors: string[];
 }
 
+export interface ConflictRow {
+  id: number;
+  fullName: string;
+  existingEmail: string;
+  newEmail: string;
+}
+
+export interface ContactsEnrichPreview extends EnrichPreview {
+  conflicts: ConflictRow[];
+  stats: { total: number; matched: number; conflicts: number; unmatched: number; ambiguous: number };
+}
+
 export interface EmployeeInput {
   full_name: string;
   hire_date: string;

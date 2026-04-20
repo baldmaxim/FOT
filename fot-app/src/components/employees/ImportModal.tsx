@@ -1,11 +1,12 @@
 import { useRef, type FC } from 'react';
-import { X, FileText, Coins, History, Upload } from 'lucide-react';
+import { X, FileText, Coins, History, Upload, Mail } from 'lucide-react';
 
 interface IImportModalProps {
   onClose: () => void;
   onEnrichFile: (file: File) => void;
   onSalaryFile: (file: File) => void;
   onSalaryHistoryFile: (file: File) => void;
+  onContactsFile: (file: File) => void;
 }
 
 interface ImportOption {
@@ -17,10 +18,11 @@ interface ImportOption {
   onFile: (file: File) => void;
 }
 
-export const ImportModal: FC<IImportModalProps> = ({ onClose, onEnrichFile, onSalaryFile, onSalaryHistoryFile }) => {
+export const ImportModal: FC<IImportModalProps> = ({ onClose, onEnrichFile, onSalaryFile, onSalaryHistoryFile, onContactsFile }) => {
   const enrichRef = useRef<HTMLInputElement>(null);
   const salaryRef = useRef<HTMLInputElement>(null);
   const salaryHistoryRef = useRef<HTMLInputElement>(null);
+  const contactsRef = useRef<HTMLInputElement>(null);
 
   const options: ImportOption[] = [
     {
@@ -47,12 +49,21 @@ export const ImportModal: FC<IImportModalProps> = ({ onClose, onEnrichFile, onSa
       icon: History,
       onFile: onSalaryHistoryFile,
     },
+    {
+      id: 'contacts',
+      title: 'Импорт email сотрудников',
+      description: 'Массовая загрузка email-адресов по списку ФИО. При конфликте — ручное решение',
+      columns: 'ФИО, Email, Отдел (необязательно)',
+      icon: Mail,
+      onFile: onContactsFile,
+    },
   ];
 
   const refs: Record<string, React.RefObject<HTMLInputElement | null>> = {
     enrich: enrichRef,
     salary: salaryRef,
     'salary-history': salaryHistoryRef,
+    contacts: contactsRef,
   };
 
   const handleFileChange = (optionId: string, e: React.ChangeEvent<HTMLInputElement>) => {

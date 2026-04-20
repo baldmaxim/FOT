@@ -1,5 +1,5 @@
 import { apiClient } from '../api/client';
-import type { Employee, EmployeeInput, EmployeeHistoryEvent, EnrichPreview, EnrichResult } from '../types';
+import type { Employee, EmployeeInput, EmployeeHistoryEvent, EnrichPreview, EnrichResult, ContactsEnrichPreview } from '../types';
 
 interface ApiResponse<T> {
   data: T;
@@ -243,6 +243,30 @@ export const employeeService = {
       formData.append('manualMatches', JSON.stringify(manualMatches));
     }
     const response = await apiClient.post<ApiResponse<EnrichResult>>('/employees/enrich-salary-history?preview=false', formData);
+    return response.data;
+  },
+
+  async contactsEnrichPreview(file: File): Promise<ContactsEnrichPreview> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await apiClient.post<ApiResponse<ContactsEnrichPreview>>('/employees/enrich-contacts?preview=true', formData);
+    return response.data;
+  },
+
+  async contactsEnrichApply(
+    file: File,
+    manualMatches?: Array<{ fullName: string; employeeId: number }>,
+    conflictResolutions?: Array<{ employeeId: number; overwrite: boolean }>,
+  ): Promise<EnrichResult> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (manualMatches?.length) {
+      formData.append('manualMatches', JSON.stringify(manualMatches));
+    }
+    if (conflictResolutions?.length) {
+      formData.append('conflictResolutions', JSON.stringify(conflictResolutions));
+    }
+    const response = await apiClient.post<ApiResponse<EnrichResult>>('/employees/enrich-contacts?preview=false', formData);
     return response.data;
   },
 };

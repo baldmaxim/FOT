@@ -4,6 +4,7 @@ import { employeesController } from '../controllers/employees.controller.js';
 import { employeeEnrichController } from '../controllers/employee-enrich.controller.js';
 import { employeeSalaryEnrichController } from '../controllers/employee-enrich-salary.controller.js';
 import { employeeSalaryHistoryController } from '../controllers/employee-enrich-salary-history.controller.js';
+import { employeeEnrichContactsController } from '../controllers/employee-enrich-contacts.controller.js';
 import { authenticate, requireAnyPageAccess, requireCritical2FA } from '../middleware/auth.js';
 import { importLimiter } from '../middleware/rateLimit.js';
 
@@ -66,6 +67,16 @@ router.post(
   importLimiter,
   upload.single('file'),
   employeeSalaryHistoryController.enrichSalaryHistory
+);
+
+// POST /api/employees/enrich-contacts - импорт email из Excel (header+, требуется 2FA)
+router.post(
+  '/enrich-contacts',
+  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requireCritical2FA,
+  importLimiter,
+  upload.single('file'),
+  employeeEnrichContactsController.enrichContacts
 );
 
 // DELETE /api/employees/all - удаление ВСЕХ (super_admin, только для разработки)

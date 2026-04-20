@@ -1,20 +1,22 @@
 import { useState, useCallback, useRef, type FC } from 'react';
-import { X, CheckCircle, AlertCircle, Users, ChevronDown, ChevronUp, Search, SkipForward, Check } from 'lucide-react';
+import { X, CheckCircle, AlertCircle, Users, ChevronDown, ChevronUp, Search, SkipForward, Check, RefreshCw } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
-import type { EnrichPreview, Employee } from '../../types';
+import type { EnrichPreview, Employee, ConflictRow } from '../../types';
 
 type Decision = { action: 'link'; employeeId: number; employeeName: string } | { action: 'skip' };
 
 interface IEnrichPreviewModalProps {
   preview: EnrichPreview;
+  conflicts?: ConflictRow[];
   loading: boolean;
-  onApply: (manualMatches: Array<{ fullName: string; employeeId: number }>) => void;
+  onApply: (manualMatches: Array<{ fullName: string; employeeId: number }>, conflictResolutions?: Array<{ employeeId: number; overwrite: boolean }>) => void;
   onClose: () => void;
   title?: string;
 }
 
 export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
   preview,
+  conflicts,
   loading,
   onApply,
   onClose,
@@ -22,6 +24,8 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
 }) => {
   const [showUnmatched, setShowUnmatched] = useState(false);
   const [showAmbiguous, setShowAmbiguous] = useState(false);
+  const [showConflicts, setShowConflicts] = useState(true);
+  const [conflictResolutions, setConflictResolutions] = useState<Map<number, boolean>>(new Map());
   const [decisions, setDecisions] = useState<Map<number, Decision>>(new Map());
   const [searchResults, setSearchResults] = useState<Map<number, Employee[]>>(new Map());
   const [searchingIdx, setSearchingIdx] = useState<number | null>(null);
@@ -79,7 +83,16 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
   const linkedCount = [...decisions.values()].filter(d => d.action === 'link').length;
   const skippedCount = [...decisions.values()].filter(d => d.action === 'skip').length;
   const pendingCount = unmatched.length - decisions.size;
-  const totalApply = matched.length + linkedCount;
+  const overwriteCount = [...conflictResolutions.values()].filter(Boolean).length;
+  const totalApply = matched.length + linkedCount + overwriteCount;
+
+  const setConflictResolution = (employeeId: number, overwrite: boolean) => {
+    setConflictResolutions(prev => {
+      const next = new Map(prev);
+      next.set(employeeId, overwrite);
+      return next;
+    });
+  };
 
   const handleApply = () => {
     const manualMatches = [...decisions.entries()]
@@ -88,7 +101,11 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
         fullName: unmatched[idx].fullName,
         employeeId: (d as { action: 'link'; employeeId: number }).employeeId,
       }));
-    onApply(manualMatches);
+    const resolvedConflicts = conflicts?.map(c => ({
+      employeeId: c.id,
+      overwrite: conflictResolutions.get(c.id) ?? false,
+    }));
+    onApply(manualMatches, resolvedConflicts);
   };
 
   return (
@@ -116,6 +133,12 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
               <AlertCircle size={16} />
               <span>Не найдено: <strong>{stats.unmatched - linkedCount - skippedCount}</strong></span>
             </div>
+            {conflicts && conflicts.length > 0 && (
+              <div className="enrich-stat warning">
+                <AlertCircle size={16} />
+                <span>Конфликты email: <strong>{conflicts.length}</strong></span>
+              </div>
+            )}
             {stats.ambiguous > 0 && (
               <div className="enrich-stat warning">
                 <AlertCircle size={16} />
@@ -154,6 +177,53 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+
+          {/* Конфликты email */}
+          {conflicts && conflicts.length > 0 && (
+            <div className="enrich-section">
+              <button
+                className="enrich-toggle"
+                onClick={() => setShowConflicts(!showConflicts)}
+              >
+                {showConflicts ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                Конфликты email ({conflicts.length})
+                {overwriteCount > 0 && <span className="enrich-toggle-linked"> — заменить: {overwriteCount}</span>}
+              </button>
+              {showConflicts && (
+                <div className="enrich-match-list">
+                  {conflicts.map(item => {
+                    const overwrite = conflictResolutions.get(item.id) ?? false;
+                    return (
+                      <div key={item.id} className="enrich-conflict-row">
+                        <div className="enrich-match-info">
+                          <span className="enrich-match-name">{item.fullName}</span>
+                          <span className="enrich-conflict-emails">
+                            <span className="enrich-conflict-old">{item.existingEmail}</span>
+                            <RefreshCw size={12} />
+                            <span className="enrich-conflict-new">{item.newEmail}</span>
+                          </span>
+                        </div>
+                        <div className="enrich-conflict-actions">
+                          <button
+                            className={`enrich-conflict-btn${!overwrite ? ' active' : ''}`}
+                            onClick={() => setConflictResolution(item.id, false)}
+                          >
+                            Оставить
+                          </button>
+                          <button
+                            className={`enrich-conflict-btn enrich-conflict-btn--replace${overwrite ? ' active' : ''}`}
+                            onClick={() => setConflictResolution(item.id, true)}
+                          >
+                            Заменить
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
