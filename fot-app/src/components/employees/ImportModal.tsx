@@ -1,6 +1,7 @@
 import { useRef, type FC } from 'react';
 import { createPortal } from 'react-dom';
 import { X, FileText, Coins, History, Upload, Mail } from 'lucide-react';
+import '../../styles/EmployeesPage.css';
 
 interface IImportModalProps {
   onClose: () => void;
