@@ -1,5 +1,4 @@
 import { useState, useCallback, useRef, type FC } from 'react';
-import { createPortal } from 'react-dom';
 import { X, CheckCircle, AlertCircle, Users, ChevronDown, ChevronUp, Search, SkipForward, Check, RefreshCw } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
 import type { EnrichPreview, Employee, ConflictRow } from '../../types';
@@ -109,7 +108,7 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
     onApply(manualMatches, resolvedConflicts);
   };
 
-  return createPortal(
+  return (
     <div className="ep-modal-overlay" onClick={onClose}>
       <div className="ep-modal enrich-modal" onClick={e => e.stopPropagation()}>
         <div className="ep-modal-header">
@@ -350,7 +349,6 @@ export const EnrichPreviewModal: FC<IEnrichPreviewModalProps> = ({
           </button>
         </div>
       </div>
-    </div>,
-    document.body,
+    </div>
   );
 };
