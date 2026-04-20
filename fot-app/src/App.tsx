@@ -480,11 +480,11 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage={['/admin/payslips', '/admin/schedules']} />}>
+        <Route element={<ProtectedRoute requiredPage={['/admin/schedules']} />}>
           <Route
             path="/admin/payroll"
             element={
-              <Layout title="Зарплата" theme={theme} onToggleTheme={toggleTheme}>
+              <Layout title="Графики работы" theme={theme} onToggleTheme={toggleTheme}>
                 <PayrollHubPage />
               </Layout>
             }
