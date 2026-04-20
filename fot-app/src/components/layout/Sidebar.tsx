@@ -8,9 +8,7 @@ import {
   GridIcon,
   UsersIcon,
   CalendarIcon,
-  SettingsIcon,
   ClipboardCheckIcon,
-  FileTextIcon,
   DatabaseIcon,
   UserIcon,
   BarChartIcon,
@@ -38,38 +36,24 @@ const navGroups: INavGroup[] = [
     items: [
       { id: 'my-cabinet', path: '/employee', label: 'Личный кабинет', icon: UserIcon, requiredPage: '/employee' },
       { id: 'overview', path: '/', label: 'Обзор', icon: GridIcon, requiredPage: '/dashboard' },
-      { id: 'leave-requests', path: '/leave-requests', label: 'Заявления', icon: ClipboardCheckIcon, requiredPage: '/leave-requests' },
+      { id: 'leave-requests', path: '/leave-requests', label: 'Заявления', icon: ClipboardCheckIcon, requiredPage: ['/leave-requests', '/salary-raise-review'] },
     ]
   },
   {
-    label: 'Сотрудники и табель',
+    label: 'Работа',
     items: [
       { id: 'staff-control', path: '/staff-control', label: 'Управление кадрами', icon: UsersIcon, requiredPage: '/staff-control' },
       { id: 'timesheet', path: '/timesheet', label: 'Табель', icon: CalendarIcon, requiredPage: '/timesheet' },
       { id: 'timesheet-hr', path: '/timesheet-hr', label: 'Табели HR', icon: CalendarIcon, requiredPage: '/timesheet-hr' },
       { id: 'discipline', path: '/discipline', label: 'Аналитика', icon: BarChartIcon, requiredPage: '/discipline' },
-      { id: 'salary-raise-review', path: '/salary-raise-review', label: 'Повышение оклада', icon: DollarIcon, requiredPage: '/salary-raise-review' },
-    ]
-  },
-  {
-    label: 'СКУД',
-    items: [
-      { id: 'skud-travel', path: '/skud-travel', label: 'Передвижения', icon: FileTextIcon, requiredPage: '/skud-travel' },
-      { id: 'skud-raw', path: '/skud-raw', label: 'Просмотр СКУД', icon: FileTextIcon, requiredPage: '/skud-raw' },
-      { id: 'skud-db', path: '/skud-db', label: 'СКУД (база)', icon: DatabaseIcon, requiredPage: '/skud-db' },
-      { id: 'skud-monitor', path: '/skud-monitor', label: 'Монитор Sigur', icon: BarChartIcon, requiredPage: '/skud-monitor' },
-      { id: 'sigur-settings', path: '/skud-settings', label: 'Настройки СКУД', icon: SettingsIcon, requiredPage: '/skud-settings' },
     ]
   },
   {
     label: 'Администрирование',
     items: [
-      { id: 'admin-schedules', path: '/admin/schedules', label: 'Графики работы', icon: CalendarIcon, requiredPage: '/admin/schedules' },
-      { id: 'admin-payslips', path: '/admin/payslips', label: 'Расчётные листки', icon: FileTextIcon, requiredPage: '/admin/payslips' },
-      { id: 'admin-users', path: '/admin/users', label: 'Пользователи', icon: SettingsIcon, requiredPage: '/admin/users' },
-      { id: 'admin-roles', path: '/admin/roles', label: 'Роли', icon: ShieldIcon, requiredPage: '/admin/roles' },
-      { id: 'admin-settings', path: '/admin/settings', label: 'Настройки', icon: SettingsIcon, requiredPage: '/admin/settings' },
-      { id: 'admin-audit', path: '/admin/audit', label: 'Аудит данных', icon: ClipboardCheckIcon, requiredPage: '/admin/audit' },
+      { id: 'payroll-hub', path: '/admin/payroll', label: 'Зарплата', icon: DollarIcon, requiredPage: ['/admin/payslips', '/admin/schedules'] },
+      { id: 'skud-hub', path: '/skud', label: 'СКУД', icon: DatabaseIcon, requiredPage: ['/skud-monitor', '/skud-settings', '/skud-travel'] },
+      { id: 'system-hub', path: '/admin/system', label: 'Система', icon: ShieldIcon, requiredPage: ['/admin/users', '/admin/roles', '/admin/audit', '/admin/settings'] },
     ]
   }
 ];

@@ -73,11 +73,14 @@ const NotFoundPage = lazy(() => import('./pages/NotFoundPage').then(m => ({ defa
 const ChatRoot = lazy(() => import('./components/chat/ChatRoot').then(m => ({ default: m.ChatRoot })));
 const ChatLauncher = lazy(() => import('./components/chat/ChatLauncher').then(m => ({ default: m.ChatLauncher })));
 
-// Leave requests management (header/hr)
-const LeaveRequestsManagePage = lazy(() => import('./pages/LeaveRequestsManagePage').then(m => ({ default: m.LeaveRequestsManagePage })));
-
-// Salary raise review (header/hr/admin)
+// Salary raise review (header/hr/admin) — используется в /salary-raise-review/:id
 const SalaryRaiseReviewPage = lazy(() => import('./pages/SalaryRaiseReviewPage').then(m => ({ default: m.SalaryRaiseReviewPage })));
+
+// Hubs (объединяющие страницы-обёртки с табами)
+const LeaveRequestsHubPage = lazy(() => import('./pages/hubs/LeaveRequestsHubPage').then(m => ({ default: m.LeaveRequestsHubPage })));
+const PayrollHubPage = lazy(() => import('./pages/hubs/PayrollHubPage').then(m => ({ default: m.PayrollHubPage })));
+const SkudHubPage = lazy(() => import('./pages/hubs/SkudHubPage').then(m => ({ default: m.SkudHubPage })));
+const SystemAdminPage = lazy(() => import('./pages/hubs/SystemAdminPage').then(m => ({ default: m.SystemAdminPage })));
 
 // Компонент для умного редиректа на основе должности
 const PositionBasedRedirect = () => {
@@ -92,15 +95,15 @@ const PositionBasedRedirect = () => {
 };
 
 const EmployeeHomeRoute = () => {
-  const { hasPermission, positionType } = useAuth();
+  const { employeeVariant, isAdmin } = useAuth();
   const [searchParams] = useSearchParams();
-  const previewAsWorker = positionType === 'super_admin' && searchParams.get('preview') === 'worker';
+  const previewAsWorker = isAdmin && searchParams.get('preview') === 'worker';
 
-  if (previewAsWorker || hasPermission('portal.employee.variant.object')) {
+  if (previewAsWorker || employeeVariant === 'object') {
     return <ObjectWorkerDashboardPage />;
   }
 
-  if (hasPermission('portal.employee.variant.office')) {
+  if (employeeVariant === 'office' || isAdmin) {
     return (
       <EmployeeLayout title="Личный кабинет">
         <EmployeeDashboardPage />
@@ -287,12 +290,12 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage="/leave-requests" />}>
+        <Route element={<ProtectedRoute requiredPage={['/leave-requests', '/salary-raise-review']} />}>
           <Route
             path="/leave-requests"
             element={
               <Layout title="Заявления" theme={theme} onToggleTheme={toggleTheme}>
-                <LeaveRequestsManagePage />
+                <LeaveRequestsHubPage />
               </Layout>
             }
           />
@@ -484,6 +487,40 @@ const AppRoutes = () => {
             element={
               <Layout title="Расчётные листки" theme={theme} onToggleTheme={toggleTheme}>
                 <PayslipManagePage />
+              </Layout>
+            }
+          />
+        </Route>
+
+        {/* Hub routes: объединённые страницы с табами */}
+        <Route element={<ProtectedRoute requiredPage={['/skud-monitor', '/skud-settings', '/skud-travel']} />}>
+          <Route
+            path="/skud"
+            element={
+              <Layout title="СКУД" theme={theme} onToggleTheme={toggleTheme}>
+                <SkudHubPage />
+              </Layout>
+            }
+          />
+        </Route>
+
+        <Route element={<ProtectedRoute requiredPage={['/admin/payslips', '/admin/schedules']} />}>
+          <Route
+            path="/admin/payroll"
+            element={
+              <Layout title="Зарплата" theme={theme} onToggleTheme={toggleTheme}>
+                <PayrollHubPage />
+              </Layout>
+            }
+          />
+        </Route>
+
+        <Route element={<ProtectedRoute requiredPage={['/admin/users', '/admin/roles', '/admin/audit', '/admin/settings']} />}>
+          <Route
+            path="/admin/system"
+            element={
+              <Layout title="Система" theme={theme} onToggleTheme={toggleTheme}>
+                <SystemAdminPage />
               </Layout>
             }
           />
