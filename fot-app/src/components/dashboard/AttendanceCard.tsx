@@ -27,6 +27,7 @@ export interface IEntryExitPair {
   entry: SkudEvent;
   exit: SkudEvent | null;
   durationMinutes: number;
+  breakMinutesAfter: number | null;
 }
 
 interface IAttendanceCardProps {
@@ -79,29 +80,37 @@ const DayEvents: FC<{ group: IDayGroup }> = ({ group }) => (
   <div className={styles.skudDayEvents}>
     {group.pairs.length > 0 ? (
       group.pairs.map((pair, i) => (
-        <div key={i} className={styles.skudPairBlock}>
-          <div className={styles.skudEventRow}>
-            <span className={`${styles.skudEventIcon} ${styles.skudEventEntry}`}>→</span>
-            <span className={styles.skudEventTime}>{formatTime(pair.entry.event_time)}</span>
-            <span className={styles.skudEventDir}>Вход</span>
-            {pair.entry.access_point && <span className={styles.skudEventPoint}>{pair.entry.access_point}</span>}
-          </div>
-          {pair.exit ? (
-            <div className={styles.skudEventRow}>
-              <span className={`${styles.skudEventIcon} ${styles.skudEventExit}`}>←</span>
-              <span className={styles.skudEventTime}>{formatTime(pair.exit.event_time)}</span>
-              <span className={styles.skudEventDir}>Выход</span>
-              {pair.exit.access_point && <span className={styles.skudEventPoint}>{pair.exit.access_point}</span>}
-            </div>
-          ) : (
+        <div key={i}>
+          <div className={styles.skudPairBlock}>
             <div className={styles.skudEventRow}>
               <span className={`${styles.skudEventIcon} ${styles.skudEventEntry}`}>→</span>
-              <span className={styles.skudEventTime}>—</span>
-              <span className={`${styles.skudEventDir} ${styles.skudOnsite}`}>на месте</span>
+              <span className={styles.skudEventTime}>{formatTime(pair.entry.event_time)}</span>
+              <span className={styles.skudEventDir}>Вход</span>
+              {pair.entry.access_point && <span className={styles.skudEventPoint}>{pair.entry.access_point}</span>}
             </div>
-          )}
-          {pair.durationMinutes > 0 && (
-            <div className={styles.skudPairDuration}>{formatHM(pair.durationMinutes)}</div>
+            {pair.exit ? (
+              <div className={styles.skudEventRow}>
+                <span className={`${styles.skudEventIcon} ${styles.skudEventExit}`}>←</span>
+                <span className={styles.skudEventTime}>{formatTime(pair.exit.event_time)}</span>
+                <span className={styles.skudEventDir}>Выход</span>
+                {pair.exit.access_point && <span className={styles.skudEventPoint}>{pair.exit.access_point}</span>}
+                {pair.durationMinutes > 0 && (
+                  <span className={styles.skudPairDuration}>{formatHM(pair.durationMinutes)}</span>
+                )}
+              </div>
+            ) : (
+              <div className={styles.skudEventRow}>
+                <span className={`${styles.skudEventIcon} ${styles.skudEventEntry}`}>→</span>
+                <span className={styles.skudEventTime}>—</span>
+                <span className={`${styles.skudEventDir} ${styles.skudOnsite}`}>на месте</span>
+                {pair.durationMinutes > 0 && (
+                  <span className={styles.skudPairDuration}>{formatHM(pair.durationMinutes)}</span>
+                )}
+              </div>
+            )}
+          </div>
+          {pair.breakMinutesAfter !== null && pair.breakMinutesAfter > 0 && (
+            <div className={styles.skudPairBreak}>Перерыв: {formatHM(pair.breakMinutesAfter)}</div>
           )}
         </div>
       ))

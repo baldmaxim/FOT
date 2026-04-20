@@ -117,5 +117,6 @@ export interface IAssignedEmployeeSummary {
   id: number;
   full_name: string;
   department_count: number;
+  email: string | null;
   departments?: IAssignedEmployeeDepartment[];
 }

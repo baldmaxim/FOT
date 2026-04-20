@@ -109,6 +109,50 @@ const nowSeconds = (): number => {
   return now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
 };
 
+type DisplayItem =
+  | { kind: 'event'; event: SkudEvent; pairDurationSeconds: number | null; isInternal: boolean }
+  | { kind: 'break'; breakSeconds: number };
+
+const buildDisplayItems = (events: SkudEvent[], internalPoints: Set<string>, dateStr?: string): DisplayItem[] => {
+  const sorted = [...events].sort((a, b) => a.event_time.localeCompare(b.event_time));
+  const items: DisplayItem[] = [];
+  let pendingEntry: SkudEvent | null = null;
+  let lastExitTimeSec: number | null = null;
+
+  for (const ev of sorted) {
+    const isInternal = ev.access_point ? internalPoints.has(ev.access_point) : false;
+
+    if (ev.direction === 'entry') {
+      if (!isInternal && lastExitTimeSec !== null) {
+        const gap = timeToSeconds(ev.event_time) - lastExitTimeSec;
+        if (gap > 0) items.push({ kind: 'break', breakSeconds: gap });
+        lastExitTimeSec = null;
+      }
+      items.push({ kind: 'event', event: ev, pairDurationSeconds: null, isInternal });
+      if (!isInternal && pendingEntry === null) {
+        pendingEntry = ev;
+      }
+    } else {
+      let pairDuration: number | null = null;
+      if (!isInternal && pendingEntry) {
+        pairDuration = timeToSeconds(ev.event_time) - timeToSeconds(pendingEntry.event_time);
+        pendingEntry = null;
+        lastExitTimeSec = timeToSeconds(ev.event_time);
+      }
+      items.push({ kind: 'event', event: ev, pairDurationSeconds: pairDuration, isInternal });
+    }
+  }
+
+  if (pendingEntry && dateStr && isToday(dateStr)) {
+    const lastItem = items[items.length - 1];
+    if (lastItem && lastItem.kind === 'event' && lastItem.event.id === pendingEntry.id) {
+      lastItem.pairDurationSeconds = nowSeconds() - timeToSeconds(pendingEntry.event_time);
+    }
+  }
+
+  return items;
+};
+
 const calculateWorkMinutes = (events: SkudEvent[], internalPoints: Set<string>, dateStr?: string): number => {
   const filtered = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
   const sorted = [...filtered].sort((a, b) => a.event_time.localeCompare(b.event_time));
@@ -438,8 +482,19 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
             <div>Событие</div>
             <div className="skud-col-point">Точка прохода</div>
           </div>
-          {allEvents.map(ev => {
-            const isInternal = ev.access_point ? internalPoints.has(ev.access_point) : false;
+          {buildDisplayItems(allEvents, internalPoints, groups[0]?.date).map((item, idx) => {
+            if (item.kind === 'break') {
+              return (
+                <div key={`break-${idx}`} className="skud-table-row skud-pair-break">
+                  <div className="skud-table-time">—</div>
+                  <div className="skud-table-event skud-pair-break-label">
+                    Перерыв: {formatDurationCompact(item.breakSeconds)}
+                  </div>
+                  <div className="skud-col-point" />
+                </div>
+              );
+            }
+            const { event: ev, pairDurationSeconds, isInternal } = item;
             return (
               <div
                 key={ev.id}
@@ -451,6 +506,11 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
                     {ev.direction === 'entry' ? <LogIn size={14} /> : <LogOut size={14} />}
                   </span>
                   {ev.direction === 'entry' ? 'Вход' : 'Выход'}
+                  {pairDurationSeconds !== null && pairDurationSeconds > 0 && (
+                    <span className="skud-pair-duration-inline">
+                      {formatDurationCompact(pairDurationSeconds)}
+                    </span>
+                  )}
                 </div>
                 <div className="skud-col-point">
                   {ev.access_point ? (
@@ -574,8 +634,17 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
                         </span>
                       )}
                     </div>
-                    {group.events.map(ev => {
-                      const isInternal = ev.access_point ? internalPoints.has(ev.access_point) : false;
+                    {buildDisplayItems(group.events, internalPoints, group.date).map((item, idx) => {
+                      if (item.kind === 'break') {
+                        return (
+                          <div key={`break-${idx}`} className="skud-event-row skud-pair-break">
+                            <span className="skud-pair-break-label">
+                              Перерыв: {formatDurationCompact(item.breakSeconds)}
+                            </span>
+                          </div>
+                        );
+                      }
+                      const { event: ev, pairDurationSeconds, isInternal } = item;
                       return (
                         <div
                           key={ev.id}
@@ -597,6 +666,11 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
                               canOpen={canOpenAccessPointMap}
                               onOpen={openAccessPointMap}
                             />
+                          )}
+                          {pairDurationSeconds !== null && pairDurationSeconds > 0 && (
+                            <span className="skud-pair-duration-inline">
+                              {formatDurationCompact(pairDurationSeconds)}
+                            </span>
                           )}
                         </div>
                       );

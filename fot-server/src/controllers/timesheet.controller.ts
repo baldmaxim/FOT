@@ -12,7 +12,7 @@ import type {
 import type { DataScope } from '../config/access-control.js';
 import { exportTimesheet } from './timesheet-export.controller.js';
 import { exportTimesheetMass } from './timesheet-mass-export.controller.js';
-import { exportTimesheetAssigned, listAssignedEmployees } from './timesheet-assigned-export.controller.js';
+import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned } from './timesheet-assigned-export.controller.js';
 import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, loadCalendarMonth } from '../services/schedule.service.js';
 import {
   getMinSelfHistoryDate,
@@ -1290,4 +1290,7 @@ export const timesheetController = {
 
   /** GET /api/timesheet/assigned-employees */
   listAssignedEmployees,
+
+  /** POST /api/timesheet/email-assigned */
+  emailAssigned: emailTimesheetAssigned,
 };

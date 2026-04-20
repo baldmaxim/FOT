@@ -71,6 +71,13 @@ router.get(
   timesheetController.listAssignedEmployees
 );
 
+// POST /api/timesheet/email-assigned
+router.post(
+  '/email-assigned',
+  requirePageAccess('/timesheet-hr', 'view'),
+  timesheetController.emailAssigned
+);
+
 // POST /api/timesheet
 router.post(
   '/',

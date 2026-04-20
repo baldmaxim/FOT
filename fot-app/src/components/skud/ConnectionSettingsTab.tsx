@@ -9,6 +9,7 @@ import type { SigurConnectionSettings } from '../../types';
 import { FIELD_LABELS, DIRECTION_LABELS } from './sigur-settings.utils';
 import { StructureSyncSection } from './StructureSyncSection';
 import { EventsSyncSection } from './EventsSyncSection';
+import { SigurDiagnosticsButton } from './SigurDiagnosticsButton';
 
 interface IConnectionSettingsTabProps {
   connected: boolean | null;
@@ -294,6 +295,7 @@ export const ConnectionSettingsTab: FC<IConnectionSettingsTabProps> = ({
             <RefreshCw size={14} />
             Проверить
           </button>
+          <SigurDiagnosticsButton />
         </div>
 
         {isConnectionFormVisible && (

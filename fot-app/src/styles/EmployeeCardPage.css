@@ -701,6 +701,36 @@
   font-size: 13px;
 }
 
+.skud-pair-duration-inline {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--bg-elevated, rgba(59, 130, 246, 0.08));
+  color: var(--accent, #3b82f6);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'Space Mono', monospace;
+  white-space: nowrap;
+}
+
+.skud-table-row.skud-pair-break {
+  background: var(--bg-subtle, rgba(0, 0, 0, 0.02));
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+}
+
+.skud-pair-break-label {
+  color: var(--text-tertiary);
+  font-style: italic;
+  font-size: 12px;
+}
+
+.skud-event-row.skud-pair-break {
+  padding: 4px 0 4px 26px;
+  border-top: 1px dashed var(--border);
+  margin: 4px 0;
+}
+
 .skud-table-status {
   font-size: 12px;
   font-weight: 500;

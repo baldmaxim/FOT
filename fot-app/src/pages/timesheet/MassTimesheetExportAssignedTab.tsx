@@ -1,11 +1,13 @@
 import { type FC, useState, useMemo, useEffect } from 'react';
-import { Download, Search, CheckSquare, Square } from 'lucide-react';
+import { Download, Search, CheckSquare, Square, Mail, CheckCircle, XCircle } from 'lucide-react';
 import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
 import { timesheetService } from '../../services/timesheetService';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
+import { useToast } from '../../contexts/ToastContext';
 
 type TimesheetDisplaySegment = 'H1' | 'H2' | 'FULL';
 type TimesheetGroupingMode = 'employees' | 'objects';
+type TimesheetExportPresentation = 'hr' | 'manager';
 
 const ASSIGNED_STORAGE_KEY = 'timesheet_export_assigned_employees_v1';
 
@@ -47,9 +49,12 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
   groupBy,
   exportAs1C,
 }) => {
+  const { showToast } = useToast();
   const [searchQuery, setSearchQuery] = useState('');
   const [checkedIds, setCheckedIds] = useState<Set<number>>(() => loadStoredAssignedIds());
   const [exporting, setExporting] = useState(false);
+  const [emailing, setEmailing] = useState(false);
+  const [presentation, setPresentation] = useState<TimesheetExportPresentation>('hr');
   const [error, setError] = useState<string | null>(null);
 
   const { data, isLoading, isError } = useAssignedEmployees();
@@ -101,8 +106,36 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
     return next;
   });
 
-  const handleExport = async () => {
+  const handleEmail = async () => {
     if (checkedIds.size === 0) return;
+    setEmailing(true);
+    setError(null);
+    try {
+      const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+      const result = await timesheetService.emailAssigned({
+        month: monthStr,
+        half: activeSegment,
+        group_by: groupBy,
+        export_as_1c: exportAs1C,
+        employee_ids: [...checkedIds],
+      });
+      if (result.sent > 0) {
+        showToast('success', `Отправлено: ${result.sent}${result.skipped > 0 ? `, без email: ${result.skipped}` : ''}`);
+      }
+      if (result.failed > 0) {
+        showToast('error', `Ошибок при отправке: ${result.failed}`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+    } finally {
+      setEmailing(false);
+    }
+  };
+
+  const handleExport = async (presentationOverride: TimesheetExportPresentation) => {
+    if (checkedIds.size === 0) return;
+    setPresentation(presentationOverride);
     setExporting(true);
     setError(null);
     try {
@@ -111,6 +144,7 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
         month: monthStr,
         half: activeSegment,
         group_by: groupBy,
+        presentation: presentationOverride,
         export_as_1c: exportAs1C,
         employee_ids: [...checkedIds],
       });
@@ -119,7 +153,8 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
         ? ''
         : `_${activeSegment === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
       const templateSuffix = exportAs1C ? '_1С' : '';
-      const filename = `Назначенные${templateSuffix}_${MONTH_NAMES[month]}_${year}${segmentSuffix}_Руководитель.zip`;
+      const presentationSuffix = presentationOverride === 'manager' ? '_Руководитель' : '';
+      const filename = `Назначенные${templateSuffix}_${MONTH_NAMES[month]}_${year}${segmentSuffix}${presentationSuffix}.zip`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -178,7 +213,15 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
                 <span className="mte-tree-name" onClick={() => toggleEmployee(employee.id)}>
                   {formatTimesheetEmployeeName(employee.full_name)}
                 </span>
-                <span className="mte-assigned-badge">{employee.department_count} отд.</span>
+                <span className="mte-assigned-badge">{employee.department_count} бр.</span>
+                <span
+                  className={`mte-email-indicator ${employee.email ? 'mte-email-indicator--ok' : 'mte-email-indicator--missing'}`}
+                  title={employee.email ?? 'Email не указан'}
+                >
+                  {employee.email
+                    ? <CheckCircle size={14} />
+                    : <XCircle size={14} />}
+                </span>
               </div>
             );
           })
@@ -196,12 +239,30 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
 
       <div className="mte-footer">
         <button
-          className="mte-export-btn"
-          onClick={handleExport}
-          disabled={exporting || checkedIds.size === 0}
+          className={`mte-export-btn ${presentation === 'hr' ? 'mte-export-btn--active' : ''}`}
+          onClick={() => handleExport('hr')}
+          disabled={exporting || emailing || checkedIds.size === 0}
         >
           <Download size={16} />
-          {exporting ? 'Выгрузить назначенных...' : `Выгрузить назначенных (${checkedIds.size})`}
+          {exporting && presentation === 'hr' ? 'Выгрузить Факт...' : `Выгрузить Факт (${checkedIds.size})`}
+        </button>
+        <button
+          className={`mte-export-btn mte-export-btn--secondary ${presentation === 'manager' ? 'mte-export-btn--active' : ''}`}
+          onClick={() => handleExport('manager')}
+          disabled={exporting || emailing || checkedIds.size === 0}
+        >
+          <Download size={16} />
+          {exporting && presentation === 'manager'
+            ? 'Выгрузить урезанный...'
+            : `Выгрузить урезанный (${checkedIds.size})`}
+        </button>
+        <button
+          className="mte-export-btn mte-export-btn--email"
+          onClick={handleEmail}
+          disabled={exporting || emailing || checkedIds.size === 0}
+        >
+          <Mail size={16} />
+          {emailing ? 'Отправка...' : `Отправить на почту (${checkedIds.size})`}
         </button>
       </div>
     </>

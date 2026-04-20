@@ -672,3 +672,26 @@
   font-weight: 500;
   white-space: nowrap;
 }
+
+.mte-email-indicator {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.mte-email-indicator--ok {
+  color: var(--success, #22c55e);
+}
+
+.mte-email-indicator--missing {
+  color: var(--text-tertiary, #9ca3af);
+}
+
+.mte-export-btn--email {
+  background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);
+}
+
+.mte-export-btn--email:hover:not(:disabled) {
+  background: linear-gradient(135deg, #6d28d9 0%, #4338ca 100%);
+  transform: translateY(-1px);
+}

@@ -181,6 +181,7 @@ export const timesheetService = {
     month: string;
     half?: TimesheetExportHalf;
     group_by?: TimesheetExportGrouping;
+    presentation?: TimesheetExportPresentation;
     export_as_1c?: boolean;
     employee_ids?: number[];
   }): Promise<Blob> {
@@ -203,6 +204,22 @@ export const timesheetService = {
   async listAssignedEmployees(): Promise<IAssignedEmployeeSummary[]> {
     const res = await apiClient.get<ApiResponse<IAssignedEmployeeSummary[]>>('/timesheet/assigned-employees');
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки назначенных сотрудников');
+    return res.data;
+  },
+
+  async emailAssigned(filters: {
+    month: string;
+    half?: string;
+    group_by?: string;
+    presentation?: string;
+    export_as_1c?: boolean;
+    employee_ids?: number[];
+  }): Promise<{ sent: number; failed: number; errors: string[]; skipped: number }> {
+    const res = await apiClient.post<ApiResponse<{ sent: number; failed: number; errors: string[]; skipped: number }>>(
+      '/timesheet/email-assigned',
+      filters,
+    );
+    if (!res.data) throw new Error(res.error || 'Ошибка отправки email');
     return res.data;
   },
 

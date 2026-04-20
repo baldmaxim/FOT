@@ -71,7 +71,7 @@ const buildPairs = (events: SkudEvent[], internalPoints: Set<string>, isToday: b
       if (currentEntry === null) currentEntry = ev;
     } else if (ev.direction === 'exit' && currentEntry !== null) {
       const dur = timeToSeconds(ev.event_time) - timeToSeconds(currentEntry.event_time);
-      pairs.push({ entry: currentEntry, exit: ev, durationMinutes: Math.round(dur / 60) });
+      pairs.push({ entry: currentEntry, exit: ev, durationMinutes: Math.round(dur / 60), breakMinutesAfter: null });
       currentEntry = null;
     }
   }
@@ -80,9 +80,16 @@ const buildPairs = (events: SkudEvent[], internalPoints: Set<string>, isToday: b
     const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
     const dur = nowSec - timeToSeconds(currentEntry.event_time);
     if (dur > 0) {
-      pairs.push({ entry: currentEntry, exit: null, durationMinutes: Math.round(dur / 60) });
+      pairs.push({ entry: currentEntry, exit: null, durationMinutes: Math.round(dur / 60), breakMinutesAfter: null });
     }
   }
+  pairs.forEach((pair, i) => {
+    const next = pairs[i + 1];
+    if (pair.exit && next?.entry) {
+      const gap = timeToSeconds(next.entry.event_time) - timeToSeconds(pair.exit.event_time);
+      pair.breakMinutesAfter = gap > 0 ? Math.round(gap / 60) : null;
+    }
+  });
   return pairs;
 };
 

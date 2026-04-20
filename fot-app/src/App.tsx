@@ -47,8 +47,6 @@ const EmployeeCardPage = lazy(() => import('./pages/employees/EmployeeCardPage')
 const SigurSettingsPage = lazy(() => import('./pages/skud/SigurSettingsPage').then(m => ({ default: m.SigurSettingsPage })));
 const SigurRawDataPage = lazy(() => import('./pages/skud/SigurRawDataPage').then(m => ({ default: m.SigurRawDataPage })));
 const SkudSupabasePage = lazy(() => import('./pages/skud/SkudSupabasePage').then(m => ({ default: m.SkudSupabasePage })));
-const SkudMonitorPage = lazy(() => import('./pages/skud/SkudMonitorPage').then(m => ({ default: m.SkudMonitorPage })));
-const TravelSegmentsPage = lazy(() => import('./pages/skud/TravelSegmentsPage').then(m => ({ default: m.TravelSegmentsPage })));
 
 // Timesheet
 const TimesheetPage = lazy(() => import('./pages/timesheet/TimesheetPage').then(m => ({ default: m.TimesheetPage })));
@@ -342,17 +340,6 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage="/skud-travel" />}>
-          <Route
-            path="/skud-travel"
-            element={
-              <Layout title="Передвижения" theme={theme} onToggleTheme={toggleTheme}>
-                <TravelSegmentsPage />
-              </Layout>
-            }
-          />
-        </Route>
-
         <Route element={<ProtectedRoute requiredPage="/timesheet-hr" />}>
           <Route
             path="/timesheet-hr"
@@ -388,17 +375,6 @@ const AppRoutes = () => {
             element={
               <Layout title="Просмотр СКУД (база)" theme={theme} onToggleTheme={toggleTheme}>
                 <SkudSupabasePage />
-              </Layout>
-            }
-          />
-        </Route>
-
-        <Route element={<ProtectedRoute requiredPage="/skud-monitor" />}>
-          <Route
-            path="/skud-monitor"
-            element={
-              <Layout title="Монитор Sigur" theme={theme} onToggleTheme={toggleTheme}>
-                <SkudMonitorPage />
               </Layout>
             }
           />
@@ -493,7 +469,7 @@ const AppRoutes = () => {
         </Route>
 
         {/* Hub routes: объединённые страницы с табами */}
-        <Route element={<ProtectedRoute requiredPage={['/skud-monitor', '/skud-settings', '/skud-travel']} />}>
+        <Route element={<ProtectedRoute requiredPage="/skud-settings" />}>
           <Route
             path="/skud"
             element={

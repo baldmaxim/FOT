@@ -139,10 +139,10 @@ router.put(
 
 // === Monitor эндпоинты (admin+) ===
 
-router.get('/monitor/status', requirePageAccess('/skud-monitor', 'view'), sigurMonitorController.getStatus);
-router.get('/monitor/incidents', requirePageAccess('/skud-monitor', 'view'), sigurMonitorController.getIncidents);
-router.get('/monitor/incidents/:id', requirePageAccess('/skud-monitor', 'view'), sigurMonitorController.getIncidentById);
-router.get('/monitor/checks', requirePageAccess('/skud-monitor', 'view'), sigurMonitorController.getChecks);
+router.get('/monitor/status', requirePageAccess('/skud-settings', 'view'), sigurMonitorController.getStatus);
+router.get('/monitor/incidents', requirePageAccess('/skud-settings', 'view'), sigurMonitorController.getIncidents);
+router.get('/monitor/incidents/:id', requirePageAccess('/skud-settings', 'view'), sigurMonitorController.getIncidentById);
+router.get('/monitor/checks', requirePageAccess('/skud-settings', 'view'), sigurMonitorController.getChecks);
 
 // GET /api/sigur/stream?type=employees — SSE-стриминг с прогрессом
 router.get('/stream', requirePageAccess('/skud-settings', 'view'), sigurController.stream);

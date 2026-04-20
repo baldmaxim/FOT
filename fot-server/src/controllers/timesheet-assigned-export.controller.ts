@@ -3,11 +3,13 @@ import ExcelJS from 'exceljs';
 import archiver from 'archiver';
 import { supabase } from '../config/database.js';
 import type { AuthenticatedRequest } from '../types/index.js';
+import { mailerService } from '../services/mailer.service.js';
 import { resolveRequestDataScope, resolveManagedDepartmentIds } from '../services/data-scope.service.js';
 import {
   fetchTimesheetDataForDepartment,
   type TimesheetExportGrouping,
   type TimesheetExportHalf,
+  type TimesheetExportPresentation,
 } from '../services/timesheet-export.service.js';
 import {
   build1CObjectTimesheetWorkbook,
@@ -27,6 +29,10 @@ const sanitizeFileName = (value: string): string =>
 
 const normalizeGrouping = (value: unknown): TimesheetExportGrouping => (
   value === 'objects' ? 'objects' : 'employees'
+);
+
+const normalizePresentation = (value: unknown): TimesheetExportPresentation => (
+  value === 'manager' ? 'manager' : 'hr'
 );
 
 const normalizeBoolean = (value: unknown): boolean => (
@@ -128,6 +134,7 @@ async function buildFilesForAssignedEmployee(params: {
   exportAs1C: boolean;
   templateSuffix: string;
   presentationSuffix: string;
+  displayMode: 'actual' | 'capped_to_schedule';
 }): Promise<Array<{ name: string; data: Buffer }>> {
   const {
     employee,
@@ -139,6 +146,7 @@ async function buildFilesForAssignedEmployee(params: {
     exportAs1C,
     templateSuffix,
     presentationSuffix,
+    displayMode,
   } = params;
 
   const leaderFio = formatNameWithInitials(employee.full_name);
@@ -146,7 +154,7 @@ async function buildFilesForAssignedEmployee(params: {
   const files: Array<{ name: string; data: Buffer }> = [];
 
   for (const departmentId of employee.department_ids) {
-    const data = await fetchTimesheetDataForDepartment(month, departmentId, exportHalf, 'capped_to_schedule');
+    const data = await fetchTimesheetDataForDepartment(month, departmentId, exportHalf, displayMode);
     if (data.employees.length === 0) continue;
 
     const halfSuffix = data.exportHalf === 'FULL'
@@ -190,7 +198,7 @@ async function buildFilesForAssignedEmployee(params: {
   return files;
 }
 
-/** GET /api/timesheet/assigned-employees → [{ id, full_name, department_count, departments: [{id, name}] }] */
+/** GET /api/timesheet/assigned-employees → [{ id, full_name, department_count, email, departments: [{id, name}] }] */
 export async function listAssignedEmployees(req: AuthenticatedRequest, res: Response) {
   try {
     const result = await collectAssignedEmployees(req);
@@ -215,6 +223,37 @@ export async function listAssignedEmployees(req: AuthenticatedRequest, res: Resp
       }
     }
 
+    // Получаем email для каждого сотрудника через user_profiles → auth.users
+    const employeeIds = result.employees.map(e => e.id);
+    const emailByEmployeeId = new Map<number, string>();
+    if (employeeIds.length > 0) {
+      const { data: profiles } = await supabase
+        .from('user_profiles')
+        .select('id, employee_id')
+        .in('employee_id', employeeIds);
+      if (profiles && profiles.length > 0) {
+        const profileIdToEmpId = new Map<string, number>();
+        for (const p of profiles) {
+          const profileId = (p as { id?: unknown }).id;
+          const empId = (p as { employee_id?: unknown }).employee_id;
+          if (typeof profileId === 'string' && typeof empId === 'number') {
+            profileIdToEmpId.set(profileId, empId);
+          }
+        }
+        try {
+          const { data: authData } = await supabase.auth.admin.listUsers({ perPage: 1000 });
+          for (const au of authData?.users ?? []) {
+            const empId = profileIdToEmpId.get(au.id);
+            if (empId !== undefined && au.email) {
+              emailByEmployeeId.set(empId, au.email);
+            }
+          }
+        } catch {
+          // Email недоступен — продолжаем без него
+        }
+      }
+    }
+
     const data = result.employees.map(employee => {
       const departments = employee.department_ids
         .map(id => ({ id, name: deptNameById.get(id) || 'Отдел' }))
@@ -223,6 +262,7 @@ export async function listAssignedEmployees(req: AuthenticatedRequest, res: Resp
         id: employee.id,
         full_name: employee.full_name,
         department_count: employee.department_ids.length,
+        email: emailByEmployeeId.get(employee.id) ?? null,
         departments,
       };
     });
@@ -236,7 +276,7 @@ export async function listAssignedEmployees(req: AuthenticatedRequest, res: Resp
 /** POST /api/timesheet/export-assigned  body: { month, half, group_by, export_as_1c, employee_ids? } */
 export async function exportTimesheetAssigned(req: AuthenticatedRequest, res: Response) {
   try {
-    const { month, half, group_by, export_as_1c, employee_ids } = req.body;
+    const { month, half, group_by, export_as_1c, employee_ids, presentation } = req.body;
 
     if (!month || typeof month !== 'string' || !/^\d{4}-\d{2}$/.test(month)) {
       return res.status(400).json({ success: false, error: 'Параметр month обязателен (формат YYYY-MM)' });
@@ -249,13 +289,17 @@ export async function exportTimesheetAssigned(req: AuthenticatedRequest, res: Re
       ? half
       : 'FULL';
     const exportGrouping = normalizeGrouping(group_by);
+    const exportPresentation = normalizePresentation(presentation);
     const exportAs1C = normalizeBoolean(export_as_1c);
+    const displayMode: 'actual' | 'capped_to_schedule' = exportPresentation === 'manager'
+      ? 'capped_to_schedule'
+      : 'actual';
     const daysInMonth = new Date(year, mon, 0).getDate();
     const segmentSuffix = exportHalf === 'FULL'
       ? ''
       : `_${exportHalf === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
     const templateSuffix = exportAs1C ? '_1С' : '';
-    const presentationSuffix = '_Руководитель';
+    const presentationSuffix = exportPresentation === 'manager' ? '_Руководитель' : '';
 
     const collected = await collectAssignedEmployees(req);
     if ('error' in collected) {
@@ -305,6 +349,7 @@ export async function exportTimesheetAssigned(req: AuthenticatedRequest, res: Re
           exportAs1C,
           templateSuffix,
           presentationSuffix,
+          displayMode,
         });
         return { employee, files };
       }));
@@ -324,5 +369,121 @@ export async function exportTimesheetAssigned(req: AuthenticatedRequest, res: Re
     if (!res.headersSent) {
       res.status(500).json({ success: false, error: 'Ошибка экспорта назначенных' });
     }
+  }
+}
+
+/** POST /api/timesheet/email-assigned  body: { month, half, group_by, export_as_1c, employee_ids?, presentation? } */
+export async function emailTimesheetAssigned(req: AuthenticatedRequest, res: Response) {
+  try {
+    if (!mailerService.isConfigured()) {
+      return res.status(503).json({ success: false, error: 'Email-сервис не настроен (SMTP_HOST, SMTP_USER, SMTP_PASS)' });
+    }
+
+    const { month, half, group_by, export_as_1c, employee_ids, presentation } = req.body;
+
+    if (!month || typeof month !== 'string' || !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ success: false, error: 'Параметр month обязателен (формат YYYY-MM)' });
+    }
+
+    const [yearStr, monthStr] = month.split('-');
+    const year = parseInt(yearStr);
+    const mon = parseInt(monthStr);
+    const exportHalf: TimesheetExportHalf = half === 'H1' || half === 'H2' || half === 'FULL' ? half : 'FULL';
+    const exportGrouping = normalizeGrouping(group_by);
+    const exportPresentation = normalizePresentation(presentation);
+    const exportAs1C = normalizeBoolean(export_as_1c);
+    const displayMode: 'actual' | 'capped_to_schedule' = exportPresentation === 'manager' ? 'capped_to_schedule' : 'actual';
+    const templateSuffix = exportAs1C ? '_1С' : '';
+    const presentationSuffix = exportPresentation === 'manager' ? '_Руководитель' : '';
+
+    const collected = await collectAssignedEmployees(req);
+    if ('error' in collected) {
+      return res.status(collected.error.status).json({ success: false, error: collected.error.message });
+    }
+
+    let assignedEmployees = collected.employees;
+    if (Array.isArray(employee_ids) && employee_ids.length > 0) {
+      const requested = new Set(employee_ids.map(Number).filter(Number.isInteger));
+      assignedEmployees = assignedEmployees.filter(e => requested.has(e.id));
+    }
+
+    if (assignedEmployees.length === 0) {
+      return res.status(404).json({ success: false, error: 'Нет назначенных сотрудников для отправки' });
+    }
+
+    // Получаем email для выбранных сотрудников
+    const empIds = assignedEmployees.map(e => e.id);
+    const emailByEmployeeId = new Map<number, string>();
+    const { data: profiles } = await supabase
+      .from('user_profiles')
+      .select('id, employee_id')
+      .in('employee_id', empIds);
+    if (profiles && profiles.length > 0) {
+      const profileIdToEmpId = new Map<string, number>();
+      for (const p of profiles) {
+        const pid = (p as { id?: unknown }).id;
+        const eid = (p as { employee_id?: unknown }).employee_id;
+        if (typeof pid === 'string' && typeof eid === 'number') profileIdToEmpId.set(pid, eid);
+      }
+      const { data: authData } = await supabase.auth.admin.listUsers({ perPage: 1000 });
+      for (const au of authData?.users ?? []) {
+        const eid = profileIdToEmpId.get(au.id);
+        if (eid !== undefined && au.email) emailByEmployeeId.set(eid, au.email);
+      }
+    }
+
+    const employeesWithEmail = assignedEmployees.filter(e => emailByEmployeeId.has(e.id));
+    if (employeesWithEmail.length === 0) {
+      return res.status(422).json({ success: false, error: 'Ни у одного из выбранных начальников участков нет email' });
+    }
+
+    const CONCURRENCY = 3;
+    let sent = 0;
+    let failed = 0;
+    const errors: string[] = [];
+
+    for (let i = 0; i < employeesWithEmail.length; i += CONCURRENCY) {
+      const batch = employeesWithEmail.slice(i, i + CONCURRENCY);
+      await Promise.all(batch.map(async employee => {
+        const email = emailByEmployeeId.get(employee.id)!;
+        const files = await buildFilesForAssignedEmployee({
+          employee,
+          month,
+          year,
+          mon,
+          exportHalf,
+          exportGrouping,
+          exportAs1C,
+          templateSuffix,
+          presentationSuffix,
+          displayMode,
+        });
+        if (files.length === 0) return;
+
+        const innerZip = await buildInnerZipBuffer(files);
+        const zipName = sanitizeFileName(`${formatAssignedFolderName(employee.full_name)}${presentationSuffix}.zip`);
+        const monthLabel = MONTH_NAMES[mon];
+        try {
+          await mailerService.sendWithAttachment({
+            to: email,
+            subject: `Табель ${monthLabel} ${year}${presentationSuffix ? ' (Руководитель)' : ''}`,
+            text: `Здравствуйте,\n\nВо вложении табель за ${monthLabel} ${year}.\n\nС уважением, FOT`,
+            attachments: [{ filename: zipName, content: innerZip, contentType: 'application/zip' }],
+          });
+          sent++;
+        } catch (mailErr) {
+          failed++;
+          errors.push(`${employee.full_name} (${email}): ${mailErr instanceof Error ? mailErr.message : String(mailErr)}`);
+        }
+      }));
+    }
+
+    return res.json({
+      success: true,
+      data: { sent, failed, errors, skipped: assignedEmployees.length - employeesWithEmail.length },
+    });
+  } catch (err) {
+    console.error('timesheet.emailAssigned error:', err);
+    return res.status(500).json({ success: false, error: 'Ошибка отправки email' });
   }
 }

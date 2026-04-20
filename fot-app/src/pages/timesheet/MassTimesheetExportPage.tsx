@@ -170,7 +170,7 @@ export const MassTimesheetExportPage: FC = () => {
           className={`mte-tab-button ${activeTab === 'assigned' ? 'mte-tab-button--active' : ''}`}
           onClick={() => setActiveTab('assigned')}
         >
-          Назначенные
+          Участки
         </button>
       </div>
 
