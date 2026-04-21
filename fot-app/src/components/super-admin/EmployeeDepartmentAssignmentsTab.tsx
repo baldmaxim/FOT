@@ -76,7 +76,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
   const filteredEmployees = useMemo(() => {
     const normalizedSearch = normalizeText(searchQuery);
     return employees.filter(employee => {
-      const additionalDepartmentIds = normalizeAdditionalDepartmentIds(employee.additional_department_ids || [], employee.department_id);
+      const additionalDepartmentIds = normalizeAdditionalDepartmentIds(employee.additional_department_ids || []);
       if (!showAllEmployees && additionalDepartmentIds.length === 0) {
         return false;
       }
@@ -134,7 +134,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
       const response = await adminService.updateEmployeeDepartmentAccess(employee.employee_id, additionalDepartmentIds);
       setDepartmentAccessDrafts(prev => ({
         ...prev,
-        [employee.employee_id]: normalizeAdditionalDepartmentIds(response.additional_department_ids, employee.department_id),
+        [employee.employee_id]: normalizeAdditionalDepartmentIds(response.additional_department_ids),
       }));
       toast.success('Назначения сотрудника сохранены');
       await Promise.all([

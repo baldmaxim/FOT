@@ -247,7 +247,6 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   visibleDays,
   selectedCellKeys = EMPTY_CELL_SELECTION,
   splitDayKeys = EMPTY_CELL_SELECTION,
-  lockedDates,
   canManageTeam = false,
   pendingEmployeeId = null,
   onBulkSelectionChange,

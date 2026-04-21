@@ -181,7 +181,6 @@ export const TimesheetPage: FC = () => {
   const now = useMemo(() => new Date(), []);
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
-  const currentDay = now.getDate();
   const currentMonthIndex = toMonthIndex(currentYear, currentMonth);
   const previousMonthIndex = currentMonthIndex - 1;
   const isRestrictedManagerView = isTimesheetDepartmentScope;
