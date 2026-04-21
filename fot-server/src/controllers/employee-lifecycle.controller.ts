@@ -407,6 +407,7 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       .single();
 
     if (error || !data) {
+      console.error('[rehire] DB update failed:', error);
       res.status(404).json({ success: false, error: 'Employee not found' });
       return;
     }
@@ -414,7 +415,7 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
     employeeCache.invalidate(id);
 
     const today = new Date().toISOString().slice(0, 10);
-    await supabase
+    const { error: assignError } = await supabase
       .from('employee_assignments')
       .insert({
         employee_id: employeeId,
@@ -426,6 +427,10 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
         change_reason: 'Восстановление на работу',
         created_by: req.user.id,
       });
+
+    if (assignError) {
+      console.warn('[rehire] employee_assignments insert failed (non-critical):', assignError);
+    }
 
     await auditService.logFromRequest(req, req.user.id, 'REHIRE_EMPLOYEE', {
       entityType: 'employee',
