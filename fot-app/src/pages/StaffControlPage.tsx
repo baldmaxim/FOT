@@ -1620,8 +1620,8 @@ export const StaffControlPage: FC = () => {
           <div className="sc-filter-search">
             <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
           </div>
-          <button className="sc-btn apply sc-btn--icon" onClick={() => setShowAddModal(true)}>
-            <UserPlus size={16} />
+          <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
+            <UserPlus size={16} /> Добавить
           </button>
           <div className="sc-status-toggle sc-status-toggle--mobile">
             <button
