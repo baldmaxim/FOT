@@ -160,7 +160,7 @@ async function login(req: Request, res: Response): Promise<void> {
 
     if (authError || !authData.user) {
       console.error('Login error for', email, ':', authError?.message);
-      await auditService.logFromRequest(req, 'unknown', 'LOGIN_FAILED', {
+      await auditService.logFromRequest(req, null, 'LOGIN_FAILED', {
         details: { email, reason: authError?.message },
       });
 

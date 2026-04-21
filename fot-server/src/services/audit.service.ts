@@ -77,7 +77,7 @@ export const AUDIT_ACTIONS = {
 export type AuditAction = typeof AUDIT_ACTIONS[keyof typeof AUDIT_ACTIONS];
 
 interface AuditEntry {
-  user_id: string;
+  user_id: string | null;
   action: AuditAction;
   entity_type?: string;
   entity_id?: string;
@@ -87,13 +87,10 @@ interface AuditEntry {
 }
 
 export const auditService = {
-  /**
-   * Логирует действие пользователя
-   */
   async log(entry: AuditEntry): Promise<void> {
     try {
       await supabase.from('audit_logs').insert({
-        user_id: entry.user_id,
+        user_id: entry.user_id || null,
         action: entry.action,
         entity_type: entry.entity_type || null,
         entity_id: entry.entity_id || null,
@@ -112,7 +109,7 @@ export const auditService = {
    */
   async logFromRequest(
     req: Request,
-    userId: string,
+    userId: string | null,
     action: AuditAction,
     options?: {
       entityType?: string;
