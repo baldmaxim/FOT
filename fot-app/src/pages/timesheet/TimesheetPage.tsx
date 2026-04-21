@@ -1435,19 +1435,26 @@ export const TimesheetPage: FC = () => {
                 {selectorControl}
                 {modeControl}
               </div>
+              {!isMultiDepartmentManager && (
+                <div className="ts-header-right">
+                  <TimesheetApprovalBar
+                    departmentId={effectiveSelectedDeptId}
+                    month={`${year}-${String(month).padStart(2, '0')}`}
+                    allowReview={false}
+                  />
+                </div>
+              )}
             </div>
             <div className="ts-toolbar">
               <div className="ts-toolbar-left">
-                {!isAssignedMode && <TimesheetStats stats={stats} />}
-                {!isAssignedMode && (
-                  <button type="button" className="ts-btn" onClick={handleExport}>
-                    <Download size={16} />
-                    Экспорт
-                  </button>
-                )}
+                <TimesheetStats stats={stats} />
+                <button type="button" className="ts-btn" onClick={handleExport}>
+                  <Download size={16} />
+                  Экспорт
+                </button>
               </div>
               <div className="ts-toolbar-right">
-                {!isAssignedMode && canUseTeamManagement && (
+                {canUseTeamManagement && (
                   <button
                     type="button"
                     className="ts-btn ts-btn--primary"
@@ -1459,7 +1466,7 @@ export const TimesheetPage: FC = () => {
                     Добавить сотрудника
                   </button>
                 )}
-                {!isAssignedMode && effectiveSelectedDeptId && (
+                {effectiveSelectedDeptId && (
                   <button
                     type="button"
                     className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}
@@ -1467,13 +1474,6 @@ export const TimesheetPage: FC = () => {
                   >
                     Режим корректировок
                   </button>
-                )}
-                {!isAssignedMode && !isMultiDepartmentManager && (
-                  <TimesheetApprovalBar
-                    departmentId={effectiveSelectedDeptId}
-                    month={`${year}-${String(month).padStart(2, '0')}`}
-                    allowReview={false}
-                  />
                 )}
               </div>
             </div>
