@@ -819,9 +819,13 @@ export const sigurAdminController = {
     } catch (error) {
       const status = getErrorStatus(error);
       if (error instanceof AxiosError) {
-        console.error('Sigur admin updateEmployeeCardBinding Sigur response:', error.response?.status, JSON.stringify(error.response?.data));
+        const data = error.response?.data as Record<string, unknown> | undefined;
+        console.error('[Sigur PATCH 400] status=', error.response?.status);
+        console.error('[Sigur PATCH 400] request body=', error.config?.data);
+        console.error('[Sigur PATCH 400] errors=', JSON.stringify(data?.errors));
+        console.error('[Sigur PATCH 400] errorsKeys=', JSON.stringify(data?.errorsKeys));
+        console.error('[Sigur PATCH 400] full data=', JSON.stringify(data));
       }
-      console.error('Sigur admin updateEmployeeCardBinding error:', error);
       res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка обновления дат карты Sigur') });
     }
   },
