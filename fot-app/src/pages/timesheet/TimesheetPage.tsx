@@ -26,6 +26,7 @@ import { getScheduleForTimesheetDay, getWorkHoursForDay } from '../../utils/sche
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { formatTimesheetHalfLabel, type TimesheetApprovalHalf } from '../../utils/timesheetApprovalPeriod';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
+import { type IFlatDepartmentOption } from '../../utils/departmentUtils';
 import './TimesheetPage.css';
 
 const TimesheetSidePanel = lazy(() => import('../../components/timesheet/TimesheetSidePanel').then(module => ({
@@ -35,10 +36,6 @@ const TimesheetCorrectionModal = lazy(() => import('../../components/timesheet/T
   default: module.TimesheetCorrectionModal,
 })));
 
-interface IDeptOption {
-  id: string;
-  name: string;
-}
 
 const DEFAULT_STATS: ITimesheetStats = {
   employeeCount: 0,
@@ -217,10 +214,7 @@ export const TimesheetPage: FC = () => {
   const [teamSearch, setTeamSearch] = useState('');
   const [teamPendingEmployeeId, setTeamPendingEmployeeId] = useState<number | null>(null);
 
-  const deptOptions = useMemo(
-    () => managedDepartments.map(department => ({ id: department.id, name: department.name })) as IDeptOption[],
-    [managedDepartments],
-  );
+  const deptOptions: IFlatDepartmentOption[] = managedDepartments;
   const effectiveSelectedDeptId = isTimesheetDepartmentScope
     ? (selectedDeptId || primaryDepartmentId || null)
     : selectedDeptId;
