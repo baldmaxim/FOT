@@ -21,7 +21,7 @@ import {
   resolveRequestDataScope,
 } from '../services/data-scope.service.js';
 
-const EMPLOYEE_LIFECYCLE_COLUMNS = 'id, full_name, last_name, first_name, middle_name, current_salary, salary_actual, salary_calculated, staff_units, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, org_company_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, created_at, updated_at, work_category';
+const EMPLOYEE_LIFECYCLE_COLUMNS = 'id, full_name, last_name, first_name, middle_name, current_salary, salary_actual, salary_calculated, staff_units, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, created_at, updated_at, work_category';
 
 interface IHttpError extends Error {
   status?: number;
@@ -53,7 +53,14 @@ function getHttpErrorCode(error: unknown): string | null {
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object') {
+    const e = error as Record<string, unknown>;
+    const parts = [e.message, e.details, e.hint, e.code].filter(v => typeof v === 'string' && v);
+    if (parts.length > 0) return parts.join(' | ');
+    try { return JSON.stringify(error); } catch { return fallback; }
+  }
+  return typeof error === 'string' && error ? error : fallback;
 }
 
 async function loadEmployeeLifecycleRow(employeeId: number): Promise<EmployeeEncrypted | null> {
@@ -466,7 +473,7 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       res.json({ success: true, data });
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = getErrorMessage(error, 'Unknown error');
     const stack = error instanceof Error ? error.stack : undefined;
     console.error('[rehire] Unhandled error:', { employeeId: req.params.id, message, stack, error });
     res.status(500).json({ success: false, error: `Не удалось восстановить сотрудника: ${message}`, detail: message });
