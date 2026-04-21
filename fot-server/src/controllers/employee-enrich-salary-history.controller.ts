@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import * as XLSX from 'xlsx';
+import { readExcelRows } from '../utils/excel-reader.js';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -91,14 +91,8 @@ const parseShortName = (text: string): { lastName: string; initial1: string; ini
  * Парсит Excel-файл формата "История окладов"
  * Данные с 9-й строки (index 8), только столбец B (index 1)
  */
-function parseSalaryHistoryExcel(buffer: Buffer): ParsedEmployee[] {
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    raw: false,
-    defval: '',
-  });
+async function parseSalaryHistoryExcel(buffer: Buffer): Promise<ParsedEmployee[]> {
+  const rows = await readExcelRows(buffer);
 
   const result: ParsedEmployee[] = [];
   let currentDepartment: string | null = null;
@@ -200,7 +194,7 @@ export const employeeSalaryHistoryController = {
       }
 
       const preview = req.query.preview !== 'false';
-      const parsedEmployees = parseSalaryHistoryExcel(req.file.buffer);
+      const parsedEmployees = await parseSalaryHistoryExcel(req.file.buffer);
 
       console.log('[enrich-salary-history] Parsed employees:', parsedEmployees.length);
 

@@ -1,7 +1,7 @@
 /**
  * СКУД: импорт событий из Excel, синхронизация из Sigur, очистка дублей.
  */
-import * as XLSX from 'xlsx';
+import { readExcelRows } from '../utils/excel-reader.js';
 import { supabase } from '../config/database.js';
 import { auditService } from './audit.service.js';
 import { sigurService } from './sigur.service.js';
@@ -38,15 +38,7 @@ export async function importFromExcel(params: IImportParams): Promise<IImportRes
   }
 
   // Парсим Excel
-  const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
-  const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-
-  const rows: (string | number | Date | null)[][] = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    raw: false,
-    dateNF: 'yyyy-mm-dd',
-  });
+  const rows = await readExcelRows(fileBuffer);
 
   if (rows.length === 0) {
     throw new Error('Файл пуст');

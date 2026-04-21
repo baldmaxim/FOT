@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import * as XLSX from 'xlsx';
+import { readExcelRows } from '../utils/excel-reader.js';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import { employeeChangesService } from '../services/employee-changes.service.js';
@@ -67,14 +67,8 @@ const parseNumber = (val: unknown): number | null => {
  * Парсит Excel-файл формата "Оклады и ставки"
  * Данные с 5-й строки (index 4), ФИО со 2-го столбца (index 1)
  */
-function parseSalaryExcel(buffer: Buffer): ParsedSalaryRow[] {
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    raw: false,
-    defval: '',
-  });
+async function parseSalaryExcel(buffer: Buffer): Promise<ParsedSalaryRow[]> {
+  const rows = await readExcelRows(buffer);
 
   const result: ParsedSalaryRow[] = [];
 
@@ -120,7 +114,7 @@ export const employeeSalaryEnrichController = {
       }
 
       const preview = req.query.preview !== 'false';
-      const parsedRows = parseSalaryExcel(req.file.buffer);
+      const parsedRows = await parseSalaryExcel(req.file.buffer);
 
       console.log('[enrich-salary] Parsed rows:', parsedRows.length);
 

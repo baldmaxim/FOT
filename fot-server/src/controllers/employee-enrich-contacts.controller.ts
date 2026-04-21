@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import * as XLSX from 'xlsx';
+import { readExcelRows } from '../utils/excel-reader.js';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -24,15 +24,8 @@ const cleanCell = (val: unknown): string | null => {
   return s;
 };
 
-function parseContactsExcel(buffer: Buffer): ParsedRow[] {
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    raw: false,
-    defval: '',
-  });
-
+async function parseContactsExcel(buffer: Buffer): Promise<ParsedRow[]> {
+  const rows = await readExcelRows(buffer);
   const result: ParsedRow[] = [];
 
   // Row 0 = header, data starts at index 1
@@ -65,7 +58,7 @@ export const employeeEnrichContactsController = {
       }
 
       const preview = req.query.preview !== 'false';
-      const parsedRows = parseContactsExcel(req.file.buffer);
+      const parsedRows = await parseContactsExcel(req.file.buffer);
 
       if (parsedRows.length === 0) {
         res.status(400).json({ success: false, error: 'Нет данных в файле' });

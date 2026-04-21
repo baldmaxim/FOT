@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import * as XLSX from 'xlsx';
+import { readExcelRows } from '../utils/excel-reader.js';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import { parseDate } from '../utils/date.utils.js';
@@ -53,14 +53,8 @@ const isDeptRow = (row: unknown[]): boolean => {
 /**
  * Парсит Excel-файл формата "Список сотрудников"
  */
-function parseEnrichExcel(buffer: Buffer): ParsedRow[] {
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    raw: false,
-    defval: '',
-  });
+async function parseEnrichExcel(buffer: Buffer): Promise<ParsedRow[]> {
+  const rows = await readExcelRows(buffer);
 
   const result: ParsedRow[] = [];
   let currentDepartment: string | null = null;
@@ -108,7 +102,7 @@ export const employeeEnrichController = {
       }
 
       const preview = req.query.preview !== 'false';
-      const parsedRows = parseEnrichExcel(req.file.buffer);
+      const parsedRows = await parseEnrichExcel(req.file.buffer);
 
       console.log('[enrich] Parsed rows:', parsedRows.length);
       if (parsedRows.length > 0) {
