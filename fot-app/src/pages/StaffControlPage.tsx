@@ -742,6 +742,68 @@ const BulkScheduleModal: FC<IBulkScheduleModalProps> = memo(({ open, targetCount
   );
 });
 
+interface IBulkCategoryModalProps {
+  open: boolean;
+  targetCount: number;
+  categories: IWorkCategory[];
+  onClose: () => void;
+  onApply: (categoryCode: string | null) => Promise<void>;
+}
+
+const BulkCategoryModal: FC<IBulkCategoryModalProps> = memo(({ open, targetCount, categories, onClose, onApply }) => {
+  const [categoryCode, setCategoryCode] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setCategoryCode('');
+    setSaving(false);
+  }, [open, targetCount]);
+
+  if (!open) return null;
+
+  const handleApply = async () => {
+    setSaving(true);
+    try {
+      await onApply(categoryCode || null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="sc-overlay" onClick={onClose}>
+      <div className="sc-modal" onClick={e => e.stopPropagation()}>
+        <div className="sc-modal-header">
+          <h3>Массовое назначение категории</h3>
+          <button className="sc-modal-close" onClick={onClose}>&times;</button>
+        </div>
+        <div className="sc-modal-body">
+          <div className="sc-field">
+            <label>Категория труда</label>
+            <select value={categoryCode} onChange={e => setCategoryCode(e.target.value)} autoFocus>
+              <option value="">— не назначена —</option>
+              {categories.filter(c => c.is_active).map(c => (
+                <option key={c.code} value={c.code}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="sc-schedule-help">
+            <div><strong>Выбрано сотрудников:</strong> {targetCount}</div>
+            <div>Категория будет назначена всем выбранным сотрудникам.</div>
+          </div>
+        </div>
+        <div className="sc-modal-footer">
+          <button className="sc-btn cancel" onClick={onClose}>Отмена</button>
+          <button className="sc-btn apply" onClick={handleApply} disabled={saving}>
+            {saving ? 'Сохранение...' : 'Применить'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 interface IBulkBrigadeScheduleModalProps {
   open: boolean;
   brigades: IBrigadeOption[];
@@ -972,6 +1034,7 @@ export const StaffControlPage: FC = () => {
   const [bulkScheduleOpen, setBulkScheduleOpen] = useState(false);
   const [bulkFilterScheduleOpen, setBulkFilterScheduleOpen] = useState(false);
   const [bulkBrigadeScheduleOpen, setBulkBrigadeScheduleOpen] = useState(false);
+  const [bulkCategoryOpen, setBulkCategoryOpen] = useState(false);
   const visibleEmployeeIds = useMemo(() => employees.map(emp => emp.id), [employees]);
   const workCategoriesQuery = useQuery({
     queryKey: ['work-categories'],
@@ -1292,6 +1355,17 @@ export const StaffControlPage: FC = () => {
     setSelectedEmployeeIds([]);
   }, [applyScheduleToEmployees, employeeScheduleAssignmentsQuery, queryClient, selectedEmployees]);
 
+  const handleBulkSaveCategory = useCallback(async (categoryCode: string | null) => {
+    const CHUNK_SIZE = 20;
+    const ids = selectedEmployees.map(e => e.id);
+    for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+      await Promise.all(ids.slice(i, i + CHUNK_SIZE).map(id => employeeService.changeCategory(id, categoryCode)));
+    }
+    ids.forEach(id => patchEmployee(id, { work_category: categoryCode || undefined }));
+    setBulkCategoryOpen(false);
+    setSelectedEmployeeIds([]);
+  }, [selectedEmployees, patchEmployee]);
+
   const handleFilteredBulkSaveSchedule = useCallback(async (scheduleId: string | null, effectiveFrom: string) => {
     const employeeIds = await employeeService.getFilteredIds({
       search: debouncedSearch || undefined,
@@ -1543,6 +1617,9 @@ export const StaffControlPage: FC = () => {
             Выбрано сотрудников: <strong>{selectedEmployeeIds.length}</strong>
           </div>
           <div className="sc-bulk-actions">
+            <button className="sc-btn secondary" onClick={() => setBulkCategoryOpen(true)}>
+              Категория
+            </button>
             <button className="sc-btn secondary" onClick={() => setBulkScheduleOpen(true)}>
               <Calendar size={14} /> График
             </button>
@@ -1620,6 +1697,13 @@ export const StaffControlPage: FC = () => {
         onSaveDepartment={handleSaveDepartment}
         onSaveCategory={handleSaveCategory}
         onSaveSchedule={handleSaveSchedule}
+      />
+      <BulkCategoryModal
+        open={bulkCategoryOpen}
+        targetCount={selectedEmployees.length}
+        categories={workCategories}
+        onClose={() => setBulkCategoryOpen(false)}
+        onApply={handleBulkSaveCategory}
       />
       <BulkScheduleModal
         open={bulkScheduleOpen}
