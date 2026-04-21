@@ -170,6 +170,20 @@ export const sigurService = {
     return response.data;
   },
 
+  async updateEmployeeCardBinding(
+    employeeId: number,
+    cardId: number,
+    startDate: string,
+    expirationDate: string,
+    connection?: SigurConnectionScope,
+  ): Promise<SigurEmployeeCardSummary> {
+    const response = await apiClient.patch<ApiResponse<SigurEmployeeCardSummary>>(
+      `/sigur/employees/${employeeId}/cards/${cardId}/binding`,
+      { startDate, expirationDate, connection },
+    );
+    return response.data;
+  },
+
   async getEventTypes(): Promise<{ data: unknown[] }> {
     return apiClient.get('/sigur/events/types');
   },

@@ -325,4 +325,18 @@ export const sigurAdminService = {
     );
     return response.data;
   },
+
+  async updateEmployeeCardBinding(
+    sigurEmployeeId: number,
+    cardId: number,
+    startDate: string,
+    expirationDate: string,
+    connection?: SigurConnectionScope,
+  ): Promise<SigurEmployeeCardSummary> {
+    const response = await apiClient.patch<ApiResponse<SigurEmployeeCardSummary>>(
+      `/sigur/admin/employees/${sigurEmployeeId}/cards/${cardId}/binding`,
+      { startDate, expirationDate, connection },
+    );
+    return response.data;
+  },
 };

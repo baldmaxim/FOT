@@ -139,6 +139,7 @@ export const EmployeeSigurSidebar: FC<IEmployeeSigurSidebarProps> = ({
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState('');
   const [cardDrafts, setCardDrafts] = useState<Record<number, string>>({});
+  const [startDateDrafts, setStartDateDrafts] = useState<Record<number, string>>({});
   const [savingCardId, setSavingCardId] = useState<number | null>(null);
   const [cardSaveError, setCardSaveError] = useState('');
   const [accessPointEditMode, setAccessPointEditMode] = useState(false);
@@ -164,6 +165,9 @@ export const EmployeeSigurSidebar: FC<IEmployeeSigurSidebarProps> = ({
       setCardDrafts(Object.fromEntries(
         data.cards.map(card => [card.cardId, toDateInputValue(card.expirationDate)]),
       ));
+      setStartDateDrafts(Object.fromEntries(
+        data.cards.map(card => [card.cardId, toDateInputValue(card.startDate)]),
+      ));
       const boundIds = data.accessPoints.map(point => point.accessPointId).sort((left, right) => left - right);
       setAccessPointInitialIds(boundIds);
       setAccessPointDraftIds(boundIds);
@@ -180,6 +184,7 @@ export const EmployeeSigurSidebar: FC<IEmployeeSigurSidebarProps> = ({
       setProfileLoading(false);
       setProfileError('');
       setCardDrafts({});
+      setStartDateDrafts({});
       setCardSaveError('');
       setSavingCardId(null);
       setAccessPointEditMode(false);
@@ -326,21 +331,32 @@ export const EmployeeSigurSidebar: FC<IEmployeeSigurSidebarProps> = ({
     setCardSaveError('');
   };
 
+  const handleStartDateDraftChange = (cardId: number, value: string) => {
+    setStartDateDrafts(prev => ({ ...prev, [cardId]: value }));
+    setCardSaveError('');
+  };
+
   const handleSaveCardExpiration = async (card: SigurEmployeeCardSummary) => {
     if (!employeeId) return;
-    const draft = cardDrafts[card.cardId] || '';
-    if (!draft) {
+    const expirationDraft = cardDrafts[card.cardId] || '';
+    const startDraft = startDateDrafts[card.cardId] || '';
+    if (!expirationDraft) {
       setCardSaveError('Укажите дату окончания срока действия пропуска.');
+      return;
+    }
+    if (!startDraft) {
+      setCardSaveError('Укажите дату начала доступа пропуска.');
       return;
     }
 
     try {
       setSavingCardId(card.cardId);
       setCardSaveError('');
-      const updatedCard = await sigurService.updateEmployeeCardExpiration(
+      const updatedCard = await sigurService.updateEmployeeCardBinding(
         employeeId,
         card.cardId,
-        toExpirationIso(draft),
+        new Date(`${startDraft}T00:00:00`).toISOString(),
+        toExpirationIso(expirationDraft),
       );
 
       setProfile(prev => {
@@ -353,6 +369,7 @@ export const EmployeeSigurSidebar: FC<IEmployeeSigurSidebarProps> = ({
                 ...item,
                 cardNumber: updatedCard.cardNumber ?? item.cardNumber,
                 status: updatedCard.status ?? item.status,
+                startDate: updatedCard.startDate,
                 expirationDate: updatedCard.expirationDate,
               }
               : item
@@ -364,8 +381,12 @@ export const EmployeeSigurSidebar: FC<IEmployeeSigurSidebarProps> = ({
         ...prev,
         [card.cardId]: toDateInputValue(updatedCard.expirationDate),
       }));
+      setStartDateDrafts(prev => ({
+        ...prev,
+        [card.cardId]: toDateInputValue(updatedCard.startDate),
+      }));
     } catch (error) {
-      setCardSaveError(error instanceof Error ? error.message : 'Не удалось сохранить срок действия карты');
+      setCardSaveError(error instanceof Error ? error.message : 'Не удалось сохранить даты карты');
     } finally {
       setSavingCardId(null);
     }
@@ -491,9 +512,11 @@ export const EmployeeSigurSidebar: FC<IEmployeeSigurSidebarProps> = ({
           ) : (
             <div className="ep-sigur-card-list">
               {activeProfile?.cards.map(card => {
-                const draftValue = cardDrafts[card.cardId] || '';
-                const initialValue = toDateInputValue(card.expirationDate);
-                const changed = draftValue !== initialValue;
+                const expirationDraft = cardDrafts[card.cardId] || '';
+                const startDraft = startDateDrafts[card.cardId] || '';
+                const initialExpiration = toDateInputValue(card.expirationDate);
+                const initialStart = toDateInputValue(card.startDate);
+                const changed = expirationDraft !== initialExpiration || startDraft !== initialStart;
                 return (
                   <div key={card.cardId} className="ep-sigur-card-row">
                     <div className="ep-sigur-card-main">
@@ -508,7 +531,18 @@ export const EmployeeSigurSidebar: FC<IEmployeeSigurSidebarProps> = ({
                         <CalendarDays size={13} />
                         <input
                           type="date"
-                          value={draftValue}
+                          title="Дата начала доступа"
+                          value={startDraft}
+                          onChange={event => handleStartDateDraftChange(card.cardId, event.target.value)}
+                          disabled={!canEdit || savingCardId === card.cardId}
+                        />
+                      </div>
+                      <div className="ep-sigur-date-input-wrap">
+                        <CalendarDays size={13} />
+                        <input
+                          type="date"
+                          title="Срок действия"
+                          value={expirationDraft}
                           onChange={event => handleCardDraftChange(card.cardId, event.target.value)}
                           disabled={!canEdit || savingCardId === card.cardId}
                         />
@@ -518,7 +552,7 @@ export const EmployeeSigurSidebar: FC<IEmployeeSigurSidebarProps> = ({
                           className="ep-sigur-save-btn"
                           type="button"
                           onClick={() => void handleSaveCardExpiration(card)}
-                          disabled={!draftValue || !changed || savingCardId === card.cardId}
+                          disabled={!changed || savingCardId === card.cardId}
                         >
                           <Save size={13} />
                           <span>{savingCardId === card.cardId ? '...' : 'Сохранить'}</span>

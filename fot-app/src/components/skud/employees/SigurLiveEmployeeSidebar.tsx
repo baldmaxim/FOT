@@ -183,6 +183,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   const [creatingPosition, setCreatingPosition] = useState(false);
 
   const [cardDrafts, setCardDrafts] = useState<Record<number, string>>({});
+  const [startDateDrafts, setStartDateDrafts] = useState<Record<number, string>>({});
   const [savingCardId, setSavingCardId] = useState<number | null>(null);
   const [cardSaveError, setCardSaveError] = useState('');
 
@@ -217,6 +218,10 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
           data.cards.map(card => [card.cardId, toDateInputValue(card.expirationDate)]),
         );
         setCardDrafts(nextCardDrafts);
+        const nextStartDateDrafts = Object.fromEntries(
+          data.cards.map(card => [card.cardId, toDateInputValue(card.startDate)]),
+        );
+        setStartDateDrafts(nextStartDateDrafts);
         const boundIds = data.accessPoints.map(point => point.accessPointId).sort((left, right) => left - right);
         setAccessPointInitialIds(boundIds);
         setAccessPointDraftIds(boundIds);
@@ -236,6 +241,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
       setProfile(null);
       setDraft(profileToDraft(null));
       setCardDrafts({});
+      setStartDateDrafts({});
       setAccessPointDraftIds([]);
       setAccessPointInitialIds([]);
       setAccessRuleDraftIds([]);
@@ -377,21 +383,32 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
     setCardSaveError('');
   };
 
+  const handleStartDateDraftChange = (cardId: number, value: string) => {
+    setStartDateDrafts(prev => ({ ...prev, [cardId]: value }));
+    setCardSaveError('');
+  };
+
   const handleSaveCardExpiration = async (card: SigurEmployeeCardSummary) => {
     if (!sigurEmployeeId) return;
-    const draftValue = cardDrafts[card.cardId] || '';
-    if (!draftValue) {
+    const expirationDraft = cardDrafts[card.cardId] || '';
+    const startDraft = startDateDrafts[card.cardId] || '';
+    if (!expirationDraft) {
       setCardSaveError('Укажите дату окончания срока действия карты.');
+      return;
+    }
+    if (!startDraft) {
+      setCardSaveError('Укажите дату начала доступа карты.');
       return;
     }
 
     try {
       setSavingCardId(card.cardId);
       setCardSaveError('');
-      const updatedCard = await sigurAdminService.updateEmployeeCardExpiration(
+      const updatedCard = await sigurAdminService.updateEmployeeCardBinding(
         sigurEmployeeId,
         card.cardId,
-        toExpirationIso(draftValue),
+        new Date(`${startDraft}T00:00:00`).toISOString(),
+        toExpirationIso(expirationDraft),
       );
       setProfile(prev => {
         if (!prev) return prev;
@@ -403,6 +420,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                 ...item,
                 cardNumber: updatedCard.cardNumber ?? item.cardNumber,
                 status: updatedCard.status ?? item.status,
+                startDate: updatedCard.startDate,
                 expirationDate: updatedCard.expirationDate,
               }
               : item
@@ -413,8 +431,12 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
         ...prev,
         [card.cardId]: toDateInputValue(updatedCard.expirationDate),
       }));
+      setStartDateDrafts(prev => ({
+        ...prev,
+        [card.cardId]: toDateInputValue(updatedCard.startDate),
+      }));
     } catch (error) {
-      setCardSaveError(error instanceof Error ? error.message : 'Не удалось сохранить срок действия карты');
+      setCardSaveError(error instanceof Error ? error.message : 'Не удалось сохранить даты карты');
     } finally {
       setSavingCardId(null);
     }
@@ -716,9 +738,11 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
           ) : (
             <div className="ep-sigur-card-list">
               {profile.cards.map(card => {
-                const draftValue = cardDrafts[card.cardId] || '';
-                const initialValue = toDateInputValue(card.expirationDate);
-                const changed = draftValue !== initialValue;
+                const expirationDraft = cardDrafts[card.cardId] || '';
+                const startDraft = startDateDrafts[card.cardId] || '';
+                const initialExpiration = toDateInputValue(card.expirationDate);
+                const initialStart = toDateInputValue(card.startDate);
+                const changed = expirationDraft !== initialExpiration || startDraft !== initialStart;
 
                 return (
                   <div key={card.cardId} className="ep-sigur-card-row">
@@ -734,7 +758,18 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                         <CalendarDays size={13} />
                         <input
                           type="date"
-                          value={draftValue}
+                          title="Дата начала доступа"
+                          value={startDraft}
+                          onChange={event => handleStartDateDraftChange(card.cardId, event.target.value)}
+                          disabled={!canEdit || savingCardId === card.cardId}
+                        />
+                      </div>
+                      <div className="ep-sigur-date-input-wrap">
+                        <CalendarDays size={13} />
+                        <input
+                          type="date"
+                          title="Срок действия"
+                          value={expirationDraft}
                           onChange={event => handleCardDraftChange(card.cardId, event.target.value)}
                           disabled={!canEdit || savingCardId === card.cardId}
                         />

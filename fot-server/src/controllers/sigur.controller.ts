@@ -244,6 +244,7 @@ function toSigurCard(raw: Record<string, unknown>): {
   cardId: number;
   cardNumber: string | null;
   status: string | null;
+  startDate: string | null;
   expirationDate: string | null;
 } | null {
   const cardId = normalizeInt(resolveField(raw, 'id', 'ID', 'Id', 'cardId', 'card_id', 'cardID'));
@@ -254,6 +255,10 @@ function toSigurCard(raw: Record<string, unknown>): {
     ?? '',
   ).trim() || null;
   const status = String(resolveField<string>(raw, 'status', 'Status', 'state') || '').trim() || null;
+  const startDate = String(
+    resolveField<string>(raw, 'startDate', 'start_date', 'validFrom', 'startAt')
+    || '',
+  ).trim() || null;
   const expirationDate = String(
     resolveField<string>(raw, 'expirationDate', 'expiration_date', 'expiresAt', 'expiryDate', 'validTo')
     || '',
@@ -263,6 +268,7 @@ function toSigurCard(raw: Record<string, unknown>): {
     cardId,
     cardNumber,
     status,
+    startDate,
     expirationDate,
   };
 }
@@ -272,6 +278,7 @@ function toCardBinding(raw: Record<string, unknown>): {
   cardId: number;
   cardNumber: string | null;
   status: string | null;
+  startDate: string | null;
   expirationDate: string | null;
 } | null {
   const employeeId = normalizeInt(resolveField(raw, 'employeeId', 'employee_id'));
@@ -286,6 +293,10 @@ function toCardBinding(raw: Record<string, unknown>): {
       ?? '',
     ).trim() || null,
     status: String(resolveField<string>(raw, 'status', 'Status', 'state') || '').trim() || null,
+    startDate: String(
+      resolveField<string>(raw, 'startDate', 'start_date', 'validFrom', 'startAt')
+      || '',
+    ).trim() || null,
     expirationDate: String(
       resolveField<string>(raw, 'expirationDate', 'expiration_date', 'expiresAt', 'expiryDate', 'validTo')
       || '',
@@ -297,6 +308,7 @@ function toCardSummary(raw: Record<string, unknown>): {
   cardId: number;
   cardNumber: string | null;
   status: string | null;
+  startDate: string | null;
   expirationDate: string | null;
 } | null {
   const binding = toCardBinding(raw);
@@ -305,6 +317,7 @@ function toCardSummary(raw: Record<string, unknown>): {
       cardId: binding.cardId,
       cardNumber: binding.cardNumber,
       status: binding.status,
+      startDate: binding.startDate,
       expirationDate: binding.expirationDate,
     };
   }
@@ -1346,6 +1359,7 @@ export const sigurController = {
           cardId,
           cardNumber: null,
           status: null,
+          startDate: null,
           expirationDate: parsedExpirationDate.toISOString(),
         },
       });
@@ -1354,6 +1368,118 @@ export const sigurController = {
       const status = error instanceof AxiosError && error.response?.status ? error.response.status : 500;
       const data = error instanceof AxiosError ? error.response?.data as Record<string, unknown> | string | undefined : undefined;
       let message = 'Ошибка обновления срока действия пропуска';
+      if (typeof data === 'string' && data.trim()) {
+        message = data.trim();
+      } else if (typeof data === 'object' && data) {
+        const msg = data.message ?? data.error ?? data.detail;
+        if (typeof msg === 'string' && msg.trim()) message = msg.trim();
+      }
+      res.status(status).json({ success: false, error: message });
+    }
+  },
+
+  async updateEmployeeCardBinding(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const employeeId = Number(req.params.id);
+      const cardId = Number(req.params.cardId);
+      if (
+        !Number.isInteger(employeeId)
+        || !Number.isInteger(cardId)
+        || !(await canAccessEmployeeInScope(req, employeeId))
+      ) {
+        res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+        return;
+      }
+
+      if (!(await ensureSigurConfigured(res))) {
+        return;
+      }
+
+      const { startDate, expirationDate } = req.body as { startDate?: unknown; expirationDate?: unknown };
+      if (typeof startDate !== 'string' || !startDate.trim()) {
+        res.status(400).json({ success: false, error: 'startDate обязателен' });
+        return;
+      }
+      if (typeof expirationDate !== 'string' || !expirationDate.trim()) {
+        res.status(400).json({ success: false, error: 'expirationDate обязателен' });
+        return;
+      }
+
+      const parsedStartDate = new Date(startDate);
+      if (Number.isNaN(parsedStartDate.getTime())) {
+        res.status(400).json({ success: false, error: 'Некорректная дата начала доступа' });
+        return;
+      }
+      const parsedExpirationDate = new Date(expirationDate);
+      if (Number.isNaN(parsedExpirationDate.getTime())) {
+        res.status(400).json({ success: false, error: 'Некорректная дата срока действия' });
+        return;
+      }
+
+      const connection = (req.body.connection as 'external' | 'internal') || undefined;
+      const { data: employee, error: employeeError } = await supabase
+        .from('employees')
+        .select('id, sigur_employee_id')
+        .eq('id', employeeId)
+        .maybeSingle();
+
+      if (employeeError) throw employeeError;
+      if (!employee) {
+        res.status(404).json({ success: false, error: 'Сотрудник не найден' });
+        return;
+      }
+      if (!employee.sigur_employee_id) {
+        res.status(400).json({ success: false, error: 'Сотрудник не связан с Sigur' });
+        return;
+      }
+
+      await sigurService.patchEmployeeCardBinding(
+        employee.sigur_employee_id,
+        cardId,
+        parsedStartDate.toISOString(),
+        parsedExpirationDate.toISOString(),
+        connection,
+      );
+
+      const cardsRaw = await sigurService.getCardBindings(
+        { employeeId: employee.sigur_employee_id },
+        connection,
+      ) as Record<string, unknown>[];
+
+      const card = cardsRaw
+        .map(rawCard => toCardSummary(rawCard))
+        .filter((rawCard): rawCard is NonNullable<ReturnType<typeof toCardSummary>> => !!rawCard)
+        .find(rawCard => rawCard.cardId === cardId) || null;
+
+      await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
+        entityType: 'sigur_card_binding',
+        entityId: `${employeeId}:${cardId}`,
+        details: {
+          employeeId,
+          sigurEmployeeId: employee.sigur_employee_id,
+          cardId,
+          startDate: parsedStartDate.toISOString(),
+          expirationDate: parsedExpirationDate.toISOString(),
+        },
+      });
+
+      invalidateEmployeeProfileCache(employeeId);
+
+      res.json({
+        success: true,
+        data: card || {
+          cardId,
+          cardNumber: null,
+          status: null,
+          startDate: parsedStartDate.toISOString(),
+          expirationDate: parsedExpirationDate.toISOString(),
+        },
+      });
+    } catch (error) {
+      console.error('Sigur update employee card binding error:', error);
+      const status = error instanceof AxiosError && error.response?.status ? error.response.status : 500;
+      const data = error instanceof AxiosError ? error.response?.data as Record<string, unknown> | string | undefined : undefined;
+      let message = 'Ошибка обновления дат карты доступа';
       if (typeof data === 'string' && data.trim()) {
         message = data.trim();
       } else if (typeof data === 'object' && data) {

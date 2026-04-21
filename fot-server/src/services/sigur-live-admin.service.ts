@@ -194,6 +194,7 @@ function toCardSummary(raw: Record<string, unknown>): {
   cardId: number;
   cardNumber: string | null;
   status: string | null;
+  startDate: string | null;
   expirationDate: string | null;
 } | null {
   const cardId = normalizeInt(resolveField(raw, 'cardId', 'card_id', 'cardID', 'cardid', 'id', 'ID', 'Id'));
@@ -206,6 +207,10 @@ function toCardSummary(raw: Record<string, unknown>): {
       ?? '',
     ).trim() || null,
     status: String(resolveField<string>(raw, 'status', 'Status', 'state') || '').trim() || null,
+    startDate: String(
+      resolveField<string>(raw, 'startDate', 'start_date', 'validFrom', 'startAt')
+      || '',
+    ).trim() || null,
     expirationDate: String(
       resolveField<string>(raw, 'expirationDate', 'expiration_date', 'expiresAt', 'expiryDate', 'validTo')
       || '',
@@ -1509,6 +1514,7 @@ export async function updateSigurEmployeeCardExpiration(
   cardId: number;
   cardNumber: string | null;
   status: string | null;
+  startDate: string | null;
   expirationDate: string | null;
 }> {
   const parsedExpirationDate = new Date(expirationDate);
@@ -1533,6 +1539,52 @@ export async function updateSigurEmployeeCardExpiration(
     cardId,
     cardNumber: null,
     status: null,
+    startDate: null,
+    expirationDate: parsedExpirationDate.toISOString(),
+  };
+}
+
+export async function updateSigurEmployeeCardBinding(
+  sigurEmployeeId: number,
+  cardId: number,
+  startDate: string,
+  expirationDate: string,
+  connection?: ConnectionType,
+): Promise<{
+  cardId: number;
+  cardNumber: string | null;
+  status: string | null;
+  startDate: string | null;
+  expirationDate: string | null;
+}> {
+  const parsedStartDate = new Date(startDate);
+  if (Number.isNaN(parsedStartDate.getTime())) {
+    throw new Error('Некорректная дата начала доступа');
+  }
+  const parsedExpirationDate = new Date(expirationDate);
+  if (Number.isNaN(parsedExpirationDate.getTime())) {
+    throw new Error('Некорректная дата срока действия');
+  }
+
+  await sigurService.patchEmployeeCardBinding(
+    sigurEmployeeId,
+    cardId,
+    parsedStartDate.toISOString(),
+    parsedExpirationDate.toISOString(),
+    connection,
+  );
+
+  const cardsRaw = await sigurService.getCardBindings({ employeeId: sigurEmployeeId }, connection) as Record<string, unknown>[];
+  const card = cardsRaw
+    .map(rawCard => toCardSummary(rawCard))
+    .filter((rawCard): rawCard is NonNullable<ReturnType<typeof toCardSummary>> => !!rawCard)
+    .find(rawCard => rawCard.cardId === cardId);
+
+  return card || {
+    cardId,
+    cardNumber: null,
+    status: null,
+    startDate: parsedStartDate.toISOString(),
     expirationDate: parsedExpirationDate.toISOString(),
   };
 }

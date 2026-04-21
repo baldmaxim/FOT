@@ -1019,4 +1019,20 @@ export class SigurDataService extends SigurServiceBase {
       connection,
     );
   }
+
+  async patchEmployeeCardBinding(
+    employeeId: number,
+    cardId: number,
+    startDate: string,
+    expirationDate: string,
+    connection?: ConnectionType,
+  ): Promise<void> {
+    await this.mutate<void>(
+      'patch',
+      '/api/v1/bindings/employees-cards',
+      { employeeId, cardId, startDate, expirationDate },
+      undefined,
+      connection,
+    );
+  }
 }

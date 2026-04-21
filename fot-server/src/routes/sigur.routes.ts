@@ -136,6 +136,12 @@ router.put(
   requireCritical2FA,
   sigurAdminController.updateEmployeeCardExpiration,
 );
+router.patch(
+  '/admin/employees/:sigurEmployeeId/cards/:cardId/binding',
+  requirePageAccess('/skud-settings', 'edit'),
+  requireCritical2FA,
+  sigurAdminController.updateEmployeeCardBinding,
+);
 
 // === Monitor эндпоинты (admin+) ===
 
@@ -239,6 +245,12 @@ router.put(
   requireAnyPageAccess(['/employees', '/staff-control', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurController.updateEmployeeCardExpiration,
+);
+router.patch(
+  '/employees/:id/cards/:cardId/binding',
+  requireAnyPageAccess(['/employees', '/staff-control', '/skud-settings'], 'edit'),
+  requireCritical2FA,
+  sigurController.updateEmployeeCardBinding,
 );
 
 // PUT /api/sigur/employees/:id/access-points — сохранить прямые точки доступа сотрудника

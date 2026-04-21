@@ -22,6 +22,7 @@ import {
   replaceSigurEmployeeAccessRules,
   updateSigurDepartment,
   updateSigurEmployee,
+  updateSigurEmployeeCardBinding,
   updateSigurEmployeeCardExpiration,
   updateSigurPosition,
 } from '../services/sigur-live-admin.service.js';
@@ -779,6 +780,40 @@ export const sigurAdminController = {
       const status = getErrorStatus(error);
       console.error('Sigur admin updateEmployeeCardExpiration error:', error);
       res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка обновления срока действия карты Sigur') });
+    }
+  },
+
+  async updateEmployeeCardBinding(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const sigurEmployeeId = parseInteger(req.params.sigurEmployeeId);
+      const cardId = parseInteger(req.params.cardId);
+      const startDate = typeof req.body.startDate === 'string' ? req.body.startDate : '';
+      const expirationDate = typeof req.body.expirationDate === 'string' ? req.body.expirationDate : '';
+
+      if (!sigurEmployeeId || !cardId || !startDate || !expirationDate) {
+        res.status(400).json({ success: false, error: 'sigurEmployeeId, cardId, startDate и expirationDate обязательны' });
+        return;
+      }
+
+      const connection = parseConnection(req.body.connection);
+      const data = await updateSigurEmployeeCardBinding(sigurEmployeeId, cardId, startDate, expirationDate, connection);
+
+      await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
+        entityType: 'sigur_employee',
+        entityId: String(sigurEmployeeId),
+        details: {
+          action: 'update_card_binding',
+          cardId,
+          startDate: data.startDate,
+          expirationDate: data.expirationDate,
+        },
+      });
+
+      res.json({ success: true, data });
+    } catch (error) {
+      const status = getErrorStatus(error);
+      console.error('Sigur admin updateEmployeeCardBinding error:', error);
+      res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка обновления дат карты Sigur') });
     }
   },
 };
