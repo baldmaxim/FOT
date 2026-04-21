@@ -1,4 +1,4 @@
-import { type FC, useEffect, useRef, useState } from 'react';
+import { type FC, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { leaveRequestService, type LeaveRequestType } from '../../services/leaveRequestService';
 import { documentService } from '../../services/documentService';
@@ -285,6 +285,271 @@ export const RequestModal: FC<IRequestModalProps> = ({ activeModal, onClose, emp
           <button className={styles.btnSecondary} onClick={onClose} disabled={submitting}>
             Отмена
           </button>
+          <button className={styles.btnPrimary} onClick={handleSubmit} disabled={submitting}>
+            {submitting ? 'Отправка...' : 'Отправить'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const WEEKDAY_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+const UNIFIED_TYPES: { value: LeaveRequestType; label: string }[] = [
+  { value: 'remote', label: 'Удалённая работа' },
+  { value: 'vacation', label: 'Отпуск' },
+  { value: 'sick_leave', label: 'Больничный' },
+];
+
+interface IUnifiedRequestModalProps {
+  onClose: () => void;
+  employeeId: number | null;
+}
+
+export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, employeeId }) => {
+  const queryClient = useQueryClient();
+  const { showToast } = useToast();
+  const isMobile = useIsMobile();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+
+  const todayIso = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  }, []);
+
+  const [requestType, setRequestType] = useState<LeaveRequestType>('remote');
+  const [selectedDates, setSelectedDates] = useState<Set<string>>(new Set());
+  const [reason, setReason] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  const todayDate = useMemo(() => new Date(), []);
+  const [calYear, setCalYear] = useState(todayDate.getFullYear());
+  const [calMonth, setCalMonth] = useState(todayDate.getMonth() + 1);
+
+  const minYear = todayDate.getMonth() === 0 ? todayDate.getFullYear() - 1 : todayDate.getFullYear();
+  const minMonth = todayDate.getMonth() === 0 ? 12 : todayDate.getMonth();
+  const canGoPrev = calYear > minYear || (calYear === minYear && calMonth > minMonth);
+  const canGoNext = !(calYear === todayDate.getFullYear() && calMonth === todayDate.getMonth() + 1);
+
+  const prevMonth = () => {
+    if (!canGoPrev) return;
+    if (calMonth === 1) { setCalMonth(12); setCalYear(y => y - 1); }
+    else setCalMonth(m => m - 1);
+  };
+  const nextMonth = () => {
+    if (!canGoNext) return;
+    if (calMonth === 12) { setCalMonth(1); setCalYear(y => y + 1); }
+    else setCalMonth(m => m + 1);
+  };
+
+  const daysInMonth = new Date(calYear, calMonth, 0).getDate();
+  const firstDow = (() => {
+    const d = new Date(calYear, calMonth - 1, 1).getDay();
+    return d === 0 ? 6 : d - 1;
+  })();
+
+  const cells = useMemo(() => {
+    const result: Array<{ day: number; iso: string; isWeekend: boolean; isFuture: boolean; isToday: boolean } | null> = [];
+    for (let i = 0; i < firstDow; i++) result.push(null);
+    for (let day = 1; day <= daysInMonth; day++) {
+      const iso = `${calYear}-${pad2(calMonth)}-${pad2(day)}`;
+      const dow = new Date(calYear, calMonth - 1, day).getDay();
+      result.push({ day, iso, isWeekend: dow === 0 || dow === 6, isFuture: iso > todayIso, isToday: iso === todayIso });
+    }
+    return result;
+  }, [calYear, calMonth, firstDow, daysInMonth, todayIso]);
+
+  const monthLabel = new Date(calYear, calMonth - 1, 1).toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+
+  const toggleDay = (iso: string, isFuture: boolean) => {
+    if (isFuture) return;
+    setSelectedDates(prev => {
+      const next = new Set(prev);
+      if (next.has(iso)) next.delete(iso);
+      else next.add(iso);
+      return next;
+    });
+  };
+
+  const sortedDates = useMemo(() => [...selectedDates].sort(), [selectedDates]);
+
+  const handleFiles = (incoming: FileList | null) => {
+    if (!incoming) return;
+    const next: File[] = [];
+    for (const file of Array.from(incoming)) {
+      if (!ALLOWED_MIMES.includes(file.type)) { showToast('error', `${file.name}: разрешены только PDF, JPG, PNG`); continue; }
+      if (file.size > MAX_FILE_SIZE) { showToast('error', `${file.name}: превышает 10 МБ`); continue; }
+      next.push(file);
+    }
+    if (next.length > 0) setFiles(prev => [...prev, ...next]);
+  };
+
+  const handleSubmit = async () => {
+    if (!employeeId) return showToast('error', 'Не найден ID сотрудника');
+    if (selectedDates.size === 0) return showToast('error', 'Выберите хотя бы один день');
+    if (requestType === 'sick_leave' && files.length === 0) return showToast('error', 'Для больничного приложите файл');
+    setSubmitting(true);
+    try {
+      const created = await leaveRequestService.create({
+        request_type: requestType,
+        start_date: sortedDates[0],
+        end_date: sortedDates[sortedDates.length - 1],
+        reason: reason.trim() || undefined,
+      });
+      if (files.length > 0) {
+        const uploads = await Promise.allSettled(
+          files.map(file => documentService.uploadFile(file, employeeId, 'scan', created.id)),
+        );
+        const failed = uploads.filter(u => u.status === 'rejected').length;
+        if (failed > 0) showToast('warning', `Заявка создана, но ${failed} файл(ов) не загрузились`);
+      }
+      await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
+      showToast('success', 'Заявление отправлено');
+      onClose();
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Ошибка отправки');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className={styles.modalOverlay} onClick={onClose}>
+      <div className={`${styles.modal} ${styles.modalWide}`} onClick={e => e.stopPropagation()}>
+        <div className={styles.modalHeader}>
+          <h2 className={styles.modalTitle}>Подать заявление</h2>
+          <button className={styles.modalClose} onClick={onClose}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+
+        <div className={styles.modalBody}>
+          {/* Type selector */}
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Тип заявления <span className={styles.required}>*</span></label>
+            <select
+              className={styles.formSelect}
+              value={requestType}
+              onChange={e => setRequestType(e.target.value as LeaveRequestType)}
+            >
+              {UNIFIED_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+            </select>
+          </div>
+
+          {/* Calendar picker */}
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>
+              Выберите дни <span className={styles.required}>*</span>
+              {selectedDates.size > 0 && (
+                <span className={styles.reqCalSelectedCount}> — выбрано: {selectedDates.size} дн.</span>
+              )}
+            </label>
+            <div className={styles.reqCalWrapper}>
+              <div className={styles.reqCalHeader}>
+                <button className={styles.reqCalNavBtn} onClick={prevMonth} disabled={!canGoPrev}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <span className={styles.reqCalMonth}>{monthLabel}</span>
+                <button className={styles.reqCalNavBtn} onClick={nextMonth} disabled={!canGoNext}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+              </div>
+              <div className={styles.reqCalWeekdays}>
+                {WEEKDAY_SHORT.map(d => <div key={d} className={styles.reqCalWd}>{d}</div>)}
+              </div>
+              <div className={styles.reqCalGrid}>
+                {cells.map((cell, idx) => {
+                  if (!cell) return <div key={`pad-${idx}`} className={styles.reqCalPad} />;
+                  const isSel = selectedDates.has(cell.iso);
+                  const cls = [
+                    styles.reqCalCell,
+                    cell.isWeekend && !isSel ? styles.reqCalCellWeekend : '',
+                    cell.isToday && !isSel ? styles.reqCalCellToday : '',
+                    isSel ? styles.reqCalCellSelected : '',
+                    cell.isFuture ? styles.reqCalCellFuture : '',
+                  ].filter(Boolean).join(' ');
+                  return (
+                    <button
+                      key={cell.iso}
+                      type="button"
+                      className={cls}
+                      onClick={() => toggleDay(cell.iso, cell.isFuture)}
+                      title={cell.isFuture ? 'Будущая дата' : cell.iso}
+                    >
+                      {cell.day}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            {selectedDates.size > 0 && (
+              <div className={styles.reqCalChips}>
+                {sortedDates.map(d => (
+                  <span key={d} className={styles.reqCalChip}>
+                    {new Date(d + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
+                    <button type="button" className={styles.reqCalChipRemove} onClick={() => toggleDay(d, false)}>×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Comment */}
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>
+              {requestType === 'sick_leave' ? 'Комментарий / номер ЭЛН' : 'Комментарий'}
+            </label>
+            <textarea
+              className={styles.formTextarea}
+              placeholder={requestType === 'remote' ? 'Причина работы из дома...' : 'Дополнительная информация...'}
+              value={reason}
+              onChange={e => setReason(e.target.value)}
+            />
+          </div>
+
+          {/* Files */}
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>
+              Документы {requestType === 'sick_leave' && <span className={styles.required}>*</span>}
+              <span style={{ fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 6, fontSize: 12 }}>(PDF, JPG, PNG до 10 МБ)</span>
+            </label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+              <button type="button" className={styles.btnSecondary} onClick={() => fileInputRef.current?.click()}>
+                Выбрать файлы
+              </button>
+              {isMobile && (
+                <button type="button" className={styles.btnSecondary} onClick={() => cameraInputRef.current?.click()}>
+                  Сделать фото
+                </button>
+              )}
+            </div>
+            <input ref={fileInputRef} type="file" multiple accept={ACCEPT_ATTR} style={{ display: 'none' }}
+              onChange={e => { handleFiles(e.target.files); e.target.value = ''; }} />
+            <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+              onChange={e => { handleFiles(e.target.files); e.target.value = ''; }} />
+            {files.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {files.map((file, idx) => (
+                  <div key={`${file.name}-${idx}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-tertiary)', borderRadius: 8, fontSize: 13 }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                      {file.name}
+                      <span style={{ color: 'var(--text-tertiary)', marginLeft: 8 }}>{formatBytes(file.size)}</span>
+                    </span>
+                    <button type="button" onClick={() => setFiles(prev => prev.filter((_, i) => i !== idx))}
+                      style={{ background: 'transparent', border: 0, color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '0 4px' }} aria-label="Удалить">×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className={styles.modalFooter}>
+          <button className={styles.btnSecondary} onClick={onClose} disabled={submitting}>Отмена</button>
           <button className={styles.btnPrimary} onClick={handleSubmit} disabled={submitting}>
             {submitting ? 'Отправка...' : 'Отправить'}
           </button>

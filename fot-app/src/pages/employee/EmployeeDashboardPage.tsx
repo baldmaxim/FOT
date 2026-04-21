@@ -12,11 +12,9 @@ import { useEmployeeTimesheetMonths } from '../../hooks/useEmployeeTimesheet';
 import styles from './EmployeeDashboard.module.css';
 
 const EmployeeInfoCards = lazy(() => import('../../components/dashboard/EmployeeInfoCards').then(m => ({ default: m.EmployeeInfoCards })));
-const RequestModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.RequestModal })));
+const UnifiedRequestModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.UnifiedRequestModal })));
 const TwoFAModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.TwoFAModal })));
 const MyMonthTimesheet = lazy(() => import('../../components/dashboard/MyMonthTimesheet').then(m => ({ default: m.MyMonthTimesheet })));
-
-type RequestType = 'vacation' | 'sick' | 'remote' | 'docs';
 
 const timeToSeconds = (t: string): number => {
   const [h, m, s = 0] = t.split(':').map(Number);
@@ -137,8 +135,7 @@ export const EmployeeDashboardPage: React.FC = () => {
 
   const { user, profile, refreshProfile, isTwoFactorEnabled } = useAuth();
   const { showToast } = useToast();
-  const [activeModal, setActiveModal] = useState<RequestType | null>(null);
-  const [presetDates, setPresetDates] = useState<{ start: string; end: string } | null>(null);
+  const [showRequestModal, setShowRequestModal] = useState(false);
 
   const todayIso = useMemo(() => toLocalISO(new Date()), []);
   const [activeDayIso, setActiveDayIso] = useState<string>(todayIso);
@@ -268,23 +265,13 @@ export const EmployeeDashboardPage: React.FC = () => {
 
   return (
     <div className={styles.content}>
-      {/* Quick Actions */}
+      {/* Header with request button */}
       <div className={styles.sectionHeader}>
-        <h2 className={styles.sectionTitle}>Подать заявление</h2>
-      </div>
-      <div className={styles.quickActionsGrid}>
-        {(['vacation','sick','remote','docs'] as RequestType[]).map((type) => (
-          <div key={type} className={styles.quickActionCard} onClick={() => { setPresetDates(null); setActiveModal(type); }}>
-            <div className={`${styles.quickActionIcon} ${styles[type]}`}>
-              {type === 'vacation' && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>}
-              {type === 'sick' && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>}
-              {type === 'remote' && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>}
-              {type === 'docs' && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>}
-            </div>
-            <div className={styles.quickActionTitle}>{type === 'vacation' ? 'Отпуск' : type === 'sick' ? 'Больничный' : type === 'remote' ? 'Удалёнка' : 'Справка'}</div>
-            <div className={styles.quickActionDesc}>{type === 'vacation' ? 'Ежегодный оплачиваемый' : type === 'sick' ? 'Листок нетрудоспособности' : type === 'remote' ? 'Работа из дома' : 'Запросить документ'}</div>
-          </div>
-        ))}
+        <h2 className={styles.sectionTitle}>Личный кабинет</h2>
+        <button className={styles.submitRequestBtn} onClick={() => setShowRequestModal(true)}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Подать заявление
+        </button>
       </div>
 
       {/* Content Grid */}
@@ -298,10 +285,6 @@ export const EmployeeDashboardPage: React.FC = () => {
                 employeeId={employeeId}
                 activeDayIso={activeDayIso}
                 onDayActivate={setActiveDayIso}
-                onSubmitRequest={(dates) => {
-                  setPresetDates({ start: dates[0], end: dates[dates.length - 1] });
-                  setActiveModal('remote');
-                }}
                 noCard
               />
             </Suspense>
@@ -362,13 +345,11 @@ export const EmployeeDashboardPage: React.FC = () => {
         </Suspense>
       )}
 
-      {activeModal && (
+      {showRequestModal && (
         <Suspense fallback={null}>
-          <RequestModal
-            activeModal={activeModal}
-            onClose={() => { setActiveModal(null); setPresetDates(null); }}
+          <UnifiedRequestModal
             employeeId={employeeId}
-            presetDates={presetDates}
+            onClose={() => setShowRequestModal(false)}
           />
         </Suspense>
       )}

@@ -36,20 +36,18 @@ const buildIsoDate = (year: number, month: number, day: number) =>
 
 interface IMyMonthTimesheetProps {
   employeeId: number | null;
-  onSubmitRequest: (selectedDates: string[]) => void;
   activeDayIso?: string | null;
   onDayActivate?: (date: string) => void;
   noCard?: boolean;
 }
 
-export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, onSubmitRequest, activeDayIso, onDayActivate, noCard }) => {
+export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activeDayIso, onDayActivate, noCard }) => {
   const today = useMemo(() => new Date(), []);
   const currentYear = today.getFullYear();
   const currentMonth = today.getMonth() + 1;
   const todayIso = useMemo(() => buildIsoDate(currentYear, currentMonth, today.getDate()), [currentYear, currentMonth, today]);
 
   const [monthOffset, setMonthOffset] = useState<0 | -1>(0);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const { year, month } = useMemo(() => {
     const d = new Date(currentYear, currentMonth - 1 + monthOffset, 1);
@@ -92,24 +90,6 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, onSub
     });
   }
 
-  const toggleDay = (iso: string, disabled: boolean) => {
-    if (disabled) return;
-    onDayActivate?.(iso);
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(iso)) next.delete(iso);
-      else next.add(iso);
-      return next;
-    });
-  };
-
-  const handleSubmit = () => {
-    if (selected.size === 0) return;
-    const dates = Array.from(selected).sort();
-    onSubmitRequest(dates);
-    setSelected(new Set());
-  };
-
   const monthLabel = new Date(year, month - 1, 1)
     .toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
 
@@ -146,7 +126,6 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, onSub
         {cells.map((cell, idx) => {
           if (!cell) return <div key={`pad-${idx}`} className={styles.padCell} />;
           const status = cell.entry?.status ?? null;
-          const isSelected = selected.has(cell.iso);
           const isActive = cell.iso === activeDayIso;
           const cellCls = [
             styles.cell,
@@ -154,7 +133,6 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, onSub
             cell.isWeekend && !cell.entry ? styles.cellWeekend : '',
             cell.entry ? styles[getCellStatus(cell.entry, status)] : '',
             cell.isFuture && !cell.entry ? styles.cellEmpty : '',
-            isSelected ? styles.cellSelected : '',
             isActive ? styles.cellActive : '',
             cell.entry?.is_correction ? styles.cellCorrection : '',
           ].filter(Boolean).join(' ');
@@ -168,7 +146,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, onSub
               key={cell.iso}
               type="button"
               className={cellCls}
-              onClick={() => toggleDay(cell.iso, false)}
+              onClick={() => onDayActivate?.(cell.iso)}
               title={title}
             >
               <span className={styles.cellDay}>{cell.day}</span>
@@ -187,18 +165,6 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, onSub
         <span><i className={`${styles.dot} ${styles.cellVacation}`}/>Отпуск</span>
         <span><i className={`${styles.dot} ${styles.cellAbsent}`}/>Неявка</span>
       </div>
-
-      {selected.size > 0 && (
-        <div className={styles.actionBar}>
-          <span className={styles.selectedInfo}>Выбрано дней: <b>{selected.size}</b></span>
-          <button className={styles.clearBtn} onClick={() => setSelected(new Set())}>
-            Очистить
-          </button>
-          <button className={styles.submitBtn} onClick={handleSubmit}>
-            Подать заявку на выбранные дни
-          </button>
-        </div>
-      )}
     </div>
   );
 };

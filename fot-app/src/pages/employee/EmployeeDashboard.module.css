@@ -1219,6 +1219,195 @@
   height: 16px;
 }
 
+/* Submit request button */
+.submitRequestBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+
+.submitRequestBtn:hover {
+  background: var(--accent-hover, #2563eb);
+}
+
+.submitRequestBtn svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* Wide modal for unified request */
+.modalWide {
+  max-width: 560px;
+}
+
+/* Request modal mini-calendar */
+.reqCalWrapper {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.reqCalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+}
+
+.reqCalMonth {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: capitalize;
+  color: var(--text-primary);
+}
+
+.reqCalNavBtn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: background 0.12s;
+}
+
+.reqCalNavBtn:hover:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+.reqCalNavBtn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.reqCalWeekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+}
+
+.reqCalWd {
+  text-align: center;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  padding: 4px 0;
+  text-transform: uppercase;
+}
+
+.reqCalGrid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  padding: 6px;
+  background: var(--bg-secondary);
+}
+
+.reqCalPad {
+  aspect-ratio: 1;
+}
+
+.reqCalCell {
+  aspect-ratio: 1;
+  border: 1.5px solid transparent;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.reqCalCell:hover {
+  background: var(--bg-elevated, var(--bg-secondary));
+  border-color: var(--border);
+}
+
+.reqCalCellWeekend {
+  color: var(--text-tertiary);
+  background: var(--bg-primary);
+}
+
+.reqCalCellToday {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.reqCalCellSelected {
+  background: var(--accent) !important;
+  color: white !important;
+  border-color: var(--accent) !important;
+}
+
+.reqCalCellFuture {
+  opacity: 0.3;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.reqCalSelectedCount {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--accent);
+  margin-left: 4px;
+}
+
+.reqCalChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.reqCalChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: var(--accent-muted);
+  color: var(--accent);
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.reqCalChipRemove {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  opacity: 0.7;
+}
+
+.reqCalChipRemove:hover {
+  opacity: 1;
+}
+
 /* Calendar + Events combined block */
 .calendarEventsBlock {
   background: var(--bg-secondary);
