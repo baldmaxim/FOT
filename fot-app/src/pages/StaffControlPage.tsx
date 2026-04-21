@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, UserRoundX } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
 import { scheduleService } from '../services/scheduleService';
@@ -81,9 +81,10 @@ interface IStaffRowProps {
   onOpenModal: (emp: Employee, type: ModalType) => void;
   onOpenHistory: (emp: Employee) => void;
   onRehire?: (emp: Employee) => void;
+  onFire?: (emp: Employee) => void;
 }
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
 
@@ -157,9 +158,21 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, categoryLabels, schedul
             Восстановить
           </button>
         ) : (
-          <button className="sc-btn-icon" title="История" onClick={() => onOpenHistory(emp)}>
-            <History size={14} />
-          </button>
+          <span style={{ display: 'inline-flex', gap: 4 }}>
+            {onFire && emp.employment_status !== 'fired' && (
+              <button
+                className="sc-btn-icon"
+                style={{ color: '#dc2626' }}
+                title="Уволить"
+                onClick={() => onFire(emp)}
+              >
+                <UserRoundX size={14} />
+              </button>
+            )}
+            <button className="sc-btn-icon" title="История" onClick={() => onOpenHistory(emp)}>
+              <History size={14} />
+            </button>
+          </span>
         )}
       </td>
     </tr>
@@ -446,6 +459,7 @@ interface IVirtualTableProps {
   onOpenModal: (emp: Employee, type: ModalType) => void;
   onOpenHistory: (emp: Employee) => void;
   onRehire?: (emp: Employee) => void;
+  onFire?: (emp: Employee) => void;
 }
 
 const ROW_HEIGHT = 36;
@@ -462,6 +476,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   onOpenModal,
   onOpenHistory,
   onRehire,
+  onFire,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -520,6 +535,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     onOpenModal={onOpenModal}
                     onOpenHistory={onOpenHistory}
                     onRehire={onRehire}
+                    onFire={onFire}
                   />
                 );
               })}
@@ -550,6 +566,7 @@ interface IVirtualCardsProps {
   onOpenModal: (emp: Employee, type: ModalType) => void;
   onOpenHistory: (emp: Employee) => void;
   onRehire?: (emp: Employee) => void;
+  onFire?: (emp: Employee) => void;
 }
 
 const CARD_HEIGHT = 270;
@@ -564,7 +581,8 @@ const MobileCard: FC<{
   onOpenModal: (emp: Employee, type: ModalType) => void;
   onOpenHistory: (emp: Employee) => void;
   onRehire?: (emp: Employee) => void;
-}> = memo(({ emp, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire }) => {
+  onFire?: (emp: Employee) => void;
+}> = memo(({ emp, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
   return (
@@ -615,6 +633,16 @@ const MobileCard: FC<{
           </button>
         ) : (
           <>
+            {onFire && emp.employment_status !== 'fired' && (
+              <button
+                className="sc-btn-icon"
+                style={{ color: '#dc2626' }}
+                title="Уволить"
+                onClick={e => { e.stopPropagation(); onFire(emp); }}
+              >
+                <UserRoundX size={14} />
+              </button>
+            )}
             <button className="sc-btn-icon" title="История" onClick={e => { e.stopPropagation(); onOpenHistory(emp); }}>
               <History size={14} />
             </button>
@@ -640,7 +668,7 @@ const MobileCard: FC<{
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire }) => {
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -666,6 +694,7 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, categoryLabels, s
                 onOpenModal={onOpenModal}
                 onOpenHistory={onOpenHistory}
                 onRehire={onRehire}
+                onFire={onFire}
               />
             </div>
           );
@@ -1392,8 +1421,20 @@ export const StaffControlPage: FC = () => {
     try {
       await employeeService.rehire(emp.id);
       refresh();
-    } catch {
-      toast.error('Ошибка восстановления сотрудника');
+    } catch (err) {
+      const msg = err instanceof Error && err.message ? err.message : 'Ошибка восстановления сотрудника';
+      toast.error(msg);
+    }
+  }, [refresh, toast]);
+
+  const handleFire = useCallback(async (emp: Employee) => {
+    if (!confirm(`Уволить ${emp.full_name}? Сотрудник будет перемещён в папку «Уволенные» в Sigur, карты пропуска будут заблокированы.`)) return;
+    try {
+      await employeeService.fire(emp.id);
+      refresh();
+    } catch (err) {
+      const msg = err instanceof Error && err.message ? err.message : 'Ошибка увольнения сотрудника';
+      toast.error(msg);
     }
   }, [refresh, toast]);
 
@@ -1674,6 +1715,7 @@ export const StaffControlPage: FC = () => {
           onOpenModal={openModal}
           onOpenHistory={openHistory}
           onRehire={statusFilter === 'fired' ? handleRehire : undefined}
+          onFire={statusFilter === 'active' ? handleFire : undefined}
         />
       ) : (
         <VirtualTable
@@ -1688,6 +1730,7 @@ export const StaffControlPage: FC = () => {
           onOpenModal={openModal}
           onOpenHistory={openHistory}
           onRehire={statusFilter === 'fired' ? handleRehire : undefined}
+          onFire={statusFilter === 'active' ? handleFire : undefined}
         />
       )}
 

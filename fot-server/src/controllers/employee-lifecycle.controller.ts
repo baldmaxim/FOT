@@ -415,37 +415,61 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
     employeeCache.invalidate(id);
 
     const today = new Date().toISOString().slice(0, 10);
-    const { error: assignError } = await supabase
-      .from('employee_assignments')
-      .insert({
-        employee_id: employeeId,
-        org_department_id: data.org_department_id || null,
-        position_id: data.position_id || null,
-        effective_from: today,
-        is_primary: true,
-        assignment_type: 'main',
-        change_reason: 'Восстановление на работу',
-        created_by: req.user.id,
-      });
+    try {
+      const { error: closeErr } = await supabase
+        .from('employee_assignments')
+        .update({ effective_to: today })
+        .eq('employee_id', employeeId)
+        .is('effective_to', null);
+      if (closeErr) {
+        console.warn('[rehire] close previous assignments failed (non-critical):', closeErr);
+      }
 
-    if (assignError) {
-      console.warn('[rehire] employee_assignments insert failed (non-critical):', assignError);
+      const { error: assignError } = await supabase
+        .from('employee_assignments')
+        .insert({
+          employee_id: employeeId,
+          org_department_id: data.org_department_id || null,
+          position_id: data.position_id || null,
+          effective_from: today,
+          is_primary: true,
+          assignment_type: 'main',
+          change_reason: 'Восстановление на работу',
+          created_by: req.user.id,
+        });
+
+      if (assignError) {
+        console.warn('[rehire] employee_assignments insert failed (non-critical):', assignError);
+      }
+    } catch (assignCatch) {
+      console.warn('[rehire] assignment block threw (non-critical):', assignCatch);
     }
 
-    await auditService.logFromRequest(req, req.user.id, 'REHIRE_EMPLOYEE', {
-      entityType: 'employee',
-      entityId: id,
-      details: {
-        source: existing.sigur_employee_id ? 'sigur' : 'portal',
-      },
-    });
+    try {
+      await auditService.logFromRequest(req, req.user.id, 'REHIRE_EMPLOYEE', {
+        entityType: 'employee',
+        entityId: id,
+        details: {
+          source: existing.sigur_employee_id ? 'sigur' : 'portal',
+        },
+      });
+    } catch (auditErr) {
+      console.warn('[rehire] audit log failed (non-critical):', auditErr);
+    }
 
-    const structureCache = await loadStructureCache();
-    const employee = decryptEmployee(data as EmployeeEncrypted, structureCache);
-    res.json({ success: true, data: employee });
+    try {
+      const structureCache = await loadStructureCache();
+      const employee = decryptEmployee(data as EmployeeEncrypted, structureCache);
+      res.json({ success: true, data: employee });
+    } catch (decryptErr) {
+      console.warn('[rehire] decrypt/structure cache failed, returning raw row:', decryptErr);
+      res.json({ success: true, data });
+    }
   } catch (error) {
-    console.error('Rehire employee error:', error);
-    res.status(500).json({ success: false, error: 'Failed to rehire employee', detail: error instanceof Error ? error.message : String(error) });
+    const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
+    console.error('[rehire] Unhandled error:', { employeeId: req.params.id, message, stack, error });
+    res.status(500).json({ success: false, error: `Не удалось восстановить сотрудника: ${message}`, detail: message });
   }
 }
 
