@@ -230,6 +230,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return state.profile?.page_access?.['/timesheet-hr']?.can_view === true;
       case 'data.scope.all':
         return !!state.profile?.is_admin;
+      case 'data.scope.department':
+        return !state.profile?.is_admin;
       default:
         return false;
     }

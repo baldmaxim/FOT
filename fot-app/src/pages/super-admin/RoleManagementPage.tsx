@@ -3,6 +3,7 @@ import type { FC } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rolesService } from '../../services/rolesService';
 import type { AccessMode, PageCatalogItem } from '../../services/rolesService';
+import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import type { SystemRole, EmployeeVariant } from '../../types';
 import styles from './RoleManagementPage.module.css';
@@ -57,6 +58,7 @@ const employeeVariantLabel = (variant: EmployeeVariant | null): string => {
 
 export const RoleManagementPage: FC = () => {
   const toast = useToast();
+  const { refreshProfile } = useAuth();
   const queryClient = useQueryClient();
 
   const [tab, setTab] = useState<Tab>('roles');
@@ -273,6 +275,7 @@ export const RoleManagementPage: FC = () => {
       await rolesService.updateAccessProfile(selectedRoleCode, { page_access: draftPageAccess });
       toast.success('Профиль доступа сохранён');
       await queryClient.invalidateQueries({ queryKey: ['roles', 'access-profile', selectedRoleCode] });
+      await refreshProfile();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка сохранения профиля доступа');
     } finally {

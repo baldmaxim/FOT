@@ -7,10 +7,11 @@ import {
   CheckSquare,
   Square,
 } from 'lucide-react';
+import { useAuth } from '../../contexts/AuthContext';
 import { useStructureTree } from '../../hooks/useStructure';
 import { timesheetService } from '../../services/timesheetService';
 import type { OrgDepartmentNode } from '../../types';
-import { filterDepartmentTree, sortDepartmentTree } from '../../utils/departmentUtils';
+import { filterDepartmentTree, filterDepartmentTreeByIds, sortDepartmentTree } from '../../utils/departmentUtils';
 
 type TimesheetDisplaySegment = 'H1' | 'H2' | 'FULL';
 type TimesheetGroupingMode = 'employees' | 'objects';
@@ -142,11 +143,25 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const { profile } = useAuth();
   const { data: structure, isLoading } = useStructureTree();
   const departments = structure?.departments ?? EMPTY_DEPARTMENTS;
+
+  const managedDepartmentIds = useMemo(() => {
+    if (profile?.is_admin) return null;
+    const ids = new Set<string>(profile?.managed_department_ids?.filter(Boolean) ?? []);
+    if (profile?.department_id) ids.add(profile.department_id);
+    return ids;
+  }, [profile?.is_admin, profile?.managed_department_ids, profile?.department_id]);
+
+  const scopedDepartments = useMemo(
+    () => managedDepartmentIds ? filterDepartmentTreeByIds(departments, managedDepartmentIds) : departments,
+    [departments, managedDepartmentIds],
+  );
+
   const sortedDepartments = useMemo(
-    () => sortDepartmentTree(departments),
-    [departments],
+    () => sortDepartmentTree(scopedDepartments),
+    [scopedDepartments],
   );
 
   const filteredDepts = useMemo(
