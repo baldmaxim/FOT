@@ -244,6 +244,7 @@ function toSigurCard(raw: Record<string, unknown>): {
   cardId: number;
   cardNumber: string | null;
   status: string | null;
+  format: string | null;
   startDate: string | null;
   expirationDate: string | null;
 } | null {
@@ -255,6 +256,7 @@ function toSigurCard(raw: Record<string, unknown>): {
     ?? '',
   ).trim() || null;
   const status = String(resolveField<string>(raw, 'status', 'Status', 'state') || '').trim() || null;
+  const format = String(resolveField<string>(raw, 'format', 'Format', 'cardFormat') || '').trim() || null;
   const startDate = String(
     resolveField<string>(raw, 'startDate', 'start_date', 'validFrom', 'startAt')
     || '',
@@ -268,6 +270,7 @@ function toSigurCard(raw: Record<string, unknown>): {
     cardId,
     cardNumber,
     status,
+    format,
     startDate,
     expirationDate,
   };
@@ -278,6 +281,7 @@ function toCardBinding(raw: Record<string, unknown>): {
   cardId: number;
   cardNumber: string | null;
   status: string | null;
+  format: string | null;
   startDate: string | null;
   expirationDate: string | null;
 } | null {
@@ -293,6 +297,7 @@ function toCardBinding(raw: Record<string, unknown>): {
       ?? '',
     ).trim() || null,
     status: String(resolveField<string>(raw, 'status', 'Status', 'state') || '').trim() || null,
+    format: String(resolveField<string>(raw, 'format', 'Format', 'cardFormat') || '').trim() || null,
     startDate: String(
       resolveField<string>(raw, 'startDate', 'start_date', 'validFrom', 'startAt')
       || '',
@@ -308,6 +313,7 @@ function toCardSummary(raw: Record<string, unknown>): {
   cardId: number;
   cardNumber: string | null;
   status: string | null;
+  format: string | null;
   startDate: string | null;
   expirationDate: string | null;
 } | null {
@@ -317,6 +323,7 @@ function toCardSummary(raw: Record<string, unknown>): {
       cardId: binding.cardId,
       cardNumber: binding.cardNumber,
       status: binding.status,
+      format: binding.format,
       startDate: binding.startDate,
       expirationDate: binding.expirationDate,
     };
@@ -1359,6 +1366,7 @@ export const sigurController = {
           cardId,
           cardNumber: null,
           status: null,
+          format: null,
           startDate: null,
           expirationDate: parsedExpirationDate.toISOString(),
         },
@@ -1417,6 +1425,7 @@ export const sigurController = {
       }
 
       const connection = (req.body.connection as 'external' | 'internal') || undefined;
+      const format = typeof req.body.format === 'string' && req.body.format ? req.body.format as string : undefined;
       const { data: employee, error: employeeError } = await supabase
         .from('employees')
         .select('id, sigur_employee_id')
@@ -1439,6 +1448,7 @@ export const sigurController = {
         parsedStartDate.toISOString(),
         parsedExpirationDate.toISOString(),
         connection,
+        format,
       );
 
       const cardsRaw = await sigurService.getCardBindings(
@@ -1471,6 +1481,7 @@ export const sigurController = {
           cardId,
           cardNumber: null,
           status: null,
+          format: null,
           startDate: parsedStartDate.toISOString(),
           expirationDate: parsedExpirationDate.toISOString(),
         },

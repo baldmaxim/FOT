@@ -74,6 +74,11 @@ function getErrorMessage(error: unknown, fallback: string): string {
     if (typeof data === 'object') {
       const msg = data.message ?? data.error ?? data.detail;
       if (typeof msg === 'string' && msg.trim()) return msg.trim();
+      const errors = data.errors;
+      if (Array.isArray(errors) && errors.length > 0) {
+        const first = String(errors[0]).trim();
+        if (first) return first;
+      }
     }
   }
   return error instanceof Error && error.message ? error.message : fallback;
@@ -796,7 +801,8 @@ export const sigurAdminController = {
       }
 
       const connection = parseConnection(req.body.connection);
-      const data = await updateSigurEmployeeCardBinding(sigurEmployeeId, cardId, startDate, expirationDate, connection);
+      const format = typeof req.body.format === 'string' && req.body.format ? req.body.format : undefined;
+      const data = await updateSigurEmployeeCardBinding(sigurEmployeeId, cardId, startDate, expirationDate, connection, format);
 
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
         entityType: 'sigur_employee',
@@ -812,6 +818,9 @@ export const sigurAdminController = {
       res.json({ success: true, data });
     } catch (error) {
       const status = getErrorStatus(error);
+      if (error instanceof AxiosError) {
+        console.error('Sigur admin updateEmployeeCardBinding Sigur response:', error.response?.status, JSON.stringify(error.response?.data));
+      }
       console.error('Sigur admin updateEmployeeCardBinding error:', error);
       res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка обновления дат карты Sigur') });
     }

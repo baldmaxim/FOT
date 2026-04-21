@@ -194,6 +194,7 @@ function toCardSummary(raw: Record<string, unknown>): {
   cardId: number;
   cardNumber: string | null;
   status: string | null;
+  format: string | null;
   startDate: string | null;
   expirationDate: string | null;
 } | null {
@@ -207,6 +208,7 @@ function toCardSummary(raw: Record<string, unknown>): {
       ?? '',
     ).trim() || null,
     status: String(resolveField<string>(raw, 'status', 'Status', 'state') || '').trim() || null,
+    format: String(resolveField<string>(raw, 'format', 'Format', 'cardFormat') || '').trim() || null,
     startDate: String(
       resolveField<string>(raw, 'startDate', 'start_date', 'validFrom', 'startAt')
       || '',
@@ -1514,6 +1516,7 @@ export async function updateSigurEmployeeCardExpiration(
   cardId: number;
   cardNumber: string | null;
   status: string | null;
+  format: string | null;
   startDate: string | null;
   expirationDate: string | null;
 }> {
@@ -1539,6 +1542,7 @@ export async function updateSigurEmployeeCardExpiration(
     cardId,
     cardNumber: null,
     status: null,
+    format: null,
     startDate: null,
     expirationDate: parsedExpirationDate.toISOString(),
   };
@@ -1550,10 +1554,12 @@ export async function updateSigurEmployeeCardBinding(
   startDate: string,
   expirationDate: string,
   connection?: ConnectionType,
+  format?: string | null,
 ): Promise<{
   cardId: number;
   cardNumber: string | null;
   status: string | null;
+  format: string | null;
   startDate: string | null;
   expirationDate: string | null;
 }> {
@@ -1572,6 +1578,7 @@ export async function updateSigurEmployeeCardBinding(
     parsedStartDate.toISOString(),
     parsedExpirationDate.toISOString(),
     connection,
+    format ?? undefined,
   );
 
   const cardsRaw = await sigurService.getCardBindings({ employeeId: sigurEmployeeId }, connection) as Record<string, unknown>[];
@@ -1584,6 +1591,7 @@ export async function updateSigurEmployeeCardBinding(
     cardId,
     cardNumber: null,
     status: null,
+    format: format ?? null,
     startDate: parsedStartDate.toISOString(),
     expirationDate: parsedExpirationDate.toISOString(),
   };

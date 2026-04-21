@@ -409,6 +409,8 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
         card.cardId,
         new Date(`${startDraft}T00:00:00`).toISOString(),
         toExpirationIso(expirationDraft),
+        undefined,
+        card.format ?? undefined,
       );
       setProfile(prev => {
         if (!prev) return prev;

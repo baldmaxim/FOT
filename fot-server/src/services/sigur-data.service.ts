@@ -1026,11 +1026,14 @@ export class SigurDataService extends SigurServiceBase {
     startDate: string,
     expirationDate: string,
     connection?: ConnectionType,
+    format?: string,
   ): Promise<void> {
+    const body: Record<string, unknown> = { employeeId, cardId, startDate, expirationDate };
+    if (format) body.format = format;
     await this.mutate<void>(
       'patch',
       '/api/v1/bindings/employees-cards',
-      { employeeId, cardId, startDate, expirationDate },
+      body,
       undefined,
       connection,
     );

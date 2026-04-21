@@ -83,6 +83,7 @@ export interface SigurEmployeeCardSummary {
   cardId: number;
   cardNumber: string | null;
   status: string | null;
+  format: string | null;
   startDate: string | null;
   expirationDate: string | null;
 }

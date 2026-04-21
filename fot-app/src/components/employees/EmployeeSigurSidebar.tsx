@@ -357,6 +357,8 @@ export const EmployeeSigurSidebar: FC<IEmployeeSigurSidebarProps> = ({
         card.cardId,
         new Date(`${startDraft}T00:00:00`).toISOString(),
         toExpirationIso(expirationDraft),
+        undefined,
+        card.format ?? undefined,
       );
 
       setProfile(prev => {

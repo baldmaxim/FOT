@@ -176,10 +176,11 @@ export const sigurService = {
     startDate: string,
     expirationDate: string,
     connection?: SigurConnectionScope,
+    format?: string,
   ): Promise<SigurEmployeeCardSummary> {
     const response = await apiClient.patch<ApiResponse<SigurEmployeeCardSummary>>(
       `/sigur/employees/${employeeId}/cards/${cardId}/binding`,
-      { startDate, expirationDate, connection },
+      { startDate, expirationDate, connection, ...(format ? { format } : {}) },
     );
     return response.data;
   },
