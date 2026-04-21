@@ -154,7 +154,7 @@ export const TimesheetPage: FC = () => {
   const queryMode = searchParams.get('mode');
   const queryAssignee = searchParams.get('assignee');
   const queryAssignedDept = searchParams.get('dept');
-  const canUseAssignedMode = hasPermission('timesheet.workflow.monitor') || hasPermission('timesheet.workflow.review');
+  const canUseAssignedMode = !isTimesheetDepartmentScope && (hasPermission('timesheet.workflow.monitor') || hasPermission('timesheet.workflow.review'));
   const timesheetMode: 'department' | 'assigned' = (queryMode === 'assigned' && canUseAssignedMode) ? 'assigned' : 'department';
   const selectedAssigneeId = useMemo(() => {
     if (timesheetMode !== 'assigned') return null;
@@ -1281,7 +1281,7 @@ export const TimesheetPage: FC = () => {
         className={`ts-mode-chip ${timesheetMode === 'assigned' ? 'ts-mode-chip--active' : ''}`}
         onClick={() => handleTimesheetModeChange('assigned')}
       >
-        По назначенному
+        По участкам
       </button>
     </section>
   ) : null;
@@ -1430,10 +1430,18 @@ export const TimesheetPage: FC = () => {
                 {selectorControl}
                 {modeControl}
               </div>
-
-              {!isAssignedMode && <TimesheetStats stats={stats} />}
-
-              <div className="ts-header-right">
+            </div>
+            <div className="ts-toolbar">
+              <div className="ts-toolbar-left">
+                {!isAssignedMode && <TimesheetStats stats={stats} />}
+                {!isAssignedMode && (
+                  <button type="button" className="ts-btn" onClick={handleExport}>
+                    <Download size={16} />
+                    Экспорт
+                  </button>
+                )}
+              </div>
+              <div className="ts-toolbar-right">
                 {!isAssignedMode && canUseTeamManagement && (
                   <button
                     type="button"
@@ -1446,7 +1454,7 @@ export const TimesheetPage: FC = () => {
                     Добавить сотрудника
                   </button>
                 )}
-                {!isAssignedMode && !isMobile && effectiveSelectedDeptId && (
+                {!isAssignedMode && effectiveSelectedDeptId && (
                   <button
                     type="button"
                     className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}
@@ -1461,12 +1469,6 @@ export const TimesheetPage: FC = () => {
                     month={`${year}-${String(month).padStart(2, '0')}`}
                     allowReview={false}
                   />
-                )}
-                {!isAssignedMode && (
-                  <button type="button" className="ts-btn" onClick={handleExport}>
-                    <Download size={16} />
-                    Экспорт
-                  </button>
                 )}
               </div>
             </div>
