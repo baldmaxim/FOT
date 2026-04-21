@@ -1011,10 +1011,11 @@ export class SigurDataService extends SigurServiceBase {
     expirationDate: string,
     connection?: ConnectionType,
   ): Promise<void> {
+    // Sigur ожидает массив объектов — не единичный объект.
     await this.mutate<void>(
       'put',
       '/api/v1/bindings/employees-cards',
-      { employeeId, cardId, expirationDate: toSigurLocalDateTime(expirationDate) },
+      [{ employeeId, cardId, expirationDate }],
       undefined,
       connection,
     );
@@ -1028,69 +1029,14 @@ export class SigurDataService extends SigurServiceBase {
     connection?: ConnectionType,
     format?: string,
   ): Promise<void> {
-    const localStart = toSigurLocalDateTime(startDate);
-    const localExpiration = toSigurLocalDateTime(expirationDate);
-
-    // 1. Пробуем PATCH (документированный способ)
-    try {
-      await this.mutate<void>(
-        'patch',
-        '/api/v1/bindings/employees-cards',
-        { employeeId, cardId, startDate: localStart, expirationDate: localExpiration },
-        undefined,
-        connection,
-      );
-      return;
-    } catch (patchError) {
-      console.warn('[Sigur] PATCH failed:', patchError instanceof Error ? patchError.message : patchError);
-    }
-
-    // 2. Пробуем PUT (только expirationDate)
-    try {
-      await this.mutate<void>(
-        'put',
-        '/api/v1/bindings/employees-cards',
-        { employeeId, cardId, expirationDate: localExpiration },
-        undefined,
-        connection,
-      );
-      return;
-    } catch (putError) {
-      console.warn('[Sigur] PUT failed:', putError instanceof Error ? putError.message : putError);
-    }
-
-    // 3. Фоллбэк: удалить привязку и создать заново
-    if (!format) {
-      throw new Error('Не удалось обновить привязку карты (PATCH/PUT отклонены Sigur), и неизвестен format для пересоздания.');
-    }
-    console.warn('[Sigur] Falling back to DELETE + POST for binding update');
+    const item: Record<string, unknown> = { employeeId, cardId, startDate, expirationDate };
+    if (format) item.format = format;
     await this.mutate<void>(
-      'post',
-      '/api/v1/bindings/employees-cards/delete',
-      { employeeId, cardId, format },
-      undefined,
-      connection,
-    );
-    await this.mutate<void>(
-      'post',
+      'patch',
       '/api/v1/bindings/employees-cards',
-      { employeeId, cardId, format, startDate: localStart, expirationDate: localExpiration },
+      [item],
       undefined,
       connection,
     );
   }
-}
-
-// Sigur принимает/возвращает даты в формате "YYYY-MM-DD HH:mm:ss" в московском времени (UTC+3), без T/Z.
-function toSigurLocalDateTime(isoDate: string): string {
-  const date = new Date(isoDate);
-  if (Number.isNaN(date.getTime())) return isoDate;
-  const msk = new Date(date.getTime() + 3 * 60 * 60 * 1000);
-  const yyyy = msk.getUTCFullYear();
-  const mm = String(msk.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(msk.getUTCDate()).padStart(2, '0');
-  const hh = String(msk.getUTCHours()).padStart(2, '0');
-  const mi = String(msk.getUTCMinutes()).padStart(2, '0');
-  const ss = String(msk.getUTCSeconds()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
 }
