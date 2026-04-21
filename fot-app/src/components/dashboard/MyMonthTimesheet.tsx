@@ -37,9 +37,12 @@ const buildIsoDate = (year: number, month: number, day: number) =>
 interface IMyMonthTimesheetProps {
   employeeId: number | null;
   onSubmitRequest: (selectedDates: string[]) => void;
+  activeDayIso?: string | null;
+  onDayActivate?: (date: string) => void;
+  noCard?: boolean;
 }
 
-export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, onSubmitRequest }) => {
+export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, onSubmitRequest, activeDayIso, onDayActivate, noCard }) => {
   const today = useMemo(() => new Date(), []);
   const currentYear = today.getFullYear();
   const currentMonth = today.getMonth() + 1;
@@ -91,6 +94,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, onSub
 
   const toggleDay = (iso: string, disabled: boolean) => {
     if (disabled) return;
+    onDayActivate?.(iso);
     setSelected(prev => {
       const next = new Set(prev);
       if (next.has(iso)) next.delete(iso);
@@ -115,7 +119,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, onSub
   };
 
   return (
-    <div className={styles.root}>
+    <div className={`${styles.root}${noCard ? ` ${styles.rootNoCard}` : ''}`}>
       <div className={styles.header}>
         <h2 className={styles.title}>Мой табель — {monthLabel}</h2>
         <div className={styles.monthSwitch}>
@@ -143,6 +147,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, onSub
           if (!cell) return <div key={`pad-${idx}`} className={styles.padCell} />;
           const status = cell.entry?.status ?? null;
           const isSelected = selected.has(cell.iso);
+          const isActive = cell.iso === activeDayIso;
           const cellCls = [
             styles.cell,
             cell.isToday ? styles.cellToday : '',
@@ -150,6 +155,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, onSub
             cell.entry ? styles[getCellStatus(cell.entry, status)] : '',
             cell.isFuture && !cell.entry ? styles.cellEmpty : '',
             isSelected ? styles.cellSelected : '',
+            isActive ? styles.cellActive : '',
             cell.entry?.is_correction ? styles.cellCorrection : '',
           ].filter(Boolean).join(' ');
 

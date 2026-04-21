@@ -44,16 +44,6 @@ interface IAttendanceCardProps {
 
 const formatTime = (t: string) => t.slice(0, 5);
 
-const formatHM = (totalMinutes: number): string => {
-  const h = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
-  if (h === 0) return `${m} мин`;
-  if (m === 0) return `${h} ч`;
-  return `${h} ч ${m} мин`;
-};
-
-const formatDateLong = (d: string) =>
-  new Date(d + 'T00:00:00').toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' });
 
 const getStatusClassName = (status: TimesheetStatus | null): string => {
   if (status === 'work' || status === 'manual') return styles.dayStatusBadgeWork;
@@ -76,7 +66,18 @@ const ChevronRight: FC<{ className?: string }> = ({ className }) => (
   </svg>
 );
 
-const DayEvents: FC<{ group: IDayGroup }> = ({ group }) => (
+export const formatHM = (totalMinutes: number): string => {
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (h === 0) return `${m} мин`;
+  if (m === 0) return `${h} ч`;
+  return `${h} ч ${m} мин`;
+};
+
+export const formatDateLong = (d: string) =>
+  new Date(d + 'T00:00:00').toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+
+export const DayEvents: FC<{ group: IDayGroup }> = ({ group }) => (
   <div className={styles.skudDayEvents}>
     {group.pairs.length > 0 ? (
       group.pairs.map((pair, i) => (
@@ -129,7 +130,7 @@ const DayEvents: FC<{ group: IDayGroup }> = ({ group }) => (
   </div>
 );
 
-const DaySummaryBadges: FC<{ group: IDayGroup }> = ({ group }) => (
+export const DaySummaryBadges: FC<{ group: IDayGroup }> = ({ group }) => (
   <div className={styles.skudDaySummary}>
     {group.statusLabel && group.status !== 'work' && group.status !== 'manual' && (
       <span className={`${styles.dayStatusBadge} ${getStatusClassName(group.status)}`}>

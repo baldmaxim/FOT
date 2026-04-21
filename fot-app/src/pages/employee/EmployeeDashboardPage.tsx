@@ -6,7 +6,7 @@ import { apiClient } from '../../api/client';
 import { employeeService } from '../../services/employeeService';
 import { skudService } from '../../services/skudService';
 import type { Employee, SkudEvent, IAccessPointSetting, TimesheetEntry, TimesheetStatus } from '../../types';
-import { AttendanceCard } from '../../components/dashboard/AttendanceCard';
+import { DayEvents, DaySummaryBadges, formatHM } from '../../components/dashboard/AttendanceCard';
 import type { IDayGroup, IEntryExitPair } from '../../components/dashboard/AttendanceCard';
 import { useEmployeeTimesheetMonths } from '../../hooks/useEmployeeTimesheet';
 import styles from './EmployeeDashboard.module.css';
@@ -17,7 +17,6 @@ const TwoFAModal = lazy(() => import('../../components/dashboard/RequestModals')
 const MyMonthTimesheet = lazy(() => import('../../components/dashboard/MyMonthTimesheet').then(m => ({ default: m.MyMonthTimesheet })));
 
 type RequestType = 'vacation' | 'sick' | 'remote' | 'docs';
-type ViewPeriod = 'day' | 'week' | 'month';
 
 const timeToSeconds = (t: string): number => {
   const [h, m, s = 0] = t.split(':').map(Number);
@@ -45,20 +44,10 @@ const STATUS_LABELS: Record<TimesheetStatus, string> = {
 };
 const WORKED_STATUSES = new Set<TimesheetStatus>(['work', 'manual', 'remote', 'business_trip']);
 
-const getRangeMonthKeys = (startDate: string, endDate: string): string[] => {
-  const [startYear, startMonth] = startDate.split('-').map(Number);
-  const [endYear, endMonth] = endDate.split('-').map(Number);
-  const cursor = new Date(startYear, startMonth - 1, 1);
-  const finish = new Date(endYear, endMonth - 1, 1);
-  const result: string[] = [];
+const pad2 = (n: number) => String(n).padStart(2, '0');
 
-  while (cursor <= finish) {
-    result.push(`${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`);
-    cursor.setMonth(cursor.getMonth() + 1);
-  }
-
-  return result;
-};
+const formatActiveDayLabel = (iso: string): string =>
+  new Date(iso + 'T00:00:00').toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
 
 const buildPairs = (events: SkudEvent[], internalPoints: Set<string>, isToday: boolean): IEntryExitPair[] => {
   const ext = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
@@ -93,132 +82,55 @@ const buildPairs = (events: SkudEvent[], internalPoints: Set<string>, isToday: b
   return pairs;
 };
 
-const buildDayGroups = (
-  startDate: string,
-  endDate: string,
+const buildDayGroup = (
+  dateStr: string,
   timesheetEntries: TimesheetEntry[],
   events: SkudEvent[],
   internalPoints: Set<string>,
-): IDayGroup[] => {
-  const start = new Date(startDate + 'T00:00:00');
-  const end = new Date(endDate + 'T00:00:00');
+): IDayGroup => {
   const todayStr = toLocalISO(new Date());
-  const groups: IDayGroup[] = [];
-  const eventsByDate = new Map<string, SkudEvent[]>();
-  const entriesByDate = new Map<string, TimesheetEntry>();
+  const entry = timesheetEntries.find(e => e.work_date === dateStr) ?? null;
+  const dayEvents = [...events].sort((a, b) => a.event_time.localeCompare(b.event_time));
 
-  for (const event of events) {
-    const bucket = eventsByDate.get(event.event_date);
-    if (bucket) bucket.push(event);
-    else eventsByDate.set(event.event_date, [event]);
-  }
+  const ext = dayEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point));
+  const src = ext.length > 0 ? ext : dayEvents;
+  const directionEntries = src.filter(e => e.direction === 'entry');
+  const exits = src.filter(e => e.direction === 'exit');
 
-  for (const entry of timesheetEntries) {
-    entriesByDate.set(entry.work_date, entry);
-  }
+  const isToday = dateStr === todayStr;
+  const pairs = buildPairs(dayEvents, internalPoints, isToday);
+  const rawTotalMinutes = pairs.reduce((sum, pair) => sum + pair.durationMinutes, 0);
+  const canonicalMinutes = entry?.hours_worked != null
+    ? Math.max(0, Math.round(entry.hours_worked * 60))
+    : 0;
+  const hasWorkedStatus = entry ? WORKED_STATUSES.has(entry.status) : rawTotalMinutes > 0;
+  const totalMinutes = isToday && rawTotalMinutes > 0 && (!entry || hasWorkedStatus)
+    ? Math.max(canonicalMinutes, rawTotalMinutes)
+    : (canonicalMinutes > 0 || entry ? canonicalMinutes : rawTotalMinutes);
 
-  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    const dateStr = toLocalISO(d);
-    const entry = entriesByDate.get(dateStr) ?? null;
-    const dayEvents = [...(eventsByDate.get(dateStr) ?? [])].sort((a, b) => a.event_time.localeCompare(b.event_time));
+  const firstEntry = entry?.first_entry ?? (directionEntries.length > 0 ? directionEntries[0].event_time : null);
+  const lastExit = entry?.last_exit ?? (exits.length > 0 ? exits[exits.length - 1].event_time : null);
+  const d = new Date(dateStr + 'T00:00:00');
+  const dow = d.getDay() === 0 ? 6 : d.getDay() - 1;
+  const status = entry?.status ?? (dayEvents.length > 0 ? 'work' : null);
 
-    const ext = dayEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point));
-    const src = ext.length > 0 ? ext : dayEvents;
-    const directionEntries = src.filter(e => e.direction === 'entry');
-    const exits = src.filter(e => e.direction === 'exit');
-
-    const isToday = dateStr === todayStr;
-    const pairs = buildPairs(dayEvents, internalPoints, isToday);
-    const rawTotalMinutes = pairs.reduce((sum, pair) => sum + pair.durationMinutes, 0);
-    const canonicalMinutes = entry?.hours_worked != null
-      ? Math.max(0, Math.round(entry.hours_worked * 60))
-      : 0;
-    const hasWorkedStatus = entry ? WORKED_STATUSES.has(entry.status) : rawTotalMinutes > 0;
-    const totalMinutes = isToday && rawTotalMinutes > 0 && (!entry || hasWorkedStatus)
-      ? Math.max(canonicalMinutes, rawTotalMinutes)
-      : (canonicalMinutes > 0 || entry ? canonicalMinutes : rawTotalMinutes);
-    const firstEntry = entry?.first_entry ?? (directionEntries.length > 0 ? directionEntries[0].event_time : null);
-    const lastExit = entry?.last_exit ?? (exits.length > 0 ? exits[exits.length - 1].event_time : null);
-    const dow = d.getDay() === 0 ? 6 : d.getDay() - 1;
-    const status = entry?.status ?? (dayEvents.length > 0 ? 'work' : null);
-
-    groups.push({
-      date: dateStr,
-      dayName: DAY_NAMES[dow],
-      events: dayEvents,
-      firstEntry,
-      lastExit,
-      totalMinutes,
-      isToday,
-      isWeekend: dow >= 5 && !hasWorkedStatus,
-      isFuture: dateStr > todayStr,
-      pairs,
-      status,
-      statusLabel: status ? STATUS_LABELS[status] : null,
-      isCorrection: Boolean(entry?.is_correction),
-      hasSkudDetails: dayEvents.length > 0,
-      hasCanonicalEntry: Boolean(entry),
-    });
-  }
-  return groups;
-};
-
-// Сотрудник в ЛК видит свои данные только за текущий и прошлый месяц.
-// Нижняя граница: первое число прошлого месяца.
-const getMinOffset = (period: ViewPeriod): number => {
-  const today = new Date();
-  const minDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-
-  if (period === 'month') return -1;
-  if (period === 'day') {
-    const msPerDay = 86_400_000;
-    const diff = Math.floor((today.getTime() - minDate.getTime()) / msPerDay);
-    return -diff;
-  }
-  // week
-  const currentDay = today.getDay() === 0 ? 6 : today.getDay() - 1;
-  const monday = new Date(today);
-  monday.setDate(today.getDate() - currentDay);
-  const minDaysDiff = Math.floor((monday.getTime() - minDate.getTime()) / 86_400_000);
-  return -Math.ceil(minDaysDiff / 7);
-};
-
-const clampOffset = (period: ViewPeriod, offset: number): number => {
-  const min = getMinOffset(period);
-  if (offset < min) return min;
-  if (offset > 0) return 0;
-  return offset;
-};
-
-const getPeriodRange = (period: ViewPeriod, offset: number): { startDate: string; endDate: string; label: string } => {
-  const today = new Date();
-
-  if (period === 'day') {
-    const d = new Date(today);
-    d.setDate(today.getDate() + offset);
-    const dateStr = toLocalISO(d);
-    const isToday = offset === 0;
-    const label = isToday
-      ? 'Сегодня'
-      : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
-    return { startDate: dateStr, endDate: dateStr, label };
-  }
-
-  if (period === 'week') {
-    const currentDay = today.getDay() === 0 ? 6 : today.getDay() - 1;
-    const start = new Date(today);
-    start.setDate(today.getDate() - currentDay + offset * 7);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-    const label = `${start.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })} – ${end.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}`;
-    return { startDate: toLocalISO(start), endDate: toLocalISO(end), label };
-  }
-
-  // month
-  const d = new Date(today.getFullYear(), today.getMonth() + offset, 1);
-  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-  const label = d.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
-  return { startDate: toLocalISO(d), endDate: toLocalISO(last), label };
+  return {
+    date: dateStr,
+    dayName: DAY_NAMES[dow],
+    events: dayEvents,
+    firstEntry,
+    lastExit,
+    totalMinutes,
+    isToday,
+    isWeekend: dow >= 5 && !hasWorkedStatus,
+    isFuture: dateStr > todayStr,
+    pairs,
+    status,
+    statusLabel: status ? STATUS_LABELS[status] : null,
+    isCorrection: Boolean(entry?.is_correction),
+    hasSkudDetails: dayEvents.length > 0,
+    hasCanonicalEntry: Boolean(entry),
+  };
 };
 
 export const EmployeeDashboardPage: React.FC = () => {
@@ -228,14 +140,8 @@ export const EmployeeDashboardPage: React.FC = () => {
   const [activeModal, setActiveModal] = useState<RequestType | null>(null);
   const [presetDates, setPresetDates] = useState<{ start: string; end: string } | null>(null);
 
-  // Period navigation
-  const [viewPeriod, setViewPeriod] = useState<ViewPeriod>('day');
-  const [periodOffsetRaw, setPeriodOffsetRaw] = useState(0);
-  const periodOffset = clampOffset(viewPeriod, periodOffsetRaw);
-  const canGoBack = periodOffset > getMinOffset(viewPeriod);
-  const setPeriodOffset = (updater: (o: number) => number) => {
-    setPeriodOffsetRaw(current => clampOffset(viewPeriod, updater(current)));
-  };
+  const todayIso = useMemo(() => toLocalISO(new Date()), []);
+  const [activeDayIso, setActiveDayIso] = useState<string>(todayIso);
 
   // 2FA state
   const [show2FASetup, setShow2FASetup] = useState(false);
@@ -244,12 +150,17 @@ export const EmployeeDashboardPage: React.FC = () => {
   const [isEnabling2FA, setIsEnabling2FA] = useState(false);
 
   const employeeId = profile?.employee_id ?? null;
-  const periodRange = useMemo(() => getPeriodRange(viewPeriod, periodOffset), [viewPeriod, periodOffset]);
-  const periodMonthKeys = useMemo(
-    () => getRangeMonthKeys(periodRange.startDate, periodRange.endDate),
-    [periodRange.endDate, periodRange.startDate],
-  );
-  const shouldLoadSkudDetails = viewPeriod !== 'month';
+
+  // Always load current + previous month
+  const timesheetMonthKeys = useMemo(() => {
+    const today = new Date();
+    const prev = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    const curr = new Date(today.getFullYear(), today.getMonth(), 1);
+    return [
+      `${prev.getFullYear()}-${pad2(prev.getMonth() + 1)}`,
+      `${curr.getFullYear()}-${pad2(curr.getMonth() + 1)}`,
+    ];
+  }, []);
 
   useEffect(() => {
     if (!employeeId && refreshProfile) {
@@ -267,49 +178,49 @@ export const EmployeeDashboardPage: React.FC = () => {
   const accessPointsQuery = useQuery<IAccessPointSetting[]>({
     queryKey: ['skud-access-point-settings'],
     queryFn: () => skudService.getAccessPointSettings().catch(() => [] as IAccessPointSetting[]),
-    enabled: shouldLoadSkudDetails,
+    enabled: !!employeeId,
     staleTime: 10 * 60_000,
   });
 
-  const timesheetQuery = useEmployeeTimesheetMonths(employeeId, periodMonthKeys, !!employeeId);
+  const timesheetQuery = useEmployeeTimesheetMonths(employeeId, timesheetMonthKeys, !!employeeId);
 
   const skudEventsQuery = useQuery<SkudEvent[]>({
-    queryKey: ['employee-dashboard-skud-events', employeeId, periodRange.startDate, periodRange.endDate],
-    enabled: !!employeeId && shouldLoadSkudDetails,
+    queryKey: ['employee-dashboard-skud-events', employeeId, activeDayIso],
+    enabled: !!employeeId,
     staleTime: 30_000,
     queryFn: () => skudService.getEmployeeEvents(
       employeeId as number,
-      periodRange.startDate,
-      periodRange.endDate,
+      activeDayIso,
+      activeDayIso,
     ).catch(() => [] as SkudEvent[]),
   });
 
   const employee = employeeQuery.data ?? null;
+
   const timesheetEntries = useMemo(() => {
     const uniqueEntries = new Map<string, TimesheetEntry>();
     for (const response of timesheetQuery.data) {
       for (const entry of response.entries || []) {
         if (entry.employee_id !== employeeId) continue;
-        if (entry.work_date < periodRange.startDate || entry.work_date > periodRange.endDate) continue;
         uniqueEntries.set(entry.work_date, entry);
       }
     }
     return Array.from(uniqueEntries.values()).sort((a, b) => a.work_date.localeCompare(b.work_date));
-  }, [employeeId, periodRange.endDate, periodRange.startDate, timesheetQuery.data]);
+  }, [employeeId, timesheetQuery.data]);
+
   const skudEvents = useMemo(() => skudEventsQuery.data ?? [], [skudEventsQuery.data]);
   const internalPoints = useMemo(
     () => new Set((accessPointsQuery.data ?? []).filter(point => point.is_internal).map(point => point.access_point_name)),
     [accessPointsQuery.data],
   );
-  const loading = employeeQuery.isLoading || timesheetQuery.isLoading || (shouldLoadSkudDetails && accessPointsQuery.isLoading);
-  const eventsLoading = shouldLoadSkudDetails ? skudEventsQuery.isLoading : false;
 
-  const dayGroups = useMemo(
-    () => buildDayGroups(periodRange.startDate, periodRange.endDate, timesheetEntries, skudEvents, internalPoints),
-    [periodRange.startDate, periodRange.endDate, timesheetEntries, skudEvents, internalPoints],
+  const loading = employeeQuery.isLoading || timesheetQuery.isLoading || accessPointsQuery.isLoading;
+  const eventsLoading = skudEventsQuery.isLoading;
+
+  const activeDayGroup = useMemo(
+    () => buildDayGroup(activeDayIso, timesheetEntries, skudEvents, internalPoints),
+    [activeDayIso, timesheetEntries, skudEvents, internalPoints],
   );
-
-  const isCurrentPeriod = periodOffset === 0;
 
   const handleSetup2FA = async () => {
     try {
@@ -353,6 +264,8 @@ export const EmployeeDashboardPage: React.FC = () => {
     </div>
   );
 
+  const hasEventsData = activeDayGroup.hasSkudDetails || activeDayGroup.hasCanonicalEntry;
+
   return (
     <div className={styles.content}>
       {/* Quick Actions */}
@@ -374,31 +287,53 @@ export const EmployeeDashboardPage: React.FC = () => {
         ))}
       </div>
 
-      {/* Месячный табель с возможностью подачи заявки на выбранные дни */}
-      <Suspense fallback={DashboardCardFallback}>
-        <MyMonthTimesheet
-          employeeId={employeeId}
-          onSubmitRequest={(dates) => {
-            setPresetDates({ start: dates[0], end: dates[dates.length - 1] });
-            setActiveModal('remote');
-          }}
-        />
-      </Suspense>
-
       {/* Content Grid */}
       <div className={styles.contentGrid}>
-        <AttendanceCard
-          loading={loading}
-          eventsLoading={eventsLoading}
-          viewPeriod={viewPeriod}
-          setViewPeriod={setViewPeriod}
-          setPeriodOffset={setPeriodOffset}
-          periodLabel={periodRange.label}
-          isCurrentPeriod={isCurrentPeriod}
-          canGoBack={canGoBack}
-          dayGroups={dayGroups}
-        />
+        {/* Calendar + Day Events */}
+        <div className={styles.calendarEventsBlock}>
+          {/* Left: Calendar */}
+          <div className={styles.calendarPane}>
+            <Suspense fallback={<div className={styles.emptyState}>Загрузка...</div>}>
+              <MyMonthTimesheet
+                employeeId={employeeId}
+                activeDayIso={activeDayIso}
+                onDayActivate={setActiveDayIso}
+                onSubmitRequest={(dates) => {
+                  setPresetDates({ start: dates[0], end: dates[dates.length - 1] });
+                  setActiveModal('remote');
+                }}
+                noCard
+              />
+            </Suspense>
+          </div>
 
+          {/* Right: Day Events */}
+          <div className={styles.eventsPane}>
+            <div className={styles.eventsPaneHeader}>
+              <span className={styles.eventsPaneDate}>{formatActiveDayLabel(activeDayIso)}</span>
+              {hasEventsData && <DaySummaryBadges group={activeDayGroup} />}
+            </div>
+            <div className={styles.eventsPaneBody}>
+              {loading || eventsLoading ? (
+                <div className={styles.emptyState}>Загрузка...</div>
+              ) : hasEventsData ? (
+                <DayEvents group={activeDayGroup} />
+              ) : (
+                <div className={styles.emptyState}>
+                  {activeDayGroup.isFuture ? 'Будущая дата' : 'Нет данных за этот день'}
+                </div>
+              )}
+            </div>
+            {activeDayGroup.totalMinutes > 0 && (
+              <div className={styles.eventsPaneFooter}>
+                <span>Итого за день:</span>
+                <strong>{formatHM(activeDayGroup.totalMinutes)}</strong>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right column: Employee Info */}
         <div className={styles.rightColumn}>
           <Suspense fallback={DashboardCardFallback}>
             <EmployeeInfoCards

@@ -1219,6 +1219,68 @@
   height: 16px;
 }
 
+/* Calendar + Events combined block */
+.calendarEventsBlock {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 340px 1fr;
+}
+
+.calendarPane {
+  border-right: 1px solid var(--border);
+  padding: 20px;
+}
+
+.eventsPane {
+  display: flex;
+  flex-direction: column;
+  min-height: 440px;
+}
+
+.eventsPaneHeader {
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 52px;
+}
+
+.eventsPaneDate {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-transform: capitalize;
+  flex-shrink: 0;
+}
+
+.eventsPaneBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.eventsPaneFooter {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.eventsPaneFooter strong {
+  font-family: 'Space Mono', monospace;
+  font-size: 14px;
+  color: var(--accent);
+}
+
 /* Responsive */
 @media (max-width: 1200px) {
   .quickActionsGrid {
@@ -1229,6 +1291,21 @@
     grid-template-columns: 1fr;
   }
 
+}
+
+@media (max-width: 900px) {
+  .calendarEventsBlock {
+    grid-template-columns: 1fr;
+  }
+
+  .calendarPane {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .eventsPane {
+    min-height: 300px;
+  }
 }
 
 @media (max-width: 768px) {

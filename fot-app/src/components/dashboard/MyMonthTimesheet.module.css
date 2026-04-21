@@ -4,7 +4,14 @@
   border-radius: 16px;
   padding: 20px;
   margin-bottom: 24px;
-  max-width: 560px;
+}
+
+.rootNoCard {
+  background: none;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  margin-bottom: 0;
 }
 
 .header {
@@ -164,6 +171,12 @@
 .cellAbsent {
   background: rgba(239, 68, 68, 0.15);
   color: #dc2626;
+}
+
+.cellActive {
+  outline: 2.5px solid var(--accent-primary, #3b82f6);
+  outline-offset: -2px;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15);
 }
 
 .cellCorrection::after {
