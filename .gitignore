@@ -11,6 +11,7 @@ exports/
 
 # Dependencies
 node_modules/
+/package-lock.json
 
 # Environment variables (IMPORTANT - contains secrets!)
 .env

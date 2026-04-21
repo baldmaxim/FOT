@@ -2,6 +2,7 @@
   "name": "fot-server",
   "version": "1.0.0",
   "description": "FOT Backend Server with encryption and 2FA",
+  "packageManager": "npm@11.6.2",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
