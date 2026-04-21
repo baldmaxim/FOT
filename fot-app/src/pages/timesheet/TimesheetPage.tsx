@@ -26,7 +26,7 @@ import { getScheduleForTimesheetDay, getWorkHoursForDay } from '../../utils/sche
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { formatTimesheetHalfLabel, type TimesheetApprovalHalf } from '../../utils/timesheetApprovalPeriod';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
-import { type IFlatDepartmentOption } from '../../utils/departmentUtils';
+import { type IFlatDepartmentOption, getTreeFlatDepartments, filterDepartmentTreeByIds } from '../../utils/departmentUtils';
 import './TimesheetPage.css';
 
 const TimesheetSidePanel = lazy(() => import('../../components/timesheet/TimesheetSidePanel').then(module => ({
@@ -142,6 +142,7 @@ export const TimesheetPage: FC = () => {
     managedDepartmentIds,
     managedDepartments,
     primaryDepartmentId,
+    structureQuery,
   } = useManagedDepartments();
   const isTimesheetDepartmentScope = !canManageAllDepartments && isDepartmentScope && canViewManagedTimesheet;
   const isMultiDepartmentManager = isTimesheetDepartmentScope && managedDepartmentIds.length > 1;
@@ -214,7 +215,14 @@ export const TimesheetPage: FC = () => {
   const [teamSearch, setTeamSearch] = useState('');
   const [teamPendingEmployeeId, setTeamPendingEmployeeId] = useState<number | null>(null);
 
-  const deptOptions: IFlatDepartmentOption[] = managedDepartments;
+  const deptOptions = useMemo<IFlatDepartmentOption[]>(() => {
+    const allNodes = structureQuery.data?.departments ?? [];
+    if (isDepartmentScope && managedDepartmentIds.length > 0) {
+      const filtered = filterDepartmentTreeByIds(allNodes, new Set(managedDepartmentIds));
+      return getTreeFlatDepartments(filtered);
+    }
+    return getTreeFlatDepartments(allNodes);
+  }, [structureQuery.data, isDepartmentScope, managedDepartmentIds]);
   const effectiveSelectedDeptId = isTimesheetDepartmentScope
     ? (selectedDeptId || primaryDepartmentId || null)
     : selectedDeptId;
