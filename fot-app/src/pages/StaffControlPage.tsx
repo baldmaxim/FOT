@@ -80,9 +80,10 @@ interface IStaffRowProps {
   onToggleSelect: (empId: number) => void;
   onOpenModal: (emp: Employee, type: ModalType) => void;
   onOpenHistory: (emp: Employee) => void;
+  onRehire?: (emp: Employee) => void;
 }
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
 
@@ -151,9 +152,15 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, categoryLabels, schedul
         </span>
       </td>
       <td className="sc-td-hist" onClick={e => e.stopPropagation()}>
-        <button className="sc-btn-icon" title="История" onClick={() => onOpenHistory(emp)}>
-          <History size={14} />
-        </button>
+        {onRehire && emp.employment_status === 'fired' ? (
+          <button className="sc-btn secondary" style={{ fontSize: 11, padding: '2px 8px' }} title="Восстановить сотрудника" onClick={() => onRehire(emp)}>
+            Восстановить
+          </button>
+        ) : (
+          <button className="sc-btn-icon" title="История" onClick={() => onOpenHistory(emp)}>
+            <History size={14} />
+          </button>
+        )}
       </td>
     </tr>
   );
@@ -438,6 +445,7 @@ interface IVirtualTableProps {
   allSelected: boolean;
   onOpenModal: (emp: Employee, type: ModalType) => void;
   onOpenHistory: (emp: Employee) => void;
+  onRehire?: (emp: Employee) => void;
 }
 
 const ROW_HEIGHT = 36;
@@ -453,6 +461,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   allSelected,
   onOpenModal,
   onOpenHistory,
+  onRehire,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -510,6 +519,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     onToggleSelect={onToggleSelect}
                     onOpenModal={onOpenModal}
                     onOpenHistory={onOpenHistory}
+                    onRehire={onRehire}
                   />
                 );
               })}
@@ -539,6 +549,7 @@ interface IVirtualCardsProps {
   onToggleSelect: (empId: number) => void;
   onOpenModal: (emp: Employee, type: ModalType) => void;
   onOpenHistory: (emp: Employee) => void;
+  onRehire?: (emp: Employee) => void;
 }
 
 const CARD_HEIGHT = 200;
@@ -552,7 +563,8 @@ const MobileCard: FC<{
   onToggleSelect: (empId: number) => void;
   onOpenModal: (emp: Employee, type: ModalType) => void;
   onOpenHistory: (emp: Employee) => void;
-}> = memo(({ emp, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory }) => {
+  onRehire?: (emp: Employee) => void;
+}> = memo(({ emp, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
   return (
@@ -597,30 +609,38 @@ const MobileCard: FC<{
         <span>{fmt(emp.salary_calculated)}</span>
       </div>
       <div className="sc-card-actions">
-        <button className="sc-btn-icon" title="История" onClick={e => { e.stopPropagation(); onOpenHistory(emp); }}>
-          <History size={14} />
-        </button>
-        <button className="sc-btn-icon" title="Сменить должность" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'position'); }}>
-          <Pencil size={14} />
-        </button>
-        <button className="sc-btn-icon" title="Категория труда" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'category'); }}>
-          <Pencil size={14} />
-        </button>
-        <button className="sc-btn-icon" title="Назначить график" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'schedule'); }}>
-          <Calendar size={14} />
-        </button>
-        <button className="sc-btn-icon" title="Изменить оклад" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'salary'); }}>
-          <TrendingUp size={14} />
-        </button>
-        <button className="sc-btn-icon" title="Сменить отдел" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'department'); }}>
-          <ArrowRightLeft size={14} />
-        </button>
+        {onRehire && emp.employment_status === 'fired' ? (
+          <button className="sc-btn secondary" style={{ fontSize: 12, padding: '4px 10px' }} onClick={e => { e.stopPropagation(); onRehire(emp); }}>
+            Восстановить
+          </button>
+        ) : (
+          <>
+            <button className="sc-btn-icon" title="История" onClick={e => { e.stopPropagation(); onOpenHistory(emp); }}>
+              <History size={14} />
+            </button>
+            <button className="sc-btn-icon" title="Сменить должность" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'position'); }}>
+              <Pencil size={14} />
+            </button>
+            <button className="sc-btn-icon" title="Категория труда" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'category'); }}>
+              <Pencil size={14} />
+            </button>
+            <button className="sc-btn-icon" title="Назначить график" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'schedule'); }}>
+              <Calendar size={14} />
+            </button>
+            <button className="sc-btn-icon" title="Изменить оклад" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'salary'); }}>
+              <TrendingUp size={14} />
+            </button>
+            <button className="sc-btn-icon" title="Сменить отдел" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'department'); }}>
+              <ArrowRightLeft size={14} />
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory }) => {
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -645,6 +665,7 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, categoryLabels, s
                 onToggleSelect={onToggleSelect}
                 onOpenModal={onOpenModal}
                 onOpenHistory={onOpenHistory}
+                onRehire={onRehire}
               />
             </div>
           );
@@ -1366,6 +1387,16 @@ export const StaffControlPage: FC = () => {
     setSelectedEmployeeIds([]);
   }, [selectedEmployees, patchEmployee]);
 
+  const handleRehire = useCallback(async (emp: Employee) => {
+    if (!confirm(`Восстановить ${emp.full_name}?`)) return;
+    try {
+      await employeeService.rehire(emp.id);
+      refresh();
+    } catch {
+      toast.error('Ошибка восстановления сотрудника');
+    }
+  }, [refresh, toast]);
+
   const handleFilteredBulkSaveSchedule = useCallback(async (scheduleId: string | null, effectiveFrom: string) => {
     const employeeIds = await employeeService.getFilteredIds({
       search: debouncedSearch || undefined,
@@ -1642,6 +1673,7 @@ export const StaffControlPage: FC = () => {
           onToggleSelect={toggleSelectEmployee}
           onOpenModal={openModal}
           onOpenHistory={openHistory}
+          onRehire={statusFilter === 'fired' ? handleRehire : undefined}
         />
       ) : (
         <VirtualTable
@@ -1655,6 +1687,7 @@ export const StaffControlPage: FC = () => {
           allSelected={allVisibleSelected}
           onOpenModal={openModal}
           onOpenHistory={openHistory}
+          onRehire={statusFilter === 'fired' ? handleRehire : undefined}
         />
       )}
 
