@@ -486,6 +486,14 @@
   white-space: nowrap;
 }
 
+.ts-assignee-email-dot {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  color: var(--primary, #3b82f6);
+  opacity: 0.75;
+}
+
 .ts-assignee-badge {
   flex-shrink: 0;
   font-size: 11px;

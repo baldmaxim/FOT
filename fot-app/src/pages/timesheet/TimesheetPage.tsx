@@ -1,6 +1,6 @@
 import { type FC, Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, ChevronDown, Download, UserPlus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronDown, Download, UserPlus, Mail } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { TimesheetStats } from '../../components/timesheet/TimesheetStats';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
@@ -1259,6 +1259,11 @@ export const TimesheetPage: FC = () => {
               onClick={() => handleSelectAssignee(emp.id)}
             >
               <span className="ts-assignee-name">{formatTimesheetEmployeeName(emp.full_name)}</span>
+              {emp.email && (
+                <span className="ts-assignee-email-dot" title={emp.email}>
+                  <Mail size={12} />
+                </span>
+              )}
               <span className="ts-assignee-badge">{emp.department_count} отд.</span>
             </div>
           ))}
