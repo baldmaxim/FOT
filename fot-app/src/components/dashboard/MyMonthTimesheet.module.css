@@ -4,6 +4,7 @@
   border-radius: 16px;
   padding: 20px;
   margin-bottom: 24px;
+  max-width: 560px;
 }
 
 .header {

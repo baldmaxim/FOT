@@ -205,6 +205,10 @@ async function canAccessEmployeeForTimesheetDate(
     return req.user.employee_id === employeeId;
   }
 
+  if (scope === 'department' && req.user.employee_id === employeeId) {
+    return true;
+  }
+
   const managedDepartmentIds = await resolveManagedDepartmentIds(req);
   if (managedDepartmentIds.length === 0) {
     return false;
@@ -237,6 +241,10 @@ async function canAccessEmployeeForTimesheetPeriod(
 
   if (scope === 'self') {
     return req.user.employee_id === employeeId;
+  }
+
+  if (scope === 'department' && req.user.employee_id === employeeId) {
+    return true;
   }
 
   const managedDepartmentIds = await resolveManagedDepartmentIds(req);
