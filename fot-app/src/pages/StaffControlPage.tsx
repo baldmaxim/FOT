@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, SlidersHorizontal, X } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
 import { scheduleService } from '../services/scheduleService';
@@ -951,8 +951,6 @@ export const StaffControlPage: FC = () => {
   const navigate = useNavigate();
   const [urlParams, setUrlParams] = useSearchParams();
   const isMobile = useIsMobile(768);
-  const [filtersOpen, setFiltersOpen] = useState(false);
-
   const [search, setSearch] = useState(() => urlParams.get('q') || '');
   const [deptId, setDeptId] = useState(() => urlParams.get('dept') || '');
   const [page, setPage] = useState(1);
@@ -1154,12 +1152,6 @@ export const StaffControlPage: FC = () => {
     return parts.join(' • ');
   }, [deptId, debouncedSearch, allDepts]);
 
-  const selectedDeptName = useMemo(
-    () => allDepts.find(dept => dept.id === deptId)?.name || 'Все отделы',
-    [allDepts, deptId],
-  );
-  const filtersVisible = isMobile && filtersOpen;
-
   const handleSearchChange = useCallback((value: string) => {
     setSearch(value);
     setPage(1);
@@ -1168,8 +1160,7 @@ export const StaffControlPage: FC = () => {
   const handleDeptChange = useCallback((value: string) => {
     setDeptId(value);
     setPage(1);
-    if (isMobile) setFiltersOpen(false);
-  }, [isMobile]);
+  }, []);
 
   /* ─── stable callbacks for child components ─── */
 
@@ -1497,37 +1488,19 @@ export const StaffControlPage: FC = () => {
     <div className="sc-page">
       {/* Filters */}
       {isMobile ? (
-        <>
-          <div className="sc-mobile-toolbar">
-            <button className="sc-mobile-filter-btn" onClick={() => setFiltersOpen(true)}>
-              <SlidersHorizontal size={16} />
-              <span className="sc-mobile-filter-label">{selectedDeptName}</span>
-            </button>
-            <div className="sc-mobile-toolbar-meta">
-              <span className="sc-mobile-count-pill">{meta.total}</span>
-              <button className="sc-btn secondary" onClick={() => setShowImportModal(true)}>
-                <Upload size={14} /> Импорт
-              </button>
-              <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
-                <UserPlus size={14} /> Добавить
-              </button>
-            </div>
+        <div className="sc-mobile-toolbar">
+          <DeptSelect
+            departments={allDepts}
+            value={deptId}
+            onChange={handleDeptChange}
+          />
+          <div className="sc-filter-search">
+            <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
           </div>
-
-          <div className={`sc-mobile-filters-overlay ${filtersVisible ? 'open' : ''}`} onClick={() => setFiltersOpen(false)} />
-          <div className={`sc-mobile-filters-sheet ${filtersVisible ? 'open' : ''}`}>
-            <div className="sc-mobile-filters-head">
-              <div>
-                <div className="sc-mobile-filters-title">Фильтры</div>
-                <div className="sc-mobile-filters-subtitle">{currentFilterDescription}</div>
-              </div>
-              <button className="sc-mobile-filters-close" onClick={() => setFiltersOpen(false)}>
-                <X size={18} />
-              </button>
-            </div>
-            {filtersContent}
-          </div>
-        </>
+          <button className="sc-btn apply sc-btn--icon" onClick={() => setShowAddModal(true)}>
+            <UserPlus size={16} />
+          </button>
+        </div>
       ) : (
         filtersContent
       )}
