@@ -52,8 +52,10 @@ function isMissingFunctionError(error: unknown): boolean {
   const message = 'message' in error ? String(error.message || '') : '';
   return (
     code === '42883'
+    || code === '42703'
     || code === 'PGRST202'
     || /function .* does not exist/i.test(message)
+    || /column .* does not exist/i.test(message)
     || /schema cache/i.test(message)
     || /Could not find the function/i.test(message)
   );
