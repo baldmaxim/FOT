@@ -820,11 +820,12 @@ export const sigurAdminController = {
       const status = getErrorStatus(error);
       if (error instanceof AxiosError) {
         const data = error.response?.data as Record<string, unknown> | undefined;
-        console.error('[Sigur PATCH 400] status=', error.response?.status);
-        console.error('[Sigur PATCH 400] request body=', error.config?.data);
-        console.error('[Sigur PATCH 400] errors=', JSON.stringify(data?.errors));
-        console.error('[Sigur PATCH 400] errorsKeys=', JSON.stringify(data?.errorsKeys));
-        console.error('[Sigur PATCH 400] full data=', JSON.stringify(data));
+        console.error('[Sigur 400] method=', error.config?.method, 'url=', error.config?.url);
+        console.error('[Sigur 400] status=', error.response?.status);
+        console.error('[Sigur 400] request body=', error.config?.data);
+        console.error('[Sigur 400] errors=', JSON.stringify(data?.errors));
+        console.error('[Sigur 400] errorsKeys=', JSON.stringify(data?.errorsKeys));
+        console.error('[Sigur 400] full data=', JSON.stringify(data));
       }
       res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка обновления дат карты Sigur') });
     }
