@@ -445,7 +445,7 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
     res.json({ success: true, data: employee });
   } catch (error) {
     console.error('Rehire employee error:', error);
-    res.status(500).json({ success: false, error: 'Failed to rehire employee' });
+    res.status(500).json({ success: false, error: 'Failed to rehire employee', detail: error instanceof Error ? error.message : String(error) });
   }
 }
 

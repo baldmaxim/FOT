@@ -552,7 +552,7 @@ interface IVirtualCardsProps {
   onRehire?: (emp: Employee) => void;
 }
 
-const CARD_HEIGHT = 200;
+const CARD_HEIGHT = 270;
 
 const MobileCard: FC<{
   emp: Employee;
