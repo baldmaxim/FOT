@@ -1014,7 +1014,7 @@ export class SigurDataService extends SigurServiceBase {
     await this.mutate<void>(
       'put',
       '/api/v1/bindings/employees-cards',
-      { employeeId, cardId, expirationDate },
+      { employeeId, cardId, expirationDate: toSigurLocalDateTime(expirationDate) },
       undefined,
       connection,
     );
@@ -1028,7 +1028,12 @@ export class SigurDataService extends SigurServiceBase {
     connection?: ConnectionType,
     format?: string,
   ): Promise<void> {
-    const body: Record<string, unknown> = { employeeId, cardId, startDate, expirationDate };
+    const body: Record<string, unknown> = {
+      employeeId,
+      cardId,
+      startDate: toSigurLocalDateTime(startDate),
+      expirationDate: toSigurLocalDateTime(expirationDate),
+    };
     if (format) body.format = format;
     await this.mutate<void>(
       'patch',
@@ -1038,4 +1043,18 @@ export class SigurDataService extends SigurServiceBase {
       connection,
     );
   }
+}
+
+// Sigur принимает/возвращает даты в формате "YYYY-MM-DD HH:mm:ss" в московском времени (UTC+3), без T/Z.
+function toSigurLocalDateTime(isoDate: string): string {
+  const date = new Date(isoDate);
+  if (Number.isNaN(date.getTime())) return isoDate;
+  const msk = new Date(date.getTime() + 3 * 60 * 60 * 1000);
+  const yyyy = msk.getUTCFullYear();
+  const mm = String(msk.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(msk.getUTCDate()).padStart(2, '0');
+  const hh = String(msk.getUTCHours()).padStart(2, '0');
+  const mi = String(msk.getUTCMinutes()).padStart(2, '0');
+  const ss = String(msk.getUTCSeconds()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
 }
