@@ -5,7 +5,7 @@ import { Response } from 'express';
 import { z } from 'zod';
 import { supabase } from '../config/database.js';
 import { resolveSchedule, resolveSchedulesBulk } from '../services/schedule.service.js';
-import { resolveRequestDataScope, resolveScopedDepartmentIds } from '../services/data-scope.service.js';
+import { canAccessEmployeeInScope, resolveRequestDataScope, resolveScopedDepartmentIds } from '../services/data-scope.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const scheduleTypeEnum = z.enum(['office', 'remote', 'hybrid', 'shift']);
@@ -654,6 +654,10 @@ export const scheduleController = {
       const parsed = assignEmployeeSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.issues });
 
+      if (!(await canAccessEmployeeInScope(req, parsedEmployeeId.data))) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
+
       const data = await assignEmployeeSchedule(
         parsedEmployeeId.data,
         parsed.data.schedule_id,
@@ -785,6 +789,10 @@ export const scheduleController = {
         : { success: true as const, data: new Date().toISOString().slice(0, 10) };
       if (!parsedEffectiveTo.success) {
         return res.status(400).json({ success: false, error: 'Некорректная дата effective_to' });
+      }
+
+      if (!(await canAccessEmployeeInScope(req, parsedEmployeeId.data))) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 
       const updated = await removeEmployeeSchedule(parsedEmployeeId.data, parsedEffectiveTo.data);

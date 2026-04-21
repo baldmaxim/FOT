@@ -1,6 +1,18 @@
 import { supabase } from '../config/database.js';
 import { DEFAULT_ACCESS_PAGE_CATALOG, type PageCatalogItem } from '../config/access-control.js';
 import { getRoleByCode, getRoleById, invalidateRolesCache } from './roles-cache.service.js';
+import { resolveAccessibleDepartmentIds } from './data-scope.service.js';
+import type { AuthenticatedRequest } from '../types/index.js';
+
+/**
+ * Список страниц, к которым не-админ с назначенными отделами
+ * (employee_department_access) получает авто-доступ как «руководитель».
+ * Доступ к редактированию на этих страницах ограничен scope-проверками
+ * внутри обработчиков (canAccessEmployeeInScope и др.).
+ */
+const MANAGER_AUTO_ACCESS_PAGES = new Set<string>([
+  '/staff-control',
+]);
 
 export interface PageAccessPermission {
   can_view: boolean;
@@ -108,6 +120,30 @@ export async function hasPageView(roleRef: string, pagePath: string): Promise<bo
 export async function hasPageEdit(roleRef: string, pagePath: string): Promise<boolean> {
   const access = await getRolePageAccess(roleRef);
   return access[pagePath]?.can_edit === true;
+}
+
+async function hasManagerAutoAccess(req: AuthenticatedRequest, pagePath: string): Promise<boolean> {
+  if (req.user.is_admin) return false;
+  if (!MANAGER_AUTO_ACCESS_PAGES.has(pagePath)) return false;
+  const accessible = await resolveAccessibleDepartmentIds(req);
+  return accessible !== 'all' && accessible.length > 0;
+}
+
+/**
+ * Эффективная проверка доступа к странице: role-based + авто-доступ
+ * «руководителя» (не-админ с назначенными отделами) к страницам из
+ * MANAGER_AUTO_ACCESS_PAGES.
+ */
+export async function resolveEffectivePageAccess(
+  req: AuthenticatedRequest,
+  pagePath: string,
+  action: 'view' | 'edit',
+): Promise<boolean> {
+  const byRole = action === 'edit'
+    ? await hasPageEdit(req.user.role_code, pagePath)
+    : await hasPageView(req.user.role_code, pagePath);
+  if (byRole) return true;
+  return hasManagerAutoAccess(req, pagePath);
 }
 
 export function invalidateRolePageAccessCache(): void {

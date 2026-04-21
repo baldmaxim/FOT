@@ -17,6 +17,7 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useStaffData } from '../hooks/useStaffData';
 import { useToast } from '../contexts/ToastContext';
+import { useAuth } from '../contexts/AuthContext';
 import { DeptSelect } from '../components/staff/DeptSelect';
 import type { Employee, EmployeeHistoryEvent, EmployeeInput, EnrichPreview, ContactsEnrichPreview } from '../types';
 import type { IFlatDepartmentOption } from '../utils/departmentUtils';
@@ -1070,6 +1071,9 @@ export const StaffControlPage: FC = () => {
   const debouncedSearch = useDebouncedValue(search, 300);
   const queryClient = useQueryClient();
   const toast = useToast();
+  const { isAdmin, profile } = useAuth();
+  const managedDepartmentIds = useMemo(() => profile?.managed_department_ids ?? [], [profile]);
+  const restrictToManaged = !isAdmin && managedDepartmentIds.length > 0;
 
   const { employees, departments, countsByDepartment, loading, meta, totalActive, refresh, patchEmployee } = useStaffData({
     page,
@@ -1243,7 +1247,12 @@ export const StaffControlPage: FC = () => {
 
   /* ─── memoized computations ─── */
 
-  const allDepts = useMemo(() => getTreeFlatDepartments(departments), [departments]);
+  const allDepts = useMemo(() => {
+    const flat = getTreeFlatDepartments(departments);
+    if (!restrictToManaged) return flat;
+    const allow = new Set(managedDepartmentIds);
+    return flat.filter(d => allow.has(d.id));
+  }, [departments, restrictToManaged, managedDepartmentIds]);
   const brigadeOptions = useMemo<IBrigadeOption[]>(
     () => allDepts
       .filter(department => isBrigadeDepartmentName(department.name) && (countsByDepartment[department.id] || 0) > 0)
@@ -1627,7 +1636,7 @@ export const StaffControlPage: FC = () => {
       <div className="sc-filter-count">
         {meta.total}{statusFilter === 'active' ? ` из ${totalActive}` : ''}
       </div>
-      {statusFilter === 'active' && (
+      {statusFilter === 'active' && isAdmin && (
         <div className="sc-filter-actions">
           <button className="sc-btn secondary" onClick={() => setBulkBrigadeScheduleOpen(true)} disabled={brigadeOptions.length === 0}>
             <Calendar size={14} /> По бригадам
@@ -1661,9 +1670,11 @@ export const StaffControlPage: FC = () => {
           <div className="sc-filter-search">
             <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
           </div>
-          <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
-            <UserPlus size={16} /> Добавить
-          </button>
+          {isAdmin && (
+            <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
+              <UserPlus size={16} /> Добавить
+            </button>
+          )}
           <div className="sc-status-toggle sc-status-toggle--mobile">
             <button
               className={`sc-btn${statusFilter === 'active' ? ' apply' : ' secondary'}`}

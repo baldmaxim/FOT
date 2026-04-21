@@ -4,7 +4,7 @@ import { env } from '../config/env.js';
 import { CRITICAL_2FA_ENABLED } from '../config/features.js';
 import type { AccessAction } from '../config/access-control.js';
 import type { AuthenticatedRequest, JWTPayload } from '../types/index.js';
-import { hasPageEdit, hasPageView } from '../services/access-control.service.js';
+import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { getAccessTokenFromRequest } from '../utils/auth-session.js';
 
 export const authenticate = async (
@@ -97,9 +97,7 @@ export const requirePageAccess = (pagePath: string, action: AccessAction = 'view
     }
 
     try {
-      const hasAccess = action === 'edit'
-        ? await hasPageEdit(req.user.role_code, pagePath)
-        : await hasPageView(req.user.role_code, pagePath);
+      const hasAccess = await resolveEffectivePageAccess(req, pagePath, action);
 
       if (!hasAccess) {
         res.status(403).json({ success: false, error: 'Insufficient permissions' });
@@ -123,11 +121,7 @@ export const requireAnyPageAccess = (pagePaths: string[], action: AccessAction =
 
     try {
       const checks = await Promise.all(
-        pagePaths.map(pagePath => (
-          action === 'edit'
-            ? hasPageEdit(req.user.role_code, pagePath)
-            : hasPageView(req.user.role_code, pagePath)
-        )),
+        pagePaths.map(pagePath => resolveEffectivePageAccess(req, pagePath, action)),
       );
 
       if (!checks.some(Boolean)) {

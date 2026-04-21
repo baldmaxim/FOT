@@ -70,6 +70,10 @@ async function buildProfileResponse(
     profile.employee_id,
   );
 
+  if (!role.is_admin && managed_department_ids.length > 0 && !page_access['/staff-control']?.can_view) {
+    page_access['/staff-control'] = { can_view: true, can_edit: true };
+  }
+
   const response: UserProfileResponse = {
     id: profile.id,
     full_name: profile.full_name,
