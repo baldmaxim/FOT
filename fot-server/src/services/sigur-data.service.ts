@@ -1035,13 +1035,26 @@ export class SigurDataService extends SigurServiceBase {
       expirationDate: toSigurLocalDateTime(expirationDate),
     };
     if (format) body.format = format;
-    await this.mutate<void>(
-      'patch',
-      '/api/v1/bindings/employees-cards',
-      body,
-      undefined,
-      connection,
-    );
+
+    // Sigur 1.6.x на порту 9555 не принимает PATCH → пробуем PATCH, при 400 фоллбэк на PUT.
+    try {
+      await this.mutate<void>(
+        'patch',
+        '/api/v1/bindings/employees-cards',
+        body,
+        undefined,
+        connection,
+      );
+    } catch (patchError) {
+      console.warn('[Sigur] PATCH binding failed, falling back to PUT:', patchError instanceof Error ? patchError.message : patchError);
+      await this.mutate<void>(
+        'put',
+        '/api/v1/bindings/employees-cards',
+        body,
+        undefined,
+        connection,
+      );
+    }
   }
 }
 
