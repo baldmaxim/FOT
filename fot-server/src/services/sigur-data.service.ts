@@ -1026,31 +1026,35 @@ export class SigurDataService extends SigurServiceBase {
     startDate: string,
     expirationDate: string,
     connection?: ConnectionType,
-    format?: string,
+    _format?: string,
   ): Promise<void> {
-    const body: Record<string, unknown> = {
+    // По докам Sigur PATCH требует ровно 4 поля — без format.
+    const patchBody = {
       employeeId,
       cardId,
       startDate: toSigurLocalDateTime(startDate),
       expirationDate: toSigurLocalDateTime(expirationDate),
     };
-    if (format) body.format = format;
 
-    // Sigur 1.6.x на порту 9555 не принимает PATCH → пробуем PATCH, при 400 фоллбэк на PUT.
     try {
       await this.mutate<void>(
         'patch',
         '/api/v1/bindings/employees-cards',
-        body,
+        patchBody,
         undefined,
         connection,
       );
     } catch (patchError) {
-      console.warn('[Sigur] PATCH binding failed, falling back to PUT:', patchError instanceof Error ? patchError.message : patchError);
+      console.warn('[Sigur] PATCH binding failed, falling back to PUT (expirationDate only):', patchError instanceof Error ? patchError.message : patchError);
+      // По докам PUT обновляет только expirationDate и требует 3 поля.
       await this.mutate<void>(
         'put',
         '/api/v1/bindings/employees-cards',
-        body,
+        {
+          employeeId,
+          cardId,
+          expirationDate: toSigurLocalDateTime(expirationDate),
+        },
         undefined,
         connection,
       );
