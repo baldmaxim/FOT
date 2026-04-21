@@ -391,8 +391,12 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
 
     const connection = (req.body.connection as 'external' | 'internal') || undefined;
     if (existing.sigur_employee_id && (await sigurService.isConfigured())) {
-      await sigurService.unblockEmployee(existing.sigur_employee_id, connection);
-      await syncLinkedEmployeeFromSigur(existing.id, connection);
+      try {
+        await sigurService.unblockEmployee(existing.sigur_employee_id, connection);
+        await syncLinkedEmployeeFromSigur(existing.id, connection);
+      } catch (sigurErr) {
+        console.warn(`[rehire] Sigur unblock failed for employee ${existing.id}, continuing:`, sigurErr);
+      }
     }
 
     const { data, error } = await supabase
