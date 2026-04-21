@@ -1026,39 +1026,58 @@ export class SigurDataService extends SigurServiceBase {
     startDate: string,
     expirationDate: string,
     connection?: ConnectionType,
-    _format?: string,
+    format?: string,
   ): Promise<void> {
-    // По докам Sigur PATCH требует ровно 4 поля — без format.
-    const patchBody = {
-      employeeId,
-      cardId,
-      startDate: toSigurLocalDateTime(startDate),
-      expirationDate: toSigurLocalDateTime(expirationDate),
-    };
+    const localStart = toSigurLocalDateTime(startDate);
+    const localExpiration = toSigurLocalDateTime(expirationDate);
 
+    // 1. Пробуем PATCH (документированный способ)
     try {
       await this.mutate<void>(
         'patch',
         '/api/v1/bindings/employees-cards',
-        patchBody,
+        { employeeId, cardId, startDate: localStart, expirationDate: localExpiration },
         undefined,
         connection,
       );
+      return;
     } catch (patchError) {
-      console.warn('[Sigur] PATCH binding failed, falling back to PUT (expirationDate only):', patchError instanceof Error ? patchError.message : patchError);
-      // По докам PUT обновляет только expirationDate и требует 3 поля.
+      console.warn('[Sigur] PATCH failed:', patchError instanceof Error ? patchError.message : patchError);
+    }
+
+    // 2. Пробуем PUT (только expirationDate)
+    try {
       await this.mutate<void>(
         'put',
         '/api/v1/bindings/employees-cards',
-        {
-          employeeId,
-          cardId,
-          expirationDate: toSigurLocalDateTime(expirationDate),
-        },
+        { employeeId, cardId, expirationDate: localExpiration },
         undefined,
         connection,
       );
+      return;
+    } catch (putError) {
+      console.warn('[Sigur] PUT failed:', putError instanceof Error ? putError.message : putError);
     }
+
+    // 3. Фоллбэк: удалить привязку и создать заново
+    if (!format) {
+      throw new Error('Не удалось обновить привязку карты (PATCH/PUT отклонены Sigur), и неизвестен format для пересоздания.');
+    }
+    console.warn('[Sigur] Falling back to DELETE + POST for binding update');
+    await this.mutate<void>(
+      'post',
+      '/api/v1/bindings/employees-cards/delete',
+      { employeeId, cardId, format },
+      undefined,
+      connection,
+    );
+    await this.mutate<void>(
+      'post',
+      '/api/v1/bindings/employees-cards',
+      { employeeId, cardId, format, startDate: localStart, expirationDate: localExpiration },
+      undefined,
+      connection,
+    );
   }
 }
 

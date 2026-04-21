@@ -75,9 +75,11 @@ function getErrorMessage(error: unknown, fallback: string): string {
       const msg = data.message ?? data.error ?? data.detail;
       if (typeof msg === 'string' && msg.trim()) return msg.trim();
       const errors = data.errors;
+      const errorsKeys = data.errorsKeys;
       if (Array.isArray(errors) && errors.length > 0) {
         const first = String(errors[0]).trim();
-        if (first) return first;
+        const key = Array.isArray(errorsKeys) && errorsKeys[0] ? ` [${errorsKeys[0]}]` : '';
+        if (first) return `${first}${key}`;
       }
     }
   }
