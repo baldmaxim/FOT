@@ -1163,7 +1163,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
   }
 
   .sc-mobile-toolbar .sc-dept-select {
@@ -1178,12 +1178,17 @@
     max-width: unset;
   }
 
-  .sc-mobile-toolbar .sc-status-toggle {
+  .sc-mobile-toolbar .sc-btn--icon {
     flex: 0 0 auto;
-    width: 100%;
   }
 
-  .sc-mobile-toolbar .sc-status-toggle .sc-btn {
+  .sc-status-toggle--mobile {
+    flex: 0 0 100%;
+    display: flex;
+    gap: 4px;
+  }
+
+  .sc-status-toggle--mobile .sc-btn {
     flex: 1;
   }
 

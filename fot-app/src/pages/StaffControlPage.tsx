@@ -1620,7 +1620,10 @@ export const StaffControlPage: FC = () => {
           <div className="sc-filter-search">
             <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
           </div>
-          <div className="sc-status-toggle">
+          <button className="sc-btn apply sc-btn--icon" onClick={() => setShowAddModal(true)}>
+            <UserPlus size={16} />
+          </button>
+          <div className="sc-status-toggle sc-status-toggle--mobile">
             <button
               className={`sc-btn${statusFilter === 'active' ? ' apply' : ' secondary'}`}
               onClick={() => { setStatusFilter('active'); setPage(1); }}
@@ -1634,9 +1637,6 @@ export const StaffControlPage: FC = () => {
               Уволенные
             </button>
           </div>
-          <button className="sc-btn apply sc-btn--icon" onClick={() => setShowAddModal(true)}>
-            <UserPlus size={16} />
-          </button>
         </div>
       ) : (
         filtersContent
