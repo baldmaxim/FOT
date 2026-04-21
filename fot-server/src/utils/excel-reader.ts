@@ -2,7 +2,8 @@ import ExcelJS from 'exceljs';
 
 export async function readExcelRows(buffer: Buffer): Promise<string[][]> {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
+  const ab = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+  await workbook.xlsx.load(ab);
   const worksheet = workbook.worksheets[0];
   if (!worksheet) return [];
 

@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import { readExcelRows } from '../utils/excel-reader.js';
 import { supabase } from '../config/database.js';
 
 const IMPORT_SOURCE_TYPE = 'manager_excel_admin_ui';
@@ -131,22 +131,14 @@ function parseSectionFromManagerRow(raw: string): { manager_name: string; sectio
   return { manager_name: match[1].trim(), section_name: match[2].trim() };
 }
 
-function parseWorkbookBuffer(buffer: Buffer): IParsedLink[] {
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) {
-    throw new Error('В книге не найден ни один лист');
-  }
-  const worksheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json<string[]>(worksheet, { header: 1, defval: '' });
-
+async function parseWorkbookBuffer(buffer: Buffer): Promise<IParsedLink[]> {
+  const rows = await readExcelRows(buffer);
   const links: IParsedLink[] = [];
   let currentManager: string | null = null;
   let currentSection: string | null = null;
 
   for (let i = 8; i < rows.length; i++) {
-    const row = rows[i];
-    const cell = String(row[0] ?? '').trim();
+    const cell = String(rows[i][0] ?? '').trim();
     if (!cell) continue;
 
     if (cell.startsWith('бр.')) {
@@ -247,7 +239,7 @@ async function loadSavedBrigadeAliasIndex(
 export async function buildManagerDepartmentImportPreviewFromBuffer(
   buffer: Buffer,
 ): Promise<IManagerDepartmentImportPreview> {
-  const links = parseWorkbookBuffer(buffer);
+  const links = await parseWorkbookBuffer(buffer);
   const departments = await loadActiveDepartments();
   const departmentById = new Map(departments.map(row => [row.id, row]));
   const [departmentIndex, employeeAliasIndex, brigadeAliasIndex] = await Promise.all([

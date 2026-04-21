@@ -120,6 +120,7 @@ export const DepartmentAccessImportTab: FC<IDepartmentAccessImportTabProps> = ({
   const [assignmentsByGroup, setAssignmentsByGroup] = useState<Record<string, string>>({});
   const [manualDepartmentQueryByBrigade, setManualDepartmentQueryByBrigade] = useState<Record<string, string>>({});
   const [manualDepartmentSelectionByBrigade, setManualDepartmentSelectionByBrigade] = useState<Record<string, string>>({});
+  const [employeeQueryByGroup, setEmployeeQueryByGroup] = useState<Record<string, string>>({});
   const employeesQuery = useQuery<Employee[]>({
     queryKey: ['admin-users', 'department-import', 'employees'],
     queryFn: () => employeeService.getAll({ view: 'list' }),
@@ -536,25 +537,72 @@ export const DepartmentAccessImportTab: FC<IDepartmentAccessImportTabProps> = ({
                         К применению отделов: <strong>{groupDepartmentIds.length}</strong>
                       </div>
                     </div>
-                    <select
-                      className={styles.importUserSelect}
-                      value={assignmentsByGroup[group.group_key] || ''}
-                      onChange={(event) => setAssignmentsByGroup(prev => {
-                        const next = { ...prev };
-                        if (event.target.value) {
-                          next[group.group_key] = event.target.value;
-                        } else {
-                          delete next[group.group_key];
-                        }
-                        return next;
-                      })}
-                      disabled={employeesQuery.isPending || employeeOptions.length === 0}
-                    >
-                      <option value="">Не назначено</option>
-                      {employeeOptions.map(option => (
-                        <option key={option.id} value={String(option.id)}>{option.label}</option>
-                      ))}
-                    </select>
+                    <div className={styles.importDepartmentSearch}>
+                      {selectedEmployee ? (
+                        <div className={styles.importDepartmentSelected}>
+                          {selectedEmployee.full_name}
+                          {selectedEmployee.hasPortalAccount ? ' • есть аккаунт' : ' • без аккаунта'}
+                          <button
+                            type="button"
+                            className={styles.importDepartmentClear}
+                            onClick={() => {
+                              setAssignmentsByGroup(prev => {
+                                const next = { ...prev };
+                                delete next[group.group_key];
+                                return next;
+                              });
+                              setEmployeeQueryByGroup(prev => ({ ...prev, [group.group_key]: '' }));
+                            }}
+                          >
+                            Очистить
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <input
+                            type="text"
+                            className={styles.importDepartmentSearchInput}
+                            placeholder="Поиск сотрудника..."
+                            value={employeeQueryByGroup[group.group_key] ?? ''}
+                            disabled={employeesQuery.isPending}
+                            onChange={(event) => setEmployeeQueryByGroup(prev => ({
+                              ...prev,
+                              [group.group_key]: event.target.value,
+                            }))}
+                          />
+                          <div className={styles.importDepartmentResults}>
+                            {(() => {
+                              const q = normalizeText(employeeQueryByGroup[group.group_key] ?? '');
+                              const results = q.length < 1
+                                ? []
+                                : employeeOptions
+                                    .filter(opt => normalizeText(opt.full_name).includes(q))
+                                    .slice(0, MAX_MANUAL_DEPARTMENT_RESULTS);
+                              return results.length > 0
+                                ? results.map(opt => (
+                                    <button
+                                      key={opt.id}
+                                      type="button"
+                                      className={styles.importDepartmentResult}
+                                      onClick={() => {
+                                        setAssignmentsByGroup(prev => ({ ...prev, [group.group_key]: String(opt.id) }));
+                                        setEmployeeQueryByGroup(prev => ({ ...prev, [group.group_key]: '' }));
+                                      }}
+                                    >
+                                      {opt.full_name}
+                                      <span style={{ opacity: 0.6, fontSize: '0.85em' }}>
+                                        {opt.hasPortalAccount ? ' • есть аккаунт' : ' • без аккаунта'}
+                                      </span>
+                                    </button>
+                                  ))
+                                : (employeeQueryByGroup[group.group_key]?.length ?? 0) > 0
+                                  ? <div className={styles.importDepartmentEmpty}>Не найдено</div>
+                                  : null;
+                            })()}
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </div>
 
                   {unresolvedBrigades.length > 0 ? (
