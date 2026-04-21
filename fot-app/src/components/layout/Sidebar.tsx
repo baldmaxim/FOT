@@ -53,7 +53,7 @@ const navGroups: INavGroup[] = [
     items: [
       { id: 'payroll-hub', path: '/admin/payroll', label: 'Графики работы', icon: DollarIcon, requiredPage: ['/admin/schedules'] },
       { id: 'skud-hub', path: '/skud', label: 'СКУД', icon: DatabaseIcon, requiredPage: '/skud-settings' },
-      { id: 'system-hub', path: '/admin/system', label: 'Система', icon: ShieldIcon, requiredPage: ['/admin/users', '/admin/roles', '/admin/audit', '/admin/settings'] },
+      { id: 'system-hub', path: '/admin/system', label: 'Система', icon: ShieldIcon, requiredPage: ['/admin/users', '/admin/roles', '/admin/audit', '/admin/action-history', '/admin/settings'] },
     ]
   }
 ];

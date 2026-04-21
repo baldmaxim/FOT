@@ -8,6 +8,9 @@ const router = Router();
 router.use(authenticate);
 router.use(requirePageAccess('/admin/audit', 'view'));
 
+// История действий пользователей
+router.get('/logs', requirePageAccess('/admin/action-history', 'view'), auditController.getActionLogs);
+
 // Запуск полного аудита
 router.get('/run', auditController.runFullAudit);
 

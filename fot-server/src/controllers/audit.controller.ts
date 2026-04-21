@@ -33,6 +33,64 @@ const AUDIT_CACHE_TTL = 10 * 60_000;
 let auditCache: { data: AuditSummary; expiresAt: number } | null = null;
 
 export const auditController = {
+  async getActionLogs(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const {
+        action,
+        user_id,
+        date_from,
+        date_to,
+        page = '1',
+        limit = '50',
+      } = req.query as Record<string, string>;
+
+      const pageNum = Math.max(1, parseInt(page, 10) || 1);
+      const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+      const offset = (pageNum - 1) * limitNum;
+
+      let query = supabase
+        .from('audit_logs')
+        .select('id, user_id, action, entity_type, entity_id, ip_address, created_at', { count: 'exact' });
+
+      if (action) query = query.eq('action', action);
+      if (user_id) query = query.eq('user_id', user_id);
+      if (date_from) query = query.gte('created_at', date_from);
+      if (date_to) {
+        const end = date_to.length === 10 ? `${date_to}T23:59:59.999Z` : date_to;
+        query = query.lte('created_at', end);
+      }
+
+      const { data: logs, error, count } = await query
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limitNum - 1);
+
+      if (error) throw error;
+
+      const userIds = [...new Set((logs || []).map(l => l.user_id).filter(Boolean))];
+      const userMap: Record<string, string> = {};
+
+      if (userIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from('user_profiles')
+          .select('id, full_name')
+          .in('id', userIds);
+        for (const p of profiles || []) {
+          userMap[p.id] = p.full_name || p.id;
+        }
+      }
+
+      const enriched = (logs || []).map(log => ({
+        ...log,
+        user_name: log.user_id ? (userMap[log.user_id] || log.user_id) : null,
+      }));
+
+      res.json({ success: true, data: enriched, total: count ?? 0, page: pageNum, limit: limitNum });
+    } catch (error) {
+      console.error('[audit] getActionLogs error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка загрузки истории действий' });
+    }
+  },
+
   async runFullAudit(_req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const now = Date.now();
