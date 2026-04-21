@@ -1572,6 +1572,9 @@ export async function updateSigurEmployeeCardBinding(
     throw new Error('Некорректная дата срока действия');
   }
 
+  const existingBindings = await sigurService.getCardBindings({ employeeId: sigurEmployeeId, cardId }, connection) as Record<string, unknown>[];
+  console.log('[Sigur binding BEFORE patch] raw=', JSON.stringify(existingBindings));
+
   await sigurService.patchEmployeeCardBinding(
     sigurEmployeeId,
     cardId,
