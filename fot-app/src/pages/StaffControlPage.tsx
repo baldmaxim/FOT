@@ -953,6 +953,7 @@ export const StaffControlPage: FC = () => {
   const isMobile = useIsMobile(768);
   const [search, setSearch] = useState(() => urlParams.get('q') || '');
   const [deptId, setDeptId] = useState(() => urlParams.get('dept') || '');
+  const [statusFilter, setStatusFilter] = useState<'active' | 'fired'>('active');
   const [page, setPage] = useState(1);
   const debouncedSearch = useDebouncedValue(search, 300);
   const queryClient = useQueryClient();
@@ -963,6 +964,7 @@ export const StaffControlPage: FC = () => {
     pageSize: 100,
     search: debouncedSearch || undefined,
     departmentId: deptId || undefined,
+    status: statusFilter,
   });
 
   const today = getLocalISODate();
@@ -1462,23 +1464,39 @@ export const StaffControlPage: FC = () => {
       <div className="sc-filter-search">
         <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
       </div>
+      <div className="sc-status-toggle">
+        <button
+          className={`sc-btn${statusFilter === 'active' ? ' apply' : ' secondary'}`}
+          onClick={() => { setStatusFilter('active'); setPage(1); }}
+        >
+          Активные
+        </button>
+        <button
+          className={`sc-btn${statusFilter === 'fired' ? ' apply' : ' secondary'}`}
+          onClick={() => { setStatusFilter('fired'); setPage(1); }}
+        >
+          Уволенные
+        </button>
+      </div>
       <div className="sc-filter-count">
-        {meta.total} из {totalActive}
+        {meta.total}{statusFilter === 'active' ? ` из ${totalActive}` : ''}
       </div>
-      <div className="sc-filter-actions">
-        <button className="sc-btn secondary" onClick={() => setBulkBrigadeScheduleOpen(true)} disabled={brigadeOptions.length === 0}>
-          <Calendar size={14} /> По бригадам
-        </button>
-        <button className="sc-btn secondary" onClick={() => setBulkFilterScheduleOpen(true)} disabled={meta.total === 0}>
-          <Calendar size={14} /> По фильтру
-        </button>
-        <button className="sc-btn secondary" onClick={() => setShowImportModal(true)}>
-          <Upload size={14} /> Импорт
-        </button>
-        <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
-          <UserPlus size={14} /> Добавить
-        </button>
-      </div>
+      {statusFilter === 'active' && (
+        <div className="sc-filter-actions">
+          <button className="sc-btn secondary" onClick={() => setBulkBrigadeScheduleOpen(true)} disabled={brigadeOptions.length === 0}>
+            <Calendar size={14} /> По бригадам
+          </button>
+          <button className="sc-btn secondary" onClick={() => setBulkFilterScheduleOpen(true)} disabled={meta.total === 0}>
+            <Calendar size={14} /> По фильтру
+          </button>
+          <button className="sc-btn secondary" onClick={() => setShowImportModal(true)}>
+            <Upload size={14} /> Импорт
+          </button>
+          <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
+            <UserPlus size={14} /> Добавить
+          </button>
+        </div>
+      )}
     </div>
   );
 
@@ -1496,6 +1514,20 @@ export const StaffControlPage: FC = () => {
           />
           <div className="sc-filter-search">
             <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
+          </div>
+          <div className="sc-status-toggle">
+            <button
+              className={`sc-btn${statusFilter === 'active' ? ' apply' : ' secondary'}`}
+              onClick={() => { setStatusFilter('active'); setPage(1); }}
+            >
+              Активные
+            </button>
+            <button
+              className={`sc-btn${statusFilter === 'fired' ? ' apply' : ' secondary'}`}
+              onClick={() => { setStatusFilter('fired'); setPage(1); }}
+            >
+              Уволенные
+            </button>
           </div>
           <button className="sc-btn apply sc-btn--icon" onClick={() => setShowAddModal(true)}>
             <UserPlus size={16} />

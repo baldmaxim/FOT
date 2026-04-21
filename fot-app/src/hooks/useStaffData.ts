@@ -18,10 +18,11 @@ interface IUseStaffDataParams {
   pageSize?: number;
   search?: string;
   departmentId?: string;
+  status?: 'active' | 'fired';
 }
 
 export const useStaffData = (params: IUseStaffDataParams) => {
-  const { page, pageSize = 100, search, departmentId } = params;
+  const { page, pageSize = 100, search, departmentId, status = 'active' } = params;
   const queryClient = useQueryClient();
   const structureQuery = useStructureTree();
   const employeesParams = {
@@ -29,7 +30,7 @@ export const useStaffData = (params: IUseStaffDataParams) => {
     pageSize,
     search: search || undefined,
     departmentId: departmentId || undefined,
-    status: 'active' as const,
+    status,
     view: 'staff' as const,
   };
   const employeesQueryKey = paginatedEmployeesQueryKey(employeesParams);
