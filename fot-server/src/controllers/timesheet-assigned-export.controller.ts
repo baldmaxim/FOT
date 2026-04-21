@@ -73,7 +73,7 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
   const { data: accessRows, error: accessError } = await accessQuery;
   if (accessError) throw accessError;
 
-  const byEmployee = new Map<number, { full_name: string; department_ids: string[] }>();
+  const byEmployee = new Map<number, { full_name: string; email: string | null; department_ids: string[] }>();
   for (const row of accessRows || []) {
     const id = Number((row as { employee_id?: unknown }).employee_id);
     const departmentId = (row as { department_id?: unknown }).department_id;

@@ -1445,39 +1445,42 @@ export const TimesheetPage: FC = () => {
                 </div>
               )}
             </div>
-            <div className="ts-toolbar">
-              <div className="ts-toolbar-left">
-                <TimesheetStats stats={stats} />
-                <button type="button" className="ts-btn" onClick={handleExport}>
-                  <Download size={16} />
-                  Экспорт
-                </button>
-              </div>
-              <div className="ts-toolbar-right">
-                {canUseTeamManagement && (
-                  <button
-                    type="button"
-                    className="ts-btn ts-btn--primary"
-                    onClick={openTeamManagement}
-                    disabled={!effectiveSelectedDeptId}
-                    title={!effectiveSelectedDeptId ? 'Сначала выберите отдел' : undefined}
-                  >
-                    <UserPlus size={16} />
-                    Добавить сотрудника
-                  </button>
-                )}
-                {effectiveSelectedDeptId && (
-                  <button
-                    type="button"
-                    className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}
-                    onClick={handleBulkModeToggle}
-                  >
-                    Режим корректировок
-                  </button>
-                )}
-              </div>
-            </div>
           </section>
+        )}
+
+        {!isMobile && (
+          <div className="ts-toolbar">
+            <div className="ts-toolbar-left">
+              <TimesheetStats stats={stats} />
+              <button type="button" className="ts-btn" onClick={handleExport}>
+                <Download size={16} />
+                Экспорт
+              </button>
+            </div>
+            <div className="ts-toolbar-right">
+              {canUseTeamManagement && (
+                <button
+                  type="button"
+                  className="ts-btn ts-btn--primary"
+                  onClick={openTeamManagement}
+                  disabled={!effectiveSelectedDeptId}
+                  title={!effectiveSelectedDeptId ? 'Сначала выберите отдел' : undefined}
+                >
+                  <UserPlus size={16} />
+                  Добавить сотрудника
+                </button>
+              )}
+              {effectiveSelectedDeptId && (
+                <button
+                  type="button"
+                  className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}
+                  onClick={handleBulkModeToggle}
+                >
+                  Режим корректировок
+                </button>
+              )}
+            </div>
+          </div>
         )}
 
         {segmentControl}
