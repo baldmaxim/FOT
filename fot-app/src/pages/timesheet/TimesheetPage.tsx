@@ -1207,15 +1207,22 @@ export const TimesheetPage: FC = () => {
               >
                 Все отделы
               </div>
-              {filteredDepts.map(d => (
-                <div
-                  key={d.id}
-                  className={`ts-dept-item ${selectedDeptId === d.id ? 'ts-dept-item--active' : ''}`}
-                  onClick={() => { clearBulkState(); closeTeamManagement(); setSelectedDeptId(d.id); setDeptOpen(false); }}
-                >
-                  {d.name}
-                </div>
-              ))}
+              {filteredDepts.map(d =>
+                d.hasChildren ? (
+                  <div key={d.id} className="ts-dept-item ts-dept-item--header">
+                    {d.name}
+                  </div>
+                ) : (
+                  <div
+                    key={d.id}
+                    className={`ts-dept-item ${selectedDeptId === d.id ? 'ts-dept-item--active' : ''}`}
+                    style={{ paddingLeft: `${10 + d.level * 12}px` }}
+                    onClick={() => { clearBulkState(); closeTeamManagement(); setSelectedDeptId(d.id); setDeptOpen(false); }}
+                  >
+                    {d.name}
+                  </div>
+                )
+              )}
             </div>
           )}
         </>
