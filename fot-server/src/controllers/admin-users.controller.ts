@@ -610,6 +610,31 @@ export const adminUsersController = {
     }
   },
 
+  async clearDepartmentAssignments(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { error, count } = await supabase
+        .from('employee_department_access')
+        .delete({ count: 'exact' })
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+
+      if (error) {
+        res.status(500).json({ success: false, error: 'Не удалось очистить назначения' });
+        return;
+      }
+
+      await auditService.logFromRequest(req, req.user.id, 'USER_DEPARTMENT_ACCESS_CHANGED', {
+        entityType: 'employee',
+        entityId: 'all',
+        details: { deleted_count: count ?? 0 },
+      });
+
+      res.json({ success: true, data: { deleted: count ?? 0 } });
+    } catch (error) {
+      console.error('Clear department assignments error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось очистить назначения' });
+    }
+  },
+
   async approveUser(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;

@@ -116,6 +116,7 @@ export const DepartmentAccessImportTab: FC<IDepartmentAccessImportTabProps> = ({
   const [preview, setPreview] = useState<ManagerDepartmentImportPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [applyLoading, setApplyLoading] = useState(false);
+  const [clearLoading, setClearLoading] = useState(false);
   const [assignmentsByGroup, setAssignmentsByGroup] = useState<Record<string, string>>({});
   const [manualDepartmentQueryByBrigade, setManualDepartmentQueryByBrigade] = useState<Record<string, string>>({});
   const [manualDepartmentSelectionByBrigade, setManualDepartmentSelectionByBrigade] = useState<Record<string, string>>({});
@@ -380,6 +381,20 @@ export const DepartmentAccessImportTab: FC<IDepartmentAccessImportTabProps> = ({
     }
   };
 
+  const handleClear = async () => {
+    if (!window.confirm('Очистить все назначения отделов? Это действие нельзя отменить.')) return;
+    setClearLoading(true);
+    try {
+      const result = await adminService.clearDepartmentAssignments();
+      toast.success(`Удалено назначений: ${result.deleted}`);
+      await onReload();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка очистки назначений');
+    } finally {
+      setClearLoading(false);
+    }
+  };
+
   return (
     <div className={styles.importSection}>
       <div className={styles.importIntro}>
@@ -401,10 +416,18 @@ export const DepartmentAccessImportTab: FC<IDepartmentAccessImportTabProps> = ({
           >
             {previewLoading ? 'Разбираю файл...' : 'Загрузить Excel'}
           </button>
+          <button
+            type="button"
+            className={styles.dangerBtn}
+            onClick={() => void handleClear()}
+            disabled={clearLoading}
+          >
+            {clearLoading ? 'Очищаю...' : 'Очистить назначения'}
+          </button>
           <input
             ref={fileRef}
             type="file"
-            accept=".xlsx"
+            accept=".xlsx,.xls"
             hidden
             onChange={(event) => {
               const file = event.target.files?.[0];

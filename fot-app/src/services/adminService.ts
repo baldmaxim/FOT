@@ -173,6 +173,13 @@ export const adminService = {
     return response.data;
   },
 
+  async clearDepartmentAssignments(): Promise<{ deleted: number }> {
+    const response = await apiClient.delete<ApiResponse<{ deleted: number }>>(
+      '/admin/users/department-access-assignments',
+    );
+    return response.data;
+  },
+
   // 2FA management
   async generate2FA(userId: string): Promise<TwoFactorData> {
     const response = await apiClient.post<ApiResponse<{ secret: string; qr_code: string; recovery_codes: string[] }>>(`/admin/users/${userId}/generate-2fa`);

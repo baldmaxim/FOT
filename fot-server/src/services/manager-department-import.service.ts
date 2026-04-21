@@ -1,9 +1,6 @@
-import ExcelJS from 'exceljs';
+import * as XLSX from 'xlsx';
 import { supabase } from '../config/database.js';
 
-const MANAGER_FILL = 'FFFAFAD2';
-const BRIGADE_FILL = 'FFE6E6FA';
-const SECTION_FILL = 'FFE6E6E6';
 const IMPORT_SOURCE_TYPE = 'manager_excel_admin_ui';
 
 let missingEmployeeAliasTableWarned = false;
@@ -126,68 +123,47 @@ function uniqueDepartmentIds(values: Array<string | null | undefined>): string[]
   return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))];
 }
 
-function extractArgb(cell: ExcelJS.Cell): string | null {
-  const fill = cell.fill;
-  if (!fill || fill.type !== 'pattern') return null;
-  if (fill.pattern && fill.pattern !== 'solid') return null;
-  return fill.fgColor?.argb || fill.bgColor?.argb || null;
+function parseSectionFromManagerRow(raw: string): { manager_name: string; section_name: string | null } {
+  const match = /^(.+?)\s*\(\d+\.\s*(.+?)\)\s*$/.exec(raw.trim());
+  if (!match) {
+    return { manager_name: raw.trim(), section_name: null };
+  }
+  return { manager_name: match[1].trim(), section_name: match[2].trim() };
 }
 
-function extractCellText(cell: ExcelJS.Cell): string {
-  if (typeof cell.text === 'string' && cell.text.trim()) {
-    return cell.text.trim();
-  }
-
-  const value = cell.value;
-  if (typeof value === 'string') return value.trim();
-  if (typeof value === 'number') return String(value);
-  if (value && typeof value === 'object' && 'richText' in value && Array.isArray(value.richText)) {
-    return value.richText.map(part => part.text).join('').trim();
-  }
-
-  return '';
-}
-
-async function parseWorkbookBuffer(buffer: Buffer): Promise<IParsedLink[]> {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer as unknown as Parameters<typeof workbook.xlsx.load>[0]);
-  const worksheet = workbook.worksheets[0];
-  if (!worksheet) {
+function parseWorkbookBuffer(buffer: Buffer): IParsedLink[] {
+  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) {
     throw new Error('В книге не найден ни один лист');
   }
+  const worksheet = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json<string[]>(worksheet, { header: 1, defval: '' });
 
   const links: IParsedLink[] = [];
-  let currentSection: string | null = null;
   let currentManager: string | null = null;
+  let currentSection: string | null = null;
 
-  worksheet.eachRow((row, rowNumber) => {
-    const cell = row.getCell(2);
-    const text = extractCellText(cell);
-    const fill = extractArgb(cell);
-    if (!text) {
-      return;
-    }
+  for (let i = 8; i < rows.length; i++) {
+    const row = rows[i];
+    const cell = String(row[0] ?? '').trim();
+    if (!cell) continue;
 
-    if (fill === SECTION_FILL) {
-      currentSection = text;
-      currentManager = null;
-      return;
+    if (cell.startsWith('бр.')) {
+      if (currentManager) {
+        links.push({
+          manager_name: currentManager,
+          brigade_name: cell,
+          row_number: i + 1,
+          section_name: currentSection,
+        });
+      }
+    } else if (cell.includes('(')) {
+      const parsed = parseSectionFromManagerRow(cell);
+      currentManager = parsed.manager_name;
+      currentSection = parsed.section_name;
     }
-
-    if (fill === MANAGER_FILL) {
-      currentManager = text;
-      return;
-    }
-
-    if (fill === BRIGADE_FILL && currentManager) {
-      links.push({
-        manager_name: currentManager,
-        brigade_name: text,
-        row_number: rowNumber,
-        section_name: currentSection,
-      });
-    }
-  });
+  }
 
   return links;
 }
@@ -271,7 +247,7 @@ async function loadSavedBrigadeAliasIndex(
 export async function buildManagerDepartmentImportPreviewFromBuffer(
   buffer: Buffer,
 ): Promise<IManagerDepartmentImportPreview> {
-  const links = await parseWorkbookBuffer(buffer);
+  const links = parseWorkbookBuffer(buffer);
   const departments = await loadActiveDepartments();
   const departmentById = new Map(departments.map(row => [row.id, row]));
   const [departmentIndex, employeeAliasIndex, brigadeAliasIndex] = await Promise.all([

@@ -12,11 +12,12 @@ const upload = multer({
   fileFilter: (_req, file, cb) => {
     const allowedMimes = [
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
     ];
     if (allowedMimes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Недопустимый формат файла. Разрешён только .xlsx'));
+      cb(new Error('Недопустимый формат файла. Разрешены только .xlsx и .xls'));
     }
   },
 });
@@ -37,6 +38,11 @@ router.post(
   '/users/department-access-import/apply',
   requirePageAccess('/admin/users', 'edit'),
   adminController.applyDepartmentAccessImport,
+);
+router.delete(
+  '/users/department-access-assignments',
+  requirePageAccess('/admin/users', 'edit'),
+  adminController.clearDepartmentAssignments,
 );
 router.post('/users/:id/approve', requirePageAccess('/admin/users', 'edit'), adminController.approveUser);
 router.post('/users/:id/reject', requirePageAccess('/admin/users', 'edit'), adminController.rejectUser);
