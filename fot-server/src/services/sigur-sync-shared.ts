@@ -312,7 +312,7 @@ async function persistSyncFilterRows(
   }
 }
 
-/** Загружает whitelist отделов из skud_sync_department_filter. null = фильтр не задан (синхронизировать все) */
+/** Загружает whitelist отделов из skud_sync_department_filter. Пустой Set = ничего не синхронизировать */
 export async function getWhitelistedDepartmentIds(
   connection?: 'external' | 'internal',
   context?: ISyncContext,
@@ -323,10 +323,11 @@ export async function getWhitelistedDepartmentIds(
 
   const rows = await loadSyncFilterRows(context);
   if (rows.length === 0) {
+    const empty = new Set<number>();
     if (context) {
-      context.whitelistDepartmentIds = null;
+      context.whitelistDepartmentIds = empty;
     }
-    return null;
+    return empty;
   }
 
   const departments = await getNormalizedDepartmentsCached(connection, context);

@@ -92,9 +92,10 @@ export async function getSyncFilteredEmployees(): Promise<{ empIds: Set<number>;
     .select('sigur_department_id');
 
   if (!filterRows || filterRows.length === 0) {
-    console.log('[sync-filter] Нет фильтра → показываем всё');
-    syncFilterCache = { data: null, expiresAt: Date.now() + SYNC_FILTER_CACHE_TTL };
-    return null;
+    console.log('[sync-filter] Пустой whitelist → ничего не синхронизируем');
+    const empty = { empIds: new Set<number>(), empNames: new Set<string>() };
+    syncFilterCache = { data: empty, expiresAt: Date.now() + SYNC_FILTER_CACHE_TTL };
+    return empty;
   }
 
   const sigurDeptIds = filterRows.map(r => r.sigur_department_id);
