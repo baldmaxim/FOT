@@ -42,6 +42,7 @@ const normalizeBoolean = (value: unknown): boolean => (
 interface IAssignedEmployee {
   id: number;
   full_name: string;
+  email: string | null;
   department_ids: string[];
 }
 
@@ -56,7 +57,7 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
 
   let accessQuery = supabase
     .from('employee_department_access')
-    .select('employee_id, department_id, employees!inner(id, full_name, employment_status, is_archived)')
+    .select('employee_id, department_id, employees!inner(id, full_name, email, employment_status, is_archived)')
     .eq('is_active', true)
     .eq('employees.employment_status', 'active')
     .eq('employees.is_archived', false);
@@ -79,18 +80,22 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
     const employeeRel = (row as { employees?: { full_name?: unknown } | Array<{ full_name?: unknown }> }).employees;
     const employeeRow = Array.isArray(employeeRel) ? employeeRel[0] : employeeRel;
     const fullName = String(employeeRow?.full_name ?? '').trim();
+    const email = typeof (employeeRow as { email?: unknown })?.email === 'string'
+      ? ((employeeRow as { email: string }).email || null)
+      : null;
     if (!Number.isFinite(id) || typeof departmentId !== 'string' || !departmentId.trim()) continue;
     const entry = byEmployee.get(id);
     if (entry) {
       if (!entry.department_ids.includes(departmentId)) entry.department_ids.push(departmentId);
     } else {
-      byEmployee.set(id, { full_name: fullName, department_ids: [departmentId] });
+      byEmployee.set(id, { full_name: fullName, email, department_ids: [departmentId] });
     }
   }
 
   const employees: IAssignedEmployee[] = Array.from(byEmployee.entries()).map(([id, value]) => ({
     id,
     full_name: value.full_name,
+    email: value.email,
     department_ids: value.department_ids,
   }));
 
@@ -262,7 +267,7 @@ export async function listAssignedEmployees(req: AuthenticatedRequest, res: Resp
         id: employee.id,
         full_name: employee.full_name,
         department_count: employee.department_ids.length,
-        email: emailByEmployeeId.get(employee.id) ?? null,
+        email: emailByEmployeeId.get(employee.id) ?? employee.email ?? null,
         departments,
       };
     });
@@ -430,6 +435,10 @@ export async function emailTimesheetAssigned(req: AuthenticatedRequest, res: Res
         const eid = profileIdToEmpId.get(au.id);
         if (eid !== undefined && au.email) emailByEmployeeId.set(eid, au.email);
       }
+    }
+    // Фолбэк: брать email из таблицы employees, если auth-запись не найдена
+    for (const e of assignedEmployees) {
+      if (!emailByEmployeeId.has(e.id) && e.email) emailByEmployeeId.set(e.id, e.email);
     }
 
     const employeesWithEmail = assignedEmployees.filter(e => emailByEmployeeId.has(e.id));
