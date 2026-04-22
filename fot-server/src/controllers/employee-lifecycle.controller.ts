@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { AxiosError } from 'axios';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import { employeeChangesService } from '../services/employee-changes.service.js';
@@ -144,18 +145,42 @@ async function moveEmployeeToDepartmentInternal(params: {
       throw createHttpError(409, 'У выбранного отдела нет привязки к Sigur');
     }
 
-    await sigurService.updateEmployee(employee.sigur_employee_id, {
-      departmentId: targetDepartment.sigur_department_id,
-    }, connection);
+    try {
+      await sigurService.updateEmployee(employee.sigur_employee_id, {
+        departmentId: targetDepartment.sigur_department_id,
+      }, connection);
 
-    await employeeChangesService.changeDepartment(employee.id, targetDepartment.id, {
-      reason,
-      lockDepartment: false,
-      createdBy: req.user.id,
-      effectiveDate,
-    });
+      await employeeChangesService.changeDepartment(employee.id, targetDepartment.id, {
+        reason,
+        lockDepartment: false,
+        createdBy: req.user.id,
+        effectiveDate,
+      });
 
-    await syncLinkedEmployeeFromSigur(employee.id, connection);
+      await syncLinkedEmployeeFromSigur(employee.id, connection);
+    } catch (error) {
+      if (error instanceof AxiosError) {
+        const status = error.response?.status;
+        console.error('[moveDepartment] Sigur error', {
+          status,
+          url: error.config?.url,
+          method: error.config?.method,
+          employeeId: employee.id,
+          sigurEmployeeId: employee.sigur_employee_id,
+          targetSigurDepartmentId: targetDepartment.sigur_department_id,
+          responseData: error.response?.data,
+          message: error.message,
+        });
+        if (status === 404) {
+          throw createHttpError(
+            409,
+            `Sigur вернул 404 на ${error.config?.method?.toUpperCase() || 'запросе'} ${error.config?.url || ''}. Вероятно, сотрудник (sigur_employee_id=${employee.sigur_employee_id}) или отдел «${targetDepartment.name}» (sigur_department_id=${targetDepartment.sigur_department_id}) удалены в Sigur. Запустите синхронизацию структуры и попробуйте снова.`,
+          );
+        }
+      }
+      throw error;
+    }
+
     return 'sigur';
   }
 
