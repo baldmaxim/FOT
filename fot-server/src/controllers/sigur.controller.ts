@@ -833,6 +833,9 @@ export const sigurController = {
       }
 
       const connection = (req.query.connection as 'external' | 'internal') || undefined;
+      if (req.query.force === '1') {
+        sigurService.invalidateDepartmentCache();
+      }
       const data = await sigurService.getDepartments(connection);
 
       console.log('[sigur departments] sample (first 2):', JSON.stringify(data.slice(0, 2), null, 2));

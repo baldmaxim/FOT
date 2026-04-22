@@ -92,8 +92,9 @@ export const sigurService = {
     return apiClient.get('/sigur/employees');
   },
 
-  async getDepartments(): Promise<{ data: unknown[]; count: number }> {
-    return apiClient.get('/sigur/departments');
+  async getDepartments(options?: { force?: boolean }): Promise<{ data: unknown[]; count: number }> {
+    const query = options?.force ? '?force=1' : '';
+    return apiClient.get(`/sigur/departments${query}`);
   },
 
   async getAccessPoints(connection?: 'internal' | 'external'): Promise<{ data: unknown[]; count: number }> {

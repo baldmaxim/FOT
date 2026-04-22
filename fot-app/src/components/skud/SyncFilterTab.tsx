@@ -264,7 +264,7 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
     setError('');
     try {
       const [deptsRes, filterRes] = await Promise.all([
-        sigurService.getDepartments(),
+        sigurService.getDepartments({ force: true }),
         sigurService.getSyncFilter(),
       ]);
 

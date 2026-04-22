@@ -187,6 +187,8 @@ export const sigurSyncController = {
       await acquirePresencePollingLock();
       lockAcquired = true;
 
+      sigurService.invalidateEmployeeCache();
+      sigurService.invalidateDepartmentCache();
       const result = await syncEmployeesLogic(connection, undefined, {});
       res.json({ success: true, data: result });
     } catch (error) {
@@ -213,6 +215,7 @@ export const sigurSyncController = {
       await acquirePresencePollingLock();
       lockAcquired = true;
 
+      sigurService.invalidateDepartmentCache();
       const result = await syncDepartmentsLogic(connection, {});
       invalidateStructureCache();
       res.json({ success: true, data: result });
@@ -240,6 +243,7 @@ export const sigurSyncController = {
       await acquirePresencePollingLock();
       lockAcquired = true;
 
+      sigurService.invalidatePositionCache();
       const result = await syncPositionsFromSigurLogic(connection, {});
       invalidateStructureCache();
       res.json({ success: true, data: result });
@@ -358,6 +362,16 @@ export const sigurSyncController = {
         },
       });
       lockAcquired = true;
+
+      if (steps.includes('departments') || steps.includes('employees')) {
+        sigurService.invalidateDepartmentCache();
+      }
+      if (steps.includes('employees')) {
+        sigurService.invalidateEmployeeCache();
+      }
+      if (steps.includes('positions')) {
+        sigurService.invalidatePositionCache();
+      }
 
       const progressSender = sendProgress || undefined;
       const connection = (req.body.connection as ConnectionType) || undefined;
