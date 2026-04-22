@@ -2,6 +2,13 @@ import { useMemo, type FC } from 'react';
 import { Clock, LogIn, LogOut } from 'lucide-react';
 import type { Employee, SkudEvent } from '../../types';
 import type { IAlert, IDayAttendance, IWeekdayPattern } from '../../utils/attendanceCalc';
+import {
+  buildDisplayItems,
+  calculateWorkSeconds,
+  findFirstExternalEntry,
+  findLastExternalExit,
+  sumBreakSeconds,
+} from '../../utils/skudDisplay';
 import { AttendanceCalendar } from './AttendanceCalendar';
 import { EmployeeCardSidebar } from './EmployeeCardSidebar';
 
@@ -22,19 +29,17 @@ interface IEmployeeAttendanceSectionProps {
   showEventsLoading: boolean;
   weeklyPattern: IWeekdayPattern[];
   alerts: IAlert[];
+  internalPoints: Set<string>;
 }
 
-const timeToSec = (time: string): number => {
-  const [h, m, s = 0] = time.split(':').map(Number);
-  return h * 3600 + m * 60 + s;
-};
-
-const formatMinutes = (mins: number): string => {
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  if (h === 0) return `${m} мин`;
-  if (m === 0) return `${h} ч`;
-  return `${h} ч ${m} мин`;
+const formatHM = (seconds: number): string => {
+  if (seconds <= 0) return '';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h === 0 && m === 0) return '<1м';
+  if (h === 0) return `${m}м`;
+  if (m === 0) return `${h}ч`;
+  return `${h}ч ${m}м`;
 };
 
 export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
@@ -54,72 +59,28 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
   showEventsLoading,
   weeklyPattern,
   alerts,
+  internalPoints,
 }) => {
-  const { pairs, totalSec, firstEntry, lastExit, absentSec } = useMemo(() => {
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const computedPairs: { entry: SkudEvent; exit: SkudEvent | null; durationMinutes: number; absentAfterMinutes: number }[] = [];
-    let totalSeconds = 0;
-    let currentEntry: SkudEvent | null = null;
-
-    for (const event of showEvents) {
-      if (event.direction === 'entry') {
-        if (!currentEntry) currentEntry = event;
-        continue;
-      }
-      if (event.direction === 'exit' && currentEntry) {
-        const duration = timeToSec(event.event_time) - timeToSec(currentEntry.event_time);
-        totalSeconds += duration;
-        computedPairs.push({
-          entry: currentEntry,
-          exit: event,
-          durationMinutes: Math.round(duration / 60),
-          absentAfterMinutes: 0,
-        });
-        currentEntry = null;
-      }
-    }
-
-    const viewingToday = showDate === todayStr;
-    if (currentEntry && viewingToday) {
-      const now = new Date();
-      const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-      const duration = nowSec - timeToSec(currentEntry.event_time);
-      if (duration > 0) {
-        totalSeconds += duration;
-        computedPairs.push({
-          entry: currentEntry,
-          exit: null,
-          durationMinutes: Math.round(duration / 60),
-          absentAfterMinutes: 0,
-        });
-      }
-    }
-
-    let totalAbsentSec = 0;
-    for (let i = 0; i < computedPairs.length - 1; i += 1) {
-      const exitTime = computedPairs[i].exit?.event_time;
-      const nextEntry = computedPairs[i + 1].entry.event_time;
-      if (exitTime) {
-        const absentSec = timeToSec(nextEntry) - timeToSec(exitTime);
-        totalAbsentSec += absentSec;
-        computedPairs[i].absentAfterMinutes = Math.round(absentSec / 60);
-      }
-    }
-
+  const { items, totalSec, firstEntry, lastExit, breakSec } = useMemo(() => {
+    const sortedEvents = [...showEvents].sort((a, b) => a.event_time.localeCompare(b.event_time));
+    const displayItems = buildDisplayItems(sortedEvents, internalPoints, showDate);
+    const total = calculateWorkSeconds(sortedEvents, internalPoints, showDate);
+    const firstExt = findFirstExternalEntry(sortedEvents, internalPoints);
+    const lastExt = findLastExternalExit(sortedEvents, internalPoints);
     return {
-      pairs: computedPairs,
-      totalSec: totalSeconds,
-      firstEntry: showEvents.find(event => event.direction === 'entry')?.event_time?.slice(0, 5) || null,
-      lastExit: [...showEvents].reverse().find(event => event.direction === 'exit')?.event_time?.slice(0, 5) || null,
-      absentSec: totalAbsentSec,
+      items: displayItems,
+      totalSec: total,
+      firstEntry: firstExt?.event_time.slice(0, 5) || null,
+      lastExit: lastExt?.event_time.slice(0, 5) || null,
+      breakSec: sumBreakSeconds(displayItems),
     };
-  }, [showDate, showEvents]);
+  }, [showDate, showEvents, internalPoints]);
 
   const workCalc = totalSec > 0
     ? `${Math.floor(totalSec / 3600)}ч ${Math.floor((totalSec % 3600) / 60)}м`
     : null;
-  const absentCalc = absentSec > 0
-    ? `${Math.floor(absentSec / 3600)}ч ${Math.floor((absentSec % 3600) / 60)}м`
+  const breakCalc = breakSec > 0
+    ? `${Math.floor(breakSec / 3600)}ч ${Math.floor((breakSec % 3600) / 60)}м`
     : null;
 
   return (
@@ -133,47 +94,34 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
         </div>
         {showEventsLoading ? (
           <div className="ec-tl-empty">Загрузка событий...</div>
-        ) : showEvents.length > 0 ? (
+        ) : items.length > 0 ? (
           <div className="ec-today-events">
-            {pairs.length > 0 ? pairs.map((pair, index) => (
-              <div key={index} className="ec-pair-block">
-                <div className="ec-event-row">
-                  <span className="ec-event-icon ec-event-entry">→</span>
-                  <span className="ec-event-time">{pair.entry.event_time.slice(0, 5)}</span>
-                  <span className="ec-event-dir">Вход</span>
-                  {pair.entry.access_point && <span className="ec-event-point">{pair.entry.access_point}</span>}
+            {items.map((item, index) => {
+              if (item.kind === 'break') {
+                return (
+                  <div key={`break-${index}`} className="ec-event-row ec-pair-break">
+                    <span className="ec-pair-break-label">Перерыв: {formatHM(item.breakSeconds)}</span>
+                  </div>
+                );
+              }
+              const { event, pairDurationSeconds, isInternal } = item;
+              return (
+                <div
+                  key={event.id}
+                  className={`ec-event-row ${isInternal ? 'ec-event-row--internal' : ''}`}
+                >
+                  <span className={`ec-event-icon ${event.direction === 'entry' ? 'ec-event-entry' : 'ec-event-exit'}`}>
+                    {event.direction === 'entry' ? '→' : '←'}
+                  </span>
+                  <span className="ec-event-time">{event.event_time.slice(0, 5)}</span>
+                  <span className="ec-event-dir">{event.direction === 'entry' ? 'Вход' : 'Выход'}</span>
+                  {event.access_point && <span className="ec-event-point">{event.access_point}</span>}
+                  {pairDurationSeconds !== null && pairDurationSeconds > 0 && (
+                    <span className="ec-pair-duration-inline">{formatHM(pairDurationSeconds)}</span>
+                  )}
                 </div>
-                {pair.exit ? (
-                  <div className="ec-event-row">
-                    <span className="ec-event-icon ec-event-exit">←</span>
-                    <span className="ec-event-time">{pair.exit.event_time.slice(0, 5)}</span>
-                    <span className="ec-event-dir">Выход</span>
-                    {pair.exit.access_point && <span className="ec-event-point">{pair.exit.access_point}</span>}
-                  </div>
-                ) : (
-                  <div className="ec-event-row">
-                    <span className="ec-event-icon ec-event-entry">→</span>
-                    <span className="ec-event-time">—</span>
-                    <span className="ec-event-dir ec-on-site">на месте</span>
-                  </div>
-                )}
-                {pair.durationMinutes > 0 && (
-                  <div className="ec-pair-duration">{formatMinutes(pair.durationMinutes)}</div>
-                )}
-                {pair.absentAfterMinutes > 0 && (
-                  <div className="ec-absent-row">Отсутствие: {formatMinutes(pair.absentAfterMinutes)}</div>
-                )}
-              </div>
-            )) : showEvents.map((event, index) => (
-              <div key={index} className="ec-event-row">
-                <span className={`ec-event-icon ${event.direction === 'entry' ? 'ec-event-entry' : 'ec-event-exit'}`}>
-                  {event.direction === 'entry' ? '→' : '←'}
-                </span>
-                <span className="ec-event-time">{event.event_time.slice(0, 5)}</span>
-                <span className="ec-event-dir">{event.direction === 'entry' ? 'Вход' : 'Выход'}</span>
-                {event.access_point && <span className="ec-event-point">{event.access_point}</span>}
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="ec-tl-empty">Нет событий</div>
@@ -192,9 +140,9 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
                 <span>{lastExit}</span>
               </div>
             )}
-            {absentCalc && (
+            {breakCalc && (
               <div className="ec-today-badge ec-today-badge-absent">
-                <span>Перерыв: {absentCalc}</span>
+                <span>Перерыв: {breakCalc}</span>
               </div>
             )}
             <div className="ec-today-total">{workCalc}</div>

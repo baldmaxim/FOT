@@ -7,6 +7,12 @@ import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
 import { skudService } from '../../services/skudService';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 import {
+  buildDisplayItems,
+  calculateWorkSeconds,
+  findFirstExternalEntry,
+  findLastExternalExit,
+} from '../../utils/skudDisplay';
+import {
   getDaysInMonth,
   formatDateRu,
   getWeekdayFull,
@@ -45,11 +51,6 @@ const getInitials = (name: string): string => {
   return name.substring(0, 2).toUpperCase();
 };
 
-const timeToSeconds = (time: string): number => {
-  const [h, m, s = 0] = time.split(':').map(Number);
-  return h * 3600 + m * 60 + s;
-};
-
 const formatTime = (time: string): string => time.slice(0, 5);
 
 const formatDuration = (seconds: number): string => {
@@ -70,31 +71,6 @@ const formatTravelMinutes = (minutes: number): string => {
   return `${hours}ч ${mins}м`;
 };
 
-const todayISO = (): string => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
-
-const calcPairSeconds = (evts: SkudEvent[], dateStr?: string): number => {
-  let total = 0;
-  let entry: number | null = null;
-  for (const ev of evts) {
-    if (ev.direction === 'entry') {
-      if (entry === null) entry = timeToSeconds(ev.event_time);
-    } else if (ev.direction === 'exit' && entry !== null) {
-      total += timeToSeconds(ev.event_time) - entry;
-      entry = null;
-    }
-  }
-  // Открытый вход (на работе сейчас) — считаем до текущего времени
-  if (entry !== null && dateStr === todayISO()) {
-    const now = new Date();
-    const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-    if (nowSec > entry) total += nowSec - entry;
-  }
-  return total;
-};
-
 const groupEventsByDay = (events: SkudEvent[], internalPoints: Set<string>): Map<string, IDayEvents> => {
   const map = new Map<string, SkudEvent[]>();
   for (const ev of events) {
@@ -106,25 +82,15 @@ const groupEventsByDay = (events: SkudEvent[], internalPoints: Set<string>): Map
   const result = new Map<string, IDayEvents>();
   for (const [date, dayEvents] of map) {
     dayEvents.sort((a, b) => a.event_time.localeCompare(b.event_time));
-
-    // Filter out internal access points (same as EmployeeSkudSection)
-    const extEvents = dayEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point));
-
-    // Calculate from external events; fallback to all if external gives 0
-    let totalSeconds = calcPairSeconds(extEvents, date);
-    if (totalSeconds === 0 && extEvents.length === 0 && dayEvents.length > 0) {
-      totalSeconds = calcPairSeconds(dayEvents, date);
-    }
-
-    const srcEvents = extEvents.length > 0 ? extEvents : dayEvents;
-    const srcEntries = srcEvents.filter(e => e.direction === 'entry');
-    const srcExits = srcEvents.filter(e => e.direction === 'exit');
+    const totalSeconds = calculateWorkSeconds(dayEvents, internalPoints, date);
+    const firstExt = findFirstExternalEntry(dayEvents, internalPoints);
+    const lastExt = findLastExternalExit(dayEvents, internalPoints);
 
     result.set(date, {
       date,
       events: dayEvents,
-      firstEntry: srcEntries.length > 0 ? srcEntries[0].event_time : null,
-      lastExit: srcExits.length > 0 ? srcExits[srcExits.length - 1].event_time : null,
+      firstEntry: firstExt?.event_time || null,
+      lastExit: lastExt?.event_time || null,
       totalSeconds,
     });
   }
@@ -352,8 +318,17 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                         <div className="ts-day-events-empty">Нет событий СКУД</div>
                       ) : (
                         <>
-                          {dayEventsData.events.map(ev => {
-                            const isInternal = ev.access_point ? internalPoints.has(ev.access_point) : false;
+                          {buildDisplayItems(dayEventsData.events, internalPoints, dateStr).map((item, idx) => {
+                            if (item.kind === 'break') {
+                              return (
+                                <div key={`break-${idx}`} className="ts-day-event-row ts-day-event-row--break">
+                                  <span className="ts-day-event-break-label">
+                                    Перерыв: {formatDuration(item.breakSeconds)}
+                                  </span>
+                                </div>
+                              );
+                            }
+                            const { event: ev, pairDurationSeconds, isInternal } = item;
                             return (
                             <div
                               key={ev.id}
@@ -375,6 +350,11 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                                   canOpen={canOpenAccessPointMap}
                                   onOpen={openAccessPointMap}
                                 />
+                              )}
+                              {pairDurationSeconds !== null && pairDurationSeconds > 0 && (
+                                <span className="ts-day-event-pair-duration">
+                                  {formatDuration(pairDurationSeconds)}
+                                </span>
                               )}
                             </div>
                             );

@@ -5,6 +5,12 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
 import { skudService } from '../../services/skudService';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
+import {
+  buildDisplayItems,
+  calculateWorkSeconds,
+  findFirstExternalEntry,
+  findLastExternalExit,
+} from '../../utils/skudDisplay';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 
 interface ICorrectionModalProps {
@@ -55,16 +61,6 @@ const formatHM = (decimal: number): string => {
 };
 
 const formatTime = (time: string): string => time.slice(0, 5);
-
-const todayISO = (): string => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
-
-const timeToSeconds = (time: string): number => {
-  const [h, m, s = 0] = time.split(':').map(Number);
-  return h * 3600 + m * 60 + s;
-};
 
 const formatDuration = (seconds: number): string => {
   if (seconds <= 0) return '0м';
@@ -125,32 +121,10 @@ const EventsTab: FC<{
 
   useEffect(() => { loadEvents(); }, [loadEvents]);
 
-  const extEvents = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
-  const summaryEvents = extEvents.length > 0 ? extEvents : events;
-
-  const calcPairs = (evts: SkudEvent[]): number => {
-    let total = 0;
-    let entry: number | null = null;
-    for (const ev of evts) {
-      if (ev.direction === 'entry') {
-        if (entry === null) entry = timeToSeconds(ev.event_time);
-      } else if (ev.direction === 'exit' && entry !== null) {
-        total += timeToSeconds(ev.event_time) - entry;
-        entry = null;
-      }
-    }
-    // Открытый вход (на работе сейчас) — считаем до текущего времени
-    if (entry !== null && workDate === todayISO()) {
-      const now = new Date();
-      const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-      if (nowSec > entry) total += nowSec - entry;
-    }
-    return total;
-  };
-
-  const fallbackTotalSec = calcPairs(summaryEvents);
-  const fallbackFirstEntry = summaryEvents.find(e => e.direction === 'entry');
-  const fallbackLastExit = [...summaryEvents].reverse().find(e => e.direction === 'exit');
+  const displayItems = buildDisplayItems(events, internalPoints, workDate);
+  const fallbackTotalSec = calculateWorkSeconds(events, internalPoints, workDate);
+  const fallbackFirstEntry = findFirstExternalEntry(events, internalPoints);
+  const fallbackLastExit = findLastExternalExit(events, internalPoints);
   const visibleHours = timesheetEntry?.display_hours_worked ?? timesheetEntry?.hours_worked ?? null;
   const totalSec = visibleHours != null
     ? Math.max(0, Math.round(visibleHours * 3600))
@@ -165,8 +139,17 @@ const EventsTab: FC<{
   return (
     <div className="ts-modal-events">
       <div className="ts-modal-events-list">
-        {events.map(ev => {
-          const isInternal = ev.access_point ? internalPoints.has(ev.access_point) : false;
+        {displayItems.map((item, idx) => {
+          if (item.kind === 'break') {
+            return (
+              <div key={`break-${idx}`} className="ts-modal-event-row ts-modal-event-row--break">
+                <span className="ts-modal-event-break-label">
+                  Перерыв: {formatDuration(item.breakSeconds)}
+                </span>
+              </div>
+            );
+          }
+          const { event: ev, pairDurationSeconds, isInternal } = item;
           return (
             <div
               key={ev.id}
@@ -188,6 +171,9 @@ const EventsTab: FC<{
                 />
               ) : (
                 <span className="ts-modal-event-point">—</span>
+              )}
+              {pairDurationSeconds !== null && pairDurationSeconds > 0 && (
+                <span className="ts-modal-event-pair-duration">{formatDuration(pairDurationSeconds)}</span>
               )}
             </div>
           );

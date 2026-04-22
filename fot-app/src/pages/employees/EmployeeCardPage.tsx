@@ -483,9 +483,7 @@ export const EmployeeCardPage: FC = () => {
     const showDate = selectedCalDay || todayLocalStr;
     const showEvents = selectedCalDay
       ? selectedDayEventsFast
-      : todayEvents
-        .filter(e => !e.access_point || !internalPoints.has(e.access_point))
-        .sort((a, b) => a.event_time.localeCompare(b.event_time));
+      : [...todayEvents].sort((a, b) => a.event_time.localeCompare(b.event_time));
     const showEventsLoading = selectedCalDay
       ? selectedDayEventsQuery.isLoading && selectedDayEventsFast.length === 0
       : todayEventsQuery.isLoading && todayEvents.length === 0;
@@ -653,6 +651,7 @@ export const EmployeeCardPage: FC = () => {
             showEventsLoading={attendanceViewModel.showEventsLoading}
             weeklyPattern={periodData.weeklyPattern}
             alerts={attendance?.alerts ?? []}
+            internalPoints={internalPoints}
           />
         </Suspense>
       )}

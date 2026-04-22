@@ -10,6 +10,14 @@ import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 import { DateInput } from '../ui/DateInput';
 import type { SkudEvent } from '../../types';
 import { triggerBlobDownload } from '../../utils/download';
+import {
+  buildDisplayItems,
+  calculateWorkSeconds,
+  isToday,
+  nowSeconds,
+  timeToSeconds,
+  toLocalISO,
+} from '../../utils/skudDisplay';
 
 interface IEmployeeSkudSectionProps {
   employeeId: number;
@@ -88,93 +96,6 @@ const formatDuration = (seconds: number): string => {
   return `${h}ч ${m}м ${s}с`;
 };
 
-const timeToSeconds = (time: string): number => {
-  const [h, m, s = 0] = time.split(':').map(Number);
-  return h * 3600 + m * 60 + s;
-};
-
-/** Форматирует Date в YYYY-MM-DD в локальном часовом поясе */
-const toLocalISO = (d: Date): string => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-};
-
-const isToday = (dateStr: string): boolean =>
-  dateStr === toLocalISO(new Date());
-
-const nowSeconds = (): number => {
-  const now = new Date();
-  return now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-};
-
-type DisplayItem =
-  | { kind: 'event'; event: SkudEvent; pairDurationSeconds: number | null; isInternal: boolean }
-  | { kind: 'break'; breakSeconds: number };
-
-const buildDisplayItems = (events: SkudEvent[], internalPoints: Set<string>, dateStr?: string): DisplayItem[] => {
-  const sorted = [...events].sort((a, b) => a.event_time.localeCompare(b.event_time));
-  const items: DisplayItem[] = [];
-  let pendingEntry: SkudEvent | null = null;
-  let lastExitTimeSec: number | null = null;
-
-  for (const ev of sorted) {
-    const isInternal = ev.access_point ? internalPoints.has(ev.access_point) : false;
-
-    if (ev.direction === 'entry') {
-      if (!isInternal && lastExitTimeSec !== null) {
-        const gap = timeToSeconds(ev.event_time) - lastExitTimeSec;
-        if (gap > 0) items.push({ kind: 'break', breakSeconds: gap });
-        lastExitTimeSec = null;
-      }
-      items.push({ kind: 'event', event: ev, pairDurationSeconds: null, isInternal });
-      if (!isInternal && pendingEntry === null) {
-        pendingEntry = ev;
-      }
-    } else {
-      let pairDuration: number | null = null;
-      if (!isInternal && pendingEntry) {
-        pairDuration = timeToSeconds(ev.event_time) - timeToSeconds(pendingEntry.event_time);
-        pendingEntry = null;
-        lastExitTimeSec = timeToSeconds(ev.event_time);
-      }
-      items.push({ kind: 'event', event: ev, pairDurationSeconds: pairDuration, isInternal });
-    }
-  }
-
-  if (pendingEntry && dateStr && isToday(dateStr)) {
-    const lastItem = items[items.length - 1];
-    if (lastItem && lastItem.kind === 'event' && lastItem.event.id === pendingEntry.id) {
-      lastItem.pairDurationSeconds = nowSeconds() - timeToSeconds(pendingEntry.event_time);
-    }
-  }
-
-  return items;
-};
-
-const calculateWorkMinutes = (events: SkudEvent[], internalPoints: Set<string>, dateStr?: string): number => {
-  const filtered = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
-  const sorted = [...filtered].sort((a, b) => a.event_time.localeCompare(b.event_time));
-  let total = 0;
-  let entryTime: number | null = null;
-
-  for (const ev of sorted) {
-    if (ev.direction === 'entry') {
-      if (entryTime === null) entryTime = timeToSeconds(ev.event_time);
-    } else if (ev.direction === 'exit' && entryTime !== null) {
-      total += timeToSeconds(ev.event_time) - entryTime;
-      entryTime = null;
-    }
-  }
-
-  if (entryTime !== null && dateStr && isToday(dateStr)) {
-    total += nowSeconds() - entryTime;
-  }
-
-  return total;
-};
-
 const groupByDay = (events: SkudEvent[], internalPoints: Set<string>): IDayGroup[] => {
   const map = new Map<string, SkudEvent[]>();
   for (const ev of events) {
@@ -206,7 +127,7 @@ const groupByDay = (events: SkudEvent[], internalPoints: Set<string>): IDayGroup
       events: dayEvents,
       firstEntry: entries.length > 0 ? entries[0].event_time : null,
       lastExit: stillOnSite ? null : (exits.length > 0 ? exits[exits.length - 1].event_time : null),
-      totalSeconds: calculateWorkMinutes(dayEvents, internalPoints, date),
+      totalSeconds: calculateWorkSeconds(dayEvents, internalPoints, date),
       spanSeconds,
     });
   }

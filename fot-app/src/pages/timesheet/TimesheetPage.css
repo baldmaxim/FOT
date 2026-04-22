@@ -2302,6 +2302,33 @@
   opacity: 0.45;
 }
 
+.ts-day-event-row.ts-day-event-row--break {
+  justify-content: flex-start;
+  padding: 4px 8px 4px 26px;
+  margin: 2px 0;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+  background: var(--bg-subtle, rgba(0, 0, 0, 0.02));
+}
+
+.ts-day-event-break-label {
+  color: var(--text-tertiary);
+  font-style: italic;
+  font-size: 12px;
+}
+
+.ts-day-event-pair-duration {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--accent, #6366f1);
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .ts-day-events-summary {
   display: flex;
   gap: 6px;
@@ -2455,6 +2482,33 @@
 
 .ts-modal-event-row.internal {
   opacity: 0.45;
+}
+
+.ts-modal-event-row.ts-modal-event-row--break {
+  justify-content: flex-start;
+  padding: 6px 10px 6px 26px;
+  margin: 2px 0;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+  background: var(--bg-subtle, rgba(0, 0, 0, 0.02));
+}
+
+.ts-modal-event-break-label {
+  color: var(--text-tertiary);
+  font-style: italic;
+  font-size: 12px;
+}
+
+.ts-modal-event-pair-duration {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--accent, #6366f1);
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .ts-modal-event-time {
