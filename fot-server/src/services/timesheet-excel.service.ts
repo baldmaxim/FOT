@@ -22,18 +22,12 @@ const applyA4PrintSetup = (ws: ExcelJS.Worksheet, titleRows: number): void => {
     fitToWidth: 1,
     fitToHeight: 0,
     horizontalCentered: true,
-    verticalCentered: false,
     margins: {
       left: 0.3, right: 0.3,
       top: 0.5, bottom: 0.5,
       header: 0.3, footer: 0.3,
     },
     printTitlesRow: `1:${titleRows}`,
-    showGridLines: false,
-  };
-  ws.views = [{ state: 'normal', showGridLines: true, style: 'pageLayout' }];
-  ws.headerFooter = {
-    oddFooter: '&C&"Arial"&8Стр. &P из &N',
   };
 };
 // Цвета как в образце "Тердерный отдел.xls"
