@@ -9,10 +9,7 @@ interface ApiResponse<T> {
 interface UserFromApi {
   id: string;
   full_name: string | null;
-  department_id: string | null;
-  department_name: string | null;
-  additional_department_ids: string[];
-  managed_department_ids: string[];
+  assigned_department_ids: string[];
   position_type: EmployeePositionType;
   imported_position: string | null;
   employee_id: number | null;
@@ -36,9 +33,7 @@ interface PendingUserFromApi {
 export interface EmployeeDepartmentAssignmentFromApi {
   employee_id: number;
   full_name: string;
-  department_id: string | null;
-  additional_department_ids: string[];
-  managed_department_ids: string[];
+  assigned_department_ids: string[];
 }
 
 export type BrigadeWorkerStatus =
@@ -166,24 +161,20 @@ export const adminService = {
     await apiClient.patch(`/admin/users/${userId}/chat-inbound-mode`, { chat_inbound_mode: chatInboundMode });
   },
 
-  async updateUserEmployee(userId: string, employeeId: number | null, departmentId?: string): Promise<void> {
-    await apiClient.patch(`/admin/users/${userId}/employee`, { employee_id: employeeId, department_id: departmentId || null });
+  async updateUserEmployee(userId: string, employeeId: number | null): Promise<void> {
+    await apiClient.patch(`/admin/users/${userId}/employee`, { employee_id: employeeId });
   },
 
-  async updateEmployeeDepartment(userId: string, departmentId: string): Promise<void> {
-    await apiClient.patch(`/admin/users/${userId}/department`, { department_id: departmentId });
-  },
-
-  async updateUserDepartmentAccess(userId: string, departmentIds: string[]): Promise<{ additional_department_ids: string[]; managed_department_ids: string[] }> {
-    const response = await apiClient.put<ApiResponse<{ additional_department_ids: string[]; managed_department_ids: string[] }>>(
+  async updateUserDepartmentAccess(userId: string, departmentIds: string[]): Promise<{ assigned_department_ids: string[] }> {
+    const response = await apiClient.put<ApiResponse<{ assigned_department_ids: string[] }>>(
       `/admin/users/${userId}/department-access`,
       { department_ids: departmentIds },
     );
     return response.data;
   },
 
-  async updateEmployeeDepartmentAccess(employeeId: number, departmentIds: string[]): Promise<{ additional_department_ids: string[]; managed_department_ids: string[] }> {
-    const response = await apiClient.put<ApiResponse<{ additional_department_ids: string[]; managed_department_ids: string[] }>>(
+  async updateEmployeeDepartmentAccess(employeeId: number, departmentIds: string[]): Promise<{ assigned_department_ids: string[] }> {
+    const response = await apiClient.put<ApiResponse<{ assigned_department_ids: string[] }>>(
       `/admin/employees/${employeeId}/department-access`,
       { department_ids: departmentIds },
     );

@@ -57,7 +57,6 @@ router.patch('/users/:id/position', requirePageAccess('/admin/users', 'edit'), a
 router.patch('/users/:id/name', requirePageAccess('/admin/users', 'edit'), adminController.updateUserName);
 router.patch('/users/:id/chat-inbound-mode', requirePageAccess('/admin/users', 'edit'), adminController.updateUserChatInboundMode);
 router.patch('/users/:id/employee', requirePageAccess('/admin/users', 'edit'), adminController.updateUserEmployee);
-router.patch('/users/:id/department', requirePageAccess('/admin/users', 'edit'), adminController.updateEmployeeDepartment);
 router.put('/users/:id/department-access', requirePageAccess('/admin/users', 'edit'), adminController.updateUserDepartmentAccess);
 router.put('/employees/:id/department-access', requirePageAccess('/admin/users', 'edit'), adminController.updateEmployeeDepartmentAccess);
 

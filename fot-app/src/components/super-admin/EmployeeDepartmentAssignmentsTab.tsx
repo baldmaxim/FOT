@@ -69,14 +69,14 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
 
   const employees = employeesQuery.data || [];
   const employeesWithAssignmentsCount = useMemo(
-    () => employees.filter(employee => employee.additional_department_ids.length > 0).length,
+    () => employees.filter(employee => employee.assigned_department_ids.length > 0).length,
     [employees],
   );
 
   const filteredEmployees = useMemo(() => {
     const normalizedSearch = normalizeText(searchQuery);
     return employees.filter(employee => {
-      const additionalDepartmentIds = normalizeAdditionalDepartmentIds(employee.additional_department_ids || []);
+      const additionalDepartmentIds = normalizeAdditionalDepartmentIds(employee.assigned_department_ids || []);
       if (!showAllEmployees && additionalDepartmentIds.length === 0) {
         return false;
       }
@@ -90,7 +90,6 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
         employee.full_name,
         linkedUser?.full_name,
         linkedUser?.email,
-        employee.department_id ? departmentMap.get(employee.department_id)?.name : null,
         ...additionalDepartmentIds.map(departmentId => departmentMap.get(departmentId)?.name || null),
       ];
 
@@ -100,7 +99,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
 
   const getAdditionalDepartmentIds = (employee: EmployeeDepartmentAssignmentFromApi): string[] => (
     normalizeAdditionalDepartmentIds(
-      departmentAccessDrafts[employee.employee_id] ?? employee.additional_department_ids ?? [],
+      departmentAccessDrafts[employee.employee_id] ?? employee.assigned_department_ids ?? [],
     )
   );
 
@@ -119,7 +118,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
   const handleDepartmentAccessReset = (employee: EmployeeDepartmentAssignmentFromApi) => {
     setDepartmentAccessDrafts(prev => ({
       ...prev,
-      [employee.employee_id]: normalizeAdditionalDepartmentIds(employee.additional_department_ids ?? []),
+      [employee.employee_id]: normalizeAdditionalDepartmentIds(employee.assigned_department_ids ?? []),
     }));
     setDepartmentAccessQuery(prev => ({
       ...prev,
@@ -134,7 +133,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
       const response = await adminService.updateEmployeeDepartmentAccess(employee.employee_id, additionalDepartmentIds);
       setDepartmentAccessDrafts(prev => ({
         ...prev,
-        [employee.employee_id]: normalizeAdditionalDepartmentIds(response.additional_department_ids),
+        [employee.employee_id]: normalizeAdditionalDepartmentIds(response.assigned_department_ids),
       }));
       toast.success('Назначения сотрудника сохранены');
       await Promise.all([
@@ -211,7 +210,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
             const isExpanded = expandedEmployeeId === employee.employee_id;
             const linkedUser = linkedUserByEmployeeId.get(employee.employee_id) || null;
             const additionalDepartmentIds = getAdditionalDepartmentIds(employee);
-            const initialDepartmentIds = normalizeAdditionalDepartmentIds(employee.additional_department_ids ?? []);
+            const initialDepartmentIds = normalizeAdditionalDepartmentIds(employee.assigned_department_ids ?? []);
             const hasDepartmentAccessChanges = !areDepartmentSelectionsEqual(additionalDepartmentIds, initialDepartmentIds);
             const departmentSearchQuery = normalizeText(departmentAccessQuery[employee.employee_id] || '');
             const filteredAdditionalDepartments = flatDepts.filter(department => (
@@ -280,11 +279,6 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
                         <div className={styles.departmentAccessCount}>
                           {additionalDepartmentIds.length} выбрано
                         </div>
-                      </div>
-
-                      <div className={styles.departmentAccessPrimary}>
-                        Аккаунт портала:{' '}
-                        <strong>{linkedUser ? (linkedUser.full_name || linkedUser.email || linkedUser.id) : 'ещё не зарегистрирован'}</strong>
                       </div>
 
                       <input

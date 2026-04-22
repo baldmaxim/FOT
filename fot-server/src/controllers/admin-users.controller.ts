@@ -71,21 +71,6 @@ async function resolveActiveRoleAssignment(positionType: string): Promise<{ id: 
   };
 }
 
-async function getPrimaryDepartmentIdForEmployee(employeeId: number | null): Promise<string | null> {
-  if (!employeeId) return null;
-  const { data: employee, error: employeeError } = await supabase
-    .from('employees')
-    .select('org_department_id')
-    .eq('id', employeeId)
-    .single();
-
-  if (employeeError) {
-    throw employeeError;
-  }
-
-  return employee?.org_department_id || null;
-}
-
 async function validateDepartmentIds(departmentIds: string[]): Promise<{ missingIds: string[] }> {
   const normalizedDepartmentIds = uniqueStringValues(departmentIds);
   if (normalizedDepartmentIds.length === 0) {
@@ -111,7 +96,6 @@ async function replaceExplicitDepartmentAccess(params: {
   targetTable: 'employee_department_access' | 'user_department_access';
   targetField: 'employee_id' | 'user_id';
   targetValue: number | string;
-  primaryDepartmentId: string | null;
   departmentIds: string[];
   actorUserId: string;
   source: string;
@@ -226,42 +210,7 @@ export const adminUsersController = {
         return;
       }
 
-      // Подгружаем department_id из employees для пользователей с employee_id
-      const empIds = users
-        .filter((u: UserProfile) => u.employee_id)
-        .map((u: UserProfile) => u.employee_id);
-
-      let empDeptMap: Record<number, string | null> = {};
-      if (empIds.length > 0) {
-        const { data: emps } = await supabase
-          .from('employees')
-          .select('id, org_department_id')
-          .in('id', empIds);
-        if (emps) {
-          empDeptMap = emps.reduce((acc, e) => {
-            acc[e.id] = e.org_department_id || null;
-            return acc;
-          }, {} as Record<number, string | null>);
-        }
-      }
-
-      // Подгружаем названия отделов
-      const deptIds = Object.values(empDeptMap).filter(Boolean) as string[];
-      let deptNameMap: Record<string, string> = {};
-      if (deptIds.length > 0) {
-        const { data: depts } = await supabase
-          .from('org_departments')
-          .select('id, name')
-          .in('id', deptIds);
-        if (depts) {
-          deptNameMap = depts.reduce((acc, d) => {
-            acc[d.id] = d.name;
-            return acc;
-          }, {} as Record<string, string>);
-        }
-      }
-
-      const additionalDepartmentMap = await loadExplicitDepartmentMap(
+      const assignedDepartmentMap = await loadExplicitDepartmentMap(
         users.map((u: UserProfile) => ({
           user_id: u.id,
           employee_id: u.employee_id,
@@ -301,20 +250,14 @@ export const adminUsersController = {
       }
 
       const sanitizedUsers = users.map((u: UserProfile) => {
-        const deptId = u.employee_id ? empDeptMap[u.employee_id] || null : null;
-        const additionalDepartmentIds = (additionalDepartmentMap.get(u.id) || []);
+        const assignedDepartmentIds = (assignedDepartmentMap.get(u.id) || []);
         const authInfo = authEmailMap[u.id];
         return {
           id: u.id,
           email: authInfo?.email || '',
           email_confirmed: authInfo?.email_confirmed ?? false,
           full_name: u.full_name,
-          department_id: deptId,
-          department_name: deptId ? (deptNameMap[deptId] || null) : null,
-          additional_department_ids: additionalDepartmentIds,
-          managed_department_ids: [...new Set(
-            additionalDepartmentIds.filter((value): value is string => Boolean(value)),
-          )],
+          assigned_department_ids: assignedDepartmentIds,
           position_type: roleCodeById.get(u.system_role_id) ?? '',
           imported_position: u.imported_position,
           employee_id: u.employee_id,
@@ -338,7 +281,7 @@ export const adminUsersController = {
     try {
       const { data: employees, error: employeesError } = await supabase
         .from('employees')
-        .select('id, full_name, org_department_id')
+        .select('id, full_name')
         .eq('employment_status', 'active')
         .eq('is_archived', false)
         .order('full_name', { ascending: true })
@@ -353,18 +296,11 @@ export const adminUsersController = {
       const employeeIds = (employees || []).map(employee => employee.id as number);
       const explicitDepartmentMap = await loadEmployeeAccessMap(employeeIds);
 
-      const payload = (employees || []).map(employee => {
-        const primaryDepartmentId = employee.org_department_id as string | null;
-        const additionalDepartmentIds = explicitDepartmentMap.get(employee.id as number) || [];
-
-        return {
-          employee_id: employee.id,
-          full_name: employee.full_name,
-          department_id: primaryDepartmentId,
-          additional_department_ids: additionalDepartmentIds,
-          managed_department_ids: uniqueStringValues(additionalDepartmentIds),
-        };
-      });
+      const payload = (employees || []).map(employee => ({
+        employee_id: employee.id,
+        full_name: employee.full_name,
+        assigned_department_ids: explicitDepartmentMap.get(employee.id as number) || [],
+      }));
 
       res.json({ success: true, data: payload });
     } catch (error) {
@@ -1039,9 +975,8 @@ export const adminUsersController = {
   async updateUserEmployee(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const { employee_id, department_id } = z.object({
+      const { employee_id } = z.object({
         employee_id: z.number().int().positive().nullable(),
-        department_id: z.string().uuid().nullable().optional(),
       }).parse(req.body);
 
       const { error } = await supabase
@@ -1052,14 +987,6 @@ export const adminUsersController = {
       if (error) {
         res.status(500).json({ success: false, error: 'Failed to update employee link' });
         return;
-      }
-
-      // Если указан отдел и сотрудник — обновляем org_department_id сотрудника
-      if (employee_id && department_id) {
-        await supabase
-          .from('employees')
-          .update({ org_department_id: department_id })
-          .eq('id', employee_id);
       }
 
       res.json({ success: true });
@@ -1108,47 +1035,6 @@ export const adminUsersController = {
     }
   },
 
-  /** Обновить отдел привязанного сотрудника */
-  async updateEmployeeDepartment(req: AuthenticatedRequest, res: Response): Promise<void> {
-    try {
-      const { id } = req.params;
-      const { department_id } = z.object({
-        department_id: z.string().uuid(),
-      }).parse(req.body);
-
-      // Получаем employee_id пользователя
-      const { data: profile } = await supabase
-        .from('user_profiles')
-        .select('employee_id')
-        .eq('id', id)
-        .single();
-
-      if (!profile?.employee_id) {
-        res.status(400).json({ success: false, error: 'У пользователя нет привязки к сотруднику' });
-        return;
-      }
-
-      const { error } = await supabase
-        .from('employees')
-        .update({ org_department_id: department_id })
-        .eq('id', profile.employee_id);
-
-      if (error) {
-        res.status(500).json({ success: false, error: 'Failed to update department' });
-        return;
-      }
-
-      res.json({ success: true });
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        res.status(400).json({ success: false, error: error.errors[0].message });
-        return;
-      }
-      console.error('Update employee department error:', error);
-      res.status(500).json({ success: false, error: 'Failed to update department' });
-    }
-  },
-
   async updateUserDepartmentAccess(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
@@ -1166,7 +1052,6 @@ export const adminUsersController = {
         return;
       }
 
-      const primaryDepartmentId = await getPrimaryDepartmentIdForEmployee(profile.employee_id);
       const { missingIds } = await validateDepartmentIds(normalizedDepartmentIds);
       if (missingIds.length > 0) {
         res.status(400).json({
@@ -1181,7 +1066,6 @@ export const adminUsersController = {
         targetTable: profile.employee_id ? 'employee_department_access' : 'user_department_access',
         targetField: profile.employee_id ? 'employee_id' : 'user_id',
         targetValue: profile.employee_id ?? id,
-        primaryDepartmentId,
         departmentIds: normalizedDepartmentIds,
         actorUserId: req.user.id,
         source: 'manual_admin_ui',
@@ -1191,19 +1075,15 @@ export const adminUsersController = {
         entityType: 'user',
         entityId: id,
         details: {
-          primary_department_id: primaryDepartmentId,
-          additional_department_ids: explicitDepartmentIds,
-          additional_department_count: explicitDepartmentIds.length,
+          assigned_department_ids: explicitDepartmentIds,
+          assigned_department_count: explicitDepartmentIds.length,
         },
       });
 
       res.json({
         success: true,
         data: {
-          additional_department_ids: explicitDepartmentIds,
-          managed_department_ids: [...new Set(
-            explicitDepartmentIds.filter((value): value is string => Boolean(value)),
-          )],
+          assigned_department_ids: explicitDepartmentIds,
         },
       });
     } catch (error) {
@@ -1224,7 +1104,7 @@ export const adminUsersController = {
 
       const { data: employee, error: employeeError } = await supabase
         .from('employees')
-        .select('id, org_department_id, full_name')
+        .select('id, full_name')
         .eq('id', employeeId)
         .single();
 
@@ -1247,7 +1127,6 @@ export const adminUsersController = {
         targetTable: 'employee_department_access',
         targetField: 'employee_id',
         targetValue: employeeId,
-        primaryDepartmentId: employee.org_department_id || null,
         departmentIds: normalizedDepartmentIds,
         actorUserId: req.user.id,
         source: 'manual_admin_ui',
@@ -1259,17 +1138,15 @@ export const adminUsersController = {
         details: {
           employee_id: employeeId,
           employee_name: employee.full_name,
-          primary_department_id: employee.org_department_id || null,
-          additional_department_ids: explicitDepartmentIds,
-          additional_department_count: explicitDepartmentIds.length,
+          assigned_department_ids: explicitDepartmentIds,
+          assigned_department_count: explicitDepartmentIds.length,
         },
       });
 
       res.json({
         success: true,
         data: {
-          additional_department_ids: explicitDepartmentIds,
-          managed_department_ids: uniqueStringValues(explicitDepartmentIds),
+          assigned_department_ids: explicitDepartmentIds,
         },
       });
     } catch (error) {

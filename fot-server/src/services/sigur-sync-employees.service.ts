@@ -14,6 +14,7 @@ import { assignEmployeesToArchiveDepartment } from './employee-archive-departmen
 import { invalidatePresencePollingEmployeeCache } from './presence-polling-cache.service.js';
 import { batchMoveSigurEmployees } from './sigur-live-admin.service.js';
 import { settingsService } from './settings.service.js';
+import { upsertTechnicalDepartmentAccess } from './employee-department-access.service.js';
 
 // ─── Типы результатов ───
 
@@ -262,6 +263,47 @@ export async function syncEmployeesLogic(
     }
   }
 
+  // Portal-only активные сотрудники (sigur_employee_id IS NULL) — чтобы новосозданный
+  // в Sigur человек не породил дубль, если в БД уже есть активный portal-only с таким же ФИО
+  // (например, после rehire с auto-detach).
+  interface IPortalOnlyRow {
+    id: number;
+    full_name: string | null;
+    last_name: string | null;
+    first_name: string | null;
+    middle_name: string | null;
+    org_department_id: string | null;
+    position_id: string | null;
+    tab_number: string | null;
+    department_locked: boolean;
+  }
+  const portalOnlyEmps: IPortalOnlyRow[] = [];
+  let portalOffset = 0;
+  while (true) {
+    const { data: page } = await supabase
+      .from('employees')
+      .select('id, full_name, last_name, first_name, middle_name, org_department_id, position_id, tab_number, department_locked')
+      .is('sigur_employee_id', null)
+      .eq('employment_status', 'active')
+      .range(portalOffset, portalOffset + EMP_PAGE - 1);
+    if (!page || page.length === 0) break;
+    portalOnlyEmps.push(...(page as IPortalOnlyRow[]));
+    if (page.length < EMP_PAGE) break;
+    portalOffset += EMP_PAGE;
+  }
+
+  const normalizeFullName = (name: string): string => (
+    name.trim().toLowerCase().replace(/\s+/g, ' ').replace(/ё/g, 'е')
+  );
+  const portalOnlyByName = new Map<string, IPortalOnlyRow[]>();
+  for (const e of portalOnlyEmps) {
+    if (!e.full_name) continue;
+    const key = normalizeFullName(e.full_name);
+    const arr = portalOnlyByName.get(key);
+    if (arr) arr.push(e);
+    else portalOnlyByName.set(key, [e]);
+  }
+
   const { data: dbDepartments } = await supabase
     .from('org_departments')
     .select('id, sigur_department_id, name')
@@ -432,6 +474,61 @@ export async function syncEmployeesLogic(
         skipped++;
         continue;
       }
+
+      // Защита от дублей: если в БД уже есть активный portal-only сотрудник с таким же ФИО
+      // (например, восстановленный через rehire с auto-detach), привязываем нового Sigur-сотрудника
+      // к существующей портальной записи вместо создания новой.
+      const nameKey = normalizeFullName(fullName);
+      const portalMatches = portalOnlyByName.get(nameKey);
+      if (portalMatches && portalMatches.length === 1 && sigurEmpId) {
+        const match = portalMatches[0];
+        const fio = parseFIO(fullName);
+        const normalizedFullName = fullName.trim();
+        const linkFields: Record<string, unknown> = {
+          sigur_employee_id: sigurEmpId,
+          department_locked: false,
+        };
+        if (orgDepartmentId) linkFields.org_department_id = orgDepartmentId;
+        if (positionId) linkFields.position_id = positionId;
+        if (tabNumber !== (match.tab_number || null)) linkFields.tab_number = tabNumber;
+        if ((match.full_name || '') !== normalizedFullName) {
+          linkFields.full_name = normalizedFullName;
+          linkFields.last_name = fio.lastName;
+          linkFields.first_name = fio.firstName || null;
+          linkFields.middle_name = fio.middleName || null;
+        }
+        updates.push({ id: match.id, fields: linkFields, name: fullName });
+        // dbEmpById нужен для корректной обработки в batch ниже (changeDepartment / changePosition)
+        dbEmpById.set(match.id, {
+          org_department_id: match.org_department_id,
+          position_id: match.position_id,
+          tab_number: match.tab_number,
+          full_name: match.full_name,
+          last_name: match.last_name,
+          first_name: match.first_name,
+          middle_name: match.middle_name,
+          department_locked: match.department_locked,
+          employment_status: 'active',
+        });
+        sigurIdToDbId.set(sigurEmpId, match.id);
+        portalOnlyByName.delete(nameKey);
+        console.log(`[syncEmployees] auto-link portal-only: ${fullName} (id=${match.id}) ← sigurId=${sigurEmpId}`);
+        continue;
+      }
+      if (portalMatches && portalMatches.length > 1) {
+        // Неоднозначно — в unmatched, чтобы HR решил вручную через SigurMatchModal
+        console.warn(`[syncEmployees] ambiguous portal-only match: ${fullName} (${portalMatches.length} candidates) — skip insert, add to unmatched`);
+        unmatchedList.push({
+          sigurId: sigurEmpId,
+          name: fullName.trim(),
+          departmentName: sigurDeptName || '',
+          positionName: emp.position || '',
+          orgDepartmentId: orgDepartmentId,
+          positionId: positionId,
+        });
+        continue;
+      }
+
       const fio = parseFIO(fullName);
       inserts.push({
         full_name: fullName.trim(),
@@ -476,12 +573,14 @@ export async function syncEmployeesLogic(
       batch.map(async u => {
         try {
           const prev = dbEmpById.get(u.id);
-          // Отдел изменился → пишем историю
+          // Отдел изменился → пишем историю и синхронизируем назначения
           if (u.fields.org_department_id && prev && u.fields.org_department_id !== prev.org_department_id) {
-            await employeeChangesService.changeDepartment(u.id, u.fields.org_department_id as string, {
+            const nextDeptId = u.fields.org_department_id as string;
+            await employeeChangesService.changeDepartment(u.id, nextDeptId, {
               reason: 'Синхронизация Sigur',
               lockDepartment: false,
             });
+            await upsertTechnicalDepartmentAccess(u.id, nextDeptId, prev.org_department_id || null, 'sigur_sync');
             delete u.fields.org_department_id;
           }
           if (u.fields.position_id && prev && u.fields.position_id !== prev.position_id) {
@@ -511,21 +610,45 @@ export async function syncEmployeesLogic(
   send({ type: 'employees_progress', phase: 'saving', current: totalEmployees, total: totalEmployees, percent: 100 });
 
   const BATCH_SIZE = 100;
+  const insertedAccessSeeds: Array<{ id: number; org_department_id: string }> = [];
   for (let i = 0; i < inserts.length; i += BATCH_SIZE) {
     const batch = inserts.slice(i, i + BATCH_SIZE);
-    const { error: insertError } = await supabase.from('employees').insert(batch);
+    const { data: insertedRows, error: insertError } = await supabase
+      .from('employees')
+      .insert(batch)
+      .select('id, org_department_id');
     if (insertError) {
       console.warn(`[syncEmployees] batch ${i / BATCH_SIZE + 1} failed: ${insertError.message}. Fallback to individual inserts.`);
       for (const row of batch) {
-        const { error: singleErr } = await supabase.from('employees').insert(row);
+        const { data: singleRow, error: singleErr } = await supabase
+          .from('employees')
+          .insert(row)
+          .select('id, org_department_id')
+          .single();
         if (singleErr) {
           errors.push(`${(row as Record<string, unknown>).full_name}: ${singleErr.message}`);
         } else {
           imported++;
+          if (singleRow?.id && singleRow.org_department_id) {
+            insertedAccessSeeds.push({ id: singleRow.id as number, org_department_id: singleRow.org_department_id as string });
+          }
         }
       }
     } else {
       imported += batch.length;
+      for (const row of insertedRows || []) {
+        if (row.id && row.org_department_id) {
+          insertedAccessSeeds.push({ id: row.id as number, org_department_id: row.org_department_id as string });
+        }
+      }
+    }
+  }
+
+  for (const seed of insertedAccessSeeds) {
+    try {
+      await upsertTechnicalDepartmentAccess(seed.id, seed.org_department_id, null, 'sigur_sync');
+    } catch (accessError) {
+      errors.push(`access insert ${seed.id}: ${(accessError as Error).message}`);
     }
   }
 

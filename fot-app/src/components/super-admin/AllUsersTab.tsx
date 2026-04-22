@@ -13,10 +13,7 @@ export interface IUserFromApi {
   email?: string;
   email_confirmed?: boolean;
   full_name: string | null;
-  department_id: string | null;
-  department_name: string | null;
-  additional_department_ids: string[];
-  managed_department_ids: string[];
+  assigned_department_ids: string[];
   position_type: EmployeePositionType;
   imported_position: string | null;
   employee_id: number | null;
@@ -48,8 +45,8 @@ interface IAllUsersTabProps {
   onReload: () => Promise<void>;
 }
 
-const normalizeAdditionalDepartmentIds = (departmentIds: string[], primaryDepartmentId: string | null): string[] => (
-  [...new Set(departmentIds.filter(Boolean))].filter(departmentId => departmentId !== primaryDepartmentId)
+const normalizeAssignedDepartmentIds = (departmentIds: string[]): string[] => (
+  [...new Set(departmentIds.filter(Boolean))]
 );
 
 const areDepartmentSelectionsEqual = (left: string[], right: string[]): boolean => {
@@ -119,12 +116,16 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
     setEmpSearch(null);
   };
 
-  const getDeptName = (user: IUserFromApi) => {
-    return user.department_name || 'Не назначен';
-  };
-
   const getPositionName = (positionType: EmployeePositionType) => {
     return getRoleLabel(positionType);
+  };
+
+  const renderAssignedDepartments = (user: IUserFromApi) => {
+    const ids = user.assigned_department_ids ?? [];
+    if (ids.length === 0) return '—';
+    const names = ids.map(id => departmentMap.get(id)?.name || '—');
+    if (names.length === 1) return names[0];
+    return `${names[0]} +${names.length - 1}`;
   };
 
   const handleEmpSearchQuery = async (userId: string, query: string) => {
@@ -196,39 +197,28 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
     }
   };
 
-  const handleDeptChange = async (userId: string, deptId: string) => {
-    try {
-      await adminService.updateEmployeeDepartment(userId, deptId);
-      toast.success('Отдел назначен');
-      await onReload();
-    } catch {
-      toast.error('Ошибка назначения отдела');
-    }
-  };
-
-  const getAdditionalDepartmentIds = (user: IUserFromApi): string[] => (
-    normalizeAdditionalDepartmentIds(
-      departmentAccessDrafts[user.id] ?? user.additional_department_ids ?? [],
-      user.department_id,
+  const getAssignedDepartmentIds = (user: IUserFromApi): string[] => (
+    normalizeAssignedDepartmentIds(
+      departmentAccessDrafts[user.id] ?? user.assigned_department_ids ?? [],
     )
   );
 
   const handleDepartmentAccessToggle = (user: IUserFromApi, departmentId: string) => {
-    const currentDepartmentIds = getAdditionalDepartmentIds(user);
+    const currentDepartmentIds = getAssignedDepartmentIds(user);
     const nextDepartmentIds = currentDepartmentIds.includes(departmentId)
       ? currentDepartmentIds.filter(id => id !== departmentId)
       : [...currentDepartmentIds, departmentId];
 
     setDepartmentAccessDrafts(prev => ({
       ...prev,
-      [user.id]: normalizeAdditionalDepartmentIds(nextDepartmentIds, user.department_id),
+      [user.id]: normalizeAssignedDepartmentIds(nextDepartmentIds),
     }));
   };
 
   const handleDepartmentAccessReset = (user: IUserFromApi) => {
     setDepartmentAccessDrafts(prev => ({
       ...prev,
-      [user.id]: normalizeAdditionalDepartmentIds(user.additional_department_ids ?? [], user.department_id),
+      [user.id]: normalizeAssignedDepartmentIds(user.assigned_department_ids ?? []),
     }));
     setDepartmentAccessQuery(prev => ({
       ...prev,
@@ -237,21 +227,21 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
   };
 
   const handleDepartmentAccessSave = async (user: IUserFromApi) => {
-    const additionalDepartmentIds = getAdditionalDepartmentIds(user);
+    const assignedDepartmentIds = getAssignedDepartmentIds(user);
     setSavingDepartmentAccessUserId(user.id);
     try {
-      const response = await adminService.updateUserDepartmentAccess(user.id, additionalDepartmentIds);
+      const response = await adminService.updateUserDepartmentAccess(user.id, assignedDepartmentIds);
       setDepartmentAccessDrafts(prev => ({
         ...prev,
-        [user.id]: normalizeAdditionalDepartmentIds(response.additional_department_ids, user.department_id),
+        [user.id]: normalizeAssignedDepartmentIds(response.assigned_department_ids),
       }));
-      toast.success('Дополнительные доступы сохранены');
+      toast.success('Назначения сохранены');
       await onReload();
       if (profile?.id === user.id) {
         await refreshProfile();
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Ошибка сохранения доступов');
+      toast.error(error instanceof Error ? error.message : 'Ошибка сохранения назначений');
     } finally {
       setSavingDepartmentAccessUserId(null);
     }
@@ -330,22 +320,21 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
         <div className={styles.userListTableHeader}>
           <span>ФИО</span>
           <span>Роль</span>
-          <span>Отдел</span>
+          <span>Отделы</span>
           <span>Статус</span>
           <span></span>
         </div>
 
         {filteredUsers.map(user => {
           const isExpanded = expandedUserId === user.id;
-          const additionalDepartmentIds = getAdditionalDepartmentIds(user);
-          const initialDepartmentIds = normalizeAdditionalDepartmentIds(user.additional_department_ids ?? [], user.department_id);
-          const hasDepartmentAccessChanges = !areDepartmentSelectionsEqual(additionalDepartmentIds, initialDepartmentIds);
-          const availableAdditionalDepartments = flatDepts.filter(department => department.id !== user.department_id);
+          const assignedDepartmentIds = getAssignedDepartmentIds(user);
+          const initialDepartmentIds = normalizeAssignedDepartmentIds(user.assigned_department_ids ?? []);
+          const hasDepartmentAccessChanges = !areDepartmentSelectionsEqual(assignedDepartmentIds, initialDepartmentIds);
           const departmentSearchQuery = (departmentAccessQuery[user.id] || '').trim().toLowerCase();
-          const filteredAdditionalDepartments = availableAdditionalDepartments.filter(department => (
+          const filteredDepartments = flatDepts.filter(department => (
             !departmentSearchQuery || department.name.toLowerCase().includes(departmentSearchQuery)
           ));
-          const selectedDepartments = additionalDepartmentIds
+          const selectedDepartments = assignedDepartmentIds
             .map(departmentId => departmentMap.get(departmentId) || {
               id: departmentId,
               name: `Не найденный отдел (${departmentId.slice(0, 8)})`,
@@ -370,7 +359,6 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
 
           return (
             <div key={user.id} className={`${styles.userRow} ${isExpanded ? styles.expanded : ''}`}>
-              {/* Основная строка */}
               <div className={styles.userRowHeader} onClick={() => toggleExpand(user.id)}>
                 <div className={styles.userRowInfo}>
                   <div className={styles.userRowName}>
@@ -387,7 +375,14 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
 
                 <div className={styles.userRowMeta}>
                   <span className={styles.userRowRole}>{getPositionName(user.position_type)}</span>
-                  <span className={styles.userRowOrg}>{getDeptName(user)}</span>
+                  <span
+                    className={styles.userRowOrg}
+                    title={user.assigned_department_ids
+                      .map(id => departmentMap.get(id)?.name || id)
+                      .join(', ')}
+                  >
+                    {renderAssignedDepartments(user)}
+                  </span>
                   <div className={styles.userRowStatusCell}>
                     <span className={
                       !user.is_approved ? styles.notApproved
@@ -413,10 +408,8 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
                 </div>
               </div>
 
-              {/* Раскрывающееся меню */}
               {isExpanded && (
                 <div className={styles.userRowControls}>
-                  {/* Редактирование ФИО */}
                   <div className={styles.controlGroup}>
                     <label>ФИО:</label>
                     {editingName?.userId === user.id ? (
@@ -449,188 +442,163 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
                     )}
                   </div>
 
-                  <>
-                    <div className={styles.controlGroup}>
-                      <label>Должность:</label>
-                      <select
-                        value={user.position_type}
-                        onChange={(e) => handlePositionChange(user.id, e.target.value as EmployeePositionType)}
-                      >
-                        {assignableRoles
-                          .sort((a, b) => Number(b.is_admin) - Number(a.is_admin) || a.name.localeCompare(b.name, 'ru'))
-                          .map(role => (
-                            <option key={role.code} value={role.code}>{role.name}</option>
-                          ))
-                        }
-                      </select>
-                    </div>
+                  <div className={styles.controlGroup}>
+                    <label>Должность:</label>
+                    <select
+                      value={user.position_type}
+                      onChange={(e) => handlePositionChange(user.id, e.target.value as EmployeePositionType)}
+                    >
+                      {assignableRoles
+                        .sort((a, b) => Number(b.is_admin) - Number(a.is_admin) || a.name.localeCompare(b.name, 'ru'))
+                        .map(role => (
+                          <option key={role.code} value={role.code}>{role.name}</option>
+                        ))
+                      }
+                    </select>
+                  </div>
 
-                    <div className={styles.controlGroup}>
-                      <label>Входящий чат:</label>
-                      <select
-                        value={user.chat_inbound_mode || 'open'}
-                        onChange={(e) => handleChatInboundModeChange(user.id, e.target.value as ChatInboundMode)}
-                      >
-                        <option value="open">Открыт</option>
-                        <option value="requests_only">Только по запросу</option>
-                        <option value="disabled">Запрещён</option>
-                      </select>
-                    </div>
+                  <div className={styles.controlGroup}>
+                    <label>Входящий чат:</label>
+                    <select
+                      value={user.chat_inbound_mode || 'open'}
+                      onChange={(e) => handleChatInboundModeChange(user.id, e.target.value as ChatInboundMode)}
+                    >
+                      <option value="open">Открыт</option>
+                      <option value="requests_only">Только по запросу</option>
+                      <option value="disabled">Запрещён</option>
+                    </select>
+                  </div>
 
-                    <div className={styles.controlGroup}>
-                      <label>Отдел:</label>
-                      <select
-                        value={user.department_id || ''}
-                        onChange={(e) => handleDeptChange(user.id, e.target.value)}
-                        disabled={!user.employee_id}
-                      >
-                        <option value="">
-                          {user.employee_id ? 'Выберите отдел' : 'Сначала привяжите СКУД'}
-                        </option>
-                        {flatDepts.map(d => (
-                          <option key={d.id} value={d.id} disabled={d.hasChildren}>
-                            {'\u00A0\u00A0'.repeat(d.level)}{d.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className={styles.controlGroup}>
-                      <label>Сотрудник СКУД:</label>
-                      {user.employee_id ? (
-                        <div className={styles.skudLinked}>
-                          <span className={styles.skudLinkedText}>
-                            ID {user.employee_id}
-                          </span>
-                          <button
-                            className={styles.skudUnlinkBtn}
-                            onClick={() => handleEmpLink(user.id, null)}
+                  <div className={styles.controlGroup}>
+                    <label>Сотрудник СКУД:</label>
+                    {user.employee_id ? (
+                      <div className={styles.skudLinked}>
+                        <span className={styles.skudLinkedText}>
+                          ID {user.employee_id}
+                        </span>
+                        <button
+                          className={styles.skudUnlinkBtn}
+                          onClick={() => handleEmpLink(user.id, null)}
+                        >
+                          Отвязать
+                        </button>
+                      </div>
+                    ) : (
+                      <span className={styles.skudNotLinked}>Не привязан</span>
+                    )}
+                    <input
+                      type="text"
+                      placeholder="Поиск по ФИО..."
+                      value={empSearch?.userId === user.id ? empSearch.query : ''}
+                      onChange={(e) => handleEmpSearchQuery(user.id, e.target.value)}
+                      className={`${styles.nameInput} ${styles.skudSearchInput}`}
+                    />
+                    {empSearch?.userId === user.id && empSearch.loading && (
+                      <div className={styles.skudSearchLoading}>Поиск...</div>
+                    )}
+                    {empSearch?.userId === user.id && empSearch.results.length > 0 && (
+                      <div className={styles.skudSearchResults}>
+                        {empSearch.results.map(emp => (
+                          <div
+                            key={emp.id}
+                            className={styles.skudSearchItem}
+                            onClick={() => handleEmpLink(user.id, emp.id, emp.full_name)}
                           >
-                            Отвязать
+                            {emp.full_name}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className={styles.departmentAccessSection}>
+                    <div className={styles.departmentAccessHeader}>
+                      <div>
+                        <div className={styles.departmentAccessTitle}>Назначенные отделы и бригады</div>
+                        <div className={styles.departmentAccessHint}>
+                          Выберите все отделы и бригады, за которые отвечает пользователь. Все назначения равноправны.
+                        </div>
+                      </div>
+                      <div className={styles.departmentAccessCount}>
+                        {assignedDepartmentIds.length} выбрано
+                      </div>
+                    </div>
+
+                    <input
+                      type="text"
+                      placeholder="Поиск отдела или бригады..."
+                      value={departmentAccessQuery[user.id] || ''}
+                      onChange={(e) => setDepartmentAccessQuery(prev => ({
+                        ...prev,
+                        [user.id]: e.target.value,
+                      }))}
+                      className={`${styles.nameInput} ${styles.departmentAccessSearch}`}
+                    />
+
+                    {selectedDepartments.length > 0 && (
+                      <div className={styles.departmentAccessTags}>
+                        {selectedDepartments.map(department => (
+                          <button
+                            key={department.id}
+                            type="button"
+                            className={styles.departmentAccessTag}
+                            onClick={() => handleDepartmentAccessToggle(user, department.id)}
+                          >
+                            {department.name}
                           </button>
-                        </div>
-                      ) : (
-                        <span className={styles.skudNotLinked}>Не привязан</span>
-                      )}
-                      <input
-                        type="text"
-                        placeholder="Поиск по ФИО..."
-                        value={empSearch?.userId === user.id ? empSearch.query : ''}
-                        onChange={(e) => handleEmpSearchQuery(user.id, e.target.value)}
-                        className={`${styles.nameInput} ${styles.skudSearchInput}`}
-                      />
-                      {empSearch?.userId === user.id && empSearch.loading && (
-                        <div className={styles.skudSearchLoading}>Поиск...</div>
-                      )}
-                      {empSearch?.userId === user.id && empSearch.results.length > 0 && (
-                        <div className={styles.skudSearchResults}>
-                          {empSearch.results.map(emp => (
-                            <div
-                              key={emp.id}
-                              className={styles.skudSearchItem}
-                              onClick={() => handleEmpLink(user.id, emp.id, emp.full_name)}
-                            >
-                              {emp.full_name}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className={styles.departmentAccessSection}>
-                      <div className={styles.departmentAccessHeader}>
-                        <div>
-                          <div className={styles.departmentAccessTitle}>Дополнительный доступ к отделам и бригадам</div>
-                          <div className={styles.departmentAccessHint}>
-                            Основной отдел назначается отдельно. Здесь можно вручную добавить ещё подразделения,
-                            которые руководитель будет видеть в табелях и связанных разделах.
-                          </div>
-                        </div>
-                        <div className={styles.departmentAccessCount}>
-                          {additionalDepartmentIds.length} выбрано
-                        </div>
+                        ))}
                       </div>
+                    )}
 
-                      <div className={styles.departmentAccessPrimary}>
-                        Основной отдел: <strong>{getDeptName(user)}</strong>
-                      </div>
-
-                      <input
-                        type="text"
-                        placeholder="Поиск отдела или бригады..."
-                        value={departmentAccessQuery[user.id] || ''}
-                        onChange={(e) => setDepartmentAccessQuery(prev => ({
-                          ...prev,
-                          [user.id]: e.target.value,
-                        }))}
-                        className={`${styles.nameInput} ${styles.departmentAccessSearch}`}
-                      />
-
-                      {selectedDepartments.length > 0 && (
-                        <div className={styles.departmentAccessTags}>
-                          {selectedDepartments.map(department => (
-                            <button
+                    <div className={styles.departmentAccessList}>
+                      {filteredDepartments.length > 0 ? (
+                        filteredDepartments.map(department => {
+                          const checked = assignedDepartmentIds.includes(department.id);
+                          return (
+                            <label
                               key={department.id}
-                              type="button"
-                              className={styles.departmentAccessTag}
-                              onClick={() => handleDepartmentAccessToggle(user, department.id)}
+                              className={`${styles.departmentAccessItem} ${checked ? styles.departmentAccessItemChecked : ''}`}
                             >
-                              {department.name}
-                            </button>
-                          ))}
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => handleDepartmentAccessToggle(user, department.id)}
+                              />
+                              <span
+                                className={styles.departmentAccessItemLabel}
+                                style={{ paddingLeft: `${department.level * 14}px` }}
+                              >
+                                {department.name}
+                              </span>
+                            </label>
+                          );
+                        })
+                      ) : (
+                        <div className={styles.departmentAccessEmpty}>
+                          {departmentSearchQuery ? 'По запросу ничего не найдено' : 'Нет доступных подразделений'}
                         </div>
                       )}
-
-                      <div className={styles.departmentAccessList}>
-                        {filteredAdditionalDepartments.length > 0 ? (
-                          filteredAdditionalDepartments.map(department => {
-                            const checked = additionalDepartmentIds.includes(department.id);
-                            return (
-                              <label
-                                key={department.id}
-                                className={`${styles.departmentAccessItem} ${checked ? styles.departmentAccessItemChecked : ''}`}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => handleDepartmentAccessToggle(user, department.id)}
-                                />
-                                <span
-                                  className={styles.departmentAccessItemLabel}
-                                  style={{ paddingLeft: `${department.level * 14}px` }}
-                                >
-                                  {department.name}
-                                </span>
-                              </label>
-                            );
-                          })
-                        ) : (
-                          <div className={styles.departmentAccessEmpty}>
-                            {departmentSearchQuery ? 'По запросу ничего не найдено' : 'Нет доступных подразделений'}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className={styles.departmentAccessActions}>
-                        <button
-                          type="button"
-                          className={styles.cancelBtn}
-                          onClick={() => handleDepartmentAccessReset(user)}
-                          disabled={!hasDepartmentAccessChanges || savingDepartmentAccessUserId === user.id}
-                        >
-                          Сбросить
-                        </button>
-                        <button
-                          type="button"
-                          className={styles.saveBtn}
-                          onClick={() => handleDepartmentAccessSave(user)}
-                          disabled={!hasDepartmentAccessChanges || savingDepartmentAccessUserId === user.id}
-                        >
-                          {savingDepartmentAccessUserId === user.id ? 'Сохраняю...' : 'Сохранить доступы'}
-                        </button>
-                      </div>
                     </div>
-                  </>
+
+                    <div className={styles.departmentAccessActions}>
+                      <button
+                        type="button"
+                        className={styles.cancelBtn}
+                        onClick={() => handleDepartmentAccessReset(user)}
+                        disabled={!hasDepartmentAccessChanges || savingDepartmentAccessUserId === user.id}
+                      >
+                        Сбросить
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.saveBtn}
+                        onClick={() => handleDepartmentAccessSave(user)}
+                        disabled={!hasDepartmentAccessChanges || savingDepartmentAccessUserId === user.id}
+                      >
+                        {savingDepartmentAccessUserId === user.id ? 'Сохраняю...' : 'Сохранить назначения'}
+                      </button>
+                    </div>
+                  </div>
 
                   <div className={styles.controlActions}>
                     {!user.email_confirmed && (
@@ -672,7 +640,6 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
         })}
       </div>
 
-      {/* 2FA Modal */}
       {twoFactorModal.visible && (
         <div className={styles.modalOverlay} onClick={closeTwoFactorModal}>
           <div className={styles.modal} onClick={e => e.stopPropagation()}>

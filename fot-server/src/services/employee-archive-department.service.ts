@@ -3,6 +3,7 @@ import { invalidateDeptTreeCache } from './skud-shared.service.js';
 import { settingsService } from './settings.service.js';
 import { ensureLocalSigurDepartment } from './sigur-linked-employees.service.js';
 import { employeeCache } from './employee-cache.service.js';
+import { deactivateAllDepartmentAccessForEmployee } from './employee-department-access.service.js';
 import type { ConnectionType } from './sigur.service.js';
 
 const LOCAL_ARCHIVE_DEPARTMENT_ID_KEY = 'employees_archive_department_id';
@@ -227,6 +228,14 @@ async function moveEmployeesIntoArchiveDepartment(
     .update({ effective_to: effectiveDate })
     .in('employee_id', uniqueIds)
     .is('effective_to', null);
+
+  for (const id of uniqueIds) {
+    try {
+      await deactivateAllDepartmentAccessForEmployee(id);
+    } catch (err) {
+      console.warn(`[archive] deactivate access for ${id} failed:`, err);
+    }
+  }
 
   uniqueIds.forEach(id => employeeCache.invalidate(id));
   return uniqueIds;

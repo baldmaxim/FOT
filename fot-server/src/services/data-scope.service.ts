@@ -1,6 +1,5 @@
-import { supabase } from '../config/database.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { listExplicitDepartmentIdsForUser } from './department-access.service.js';
+import { listExplicitDepartmentIdsForUser, loadEmployeeAccessMap } from './department-access.service.js';
 
 export type DataScope = 'self' | 'department' | 'all';
 
@@ -45,14 +44,12 @@ export async function canAccessEmployeeInScope(
   if (accessible === 'all') return true;
   if (accessible.length === 0) return false;
 
-  const { data, error } = await supabase
-    .from('employees')
-    .select('org_department_id')
-    .eq('id', employeeId)
-    .single();
+  const targetAccessMap = await loadEmployeeAccessMap([employeeId]);
+  const targetDepartmentIds = targetAccessMap.get(employeeId) || [];
+  if (targetDepartmentIds.length === 0) return false;
 
-  if (error || !data) return false;
-  return accessible.includes((data.org_department_id as string | null) ?? '');
+  const accessibleSet = new Set(accessible);
+  return targetDepartmentIds.some(id => accessibleSet.has(id));
 }
 
 export async function canAccessDepartmentInScope(

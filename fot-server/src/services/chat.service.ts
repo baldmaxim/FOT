@@ -522,7 +522,7 @@ export const chatService = {
         id: context.id,
         full_name: context.full_name,
         role_code: context.role_code,
-        department_id: context.department_id,
+        department_id: context.department_ids[0] ?? null,
         availability: decision.availability,
         availability_reason: decision.availability_reason,
         request_status: decision.request_status,

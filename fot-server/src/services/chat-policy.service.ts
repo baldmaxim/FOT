@@ -1,6 +1,7 @@
 import { supabase } from '../config/database.js';
 import type { ChatInboundMode } from '../types/index.js';
 import { getRoleById } from './roles-cache.service.js';
+import { loadEmployeeAccessMap } from './department-access.service.js';
 
 export type ChatAvailability = 'direct' | 'request' | 'forbidden';
 export type ChatRequestStatus = 'incoming_pending' | 'outgoing_pending' | null;
@@ -12,7 +13,7 @@ export interface IChatUserContext {
   is_admin: boolean;
   supervisor_id: string | null;
   employee_id: number | null;
-  department_id: string | null;
+  department_ids: string[];
   chat_inbound_mode: ChatInboundMode;
   is_approved: boolean;
 }
@@ -32,8 +33,10 @@ const normalizePair = (left: string, right: string): [string, string] => {
   return left < right ? [left, right] : [right, left];
 };
 
-const sameDepartment = (left: IChatUserContext, right: IChatUserContext): boolean => {
-  return !!left.department_id && left.department_id === right.department_id;
+const hasDepartmentOverlap = (left: IChatUserContext, right: IChatUserContext): boolean => {
+  if (left.department_ids.length === 0 || right.department_ids.length === 0) return false;
+  const rightSet = new Set(right.department_ids);
+  return left.department_ids.some(id => rightSet.has(id));
 };
 
 const isDirectSupervisorLink = (left: IChatUserContext, right: IChatUserContext): boolean => {
@@ -77,21 +80,7 @@ export const chatPolicyService = {
       .map(profile => profile.employee_id)
       .filter((id): id is number => typeof id === 'number');
 
-    const employeeDeptMap = new Map<number, string | null>();
-    if (employeeIds.length > 0) {
-      const { data: employees, error: employeeError } = await supabase
-        .from('employees')
-        .select('id, org_department_id')
-        .in('id', employeeIds);
-
-      if (employeeError) {
-        throw new Error(`Failed to load chat departments: ${employeeError.message}`);
-      }
-
-      (employees || []).forEach(employee => {
-        employeeDeptMap.set(employee.id, employee.org_department_id || null);
-      });
-    }
+    const employeeAccessMap = await loadEmployeeAccessMap(employeeIds);
 
     const result = new Map<string, IChatUserContext>();
     for (const profile of profiles || []) {
@@ -103,7 +92,7 @@ export const chatPolicyService = {
         is_admin: !!role?.is_admin,
         supervisor_id: profile.supervisor_id,
         employee_id: profile.employee_id,
-        department_id: profile.employee_id ? (employeeDeptMap.get(profile.employee_id) ?? null) : null,
+        department_ids: profile.employee_id ? (employeeAccessMap.get(profile.employee_id) ?? []) : [],
         chat_inbound_mode: (profile.chat_inbound_mode || 'open') as ChatInboundMode,
         is_approved: !!profile.is_approved,
       });
@@ -262,8 +251,8 @@ export const chatPolicyService = {
       return buildDecision('forbidden', 'target_disabled', 'Пользователь не принимает новые контакты', requestStatus);
     }
 
-    if (sameDepartment(currentUser, targetUser)) {
-      return buildDecision('direct', 'direct_same_department', 'Прямой чат доступен внутри одного подразделения', requestStatus);
+    if (hasDepartmentOverlap(currentUser, targetUser)) {
+      return buildDecision('direct', 'direct_same_department', 'Прямой чат доступен внутри общих подразделений', requestStatus);
     }
 
     if (isDirectSupervisorLink(currentUser, targetUser)) {

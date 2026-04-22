@@ -21,6 +21,10 @@ import {
   canAccessEmployeeInScope,
   resolveRequestDataScope,
 } from '../services/data-scope.service.js';
+import {
+  upsertTechnicalDepartmentAccess,
+  deactivateAllDepartmentAccessForEmployee,
+} from '../services/employee-department-access.service.js';
 
 const EMPLOYEE_LIFECYCLE_COLUMNS = 'id, full_name, last_name, first_name, middle_name, current_salary, salary_actual, salary_calculated, staff_units, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, created_at, updated_at, work_category';
 
@@ -157,6 +161,13 @@ async function moveEmployeeToDepartmentInternal(params: {
         effectiveDate,
       });
 
+      await upsertTechnicalDepartmentAccess(
+        employee.id,
+        targetDepartment.id,
+        employee.org_department_id || null,
+        'sigur_sync',
+      );
+
       await syncLinkedEmployeeFromSigur(employee.id, connection);
     } catch (error) {
       if (error instanceof AxiosError) {
@@ -190,6 +201,13 @@ async function moveEmployeeToDepartmentInternal(params: {
     createdBy: req.user.id,
     effectiveDate,
   });
+
+  await upsertTechnicalDepartmentAccess(
+    employee.id,
+    targetDepartment.id,
+    employee.org_department_id || null,
+    'portal_lifecycle',
+  );
 
   return 'portal';
 }
@@ -228,6 +246,8 @@ export async function archive(req: AuthenticatedRequest, res: Response): Promise
       return;
     }
 
+    await deactivateAllDepartmentAccessForEmployee(Number(id));
+
     employeeCache.invalidate(id);
 
     await auditService.logFromRequest(req, req.user.id, 'ARCHIVE_EMPLOYEE', {
@@ -262,6 +282,15 @@ export async function restore(req: AuthenticatedRequest, res: Response): Promise
     if (error || !data) {
       res.status(404).json({ success: false, error: 'Employee not found' });
       return;
+    }
+
+    if (data.org_department_id) {
+      await upsertTechnicalDepartmentAccess(
+        Number(id),
+        data.org_department_id as string,
+        null,
+        data.sigur_employee_id ? 'sigur_sync' : 'portal_lifecycle',
+      );
     }
 
     employeeCache.invalidate(id);
@@ -532,6 +561,13 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
         effectiveDate: today,
       });
     }
+
+    await upsertTechnicalDepartmentAccess(
+      employeeId,
+      targetDepartment.id,
+      null,
+      existing.sigur_employee_id && !sigurDetached ? 'sigur_sync' : 'portal_lifecycle',
+    );
 
     const { data, error } = await supabase
       .from('employees')

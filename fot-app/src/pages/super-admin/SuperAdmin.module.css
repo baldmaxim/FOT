@@ -1001,7 +1001,7 @@
 
 .userListTableHeader {
   display: grid;
-  grid-template-columns: 1fr 120px 140px 28px;
+  grid-template-columns: minmax(240px, 1fr) 120px 220px 140px 28px;
   align-items: center;
   padding: 6px 16px;
   gap: 12px;
@@ -1023,7 +1023,7 @@
 
 .userRowHeader {
   display: grid;
-  grid-template-columns: 1fr 120px 140px 28px;
+  grid-template-columns: minmax(240px, 1fr) 120px 220px 140px 28px;
   align-items: center;
   padding: 10px 16px;
   cursor: pointer;
@@ -1036,8 +1036,7 @@
 }
 
 .userRowInfo {
-  flex: 1;
-  min-width: 200px;
+  min-width: 0;
 }
 
 .userRowName {
@@ -1070,7 +1069,7 @@
   font-weight: 500;
 }
 
-/* На десктопе — прозрачная обёртка: дети становятся прямыми grid-элементами */
+/* Legacy-обёртка: используется в EmployeeDepartmentAssignmentsTab */
 .userRowMeta {
   display: contents;
 }
@@ -1083,6 +1082,10 @@
   border-radius: 4px;
   justify-self: center;
   text-align: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .userRowOrg {
@@ -1093,12 +1096,14 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: center;
+  min-width: 0;
 }
 
 .userRowStatusCell {
   display: flex;
   justify-content: center;
   align-items: center;
+  min-width: 0;
 }
 
 .expandIcon {

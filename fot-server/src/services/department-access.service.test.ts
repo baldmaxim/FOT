@@ -11,11 +11,6 @@ type QueryResponse = {
 };
 
 const mockedState = vi.hoisted(() => ({
-  userDepartmentAccess: [] as Array<{
-    user_id: string;
-    department_id: string;
-    is_active: boolean;
-  }>,
   employeeDepartmentAccess: [] as Array<{
     employee_id: number;
     department_id: string;
@@ -40,13 +35,6 @@ function matchesQueryRecord<T extends Record<string, unknown>>(row: T, query: Qu
 }
 
 function resolveQuery(query: QueryRecord): QueryResponse {
-  if (query.table === 'user_department_access') {
-    return {
-      data: mockedState.userDepartmentAccess.filter(row => matchesQueryRecord(row, query)),
-      error: null,
-    };
-  }
-
   if (query.table === 'employee_department_access') {
     return {
       data: mockedState.employeeDepartmentAccess.filter(row => matchesQueryRecord(row, query)),
@@ -90,58 +78,46 @@ import { listManagedDepartmentIdsForUser, loadManagedDepartmentMap } from './dep
 
 describe('department-access.service', () => {
   beforeEach(() => {
-    mockedState.userDepartmentAccess = [];
     mockedState.employeeDepartmentAccess = [];
   });
 
-  it('unions primary, user, and employee departments without duplicates', async () => {
-    mockedState.userDepartmentAccess = [
-      { user_id: 'user-1', department_id: 'dept-b', is_active: true },
-      { user_id: 'user-1', department_id: 'dept-a', is_active: true },
-    ];
+  it('возвращает только активные назначения сотрудника (понятия "основной отдел" нет)', async () => {
     mockedState.employeeDepartmentAccess = [
-      { employee_id: 10, department_id: 'dept-c', is_active: true },
-    ];
-
-    const result = await listManagedDepartmentIdsForUser('user-1', 'dept-a', 10);
-
-    expect(result).toEqual(['dept-a', 'dept-b', 'dept-c']);
-  });
-
-  it('ignores inactive explicit rows from both sources', async () => {
-    mockedState.userDepartmentAccess = [
-      { user_id: 'user-1', department_id: 'dept-b', is_active: false },
-    ];
-    mockedState.employeeDepartmentAccess = [
+      { employee_id: 10, department_id: 'dept-a', is_active: true },
+      { employee_id: 10, department_id: 'dept-b', is_active: true },
       { employee_id: 10, department_id: 'dept-c', is_active: false },
-      { employee_id: 10, department_id: 'dept-d', is_active: true },
     ];
 
-    const result = await listManagedDepartmentIdsForUser('user-1', 'dept-a', 10);
+    const result = await listManagedDepartmentIdsForUser('user-1', null, 10);
 
-    expect(result).toEqual(['dept-a', 'dept-d']);
+    expect(result).toEqual(['dept-a', 'dept-b']);
   });
 
-  it('builds managed department maps for multiple users with employee-based access', async () => {
-    mockedState.userDepartmentAccess = [
-      { user_id: 'user-1', department_id: 'dept-b', is_active: true },
-    ];
+  it('без employee_id возвращает пустой список', async () => {
     mockedState.employeeDepartmentAccess = [
+      { employee_id: 10, department_id: 'dept-a', is_active: true },
+    ];
+
+    const result = await listManagedDepartmentIdsForUser('user-1', null, null);
+
+    expect(result).toEqual([]);
+  });
+
+  it('строит карту назначений для нескольких сотрудников', async () => {
+    mockedState.employeeDepartmentAccess = [
+      { employee_id: 11, department_id: 'dept-a', is_active: true },
+      { employee_id: 22, department_id: 'dept-b', is_active: true },
       { employee_id: 22, department_id: 'dept-c', is_active: true },
     ];
 
     const result = await loadManagedDepartmentMap([
-      { user_id: 'user-1', primary_department_id: 'dept-a', employee_id: 11 },
-      { user_id: 'user-2', primary_department_id: 'dept-c', employee_id: 22 },
+      { user_id: 'user-1', employee_id: 11 },
+      { user_id: 'user-2', employee_id: 22 },
+      { user_id: 'user-3', employee_id: null },
     ]);
 
-    expect(result.get('user-1')).toEqual({
-      primary_department_id: 'dept-a',
-      managed_department_ids: ['dept-a', 'dept-b'],
-    });
-    expect(result.get('user-2')).toEqual({
-      primary_department_id: 'dept-c',
-      managed_department_ids: ['dept-c'],
-    });
+    expect(result.get('user-1')?.managed_department_ids).toEqual(['dept-a']);
+    expect(result.get('user-2')?.managed_department_ids?.sort()).toEqual(['dept-b', 'dept-c']);
+    expect(result.get('user-3')?.managed_department_ids).toEqual([]);
   });
 });
