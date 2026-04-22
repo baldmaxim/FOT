@@ -39,6 +39,7 @@ export const documentService = {
   }) => {
     const res = await apiClient.post<ApiResponse<{
       upload_url: string;
+      upload_headers: Record<string, string>;
       r2_key: string;
       employee_id: number;
       file_name: string;
@@ -89,7 +90,7 @@ export const documentService = {
   /** Загрузить файл через presigned URL */
   uploadFile: async (file: File, employeeId: number, category: DocumentCategory, leaveRequestId?: number) => {
     // 1. Получаем presigned URL
-    const { upload_url, r2_key } = await documentService.getUploadUrl({
+    const { upload_url, upload_headers, r2_key } = await documentService.getUploadUrl({
       employee_id: employeeId,
       file_name: file.name,
       content_type: file.type || 'application/octet-stream',
@@ -101,7 +102,10 @@ export const documentService = {
     await fetch(upload_url, {
       method: 'PUT',
       body: file,
-      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      headers: {
+        'Content-Type': file.type || 'application/octet-stream',
+        ...(upload_headers || {}),
+      },
     });
 
     // 3. Подтверждаем загрузку

@@ -1,4 +1,5 @@
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import type { PutObjectCommandInput } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { settingsService } from './settings.service.js';
 import { randomUUID } from 'crypto';
@@ -8,6 +9,7 @@ const URL_EXPIRY = 3600;
 
 let cachedClient: S3Client | null = null;
 let cachedBucket: string = '';
+let cachedKmsKeyId: string = '';
 let cachedHash: string = '';
 
 export const sanitizeS3Value = (raw: string): string => raw.trim();
@@ -26,6 +28,7 @@ export type S3ClientConfig = {
   endpoint: string;
   region: string;
   forcePathStyle: boolean;
+  kmsKeyId?: string;
 };
 
 export const buildS3Endpoint = (cfg: Pick<S3ClientConfig, 'accountId' | 'endpoint'>): string => {
@@ -40,13 +43,13 @@ export const createS3Client = (cfg: S3ClientConfig): S3Client => new S3Client({
   credentials: { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey },
 });
 
-const getR2 = async (): Promise<{ client: S3Client | null; bucket: string; enabled: boolean }> => {
+const getR2 = async (): Promise<{ client: S3Client | null; bucket: string; kmsKeyId: string; enabled: boolean }> => {
   const cfg = await settingsService.getR2Config();
   if (!cfg.enabled) {
-    return { client: null, bucket: '', enabled: false };
+    return { client: null, bucket: '', kmsKeyId: '', enabled: false };
   }
 
-  const hash = `${cfg.accountId}:${cfg.accessKeyId}:${cfg.secretAccessKey}:${cfg.bucketName}:${cfg.endpoint}:${cfg.region}:${cfg.forcePathStyle}`;
+  const hash = `${cfg.accountId}:${cfg.accessKeyId}:${cfg.secretAccessKey}:${cfg.bucketName}:${cfg.endpoint}:${cfg.region}:${cfg.forcePathStyle}:${cfg.kmsKeyId}`;
   if (hash !== cachedHash) {
     cachedClient = createS3Client({
       accountId: cfg.accountId,
@@ -57,16 +60,18 @@ const getR2 = async (): Promise<{ client: S3Client | null; bucket: string; enabl
       forcePathStyle: cfg.forcePathStyle,
     });
     cachedBucket = cfg.bucketName;
+    cachedKmsKeyId = cfg.kmsKeyId;
     cachedHash = hash;
   }
 
-  return { client: cachedClient, bucket: cachedBucket, enabled: true };
+  return { client: cachedClient, bucket: cachedBucket, kmsKeyId: cachedKmsKeyId, enabled: true };
 };
 
 export const r2Service = {
   invalidateCachedConfig: (): void => {
     cachedClient = null;
     cachedBucket = '';
+    cachedKmsKeyId = '';
     cachedHash = '';
   },
 
@@ -80,11 +85,26 @@ export const r2Service = {
     return `documents/${employeeId}/${randomUUID()}${ext}`;
   },
 
-  generateUploadUrl: async (key: string, contentType: string): Promise<string> => {
-    const { client, bucket } = await getR2();
+  generateUploadUrl: async (key: string, contentType: string): Promise<{ url: string; headers: Record<string, string> }> => {
+    const { client, bucket, kmsKeyId } = await getR2();
     if (!client) throw new Error('R2 не настроен');
-    const command = new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: contentType });
-    return getSignedUrl(client, command, { expiresIn: URL_EXPIRY });
+
+    const putInput: PutObjectCommandInput = { Bucket: bucket, Key: key, ContentType: contentType };
+    const headers: Record<string, string> = {};
+    const unhoistableHeaders = new Set<string>();
+
+    if (kmsKeyId) {
+      putInput.ServerSideEncryption = 'aws:kms';
+      putInput.SSEKMSKeyId = kmsKeyId;
+      headers['x-amz-server-side-encryption'] = 'aws:kms';
+      headers['x-amz-server-side-encryption-aws-kms-key-id'] = kmsKeyId;
+      unhoistableHeaders.add('x-amz-server-side-encryption');
+      unhoistableHeaders.add('x-amz-server-side-encryption-aws-kms-key-id');
+    }
+
+    const command = new PutObjectCommand(putInput);
+    const url = await getSignedUrl(client, command, { expiresIn: URL_EXPIRY, unhoistableHeaders });
+    return { url, headers };
   },
 
   generateDownloadUrl: async (key: string): Promise<string> => {

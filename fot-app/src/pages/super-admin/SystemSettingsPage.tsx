@@ -38,6 +38,7 @@ export const SystemSettingsPage: FC = () => {
   const [endpoint, setEndpoint] = useState('');
   const [region, setRegion] = useState('');
   const [forcePathStyle, setForcePathStyle] = useState(false);
+  const [kmsKeyId, setKmsKeyId] = useState('');
   const [monitorSettings, setMonitorSettings] = useState<ISigurMonitorSettings>({
     enabled: true,
     failureThreshold: 2,
@@ -82,8 +83,9 @@ export const SystemSettingsPage: FC = () => {
       setEndpoint(status.endpoint || '');
       setRegion(status.region || '');
       setForcePathStyle(!!status.force_path_style);
+      setKmsKeyId(status.kms_key_id || '');
     }
-  }, [status?.endpoint, status?.region, status?.force_path_style]);
+  }, [status?.endpoint, status?.region, status?.force_path_style, status?.kms_key_id]);
 
   useEffect(() => {
     if (monitorSettingsQuery.data) {
@@ -115,6 +117,7 @@ export const SystemSettingsPage: FC = () => {
         endpoint?: string;
         region?: string;
         force_path_style?: boolean;
+        kms_key_id?: string;
       } = {};
       if (accountId) data.account_id = accountId;
       if (accessKeyId) data.access_key_id = accessKeyId;
@@ -123,6 +126,7 @@ export const SystemSettingsPage: FC = () => {
       data.endpoint = endpoint;
       data.region = region;
       data.force_path_style = forcePathStyle;
+      data.kms_key_id = kmsKeyId;
 
       await settingsService.saveR2(data);
       await queryClient.invalidateQueries({ queryKey: getR2StatusQueryKey() });
@@ -282,6 +286,18 @@ export const SystemSettingsPage: FC = () => {
               onChange={e => setSecretAccessKey(e.target.value)}
               placeholder={status?.has_secret_key ? '••• (установлен)' : 'S3 Secret Access Key'}
             />
+          </div>
+          <div className={styles.formGroupFull}>
+            <label className={styles.formLabel}>Идентификатор симметричного ключа шифрования (KMS Key ID)</label>
+            <input
+              className={styles.formInput}
+              value={kmsKeyId}
+              onChange={e => setKmsKeyId(e.target.value)}
+              placeholder="Например: 12345678-1234-1234-1234-123456789abc"
+            />
+            <span className={styles.hint}>
+              Включает SSE-KMS (aws:kms) шифрование всех новых загрузок. Для Cloud.ru требуется роль sckm.user на указанный ключ. Оставьте пустым — шифрование не применяется.
+            </span>
           </div>
           <div className={styles.formGroupFull}>
             <div className={styles.checkboxRow}>

@@ -10,6 +10,8 @@ export interface IR2Status {
   endpoint: string;
   region: string;
   force_path_style: boolean;
+  has_kms_key: boolean;
+  kms_key_id: string;
 }
 
 export interface IR2TestResult {
@@ -60,6 +62,7 @@ export const settingsService = {
     endpoint?: string;
     region?: string;
     force_path_style?: boolean;
+    kms_key_id?: string;
   }): Promise<{ enabled: boolean; bucket_name: string }> => {
     const res = await apiClient.put<ApiResponse<{ enabled: boolean; bucket_name: string }>>('/settings/r2', data);
     return res.data;

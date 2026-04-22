@@ -138,12 +138,13 @@ const getUploadUrl = async (req: AuthenticatedRequest, res: Response): Promise<v
     }
 
     const r2Key = r2Service.generateKey(employee_id, file_name);
-    const uploadUrl = await r2Service.generateUploadUrl(r2Key, content_type);
+    const { url: uploadUrl, headers: uploadHeaders } = await r2Service.generateUploadUrl(r2Key, content_type);
 
     res.json({
       success: true,
       data: {
         upload_url: uploadUrl,
+        upload_headers: uploadHeaders,
         r2_key: r2Key,
         employee_id,
         file_name,

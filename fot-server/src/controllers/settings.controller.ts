@@ -36,6 +36,8 @@ const getR2Status = async (_req: AuthenticatedRequest, res: Response): Promise<v
         endpoint: cfg.endpoint,
         region: cfg.region,
         force_path_style: cfg.forcePathStyle,
+        has_kms_key: !!cfg.kmsKeyId,
+        kms_key_id: cfg.kmsKeyId,
       },
     });
   } catch (err) {
@@ -55,6 +57,7 @@ const saveR2 = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       endpoint,
       region,
       force_path_style,
+      kms_key_id,
     } = req.body;
 
     const entries: { key: string; value: string | null; description?: string }[] = [];
@@ -83,6 +86,10 @@ const saveR2 = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
     if (force_path_style !== undefined) {
       entries.push({ key: 'r2_force_path_style', value: force_path_style ? 'true' : 'false', description: 'S3 Force Path Style URL' });
+    }
+    if (kms_key_id !== undefined) {
+      const clean = typeof kms_key_id === 'string' ? sanitizeS3Value(kms_key_id) : '';
+      entries.push({ key: 'r2_kms_key_id', value: clean || null, description: 'S3 SSE-KMS Key ID (симметричный ключ для aws:kms шифрования)' });
     }
 
     if (entries.length > 0) {

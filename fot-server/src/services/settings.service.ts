@@ -186,6 +186,7 @@ export const settingsService = {
     endpoint: string;
     region: string;
     forcePathStyle: boolean;
+    kmsKeyId: string;
     enabled: boolean;
   }> {
     await loadCache();
@@ -196,6 +197,7 @@ export const settingsService = {
     const endpoint = (cache.get('r2_endpoint') || process.env.R2_ENDPOINT || '').trim();
     const region = (cache.get('r2_region') || process.env.R2_REGION || 'auto').trim();
     const forcePathStyle = (cache.get('r2_force_path_style') || process.env.R2_FORCE_PATH_STYLE || '') === 'true';
+    const kmsKeyId = (cache.get('r2_kms_key_id') || process.env.R2_KMS_KEY_ID || '').trim();
     return {
       accountId,
       accessKeyId,
@@ -204,6 +206,7 @@ export const settingsService = {
       endpoint,
       region,
       forcePathStyle,
+      kmsKeyId,
       enabled: !!(accessKeyId && secretAccessKey && (accountId || endpoint)),
     };
   },
