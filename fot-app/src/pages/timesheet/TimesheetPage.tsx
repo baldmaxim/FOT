@@ -1471,14 +1471,14 @@ export const TimesheetPage: FC = () => {
                   type="button"
                   className="ts-btn ts-btn--primary"
                   onClick={openTeamManagement}
-                  disabled={!effectiveSelectedDeptId}
-                  title={!effectiveSelectedDeptId ? 'Сначала выберите отдел' : undefined}
+                  disabled={!activeGridDeptId}
+                  title={!activeGridDeptId ? 'Сначала выберите отдел' : undefined}
                 >
                   <UserPlus size={16} />
                   Добавить сотрудника
                 </button>
               )}
-              {effectiveSelectedDeptId && (
+              {activeGridDeptId && (
                 <button
                   type="button"
                   className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}
@@ -1604,23 +1604,6 @@ export const TimesheetPage: FC = () => {
                             month={`${year}-${String(month).padStart(2, '0')}`}
                             allowReview={false}
                           />
-                          {canUseTeamManagement && (
-                            <button
-                              type="button"
-                              className="ts-btn ts-btn--primary"
-                              onClick={openTeamManagement}
-                            >
-                              <UserPlus size={16} />
-                              Добавить сотрудника
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}
-                            onClick={handleBulkModeToggle}
-                          >
-                            Режим корректировок
-                          </button>
                         </div>
                       )}
                       {timesheetQuery.isLoading ? (
