@@ -31,7 +31,7 @@ const resolveApiUrl = (): string => {
     }
   }
 
-  return configured || 'http://localhost:3000/api';
+  return configured || 'http://localhost:3001/api';
 };
 
 export const API_URL = resolveApiUrl();

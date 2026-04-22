@@ -21,7 +21,7 @@ const envSchema = z.object({
   JWT_EXPIRES_IN: z.string().default('7d'),
   JWT_REFRESH_EXPIRES_IN: z.string().default('30d'),
   TOTP_ISSUER: z.string().default('FOT-App'),
-  PORT: z.string().default('3000'),
+  PORT: z.string().default('3001'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   CORS_ORIGIN: z.string().default(DEFAULT_CORS_ORIGINS.join(',')),
 

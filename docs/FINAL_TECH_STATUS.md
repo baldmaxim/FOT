@@ -11,7 +11,7 @@
 | Модуль | Стек | Назначение |
 |--------|------|------------|
 | **fot-app** | React 19, Vite, TypeScript | SPA-фронтенд |
-| **fot-server** | Express, TypeScript | REST API (порт 3000) |
+| **fot-server** | Express, TypeScript | REST API (порт 3001) |
 | **supabase** | PostgreSQL 17, локальный Supabase | БД, миграции |
 
 Связь: фронтенд → REST `/api/*` с JWT Bearer → бэкенд → Supabase (service role key, RLS отключён).

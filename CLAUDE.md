@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Монорепо с двумя частями:
 
 - **fot-app/** — React 19 + Vite + TypeScript (фронтенд)
-- **fot-server/** — Express + TypeScript (бэкенд, порт 3000)
+- **fot-server/** — Express + TypeScript (бэкенд, порт 3001)
 
 БД: Supabase Cloud (PostgreSQL). Связь: фронтенд → REST API (`/api/...`) с JWT Bearer → бэкенд → Supabase Cloud (service role key, без RLS). Реалтайм через Socket.IO (чат, присутствие).
 
@@ -25,7 +25,7 @@ cd fot-app && npm run dev
 cd fot-server && npx tsx watch src/index.ts
 
 # Перезапуск бэкенда
-npx kill-port 3000 && cd fot-server && npx tsx watch src/index.ts &
+npx kill-port 3001 && cd fot-server && npx tsx watch src/index.ts &
 
 # Сборка
 cd fot-app && npm run build      # TypeScript check + Vite build
@@ -74,7 +74,7 @@ cd fot-server && npm run test
 
 ## Структура фронтенда
 
-- **API клиент** (`fot-app/src/api/client.ts`): кастомный `apiClient` с методами `get/post/put/patch/delete`, авто-подстановка Bearer токена, `ApiError` класс. Base URL: `VITE_API_URL` или `http://localhost:3000/api`.
+- **API клиент** (`fot-app/src/api/client.ts`): кастомный `apiClient` с методами `get/post/put/patch/delete`, авто-подстановка Bearer токена, `ApiError` класс. Base URL: `VITE_API_URL` или `http://localhost:3001/api`.
 - **Стейт**: React Context для UI (Auth, Toast, Chat) + TanStack React Query для серверных данных (`staleTime: 30s`, `gcTime: 5min`, `retry: 1`).
 - **Стили**: CSS Modules + CSS Variables (тёмная/светлая тема через `data-theme`). Дизайн-токены в `src/index.css`.
 - **Код-сплиттинг**: `vite.config.ts` — `manualChunks` по роутам и вендорам.
