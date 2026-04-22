@@ -1,26 +1,53 @@
-import { Router } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { adminController } from '../controllers/admin.controller.js';
 import { authenticate, requirePageAccess } from '../middleware/auth.js';
 
 const router = Router();
+
+const ACCEPTED_MIMES = new Set([
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+  // Windows/Chrome нередко отдают .xlsx так — считаем валидным,
+  // если расширение совпадает.
+  'application/octet-stream',
+  '',
+]);
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 10 * 1024 * 1024,
   },
   fileFilter: (_req, file, cb) => {
-    const allowedMimes = [
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-excel',
-    ];
-    if (allowedMimes.includes(file.mimetype)) {
+    const hasExcelExtension = /\.(xlsx|xls)$/i.test(file.originalname || '');
+    if (ACCEPTED_MIMES.has(file.mimetype) || hasExcelExtension) {
       cb(null, true);
-    } else {
-      cb(new Error('Недопустимый формат файла. Разрешены только .xlsx и .xls'));
+      return;
     }
+    cb(new Error(
+      `Недопустимый формат файла (${file.mimetype || 'unknown'}). Разрешены .xlsx и .xls`,
+    ));
   },
 });
+
+/**
+ * Оборачивает multer так, чтобы его ошибки (лимит размера, отклонённый
+ * mime, невалидный form-data) превращались в 400 JSON, а не голый 500.
+ */
+function uploadSingleFile(field: string) {
+  const middleware = upload.single(field);
+  return (req: Request, res: Response, next: NextFunction) => {
+    middleware(req, res, err => {
+      if (!err) {
+        next();
+        return;
+      }
+      const message = err instanceof Error ? err.message : 'Ошибка загрузки файла';
+      res.status(400).json({ success: false, error: message });
+    });
+  };
+}
 
 router.use(authenticate);
 
@@ -31,7 +58,7 @@ router.get('/employees/department-access', requirePageAccess('/admin/users', 'vi
 router.post(
   '/users/department-access-import/preview',
   requirePageAccess('/admin/users', 'view'),
-  upload.single('file'),
+  uploadSingleFile('file'),
   adminController.previewDepartmentAccessImport,
 );
 router.post(

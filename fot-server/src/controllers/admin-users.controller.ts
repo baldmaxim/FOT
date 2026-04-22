@@ -389,8 +389,17 @@ export const adminUsersController = {
       const preview = await buildManagerDepartmentImportPreviewFromBuffer(uploadedFile.buffer);
       res.json({ success: true, data: preview });
     } catch (error) {
-      console.error('Preview department access import error:', error);
-      res.status(500).json({ success: false, error: 'Не удалось обработать Excel-файл' });
+      const details = {
+        name: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message : String(error),
+        code: (error as { code?: unknown })?.code ?? null,
+        stack: error instanceof Error ? error.stack : undefined,
+      };
+      console.error('Preview department access import error:', details);
+      res.status(500).json({
+        success: false,
+        error: `Не удалось обработать Excel-файл: ${details.message}`,
+      });
     }
   },
 

@@ -259,7 +259,15 @@ function parseMultiColumnWorkbook(rows: string[][]): IParsedLink[] {
 }
 
 async function parseWorkbookBuffer(buffer: Buffer): Promise<IParsedLink[]> {
-  const rows = await readExcelRows(buffer);
+  let rows: string[][];
+  try {
+    rows = await readExcelRows(buffer);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Не удалось прочитать .xlsx (${msg}). Пересохраните файл в Excel через «Сохранить как → Книга Excel (.xlsx)».`,
+    );
+  }
   return isMultiColumnFormat(rows)
     ? parseMultiColumnWorkbook(rows)
     : parseOldFormatWorkbook(rows);
