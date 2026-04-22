@@ -7,6 +7,7 @@ import {
   Database,
   Folder,
   FolderOpen,
+  FolderPlus,
   Pencil,
   Plus,
   RefreshCw,
@@ -35,6 +36,15 @@ type DepartmentDialogState =
   | { mode: 'rename'; name: string; departmentId: number }
   | { mode: 'move'; departmentIds: number[]; parentId: number | null }
   | null;
+
+type DeleteDepartmentsDialogState = {
+  departmentIds: number[];
+  names: string[];
+  totalChildDepts: number;
+  directEmployees: number;
+  totalEmployees: number;
+  hasChildren: boolean;
+} | null;
 
 type EmployeeDialogState = {
   name: string;
@@ -356,6 +366,8 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
   const [debouncedEmployeeSearch, setDebouncedEmployeeSearch] = useState('');
   const [employeeStatusFilter, setEmployeeStatusFilter] = useState<EmployeeStatusFilter>('all');
   const [departmentDialog, setDepartmentDialog] = useState<DepartmentDialogState>(null);
+  const [deleteDepartmentsDialog, setDeleteDepartmentsDialog] = useState<DeleteDepartmentsDialogState>(null);
+  const [deletingDepartments, setDeletingDepartments] = useState(false);
   const [departmentContextMenu, setDepartmentContextMenu] = useState<DepartmentContextMenuState>(null);
   const [employeeDialog, setEmployeeDialog] = useState<EmployeeDialogState>(null);
   const [employeeMoveDialog, setEmployeeMoveDialog] = useState<EmployeeMoveDialogState>(null);
@@ -465,9 +477,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
 
   const canRenameManageSelection = activeManageDepartmentIds.length === 1;
   const canMoveManageSelection = activeManageDepartmentIds.length > 0;
-  const canDeleteEmptyManageSelection = activeManageDepartments.length > 0
-    && activeManageDepartments.every(department => !department.hasChildren && department.employeeCount === 0);
-  const canDeleteRecursiveManageSelection = activeManageDepartmentIds.length === 1;
+  const canDeleteManageSelection = activeManageDepartments.length > 0;
 
   const allVisibleEmployeesSelected = useMemo(
     () => visibleEmployeeIds.length > 0 && visibleEmployeeIds.every(id => selectedEmployeeIds.has(id)),
@@ -678,51 +688,73 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
     }
   };
 
-  const handleDeleteEmptyDepartments = async (departmentIds: number[]) => {
+  const openDeleteDepartmentsDialog = (departmentIds: number[]) => {
     if (departmentIds.length === 0) return;
-    const titles = departmentIds
-      .map(id => departmentNodeMap.get(id)?.name)
-      .filter((name): name is string => !!name);
+    const names: string[] = [];
+    let totalChildDepts = 0;
+    let directEmployees = 0;
+    let totalEmployees = 0;
+    let hasChildren = false;
 
-    if (!confirm(`Удалить ${departmentIds.length > 1 ? 'выбранные пустые отделы' : `отдел "${titles[0]}"`} из Sigur?`)) {
-      return;
+    const walkSubtree = (node: SigurDepartmentNode) => {
+      for (const child of node.children || []) {
+        totalChildDepts += 1;
+        totalEmployees += child.employeeCount || 0;
+        walkSubtree(child);
+      }
+    };
+
+    for (const id of departmentIds) {
+      const node = departmentNodeMap.get(id);
+      if (!node) continue;
+      names.push(node.name);
+      directEmployees += node.employeeCount || 0;
+      totalEmployees += node.employeeCount || 0;
+      if (node.hasChildren || (node.children && node.children.length > 0)) {
+        hasChildren = true;
+      }
+      walkSubtree(node);
     }
 
-    try {
-      setError('');
-      for (const departmentId of departmentIds) {
-        await sigurAdminService.deleteDepartment(departmentId);
-      }
-      if (selectedDeptId != null && departmentIds.includes(selectedDeptId)) {
-        setSelectedDeptId(null);
-      }
-      setSelectedManageDeptIds(new Set());
-      setDepartmentContextMenu(null);
-      await refreshData();
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Не удалось удалить отделы Sigur');
-    }
+    setDeleteDepartmentsDialog({
+      departmentIds,
+      names,
+      totalChildDepts,
+      directEmployees,
+      totalEmployees,
+      hasChildren,
+    });
+    setDepartmentContextMenu(null);
   };
 
-  const handleDeleteRecursiveDepartment = async (departmentId: number) => {
-    const department = departmentNodeMap.get(departmentId);
-    if (!department) return;
-    if (!confirm(`Удалить ветку "${department.name}" вместе со вложенными отделами из Sigur? Сотрудники будут перенесены в родительский отдел.`)) {
-      return;
-    }
+  const confirmDeleteDepartments = async () => {
+    const dialog = deleteDepartmentsDialog;
+    if (!dialog || dialog.departmentIds.length === 0) return;
 
+    setDeletingDepartments(true);
     try {
       setError('');
-      await sigurAdminService.deleteDepartmentRecursive(departmentId);
-      if (selectedDeptId === departmentId) {
+      if (dialog.hasChildren) {
+        for (const id of dialog.departmentIds) {
+          await sigurAdminService.deleteDepartmentRecursive(id);
+        }
+      } else {
+        for (const id of dialog.departmentIds) {
+          await sigurAdminService.deleteDepartment(id);
+        }
+      }
+      if (selectedDeptId != null && dialog.departmentIds.includes(selectedDeptId)) {
         setSelectedDeptId(null);
         setSelectedEmployeeId(null);
       }
       setSelectedManageDeptIds(new Set());
       setDepartmentContextMenu(null);
+      setDeleteDepartmentsDialog(null);
       await refreshData();
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'Не удалось удалить ветку отдела Sigur');
+      setError(error instanceof Error ? error.message : 'Не удалось удалить отделы Sigur');
+    } finally {
+      setDeletingDepartments(false);
     }
   };
 
@@ -1204,12 +1236,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
 
   const contextMenuSelection = departmentContextMenu?.selection || [];
   const contextCanRename = contextMenuSelection.length === 1;
-  const contextCanDeleteEmpty = contextMenuSelection.length > 0
-    && contextMenuSelection.every(id => {
-      const department = departmentNodeMap.get(id);
-      return !!department && !department.hasChildren && department.employeeCount === 0;
-    });
-  const contextCanDeleteRecursive = contextMenuSelection.length === 1;
+  const contextCanDelete = contextMenuSelection.length > 0;
 
   return (
     <div className="sigur-live-page">
@@ -1230,55 +1257,69 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
             </div>
 
             {canEdit && (
-              <div className="ep-dept-manage-toolbar">
+              <div className="ep-dept-manage-toolbar ep-dept-manage-toolbar-compact">
                 <div className="ep-dept-manage-title">
                   <span>Управление деревом</span>
                 </div>
                 <div className="ep-dept-manage-actions">
-                  <button className="ep-mini-btn" onClick={() => openCreateDepartmentDialog(null)}>
-                    <Plus size={14} />
-                    Корень
-                  </button>
-                  <button className="ep-mini-btn" onClick={() => openCreateDepartmentDialog(selectedDeptId)} disabled={selectedDeptId == null}>
-                    <Plus size={14} />
-                    Подпапка
+                  <button
+                    type="button"
+                    className="ep-mini-btn icon-only"
+                    onClick={() => openCreateDepartmentDialog(null)}
+                    title="Создать корневой отдел"
+                    aria-label="Создать корневой отдел"
+                  >
+                    <Plus size={16} />
                   </button>
                   <button
-                    className="ep-mini-btn"
+                    type="button"
+                    className="ep-mini-btn icon-only"
+                    onClick={() => openCreateDepartmentDialog(selectedDeptId)}
+                    disabled={selectedDeptId == null}
+                    title="Создать подпапку в выбранном отделе"
+                    aria-label="Создать подпапку"
+                  >
+                    <FolderPlus size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    className="ep-mini-btn icon-only"
                     onClick={() => openRenameDepartmentDialog(activeManageDepartmentIds[0])}
                     disabled={!canRenameManageSelection}
+                    title="Переименовать выбранный отдел"
+                    aria-label="Переименовать"
                   >
-                    <Pencil size={14} />
-                    Переименовать
+                    <Pencil size={16} />
                   </button>
                   <button
-                    className="ep-mini-btn"
+                    type="button"
+                    className="ep-mini-btn icon-only"
                     onClick={() => openMoveDepartmentDialog(activeManageDepartmentIds)}
                     disabled={!canMoveManageSelection}
+                    title="Переместить выбранные отделы"
+                    aria-label="Переместить"
                   >
-                    <ArrowRightLeft size={14} />
-                    Переместить
+                    <ArrowRightLeft size={16} />
                   </button>
                   <button
-                    className="ep-mini-btn danger"
-                    onClick={() => void handleDeleteEmptyDepartments(activeManageDepartmentIds)}
-                    disabled={!canDeleteEmptyManageSelection}
+                    type="button"
+                    className="ep-mini-btn icon-only danger"
+                    onClick={() => openDeleteDepartmentsDialog(activeManageDepartmentIds)}
+                    disabled={!canDeleteManageSelection}
+                    title="Удалить выбранные отделы"
+                    aria-label="Удалить"
                   >
-                    <Trash2 size={14} />
-                    Удалить пустые
-                  </button>
-                  <button
-                    className="ep-mini-btn danger"
-                    onClick={() => void handleDeleteRecursiveDepartment(activeManageDepartmentIds[0])}
-                    disabled={!canDeleteRecursiveManageSelection}
-                  >
-                    <Trash2 size={14} />
-                    Удалить ветку
+                    <Trash2 size={16} />
                   </button>
                   {selectedManageDeptIds.size > 0 && (
-                    <button className="ep-mini-btn" onClick={() => setSelectedManageDeptIds(new Set())}>
-                      <X size={14} />
-                      Очистить
+                    <button
+                      type="button"
+                      className="ep-mini-btn icon-only"
+                      onClick={() => setSelectedManageDeptIds(new Set())}
+                      title="Снять выделение"
+                      aria-label="Снять выделение"
+                    >
+                      <X size={16} />
                     </button>
                   )}
                 </div>
@@ -1348,35 +1389,71 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
               </div>
 
               {canEdit && (
-                <div className="ep-dept-manage-toolbar">
+                <div className="ep-dept-manage-toolbar ep-dept-manage-toolbar-compact">
                   <div className="ep-dept-manage-title">
                     <span>Управление деревом</span>
                   </div>
                   <div className="ep-dept-manage-actions">
-                    <button className="ep-mini-btn" onClick={() => openCreateDepartmentDialog(null)}>
-                      <Plus size={14} />
-                      Корень
-                    </button>
-                    <button className="ep-mini-btn" onClick={() => openCreateDepartmentDialog(selectedDeptId)} disabled={selectedDeptId == null}>
-                      <Plus size={14} />
-                      Подпапка
+                    <button
+                      type="button"
+                      className="ep-mini-btn icon-only"
+                      onClick={() => openCreateDepartmentDialog(null)}
+                      title="Создать корневой отдел"
+                      aria-label="Создать корневой отдел"
+                    >
+                      <Plus size={16} />
                     </button>
                     <button
-                      className="ep-mini-btn"
+                      type="button"
+                      className="ep-mini-btn icon-only"
+                      onClick={() => openCreateDepartmentDialog(selectedDeptId)}
+                      disabled={selectedDeptId == null}
+                      title="Создать подпапку в выбранном отделе"
+                      aria-label="Создать подпапку"
+                    >
+                      <FolderPlus size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      className="ep-mini-btn icon-only"
                       onClick={() => openRenameDepartmentDialog(activeManageDepartmentIds[0])}
                       disabled={!canRenameManageSelection}
+                      title="Переименовать выбранный отдел"
+                      aria-label="Переименовать"
                     >
-                      <Pencil size={14} />
-                      Переименовать
+                      <Pencil size={16} />
                     </button>
                     <button
-                      className="ep-mini-btn"
+                      type="button"
+                      className="ep-mini-btn icon-only"
                       onClick={() => openMoveDepartmentDialog(activeManageDepartmentIds)}
                       disabled={!canMoveManageSelection}
+                      title="Переместить выбранные отделы"
+                      aria-label="Переместить"
                     >
-                      <ArrowRightLeft size={14} />
-                      Переместить
+                      <ArrowRightLeft size={16} />
                     </button>
+                    <button
+                      type="button"
+                      className="ep-mini-btn icon-only danger"
+                      onClick={() => openDeleteDepartmentsDialog(activeManageDepartmentIds)}
+                      disabled={!canDeleteManageSelection}
+                      title="Удалить выбранные отделы"
+                      aria-label="Удалить"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                    {selectedManageDeptIds.size > 0 && (
+                      <button
+                        type="button"
+                        className="ep-mini-btn icon-only"
+                        onClick={() => setSelectedManageDeptIds(new Set())}
+                        title="Снять выделение"
+                        aria-label="Снять выделение"
+                      >
+                        <X size={16} />
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -1449,17 +1526,10 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
           </button>
           <button
             className="ep-tree-context-item danger"
-            onClick={() => void handleDeleteEmptyDepartments(contextMenuSelection)}
-            disabled={!contextCanDeleteEmpty}
+            onClick={() => openDeleteDepartmentsDialog(contextMenuSelection)}
+            disabled={!contextCanDelete}
           >
-            Удалить пустые
-          </button>
-          <button
-            className="ep-tree-context-item danger"
-            onClick={() => void handleDeleteRecursiveDepartment(contextMenuSelection[0])}
-            disabled={!contextCanDeleteRecursive}
-          >
-            Удалить ветку
+            Удалить
           </button>
         </div>
       )}
@@ -1518,6 +1588,68 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
               </button>
               <button className="ep-modal-btn primary" onClick={() => void handleSaveDepartment()} disabled={savingDepartment}>
                 {savingDepartment ? 'Сохранение...' : 'Сохранить'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteDepartmentsDialog && (
+        <div className="ep-modal-overlay" onClick={() => !deletingDepartments && setDeleteDepartmentsDialog(null)}>
+          <div className="ep-modal" onClick={event => event.stopPropagation()}>
+            <div className="ep-modal-header">
+              <div className="ep-modal-heading">
+                <div className="ep-modal-title">
+                  {deleteDepartmentsDialog.departmentIds.length === 1
+                    ? `Удалить отдел «${deleteDepartmentsDialog.names[0] ?? ''}»?`
+                    : `Удалить ${deleteDepartmentsDialog.departmentIds.length} отдел(ов)?`}
+                </div>
+              </div>
+            </div>
+            <div className="ep-modal-body">
+              {deleteDepartmentsDialog.names.length > 1 && (
+                <ul className="ep-delete-list">
+                  {deleteDepartmentsDialog.names.map((name, index) => (
+                    <li key={`${name}-${index}`}>{name}</li>
+                  ))}
+                </ul>
+              )}
+              <div className="ep-danger-note">
+                <Trash2 size={18} />
+                <div>
+                  {deleteDepartmentsDialog.hasChildren ? (
+                    <>
+                      <div><b>Будет удалена вся ветка</b> — вместе со вложенными отделами{deleteDepartmentsDialog.totalChildDepts > 0 ? ` (${deleteDepartmentsDialog.totalChildDepts} шт.)` : ''}.</div>
+                      {deleteDepartmentsDialog.totalEmployees > 0 && (
+                        <div style={{ marginTop: 6 }}>
+                          Сотрудники ({deleteDepartmentsDialog.totalEmployees}) будут перенесены в родительский отдел.
+                        </div>
+                      )}
+                    </>
+                  ) : deleteDepartmentsDialog.directEmployees > 0 ? (
+                    <div>
+                      В отделе {deleteDepartmentsDialog.directEmployees} сотрудник(ов). Они будут перенесены в родительский отдел.
+                    </div>
+                  ) : (
+                    <div>Отдел пуст — будет удалён без последствий.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="ep-modal-footer">
+              <button
+                className="ep-modal-btn secondary"
+                onClick={() => setDeleteDepartmentsDialog(null)}
+                disabled={deletingDepartments}
+              >
+                Отмена
+              </button>
+              <button
+                className="ep-modal-btn danger"
+                onClick={() => void confirmDeleteDepartments()}
+                disabled={deletingDepartments}
+              >
+                {deletingDepartments ? 'Удаление...' : 'Удалить'}
               </button>
             </div>
           </div>
