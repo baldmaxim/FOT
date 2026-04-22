@@ -30,6 +30,7 @@ const getR2Status = async (_req: AuthenticatedRequest, res: Response): Promise<v
         enabled: cfg.enabled,
         bucket_name: cfg.bucketName,
         has_account_id: !!cfg.accountId,
+        account_id: cfg.accountId,
         has_access_key: !!cfg.accessKeyId,
         has_secret_key: !!cfg.secretAccessKey,
         has_endpoint: !!cfg.endpoint,

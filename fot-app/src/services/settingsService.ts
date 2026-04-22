@@ -4,6 +4,7 @@ export interface IR2Status {
   enabled: boolean;
   bucket_name: string;
   has_account_id: boolean;
+  account_id: string;
   has_access_key: boolean;
   has_secret_key: boolean;
   has_endpoint: boolean;

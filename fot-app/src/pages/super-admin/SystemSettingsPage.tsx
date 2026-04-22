@@ -80,12 +80,13 @@ export const SystemSettingsPage: FC = () => {
 
   useEffect(() => {
     if (status) {
+      setAccountId(status.account_id || '');
       setEndpoint(status.endpoint || '');
       setRegion(status.region || '');
       setForcePathStyle(!!status.force_path_style);
       setKmsKeyId(status.kms_key_id || '');
     }
-  }, [status?.endpoint, status?.region, status?.force_path_style, status?.kms_key_id]);
+  }, [status?.account_id, status?.endpoint, status?.region, status?.force_path_style, status?.kms_key_id]);
 
   useEffect(() => {
     if (monitorSettingsQuery.data) {
@@ -119,7 +120,7 @@ export const SystemSettingsPage: FC = () => {
         force_path_style?: boolean;
         kms_key_id?: string;
       } = {};
-      if (accountId) data.account_id = accountId;
+      data.account_id = accountId;
       if (accessKeyId) data.access_key_id = accessKeyId;
       if (secretAccessKey) data.secret_access_key = secretAccessKey;
       data.bucket_name = bucketName;
@@ -130,7 +131,6 @@ export const SystemSettingsPage: FC = () => {
 
       await settingsService.saveR2(data);
       await queryClient.invalidateQueries({ queryKey: getR2StatusQueryKey() });
-      setAccountId('');
       setAccessKeyId('');
       setSecretAccessKey('');
     } catch {
@@ -245,9 +245,9 @@ export const SystemSettingsPage: FC = () => {
               className={styles.formInput}
               value={accountId}
               onChange={e => setAccountId(e.target.value)}
-              placeholder={status?.has_account_id ? '••• (установлен)' : 'Cloudflare Account ID'}
+              placeholder="Cloudflare Account ID"
             />
-            <span className={styles.hint}>Только для Cloudflare R2 (Dashboard → Overview → Account ID).</span>
+            <span className={styles.hint}>Только для Cloudflare R2 (Dashboard → Overview → Account ID). Оставьте пустым для Cloud.ru и других S3-совместимых провайдеров.</span>
           </div>
           <div className={styles.formGroup}>
             <label className={styles.formLabel}>Region</label>
