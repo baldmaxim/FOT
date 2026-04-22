@@ -1,4 +1,4 @@
-import type { OrgDepartmentNode } from '../types/organization';
+import type { OrgDepartmentKind, OrgDepartmentNode } from '../types/organization';
 
 // Единый источник истины для сортировки отделов на фронтенде.
 export interface IDepartmentOption {
@@ -10,6 +10,7 @@ export interface IFlatDepartmentOption extends IDepartmentOption {
   id: string;
   level: number;
   hasChildren: boolean;
+  kind: OrgDepartmentKind;
 }
 
 const departmentNameCollator = new Intl.Collator('ru', {
@@ -96,7 +97,13 @@ export const flattenDepartmentTree = (nodes: OrgDepartmentNode[], level = 0): IF
       continue;
     }
 
-    result.push({ id: node.id, name: node.name, level, hasChildren: (node.children?.length ?? 0) > 0 });
+    result.push({
+      id: node.id,
+      name: node.name,
+      level,
+      hasChildren: (node.children?.length ?? 0) > 0,
+      kind: node.kind,
+    });
     if (node.children?.length) {
       result.push(...flattenDepartmentTree(node.children, level + 1));
     }

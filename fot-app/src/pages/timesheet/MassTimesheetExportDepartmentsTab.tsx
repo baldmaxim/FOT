@@ -34,7 +34,7 @@ const collectAllIds = (nodes: OrgDepartmentNode[]): string[] => {
 const collectBrigadeIds = (nodes: OrgDepartmentNode[]): string[] => {
   const ids: string[] = [];
   for (const node of nodes) {
-    if (node.name.toLowerCase().startsWith('бр.')) {
+    if (node.kind === 'brigade') {
       ids.push(node.id);
     }
     if (node.children?.length) {
@@ -76,7 +76,7 @@ const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expa
   const isChecked = checkedIds.has(node.id);
   const hasChildren = node.children && node.children.length > 0;
   const isExpanded = expandedIds.has(node.id);
-  const isBrigade = node.name.toLowerCase().startsWith('бр.');
+  const isBrigade = node.kind === 'brigade';
 
   const handleCheck = () => {
     onToggle([node.id], !isChecked);

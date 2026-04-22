@@ -11,6 +11,7 @@ import {
   type ISyncContext,
 } from './sigur-sync-shared.js';
 import { invalidateDeptTreeCache, invalidateSyncFilterCache } from './skud-shared.service.js';
+import { detectDepartmentKindFromName } from '../utils/department-kind.utils.js';
 
 // ─── Типы результатов ───
 
@@ -118,6 +119,7 @@ export async function syncDepartmentsLogic(
       .insert({
         name: ROOT_DEPT_NAME,
         parent_id: null,
+        kind: 'object',
       })
       .select('id')
       .single();
@@ -225,6 +227,7 @@ export async function syncDepartmentsLogic(
         .insert({
           name: dept.name,
           sigur_department_id: dept.id,
+          kind: detectDepartmentKindFromName(dept.name),
         })
         .select('id')
         .single();

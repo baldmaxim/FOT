@@ -7,8 +7,11 @@ import type {
   AuthenticatedRequest,
   OrgDepartment,
   OrgDepartmentEncrypted,
+  OrgDepartmentKind,
   OrgDepartmentNode,
 } from '../types/index.js';
+import { ORG_DEPARTMENT_KINDS } from '../types/index.js';
+import { detectDepartmentKindFromName } from '../utils/department-kind.utils.js';
 
 interface IHttpError extends Error {
   status?: number;
@@ -29,9 +32,17 @@ function decryptDepartment(encrypted: OrgDepartmentEncrypted): OrgDepartment {
     description: encrypted.description || null,
     sort_order: encrypted.sort_order,
     is_active: encrypted.is_active,
+    kind: encrypted.kind ?? 'department',
     created_at: encrypted.created_at,
     updated_at: encrypted.updated_at,
   };
+}
+
+function parseKind(value: unknown): OrgDepartmentKind | null {
+  if (typeof value !== 'string') return null;
+  return (ORG_DEPARTMENT_KINDS as readonly string[]).includes(value)
+    ? (value as OrgDepartmentKind)
+    : null;
 }
 
 function buildDepartmentTree(
@@ -225,12 +236,17 @@ export const structureController = {
 
       await ensureParentIsAllowed(parentId);
 
+      const explicitKind = parseKind(req.body.kind);
+      const kind: OrgDepartmentKind = explicitKind
+        ?? detectDepartmentKindFromName(name, { isRoot: parentId === null });
+
       const { data, error } = await supabase
         .from('org_departments')
         .insert({
           parent_id: parentId,
           name,
           description,
+          kind,
         })
         .select()
         .single();
@@ -265,8 +281,9 @@ export const structureController = {
       const { id } = req.params;
       const hasName = Object.prototype.hasOwnProperty.call(req.body, 'name');
       const hasParent = Object.prototype.hasOwnProperty.call(req.body, 'parent_id');
+      const hasKind = Object.prototype.hasOwnProperty.call(req.body, 'kind');
 
-      if (!hasName && !hasParent) {
+      if (!hasName && !hasParent && !hasKind) {
         res.status(400).json({ success: false, error: 'Нет данных для обновления отдела' });
         return;
       }
@@ -288,6 +305,16 @@ export const structureController = {
         ? (typeof req.body.parent_id === 'string' && req.body.parent_id.trim() ? req.body.parent_id.trim() : null)
         : current.parent_id;
 
+      let kind: OrgDepartmentKind = current.kind;
+      if (hasKind) {
+        const parsed = parseKind(req.body.kind);
+        if (!parsed) {
+          res.status(400).json({ success: false, error: 'Недопустимое значение поля kind' });
+          return;
+        }
+        kind = parsed;
+      }
+
       if (!name) {
         res.status(400).json({ success: false, error: 'Название обязательно' });
         return;
@@ -304,6 +331,7 @@ export const structureController = {
       const updateData: Record<string, unknown> = {};
       if (name !== current.name) updateData.name = name;
       if (parentId !== current.parent_id) updateData.parent_id = parentId;
+      if (kind !== current.kind) updateData.kind = kind;
 
       if (Object.keys(updateData).length === 0) {
         res.json({ success: true, data: current });

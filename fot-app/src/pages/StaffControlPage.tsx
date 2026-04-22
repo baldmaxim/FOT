@@ -76,10 +76,6 @@ const EMPTY_SCHEDULE_TEMPLATES: IWorkSchedule[] = [];
 const EMPTY_CATEGORY_ASSIGNMENTS: ICategorySchedule[] = [];
 const EMPTY_EMPLOYEE_SCHEDULE_ASSIGNMENTS: IEmployeeScheduleAssignment[] = [];
 
-const isBrigadeDepartmentName = (name: string): boolean => (
-  name.trim().toLowerCase().startsWith('бр.')
-);
-
 /* ───────── Memoized table row ───────── */
 
 interface IStaffRowProps {
@@ -1324,7 +1320,7 @@ export const StaffControlPage: FC = () => {
   }, [departments, restrictToManaged, managedDepartmentIds]);
   const brigadeOptions = useMemo<IBrigadeOption[]>(
     () => allDepts
-      .filter(department => isBrigadeDepartmentName(department.name) && (countsByDepartment[department.id] || 0) > 0)
+      .filter(department => department.kind === 'brigade' && (countsByDepartment[department.id] || 0) > 0)
       .map(department => ({
         ...department,
         employeeCount: countsByDepartment[department.id] || 0,

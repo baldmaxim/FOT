@@ -173,8 +173,8 @@ describe('scheduleController.bulkApplyToBrigades', () => {
       if (query.table === 'org_departments') {
         return {
           data: [
-            { id: BRIGADE_1, name: 'Бр. Монолит' },
-            { id: BRIGADE_2, name: ' бр. Отделка ' },
+            { id: BRIGADE_1, name: 'Бр. Монолит', kind: 'brigade' },
+            { id: BRIGADE_2, name: ' бр. Отделка ', kind: 'brigade' },
           ],
           error: null,
         };
@@ -263,7 +263,7 @@ describe('scheduleController.bulkApplyToBrigades', () => {
     mockedState.resolver = (query) => {
       if (query.table === 'org_departments') {
         return {
-          data: [{ id: BRIGADE_1, name: 'Бр. 1' }],
+          data: [{ id: BRIGADE_1, name: 'Бр. 1', kind: 'brigade' }],
           error: null,
         };
       }
@@ -336,7 +336,7 @@ describe('scheduleController.bulkApplyToBrigades', () => {
     mockedState.resolver = (query) => {
       if (query.table === 'org_departments') {
         return {
-          data: [{ id: BRIGADE_1, name: 'Отдел снабжения' }],
+          data: [{ id: BRIGADE_1, name: 'Отдел снабжения', kind: 'department' }],
           error: null,
         };
       }
@@ -383,7 +383,7 @@ describe('scheduleController.bulkApplyToBrigades', () => {
     mockedState.resolver = (query) => {
       if (query.table === 'org_departments') {
         return {
-          data: [{ id: BRIGADE_1, name: 'Бр. 1' }],
+          data: [{ id: BRIGADE_1, name: 'Бр. 1', kind: 'brigade' }],
           error: null,
         };
       }

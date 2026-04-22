@@ -1,3 +1,15 @@
+// Вид отдела: обычный отдел / бригада / объект.
+// Группа бригад одного начальника образует «участок» на уровне UI.
+export type OrgDepartmentKind = 'department' | 'brigade' | 'object';
+
+export const ORG_DEPARTMENT_KINDS: readonly OrgDepartmentKind[] = ['department', 'brigade', 'object'];
+
+export const ORG_DEPARTMENT_KIND_LABELS: Record<OrgDepartmentKind, string> = {
+  department: 'Отдел',
+  brigade: 'Бригада',
+  object: 'Объект',
+};
+
 // Структура организации - Отдел
 export interface OrgDepartment {
   id: string;
@@ -7,6 +19,7 @@ export interface OrgDepartment {
   description: string | null;
   sort_order: number;
   is_active: boolean;
+  kind: OrgDepartmentKind;
   created_at: string;
   updated_at: string;
 }

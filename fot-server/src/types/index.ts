@@ -278,6 +278,10 @@ export interface JWTPayload {
   exp: number;
 }
 
+export type OrgDepartmentKind = 'department' | 'brigade' | 'object';
+
+export const ORG_DEPARTMENT_KINDS: readonly OrgDepartmentKind[] = ['department', 'brigade', 'object'];
+
 export interface OrgDepartmentEncrypted {
   id: string;
   parent_id: string | null;
@@ -286,6 +290,7 @@ export interface OrgDepartmentEncrypted {
   description: string | null;
   sort_order: number;
   is_active: boolean;
+  kind: OrgDepartmentKind;
   created_at: string;
   updated_at: string;
 }
@@ -298,6 +303,7 @@ export interface OrgDepartment {
   description: string | null;
   sort_order: number;
   is_active: boolean;
+  kind: OrgDepartmentKind;
   created_at: string;
   updated_at: string;
 }

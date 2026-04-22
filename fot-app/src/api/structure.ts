@@ -1,6 +1,7 @@
 import { apiClient } from './client';
 import type {
   OrgDepartment,
+  OrgDepartmentKind,
   OrgStructureResponse,
 } from '../types';
 
@@ -26,12 +27,14 @@ export const structureApi = {
     name: string,
     description?: string,
     parentId?: string | null,
+    kind?: OrgDepartmentKind,
   ): Promise<ApiResponse<OrgDepartment>> {
     try {
       const res = await apiClient.post<ApiResponse<OrgDepartment>>('/structure/departments', {
         name,
         parent_id: parentId || null,
         description,
+        kind,
       });
       return { data: res.data, message: res.message || 'ok' };
     } catch (error) {
@@ -43,7 +46,7 @@ export const structureApi = {
 
   async updateDepartment(
     id: string,
-    payload: { name?: string; parent_id?: string | null },
+    payload: { name?: string; parent_id?: string | null; kind?: OrgDepartmentKind },
   ): Promise<ApiResponse<OrgDepartment>> {
     try {
       const res = await apiClient.put<ApiResponse<OrgDepartment>>(`/structure/departments/${id}`, payload);

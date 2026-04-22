@@ -18,7 +18,8 @@ import { EmpVirtualList } from '../../components/employees/EmpVirtualList';
 import { DepartmentPanel } from '../../components/employees/DepartmentPanel';
 import { EmployeeSigurSidebar } from '../../components/employees/EmployeeSigurSidebar';
 import { useIsMobile } from '../../hooks/useIsMobile';
-import type { Employee, OrgDepartmentNode, IEmployeePresence } from '../../types';
+import type { Employee, OrgDepartmentNode, IEmployeePresence, OrgDepartmentKind } from '../../types';
+import { ORG_DEPARTMENT_KIND_LABELS, ORG_DEPARTMENT_KINDS } from '../../types';
 import {
   EMPTY_EMPLOYEE_COUNTS,
   EMPTY_PAGINATED_META,
@@ -36,8 +37,8 @@ const PAGE_SIZE = 50;
 const EMPTY_DEPARTMENTS: OrgDepartmentNode[] = [];
 
 type DepartmentDialogState =
-  | { mode: 'create'; parentId: string | null; name: string; description: string }
-  | { mode: 'rename'; departmentId: string; name: string }
+  | { mode: 'create'; parentId: string | null; name: string; description: string; kind: OrgDepartmentKind }
+  | { mode: 'rename'; departmentId: string; name: string; kind: OrgDepartmentKind; initialKind: OrgDepartmentKind }
   | { mode: 'move'; departmentIds: string[]; parentId: string | null }
   | { mode: 'delete'; departmentIds: string[] }
   | { mode: 'deleteRecursive'; departmentId: string }
@@ -462,14 +463,19 @@ export const EmployeesPage: FC = () => {
           departmentDialog.name,
           departmentDialog.description || undefined,
           departmentDialog.parentId,
+          departmentDialog.kind,
         );
         if (result.error) throw new Error(result.error);
       }
 
       if (departmentDialog.mode === 'rename') {
-        const result = await structureApi.updateDepartment(departmentDialog.departmentId, {
+        const payload: { name: string; kind?: OrgDepartmentKind } = {
           name: departmentDialog.name,
-        });
+        };
+        if (departmentDialog.kind !== departmentDialog.initialKind) {
+          payload.kind = departmentDialog.kind;
+        }
+        const result = await structureApi.updateDepartment(departmentDialog.departmentId, payload);
         if (result.error) throw new Error(result.error);
       }
 
@@ -538,6 +544,7 @@ export const EmployeesPage: FC = () => {
           parentId: null,
           name: '',
           description: '',
+          kind: 'department',
         });
       }}
       onCreateDepartment={(parentId) => {
@@ -546,14 +553,18 @@ export const EmployeesPage: FC = () => {
           parentId: parentId === archiveDepartmentId ? null : parentId,
           name: '',
           description: '',
+          kind: 'department',
         });
       }}
       onRenameDepartment={(departmentId) => {
         const department = flatDepts.find(item => item.id === departmentId);
+        const currentKind = department?.kind ?? 'department';
         setDepartmentDialog({
           mode: 'rename',
           departmentId,
           name: department?.name || '',
+          kind: currentKind,
+          initialKind: currentKind,
         });
       }}
       onMoveDepartments={(departmentIds) => {
@@ -853,6 +864,19 @@ export const EmployeesPage: FC = () => {
                     />
                   </label>
                   <label className="ep-form-field">
+                    <span>Тип</span>
+                    <select
+                      value={departmentDialog.kind}
+                      onChange={event => setDepartmentDialog(prev => prev?.mode === 'create'
+                        ? { ...prev, kind: event.target.value as OrgDepartmentKind }
+                        : prev)}
+                    >
+                      {ORG_DEPARTMENT_KINDS.map(kind => (
+                        <option key={kind} value={kind}>{ORG_DEPARTMENT_KIND_LABELS[kind]}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="ep-form-field">
                     <span>Описание</span>
                     <textarea
                       rows={3}
@@ -863,13 +887,28 @@ export const EmployeesPage: FC = () => {
                 </div>
               )}
               {departmentDialog.mode === 'rename' && (
-                <label className="ep-form-field">
-                  <span>Новое название</span>
-                  <input
-                    value={departmentDialog.name}
-                    onChange={event => setDepartmentDialog(prev => prev?.mode === 'rename' ? { ...prev, name: event.target.value } : prev)}
-                  />
-                </label>
+                <div className="ep-modal-stack">
+                  <label className="ep-form-field">
+                    <span>Новое название</span>
+                    <input
+                      value={departmentDialog.name}
+                      onChange={event => setDepartmentDialog(prev => prev?.mode === 'rename' ? { ...prev, name: event.target.value } : prev)}
+                    />
+                  </label>
+                  <label className="ep-form-field">
+                    <span>Тип</span>
+                    <select
+                      value={departmentDialog.kind}
+                      onChange={event => setDepartmentDialog(prev => prev?.mode === 'rename'
+                        ? { ...prev, kind: event.target.value as OrgDepartmentKind }
+                        : prev)}
+                    >
+                      {ORG_DEPARTMENT_KINDS.map(kind => (
+                        <option key={kind} value={kind}>{ORG_DEPARTMENT_KIND_LABELS[kind]}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
               )}
               {departmentDialog.mode === 'move' && (
                 <label className="ep-form-field">

@@ -89,8 +89,6 @@ type ObjectScheduleRow = {
   effective_to: string | null;
 };
 
-const BRIGADE_PREFIX = 'бр.';
-
 const shiftIsoDate = (date: string, days: number): string => {
   const cursor = new Date(`${date}T00:00:00Z`);
   cursor.setUTCDate(cursor.getUTCDate() + days);
@@ -117,10 +115,6 @@ const normalizeDayOverrides = (
   }
   return result;
 };
-
-const isBrigadeDepartmentName = (name: string | null | undefined): boolean => (
-  String(name || '').trim().toLowerCase().startsWith(BRIGADE_PREFIX)
-);
 
 const loadEmployeeScheduleRows = async (employeeId: number): Promise<EmployeeScheduleRow[]> => {
   const { data, error } = await supabase
@@ -720,7 +714,7 @@ export const scheduleController = {
 
       const { data: departments, error: departmentsError } = await supabase
         .from('org_departments')
-        .select('id, name')
+        .select('id, name, kind')
         .in('id', departmentIds);
 
       if (departmentsError) throw departmentsError;
@@ -729,7 +723,7 @@ export const scheduleController = {
         return res.status(400).json({ success: false, error: 'Переданы несуществующие бригады' });
       }
 
-      const invalidDepartments = (departments || []).filter(department => !isBrigadeDepartmentName(department.name as string | null | undefined));
+      const invalidDepartments = (departments || []).filter(department => department.kind !== 'brigade');
       if (invalidDepartments.length > 0) {
         return res.status(400).json({ success: false, error: 'Можно выбирать только отделы-бригады' });
       }
