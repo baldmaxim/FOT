@@ -449,6 +449,7 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
     }
 
     const today = new Date().toISOString().slice(0, 10);
+    let sigurDetached = false;
 
     if (existing.sigur_employee_id) {
       if (!(await sigurService.isConfigured())) {
@@ -485,21 +486,48 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
             message: error.message,
           });
           if (status === 404) {
-            res.status(409).json({
-              success: false,
-              error: `Sigur вернул 404 на ${error.config?.method?.toUpperCase() || 'запросе'} ${error.config?.url || ''}. Вероятно, сотрудник (sigur_employee_id=${existing.sigur_employee_id}) или отдел «${targetDepartment.name}» (sigur_department_id=${targetDepartment.sigur_department_id}) удалены в Sigur. Запустите синхронизацию структуры и попробуйте снова.`,
-            });
-            return;
+            // Разграничиваем: 404 на сотрудника (удалён в Sigur) vs 404 на отдел.
+            let departmentAlive = false;
+            try {
+              await sigurService.getDepartmentById(targetDepartment.sigur_department_id, connection);
+              departmentAlive = true;
+            } catch (departmentProbeError) {
+              console.warn('[rehire] department probe failed', {
+                sigurDepartmentId: targetDepartment.sigur_department_id,
+                message: departmentProbeError instanceof Error ? departmentProbeError.message : String(departmentProbeError),
+              });
+            }
+
+            if (departmentAlive) {
+              // Сотрудник удалён в Sigur — отвязываем и продолжаем локальное восстановление.
+              sigurDetached = true;
+              console.warn('[rehire] auto-detach sigur_employee_id', {
+                employeeId: existing.id,
+                sigurEmployeeId: existing.sigur_employee_id,
+                reason: 'employee not found in Sigur',
+              });
+            } else {
+              res.status(409).json({
+                success: false,
+                error: `Sigur вернул 404 на ${error.config?.method?.toUpperCase() || 'запросе'} ${error.config?.url || ''}. Вероятно, отдел «${targetDepartment.name}» (sigur_department_id=${targetDepartment.sigur_department_id}) удалён в Sigur. Запустите синхронизацию структуры и попробуйте снова.`,
+              });
+              return;
+            }
+          } else {
+            throw error;
           }
+        } else {
+          throw error;
         }
-        throw error;
       }
     }
 
     if (existing.org_department_id !== targetDepartment.id) {
       await employeeChangesService.changeDepartment(employeeId, targetDepartment.id, {
-        reason: 'Восстановление — перевод в отдел',
-        lockDepartment: false,
+        reason: sigurDetached
+          ? 'Восстановление (отвязка от Sigur — сотрудник удалён в Sigur)'
+          : 'Восстановление — перевод в отдел',
+        lockDepartment: sigurDetached,
         createdBy: req.user.id,
         effectiveDate: today,
       });
@@ -510,7 +538,8 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       .update({
         employment_status: 'active',
         org_department_id: targetDepartment.id,
-        department_locked: false,
+        department_locked: sigurDetached,
+        ...(sigurDetached ? { sigur_employee_id: null } : {}),
       })
       .eq('id', id)
       .select(EMPLOYEE_LIFECYCLE_COLUMNS)
@@ -559,8 +588,10 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
         entityType: 'employee',
         entityId: id,
         details: {
-          source: existing.sigur_employee_id ? 'sigur' : 'portal',
+          source: existing.sigur_employee_id && !sigurDetached ? 'sigur' : 'portal',
           target_department_id: targetDepartment.id,
+          detached_from_sigur: sigurDetached,
+          previous_sigur_employee_id: sigurDetached ? existing.sigur_employee_id : undefined,
         },
       });
     } catch (auditErr) {
