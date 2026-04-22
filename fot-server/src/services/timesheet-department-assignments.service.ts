@@ -88,6 +88,7 @@ export async function listEmployeeIdsAssignedToDepartmentPeriod(
     .select('id')
     .eq('org_department_id', departmentId)
     .eq('is_archived', false)
+    .eq('excluded_from_timesheet', false)
     .eq('employment_status', 'active');
 
   if (snapshotError) throw snapshotError;

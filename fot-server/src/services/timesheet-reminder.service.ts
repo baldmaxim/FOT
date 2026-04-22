@@ -77,6 +77,7 @@ async function loadActiveDepartmentIds(): Promise<string[]> {
     .select('org_department_id')
     .eq('employment_status', 'active')
     .eq('is_archived', false)
+    .eq('excluded_from_timesheet', false)
     .not('org_department_id', 'is', null);
 
   if (error) {

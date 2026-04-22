@@ -153,12 +153,12 @@ export const timesheetResponsiblesService = {
     if (employeeIds.length > 0) {
       const { data: employees, error: employeesError } = await supabase
         .from('employees')
-        .select('id, org_department_id, employment_status, is_archived')
+        .select('id, org_department_id, employment_status, is_archived, excluded_from_timesheet')
         .in('id', employeeIds);
       if (employeesError) throw employeesError;
 
       for (const employee of employees || []) {
-        if (employee.is_archived || employee.employment_status !== 'active') continue;
+        if (employee.is_archived || employee.excluded_from_timesheet || employee.employment_status !== 'active') continue;
         departmentByEmployeeId.set(employee.id as number, (employee.org_department_id as string | null) ?? null);
       }
     }

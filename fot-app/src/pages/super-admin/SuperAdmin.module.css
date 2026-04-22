@@ -414,6 +414,194 @@
   color: var(--text-secondary);
 }
 
+.importToggleRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.workerPanel {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  background: var(--bg-primary);
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.workerPanelHeader {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.workerPanelTitle {
+  font-weight: 600;
+}
+
+.workerPanelToggle {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
+.workerPanelStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.workerPanelStat {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.3;
+  border: 1px solid var(--border);
+}
+
+.workerPanelStatOk {
+  background: var(--success-muted);
+  color: var(--success);
+  border-color: rgba(34, 197, 94, 0.25);
+}
+
+.workerPanelStatWarn {
+  background: var(--warning-muted);
+  color: var(--warning);
+  border-color: rgba(245, 158, 11, 0.25);
+}
+
+.workerPanelStatErr {
+  background: var(--error-muted);
+  color: var(--error);
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+.workerList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.workerItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--bg-secondary);
+}
+
+.workerItemTransfer {
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.workerItemArchived {
+  border-color: rgba(139, 92, 246, 0.3);
+}
+
+.workerItemOk {
+  border-color: rgba(34, 197, 94, 0.25);
+}
+
+.workerItemErr {
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.workerCheckbox {
+  margin-top: 3px;
+}
+
+.workerInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.workerName {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.workerMeta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.workerBadge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  margin-left: 6px;
+}
+
+.workerBadgeArchived {
+  background: rgba(139, 92, 246, 0.12);
+  color: #8b5cf6;
+  border-color: rgba(139, 92, 246, 0.3);
+}
+
+.workerCandidates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.workerCandidateBtn {
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.workerCandidateBtnActive {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+.workerPanelActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.workerMissingList {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
 .roleTabs {
   display: flex;
   gap: 4px;

@@ -11,6 +11,43 @@ export interface IManagerDepartmentImportCandidate {
   name: string | null;
 }
 
+export type IBrigadeWorkerStatus =
+  | 'already_in_brigade'
+  | 'in_other_department'
+  | 'archived_match'
+  | 'not_found'
+  | 'ambiguous';
+
+export interface IBrigadeWorkerCandidate {
+  employee_id: number;
+  full_name: string;
+  department_id: string | null;
+  department_name: string | null;
+  is_archived: boolean;
+}
+
+export interface IBrigadeWorkerPreview {
+  original_name: string;
+  normalized_name: string;
+  status: IBrigadeWorkerStatus;
+  employee_id?: number;
+  current_department_id?: string | null;
+  current_department_name?: string | null;
+  is_archived?: boolean;
+  candidates?: IBrigadeWorkerCandidate[];
+}
+
+export interface IBrigadeWorkerMissing {
+  employee_id: number;
+  full_name: string;
+  is_archived: boolean;
+}
+
+export interface IBrigadeWorkerAnalysis {
+  excel_workers: IBrigadeWorkerPreview[];
+  missing_from_excel: IBrigadeWorkerMissing[];
+}
+
 export interface IManagerDepartmentImportBrigadePreview {
   brigade_name: string;
   row_number: number;
@@ -18,6 +55,7 @@ export interface IManagerDepartmentImportBrigadePreview {
   department_id: string | null;
   department_name: string | null;
   candidates?: IManagerDepartmentImportCandidate[];
+  worker_analysis?: IBrigadeWorkerAnalysis;
 }
 
 export interface IManagerDepartmentImportGroupPreview {
@@ -45,6 +83,7 @@ interface IParsedLink {
   brigade_name: string;
   row_number: number;
   section_name: string | null;
+  worker_names: string[];
 }
 
 interface IDepartmentRow {
@@ -62,6 +101,13 @@ interface IBrigadeAliasRow {
   section_name_normalized: string;
   brigade_name_normalized: string;
   department_id: string;
+}
+
+interface IEmployeeRow {
+  id: number;
+  full_name: string;
+  org_department_id: string | null;
+  is_archived: boolean;
 }
 
 export interface IManagerDepartmentImportEmployeeAliasInput {
@@ -104,7 +150,7 @@ function warnMissingBrigadeAliasTable(): void {
 
 function normalizeText(value: string | null | undefined): string {
   return String(value || '')
-    .replace(/\u00A0/g, ' ')
+    .replace(/ /g, ' ')
     .replace(/ё/giu, 'е')
     .replace(/\s+/g, ' ')
     .trim()
@@ -131,8 +177,12 @@ function parseSectionFromManagerRow(raw: string): { manager_name: string; sectio
   return { manager_name: match[1].trim(), section_name: match[2].trim() };
 }
 
-async function parseWorkbookBuffer(buffer: Buffer): Promise<IParsedLink[]> {
-  const rows = await readExcelRows(buffer);
+function isMultiColumnFormat(rows: string[][]): boolean {
+  const headerCell = rows?.[2]?.[1];
+  return normalizeText(headerCell) === 'тип';
+}
+
+function parseOldFormatWorkbook(rows: string[][]): IParsedLink[] {
   const links: IParsedLink[] = [];
   let currentManager: string | null = null;
   let currentSection: string | null = null;
@@ -148,6 +198,7 @@ async function parseWorkbookBuffer(buffer: Buffer): Promise<IParsedLink[]> {
           brigade_name: cell,
           row_number: i + 1,
           section_name: currentSection,
+          worker_names: [],
         });
       }
     } else if (cell.includes('(')) {
@@ -158,6 +209,60 @@ async function parseWorkbookBuffer(buffer: Buffer): Promise<IParsedLink[]> {
   }
 
   return links;
+}
+
+function parseMultiColumnWorkbook(rows: string[][]): IParsedLink[] {
+  const links: IParsedLink[] = [];
+  let currentManager: string | null = null;
+  let currentSection: string | null = null;
+  let currentBrigade: IParsedLink | null = null;
+
+  for (let i = 3; i < rows.length; i++) {
+    const typeCell = String(rows[i]?.[1] ?? '').trim();
+    const nameCell = String(rows[i]?.[2] ?? '').trim();
+    if (!typeCell || !nameCell) continue;
+
+    const typeNormalized = normalizeText(typeCell);
+
+    if (typeNormalized === 'нач.уч.' || typeNormalized === 'начальник' || typeNormalized === 'руководитель') {
+      const parsed = parseSectionFromManagerRow(nameCell);
+      currentManager = parsed.manager_name;
+      currentSection = parsed.section_name;
+      currentBrigade = null;
+      continue;
+    }
+
+    if (typeNormalized === 'прораб' || typeNormalized === 'мастер') {
+      continue;
+    }
+
+    if (typeNormalized === 'бригада') {
+      if (!currentManager) continue;
+      currentBrigade = {
+        manager_name: currentManager,
+        brigade_name: nameCell,
+        row_number: i + 1,
+        section_name: currentSection,
+        worker_names: [],
+      };
+      links.push(currentBrigade);
+      continue;
+    }
+
+    if (typeNormalized === 'рабочий') {
+      if (!currentBrigade) continue;
+      currentBrigade.worker_names.push(nameCell);
+    }
+  }
+
+  return links;
+}
+
+async function parseWorkbookBuffer(buffer: Buffer): Promise<IParsedLink[]> {
+  const rows = await readExcelRows(buffer);
+  return isMultiColumnFormat(rows)
+    ? parseMultiColumnWorkbook(rows)
+    : parseOldFormatWorkbook(rows);
 }
 
 async function loadActiveDepartments(): Promise<IDepartmentRow[]> {
@@ -173,6 +278,18 @@ async function loadActiveDepartments(): Promise<IDepartmentRow[]> {
   return (data || []) as IDepartmentRow[];
 }
 
+async function loadAllEmployees(): Promise<IEmployeeRow[]> {
+  const { data, error } = await supabase
+    .from('employees')
+    .select('id, full_name, org_department_id, is_archived');
+
+  if (error) {
+    throw error;
+  }
+
+  return (data || []) as IEmployeeRow[];
+}
+
 function buildDepartmentMatchIndex(rows: IDepartmentRow[]): Map<string, IDepartmentRow[]> {
   const index = new Map<string, IDepartmentRow[]>();
   for (const row of rows) {
@@ -184,6 +301,124 @@ function buildDepartmentMatchIndex(rows: IDepartmentRow[]): Map<string, IDepartm
   }
 
   return index;
+}
+
+function buildEmployeesByNormalizedName(rows: IEmployeeRow[]): Map<string, IEmployeeRow[]> {
+  const index = new Map<string, IEmployeeRow[]>();
+  for (const row of rows) {
+    const key = normalizeText(row.full_name);
+    if (!key) continue;
+    const current = index.get(key) || [];
+    current.push(row);
+    index.set(key, current);
+  }
+
+  return index;
+}
+
+function buildEmployeesByDepartmentId(rows: IEmployeeRow[]): Map<string, IEmployeeRow[]> {
+  const index = new Map<string, IEmployeeRow[]>();
+  for (const row of rows) {
+    if (!row.org_department_id) continue;
+    const current = index.get(row.org_department_id) || [];
+    current.push(row);
+    index.set(row.org_department_id, current);
+  }
+
+  return index;
+}
+
+function toWorkerCandidate(
+  employee: IEmployeeRow,
+  departmentById: Map<string, IDepartmentRow>,
+): IBrigadeWorkerCandidate {
+  const department = employee.org_department_id ? departmentById.get(employee.org_department_id) || null : null;
+  return {
+    employee_id: employee.id,
+    full_name: employee.full_name,
+    department_id: employee.org_department_id,
+    department_name: department?.name ?? null,
+    is_archived: Boolean(employee.is_archived),
+  };
+}
+
+export function classifyBrigadeWorkers(params: {
+  worker_names: string[];
+  brigade_department_id: string;
+  employeesByNormalizedName: Map<string, IEmployeeRow[]>;
+  employeesByDepartmentId: Map<string, IEmployeeRow[]>;
+  departmentById: Map<string, IDepartmentRow>;
+}): IBrigadeWorkerAnalysis {
+  const excel_workers: IBrigadeWorkerPreview[] = [];
+  const matchedEmployeeIds = new Set<number>();
+
+  for (const rawName of params.worker_names) {
+    const normalized = normalizeText(rawName);
+    const matches = params.employeesByNormalizedName.get(normalized) || [];
+
+    if (matches.length === 0) {
+      excel_workers.push({
+        original_name: rawName,
+        normalized_name: normalized,
+        status: 'not_found',
+      });
+      continue;
+    }
+
+    if (matches.length === 1) {
+      const [only] = matches;
+      matchedEmployeeIds.add(only.id);
+
+      if (only.org_department_id === params.brigade_department_id) {
+        excel_workers.push({
+          original_name: rawName,
+          normalized_name: normalized,
+          status: 'already_in_brigade',
+          employee_id: only.id,
+          current_department_id: only.org_department_id,
+          current_department_name: params.departmentById.get(params.brigade_department_id)?.name ?? null,
+          is_archived: Boolean(only.is_archived),
+        });
+        continue;
+      }
+
+      const currentDept = only.org_department_id
+        ? params.departmentById.get(only.org_department_id) || null
+        : null;
+      excel_workers.push({
+        original_name: rawName,
+        normalized_name: normalized,
+        status: only.is_archived ? 'archived_match' : 'in_other_department',
+        employee_id: only.id,
+        current_department_id: only.org_department_id,
+        current_department_name: currentDept?.name ?? null,
+        is_archived: Boolean(only.is_archived),
+      });
+      continue;
+    }
+
+    // ambiguous: multiple employees with same ФИО
+    const candidates = matches.map(match => toWorkerCandidate(match, params.departmentById));
+    const sameDeptCandidate = matches.find(match => match.org_department_id === params.brigade_department_id);
+    if (sameDeptCandidate) matchedEmployeeIds.add(sameDeptCandidate.id);
+    excel_workers.push({
+      original_name: rawName,
+      normalized_name: normalized,
+      status: 'ambiguous',
+      candidates,
+    });
+  }
+
+  const brigadeEmployees = params.employeesByDepartmentId.get(params.brigade_department_id) || [];
+  const missing_from_excel: IBrigadeWorkerMissing[] = brigadeEmployees
+    .filter(employee => !matchedEmployeeIds.has(employee.id))
+    .map(employee => ({
+      employee_id: employee.id,
+      full_name: employee.full_name,
+      is_archived: Boolean(employee.is_archived),
+    }));
+
+  return { excel_workers, missing_from_excel };
 }
 
 async function loadSavedEmployeeAliasIndex(): Promise<Map<string, number>> {
@@ -240,13 +475,17 @@ export async function buildManagerDepartmentImportPreviewFromBuffer(
   buffer: Buffer,
 ): Promise<IManagerDepartmentImportPreview> {
   const links = await parseWorkbookBuffer(buffer);
+  const hasWorkerData = links.some(link => link.worker_names.length > 0);
   const departments = await loadActiveDepartments();
   const departmentById = new Map(departments.map(row => [row.id, row]));
-  const [departmentIndex, employeeAliasIndex, brigadeAliasIndex] = await Promise.all([
+  const [departmentIndex, employeeAliasIndex, brigadeAliasIndex, employees] = await Promise.all([
     Promise.resolve(buildDepartmentMatchIndex(departments)),
     loadSavedEmployeeAliasIndex(),
     loadSavedBrigadeAliasIndex(departmentById),
+    hasWorkerData ? loadAllEmployees() : Promise.resolve([] as IEmployeeRow[]),
   ]);
+  const employeesByNormalizedName = hasWorkerData ? buildEmployeesByNormalizedName(employees) : new Map();
+  const employeesByDepartmentId = hasWorkerData ? buildEmployeesByDepartmentId(employees) : new Map();
   const groupMap = new Map<string, IManagerDepartmentImportGroupPreview>();
   let resolvedLinks = 0;
   let unresolvedLinks = 0;
@@ -293,6 +532,25 @@ export async function buildManagerDepartmentImportPreviewFromBuffer(
         candidates: matches.length > 1
           ? matches.map(match => ({ id: match.id, name: match.name }))
           : undefined,
+      };
+    }
+
+    if (hasWorkerData && brigadePreview.department_id) {
+      brigadePreview.worker_analysis = classifyBrigadeWorkers({
+        worker_names: link.worker_names,
+        brigade_department_id: brigadePreview.department_id,
+        employeesByNormalizedName,
+        employeesByDepartmentId,
+        departmentById,
+      });
+    } else if (hasWorkerData && link.worker_names.length > 0) {
+      brigadePreview.worker_analysis = {
+        excel_workers: link.worker_names.map(name => ({
+          original_name: name,
+          normalized_name: normalizeText(name),
+          status: 'not_found' as const,
+        })),
+        missing_from_excel: [],
       };
     }
 

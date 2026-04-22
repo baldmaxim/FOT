@@ -585,6 +585,7 @@ export const timesheetController = {
         .select('id, full_name, position_id, org_department_id, employment_status, work_category')
         .eq('employment_status', 'active')
         .eq('is_archived', false)
+        .eq('excluded_from_timesheet', false)
         .order('full_name');
 
       if (hasDeptFilter) {
@@ -1063,9 +1064,10 @@ export const timesheetController = {
 
       const { data: employees, error } = await supabase
         .from('employees')
-        .select('id, full_name, org_department_id, is_archived')
+        .select('id, full_name, org_department_id, excluded_from_timesheet')
         .ilike('full_name', `%${parsed.q}%`)
         .eq('employment_status', 'active')
+        .eq('is_archived', false)
         .neq('org_department_id', targetDepartmentId)
         .order('full_name')
         .limit(20);
@@ -1098,7 +1100,7 @@ export const timesheetController = {
           department_name: employee.org_department_id
             ? departmentNameById.get(String(employee.org_department_id)) || null
             : null,
-          is_archived: Boolean(employee.is_archived),
+          excluded_from_timesheet: Boolean(employee.excluded_from_timesheet),
         })),
       });
     } catch (err) {
@@ -1126,7 +1128,7 @@ export const timesheetController = {
 
       const { data: employee, error } = await supabase
         .from('employees')
-        .select('id, full_name, org_department_id, employment_status, is_archived')
+        .select('id, full_name, org_department_id, employment_status, excluded_from_timesheet')
         .eq('id', parsed.employee_id)
         .single();
       if (error || !employee) {
@@ -1146,17 +1148,17 @@ export const timesheetController = {
         effectiveDate: parsed.effective_from,
       });
 
-      const restoredFromArchive = Boolean(employee.is_archived);
-      if (restoredFromArchive) {
-        const { error: unarchiveError } = await supabase
+      const restoredFromExclusion = Boolean(employee.excluded_from_timesheet);
+      if (restoredFromExclusion) {
+        const { error: unexcludeError } = await supabase
           .from('employees')
           .update({
-            is_archived: false,
-            archived_at: null,
+            excluded_from_timesheet: false,
+            excluded_from_timesheet_at: null,
             updated_at: new Date().toISOString(),
           })
           .eq('id', parsed.employee_id);
-        if (unarchiveError) throw unarchiveError;
+        if (unexcludeError) throw unexcludeError;
       }
 
       employeeCache.invalidate(parsed.employee_id);
@@ -1169,7 +1171,7 @@ export const timesheetController = {
           from_department_id: employee.org_department_id,
           to_department_id: targetDepartmentId,
           effective_from: parsed.effective_from,
-          restored_from_archive: restoredFromArchive,
+          restored_from_exclusion: restoredFromExclusion,
         },
       });
 
@@ -1206,7 +1208,7 @@ export const timesheetController = {
 
       const { data: employee, error } = await supabase
         .from('employees')
-        .select('id, full_name, org_department_id, employment_status, is_archived')
+        .select('id, full_name, org_department_id, employment_status, excluded_from_timesheet')
         .eq('id', parsed.employee_id)
         .single();
       if (error || !employee) {
@@ -1215,27 +1217,27 @@ export const timesheetController = {
       if (employee.org_department_id !== targetDepartmentId) {
         return res.status(409).json({ success: false, error: 'Сотрудник не относится к выбранному отделу' });
       }
-      if (employee.is_archived) {
-        return res.status(409).json({ success: false, error: 'Сотрудник уже находится во внутреннем архиве' });
+      if (employee.excluded_from_timesheet) {
+        return res.status(409).json({ success: false, error: 'Сотрудник уже исключён из табеля' });
       }
       if (employee.employment_status !== 'active') {
         return res.status(409).json({ success: false, error: 'Можно исключать только активных сотрудников' });
       }
 
-      const archivedAt = new Date().toISOString();
+      const excludedAt = new Date().toISOString();
       const { error: updateError } = await supabase
         .from('employees')
         .update({
-          is_archived: true,
-          archived_at: archivedAt,
-          updated_at: archivedAt,
+          excluded_from_timesheet: true,
+          excluded_from_timesheet_at: excludedAt,
+          updated_at: excludedAt,
         })
         .eq('id', parsed.employee_id);
       if (updateError) throw updateError;
 
       employeeCache.invalidate(parsed.employee_id);
 
-      await auditService.logFromRequest(req, req.user.id, 'ARCHIVE_EMPLOYEE', {
+      await auditService.logFromRequest(req, req.user.id, 'EXCLUDE_FROM_TIMESHEET', {
         entityType: 'employee',
         entityId: String(parsed.employee_id),
         details: {
@@ -1248,7 +1250,7 @@ export const timesheetController = {
         success: true,
         data: {
           employee_id: parsed.employee_id,
-          archived_at: archivedAt,
+          excluded_from_timesheet_at: excludedAt,
         },
       });
     } catch (err) {

@@ -13,6 +13,8 @@ import {
   buildManagerDepartmentImportPreviewFromBuffer,
   saveManagerDepartmentImportAliases,
 } from '../services/manager-department-import.service.js';
+import { employeeChangesService } from '../services/employee-changes.service.js';
+import { employeeCache } from '../services/employee-cache.service.js';
 
 const approveUserSchema = z.object({
   position_type: z.string().min(1),
@@ -21,6 +23,14 @@ const approveUserSchema = z.object({
 
 const updateDepartmentAccessSchema = z.object({
   department_ids: z.array(z.string().uuid()).default([]),
+});
+
+const applyBrigadeWorkerTransfersSchema = z.object({
+  transfers: z.array(z.object({
+    employee_id: z.number().int().positive(),
+    target_department_id: z.string().uuid(),
+    effective_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  })).min(1),
 });
 
 const applyDepartmentAccessImportSchema = z.object({
@@ -600,6 +610,146 @@ export const adminUsersController = {
     } catch (error) {
       console.error('Clear department assignments error:', error);
       res.status(500).json({ success: false, error: 'Не удалось очистить назначения' });
+    }
+  },
+
+  async applyBrigadeWorkerTransfers(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { transfers } = applyBrigadeWorkerTransfersSchema.parse(req.body);
+
+      const dedupedTransfers = [...new Map(
+        transfers.map(transfer => [`${transfer.employee_id}::${transfer.target_department_id}`, transfer]),
+      ).values()];
+
+      const employeeIds = [...new Set(dedupedTransfers.map(transfer => transfer.employee_id))];
+      const departmentIds = [...new Set(dedupedTransfers.map(transfer => transfer.target_department_id))];
+
+      const { data: employees, error: employeesError } = await supabase
+        .from('employees')
+        .select('id, full_name, org_department_id, employment_status, is_archived')
+        .in('id', employeeIds);
+
+      if (employeesError) {
+        res.status(500).json({ success: false, error: 'Не удалось проверить сотрудников' });
+        return;
+      }
+
+      const employeesById = new Map((employees || []).map(employee => [Number(employee.id), employee]));
+
+      const { data: departments, error: departmentsError } = await supabase
+        .from('org_departments')
+        .select('id')
+        .in('id', departmentIds)
+        .eq('is_active', true);
+
+      if (departmentsError) {
+        res.status(500).json({ success: false, error: 'Не удалось проверить подразделения' });
+        return;
+      }
+
+      const foundDepartmentIds = new Set((departments || []).map(department => String(department.id)));
+
+      let applied = 0;
+      let restored = 0;
+      const skipped: Array<{ employee_id: number; target_department_id: string; reason: string }> = [];
+      const errors: Array<{ employee_id: number; target_department_id: string; error: string }> = [];
+
+      for (const transfer of dedupedTransfers) {
+        const employee = employeesById.get(transfer.employee_id);
+        if (!employee) {
+          skipped.push({
+            employee_id: transfer.employee_id,
+            target_department_id: transfer.target_department_id,
+            reason: 'employee_not_found',
+          });
+          continue;
+        }
+
+        if (!foundDepartmentIds.has(transfer.target_department_id)) {
+          skipped.push({
+            employee_id: transfer.employee_id,
+            target_department_id: transfer.target_department_id,
+            reason: 'department_not_found',
+          });
+          continue;
+        }
+
+        if (employee.org_department_id === transfer.target_department_id && !employee.is_archived) {
+          skipped.push({
+            employee_id: transfer.employee_id,
+            target_department_id: transfer.target_department_id,
+            reason: 'already_in_department',
+          });
+          continue;
+        }
+
+        try {
+          await employeeChangesService.changeDepartment(
+            transfer.employee_id,
+            transfer.target_department_id,
+            {
+              reason: 'Excel-импорт бригад',
+              createdBy: req.user.id,
+              effectiveDate: transfer.effective_date,
+              lockDepartment: true,
+            },
+          );
+
+          const restoredFromArchive = Boolean(employee.is_archived);
+          if (restoredFromArchive) {
+            const { error: unarchiveError } = await supabase
+              .from('employees')
+              .update({
+                is_archived: false,
+                archived_at: null,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', transfer.employee_id);
+            if (unarchiveError) throw unarchiveError;
+            restored += 1;
+          }
+
+          employeeCache.invalidate(transfer.employee_id);
+
+          await auditService.logFromRequest(req, req.user.id, 'MOVE_EMPLOYEE_DEPARTMENT', {
+            entityType: 'employee',
+            entityId: String(transfer.employee_id),
+            details: {
+              source: 'manager_excel_admin_ui',
+              from_department_id: employee.org_department_id,
+              to_department_id: transfer.target_department_id,
+              effective_from: transfer.effective_date || null,
+              restored_from_archive: restoredFromArchive,
+            },
+          });
+
+          applied += 1;
+        } catch (transferError) {
+          console.error('Apply brigade worker transfer error:', transferError);
+          errors.push({
+            employee_id: transfer.employee_id,
+            target_department_id: transfer.target_department_id,
+            error: transferError instanceof Error ? transferError.message : 'unknown_error',
+          });
+        }
+      }
+
+      res.json({
+        success: true,
+        data: {
+          applied,
+          restored,
+          skipped,
+          errors,
+        },
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Apply brigade worker transfers error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось применить переносы сотрудников' });
     }
   },
 

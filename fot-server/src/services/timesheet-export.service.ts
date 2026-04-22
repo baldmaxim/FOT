@@ -93,6 +93,7 @@ export async function fetchTimesheetDataForDepartment(
       .select('id, full_name, position_id, org_department_id, sigur_employee_id, work_category')
       .eq('employment_status', 'active')
       .eq('is_archived', false)
+      .eq('excluded_from_timesheet', false)
       .order('full_name');
 
     if (departmentId) {

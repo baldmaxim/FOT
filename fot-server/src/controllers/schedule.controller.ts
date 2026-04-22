@@ -739,6 +739,7 @@ export const scheduleController = {
         .select('id')
         .in('org_department_id', departmentIds)
         .eq('is_archived', false)
+        .eq('excluded_from_timesheet', false)
         .neq('employment_status', 'fired');
 
       if (employeesError) throw employeesError;

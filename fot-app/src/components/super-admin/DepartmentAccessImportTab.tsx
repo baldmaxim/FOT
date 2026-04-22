@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   adminService,
+  type ManagerDepartmentImportBrigadePreview,
   type ManagerDepartmentImportGroupPreview,
   type ManagerDepartmentImportPreview,
 } from '../../services/adminService';
@@ -11,6 +12,7 @@ import { useToast } from '../../contexts/ToastContext';
 import type { Employee } from '../../types';
 import type { IUserFromApi } from './AllUsersTab';
 import { getTreeFlatDepartments } from '../../utils/departmentUtils';
+import { BrigadeWorkerTransferPanel } from './BrigadeWorkerTransferPanel';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
 
 interface IDepartmentAccessImportTabProps {
@@ -121,6 +123,7 @@ export const DepartmentAccessImportTab: FC<IDepartmentAccessImportTabProps> = ({
   const [manualDepartmentQueryByBrigade, setManualDepartmentQueryByBrigade] = useState<Record<string, string>>({});
   const [manualDepartmentSelectionByBrigade, setManualDepartmentSelectionByBrigade] = useState<Record<string, string>>({});
   const [employeeQueryByGroup, setEmployeeQueryByGroup] = useState<Record<string, string>>({});
+  const [showBrigadeWorkers, setShowBrigadeWorkers] = useState(false);
   const employeesQuery = useQuery<Employee[]>({
     queryKey: ['admin-users', 'department-import', 'employees'],
     queryFn: () => employeeService.getAll({ view: 'list' }),
@@ -247,6 +250,52 @@ export const DepartmentAccessImportTab: FC<IDepartmentAccessImportTabProps> = ({
       groupsNeedingManual,
     };
   }, [assignmentsByGroup, manualDepartmentSelectionByBrigade, preview]);
+
+  const brigadesWithWorkers = useMemo(() => {
+    if (!preview) return [] as Array<{
+      group: ManagerDepartmentImportGroupPreview;
+      brigade: ManagerDepartmentImportBrigadePreview;
+      department_id: string;
+      department_name: string | null;
+    }>;
+
+    const result: Array<{
+      group: ManagerDepartmentImportGroupPreview;
+      brigade: ManagerDepartmentImportBrigadePreview;
+      department_id: string;
+      department_name: string | null;
+    }> = [];
+
+    for (const group of preview.groups) {
+      for (const brigade of group.brigades) {
+        if (!brigade.worker_analysis) continue;
+        const brigadeKey = buildBrigadeKey(group, brigade);
+        const manualDepartmentId = manualDepartmentSelectionByBrigade[brigadeKey] || null;
+        const effectiveDepartmentId = brigade.department_id || manualDepartmentId;
+        if (!effectiveDepartmentId) continue;
+        const effectiveDepartmentName = brigade.department_name
+          || (manualDepartmentId ? departmentOptionMap.get(manualDepartmentId)?.name || null : null);
+        result.push({
+          group,
+          brigade,
+          department_id: effectiveDepartmentId,
+          department_name: effectiveDepartmentName,
+        });
+      }
+    }
+
+    return result;
+  }, [departmentOptionMap, manualDepartmentSelectionByBrigade, preview]);
+
+  const refreshPreviewAfterTransfer = async (): Promise<void> => {
+    if (!selectedFile) return;
+    try {
+      const refreshed = await adminService.previewDepartmentAccessImport(selectedFile);
+      applyPreviewData(refreshed);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Не удалось обновить данные после переноса');
+    }
+  };
 
   const selectedResolvedLinksCount = useMemo(() => {
     if (!preview) return 0;
@@ -736,6 +785,54 @@ export const DepartmentAccessImportTab: FC<IDepartmentAccessImportTabProps> = ({
               {applyLoading ? 'Применяю...' : 'Применить назначения'}
             </button>
           </div>
+
+          {brigadesWithWorkers.length > 0 && (
+            <>
+              <div className={styles.importToggleRow}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={showBrigadeWorkers}
+                    onChange={(event) => setShowBrigadeWorkers(event.target.checked)}
+                  />
+                  Показать состав бригад ({brigadesWithWorkers.length} с данными по рабочим)
+                </label>
+              </div>
+
+              {showBrigadeWorkers && (
+                <div className={styles.importGroupList}>
+                  {brigadesWithWorkers.map(({ group, brigade, department_id, department_name }) => (
+                    <div
+                      key={`${group.group_key}-${brigade.row_number}-${brigade.brigade_name}-workers`}
+                      className={styles.importGroupCard}
+                    >
+                      <div className={styles.importGroupHeader}>
+                        <div>
+                          <div className={styles.importGroupTitle}>
+                            {brigade.brigade_name}
+                          </div>
+                          <div className={styles.importGroupMeta}>
+                            Начальник: {group.manager_name}
+                            {group.section_name ? ` • ${group.section_name}` : ''}
+                            {department_name ? ` • отдел: ${department_name}` : ''}
+                          </div>
+                        </div>
+                      </div>
+                      {brigade.worker_analysis && (
+                        <BrigadeWorkerTransferPanel
+                          brigadeName={brigade.brigade_name}
+                          targetDepartmentId={department_id}
+                          targetDepartmentName={department_name}
+                          analysis={brigade.worker_analysis}
+                          onTransferApplied={refreshPreviewAfterTransfer}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </>
       )}
     </div>

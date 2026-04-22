@@ -681,7 +681,7 @@ export const TimesheetPage: FC = () => {
   const handleExcludeEmployeeFromDepartment = useCallback(async (employee: TimesheetEmployee) => {
     if (!activeGridDeptId) return;
     if (!window.confirm(
-      `Исключить ${employee.full_name} из табеля?\n\nСотрудник исчезнет с портала и будет отправлен во внутренний архив.`,
+      `Исключить ${employee.full_name} из табеля?\n\nСотрудник пропадёт из таблицы, но останется активным в системе. Вернуть его можно через «Перевести сотрудника».`,
     )) {
       return;
     }
@@ -695,7 +695,7 @@ export const TimesheetPage: FC = () => {
         setPanelOpen(false);
         setPanelEmployee(null);
       }
-      toast.success(`Сотрудник ${employee.full_name} исключён из табеля и отправлен во внутренний архив`);
+      toast.success(`Сотрудник ${employee.full_name} исключён из табеля`);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, activeSegment, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-overview'] }),

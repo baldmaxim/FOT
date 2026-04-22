@@ -41,6 +41,43 @@ export interface EmployeeDepartmentAssignmentFromApi {
   managed_department_ids: string[];
 }
 
+export type BrigadeWorkerStatus =
+  | 'already_in_brigade'
+  | 'in_other_department'
+  | 'archived_match'
+  | 'not_found'
+  | 'ambiguous';
+
+export interface BrigadeWorkerCandidate {
+  employee_id: number;
+  full_name: string;
+  department_id: string | null;
+  department_name: string | null;
+  is_archived: boolean;
+}
+
+export interface BrigadeWorkerPreview {
+  original_name: string;
+  normalized_name: string;
+  status: BrigadeWorkerStatus;
+  employee_id?: number;
+  current_department_id?: string | null;
+  current_department_name?: string | null;
+  is_archived?: boolean;
+  candidates?: BrigadeWorkerCandidate[];
+}
+
+export interface BrigadeWorkerMissing {
+  employee_id: number;
+  full_name: string;
+  is_archived: boolean;
+}
+
+export interface BrigadeWorkerAnalysis {
+  excel_workers: BrigadeWorkerPreview[];
+  missing_from_excel: BrigadeWorkerMissing[];
+}
+
 export interface ManagerDepartmentImportBrigadePreview {
   brigade_name: string;
   row_number: number;
@@ -48,6 +85,20 @@ export interface ManagerDepartmentImportBrigadePreview {
   department_id: string | null;
   department_name: string | null;
   candidates?: Array<{ id: string; name: string | null }>;
+  worker_analysis?: BrigadeWorkerAnalysis;
+}
+
+export interface BrigadeWorkerTransferInput {
+  employee_id: number;
+  target_department_id: string;
+  effective_date?: string;
+}
+
+export interface BrigadeWorkerTransferResult {
+  applied: number;
+  restored: number;
+  skipped: Array<{ employee_id: number; target_department_id: string; reason: string }>;
+  errors: Array<{ employee_id: number; target_department_id: string; error: string }>;
 }
 
 export interface ManagerDepartmentImportGroupPreview {
@@ -176,6 +227,16 @@ export const adminService = {
   async clearDepartmentAssignments(): Promise<{ deleted: number }> {
     const response = await apiClient.delete<ApiResponse<{ deleted: number }>>(
       '/admin/users/department-access-assignments',
+    );
+    return response.data;
+  },
+
+  async applyBrigadeWorkerTransfers(payload: {
+    transfers: BrigadeWorkerTransferInput[];
+  }): Promise<BrigadeWorkerTransferResult> {
+    const response = await apiClient.post<ApiResponse<BrigadeWorkerTransferResult>>(
+      '/admin/users/department-access-import/apply-worker-transfers',
+      payload,
     );
     return response.data;
   },

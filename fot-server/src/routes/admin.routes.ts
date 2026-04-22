@@ -39,6 +39,11 @@ router.post(
   requirePageAccess('/admin/users', 'edit'),
   adminController.applyDepartmentAccessImport,
 );
+router.post(
+  '/users/department-access-import/apply-worker-transfers',
+  requirePageAccess('/admin/users', 'edit'),
+  adminController.applyBrigadeWorkerTransfers,
+);
 router.delete(
   '/users/department-access-assignments',
   requirePageAccess('/admin/users', 'edit'),

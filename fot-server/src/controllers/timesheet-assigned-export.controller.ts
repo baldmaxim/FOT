@@ -57,10 +57,11 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
 
   let accessQuery = supabase
     .from('employee_department_access')
-    .select('employee_id, department_id, employees!inner(id, full_name, email, employment_status, is_archived)')
+    .select('employee_id, department_id, employees!inner(id, full_name, email, employment_status, is_archived, excluded_from_timesheet)')
     .eq('is_active', true)
     .eq('employees.employment_status', 'active')
-    .eq('employees.is_archived', false);
+    .eq('employees.is_archived', false)
+    .eq('employees.excluded_from_timesheet', false);
 
   if (scope === 'department') {
     const managed = await resolveManagedDepartmentIds(req);

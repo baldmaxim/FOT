@@ -55,7 +55,7 @@ export interface TimesheetTeamManagementCandidate {
   full_name: string;
   org_department_id: string | null;
   department_name: string | null;
-  is_archived?: boolean;
+  excluded_from_timesheet?: boolean;
 }
 
 export interface ManagedDepartmentTimesheetSummary {
