@@ -1,17 +1,36 @@
 .sigur-live-page {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  flex: 1;
+  min-height: 0;
 }
 
 .sigur-live-page .employees-page.sigur-live-employees-layout {
-  margin: 0;
-  min-height: 720px;
-  height: min(85vh, 960px);
-  border: 1px solid var(--border);
-  border-radius: 18px;
+  border: none;
+  border-radius: 0;
   overflow: hidden;
   background: var(--bg-primary);
+}
+
+.ep-dept-panel {
+  position: relative;
+}
+
+.ep-dept-panel-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 5;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.ep-dept-panel-resizer:hover,
+.ep-dept-panel-resizer:active {
+  background: color-mix(in srgb, var(--primary) 40%, transparent);
 }
 
 .sigur-live-employee-table td:last-child,
@@ -185,12 +204,13 @@
 
 @media (max-width: 768px) {
   .sigur-live-page .employees-page.sigur-live-employees-layout {
-    margin: 0;
-    min-height: 70vh;
-    height: 70vh;
     border-radius: 0;
     border-left: none;
     border-right: none;
+  }
+
+  .ep-dept-panel-resizer {
+    display: none;
   }
 
   .sigur-live-employee-table td:last-child,

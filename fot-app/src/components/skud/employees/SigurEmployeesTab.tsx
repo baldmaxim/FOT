@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type FC, type MouseEvent as ReactMouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type FC, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowRightLeft,
@@ -27,7 +27,21 @@ import { SigurLiveEmployeeSidebar } from './SigurLiveEmployeeSidebar';
 interface ISigurEmployeesTabProps {
   canEdit: boolean;
   setError: (error: string) => void;
+  headerActionSlot?: ReactNode;
 }
+
+const DEPT_PANEL_WIDTH_KEY = 'sigur-dept-panel-width';
+const DEPT_PANEL_MIN_WIDTH = 200;
+const DEPT_PANEL_MAX_WIDTH = 640;
+const DEPT_PANEL_DEFAULT_WIDTH = 288;
+
+const readInitialDeptPanelWidth = (): number => {
+  if (typeof window === 'undefined') return DEPT_PANEL_DEFAULT_WIDTH;
+  const raw = window.localStorage.getItem(DEPT_PANEL_WIDTH_KEY);
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  if (!Number.isFinite(parsed)) return DEPT_PANEL_DEFAULT_WIDTH;
+  return Math.min(DEPT_PANEL_MAX_WIDTH, Math.max(DEPT_PANEL_MIN_WIDTH, parsed));
+};
 
 type EmployeeStatusFilter = 'all' | 'active' | 'blocked';
 
@@ -350,11 +364,56 @@ const DepartmentTreeNode: FC<IDepartmentTreeNodeProps> = ({
   );
 };
 
-export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setError }) => {
+export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setError, headerActionSlot }) => {
   const queryClient = useQueryClient();
   const isMobile = useIsMobile(768);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const departmentNodeRefs = useRef(new Map<number, HTMLDivElement>());
+  const deptPanelResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const [deptPanelWidth, setDeptPanelWidth] = useState<number>(readInitialDeptPanelWidth);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(DEPT_PANEL_WIDTH_KEY, String(deptPanelWidth));
+    } catch {
+      // ignore quota errors
+    }
+  }, [deptPanelWidth]);
+
+  const handleDeptResizeMove = useCallback((event: PointerEvent) => {
+    if (!deptPanelResizeRef.current) return;
+    const delta = event.clientX - deptPanelResizeRef.current.startX;
+    const next = Math.min(
+      DEPT_PANEL_MAX_WIDTH,
+      Math.max(DEPT_PANEL_MIN_WIDTH, deptPanelResizeRef.current.startWidth + delta),
+    );
+    setDeptPanelWidth(next);
+  }, []);
+
+  const handleDeptResizeUp = useCallback(() => {
+    deptPanelResizeRef.current = null;
+    window.removeEventListener('pointermove', handleDeptResizeMove);
+    window.removeEventListener('pointerup', handleDeptResizeUp);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }, [handleDeptResizeMove]);
+
+  const handleDeptResizeDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    deptPanelResizeRef.current = { startX: event.clientX, startWidth: deptPanelWidth };
+    window.addEventListener('pointermove', handleDeptResizeMove);
+    window.addEventListener('pointerup', handleDeptResizeUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [deptPanelWidth, handleDeptResizeMove, handleDeptResizeUp]);
+
+  useEffect(() => {
+    return () => {
+      window.removeEventListener('pointermove', handleDeptResizeMove);
+      window.removeEventListener('pointerup', handleDeptResizeUp);
+    };
+  }, [handleDeptResizeMove, handleDeptResizeUp]);
 
   const [selectedDeptId, setSelectedDeptId] = useState<number | null>(null);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<number | null>(null);
@@ -1177,6 +1236,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
                 <span>Новый сотрудник</span>
               </button>
             )}
+            {headerActionSlot}
           </div>
         </div>
 
@@ -1242,7 +1302,14 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
     <div className="sigur-live-page">
       <div className="employees-page sigur-live-employees-layout">
         {!isMobile && (
-          <div className="ep-dept-panel">
+          <div className="ep-dept-panel" style={{ width: deptPanelWidth }}>
+            <div
+              className="ep-dept-panel-resizer"
+              onPointerDown={handleDeptResizeDown}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Изменить ширину панели отделов"
+            />
             <div className="ep-dept-panel-header">
               <div className="ep-panel-title">
                 <Folder size={16} />

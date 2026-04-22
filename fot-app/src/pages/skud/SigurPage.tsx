@@ -44,17 +44,26 @@ export const SigurPage = () => {
     </div>
   );
 
+  const headerActionSlot = view === 'employees' ? (
+    <button
+      className="ep-toolbar-btn secondary sigur-fullpage__action"
+      onClick={() => setView('settings')}
+    >
+      <Settings size={16} />
+      <span>Настройка</span>
+    </button>
+  ) : (
+    <button
+      className="sigur-btn sigur-fullpage__action"
+      onClick={() => setView('employees')}
+    >
+      <ArrowLeft size={14} />
+      Назад
+    </button>
+  );
+
   return (
     <div className="sigur-fullpage">
-      <div className="sigur-fullpage__bar">
-        <button
-          className="sigur-btn"
-          onClick={() => setView(view === 'employees' ? 'settings' : 'employees')}
-        >
-          {view === 'employees' ? <><Settings size={14} /> Настройка</> : <><ArrowLeft size={14} /> Назад</>}
-        </button>
-      </div>
-
       {error && (
         <div className="sigur-error sigur-fullpage__error">
           {error}
@@ -68,6 +77,7 @@ export const SigurPage = () => {
             <SigurEmployeesTab
               canEdit={canEdit}
               setError={setError}
+              headerActionSlot={headerActionSlot}
             />
           </Suspense>
         )}
@@ -78,6 +88,7 @@ export const SigurPage = () => {
               canEdit={canEdit}
               selectedConnection="external"
               setError={setError}
+              headerActionSlot={headerActionSlot}
             />
           </Suspense>
         )}

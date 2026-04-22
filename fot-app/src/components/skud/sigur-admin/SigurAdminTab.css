@@ -10,10 +10,17 @@
   display: flex;
   gap: 4px;
   flex-wrap: wrap;
+  align-items: center;
   padding: 0.25rem;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+
+.sigur-admin-subtabs__action {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
 }
 
 .sigur-admin-subtab {

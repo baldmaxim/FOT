@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, type FC } from 'react';
+import { Suspense, lazy, useCallback, type FC, type ReactNode } from 'react';
 import { Briefcase, CreditCard, MapPin, ShieldCheck } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import type { SigurConnectionScope } from '../../../types';
@@ -21,9 +21,10 @@ interface ISigurAdminTabProps {
   canEdit: boolean;
   selectedConnection: SigurConnectionScope;
   setError: (message: string) => void;
+  headerActionSlot?: ReactNode;
 }
 
-export const SigurAdminTab: FC<ISigurAdminTabProps> = ({ canEdit, selectedConnection, setError }) => {
+export const SigurAdminTab: FC<ISigurAdminTabProps> = ({ canEdit, selectedConnection, setError, headerActionSlot }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeSub = resolveSubTab(searchParams.get('sub'));
 
@@ -71,6 +72,11 @@ export const SigurAdminTab: FC<ISigurAdminTabProps> = ({ canEdit, selectedConnec
           <ShieldCheck size={14} />
           Режимы доступа
         </button>
+        {headerActionSlot && (
+          <div className="sigur-admin-subtabs__action">
+            {headerActionSlot}
+          </div>
+        )}
       </div>
 
       <Suspense fallback={sectionFallback}>

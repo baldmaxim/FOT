@@ -25,20 +25,12 @@
   padding: 0.75rem 1rem 1rem;
 }
 
-.sigur-fullpage__bar {
-  display: flex;
-  justify-content: flex-end;
-  padding: 2px 4px 4px;
-}
-
 .sigur-fullpage__error {
   margin: 4px 4px 0;
 }
 
-@media (max-width: 768px) {
-  .sigur-fullpage__bar {
-    padding: 2px 2px 4px;
-  }
+.sigur-fullpage__action {
+  white-space: nowrap;
 }
 
 .sigur-header {
