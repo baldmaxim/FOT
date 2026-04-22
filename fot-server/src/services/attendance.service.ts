@@ -1,7 +1,7 @@
 import { supabase } from '../config/database.js';
 import type { IProductionCalendarMonth, IResolvedSchedule, TimeStatus } from '../types/index.js';
 import { getTravelHoursSummaryForRange } from './skud-travel.service.js';
-import { getScheduleForDate, isWorkingDay, needsSkudCheck, resolveObjectSchedulesForPeriod } from './schedule.service.js';
+import { getScheduleForDate, isWorkingDay, needsSkudCheck } from './schedule.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import {
   buildObjectAttendanceData,
@@ -234,15 +234,6 @@ export async function buildAttendanceEntries(params: {
     todayStr,
     adjustments,
   });
-  const objectSchedulesByDate = displayMode === 'capped_to_schedule'
-    ? await resolveObjectSchedulesForPeriod(
-        objectAttendanceData.objectEntries
-          .map(entry => entry.object_id)
-          .filter((objectId): objectId is string => Boolean(objectId)),
-        startDate,
-        endDate,
-      )
-    : new Map<string, Map<string, IResolvedSchedule>>();
   const dailyAdjustments = adjustments.filter(adjustment => adjustment.source_type !== OBJECT_ADJUSTMENT_SOURCE_TYPE);
   const { userNames, legacyEmployeeNames } = await loadAdjustmentNames(dailyAdjustments);
   const entries: IAttendanceEntry[] = [];
@@ -477,29 +468,46 @@ export async function buildAttendanceEntries(params: {
       const dayObjectEntries = objectAttendanceData.objectEntriesByEmployeeDate
         .get(entry.employee_id)
         ?.get(entry.work_date) || [];
+
+      const employeeSchedule = dailySchedulesMap.get(entry.employee_id)?.get(entry.work_date);
+      const plannedDayHours = getPlannedHoursForScheduleOnDate(employeeSchedule, entry.work_date);
+
       if (dayObjectEntries.length > 0) {
-        let totalDisplayHours = 0;
-        for (const item of dayObjectEntries) {
-          const objectSchedule = item.object_id
-            ? objectSchedulesByDate.get(item.object_id)?.get(item.work_date)
-            : null;
-          const employeeSchedule = dailySchedulesMap.get(item.employee_id)?.get(item.work_date);
-          const effectiveSchedule = objectSchedule || employeeSchedule || null;
-          const plannedHours = getPlannedHoursForScheduleOnDate(effectiveSchedule, item.work_date);
-          item.display_hours_worked = plannedHours == null
-            ? item.hours_worked
-            : clampToScheduleHours(item.hours_worked, plannedHours);
-          totalDisplayHours += item.display_hours_worked;
+        const totalActualHours = roundHours(
+          dayObjectEntries.reduce((sum, item) => sum + item.hours_worked, 0),
+        );
+
+        if (plannedDayHours != null && totalActualHours > plannedDayHours) {
+          const scale = plannedDayHours / totalActualHours;
+          let allocated = 0;
+          dayObjectEntries.forEach((item, idx) => {
+            const isLast = idx === dayObjectEntries.length - 1;
+            const share = isLast
+              ? roundHours(plannedDayHours - allocated)
+              : roundHours(item.hours_worked * scale);
+            item.display_hours_worked = share;
+            item.hours_worked = share;
+            item.base_hours_worked = share;
+            allocated = roundHours(allocated + share);
+          });
+          entry.display_hours_worked = plannedDayHours;
+        } else {
+          for (const item of dayObjectEntries) {
+            item.display_hours_worked = item.hours_worked;
+            item.base_hours_worked = item.hours_worked;
+          }
+          entry.display_hours_worked = totalActualHours;
         }
-        entry.display_hours_worked = roundHours(totalDisplayHours);
-        continue;
+      } else {
+        entry.display_hours_worked = entry.hours_worked == null || plannedDayHours == null
+          ? entry.hours_worked
+          : clampToScheduleHours(entry.hours_worked, plannedDayHours);
       }
 
-      const schedule = dailySchedulesMap.get(entry.employee_id)?.get(entry.work_date);
-      const plannedHours = getPlannedHoursForScheduleOnDate(schedule, entry.work_date);
-      entry.display_hours_worked = entry.hours_worked == null || plannedHours == null
-        ? entry.hours_worked
-        : clampToScheduleHours(entry.hours_worked, plannedHours);
+      entry.hours_worked = entry.display_hours_worked;
+      entry.base_hours_worked = entry.display_hours_worked;
+      entry.first_entry = null;
+      entry.last_exit = null;
     }
   }
 

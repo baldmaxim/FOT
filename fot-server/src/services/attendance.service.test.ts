@@ -104,7 +104,6 @@ vi.mock('./schedule.service.js', () => ({
   })),
   isWorkingDay: vi.fn(() => mockedState.isWorkingDay),
   needsSkudCheck: vi.fn(() => mockedState.needsSkudCheck),
-  resolveObjectSchedulesForPeriod: vi.fn(async () => mockedState.objectSchedulesByDate),
 }));
 
 vi.mock('./skud-shared.service.js', () => ({
@@ -492,8 +491,8 @@ describe('attendance.service', () => {
     });
   });
 
-  it('caps manager-facing object rows by object schedule and falls back to employee schedule', async () => {
-    mockedState.scheduleWorkHours = 4;
+  it('proportionally caps object hours when actual total exceeds planned day hours', async () => {
+    mockedState.scheduleWorkHours = 8;
 
     const objectEntryA = {
       adjustment_id: 1,
@@ -502,9 +501,9 @@ describe('attendance.service', () => {
       object_key: 'obj-a',
       object_id: 'obj-a',
       object_name: 'Объект A',
-      hours_worked: 5,
-      display_hours_worked: 5,
-      base_hours_worked: 5,
+      hours_worked: 6,
+      display_hours_worked: 6,
+      base_hours_worked: 6,
       is_correction: false,
     };
     const objectEntryB = {
@@ -520,9 +519,6 @@ describe('attendance.service', () => {
       is_correction: false,
     };
 
-    mockedState.objectSchedulesByDate = new Map([
-      ['obj-a', new Map([['2026-04-01', { work_hours: 3 } as IResolvedSchedule]])],
-    ]);
     mockedState.objectAttendanceData = {
       objectEntries: [objectEntryA, objectEntryB],
       objectEntriesByEmployeeDate: new Map([
@@ -540,7 +536,151 @@ describe('attendance.service', () => {
             employee_id: 1,
             date: '2026-04-01',
             first_entry: '09:00:00',
-            last_exit: '19:00:00',
+            last_exit: '20:00:00',
+            total_hours: 11,
+            total_minutes: 660,
+          }],
+          error: null,
+        };
+      }
+
+      if (query.table === 'attendance_adjustments' || query.table === 'user_profiles' || query.table === 'employees') {
+        return { data: [], error: null };
+      }
+
+      throw new Error(`Unexpected query for table ${query.table}`);
+    };
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
+      startDate: '2026-04-01',
+      endDate: '2026-04-01',
+      dailySchedulesMap: new Map([
+        [1, new Map([['2026-04-01', {} as IResolvedSchedule]])],
+      ]),
+      calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-01',
+      displayMode: 'capped_to_schedule',
+    });
+
+    expect(result.entries[0]).toMatchObject({
+      employee_id: 1,
+      work_date: '2026-04-01',
+      hours_worked: 8,
+      display_hours_worked: 8,
+      base_hours_worked: 8,
+      first_entry: null,
+      last_exit: null,
+      object_detail_mode: 'available',
+    });
+
+    const objA = result.objectEntries.find(entry => entry.object_key === 'obj-a')!;
+    const objB = result.objectEntries.find(entry => entry.object_key === 'obj-b')!;
+    expect(objA.display_hours_worked).toBeCloseTo(6 * 8 / 11, 2);
+    expect(objA.hours_worked).toBe(objA.display_hours_worked);
+    expect(objA.base_hours_worked).toBe(objA.display_hours_worked);
+    expect(objB.display_hours_worked).toBeCloseTo(8 - objA.display_hours_worked, 2);
+    expect(objB.hours_worked).toBe(objB.display_hours_worked);
+    expect(objA.display_hours_worked + objB.display_hours_worked).toBeCloseTo(8, 2);
+  });
+
+  it('keeps actual object hours when total is within planned day hours', async () => {
+    mockedState.scheduleWorkHours = 8;
+
+    const objectEntryA = {
+      adjustment_id: 1,
+      employee_id: 1,
+      work_date: '2026-04-01',
+      object_key: 'obj-a',
+      object_id: 'obj-a',
+      object_name: 'Объект A',
+      hours_worked: 3,
+      display_hours_worked: 3,
+      base_hours_worked: 3,
+      is_correction: false,
+    };
+    const objectEntryB = {
+      adjustment_id: 2,
+      employee_id: 1,
+      work_date: '2026-04-01',
+      object_key: 'obj-b',
+      object_id: 'obj-b',
+      object_name: 'Объект B',
+      hours_worked: 4,
+      display_hours_worked: 4,
+      base_hours_worked: 4,
+      is_correction: false,
+    };
+
+    mockedState.objectAttendanceData = {
+      objectEntries: [objectEntryA, objectEntryB],
+      objectEntriesByEmployeeDate: new Map([
+        [1, new Map([['2026-04-01', [objectEntryA, objectEntryB]]])],
+      ]),
+      employeeDistinctObjectKeys: new Map([[1, new Set(['obj-a', 'obj-b'])]]),
+      legacyBlockedDays: new Map(),
+      rawFallbackSummaries: new Map(),
+    };
+
+    mockedState.resolver = (query) => {
+      if (query.table === 'skud_daily_summary') {
+        return {
+          data: [{
+            employee_id: 1,
+            date: '2026-04-01',
+            first_entry: '10:00:00',
+            last_exit: '17:00:00',
+            total_hours: 7,
+            total_minutes: 420,
+          }],
+          error: null,
+        };
+      }
+
+      if (query.table === 'attendance_adjustments' || query.table === 'user_profiles' || query.table === 'employees') {
+        return { data: [], error: null };
+      }
+
+      throw new Error(`Unexpected query for table ${query.table}`);
+    };
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
+      startDate: '2026-04-01',
+      endDate: '2026-04-01',
+      dailySchedulesMap: new Map([
+        [1, new Map([['2026-04-01', {} as IResolvedSchedule]])],
+      ]),
+      calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-01',
+      displayMode: 'capped_to_schedule',
+    });
+
+    expect(result.entries[0]).toMatchObject({
+      hours_worked: 7,
+      display_hours_worked: 7,
+      base_hours_worked: 7,
+      first_entry: null,
+      last_exit: null,
+    });
+
+    const objA = result.objectEntries.find(entry => entry.object_key === 'obj-a')!;
+    const objB = result.objectEntries.find(entry => entry.object_key === 'obj-b')!;
+    expect(objA.display_hours_worked).toBe(3);
+    expect(objB.display_hours_worked).toBe(4);
+  });
+
+  it('caps and masks actual fields when the day has no object breakdown', async () => {
+    mockedState.scheduleWorkHours = 8;
+
+    mockedState.resolver = (query) => {
+      if (query.table === 'skud_daily_summary') {
+        return {
+          data: [{
+            employee_id: 1,
+            date: '2026-04-01',
+            first_entry: '08:00:00',
+            last_exit: '18:00:00',
             total_hours: 10,
             total_minutes: 600,
           }],
@@ -570,22 +710,11 @@ describe('attendance.service', () => {
     expect(result.entries[0]).toMatchObject({
       employee_id: 1,
       work_date: '2026-04-01',
-      hours_worked: 10,
-      display_hours_worked: 7,
-      base_hours_worked: 10,
-      object_detail_mode: 'available',
+      hours_worked: 8,
+      display_hours_worked: 8,
+      base_hours_worked: 8,
+      first_entry: null,
+      last_exit: null,
     });
-    expect(result.objectEntries).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        object_key: 'obj-a',
-        hours_worked: 5,
-        display_hours_worked: 3,
-      }),
-      expect.objectContaining({
-        object_key: 'obj-b',
-        hours_worked: 5,
-        display_hours_worked: 4,
-      }),
-    ]));
   });
 });
