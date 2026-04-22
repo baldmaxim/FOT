@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useState } from 'react';
-import { ArrowLeft, Settings, ShieldCheck, Users } from 'lucide-react';
+import { ArrowLeft, Settings } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import '../../styles/SigurSettingsPage.css';
@@ -45,56 +45,43 @@ export const SigurPage = () => {
   );
 
   return (
-    <div className="sigur-page">
-      <div className="sigur-header">
-        {view === 'settings' ? <ShieldCheck size={24} /> : <Users size={24} />}
-        <h1>{view === 'settings' ? 'Настройки SIGUR' : 'SIGUR'}</h1>
-        {view === 'employees' ? (
-          <button
-            className="sigur-btn"
-            onClick={() => setView('settings')}
-            style={{ marginLeft: 'auto' }}
-          >
-            <Settings size={14} />
-            Настройка
-          </button>
-        ) : (
-          <button
-            className="sigur-btn"
-            onClick={() => setView('employees')}
-            style={{ marginLeft: 'auto' }}
-          >
-            <ArrowLeft size={14} />
-            Назад
-          </button>
-        )}
+    <div className="sigur-fullpage">
+      <div className="sigur-fullpage__bar">
+        <button
+          className="sigur-btn"
+          onClick={() => setView(view === 'employees' ? 'settings' : 'employees')}
+        >
+          {view === 'employees' ? <><Settings size={14} /> Настройка</> : <><ArrowLeft size={14} /> Назад</>}
+        </button>
       </div>
 
       {error && (
-        <div className="sigur-error">
+        <div className="sigur-error sigur-fullpage__error">
           {error}
           <button onClick={() => setError('')}>×</button>
         </div>
       )}
 
-      {view === 'employees' && (
-        <Suspense fallback={tabFallback}>
-          <SigurEmployeesTab
-            canEdit={canEdit}
-            setError={setError}
-          />
-        </Suspense>
-      )}
+      <div className={`sigur-fullpage__content ${view === 'settings' ? 'sigur-fullpage__content--padded' : ''}`}>
+        {view === 'employees' && (
+          <Suspense fallback={tabFallback}>
+            <SigurEmployeesTab
+              canEdit={canEdit}
+              setError={setError}
+            />
+          </Suspense>
+        )}
 
-      {view === 'settings' && (
-        <Suspense fallback={tabFallback}>
-          <SigurAdminTab
-            canEdit={canEdit}
-            selectedConnection="external"
-            setError={setError}
-          />
-        </Suspense>
-      )}
+        {view === 'settings' && (
+          <Suspense fallback={tabFallback}>
+            <SigurAdminTab
+              canEdit={canEdit}
+              selectedConnection="external"
+              setError={setError}
+            />
+          </Suspense>
+        )}
+      </div>
     </div>
   );
 };
