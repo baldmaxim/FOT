@@ -33,6 +33,14 @@ export interface PaginatedResponse {
   meta: PaginatedMeta;
 }
 
+export interface ICreateEmployeePayload {
+  full_name: string;
+  hire_date: string;
+  org_department_id: string;
+  position_id: string;
+  tab_number?: string | null;
+}
+
 export interface BatchMoveEmployeesResult {
   target_department_id: string;
   moved_count: number;
@@ -106,7 +114,7 @@ export const employeeService = {
     return response.data;
   },
 
-  async create(data: EmployeeInput): Promise<Employee> {
+  async create(data: ICreateEmployeePayload): Promise<Employee> {
     const response = await apiClient.post<ApiResponse<Employee>>('/employees', data);
     return response.data;
   },

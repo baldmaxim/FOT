@@ -584,6 +584,9 @@ export const EmployeeCardPage: FC = () => {
                 </div>
               )}
               <span className="ec-profile-id">ID: {employee.id}</span>
+              {employee.sigur_employee_id != null && (
+                <span className="ec-profile-id">Sigur ID: {employee.sigur_employee_id}</span>
+              )}
             </div>
           </div>
           {canEdit && (

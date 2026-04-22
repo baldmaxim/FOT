@@ -12,6 +12,8 @@ import {
   syncLinkedEmployeeFromSigur,
 } from '../services/sigur-linked-employees.service.js';
 import { sigurService } from '../services/sigur.service.js';
+import { createSigurEmployee } from '../services/sigur-live-admin.service.js';
+import { isProtectedArchiveDepartment } from '../services/employee-archive-department.service.js';
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 import {
   canAccessEmployeeInScope,
@@ -35,8 +37,8 @@ import { deleteAll } from './employee-import.controller.js';
 
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
-// Схемы валидации
-const createEmployeeSchema = z.object({
+// Полная схема для PUT-апдейтов (все поля опциональны)
+const fullEmployeeSchema = z.object({
   full_name: z.string().min(2).max(255).trim(),
   hire_date: z.string().regex(ISO_DATE_REGEX),
   birth_date: z.string().regex(ISO_DATE_REGEX).nullable().optional(),
@@ -60,7 +62,17 @@ const createEmployeeSchema = z.object({
   position_id: z.string().uuid().nullable().optional(),
 });
 
-const updateEmployeeSchema = createEmployeeSchema.partial();
+// Схема для POST /api/employees — приём на работу через Sigur (минимальный набор).
+// Остальные поля редактируются позже через PUT.
+const createEmployeeSchema = z.object({
+  full_name: z.string().min(2).max(255).trim(),
+  hire_date: z.string().regex(ISO_DATE_REGEX),
+  org_department_id: z.string().uuid(),
+  position_id: z.string().uuid(),
+  tab_number: z.string().max(100).nullable().optional(),
+});
+
+const updateEmployeeSchema = fullEmployeeSchema.partial();
 
 async function resolveDepartmentFilterIds(departmentId: string | undefined | null): Promise<string[] | null> {
   if (!departmentId) return null;
@@ -378,9 +390,13 @@ export const employeesController = {
   },
 
   /**
-   * POST /api/employees
+   * POST /api/employees — приём на работу через Sigur.
+   * Создаёт сотрудника сначала в Sigur (ФИО, отдел, должность, табельный),
+   * получает sigur_employee_id, затем вставляет в нашу БД и пишет историю
+   * (employee_assignments + employee_history) с effective_from = hire_date.
    */
   async create(req: AuthenticatedRequest, res: Response): Promise<void> {
+    let sigurEmployeeIdCreated: number | null = null;
     try {
       const validated = createEmployeeSchema.parse(req.body);
       const scope = await resolveRequestDataScope(req);
@@ -389,7 +405,7 @@ export const employeesController = {
         return;
       }
       if (scope === 'department') {
-        const scopedDepartmentId = await resolveScopedDepartmentId(req, validated.org_department_id ?? null);
+        const scopedDepartmentId = await resolveScopedDepartmentId(req, validated.org_department_id);
         if (!scopedDepartmentId) {
           res.status(403).json({ success: false, error: 'Можно создавать сотрудников только в назначенных бригадах' });
           return;
@@ -397,50 +413,138 @@ export const employeesController = {
         validated.org_department_id = scopedDepartmentId;
       }
 
+      const connection = (req.body.connection as 'external' | 'internal') || undefined;
+
+      if (!(await sigurService.isConfigured())) {
+        res.status(503).json({ success: false, error: 'Sigur не настроен' });
+        return;
+      }
+
+      if (await isProtectedArchiveDepartment(validated.org_department_id, connection)) {
+        res.status(409).json({ success: false, error: 'Нельзя создавать сотрудника в папке «Уволенные»' });
+        return;
+      }
+
+      const { data: departmentRow, error: departmentErr } = await supabase
+        .from('org_departments')
+        .select('id, sigur_department_id, name')
+        .eq('id', validated.org_department_id)
+        .eq('is_active', true)
+        .maybeSingle();
+      if (departmentErr || !departmentRow) {
+        res.status(400).json({ success: false, error: 'Отдел не найден или неактивен' });
+        return;
+      }
+      if (!departmentRow.sigur_department_id) {
+        res.status(409).json({ success: false, error: `У отдела «${departmentRow.name}» нет привязки к Sigur` });
+        return;
+      }
+
+      const { data: positionRow, error: positionErr } = await supabase
+        .from('positions')
+        .select('id, sigur_position_id, name')
+        .eq('id', validated.position_id)
+        .maybeSingle();
+      if (positionErr || !positionRow) {
+        res.status(400).json({ success: false, error: 'Должность не найдена' });
+        return;
+      }
+      if (!positionRow.sigur_position_id) {
+        res.status(409).json({ success: false, error: `У должности «${positionRow.name}» нет привязки к Sigur` });
+        return;
+      }
+
       const fio = parseFIO(validated.full_name);
-      const canonicalSalary = validated.current_salary ?? validated.salary_actual ?? null;
+      const tabNumber = validated.tab_number?.trim() || null;
 
-      const insertData = {
-        full_name: validated.full_name,
-        last_name: fio.lastName,
-        first_name: fio.firstName || null,
-        middle_name: fio.middleName || null,
-        current_salary: canonicalSalary,
-        salary_actual: canonicalSalary,
-        salary_calculated: validated.salary_calculated ?? null,
-        birth_date: validated.birth_date || null,
-        hire_date: validated.hire_date,
-        country: validated.country || null,
-        pension_number: validated.pension_number || null,
-        patent_issue_date: validated.patent_issue_date || null,
-        patent_expiry_date: validated.patent_expiry_date || null,
-        email: validated.email || null,
-        tab_number: validated.tab_number || null,
-        current_status: validated.current_status || null,
-        permit_expiry_date: validated.permit_expiry_date || null,
-        registration_cat1: validated.registration_cat1 || null,
-        registration_cat4: validated.registration_cat4 || null,
-        doc_receipt_date: validated.doc_receipt_date || null,
-        work_object: validated.work_object || null,
-        org_department_id: validated.org_department_id || null,
-        position_id: validated.position_id || null,
-      };
+      // 1. Создаём в Sigur
+      const sigurProfile = await createSigurEmployee({
+        name: validated.full_name,
+        departmentId: departmentRow.sigur_department_id,
+        positionId: positionRow.sigur_position_id,
+        tabId: tabNumber,
+        description: null,
+        blocked: false,
+      }, connection);
+      sigurEmployeeIdCreated = sigurProfile.sigurEmployeeId;
 
+      // 2. Пишем в нашу БД
       const { data, error } = await supabase
         .from('employees')
-        .insert(insertData)
-        .select()
+        .insert({
+          full_name: validated.full_name,
+          last_name: fio.lastName,
+          first_name: fio.firstName || null,
+          middle_name: fio.middleName || null,
+          hire_date: validated.hire_date,
+          org_department_id: validated.org_department_id,
+          position_id: validated.position_id,
+          sigur_employee_id: sigurEmployeeIdCreated,
+          tab_number: tabNumber,
+          employment_status: 'active',
+          department_locked: false,
+        })
+        .select(EMPLOYEE_FULL_COLUMNS)
         .single();
 
-      if (error) {
-        console.error('Create employee error:', error);
-        res.status(500).json({ success: false, error: 'Failed to create employee' });
+      if (error || !data) {
+        // Откатить создание в Sigur не можем автоматически (могли успеть события), поэтому:
+        // — блокируем созданного сотрудника в Sigur, чтобы он точно не ходил по пропуску;
+        // — логируем, чтобы администратор мог подчистить.
+        const orphanSigurId = sigurEmployeeIdCreated;
+        console.error('[createEmployee] Sigur create succeeded but DB insert failed, manual cleanup needed', {
+          sigurEmployeeId: orphanSigurId,
+          error,
+        });
+        try {
+          await sigurService.blockEmployee(orphanSigurId, connection);
+        } catch (blockErr) {
+          console.error('[createEmployee] failed to block orphan Sigur employee', {
+            sigurEmployeeId: orphanSigurId,
+            blockErr,
+          });
+        }
+        res.status(500).json({
+          success: false,
+          error: `Sigur-сотрудник создан (id=${orphanSigurId}), но запись в БД не создана. Заблокируйте его вручную в Sigur.`,
+          detail: error?.message || 'insert failed',
+        });
         return;
+      }
+
+      const newEmployeeId = Number(data.id);
+      employeeCache.invalidate(newEmployeeId);
+
+      // 3. История: назначение отдела и должности с hire_date
+      try {
+        await employeeChangesService.changeDepartment(newEmployeeId, validated.org_department_id, {
+          reason: 'Приём на работу',
+          lockDepartment: false,
+          createdBy: req.user.id,
+          effectiveDate: validated.hire_date,
+        });
+      } catch (assignErr) {
+        console.warn('[createEmployee] changeDepartment failed (non-critical):', assignErr);
+      }
+      try {
+        await employeeChangesService.changePosition(newEmployeeId, validated.position_id, {
+          reason: 'Приём на работу',
+          effectiveDate: validated.hire_date,
+        });
+      } catch (positionErr) {
+        console.warn('[createEmployee] changePosition failed (non-critical):', positionErr);
       }
 
       await auditService.logFromRequest(req, req.user.id, 'CREATE_EMPLOYEE', {
         entityType: 'employee',
-        entityId: String(data.id),
+        entityId: String(newEmployeeId),
+        details: {
+          sigur_employee_id: sigurEmployeeIdCreated,
+          org_department_id: validated.org_department_id,
+          position_id: validated.position_id,
+          hire_date: validated.hire_date,
+          tab_number: tabNumber,
+        },
       });
 
       const structureCache = await loadStructureCache();
@@ -451,8 +555,14 @@ export const employeesController = {
         res.status(400).json({ success: false, error: error.errors[0].message });
         return;
       }
-      console.error('Create employee error:', error);
-      res.status(500).json({ success: false, error: 'Failed to create employee' });
+      console.error('[createEmployee] error', { sigurEmployeeIdCreated, error });
+      const message = error instanceof Error && error.message ? error.message : 'Failed to create employee';
+      res.status(500).json({
+        success: false,
+        error: sigurEmployeeIdCreated
+          ? `Ошибка после создания в Sigur (id=${sigurEmployeeIdCreated}): ${message}. Проверьте запись вручную.`
+          : `Не удалось создать сотрудника: ${message}`,
+      });
     }
   },
 

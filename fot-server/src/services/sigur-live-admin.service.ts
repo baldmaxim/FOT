@@ -626,16 +626,27 @@ async function getDirectDepartmentCounts(
   }
 }
 
-function buildEmployeeSearchParams(search: string): Record<string, unknown> {
+function buildEmployeeSearchVariants(search: string): Record<string, unknown>[] {
   const trimmed = search.trim();
-  if (!trimmed) return {};
+  if (!trimmed) return [{}];
+
+  // Чисто цифровой ввод — пробуем сразу по Sigur id и по табельному (STARTS_WITH), потом сольём.
+  if (/^\d+$/.test(trimmed)) {
+    const variants: Record<string, unknown>[] = [];
+    const asId = Number(trimmed);
+    if (Number.isFinite(asId) && asId > 0) {
+      variants.push({ id: asId });
+    }
+    variants.push({ 'tabId[STARTS_WITH]': trimmed });
+    return variants;
+  }
 
   const looksLikeTabSearch = /^[A-Za-z0-9\-_/]+$/.test(trimmed) && /\d/.test(trimmed) && !/\s/.test(trimmed);
   if (looksLikeTabSearch) {
-    return { 'tabId[STARTS_WITH]': trimmed };
+    return [{ 'tabId[STARTS_WITH]': trimmed }];
   }
 
-  return { name: trimmed };
+  return [{ name: trimmed }];
 }
 
 function buildSearchHaystack(employee: ISigurEmployeeSummary): string {
@@ -644,6 +655,7 @@ function buildSearchHaystack(employee: ISigurEmployeeSummary): string {
     employee.departmentName,
     employee.positionName,
     employee.tabId,
+    String(employee.id),
   ]
     .filter(Boolean)
     .join(' ')
@@ -661,25 +673,40 @@ async function searchEmployeesDirectly(
   const safePageSize = Math.min(500, Math.max(1, pagination.pageSize || 200));
   const safePage = Math.max(1, pagination.page || 1);
   const offset = (safePage - 1) * safePageSize;
-  const searchParams = buildEmployeeSearchParams(search);
-  const baseFilters = {
+  const variants = buildEmployeeSearchVariants(search);
+  const commonFilters = {
     ...(departmentId != null ? { departmentId } : {}),
     ...(blocked == null ? {} : { blocked }),
-    ...searchParams,
   };
 
-  const [itemsRaw, countRaw] = await Promise.all([
-    sigurService.getEmployeesPage(baseFilters, { limit: safePageSize, offset }, connection),
-    sigurService.getEmployeesCount(baseFilters, connection).catch(() => null),
-  ]);
+  // Для каждого варианта (name / id / tabId) делаем параллельный запрос и сливаем по sigur id.
+  const pageResults = await Promise.all(
+    variants.map(variant =>
+      sigurService
+        .getEmployeesPage({ ...commonFilters, ...variant }, { limit: safePageSize, offset }, connection)
+        .catch(() => [] as Record<string, unknown>[]),
+    ),
+  );
+  const firstVariantFilters = { ...commonFilters, ...(variants[0] ?? {}) };
+  const countRaw = await sigurService.getEmployeesCount(firstVariantFilters, connection).catch(() => null);
 
-  const items = itemsRaw
-    .map(raw => normalizeSigurEmployeeSummary(raw, departmentNameMap))
-    .filter((employee): employee is ISigurEmployeeSummary => !!employee)
-    .filter(employee => buildSearchHaystack(employee).includes(search.toLocaleLowerCase('ru')))
-    .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
+  const seen = new Set<number>();
+  const items: ISigurEmployeeSummary[] = [];
+  for (const batch of pageResults) {
+    for (const raw of batch) {
+      const summary = normalizeSigurEmployeeSummary(raw, departmentNameMap);
+      if (!summary) continue;
+      if (seen.has(summary.id)) continue;
+      if (!buildSearchHaystack(summary).includes(search.toLocaleLowerCase('ru'))) continue;
+      seen.add(summary.id);
+      items.push(summary);
+    }
+  }
+  items.sort((left, right) => left.name.localeCompare(right.name, 'ru'));
 
-  const total = normalizeInt(countRaw) || items.length;
+  const total = variants.length > 1
+    ? items.length
+    : (normalizeInt(countRaw) || items.length);
   return {
     items,
     total,

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo, type FC } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo, type FC, type MouseEvent as ReactMouseEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -21,7 +21,8 @@ import { useStructureTree } from '../hooks/useStructure';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { DeptSelect } from '../components/staff/DeptSelect';
-import type { Employee, EmployeeHistoryEvent, EmployeeInput, EnrichPreview, ContactsEnrichPreview } from '../types';
+import type { Employee, EmployeeHistoryEvent, EnrichPreview, ContactsEnrichPreview } from '../types';
+import { structureApi } from '../api/structure';
 import type { IFlatDepartmentOption } from '../utils/departmentUtils';
 import { getTreeFlatDepartments } from '../utils/departmentUtils';
 import '../styles/StaffControlPage.css';
@@ -57,6 +58,14 @@ interface IBrigadeOption extends IFlatDepartmentOption {
   employeeCount: number;
 }
 
+interface IAddEmployeeForm {
+  full_name: string;
+  hire_date: string;
+  org_department_id: string;
+  position_id: string;
+  tab_number: string;
+}
+
 const SCHEDULE_SOURCE_LABELS: Record<ScheduleSource, string> = {
   employee: 'инд.',
   category: 'кат.',
@@ -87,12 +96,33 @@ interface IStaffRowProps {
   onFire?: (emp: Employee) => void;
 }
 
+const openEmployeeInNewTab = (empId: number) => {
+  window.open(`/employees/${empId}`, '_blank', 'noopener,noreferrer');
+};
+
+const handleMiddleClickMouseDown = (e: ReactMouseEvent) => {
+  // Отключаем авто-скролл в браузере на нажатии колеса, чтобы отработал onAuxClick.
+  if (e.button === 1) e.preventDefault();
+};
+
 const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
 
+  const handleAuxClick = (e: ReactMouseEvent) => {
+    if (e.button === 1) {
+      e.preventDefault();
+      openEmployeeInNewTab(emp.id);
+    }
+  };
+
   return (
-    <tr className={`sc-row${isSelected ? ' sc-row--selected' : ''}`} onClick={() => onNavigate(emp)}>
+    <tr
+      className={`sc-row${isSelected ? ' sc-row--selected' : ''}`}
+      onClick={() => onNavigate(emp)}
+      onAuxClick={handleAuxClick}
+      onMouseDown={handleMiddleClickMouseDown}
+    >
       <td className="sc-td-check" onClick={e => e.stopPropagation()}>
         <input
           className="sc-check"
@@ -593,8 +623,19 @@ const MobileCard: FC<{
 }> = memo(({ emp, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
+  const handleAuxClick = (e: ReactMouseEvent) => {
+    if (e.button === 1) {
+      e.preventDefault();
+      openEmployeeInNewTab(emp.id);
+    }
+  };
   return (
-    <div className={`sc-card${isSelected ? ' sc-card--selected' : ''}`} onClick={() => onNavigate(emp)}>
+    <div
+      className={`sc-card${isSelected ? ' sc-card--selected' : ''}`}
+      onClick={() => onNavigate(emp)}
+      onAuxClick={handleAuxClick}
+      onMouseDown={handleMiddleClickMouseDown}
+    >
       <div className="sc-card-head">
         <div className="sc-card-name">{emp.full_name}</div>
         <div className="sc-card-check" onClick={e => e.stopPropagation()}>
@@ -1241,7 +1282,25 @@ export const StaffControlPage: FC = () => {
   // import / add
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [addForm, setAddForm] = useState<EmployeeInput>({ full_name: '', hire_date: getLocalISODate() });
+  const [addForm, setAddForm] = useState<IAddEmployeeForm>({
+    full_name: '',
+    hire_date: getLocalISODate(),
+    org_department_id: '',
+    position_id: '',
+    tab_number: '',
+  });
+  const [addError, setAddError] = useState<string | null>(null);
+  const [addSaving, setAddSaving] = useState(false);
+  const positionsQuery = useQuery({
+    queryKey: ['structure', 'positions'],
+    queryFn: async () => {
+      const res = await structureApi.getPositions();
+      if (res.error) throw new Error(res.error);
+      return res.data || [];
+    },
+    enabled: showAddModal,
+    staleTime: 5 * 60_000,
+  });
   const [enrichPreview, setEnrichPreview] = useState<EnrichPreview | null>(null);
   const [enrichFile, setEnrichFile] = useState<File | null>(null);
   const [enrichLoading, setEnrichLoading] = useState(false);
@@ -1637,12 +1696,48 @@ export const StaffControlPage: FC = () => {
     setContactsFile(null);
   };
 
-  const handleAddEmployee = async () => {
-    if (!addForm.full_name || !addForm.hire_date) return;
-    await employeeService.create(addForm);
+  const resetAddForm = () => {
+    setAddForm({
+      full_name: '',
+      hire_date: getLocalISODate(),
+      org_department_id: '',
+      position_id: '',
+      tab_number: '',
+    });
+    setAddError(null);
+  };
+
+  const closeAddModal = () => {
+    if (addSaving) return;
     setShowAddModal(false);
-    setAddForm({ full_name: '', hire_date: getLocalISODate() });
-    refresh();
+    resetAddForm();
+  };
+
+  const handleAddEmployee = async () => {
+    if (!addForm.full_name.trim() || !addForm.hire_date || !addForm.org_department_id || !addForm.position_id) {
+      setAddError('Заполните обязательные поля');
+      return;
+    }
+    setAddSaving(true);
+    setAddError(null);
+    try {
+      await employeeService.create({
+        full_name: addForm.full_name.trim(),
+        hire_date: addForm.hire_date,
+        org_department_id: addForm.org_department_id,
+        position_id: addForm.position_id,
+        tab_number: addForm.tab_number.trim() || null,
+      });
+      setShowAddModal(false);
+      resetAddForm();
+      refresh();
+    } catch (err) {
+      const msg = err instanceof Error && err.message ? err.message : 'Ошибка создания сотрудника';
+      setAddError(msg);
+      toast.error(msg);
+    } finally {
+      setAddSaving(false);
+    }
   };
 
   const filtersContent = (
@@ -1890,25 +1985,82 @@ export const StaffControlPage: FC = () => {
 
       {/* ─── Add Employee Modal ─── */}
       {showAddModal && (
-        <div className="sc-overlay" onClick={() => setShowAddModal(false)}>
+        <div className="sc-overlay" onClick={closeAddModal}>
           <div className="sc-modal" onClick={e => e.stopPropagation()}>
             <div className="sc-modal-header">
-              <h3>Добавить сотрудника</h3>
-              <button className="sc-modal-close" onClick={() => setShowAddModal(false)}>&times;</button>
+              <h3>Добавить сотрудника в Sigur</h3>
+              <button className="sc-modal-close" onClick={closeAddModal} disabled={addSaving}>&times;</button>
             </div>
             <div className="sc-modal-body">
               <div className="sc-field">
-                <label>ФИО</label>
-                <input value={addForm.full_name} onChange={e => setAddForm({ ...addForm, full_name: e.target.value })} placeholder="Иванов Иван Иванович" autoFocus />
+                <label>ФИО *</label>
+                <input
+                  value={addForm.full_name}
+                  onChange={e => setAddForm({ ...addForm, full_name: e.target.value })}
+                  placeholder="Иванов Иван Иванович"
+                  autoFocus
+                  disabled={addSaving}
+                />
               </div>
               <div className="sc-field">
-                <label>Дата найма</label>
-                <input type="date" value={addForm.hire_date} onChange={e => setAddForm({ ...addForm, hire_date: e.target.value })} />
+                <label>Дата найма *</label>
+                <input
+                  type="date"
+                  value={addForm.hire_date}
+                  onChange={e => setAddForm({ ...addForm, hire_date: e.target.value })}
+                  disabled={addSaving}
+                />
               </div>
+              <div className="sc-field">
+                <label>Отдел *</label>
+                <select
+                  value={addForm.org_department_id}
+                  onChange={e => setAddForm({ ...addForm, org_department_id: e.target.value })}
+                  disabled={addSaving}
+                >
+                  <option value="">— Выберите отдел —</option>
+                  {allDepts.map(dept => (
+                    <option key={dept.id} value={dept.id}>
+                      {'  '.repeat(dept.level)}{dept.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="sc-field">
+                <label>Должность *</label>
+                <select
+                  value={addForm.position_id}
+                  onChange={e => setAddForm({ ...addForm, position_id: e.target.value })}
+                  disabled={addSaving || positionsQuery.isLoading}
+                >
+                  <option value="">
+                    {positionsQuery.isLoading ? 'Загрузка...' : '— Выберите должность —'}
+                  </option>
+                  {(positionsQuery.data || []).map(pos => (
+                    <option key={pos.id} value={pos.id}>{pos.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="sc-field">
+                <label>Табельный номер</label>
+                <input
+                  value={addForm.tab_number}
+                  onChange={e => setAddForm({ ...addForm, tab_number: e.target.value })}
+                  placeholder="(опционально)"
+                  disabled={addSaving}
+                />
+              </div>
+              {addError && <div className="sc-error" style={{ color: '#dc2626', fontSize: 13 }}>{addError}</div>}
             </div>
             <div className="sc-modal-footer">
-              <button className="sc-btn cancel" onClick={() => setShowAddModal(false)}>Отмена</button>
-              <button className="sc-btn apply" onClick={handleAddEmployee} disabled={!addForm.full_name}>Добавить</button>
+              <button className="sc-btn cancel" onClick={closeAddModal} disabled={addSaving}>Отмена</button>
+              <button
+                className="sc-btn apply"
+                onClick={handleAddEmployee}
+                disabled={addSaving || !addForm.full_name.trim() || !addForm.hire_date || !addForm.org_department_id || !addForm.position_id}
+              >
+                {addSaving ? 'Создаём в Sigur...' : 'Добавить'}
+              </button>
             </div>
           </div>
         </div>
