@@ -14,21 +14,12 @@ const thinBorder: Partial<ExcelJS.Borders> = {
   bottom: { style: 'thin' }, right: { style: 'thin' },
 };
 
-const applyA4PrintSetup = (ws: ExcelJS.Worksheet, titleRows: number): void => {
-  ws.pageSetup = {
-    paperSize: 9,
-    orientation: 'landscape',
-    fitToPage: true,
-    fitToWidth: 1,
-    fitToHeight: 0,
-    horizontalCentered: true,
-    margins: {
-      left: 0.3, right: 0.3,
-      top: 0.5, bottom: 0.5,
-      header: 0.3, footer: 0.3,
-    },
-    printTitlesRow: `1:${titleRows}`,
-  };
+const applyA4PrintSetup = (ws: ExcelJS.Worksheet, _titleRows: number): void => {
+  ws.pageSetup.paperSize = 9;
+  ws.pageSetup.orientation = 'landscape';
+  ws.pageSetup.fitToPage = true;
+  ws.pageSetup.fitToWidth = 1;
+  ws.pageSetup.fitToHeight = 0;
 };
 // Цвета как в образце "Тердерный отдел.xls"
 const headerFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC0C0C0' } };
