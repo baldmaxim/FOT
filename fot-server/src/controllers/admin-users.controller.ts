@@ -167,39 +167,6 @@ async function replaceExplicitDepartmentAccess(params: {
   return explicitDepartmentIds;
 }
 
-async function loadEmployeeExplicitDepartmentMap(employeeIds: number[]): Promise<Map<number, string[]>> {
-  const uniqueEmployeeIds = [...new Set(employeeIds.filter(employeeId => Number.isInteger(employeeId)))];
-  const result = new Map<number, string[]>(
-    uniqueEmployeeIds.map(employeeId => [employeeId, []]),
-  );
-
-  if (uniqueEmployeeIds.length === 0) {
-    return result;
-  }
-
-  const { data, error } = await supabase
-    .from('employee_department_access')
-    .select('employee_id, department_id')
-    .in('employee_id', uniqueEmployeeIds)
-    .eq('is_active', true);
-
-  if (error) {
-    throw error;
-  }
-
-  for (const row of data || []) {
-    const employeeId = row.employee_id as number;
-    const departmentId = row.department_id as string | null;
-    if (!departmentId || !result.has(employeeId)) continue;
-    result.set(employeeId, uniqueStringValues([
-      ...(result.get(employeeId) || []),
-      departmentId,
-    ]));
-  }
-
-  return result;
-}
-
 async function upsertEmployeeDepartmentAccess(params: {
   employeeId: number;
   departmentIds: string[];
@@ -367,7 +334,8 @@ export const adminUsersController = {
         .select('id, full_name, org_department_id')
         .eq('employment_status', 'active')
         .eq('is_archived', false)
-        .order('full_name', { ascending: true });
+        .order('full_name', { ascending: true })
+        .range(0, 9999);
 
       if (employeesError) {
         logSupabaseError('GetEmployeeDepartmentAssignments', employeesError);
@@ -376,7 +344,7 @@ export const adminUsersController = {
       }
 
       const employeeIds = (employees || []).map(employee => employee.id as number);
-      const explicitDepartmentMap = await loadEmployeeExplicitDepartmentMap(employeeIds);
+      const explicitDepartmentMap = await loadEmployeeAccessMap(employeeIds);
 
       const payload = (employees || []).map(employee => {
         const primaryDepartmentId = employee.org_department_id as string | null;
@@ -394,7 +362,7 @@ export const adminUsersController = {
 
       res.json({ success: true, data: payload });
     } catch (error) {
-      console.error('Get employee department assignments error:', error);
+      logSupabaseError('GetEmployeeDepartmentAssignments-Catch', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить назначения сотрудников' });
     }
   },

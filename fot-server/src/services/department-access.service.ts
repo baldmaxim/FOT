@@ -51,16 +51,22 @@ async function listEmployeeAccessDepartmentIds(employeeId: number): Promise<stri
   return uniqueDepartmentIds((data || []).map(row => row.department_id as string | null));
 }
 
+const IN_FILTER_THRESHOLD = 300;
+
 export async function loadEmployeeAccessMap(employeeIds: number[]): Promise<Map<number, string[]>> {
   const unique = [...new Set(employeeIds.filter((v): v is number => Number.isInteger(v)))];
   const result = new Map<number, string[]>(unique.map(id => [id, []]));
   if (unique.length === 0) return result;
 
-  const { data, error } = await supabase
+  const useInFilter = unique.length <= IN_FILTER_THRESHOLD;
+  const query = supabase
     .from('employee_department_access')
     .select('employee_id, department_id')
-    .in('employee_id', unique)
     .eq('is_active', true);
+
+  const { data, error } = useInFilter
+    ? await query.in('employee_id', unique)
+    : await query;
 
   if (error) {
     if (isMissingTableError(error, 'employee_department_access')) {
