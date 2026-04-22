@@ -554,7 +554,7 @@ export const TimesheetPage: FC = () => {
     ? Boolean(selectedAssigneeId)
     : Boolean(effectiveSelectedDeptId);
 
-  const handleExport = async () => {
+  const handleExport = async (presentation: 'hr' | 'manager' = 'hr') => {
     if (!canExport) {
       toast.error(timesheetMode === 'assigned' ? 'Выберите начальника участка' : 'Выберите отдел');
       return;
@@ -565,6 +565,7 @@ export const TimesheetPage: FC = () => {
         ? ''
         : `_${activeSegment === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
       const monthName = MONTH_NAMES_RU[month];
+      const presentationSuffix = presentation === 'manager' ? '_Руководитель' : '';
 
       let blob: Blob;
       let filename: string;
@@ -575,26 +576,29 @@ export const TimesheetPage: FC = () => {
           half: activeSegment,
           employee_ids: [selectedAssigneeId],
           group_by: viewMode,
+          presentation,
         });
         const assignee = assigneesQuery.data?.find(emp => emp.id === selectedAssigneeId);
         const assigneeName = formatFioWithInitials(assignee?.full_name) || 'Участок';
         const suffix = viewMode === 'objects' ? '_объекты' : '';
-        filename = `Участок_${assigneeName}${suffix}_${monthName}_${year}${segmentSuffix}.zip`;
+        filename = `Участок_${assigneeName}${suffix}_${monthName}_${year}${segmentSuffix}${presentationSuffix}.zip`;
       } else if (viewMode === 'objects' && effectiveSelectedDeptId) {
         blob = await timesheetService.exportMass({
           month: monthStr,
           half: activeSegment,
           department_ids: [effectiveSelectedDeptId],
           group_by: 'objects',
+          presentation,
         });
-        filename = `${selectedDeptName}_объекты_${monthName}_${year}${segmentSuffix}.zip`;
+        filename = `${selectedDeptName}_объекты_${monthName}_${year}${segmentSuffix}${presentationSuffix}.zip`;
       } else {
         blob = await timesheetService.export({
           month: monthStr,
           department_id: effectiveSelectedDeptId || undefined,
           half: activeSegment,
+          presentation,
         });
-        filename = `${selectedDeptName}_${monthName}_${year}${segmentSuffix}.xlsx`;
+        filename = `${selectedDeptName}_${monthName}_${year}${segmentSuffix}${presentationSuffix}.xlsx`;
       }
 
       const url = URL.createObjectURL(blob);
@@ -1463,11 +1467,23 @@ export const TimesheetPage: FC = () => {
                 <button
                   type="button"
                   className="ts-btn ts-btn--icon"
-                  onClick={handleExport}
+                  onClick={() => handleExport('hr')}
                   disabled={!canExport}
-                  aria-label="Экспорт табеля"
+                  aria-label="Экспорт: факт"
+                  title="Выгрузить факт"
                 >
                   <Download size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="ts-btn ts-btn--icon"
+                  onClick={() => handleExport('manager')}
+                  disabled={!canExport}
+                  aria-label="Экспорт: руководитель"
+                  title="Выгрузить для руководителя (урезано по графику)"
+                >
+                  <Download size={16} />
+                  <span style={{ fontSize: 10, marginLeft: 2 }}>Р</span>
                 </button>
               </div>
             </div>
@@ -1514,9 +1530,19 @@ export const TimesheetPage: FC = () => {
           <div className="ts-toolbar">
             <div className="ts-toolbar-left">
               <TimesheetStats stats={stats} />
-              <button type="button" className="ts-btn" onClick={handleExport} disabled={!canExport}>
+              <button type="button" className="ts-btn" onClick={() => handleExport('hr')} disabled={!canExport}>
                 <Download size={16} />
-                Экспорт
+                Факт
+              </button>
+              <button
+                type="button"
+                className="ts-btn"
+                onClick={() => handleExport('manager')}
+                disabled={!canExport}
+                title="Табель урезан по графику работы"
+              >
+                <Download size={16} />
+                Руководитель
               </button>
             </div>
             <div className="ts-toolbar-right">
@@ -1830,6 +1856,9 @@ export const TimesheetPage: FC = () => {
         />
       )}
 
+      </>
+      )}
+
       {teamManagementOpen && (
         <TimesheetTeamManagementModal
           open={teamManagementOpen}
@@ -1845,7 +1874,6 @@ export const TimesheetPage: FC = () => {
         />
       )}
 
-      {/* Side Panel */}
       {panelOpen && (
         <Suspense fallback={null}>
           <TimesheetSidePanel
@@ -1863,7 +1891,6 @@ export const TimesheetPage: FC = () => {
         </Suspense>
       )}
 
-      {/* Correction Modal */}
       {modalOpen && (
         <Suspense fallback={null}>
           <TimesheetCorrectionModal
@@ -1914,8 +1941,6 @@ export const TimesheetPage: FC = () => {
             allowedStatuses={viewMode === 'objects' ? ['manual'] : undefined}
           />
         </Suspense>
-      )}
-      </>
       )}
     </div>
   );
