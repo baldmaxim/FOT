@@ -70,7 +70,6 @@ describe('timesheet-reminder.service', () => {
       ['submit'],
       {
         excludeRoleCodes: ['admin', 'super_admin'],
-        includeDataScopes: ['department'],
       },
     );
   });
@@ -84,7 +83,6 @@ describe('timesheet-reminder.service', () => {
       ['submit'],
       {
         excludeRoleCodes: ['admin', 'super_admin'],
-        includeDataScopes: ['department'],
       },
     );
   });
