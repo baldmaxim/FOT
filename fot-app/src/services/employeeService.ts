@@ -145,8 +145,11 @@ export const employeeService = {
     return response.data;
   },
 
-  async rehire(id: number): Promise<Employee> {
-    const response = await apiClient.post<ApiResponse<Employee>>(`/employees/${id}/rehire`);
+  async rehire(id: number, orgDepartmentId: string): Promise<Employee> {
+    const response = await apiClient.post<ApiResponse<Employee>>(
+      `/employees/${id}/rehire`,
+      { org_department_id: orgDepartmentId },
+    );
     return response.data;
   },
 

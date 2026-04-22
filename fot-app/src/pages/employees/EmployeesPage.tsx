@@ -7,6 +7,7 @@ import {
   FolderOpen,
   MoveRight,
   Search,
+  ShieldCheck,
   UserRoundX,
   X,
 } from 'lucide-react';
@@ -74,6 +75,9 @@ export const EmployeesPage: FC = () => {
   const [selectedManageDeptIds, setSelectedManageDeptIds] = useState<Set<string>>(new Set());
   const [moveEmployeeIds, setMoveEmployeeIds] = useState<number[]>([]);
   const [moveDeptId, setMoveDeptId] = useState('');
+  const [rehireEmployee, setRehireEmployee] = useState<Employee | null>(null);
+  const [rehireDeptId, setRehireDeptId] = useState('');
+  const [rehireInFlight, setRehireInFlight] = useState(false);
   const [editingEmployeeId, setEditingEmployeeId] = useState<number | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [departmentDialog, setDepartmentDialog] = useState<DepartmentDialogState>(null);
@@ -373,23 +377,35 @@ export const EmployeesPage: FC = () => {
     }
   };
 
-  const rehireEmployee = async (employee: Employee) => {
-    try {
-      await employeeService.rehire(employee.id);
-      if (editingEmployeeId === employee.id) resetEmployeeEditor();
-      await refetchDirectory();
-    } catch {
-      setError('Ошибка восстановления');
-    }
-  };
-
   const handleFireFromSidebar = (employee: Employee) => {
     if (!confirm(`Уволить ${employee.full_name}?`)) return;
     void fireEmployee(employee);
   };
 
   const handleRehireFromSidebar = (employee: Employee) => {
-    void rehireEmployee(employee);
+    setRehireEmployee(employee);
+    setRehireDeptId('');
+  };
+
+  const closeRehireModal = () => {
+    setRehireEmployee(null);
+    setRehireDeptId('');
+  };
+
+  const handleConfirmRehire = async () => {
+    if (!rehireEmployee || !rehireDeptId) return;
+    setRehireInFlight(true);
+    try {
+      await employeeService.rehire(rehireEmployee.id, rehireDeptId);
+      const rehiredId = rehireEmployee.id;
+      closeRehireModal();
+      if (editingEmployeeId === rehiredId) resetEmployeeEditor();
+      await refetchDirectory();
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Ошибка восстановления');
+    } finally {
+      setRehireInFlight(false);
+    }
   };
 
   const openMoveModal = (employeeIds: number[]) => {
@@ -727,6 +743,50 @@ export const EmployeesPage: FC = () => {
             />
           </div>
         </>
+      )}
+
+      {rehireEmployee && (
+        <div className="ep-modal-overlay" onClick={rehireInFlight ? undefined : closeRehireModal}>
+          <div className="ep-modal" onClick={event => event.stopPropagation()}>
+            <div className="ep-modal-header">
+              <span className="ep-modal-title">
+                <ShieldCheck size={16} style={{ marginRight: 6, verticalAlign: 'text-bottom' }} />
+                Восстановить сотрудника
+              </span>
+              <button className="ep-modal-close" onClick={closeRehireModal} disabled={rehireInFlight}>
+                <X size={14} />
+              </button>
+            </div>
+            <div className="ep-modal-body">
+              <label>Выберите отдел для {rehireEmployee.full_name}</label>
+              <select
+                value={rehireDeptId}
+                onChange={event => setRehireDeptId(event.target.value)}
+                className="ep-modal-select"
+                disabled={rehireInFlight}
+              >
+                <option value="">— Выберите —</option>
+                {moveTargetDepartments.map(department => (
+                  <option key={department.id} value={department.id}>
+                    {'  '.repeat(department.level)}{department.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="ep-modal-footer">
+              <button className="ep-modal-btn secondary" onClick={closeRehireModal} disabled={rehireInFlight}>
+                Отмена
+              </button>
+              <button
+                className="ep-modal-btn primary"
+                onClick={handleConfirmRehire}
+                disabled={!rehireDeptId || rehireInFlight}
+              >
+                {rehireInFlight ? 'Восстанавливаем...' : 'Восстановить'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {moveEmployeeIds.length > 0 && (

@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, UserRoundX } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
 import { ApiError } from '../api/client';
@@ -17,6 +17,7 @@ import type {
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useStaffData } from '../hooks/useStaffData';
+import { useStructureTree } from '../hooks/useStructure';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { DeptSelect } from '../components/staff/DeptSelect';
@@ -1089,6 +1090,9 @@ export const StaffControlPage: FC = () => {
     status: statusFilter,
   });
 
+  const structureTree = useStructureTree();
+  const archiveDepartmentId = structureTree.data?.stats.archive_department_id ?? null;
+
   const today = getLocalISODate();
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<number[]>([]);
   const [bulkScheduleOpen, setBulkScheduleOpen] = useState(false);
@@ -1437,16 +1441,36 @@ export const StaffControlPage: FC = () => {
     setSelectedEmployeeIds([]);
   }, [selectedEmployees, patchEmployee]);
 
-  const handleRehire = useCallback(async (emp: Employee) => {
-    if (!confirm(`Восстановить ${emp.full_name}?`)) return;
+  const [rehireEmp, setRehireEmp] = useState<Employee | null>(null);
+  const [rehireDeptId, setRehireDeptId] = useState('');
+  const [rehireInFlight, setRehireInFlight] = useState(false);
+
+  const handleRehire = useCallback((emp: Employee) => {
+    setRehireEmp(emp);
+    setRehireDeptId('');
+  }, []);
+
+  const closeRehireModal = useCallback(() => {
+    if (rehireInFlight) return;
+    setRehireEmp(null);
+    setRehireDeptId('');
+  }, [rehireInFlight]);
+
+  const handleConfirmRehire = useCallback(async () => {
+    if (!rehireEmp || !rehireDeptId) return;
+    setRehireInFlight(true);
     try {
-      await employeeService.rehire(emp.id);
+      await employeeService.rehire(rehireEmp.id, rehireDeptId);
+      setRehireEmp(null);
+      setRehireDeptId('');
       refresh();
     } catch (err) {
       const msg = err instanceof Error && err.message ? err.message : 'Ошибка восстановления сотрудника';
       toast.error(msg);
+    } finally {
+      setRehireInFlight(false);
     }
-  }, [refresh, toast]);
+  }, [rehireEmp, rehireDeptId, refresh, toast]);
 
   const handleFire = useCallback(async (emp: Employee) => {
     if (!confirm(`Уволить ${emp.full_name}? Сотрудник будет перемещён в папку «Уволенные» в Sigur, карты пропуска будут заблокированы.`)) return;
@@ -1885,6 +1909,47 @@ export const StaffControlPage: FC = () => {
             <div className="sc-modal-footer">
               <button className="sc-btn cancel" onClick={() => setShowAddModal(false)}>Отмена</button>
               <button className="sc-btn apply" onClick={handleAddEmployee} disabled={!addForm.full_name}>Добавить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Rehire Modal ─── */}
+      {rehireEmp && (
+        <div className="sc-overlay" onClick={closeRehireModal}>
+          <div className="sc-modal" onClick={e => e.stopPropagation()}>
+            <div className="sc-modal-header">
+              <h3><ShieldCheck size={16} style={{ verticalAlign: 'text-bottom', marginRight: 6 }} />Восстановить сотрудника</h3>
+              <button className="sc-modal-close" onClick={closeRehireModal} disabled={rehireInFlight}>&times;</button>
+            </div>
+            <div className="sc-modal-body">
+              <div className="sc-field">
+                <label>Отдел для {rehireEmp.full_name}</label>
+                <select
+                  value={rehireDeptId}
+                  onChange={e => setRehireDeptId(e.target.value)}
+                  disabled={rehireInFlight}
+                >
+                  <option value="">— Выберите отдел —</option>
+                  {allDepts
+                    .filter(department => department.id !== archiveDepartmentId)
+                    .map(department => (
+                      <option key={department.id} value={department.id}>
+                        {'  '.repeat(department.level)}{department.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+            <div className="sc-modal-footer">
+              <button className="sc-btn cancel" onClick={closeRehireModal} disabled={rehireInFlight}>Отмена</button>
+              <button
+                className="sc-btn apply"
+                onClick={handleConfirmRehire}
+                disabled={!rehireDeptId || rehireInFlight}
+              >
+                {rehireInFlight ? 'Восстанавливаем...' : 'Восстановить'}
+              </button>
             </div>
           </div>
         </div>

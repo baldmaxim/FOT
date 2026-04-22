@@ -4,12 +4,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Edit3, Archive, RotateCcw, Trash2,
   Briefcase, FolderOpen, CalendarDays, CheckCircle,
-  Clock, DollarSign, BarChart3,
+  Clock, DollarSign, BarChart3, ShieldCheck,
 } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
 import { skudService } from '../../services/skudService';
 import { useAuth } from '../../contexts/AuthContext';
 import { useStructureTree } from '../../hooks/useStructure';
+import { getSortedFlatDepartments } from '../../utils/departmentUtils';
 import { useEmployeeTimesheetMonth } from '../../hooks/useEmployeeTimesheet';
 import {
   calculateAttendance, calculateAttendanceFromTimesheet, isEmployeeOnSite, computePeriodData,
@@ -216,8 +217,13 @@ export const EmployeeCardPage: FC = () => {
   });
   const history = historyQuery.data ?? [];
 
-  // Структура (для редактирования отделов) — общий query key, но ленивый запуск только при редактировании
-  useStructureTree(isEditing);
+  // Структура (для редактирования отделов и модалки восстановления) — общий query key
+  const structureQuery = useStructureTree(true);
+  const rehireTargetDepartments = useMemo(() => {
+    const tree = structureQuery.data?.departments ?? [];
+    const archiveId = structureQuery.data?.stats.archive_department_id ?? null;
+    return getSortedFlatDepartments(tree).filter(department => department.id !== archiveId);
+  }, [structureQuery.data]);
 
   // Настройки точек доступа (меняются редко, но нужны для расчёта внутренних проходов)
   const accessPointsQuery = useQuery({
@@ -453,6 +459,36 @@ export const EmployeeCardPage: FC = () => {
     catch { setError('Ошибка восстановления'); }
   };
 
+  const [rehireModalOpen, setRehireModalOpen] = useState(false);
+  const [rehireDeptId, setRehireDeptId] = useState('');
+  const [rehireInFlight, setRehireInFlight] = useState(false);
+
+  const openRehireModal = () => {
+    setRehireDeptId('');
+    setRehireModalOpen(true);
+  };
+
+  const closeRehireModal = () => {
+    if (rehireInFlight) return;
+    setRehireModalOpen(false);
+    setRehireDeptId('');
+  };
+
+  const handleConfirmRehire = async () => {
+    if (!employee || !rehireDeptId) return;
+    setRehireInFlight(true);
+    try {
+      await employeeService.rehire(employee.id, rehireDeptId);
+      setRehireModalOpen(false);
+      setRehireDeptId('');
+      reloadEmployee();
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Ошибка восстановления');
+    } finally {
+      setRehireInFlight(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (!employee || !confirm('Удалить сотрудника? Это действие необратимо.')) return;
     try { await employeeService.delete(employee.id); handleBack(); }
@@ -555,6 +591,11 @@ export const EmployeeCardPage: FC = () => {
               <button className="ec-action-btn" onClick={startEditing}>
                 <Edit3 size={16} /> {employee.sigur_employee_id != null ? 'Изменить ФИО' : 'Редактировать'}
               </button>
+              {employee.employment_status === 'fired' && (
+                <button className="ec-action-btn" onClick={openRehireModal}>
+                  <ShieldCheck size={16} /> Восстановить из уволенных
+                </button>
+              )}
               {employee.is_archived ? (
                 <button className="ec-action-btn" onClick={handleRestore}>
                   <RotateCcw size={16} /> Восстановить
@@ -695,6 +736,56 @@ export const EmployeeCardPage: FC = () => {
             externalViewDate={skudViewDate}
           />
         </Suspense>
+      )}
+
+      {rehireModalOpen && (
+        <div className="ec-overlay" onClick={closeRehireModal}>
+          <div className="ec-change-modal" onClick={event => event.stopPropagation()}>
+            <div className="ec-change-modal-header">
+              <h3>Восстановить из уволенных</h3>
+              <button
+                className="ec-change-modal-close"
+                onClick={closeRehireModal}
+                disabled={rehireInFlight}
+              >
+                ×
+              </button>
+            </div>
+            <div className="ec-change-modal-body">
+              <div className="ec-change-field">
+                <label>Отдел для {employee.full_name}</label>
+                <select
+                  value={rehireDeptId}
+                  onChange={event => setRehireDeptId(event.target.value)}
+                  disabled={rehireInFlight || structureQuery.isLoading}
+                >
+                  <option value="">— Выберите отдел —</option>
+                  {rehireTargetDepartments.map(department => (
+                    <option key={department.id} value={department.id}>
+                      {'  '.repeat(department.level)}{department.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="ec-change-modal-footer">
+              <button
+                className="ec-change-btn cancel"
+                onClick={closeRehireModal}
+                disabled={rehireInFlight}
+              >
+                Отмена
+              </button>
+              <button
+                className="ec-change-btn apply"
+                onClick={handleConfirmRehire}
+                disabled={!rehireDeptId || rehireInFlight}
+              >
+                {rehireInFlight ? 'Восстанавливаем...' : 'Восстановить'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>

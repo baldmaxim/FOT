@@ -415,25 +415,103 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       return;
     }
 
-    const existing = await loadEmployeeLifecycleRow(employeeId);
+    const { org_department_id } = req.body as { org_department_id?: string };
+    if (!org_department_id) {
+      res.status(400).json({ success: false, error: 'org_department_id required' });
+      return;
+    }
+
+    const connection = (req.body.connection as 'external' | 'internal') || undefined;
+
+    await assertDepartmentMoveAllowed(req, org_department_id);
+
+    const [existing, targetDepartment] = await Promise.all([
+      loadEmployeeLifecycleRow(employeeId),
+      loadTargetDepartment(org_department_id),
+    ]);
+
     if (!existing) {
       res.status(404).json({ success: false, error: 'Employee not found' });
       return;
     }
 
-    const connection = (req.body.connection as 'external' | 'internal') || undefined;
-    if (existing.sigur_employee_id && (await sigurService.isConfigured())) {
+    if (!targetDepartment) {
+      res.status(400).json({ success: false, error: 'Целевой отдел не найден' });
+      return;
+    }
+
+    if (await isProtectedArchiveDepartment(targetDepartment.id, connection)) {
+      res.status(409).json({
+        success: false,
+        error: 'Нельзя восстановить в архивный отдел «Уволенные». Выберите другой отдел.',
+      });
+      return;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    if (existing.sigur_employee_id) {
+      if (!(await sigurService.isConfigured())) {
+        res.status(503).json({ success: false, error: 'Sigur не настроен' });
+        return;
+      }
+
+      if (!targetDepartment.sigur_department_id) {
+        res.status(409).json({
+          success: false,
+          error: 'У выбранного отдела нет привязки к Sigur',
+        });
+        return;
+      }
+
       try {
+        await sigurService.updateEmployee(existing.sigur_employee_id, {
+          departmentId: targetDepartment.sigur_department_id,
+        }, connection);
+
         await sigurService.unblockEmployee(existing.sigur_employee_id, connection);
         await syncLinkedEmployeeFromSigur(existing.id, connection);
-      } catch (sigurErr) {
-        console.warn(`[rehire] Sigur unblock failed for employee ${existing.id}, continuing:`, sigurErr);
+      } catch (error) {
+        if (error instanceof AxiosError) {
+          const status = error.response?.status;
+          console.error('[rehire] Sigur error', {
+            status,
+            url: error.config?.url,
+            method: error.config?.method,
+            employeeId: existing.id,
+            sigurEmployeeId: existing.sigur_employee_id,
+            targetSigurDepartmentId: targetDepartment.sigur_department_id,
+            responseData: error.response?.data,
+            message: error.message,
+          });
+          if (status === 404) {
+            res.status(409).json({
+              success: false,
+              error: `Sigur вернул 404 на ${error.config?.method?.toUpperCase() || 'запросе'} ${error.config?.url || ''}. Вероятно, сотрудник (sigur_employee_id=${existing.sigur_employee_id}) или отдел «${targetDepartment.name}» (sigur_department_id=${targetDepartment.sigur_department_id}) удалены в Sigur. Запустите синхронизацию структуры и попробуйте снова.`,
+            });
+            return;
+          }
+        }
+        throw error;
       }
+    }
+
+    if (existing.org_department_id !== targetDepartment.id) {
+      await employeeChangesService.changeDepartment(employeeId, targetDepartment.id, {
+        reason: 'Восстановление — перевод в отдел',
+        lockDepartment: false,
+        createdBy: req.user.id,
+        effectiveDate: today,
+      });
     }
 
     const { data, error } = await supabase
       .from('employees')
-      .update({ employment_status: 'active' })
+      .update({
+        employment_status: 'active',
+        org_department_id: targetDepartment.id,
+        department_locked: false,
+      })
       .eq('id', id)
       .select(EMPLOYEE_LIFECYCLE_COLUMNS)
       .single();
@@ -446,7 +524,6 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
 
     employeeCache.invalidate(id);
 
-    const today = new Date().toISOString().slice(0, 10);
     try {
       const { error: closeErr } = await supabase
         .from('employee_assignments')
@@ -461,7 +538,7 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
         .from('employee_assignments')
         .insert({
           employee_id: employeeId,
-          org_department_id: data.org_department_id || null,
+          org_department_id: targetDepartment.id,
           position_id: data.position_id || null,
           effective_from: today,
           is_primary: true,
@@ -483,6 +560,7 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
         entityId: id,
         details: {
           source: existing.sigur_employee_id ? 'sigur' : 'portal',
+          target_department_id: targetDepartment.id,
         },
       });
     } catch (auditErr) {
@@ -498,6 +576,16 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       res.json({ success: true, data });
     }
   } catch (error) {
+    const status = getHttpErrorStatus(error);
+    if (status) {
+      res.status(status).json({
+        success: false,
+        error: getErrorMessage(error, 'Не удалось восстановить сотрудника'),
+        ...(getHttpErrorCode(error) ? { code: getHttpErrorCode(error) } : {}),
+      });
+      return;
+    }
+
     const message = getErrorMessage(error, 'Unknown error');
     const stack = error instanceof Error ? error.stack : undefined;
     console.error('[rehire] Unhandled error:', { employeeId: req.params.id, message, stack, error });
