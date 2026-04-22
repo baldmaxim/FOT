@@ -48,7 +48,10 @@
       "mcp__claude_ai_Supabase__execute_sql",
       "mcp__claude_ai_Supabase__apply_migration",
       "Bash(echo \"EXIT=$?\")",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(npx vitest *)",
+      "Bash(./node_modules/.bin/tsc --noEmit -p tsconfig.app.json)",
+      "mcp__claude_ai_Supabase__list_projects"
     ]
   }
 }
