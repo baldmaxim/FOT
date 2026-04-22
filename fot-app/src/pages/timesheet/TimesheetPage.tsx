@@ -549,6 +549,16 @@ export const TimesheetPage: FC = () => {
     }
   }, [modalEmployee, modalObjectTarget, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId, toast]);
 
+  const handleSaveModalCorrection = useCallback(
+    (status: TimesheetStatus, hours: number | null, notes: string) => {
+      if (modalMode === 'object' && (status === 'work' || status === 'manual')) {
+        return handleSaveObjectCorrection(status, hours, notes);
+      }
+      return handleSaveCorrection(status, hours, notes);
+    },
+    [modalMode, handleSaveCorrection, handleSaveObjectCorrection],
+  );
+
   const handleDeleteObjectCorrection = useCallback(async () => {
     if (!modalEmployee || !modalObjectTarget || !modalObjectEntry?.adjustment_id) return;
     try {
@@ -1931,9 +1941,13 @@ export const TimesheetPage: FC = () => {
           <TimesheetCorrectionModal
             open={modalOpen}
             onClose={closeModal}
-            onSave={modalMode === 'object' ? handleSaveObjectCorrection : handleSaveCorrection}
+            onSave={handleSaveModalCorrection}
             onDelete={modalMode === 'object' && modalObjectEntry?.adjustment_id ? handleDeleteObjectCorrection : undefined}
-            initialStatus={modalMode === 'object' ? 'manual' : (modalEntry?.status || 'work')}
+            initialStatus={
+              modalMode === 'object' && modalObjectEntry?.adjustment_id
+                ? 'manual'
+                : (modalEntry?.status || 'work')
+            }
             initialHours={modalDefaultHours}
             initialNotes={modalMode === 'object' ? (modalObjectEntry?.notes ?? '') : ''}
             dayLabel={`${formatDateRu(modalDay, month)}`}
@@ -1945,8 +1959,6 @@ export const TimesheetPage: FC = () => {
             hideSkudTab={modalMode === 'split-view'}
             allowAccessPointMap={canViewPage('/skud-settings')}
             hideCorrectionTab={modalMode === 'split-view'}
-            allowedStatuses={modalMode === 'object' ? ['manual'] : undefined}
-            confirmLabel={modalMode === 'object' ? 'Сохранить по объекту' : undefined}
             deleteLabel={modalMode === 'object' ? 'Снять корректировку' : undefined}
             customContent={splitDayContent}
             timesheetEntry={modalEntry}
