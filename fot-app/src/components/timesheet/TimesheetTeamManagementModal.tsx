@@ -86,6 +86,7 @@ export const TimesheetTeamManagementModal: FC<ITimesheetTeamManagementModalProps
                           <div className="ts-team-item-name">{formatTimesheetEmployeeName(candidate.full_name)}</div>
                           <div className="ts-team-item-meta">
                             {candidate.department_name || 'Без отдела'}
+                            {candidate.is_archived ? ' · Исключён из табеля' : ''}
                           </div>
                         </div>
                         <button
@@ -136,6 +137,7 @@ export const TimesheetTeamManagementModal: FC<ITimesheetTeamManagementModalProps
                   </label>
                   <div className="ts-team-warning">
                     Это физический перевод сотрудника между отделами. Изменение попадёт в историю назначений и начнёт действовать с выбранной даты.
+                    {selectedCandidate.is_archived ? ' Сотрудник будет возвращён из внутреннего архива.' : ''}
                   </div>
                 </div>
                 <div className="ts-team-confirm-actions">

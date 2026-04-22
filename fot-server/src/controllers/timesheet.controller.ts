@@ -1063,10 +1063,9 @@ export const timesheetController = {
 
       const { data: employees, error } = await supabase
         .from('employees')
-        .select('id, full_name, org_department_id')
+        .select('id, full_name, org_department_id, is_archived')
         .ilike('full_name', `%${parsed.q}%`)
         .eq('employment_status', 'active')
-        .eq('is_archived', false)
         .neq('org_department_id', targetDepartmentId)
         .order('full_name')
         .limit(20);
@@ -1099,6 +1098,7 @@ export const timesheetController = {
           department_name: employee.org_department_id
             ? departmentNameById.get(String(employee.org_department_id)) || null
             : null,
+          is_archived: Boolean(employee.is_archived),
         })),
       });
     } catch (err) {
@@ -1132,7 +1132,7 @@ export const timesheetController = {
       if (error || !employee) {
         return res.status(404).json({ success: false, error: 'Сотрудник не найден' });
       }
-      if (employee.employment_status !== 'active' || employee.is_archived) {
+      if (employee.employment_status !== 'active') {
         return res.status(409).json({ success: false, error: 'Можно добавлять только активных сотрудников' });
       }
       if (await isEmployeeAssignedToDepartmentOnDate(parsed.employee_id, targetDepartmentId, parsed.effective_from)) {
@@ -1145,6 +1145,20 @@ export const timesheetController = {
         lockDepartment: true,
         effectiveDate: parsed.effective_from,
       });
+
+      const restoredFromArchive = Boolean(employee.is_archived);
+      if (restoredFromArchive) {
+        const { error: unarchiveError } = await supabase
+          .from('employees')
+          .update({
+            is_archived: false,
+            archived_at: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', parsed.employee_id);
+        if (unarchiveError) throw unarchiveError;
+      }
+
       employeeCache.invalidate(parsed.employee_id);
 
       await auditService.logFromRequest(req, req.user.id, 'MOVE_EMPLOYEE_DEPARTMENT', {
@@ -1155,6 +1169,7 @@ export const timesheetController = {
           from_department_id: employee.org_department_id,
           to_department_id: targetDepartmentId,
           effective_from: parsed.effective_from,
+          restored_from_archive: restoredFromArchive,
         },
       });
 
