@@ -12,7 +12,8 @@ interface IApprovalEventRow {
   id: number;
   approval_id: number;
   department_id: string;
-  period: string;
+  start_date: string;
+  end_date: string;
   action: TimesheetApprovalEventAction;
   from_status: TimesheetApprovalStatus | null;
   to_status: TimesheetResolvedStatus;
@@ -63,7 +64,8 @@ export const timesheetApprovalHistoryService = {
   async appendEvent(input: {
     approvalId: number;
     departmentId: string;
-    period: string;
+    startDate: string;
+    endDate: string;
     action: TimesheetApprovalEventAction;
     fromStatus: TimesheetApprovalStatus | null;
     toStatus: TimesheetResolvedStatus;
@@ -77,7 +79,8 @@ export const timesheetApprovalHistoryService = {
       .insert({
         approval_id: input.approvalId,
         department_id: input.departmentId,
-        period: input.period,
+        start_date: input.startDate,
+        end_date: input.endDate,
         action: input.action,
         from_status: input.fromStatus,
         to_status: input.toStatus,
@@ -95,7 +98,7 @@ export const timesheetApprovalHistoryService = {
   async listByApprovalId(approvalId: number): Promise<TimesheetApprovalEvent[]> {
     const { data, error } = await supabase
       .from('timesheet_approval_events')
-      .select('id, approval_id, department_id, period, action, from_status, to_status, actor_user_id, comment, metadata, created_at')
+      .select('id, approval_id, department_id, start_date, end_date, action, from_status, to_status, actor_user_id, comment, metadata, created_at')
       .eq('approval_id', approvalId)
       .order('created_at', { ascending: false })
       .order('id', { ascending: false });
@@ -120,7 +123,8 @@ export const timesheetApprovalHistoryService = {
       id: row.id,
       approval_id: row.approval_id,
       department_id: row.department_id,
-      period: row.period,
+      start_date: row.start_date,
+      end_date: row.end_date,
       action: row.action,
       from_status: row.from_status,
       to_status: row.to_status,

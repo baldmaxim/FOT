@@ -35,6 +35,7 @@ import { OBJECT_ADJUSTMENT_SOURCE_TYPE } from '../services/timesheet-object.serv
 import {
   isEmployeeAssignedToDepartmentOnDate,
   listEmployeeIdsAssignedToDepartmentPeriod,
+  resolveTimesheetDateRange,
   resolveTimesheetPeriodRange,
 } from '../services/timesheet-department-assignments.service.js';
 import { fetchTimesheetDataForDepartment } from '../services/timesheet-export.service.js';
@@ -97,7 +98,6 @@ const teamManagementAddEmployeeSchema = teamManagementMutationSchema.extend({
 
 const MANAGED_TIMESHEET_PAGE_KEYS = ['/timesheet', '/timesheet-hr'] as const;
 const TIMESHEET_TEAM_MANAGEMENT_PAGE_KEY = '/timesheet/team-management';
-const TIMESHEET_APPROVAL_HALVES = ['H1', 'H2'] as const;
 
 interface IManagedDepartmentTimesheetSummary {
   department_id: string;
@@ -106,8 +106,104 @@ interface IManagedDepartmentTimesheetSummary {
   norm_hours: number;
   actual_hours: number;
   deviations: { late: number; absent: number; sick: number };
-  approval_by_half: Record<'H1' | 'H2' | 'FULL', TimesheetApprovalStatus | null>;
+  approval_status: TimesheetApprovalStatus | null;
+  approvals: Array<{
+    id: number;
+    start_date: string;
+    end_date: string;
+    status: TimesheetApprovalStatus;
+  }>;
   is_primary: boolean;
+}
+
+interface IApprovalLockInfo {
+  id: number;
+  start_date: string;
+  end_date: string;
+  status: TimesheetApprovalStatus;
+}
+
+/** Возвращает список активных (submitted/approved/returned) согласований отдела, покрывающих рабочую дату. */
+async function findApprovalLockForDate(
+  departmentId: string,
+  workDate: string,
+): Promise<IApprovalLockInfo | null> {
+  const { data, error } = await supabase
+    .from('timesheet_approvals')
+    .select('id, start_date, end_date, status')
+    .eq('department_id', departmentId)
+    .in('status', ['submitted', 'approved', 'returned'])
+    .lte('start_date', workDate)
+    .gte('end_date', workDate)
+    .order('status', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return (data as IApprovalLockInfo | null) ?? null;
+}
+
+/**
+ * Возвращает ISO-даты, для которых существует активный согласованный диапазон отдела сотрудника
+ * в пределах [startDate..endDate]. Используется для блокировки редактирования у руководителя.
+ */
+async function loadApprovalLockedDatesForDepartment(
+  departmentId: string,
+  startDate: string,
+  endDate: string,
+): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('timesheet_approvals')
+    .select('start_date, end_date, status')
+    .eq('department_id', departmentId)
+    .in('status', ['submitted', 'approved', 'returned'])
+    .lte('start_date', endDate)
+    .gte('end_date', startDate);
+
+  if (error) throw error;
+
+  const locked = new Set<string>();
+  const start = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
+  for (const row of data || []) {
+    const aStart = new Date(`${row.start_date}T00:00:00Z`);
+    const aEnd = new Date(`${row.end_date}T00:00:00Z`);
+    const cursor = new Date(Math.max(aStart.getTime(), start.getTime()));
+    const stop = new Date(Math.min(aEnd.getTime(), end.getTime()));
+    while (cursor <= stop) {
+      locked.add(cursor.toISOString().slice(0, 10));
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+  }
+  return [...locked].sort();
+}
+
+/** Пытается найти отдел сотрудника на дату среди managed-отделов запроса. */
+async function resolveEmployeeManagedDepartment(
+  req: AuthenticatedRequest,
+  employeeId: number,
+  workDate: string,
+): Promise<string | null> {
+  const managedDepartmentIds = await resolveManagedDepartmentIds(req);
+  for (const departmentId of managedDepartmentIds) {
+    if (await isEmployeeAssignedToDepartmentOnDate(employeeId, departmentId, workDate)) {
+      return departmentId;
+    }
+  }
+  return null;
+}
+
+/** Проверяет, заблокирована ли редакция записи табеля руководителем (approved/submitted/returned диапазон). */
+async function ensureNotLockedForScope(
+  req: AuthenticatedRequest,
+  scope: string | null,
+  employeeId: number,
+  workDate: string,
+): Promise<IApprovalLockInfo | null> {
+  if (scope !== 'department') return null;
+  const departmentId = await resolveEmployeeManagedDepartment(req, employeeId, workDate);
+  if (!departmentId) return null;
+  return findApprovalLockForDate(departmentId, workDate);
 }
 
 function toMonthIndex(year: number, month: number): number {
@@ -362,29 +458,36 @@ async function resolveManagedDepartmentId(
   return resolveTimesheetScopedDepartmentId(req, requestedDepartmentId);
 }
 
-function deriveFullApprovalStatus(statuses: Record<'H1' | 'H2', TimesheetApprovalStatus | null>): TimesheetApprovalStatus | null {
-  const values = Object.values(statuses).filter((status): status is TimesheetApprovalStatus => Boolean(status));
-  if (values.length === 0) {
-    return null;
-  }
-  if (values.includes('returned')) return 'returned';
-  if (values.includes('rejected')) return 'rejected';
-  if (statuses.H1 === 'approved' && statuses.H2 === 'approved') return 'approved';
-  if (values.includes('submitted')) return 'submitted';
-  if (values.includes('approved')) return 'draft';
-  return values[0] ?? null;
+const APPROVAL_STATUS_PRIORITY: Record<TimesheetApprovalStatus, number> = {
+  rejected: 4,
+  returned: 3,
+  submitted: 2,
+  approved: 1,
+  draft: 0,
+};
+
+function pickDominantApprovalStatus(
+  approvals: Array<{ status: TimesheetApprovalStatus }>,
+): TimesheetApprovalStatus | null {
+  if (approvals.length === 0) return null;
+  return approvals.reduce<TimesheetApprovalStatus>((acc, current) => (
+    APPROVAL_STATUS_PRIORITY[current.status] > APPROVAL_STATUS_PRIORITY[acc]
+      ? current.status
+      : acc
+  ), approvals[0].status);
 }
 
 async function buildManagedDepartmentTimesheetSummary(params: {
   departmentId: string;
   month: string;
-  half: 'H1' | 'H2' | 'FULL';
+  startDate: string;
+  endDate: string;
   isPrimary: boolean;
 }): Promise<IManagedDepartmentTimesheetSummary> {
   const data = await fetchTimesheetDataForDepartment(
     params.month,
     params.departmentId,
-    params.half,
+    { startDate: params.startDate, endDate: params.endDate },
     'capped_to_schedule',
   );
 
@@ -418,30 +521,23 @@ async function buildManagedDepartmentTimesheetSummary(params: {
     }
   }
 
-  const approvalPeriods = TIMESHEET_APPROVAL_HALVES.map(half => `${params.month}-${half}`);
   const { data: approvals, error: approvalsError } = await supabase
     .from('timesheet_approvals')
-    .select('period, status')
+    .select('id, start_date, end_date, status')
     .eq('department_id', params.departmentId)
-    .in('period', approvalPeriods);
+    .lte('start_date', params.endDate)
+    .gte('end_date', params.startDate);
 
   if (approvalsError) {
     throw approvalsError;
   }
 
-  const approvalByHalf: Record<'H1' | 'H2' | 'FULL', TimesheetApprovalStatus | null> = {
-    H1: null,
-    H2: null,
-    FULL: null,
-  };
-  for (const row of approvals || []) {
-    if (row.period === `${params.month}-H1`) approvalByHalf.H1 = row.status as TimesheetApprovalStatus;
-    if (row.period === `${params.month}-H2`) approvalByHalf.H2 = row.status as TimesheetApprovalStatus;
-  }
-  approvalByHalf.FULL = deriveFullApprovalStatus({
-    H1: approvalByHalf.H1,
-    H2: approvalByHalf.H2,
-  });
+  const approvalsTyped = (approvals || []).map(row => ({
+    id: Number(row.id),
+    start_date: String(row.start_date),
+    end_date: String(row.end_date),
+    status: row.status as TimesheetApprovalStatus,
+  }));
 
   return {
     department_id: params.departmentId,
@@ -450,25 +546,31 @@ async function buildManagedDepartmentTimesheetSummary(params: {
     norm_hours: normHours,
     actual_hours: actualHours,
     deviations,
-    approval_by_half: approvalByHalf,
+    approval_status: pickDominantApprovalStatus(approvalsTyped),
+    approvals: approvalsTyped,
     is_primary: params.isPrimary,
   };
 }
 
 export const timesheetController = {
-  /** GET /api/timesheet/overview?month=YYYY-MM&half=H1|H2|FULL */
+  /** GET /api/timesheet/overview?month=YYYY-MM&from=YYYY-MM-DD&to=YYYY-MM-DD */
   async getOverview(req: AuthenticatedRequest, res: Response) {
     try {
       const month = typeof req.query.month === 'string' ? req.query.month : null;
-      const half = req.query.half === 'H1' || req.query.half === 'H2' || req.query.half === 'FULL'
-        ? req.query.half
-        : 'FULL';
+      const fromParam = typeof req.query.from === 'string' ? req.query.from : null;
+      const toParam = typeof req.query.to === 'string' ? req.query.to : null;
       const scope = await resolveTimesheetScope(req);
       if (scope !== 'department') {
         return res.status(403).json({ success: false, error: 'Overview табелей доступен только для руководителей отделов' });
       }
-      if (!month || !resolveTimesheetPeriodRange(month, half)) {
+      if (!month) {
         return res.status(400).json({ success: false, error: 'Параметр month обязателен (формат YYYY-MM)' });
+      }
+      const periodRange = (fromParam && toParam)
+        ? resolveTimesheetDateRange(month, fromParam, toParam)
+        : resolveTimesheetPeriodRange(month, typeof req.query.half === 'string' ? req.query.half : null);
+      if (!periodRange) {
+        return res.status(400).json({ success: false, error: 'Некорректный диапазон' });
       }
 
       const managedDepartmentIds = await resolveManagedDepartmentIds(req);
@@ -480,7 +582,8 @@ export const timesheetController = {
         managedDepartmentIds.map(departmentId => buildManagedDepartmentTimesheetSummary({
           departmentId,
           month,
-          half,
+          startDate: periodRange.startDate,
+          endDate: periodRange.endDate,
           isPrimary: departmentId === req.user.department_id,
         })),
       );
@@ -517,10 +620,11 @@ export const timesheetController = {
       if (!month) {
         return res.status(400).json({ success: false, error: 'Параметр month обязателен (формат YYYY-MM)' });
       }
-      const periodRange = resolveTimesheetPeriodRange(
-        month,
-        typeof req.query.half === 'string' ? req.query.half : null,
-      );
+      const fromParam = typeof req.query.from === 'string' ? req.query.from : null;
+      const toParam = typeof req.query.to === 'string' ? req.query.to : null;
+      const periodRange = (fromParam && toParam)
+        ? resolveTimesheetDateRange(month, fromParam, toParam)
+        : resolveTimesheetPeriodRange(month, typeof req.query.half === 'string' ? req.query.half : null);
       if (!periodRange) {
         return res.status(400).json({ success: false, error: 'Параметр month обязателен (формат YYYY-MM)' });
       }
@@ -707,6 +811,34 @@ export const timesheetController = {
         }
       }
 
+      // Согласования, пересекающиеся с выбранным диапазоном отдела.
+      // Для scope=department они дают список заблокированных дат (руководитель не может редактировать submitted/approved/returned).
+      let departmentApprovals: Array<{ id: number; start_date: string; end_date: string; status: TimesheetApprovalStatus }> = [];
+      let approvalLockedDates: string[] = [];
+      if (hasDeptFilter) {
+        const { data: approvalsRows, error: approvalsErr } = await supabase
+          .from('timesheet_approvals')
+          .select('id, start_date, end_date, status')
+          .eq('department_id', department_id as string)
+          .lte('start_date', endDate)
+          .gte('end_date', startDate)
+          .order('start_date', { ascending: true });
+        if (approvalsErr) throw approvalsErr;
+        departmentApprovals = (approvalsRows || []).map(row => ({
+          id: Number(row.id),
+          start_date: String(row.start_date),
+          end_date: String(row.end_date),
+          status: row.status as TimesheetApprovalStatus,
+        }));
+        if (scope === 'department') {
+          approvalLockedDates = await loadApprovalLockedDatesForDepartment(
+            department_id as string,
+            startDate,
+            endDate,
+          );
+        }
+      }
+
       res.json({
         success: true,
         data: {
@@ -723,6 +855,8 @@ export const timesheetController = {
             actualHours,
             deviations,
           },
+          approvals: departmentApprovals,
+          approval_locked_dates: approvalLockedDates,
         },
       });
     } catch (err) {
@@ -744,6 +878,13 @@ export const timesheetController = {
       }
       if (!(await canAccessEmployeeForTimesheetDate(req, parsed.employee_id, parsed.work_date))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
+      const approvalLock = await ensureNotLockedForScope(req, scope, parsed.employee_id, parsed.work_date);
+      if (approvalLock) {
+        return res.status(409).json({
+          success: false,
+          error: `Период ${approvalLock.start_date} – ${approvalLock.end_date} уже ${approvalLock.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
+        });
       }
       const plannedHours = (await resolvePlannedHoursByItems([{ employee_id: parsed.employee_id, work_date: parsed.work_date }]))
         .get(`${parsed.employee_id}_${parsed.work_date}`) ?? null;
@@ -819,6 +960,18 @@ export const timesheetController = {
 	      }
 	      if (!(await canAccessEmployeeForTimesheetDate(req, Number(existing.employee_id), String(existing.work_date)))) {
 	        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+	      }
+	      const approvalLockUpdate = await ensureNotLockedForScope(
+	        req,
+	        scope,
+	        Number(existing.employee_id),
+	        String(existing.work_date),
+	      );
+	      if (approvalLockUpdate) {
+	        return res.status(409).json({
+	          success: false,
+	          error: `Период ${approvalLockUpdate.start_date} – ${approvalLockUpdate.end_date} уже ${approvalLockUpdate.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
+	        });
 	      }
         const nextStatus = (parsed.status ?? String(existing.status)) as TimeStatus;
         const plannedHours = (await resolvePlannedHoursByItems([{
@@ -905,6 +1058,16 @@ export const timesheetController = {
       if (denied) {
         return res.status(403).json({ success: false, error: 'Нет доступа к одному или нескольким сотрудникам' });
       }
+      const lockResults = await Promise.all(
+        uniqueItems.map(item => ensureNotLockedForScope(req, scope, item.employee_id, item.work_date)),
+      );
+      const lockedItem = lockResults.find(info => info !== null);
+      if (lockedItem) {
+        return res.status(409).json({
+          success: false,
+          error: `Период ${lockedItem.start_date} – ${lockedItem.end_date} уже ${lockedItem.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
+        });
+      }
       const employeeIds = [...new Set(uniqueItems.map(item => item.employee_id))];
       const plannedHoursByItem = await resolvePlannedHoursByItems(uniqueItems);
 
@@ -964,6 +1127,13 @@ export const timesheetController = {
       }
       if (!(await canAccessEmployeeForTimesheetDate(req, parsed.employee_id, parsed.work_date))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
+      const approvalLockObj = await ensureNotLockedForScope(req, scope, parsed.employee_id, parsed.work_date);
+      if (approvalLockObj) {
+        return res.status(409).json({
+          success: false,
+          error: `Период ${approvalLockObj.start_date} – ${approvalLockObj.end_date} уже ${approvalLockObj.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
+        });
       }
       const allowedHours = await resolveAllowedObjectHours(
         scope,
@@ -1275,6 +1445,13 @@ export const timesheetController = {
       }
       if (!(await canAccessEmployeeForTimesheetDate(req, parsed.employee_id, parsed.work_date))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
+      const approvalLockDel = await ensureNotLockedForScope(req, scope, parsed.employee_id, parsed.work_date);
+      if (approvalLockDel) {
+        return res.status(409).json({
+          success: false,
+          error: `Период ${approvalLockDel.start_date} – ${approvalLockDel.end_date} уже ${approvalLockDel.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
+        });
       }
 
       await deleteAttendanceAdjustmentBySource({

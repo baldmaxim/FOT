@@ -14,7 +14,11 @@ import {
 import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
-import { parseTimesheetApprovalPeriod, formatTimesheetHalfLabel } from '../services/timesheet-period.service.js';
+import {
+  formatTimesheetRangeLabel,
+  isIsoDate,
+  type ITimesheetDateRange,
+} from '../services/timesheet-range.service.js';
 import { timesheetResponsiblesService } from '../services/timesheet-responsibles.service.js';
 import { timesheetApprovalHistoryService } from '../services/timesheet-approval-history.service.js';
 import { listTimesheetWorkflowRecipientIds } from '../services/timesheet-workflow-recipients.service.js';
@@ -33,6 +37,26 @@ function normalizeComment(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function parseRangeFromBody(body: unknown): ITimesheetDateRange | null {
+  if (!body || typeof body !== 'object') return null;
+  const { start_date, end_date } = body as Record<string, unknown>;
+  if (!isIsoDate(start_date) || !isIsoDate(end_date)) return null;
+  if (end_date < start_date) return null;
+  return { startDate: start_date, endDate: end_date };
+}
+
+function parseRangeFromQuery(query: Record<string, unknown>): ITimesheetDateRange | null {
+  const startDate = query.start_date ?? query.from;
+  const endDate = query.end_date ?? query.to;
+  if (!isIsoDate(startDate) || !isIsoDate(endDate)) return null;
+  if (endDate < startDate) return null;
+  return { startDate, endDate };
+}
+
+function buildRangeRedirectPath(root: string, range: ITimesheetDateRange): string {
+  return `${root}?from=${range.startDate}&to=${range.endDate}`;
 }
 
 async function loadDepartmentName(departmentId: string): Promise<string> {
@@ -80,18 +104,18 @@ async function logApprovalAudit(
   });
 }
 
-async function notifyHrAboutSubmittedApproval(departmentId: string, period: string): Promise<void> {
+async function notifyHrAboutSubmittedApproval(
+  departmentId: string,
+  range: ITimesheetDateRange,
+): Promise<void> {
   const recipients = await listTimesheetWorkflowRecipientIds(departmentId, ['review', 'monitor']);
   if (recipients.length === 0) return;
 
-  const parsed = parseTimesheetApprovalPeriod(period);
   const departmentName = await loadDepartmentName(departmentId);
-  const periodLabel = parsed ? formatTimesheetHalfLabel(parsed.half, parsed.year, parsed.month) : period;
+  const rangeLabel = formatTimesheetRangeLabel(range.startDate, range.endDate);
   const title = 'Табель отправлен на проверку';
-  const body = `Отдел ${departmentName}: табель за период ${periodLabel} отправлен на проверку HR.`;
-  const path = parsed
-    ? `/timesheet-hr?month=${parsed.year}-${String(parsed.month).padStart(2, '0')}&half=${parsed.half}`
-    : '/timesheet-hr';
+  const body = `Отдел ${departmentName}: табель за ${rangeLabel} отправлен на проверку HR.`;
+  const path = buildRangeRedirectPath('/timesheet-hr', range);
 
   await notificationService.createMany(recipients.map(userId => ({
     userId,
@@ -100,16 +124,22 @@ async function notifyHrAboutSubmittedApproval(departmentId: string, period: stri
     body,
     metadata: {
       departmentId,
-      period,
+      start_date: range.startDate,
+      end_date: range.endDate,
       path,
     },
   })));
-  await pushService.sendGenericNotification(recipients, title, body, { path, period });
+  await pushService.sendGenericNotification(
+    recipients,
+    title,
+    body,
+    { path, start_date: range.startDate, end_date: range.endDate },
+  );
 }
 
 async function notifyDepartmentAboutReview(
   departmentId: string,
-  period: string,
+  range: ITimesheetDateRange,
   status: ReviewStatus,
   submittedBy: string | null,
   comment: string | null,
@@ -122,33 +152,30 @@ async function notifyDepartmentAboutReview(
 
   if (recipients.size === 0) return;
 
-  const parsed = parseTimesheetApprovalPeriod(period);
   const departmentName = await loadDepartmentName(departmentId);
-  const periodLabel = parsed ? formatTimesheetHalfLabel(parsed.half, parsed.year, parsed.month) : period;
+  const rangeLabel = formatTimesheetRangeLabel(range.startDate, range.endDate);
   const commentSuffix = comment ? ` Комментарий: ${comment}` : '';
-  const path = parsed
-    ? `/timesheet?month=${parsed.year}-${String(parsed.month).padStart(2, '0')}&half=${parsed.half}`
-    : '/timesheet';
+  const path = buildRangeRedirectPath('/timesheet', range);
 
   let title = 'Статус табеля изменён';
-  let body = `Отдел ${departmentName}: статус табеля за период ${periodLabel} изменён.${commentSuffix}`;
+  let body = `Отдел ${departmentName}: статус табеля за ${rangeLabel} изменён.${commentSuffix}`;
   let type = 'timesheet_approval_reviewed';
 
   if (status === 'approved') {
     title = 'Табель утверждён';
-    body = `Отдел ${departmentName}: табель за период ${periodLabel} утверждён.${commentSuffix}`;
+    body = `Отдел ${departmentName}: табель за ${rangeLabel} утверждён.${commentSuffix}`;
     type = 'timesheet_approval_approved';
   }
 
   if (status === 'rejected') {
     title = 'Табель отклонён';
-    body = `Отдел ${departmentName}: табель за период ${periodLabel} отклонён, нужна переподача.${commentSuffix}`;
+    body = `Отдел ${departmentName}: табель за ${rangeLabel} отклонён, нужна переподача.${commentSuffix}`;
     type = 'timesheet_approval_rejected';
   }
 
   if (status === 'returned') {
     title = 'Табель возвращён на доработку';
-    body = `Отдел ${departmentName}: утверждённый табель за период ${periodLabel} возвращён на доработку.${commentSuffix}`;
+    body = `Отдел ${departmentName}: утверждённый табель за ${rangeLabel} возвращён на доработку.${commentSuffix}`;
     type = 'timesheet_approval_returned';
   }
 
@@ -161,18 +188,24 @@ async function notifyDepartmentAboutReview(
     body,
     metadata: {
       departmentId,
-      period,
+      start_date: range.startDate,
+      end_date: range.endDate,
       status,
       path,
     },
   })));
-  await pushService.sendGenericNotification(recipientIds, title, body, { path, period, status });
+  await pushService.sendGenericNotification(
+    recipientIds,
+    title,
+    body,
+    { path, start_date: range.startDate, end_date: range.endDate, status },
+  );
 }
 
 async function persistApprovalTransition(input: {
   approvalId: number;
   departmentId: string;
-  period: string;
+  range: ITimesheetDateRange;
   fromStatus: TimesheetApprovalStatus | null;
   toStatus: Exclude<TimesheetApprovalStatus, 'draft'>;
   action: TimesheetApprovalEventAction;
@@ -182,7 +215,8 @@ async function persistApprovalTransition(input: {
   await timesheetApprovalHistoryService.appendEvent({
     approvalId: input.approvalId,
     departmentId: input.departmentId,
-    period: input.period,
+    startDate: input.range.startDate,
+    endDate: input.range.endDate,
     fromStatus: input.fromStatus,
     toStatus: input.toStatus,
     action: input.action,
@@ -191,32 +225,36 @@ async function persistApprovalTransition(input: {
   });
 }
 
-/** Header подтверждает табель отдела за период */
+/** Руководитель подаёт табель отдела за произвольный диапазон дат. */
 const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { department_id, period } = req.body;
-    const deptId = await resolveScopedDepartmentId(req, department_id || null);
+    const deptId = await resolveScopedDepartmentId(req, req.body.department_id || null);
+    const range = parseRangeFromBody(req.body);
 
-    if (!deptId || !period) {
-      res.status(400).json({ success: false, error: 'department_id и period обязательны' });
+    if (!deptId) {
+      res.status(400).json({ success: false, error: 'department_id обязателен' });
       return;
     }
 
-    if (typeof period !== 'string' || !parseTimesheetApprovalPeriod(period)) {
-      res.status(400).json({ success: false, error: 'period должен быть в формате YYYY-MM-H1 или YYYY-MM-H2' });
+    if (!range) {
+      res.status(400).json({
+        success: false,
+        error: 'start_date и end_date обязательны (формат YYYY-MM-DD, end_date >= start_date)',
+      });
       return;
     }
 
-    const { data: existingApproval, error: existingError } = await supabase
+    const { data: exactRow, error: exactError } = await supabase
       .from('timesheet_approvals')
       .select('*')
       .eq('department_id', deptId)
-      .eq('period', period)
+      .eq('start_date', range.startDate)
+      .eq('end_date', range.endDate)
       .maybeSingle();
 
-    if (existingError) throw existingError;
+    if (exactError) throw exactError;
 
-    const existing = (existingApproval as TimesheetApproval | null) ?? null;
+    const existing = (exactRow as TimesheetApproval | null) ?? null;
     if (existing?.status === 'approved') {
       res.status(409).json({
         success: false,
@@ -233,49 +271,67 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     const now = new Date().toISOString();
     let approval: TimesheetApproval | null = null;
 
-    if (existing) {
-      const { data, error } = await supabase
-        .from('timesheet_approvals')
-        .update({
-          status: 'submitted',
-          submitted_by: req.user.id,
-          submitted_at: now,
-          reviewed_by: null,
-          reviewed_at: null,
-          review_comment: null,
-          updated_at: now,
-        })
-        .eq('id', existing.id)
-        .select()
-        .single();
+    try {
+      if (existing) {
+        const { data, error } = await supabase
+          .from('timesheet_approvals')
+          .update({
+            status: 'submitted',
+            submitted_by: req.user.id,
+            submitted_at: now,
+            reviewed_by: null,
+            reviewed_at: null,
+            review_comment: null,
+            updated_at: now,
+          })
+          .eq('id', existing.id)
+          .select()
+          .single();
 
-      if (error) throw error;
-      approval = data as TimesheetApproval;
-    } else {
-      const { data, error } = await supabase
-        .from('timesheet_approvals')
-        .insert({
-          department_id: deptId,
-          period,
-          status: 'submitted',
-          submitted_by: req.user.id,
-          submitted_at: now,
-          reviewed_by: null,
-          reviewed_at: null,
-          review_comment: null,
-          updated_at: now,
-        })
-        .select()
-        .single();
+        if (error) throw error;
+        approval = data as TimesheetApproval;
+      } else {
+        const { data, error } = await supabase
+          .from('timesheet_approvals')
+          .insert({
+            department_id: deptId,
+            start_date: range.startDate,
+            end_date: range.endDate,
+            status: 'submitted',
+            submitted_by: req.user.id,
+            submitted_at: now,
+            reviewed_by: null,
+            reviewed_at: null,
+            review_comment: null,
+            updated_at: now,
+          })
+          .select()
+          .single();
 
-      if (error) throw error;
-      approval = data as TimesheetApproval;
+        if (error) throw error;
+        approval = data as TimesheetApproval;
+      }
+    } catch (dbErr) {
+      const code = (dbErr as { code?: string } | null)?.code;
+      if (code === '23P01') {
+        res.status(409).json({
+          success: false,
+          error: 'Выбранный диапазон пересекается с уже поданным или утверждённым табелем этого отдела.',
+        });
+        return;
+      }
+      throw dbErr;
+    }
+
+    if (!approval) {
+      res.status(500).json({ success: false, error: 'Ошибка подтверждения табеля' });
+      return;
     }
 
     await persistApprovalTransition({
       approvalId: approval.id,
       departmentId: deptId,
-      period,
+      range,
       fromStatus: existing?.status ?? null,
       toStatus: 'submitted',
       action: 'submitted',
@@ -284,12 +340,13 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     await logApprovalAudit(req, approval.id, 'TIMESHEET_APPROVAL_SUBMITTED', {
       department_id: deptId,
-      period,
+      start_date: range.startDate,
+      end_date: range.endDate,
       from_status: existing?.status ?? null,
       to_status: 'submitted',
     });
 
-    void notifyHrAboutSubmittedApproval(deptId, period).catch(notifyError => {
+    void notifyHrAboutSubmittedApproval(deptId, range).catch(notifyError => {
       console.error('timesheet-approval.submit notify error:', notifyError);
     });
 
@@ -300,22 +357,17 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
-/** Статус согласования по отделу и периоду */
+/** Статус согласования по отделу и конкретному диапазону. */
 const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const department_id = await resolveScopedDepartmentId(
       req,
       typeof req.query.department_id === 'string' ? req.query.department_id : null,
     );
-    const period = req.query.period as string;
+    const range = parseRangeFromQuery(req.query as Record<string, unknown>);
 
-    if (!department_id || !period) {
+    if (!department_id || !range) {
       res.json({ success: true, data: null });
-      return;
-    }
-
-    if (!parseTimesheetApprovalPeriod(period)) {
-      res.status(400).json({ success: false, error: 'period должен быть в формате YYYY-MM-H1 или YYYY-MM-H2' });
       return;
     }
 
@@ -323,7 +375,8 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
       .from('timesheet_approvals')
       .select('*')
       .eq('department_id', department_id)
-      .eq('period', period)
+      .eq('start_date', range.startDate)
+      .eq('end_date', range.endDate)
       .maybeSingle();
 
     if (error) throw error;
@@ -331,6 +384,59 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
   } catch (err) {
     console.error('timesheet-approval.getStatus error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения статуса' });
+  }
+};
+
+/**
+ * Список согласований отдела, пересекающихся с указанным диапазоном (или с месяцем,
+ * если передан month=YYYY-MM). Используется фронтом для показа всех заблокированных
+ * и поданных диапазонов вокруг текущей выборки.
+ */
+const listDepartmentApprovals = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const department_id = await resolveScopedDepartmentId(
+      req,
+      typeof req.query.department_id === 'string' ? req.query.department_id : null,
+    );
+
+    if (!department_id) {
+      res.status(400).json({ success: false, error: 'department_id обязателен' });
+      return;
+    }
+
+    let rangeStart: string | null = null;
+    let rangeEnd: string | null = null;
+    const monthParam = typeof req.query.month === 'string' ? req.query.month : null;
+    if (monthParam && /^\d{4}-\d{2}$/.test(monthParam)) {
+      const [y, m] = monthParam.split('-').map(Number);
+      const lastDay = new Date(y, m, 0).getDate();
+      rangeStart = `${monthParam}-01`;
+      rangeEnd = `${monthParam}-${String(lastDay).padStart(2, '0')}`;
+    } else {
+      const queryRange = parseRangeFromQuery(req.query as Record<string, unknown>);
+      if (queryRange) {
+        rangeStart = queryRange.startDate;
+        rangeEnd = queryRange.endDate;
+      }
+    }
+
+    let query = supabase
+      .from('timesheet_approvals')
+      .select('*')
+      .eq('department_id', department_id)
+      .order('start_date', { ascending: true });
+
+    if (rangeStart && rangeEnd) {
+      query = query.lte('start_date', rangeEnd).gte('end_date', rangeStart);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    res.json({ success: true, data: data || [] });
+  } catch (err) {
+    console.error('timesheet-approval.listDepartmentApprovals error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения согласований' });
   }
 };
 
@@ -386,11 +492,15 @@ async function changeApprovalReviewState(
     if (error) throw error;
 
     const updatedApproval = data as TimesheetApproval;
+    const range: ITimesheetDateRange = {
+      startDate: updatedApproval.start_date,
+      endDate: updatedApproval.end_date,
+    };
 
     await persistApprovalTransition({
       approvalId: updatedApproval.id,
       departmentId: updatedApproval.department_id,
-      period: updatedApproval.period,
+      range,
       fromStatus: approval.status,
       toStatus: input.nextStatus,
       action: input.action,
@@ -400,7 +510,8 @@ async function changeApprovalReviewState(
 
     await logApprovalAudit(req, updatedApproval.id, input.auditAction, {
       department_id: updatedApproval.department_id,
-      period: updatedApproval.period,
+      start_date: range.startDate,
+      end_date: range.endDate,
       from_status: approval.status,
       to_status: input.nextStatus,
       comment,
@@ -408,7 +519,7 @@ async function changeApprovalReviewState(
 
     void notifyDepartmentAboutReview(
       approval.department_id,
-      approval.period,
+      range,
       input.nextStatus,
       approval.submitted_by,
       comment,
@@ -423,7 +534,7 @@ async function changeApprovalReviewState(
   }
 }
 
-/** HR утверждает табель */
+/** HR утверждает табель. */
 const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   await changeApprovalReviewState(req, res, {
     allowedFrom: 'submitted',
@@ -435,7 +546,7 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
   });
 };
 
-/** HR отклоняет табель */
+/** HR отклоняет табель. */
 const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   await changeApprovalReviewState(req, res, {
     allowedFrom: 'submitted',
@@ -447,7 +558,7 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   });
 };
 
-/** HR возвращает утверждённый табель на доработку */
+/** HR возвращает утверждённый табель на доработку. */
 const returnToRework = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   await changeApprovalReviewState(req, res, {
     allowedFrom: 'approved',
@@ -459,7 +570,7 @@ const returnToRework = async (req: AuthenticatedRequest, res: Response): Promise
   });
 };
 
-/** История согласования по конкретному табелю */
+/** История согласования по конкретному табелю. */
 const getHistory = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
@@ -483,7 +594,7 @@ const getHistory = async (req: AuthenticatedRequest, res: Response): Promise<voi
   }
 };
 
-/** HR: все неутверждённые табели */
+/** HR: все неутверждённые табели. */
 const getPending = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const scope = await resolveRequestDataScope(_req);
@@ -514,14 +625,14 @@ const getPending = async (_req: AuthenticatedRequest, res: Response): Promise<vo
   }
 };
 
-/** HR: список табелей по статусу */
+/** HR: список табелей по статусу. */
 const getByStatus = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const requestedStatus = req.query.status as string | undefined;
     const status = requestedStatus as TimesheetApprovalStatus | undefined;
 
     if (status && !LISTABLE_STATUSES.has(status)) {
-      res.status(400).json({ success: false, error: 'Некорректный статус tabеля' });
+      res.status(400).json({ success: false, error: 'Некорректный статус табеля' });
       return;
     }
 
@@ -629,6 +740,7 @@ const saveResponsibles = async (req: AuthenticatedRequest, res: Response): Promi
 export const timesheetApprovalController = {
   submit,
   getStatus,
+  listDepartmentApprovals,
   approve,
   reject,
   returnToRework,

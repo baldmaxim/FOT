@@ -10,6 +10,7 @@ import {
   type TimesheetExportGrouping,
   type TimesheetExportHalf,
   type TimesheetExportPresentation,
+  type TimesheetExportRangeArg,
 } from '../services/timesheet-export.service.js';
 import {
   build1CObjectTimesheetWorkbook,
@@ -135,7 +136,8 @@ async function buildFilesForAssignedEmployee(params: {
   month: string;
   year: number;
   mon: number;
-  exportHalf: TimesheetExportHalf;
+  rangeArg: TimesheetExportRangeArg;
+  rangeSuffix: string;
   exportGrouping: TimesheetExportGrouping;
   exportAs1C: boolean;
   templateSuffix: string;
@@ -147,7 +149,8 @@ async function buildFilesForAssignedEmployee(params: {
     month,
     year,
     mon,
-    exportHalf,
+    rangeArg,
+    rangeSuffix,
     exportGrouping,
     exportAs1C,
     templateSuffix,
@@ -160,12 +163,10 @@ async function buildFilesForAssignedEmployee(params: {
   const files: Array<{ name: string; data: Buffer }> = [];
 
   for (const departmentId of employee.department_ids) {
-    const data = await fetchTimesheetDataForDepartment(month, departmentId, exportHalf, displayMode);
+    const data = await fetchTimesheetDataForDepartment(month, departmentId, rangeArg, displayMode);
     if (data.employees.length === 0) continue;
 
-    const halfSuffix = data.exportHalf === 'FULL'
-      ? ''
-      : `_${data.exportHalf === 'H1' ? '1-15' : `16-${data.daysInMonth}`}`;
+    const halfSuffix = rangeSuffix;
 
     if (exportGrouping === 'objects') {
       for (const target of listObjectExportTargets(data)) {
@@ -282,7 +283,7 @@ export async function listAssignedEmployees(req: AuthenticatedRequest, res: Resp
 /** POST /api/timesheet/export-assigned  body: { month, half, group_by, export_as_1c, employee_ids? } */
 export async function exportTimesheetAssigned(req: AuthenticatedRequest, res: Response) {
   try {
-    const { month, half, group_by, export_as_1c, employee_ids, presentation } = req.body;
+    const { month, half, from, to, group_by, export_as_1c, employee_ids, presentation } = req.body;
 
     if (!month || typeof month !== 'string' || !/^\d{4}-\d{2}$/.test(month)) {
       return res.status(400).json({ success: false, error: 'Параметр month обязателен (формат YYYY-MM)' });
@@ -291,9 +292,15 @@ export async function exportTimesheetAssigned(req: AuthenticatedRequest, res: Re
     const [yearStr, monthStr] = month.split('-');
     const year = parseInt(yearStr);
     const mon = parseInt(monthStr);
+    const isoDate = /^\d{4}-\d{2}-\d{2}$/;
+    const hasRange = typeof from === 'string' && typeof to === 'string'
+      && isoDate.test(from) && isoDate.test(to) && to >= from;
     const exportHalf: TimesheetExportHalf = half === 'H1' || half === 'H2' || half === 'FULL'
       ? half
       : 'FULL';
+    const rangeArg: TimesheetExportRangeArg = hasRange
+      ? { startDate: from as string, endDate: to as string }
+      : exportHalf;
     const exportGrouping = normalizeGrouping(group_by);
     const exportPresentation = normalizePresentation(presentation);
     const exportAs1C = normalizeBoolean(export_as_1c);
@@ -301,9 +308,14 @@ export async function exportTimesheetAssigned(req: AuthenticatedRequest, res: Re
       ? 'capped_to_schedule'
       : 'actual';
     const daysInMonth = new Date(year, mon, 0).getDate();
-    const segmentSuffix = exportHalf === 'FULL'
-      ? ''
-      : `_${exportHalf === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
+    let segmentSuffix = '';
+    if (hasRange) {
+      const sd = Number((from as string).slice(-2));
+      const ed = Number((to as string).slice(-2));
+      segmentSuffix = `_${sd}-${ed}`;
+    } else if (exportHalf !== 'FULL') {
+      segmentSuffix = `_${exportHalf === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
+    }
     const templateSuffix = exportAs1C ? '_1С' : '';
     const presentationSuffix = exportPresentation === 'manager' ? '_Руководитель' : '';
 
@@ -350,7 +362,8 @@ export async function exportTimesheetAssigned(req: AuthenticatedRequest, res: Re
           month,
           year,
           mon,
-          exportHalf,
+          rangeArg,
+          rangeSuffix: segmentSuffix,
           exportGrouping,
           exportAs1C,
           templateSuffix,
@@ -385,7 +398,7 @@ export async function emailTimesheetAssigned(req: AuthenticatedRequest, res: Res
       return res.status(503).json({ success: false, error: 'Email-сервис не настроен (SMTP_HOST, SMTP_USER, SMTP_PASS)' });
     }
 
-    const { month, half, group_by, export_as_1c, employee_ids, presentation } = req.body;
+    const { month, half, from, to, group_by, export_as_1c, employee_ids, presentation } = req.body;
 
     if (!month || typeof month !== 'string' || !/^\d{4}-\d{2}$/.test(month)) {
       return res.status(400).json({ success: false, error: 'Параметр month обязателен (формат YYYY-MM)' });
@@ -394,11 +407,26 @@ export async function emailTimesheetAssigned(req: AuthenticatedRequest, res: Res
     const [yearStr, monthStr] = month.split('-');
     const year = parseInt(yearStr);
     const mon = parseInt(monthStr);
+    const isoDate = /^\d{4}-\d{2}-\d{2}$/;
+    const hasRange = typeof from === 'string' && typeof to === 'string'
+      && isoDate.test(from) && isoDate.test(to) && to >= from;
     const exportHalf: TimesheetExportHalf = half === 'H1' || half === 'H2' || half === 'FULL' ? half : 'FULL';
+    const rangeArg: TimesheetExportRangeArg = hasRange
+      ? { startDate: from as string, endDate: to as string }
+      : exportHalf;
     const exportGrouping = normalizeGrouping(group_by);
     const exportPresentation = normalizePresentation(presentation);
     const exportAs1C = normalizeBoolean(export_as_1c);
     const displayMode: 'actual' | 'capped_to_schedule' = exportPresentation === 'manager' ? 'capped_to_schedule' : 'actual';
+    const daysInMonth = new Date(year, mon, 0).getDate();
+    let segmentSuffix = '';
+    if (hasRange) {
+      const sd = Number((from as string).slice(-2));
+      const ed = Number((to as string).slice(-2));
+      segmentSuffix = `_${sd}-${ed}`;
+    } else if (exportHalf !== 'FULL') {
+      segmentSuffix = `_${exportHalf === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
+    }
     const templateSuffix = exportAs1C ? '_1С' : '';
     const presentationSuffix = exportPresentation === 'manager' ? '_Руководитель' : '';
 
@@ -461,7 +489,8 @@ export async function emailTimesheetAssigned(req: AuthenticatedRequest, res: Res
           month,
           year,
           mon,
-          exportHalf,
+          rangeArg,
+          rangeSuffix: segmentSuffix,
           exportGrouping,
           exportAs1C,
           templateSuffix,

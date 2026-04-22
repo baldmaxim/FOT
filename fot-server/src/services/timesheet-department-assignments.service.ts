@@ -67,6 +67,59 @@ export const resolveTimesheetPeriodRange = (
   };
 };
 
+/**
+ * Возвращает диапазон дат для отображения/экспорта табеля.
+ * Приоритет у явно переданных `from`/`to` (ISO-даты в рамках месяца).
+ * Если их нет — возвращает полный месяц (весь `month`).
+ * Поле `half` помечается как 'FULL' при кастомном диапазоне (больше не несёт семантики).
+ */
+export const resolveTimesheetDateRange = (
+  month: string,
+  fromValue?: string | null,
+  toValue?: string | null,
+): ITimesheetPeriodRange | null => {
+  if (!/^\d{4}-\d{2}$/.test(month)) return null;
+
+  const year = Number.parseInt(month.slice(0, 4), 10);
+  const mon = Number.parseInt(month.slice(5, 7), 10);
+  if (!Number.isFinite(year) || !Number.isFinite(mon) || mon < 1 || mon > 12) return null;
+
+  const daysInMonth = new Date(year, mon, 0).getDate();
+  const monthFirst = `${month}-01`;
+  const monthLast = `${month}-${pad2(daysInMonth)}`;
+  const isoDateRegex = /^\d{4}-\d{2}-\d{2}$/;
+
+  const fromValid = typeof fromValue === 'string' && isoDateRegex.test(fromValue)
+    && fromValue >= monthFirst && fromValue <= monthLast
+    ? fromValue
+    : null;
+  const toValid = typeof toValue === 'string' && isoDateRegex.test(toValue)
+    && toValue >= monthFirst && toValue <= monthLast
+    && (!fromValid || toValue >= fromValid)
+    ? toValue
+    : null;
+
+  if (fromValid && toValid) {
+    return {
+      half: 'FULL',
+      year,
+      month: mon,
+      daysInMonth,
+      startDate: fromValid,
+      endDate: toValid,
+    };
+  }
+
+  return {
+    half: 'FULL',
+    year,
+    month: mon,
+    daysInMonth,
+    startDate: monthFirst,
+    endDate: monthLast,
+  };
+};
+
 export async function listEmployeeIdsAssignedToDepartmentPeriod(
   departmentId: string,
   startDate: string,

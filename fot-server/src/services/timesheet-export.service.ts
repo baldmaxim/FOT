@@ -5,12 +5,20 @@ import { buildAttendanceEntries, type IAttendanceEntry } from './attendance.serv
 import type { IAttendanceObjectEntry } from './timesheet-object.service.js';
 import {
   listEmployeeIdsAssignedToDepartmentPeriod,
+  resolveTimesheetDateRange,
   resolveTimesheetPeriodRange,
 } from './timesheet-department-assignments.service.js';
 
 export type TimesheetExportHalf = 'H1' | 'H2' | 'FULL';
+export type TimesheetExportRange = { startDate: string; endDate: string };
+export type TimesheetExportRangeArg = TimesheetExportHalf | TimesheetExportRange;
 export type TimesheetExportGrouping = 'employees' | 'objects';
 export type TimesheetExportPresentation = 'hr' | 'manager';
+
+function isExportRange(value: TimesheetExportRangeArg): value is TimesheetExportRange {
+  return typeof value === 'object' && value !== null
+    && typeof value.startDate === 'string' && typeof value.endDate === 'string';
+}
 
 export interface IExportEmployee {
   id: number;
@@ -59,17 +67,22 @@ export const resolveTimesheetExportDays = (
 export async function fetchTimesheetDataForDepartment(
   month: string,
   departmentId: string | null,
-  exportHalf: TimesheetExportHalf = 'FULL',
+  rangeArg: TimesheetExportRangeArg = 'FULL',
   displayMode: 'actual' | 'capped_to_schedule' = 'actual',
 ): Promise<IDepartmentTimesheetData> {
-  const periodRange = resolveTimesheetPeriodRange(month, exportHalf);
+  const periodRange = isExportRange(rangeArg)
+    ? resolveTimesheetDateRange(month, rangeArg.startDate, rangeArg.endDate)
+    : resolveTimesheetPeriodRange(month, rangeArg);
   if (!periodRange) {
     throw new Error('Invalid export month');
   }
   const { year, month: mon, daysInMonth, startDate, endDate } = periodRange;
   const today = new Date();
   const todayStr = today.toISOString().slice(0, 10);
-  const exportDays = resolveTimesheetExportDays(year, mon, exportHalf);
+  const startDay = Number.parseInt(startDate.slice(-2), 10);
+  const endDay = Number.parseInt(endDate.slice(-2), 10);
+  const exportDays = Array.from({ length: endDay - startDay + 1 }, (_, i) => startDay + i);
+  const exportHalf: TimesheetExportHalf = isExportRange(rangeArg) ? 'FULL' : rangeArg;
 
   // Имя отдела
   let departmentName = 'Все отделы';

@@ -1,25 +1,42 @@
 import { Response } from 'express';
 import ExcelJS from 'exceljs';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { fetchTimesheetDataForDepartment, type TimesheetExportHalf } from '../services/timesheet-export.service.js';
+import {
+  fetchTimesheetDataForDepartment,
+  type TimesheetExportRangeArg,
+} from '../services/timesheet-export.service.js';
 import { buildTimesheetSheet } from '../services/timesheet-excel.service.js';
 import { resolveRequestDataScope, resolveScopedDepartmentId } from '../services/data-scope.service.js';
 
 const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
   'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 
-/** GET /api/timesheet/export?month=YYYY-MM&department_id=...&presentation=hr|manager */
+const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+function resolveExportRangeArg(query: Record<string, unknown>): TimesheetExportRangeArg {
+  const from = query.from;
+  const to = query.to;
+  if (typeof from === 'string' && typeof to === 'string'
+    && ISO_DATE_REGEX.test(from) && ISO_DATE_REGEX.test(to)
+    && to >= from
+  ) {
+    return { startDate: from, endDate: to };
+  }
+
+  const half = query.half;
+  return half === 'H1' || half === 'H2' || half === 'FULL' ? half : 'FULL';
+}
+
+/** GET /api/timesheet/export?month=YYYY-MM&department_id=...&from=YYYY-MM-DD&to=YYYY-MM-DD&presentation=hr|manager */
 export async function exportTimesheet(req: AuthenticatedRequest, res: Response) {
   try {
-    const { month, department_id, half, presentation } = req.query;
+    const { month, department_id, presentation } = req.query;
 
     if (!month || typeof month !== 'string') {
       return res.status(400).json({ success: false, error: 'Параметр month обязателен' });
     }
 
-    const exportHalf: TimesheetExportHalf = half === 'H1' || half === 'H2' || half === 'FULL'
-      ? half
-      : 'FULL';
+    const rangeArg = resolveExportRangeArg(req.query as Record<string, unknown>);
     const requestedDepartmentId = department_id && typeof department_id === 'string' ? department_id : null;
     const scope = await resolveRequestDataScope(req);
     const deptId = await resolveScopedDepartmentId(req, requestedDepartmentId);
@@ -34,15 +51,21 @@ export async function exportTimesheet(req: AuthenticatedRequest, res: Response) 
     const displayMode: 'actual' | 'capped_to_schedule' = explicitPresentation
       ? (explicitPresentation === 'manager' ? 'capped_to_schedule' : 'actual')
       : (scope === 'department' ? 'capped_to_schedule' : 'actual');
-    const data = await fetchTimesheetDataForDepartment(month, deptId, exportHalf, displayMode);
+    const data = await fetchTimesheetDataForDepartment(month, deptId, rangeArg, displayMode);
 
     const wb = new ExcelJS.Workbook();
     buildTimesheetSheet(wb, 'Табель', data);
 
     const buf = await wb.xlsx.writeBuffer();
-    const segmentSuffix = data.exportHalf === 'FULL'
-      ? ''
-      : `_${data.exportHalf === 'H1' ? '1-15' : `16-${data.daysInMonth}`}`;
+    const isCustomRange = typeof rangeArg === 'object';
+    let segmentSuffix = '';
+    if (isCustomRange) {
+      const [, , sd] = rangeArg.startDate.split('-');
+      const [, , ed] = rangeArg.endDate.split('-');
+      segmentSuffix = `_${Number(sd)}-${Number(ed)}`;
+    } else if (data.exportHalf !== 'FULL') {
+      segmentSuffix = `_${data.exportHalf === 'H1' ? '1-15' : `16-${data.daysInMonth}`}`;
+    }
     const presentationSuffix = explicitPresentation === 'manager' ? '_Руководитель' : '';
 
     const safeFileName = `${data.departmentName}_${MONTH_NAMES[data.mon]}_${data.year}${segmentSuffix}${presentationSuffix}.xlsx`

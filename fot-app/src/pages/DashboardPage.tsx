@@ -4,10 +4,9 @@ import { ChevronDown, ChevronLeft, ChevronRight, Search, Building2, LogOut, User
 import { usePresence } from '../hooks/usePresence';
 import { useDashboardStats } from '../hooks/useDashboardStats';
 import { usePresenceRealtime } from '../hooks/usePresenceRealtime';
-import { useStructureTree } from '../hooks/useStructure';
-import { useAuth } from '../contexts/AuthContext';
+import { useManagedDepartments } from '../hooks/useManagedDepartments';
 import type { DashboardPeriod } from '../types';
-import { getTreeFlatDepartments } from '../utils/departmentUtils';
+import { filterDepartmentTreeByIds, getTreeFlatDepartments } from '../utils/departmentUtils';
 import '../styles/DashboardPage.css';
 
 const ActivityList = lazy(() => import('../components/dashboard/ActivityList').then(m => ({ default: m.ActivityList })));
@@ -39,8 +38,13 @@ const DashboardSectionFallback = () => (
 );
 
 export const DashboardPage: React.FC = () => {
-  const { hasPermission, profile } = useAuth();
-  const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
+  const {
+    isDepartmentScope,
+    managedDepartmentIds,
+    primaryDepartmentId,
+    structureQuery,
+  } = useManagedDepartments();
+  const isSingleManagedDept = isDepartmentScope && managedDepartmentIds.length === 1;
 
   const today = new Date().toLocaleDateString('ru-RU', {
     weekday: 'long',
@@ -52,31 +56,32 @@ export const DashboardPage: React.FC = () => {
   // Department selector
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedDeptId = searchParams.get('dept');
-  const effectiveSelectedDeptId = selectedDeptId || (isDepartmentScope ? profile?.department_id ?? null : null);
+  const effectiveSelectedDeptId = selectedDeptId
+    || (isDepartmentScope ? primaryDepartmentId ?? managedDepartmentIds[0] ?? null : null);
   const [deptDropdownOpen, setDeptDropdownOpen] = useState(false);
   const [deptSearchQuery, setDeptSearchQuery] = useState('');
   const deptDropdownRef = useRef<HTMLDivElement>(null);
-  const structureQuery = useStructureTree(!isDepartmentScope);
 
-  // Для header: сразу ставим отдел в URL без ожидания загрузки структуры
+  // Для руководителя: сразу ставим дефолтный отдел в URL (первый из managed)
   useEffect(() => {
-    if (!isDepartmentScope || !profile?.department_id) {
-      return;
-    }
+    if (!isDepartmentScope) return;
+    const defaultId = primaryDepartmentId ?? managedDepartmentIds[0] ?? null;
+    if (!defaultId) return;
+    if (searchParams.get('dept')) return;
 
     const next = new URLSearchParams(searchParams);
-    if (next.get('dept') === profile.department_id) {
-      return;
-    }
-
-    next.set('dept', profile.department_id);
+    next.set('dept', defaultId);
     setSearchParams(next, { replace: true });
-  }, [isDepartmentScope, profile?.department_id, searchParams, setSearchParams]);
+  }, [isDepartmentScope, primaryDepartmentId, managedDepartmentIds, searchParams, setSearchParams]);
 
   const deptOptions = useMemo(() => {
-    if (isDepartmentScope) return [];
-    return getTreeFlatDepartments(structureQuery.data?.departments || []);
-  }, [isDepartmentScope, structureQuery.data?.departments]);
+    const allNodes = structureQuery.data?.departments ?? [];
+    if (isDepartmentScope && managedDepartmentIds.length > 0) {
+      const filtered = filterDepartmentTreeByIds(allNodes, new Set(managedDepartmentIds));
+      return getTreeFlatDepartments(filtered);
+    }
+    return getTreeFlatDepartments(allNodes);
+  }, [structureQuery.data, isDepartmentScope, managedDepartmentIds]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -217,7 +222,7 @@ export const DashboardPage: React.FC = () => {
     deptInputRef.current?.blur();
   };
 
-  const deptSelector = isDepartmentScope ? (
+  const deptSelector = isSingleManagedDept ? (
     <div className="dash-dept-dropdown">
       <div className="dash-dept-trigger has-value" style={{ cursor: 'default' }}>
         <Building2 size={14} className="dash-dept-search-icon" />

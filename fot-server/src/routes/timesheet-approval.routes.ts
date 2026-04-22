@@ -14,6 +14,7 @@ router.put('/responsibles', requirePageAccess('/admin/settings', 'edit'), timesh
 router.post('/submit', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.submit);
 
 router.get('/status', requirePageAccess('/timesheet', 'view'), timesheetApprovalController.getStatus);
+router.get('/department', requirePageAccess('/timesheet', 'view'), timesheetApprovalController.listDepartmentApprovals);
 
 // Мониторинг очереди — view на /timesheet-hr.
 router.get('/pending', requirePageAccess('/timesheet-hr', 'view'), timesheetApprovalController.getPending);

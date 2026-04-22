@@ -13,7 +13,7 @@ import {
 } from '../../services/timesheetApprovalService';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useTimesheetApprovalHistory, useTimesheetApprovalReviewList } from '../../hooks/useTimesheetApprovalData';
-import { formatTimesheetApprovalPeriod } from '../../utils/timesheetApprovalPeriod';
+import { formatTimesheetRangeLabel } from '../../utils/timesheetApprovalPeriod';
 import './TimesheetReviewPage.css';
 
 interface IDeptMap { [id: string]: string }
@@ -264,7 +264,7 @@ export const TimesheetReviewPage: FC = () => {
 
                   <div className="tsr-card-meta">
                     <div className="tsr-card-period">
-                      <Clock size={14} /> {formatTimesheetApprovalPeriod(approval.period)}
+                      <Clock size={14} /> {formatTimesheetRangeLabel(approval.start_date, approval.end_date)}
                     </div>
                     {isSubmittedTab && approval.submitted_at && (
                       <div className="tsr-card-date">

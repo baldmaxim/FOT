@@ -1,14 +1,19 @@
 import { type FC, useState, useMemo, useCallback, useEffect } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { getMonthLabel } from '../../utils/calendarUtils';
-import { formatTimesheetHalfLabel, type TimesheetApprovalHalf } from '../../utils/timesheetApprovalPeriod';
 import { MassTimesheetExportDepartmentsTab } from './MassTimesheetExportDepartmentsTab';
 import { MassTimesheetExportAssignedTab } from './MassTimesheetExportAssignedTab';
 import './MassTimesheetExportPage.css';
 
-type TimesheetDisplaySegment = TimesheetApprovalHalf | 'FULL';
+type TimesheetHalf = 'H1' | 'H2';
+type TimesheetDisplaySegment = TimesheetHalf | 'FULL';
 type TimesheetGroupingMode = 'employees' | 'objects';
 type ExportTab = 'departments' | 'assigned';
+
+const getDaysInMonthUtil = (year: number, month: number): number => new Date(year, month, 0).getDate();
+
+const formatHalfRangeLabel = (half: TimesheetHalf, year: number, month: number): string =>
+  half === 'H1' ? '1-15' : `16-${getDaysInMonthUtil(year, month)}`;
 
 const ACTIVE_TAB_STORAGE_KEY = 'timesheet_export_active_tab_v1';
 
@@ -96,14 +101,14 @@ export const MassTimesheetExportPage: FC = () => {
       </div>
 
       <section className="mte-half-switch" aria-label="Период выгрузки табелей">
-        {(['H1', 'H2'] as TimesheetApprovalHalf[]).map(half => (
+        {(['H1', 'H2'] as TimesheetHalf[]).map(half => (
           <button
             key={half}
             type="button"
             className={`mte-half-chip ${activeSegment === half ? ' mte-half-chip--active' : ''}`}
             onClick={() => handleSegmentChange(half)}
           >
-            <span className="mte-half-chip-label">{formatTimesheetHalfLabel(half, year, month)}</span>
+            <span className="mte-half-chip-label">{formatHalfRangeLabel(half, year, month)}</span>
             <span className="mte-half-chip-subtitle">
               {half === 'H1' ? 'Первая половина' : 'Вторая половина'}
             </span>

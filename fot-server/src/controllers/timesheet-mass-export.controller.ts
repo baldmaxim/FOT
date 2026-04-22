@@ -8,6 +8,7 @@ import {
   type TimesheetExportGrouping,
   type TimesheetExportHalf,
   type TimesheetExportPresentation,
+  type TimesheetExportRangeArg,
 } from '../services/timesheet-export.service.js';
 import {
   build1CObjectTimesheetWorkbook,
@@ -37,10 +38,10 @@ const getPresentationFileSuffix = (presentation: TimesheetExportPresentation): s
   presentation === 'manager' ? '_Руководитель' : ''
 );
 
-/** POST /api/timesheet/export-mass  body: { month, department_ids, half } */
+/** POST /api/timesheet/export-mass  body: { month, department_ids, half?|from?/to?, ... } */
 export async function exportTimesheetMass(req: AuthenticatedRequest, res: Response) {
   try {
-    const { month, department_ids, half, group_by, presentation, export_as_1c } = req.body;
+    const { month, department_ids, half, from, to, group_by, presentation, export_as_1c } = req.body;
 
     if (!month || typeof month !== 'string') {
       return res.status(400).json({ success: false, error: 'Параметр month обязателен' });
@@ -68,17 +69,28 @@ export async function exportTimesheetMass(req: AuthenticatedRequest, res: Respon
     const [yearStr, monthStr] = month.split('-');
     const year = parseInt(yearStr);
     const mon = parseInt(monthStr);
+    const isoDate = /^\d{4}-\d{2}-\d{2}$/;
+    const hasRange = typeof from === 'string' && typeof to === 'string'
+      && isoDate.test(from) && isoDate.test(to) && to >= from;
     const exportHalf: TimesheetExportHalf = half === 'H1' || half === 'H2' || half === 'FULL'
       ? half
       : 'FULL';
+    const rangeArg: TimesheetExportRangeArg = hasRange
+      ? { startDate: from as string, endDate: to as string }
+      : exportHalf;
     const exportGrouping = normalizeGrouping(group_by);
     const exportPresentation = normalizePresentation(presentation);
     const exportAs1C = normalizeBoolean(export_as_1c);
     const displayMode = exportPresentation === 'manager' ? 'capped_to_schedule' : 'actual';
     const daysInMonth = new Date(year, mon, 0).getDate();
-    const segmentSuffix = exportHalf === 'FULL'
-      ? ''
-      : `_${exportHalf === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
+    let segmentSuffix = '';
+    if (hasRange) {
+      const sd = Number((from as string).slice(-2));
+      const ed = Number((to as string).slice(-2));
+      segmentSuffix = `_${sd}-${ed}`;
+    } else if (exportHalf !== 'FULL') {
+      segmentSuffix = `_${exportHalf === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
+    }
     const presentationSuffix = getPresentationFileSuffix(exportPresentation);
     const templateSuffix = exportAs1C ? '_1С' : '';
 
@@ -100,7 +112,7 @@ export async function exportTimesheetMass(req: AuthenticatedRequest, res: Respon
     for (let i = 0; i < scopedDepartmentIds.length; i += CONCURRENCY) {
       const batch = scopedDepartmentIds.slice(i, i + CONCURRENCY);
       const results = await Promise.all(
-        batch.map((deptId: string) => fetchTimesheetDataForDepartment(month, deptId, exportHalf, displayMode))
+        batch.map((deptId: string) => fetchTimesheetDataForDepartment(month, deptId, rangeArg, displayMode))
       );
 
       for (const data of results) {
@@ -118,9 +130,7 @@ export async function exportTimesheetMass(req: AuthenticatedRequest, res: Respon
 
             let baseName = `${data.departmentName}_${target.object_name}_${MONTH_NAMES[mon]}_${year}`
               .replace(/[\/\\?%*:|"<>]/g, '_');
-            if (data.exportHalf !== 'FULL') {
-              baseName += `_${data.exportHalf === 'H1' ? '1-15' : `16-${data.daysInMonth}`}`;
-            }
+            baseName += segmentSuffix;
             baseName += templateSuffix;
             baseName += presentationSuffix;
             if (usedNames.has(baseName)) {
@@ -147,9 +157,7 @@ export async function exportTimesheetMass(req: AuthenticatedRequest, res: Respon
 
         let baseName = `${data.departmentName}_${MONTH_NAMES[mon]}_${year}`
           .replace(/[\/\\?%*:|"<>]/g, '_');
-        if (data.exportHalf !== 'FULL') {
-          baseName += `_${data.exportHalf === 'H1' ? '1-15' : `16-${data.daysInMonth}`}`;
-        }
+        baseName += segmentSuffix;
         baseName += templateSuffix;
         baseName += presentationSuffix;
         if (usedNames.has(baseName)) {

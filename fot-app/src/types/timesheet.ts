@@ -99,6 +99,13 @@ export interface IProductionCalendarMonth {
   mandatory_holidays: string[];
 }
 
+export interface ITimesheetDepartmentApprovalSummary {
+  id: number;
+  start_date: string;
+  end_date: string;
+  status: 'draft' | 'submitted' | 'approved' | 'rejected' | 'returned';
+}
+
 export interface TimesheetResponse {
   employees: TimesheetEmployee[];
   entries: TimesheetEntry[];
@@ -107,6 +114,8 @@ export interface TimesheetResponse {
   schedules?: Record<number, IResolvedSchedule>;
   daily_schedules?: Record<number, Record<string, IResolvedSchedule>>;
   calendar?: IProductionCalendarMonth | null;
+  approvals?: ITimesheetDepartmentApprovalSummary[];
+  approval_locked_dates?: string[];
 }
 
 export interface IAssignedEmployeeDepartment {

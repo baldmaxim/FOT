@@ -525,14 +525,14 @@ export interface IProductionCalendarMonth {
 }
 
 export type TimesheetApprovalStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'returned';
-export type TimesheetApprovalHalf = 'H1' | 'H2';
 export type TimesheetResponsibleRole = 'primary' | 'backup';
 export type TimesheetApprovalEventAction = 'submitted' | 'approved' | 'rejected' | 'returned_to_rework';
 
 export interface TimesheetApproval {
   id: number;
   department_id: string;
-  period: string;
+  start_date: string;
+  end_date: string;
   status: TimesheetApprovalStatus;
   submitted_by: string | null;
   submitted_at: string | null;
@@ -547,7 +547,8 @@ export interface TimesheetApprovalEvent {
   id: number;
   approval_id: number;
   department_id: string;
-  period: string;
+  start_date: string;
+  end_date: string;
   action: TimesheetApprovalEventAction;
   from_status: TimesheetApprovalStatus | null;
   to_status: Exclude<TimesheetApprovalStatus, 'draft'>;

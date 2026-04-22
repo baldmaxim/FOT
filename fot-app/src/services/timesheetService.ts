@@ -15,6 +15,8 @@ interface TimesheetFilters {
   department_id?: string;
   employee_id?: number;
   half?: TimesheetExportHalf;
+  from?: string; // YYYY-MM-DD (приоритетнее half)
+  to?: string;
 }
 
 type TimesheetExportHalf = 'H1' | 'H2' | 'FULL';
@@ -43,7 +45,12 @@ export const timesheetService = {
     params.append('month', filters.month);
     if (filters.department_id) params.append('department_id', filters.department_id);
     if (filters.employee_id) params.append('employee_id', String(filters.employee_id));
-    if (filters.half) params.append('half', filters.half);
+    if (filters.from && filters.to) {
+      params.append('from', filters.from);
+      params.append('to', filters.to);
+    } else if (filters.half) {
+      params.append('half', filters.half);
+    }
     const res = await apiClient.get<ApiResponse<TimesheetResponse>>(`/timesheet?${params.toString()}`);
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки табеля');
     return res.data;
@@ -52,10 +59,17 @@ export const timesheetService = {
   async getOverview(filters: {
     month: string;
     half?: TimesheetExportHalf;
+    from?: string;
+    to?: string;
   }): Promise<ManagedDepartmentTimesheetSummary[]> {
     const params = new URLSearchParams();
     params.append('month', filters.month);
-    if (filters.half) params.append('half', filters.half);
+    if (filters.from && filters.to) {
+      params.append('from', filters.from);
+      params.append('to', filters.to);
+    } else if (filters.half) {
+      params.append('half', filters.half);
+    }
     const res = await apiClient.get<ApiResponse<ManagedDepartmentTimesheetSummary[]>>(`/timesheet/overview?${params.toString()}`);
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки обзора табелей');
     return res.data;
@@ -158,6 +172,8 @@ export const timesheetService = {
     month: string;
     department_ids: string[];
     half?: TimesheetExportHalf;
+    from?: string;
+    to?: string;
     group_by?: TimesheetExportGrouping;
     presentation?: TimesheetExportPresentation;
     export_as_1c?: boolean;
@@ -181,6 +197,8 @@ export const timesheetService = {
   async exportAssigned(filters: {
     month: string;
     half?: TimesheetExportHalf;
+    from?: string;
+    to?: string;
     group_by?: TimesheetExportGrouping;
     presentation?: TimesheetExportPresentation;
     export_as_1c?: boolean;
@@ -229,7 +247,12 @@ export const timesheetService = {
     params.append('month', filters.month);
     if (filters.department_id) params.append('department_id', filters.department_id);
     if (filters.employee_id) params.append('employee_id', String(filters.employee_id));
-    if (filters.half) params.append('half', filters.half);
+    if (filters.from && filters.to) {
+      params.append('from', filters.from);
+      params.append('to', filters.to);
+    } else if (filters.half) {
+      params.append('half', filters.half);
+    }
     if (filters.presentation) params.append('presentation', filters.presentation);
 
     const response = await fetch(

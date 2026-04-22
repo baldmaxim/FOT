@@ -24,7 +24,11 @@ import type { IResolvedSchedule } from '../../types/schedule';
 import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
 import { getScheduleForTimesheetDay, getWorkHoursForDay } from '../../utils/scheduleUtils';
 import { useIsMobile } from '../../hooks/useIsMobile';
-import { formatTimesheetHalfLabel, type TimesheetApprovalHalf } from '../../utils/timesheetApprovalPeriod';
+import {
+  clampRangeToMonth,
+  formatTimesheetRangeLabel,
+  getDefaultRangeForMonth,
+} from '../../utils/timesheetApprovalPeriod';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
 import { type IFlatDepartmentOption, getTreeFlatDepartments, filterDepartmentTreeByIds } from '../../utils/departmentUtils';
 import './TimesheetPage.css';
@@ -68,7 +72,6 @@ interface IObjectModalTarget {
   object_name: string;
 }
 
-type TimesheetDisplaySegment = TimesheetApprovalHalf | 'FULL';
 type TimesheetViewMode = 'employees' | 'objects';
 
 const APPROVAL_STATUS_META: Record<'draft' | 'submitted' | 'approved' | 'rejected' | 'returned', string> = {
@@ -162,7 +165,8 @@ export const TimesheetPage: FC = () => {
   const isTimesheetDepartmentScope = !canManageAllDepartments && isDepartmentScope && canViewManagedTimesheet;
   const isMultiDepartmentManager = isTimesheetDepartmentScope && managedDepartmentIds.length > 1;
   const queryMonth = searchParams.get('month');
-  const queryHalf = searchParams.get('half');
+  const queryFrom = searchParams.get('from');
+  const queryTo = searchParams.get('to');
   const queryView = searchParams.get('view');
   const queryMode = searchParams.get('mode');
   const queryAssignee = searchParams.get('assignee');
@@ -265,29 +269,33 @@ export const TimesheetPage: FC = () => {
 
   const monthStr = useMemo(() => `${year}-${String(month).padStart(2, '0')}`, [year, month]);
   const daysInMonth = useMemo(() => getDaysInMonth(year, month), [year, month]);
-  const isPastMonth = resolvedMonthIndex < currentMonthIndex;
-  const activeSegment = useMemo<TimesheetDisplaySegment>(() => {
-    if (queryHalf === 'FULL') return 'FULL';
-    if (queryHalf === 'H1' || queryHalf === 'H2') return queryHalf;
-    if (isPastMonth) return 'FULL';
-    if (resolvedMonthIndex === currentMonthIndex && currentDay > 15) return 'H2';
-    return 'H1';
-  }, [queryHalf, isPastMonth, resolvedMonthIndex, currentMonthIndex, currentDay]);
+  const activeRange = useMemo(() => {
+    const defaultRange = getDefaultRangeForMonth(monthStr) || {
+      startDate: `${monthStr}-01`,
+      endDate: `${monthStr}-${String(daysInMonth).padStart(2, '0')}`,
+    };
+    if (!queryFrom || !queryTo) return defaultRange;
+    const clamped = clampRangeToMonth({ startDate: queryFrom, endDate: queryTo }, monthStr);
+    return clamped ?? defaultRange;
+  }, [monthStr, daysInMonth, queryFrom, queryTo]);
+  const rangeStart = activeRange.startDate;
+  const rangeEnd = activeRange.endDate;
   const activeGridDeptId = timesheetMode === 'assigned' ? assignedExpandedDeptId : effectiveSelectedDeptId;
   const timesheetQuery = useQuery({
-    queryKey: ['timesheet-page', monthStr, activeSegment, activeGridDeptId ?? 'none'],
+    queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'],
     queryFn: () => timesheetService.getAll({
       month: monthStr,
       department_id: activeGridDeptId || undefined,
-      half: activeSegment,
+      from: rangeStart,
+      to: rangeEnd,
     }),
     enabled: Boolean(activeGridDeptId),
     staleTime: 30_000,
     placeholderData: previousData => previousData,
   });
   const overviewQuery = useQuery({
-    queryKey: ['timesheet-overview', monthStr, activeSegment],
-    queryFn: () => timesheetService.getOverview({ month: monthStr, half: activeSegment }),
+    queryKey: ['timesheet-overview', monthStr, rangeStart, rangeEnd],
+    queryFn: () => timesheetService.getOverview({ month: monthStr, from: rangeStart, to: rangeEnd }),
     enabled: timesheetMode === 'department' && isMultiDepartmentManager,
     staleTime: 30_000,
     placeholderData: previousData => previousData,
@@ -321,14 +329,17 @@ export const TimesheetPage: FC = () => {
     placeholderData: previousData => previousData,
   });
   const visibleDays = useMemo(() => {
-    if (activeSegment === 'FULL') {
-      return Array.from({ length: daysInMonth }, (_, index) => index + 1);
+    const start = Number.parseInt(rangeStart.slice(-2), 10);
+    const end = Number.parseInt(rangeEnd.slice(-2), 10);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+      return [];
     }
-    if (activeSegment === 'H1') {
-      return Array.from({ length: Math.min(15, daysInMonth) }, (_, index) => index + 1);
-    }
-    return Array.from({ length: Math.max(0, daysInMonth - 15) }, (_, index) => index + 16);
-  }, [activeSegment, daysInMonth]);
+    return Array.from({ length: end - start + 1 }, (_, index) => start + index);
+  }, [rangeStart, rangeEnd]);
+  const lockedDateSet = useMemo(() => {
+    const raw = (timesheetQuery.data as { approval_locked_dates?: string[] } | undefined)?.approval_locked_dates;
+    return new Set<string>(Array.isArray(raw) ? raw : []);
+  }, [timesheetQuery.data]);
   const entryMap = useMemo(() => {
     const map = new Map<string, TimesheetEntry>();
     for (const entry of entries) {
@@ -390,6 +401,8 @@ export const TimesheetPage: FC = () => {
       const next = new URLSearchParams(current);
       next.set('month', `${nextYear}-${String(nextMonth).padStart(2, '0')}`);
       next.delete('half');
+      next.delete('from');
+      next.delete('to');
       return next;
     });
   }, [clearBulkState, setSearchParams]);
@@ -432,6 +445,10 @@ export const TimesheetPage: FC = () => {
   const handleDayClick = (emp: TimesheetEmployee, day: number, entry: TimesheetEntry | null) => {
     if (bulkModeEnabled && viewMode === 'employees') return;
     const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    if (isTimesheetDepartmentScope && lockedDateSet.has(workDate)) {
+      toast.info?.('Период согласован — редактирование закрыто');
+      return;
+    }
     const dayObjectEntries = objectEntriesByEmployeeDate.get(emp.id)?.get(workDate) || [];
     setModalEmployee(emp);
     setModalDay(day);
@@ -468,6 +485,11 @@ export const TimesheetPage: FC = () => {
     target: IObjectModalTarget,
     objectEntry: TimesheetObjectEntry | null,
   ) => {
+    const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    if (isTimesheetDepartmentScope && lockedDateSet.has(workDate)) {
+      toast.info?.('Период согласован — редактирование закрыто');
+      return;
+    }
     setModalEmployee(emp);
     setModalDay(day);
     setModalEntry(entryMap.get(`${emp.id}_${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`) || null);
@@ -497,13 +519,13 @@ export const TimesheetPage: FC = () => {
       }
       closeModal();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, activeSegment, effectiveSelectedDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-overview'] }),
       ]);
     } catch (err) {
       console.error('Save correction error:', err);
     }
-  }, [modalEmployee, year, month, modalDay, modalEntry, closeModal, queryClient, monthStr, activeSegment, effectiveSelectedDeptId]);
+  }, [modalEmployee, year, month, modalDay, modalEntry, closeModal, queryClient, monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId]);
 
   const handleSaveObjectCorrection = useCallback(async (_status: TimesheetStatus, hours: number | null, notes: string) => {
     if (!modalEmployee || !modalObjectTarget || hours == null) return;
@@ -520,14 +542,14 @@ export const TimesheetPage: FC = () => {
       });
       closeModal();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, activeSegment, effectiveSelectedDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-overview'] }),
       ]);
     } catch (error) {
       console.error('Save object correction error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось сохранить корректировку по объекту');
     }
-  }, [modalEmployee, modalObjectTarget, year, month, modalDay, closeModal, queryClient, monthStr, activeSegment, effectiveSelectedDeptId, toast]);
+  }, [modalEmployee, modalObjectTarget, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId, toast]);
 
   const handleDeleteObjectCorrection = useCallback(async () => {
     if (!modalEmployee || !modalObjectTarget || !modalObjectEntry?.adjustment_id) return;
@@ -540,19 +562,20 @@ export const TimesheetPage: FC = () => {
       });
       closeModal();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, activeSegment, effectiveSelectedDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-overview'] }),
       ]);
     } catch (error) {
       console.error('Delete object correction error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку по объекту');
     }
-  }, [modalEmployee, modalObjectTarget, modalObjectEntry?.adjustment_id, year, month, modalDay, closeModal, queryClient, monthStr, activeSegment, effectiveSelectedDeptId, toast]);
+  }, [modalEmployee, modalObjectTarget, modalObjectEntry?.adjustment_id, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId, toast]);
 
   // Export
   const canExport = timesheetMode === 'assigned'
     ? Boolean(selectedAssigneeId)
     : Boolean(effectiveSelectedDeptId);
+  const exportPresentation: 'hr' | 'manager' = isTimesheetDepartmentScope ? 'manager' : 'hr';
 
   const handleExport = async (presentation: 'hr' | 'manager' = 'hr') => {
     if (!canExport) {
@@ -561,9 +584,10 @@ export const TimesheetPage: FC = () => {
     }
     try {
       const monthStr = `${year}-${String(month).padStart(2, '0')}`;
-      const segmentSuffix = activeSegment === 'FULL'
-        ? ''
-        : `_${activeSegment === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
+      const startDay = Number.parseInt(rangeStart.slice(-2), 10);
+      const endDay = Number.parseInt(rangeEnd.slice(-2), 10);
+      const isFullMonth = startDay === 1 && endDay === daysInMonth;
+      const segmentSuffix = isFullMonth ? '' : `_${startDay}-${endDay}`;
       const monthName = MONTH_NAMES_RU[month];
       const presentationSuffix = presentation === 'manager' ? '_Руководитель' : '';
 
@@ -573,7 +597,8 @@ export const TimesheetPage: FC = () => {
       if (timesheetMode === 'assigned' && selectedAssigneeId) {
         blob = await timesheetService.exportAssigned({
           month: monthStr,
-          half: activeSegment,
+          from: rangeStart,
+          to: rangeEnd,
           employee_ids: [selectedAssigneeId],
           group_by: viewMode,
           presentation,
@@ -585,7 +610,8 @@ export const TimesheetPage: FC = () => {
       } else if (viewMode === 'objects' && effectiveSelectedDeptId) {
         blob = await timesheetService.exportMass({
           month: monthStr,
-          half: activeSegment,
+          from: rangeStart,
+          to: rangeEnd,
           department_ids: [effectiveSelectedDeptId],
           group_by: 'objects',
           presentation,
@@ -595,7 +621,8 @@ export const TimesheetPage: FC = () => {
         blob = await timesheetService.export({
           month: monthStr,
           department_id: effectiveSelectedDeptId || undefined,
-          half: activeSegment,
+          from: rangeStart,
+          to: rangeEnd,
           presentation,
         });
         filename = `${selectedDeptName}_${monthName}_${year}${segmentSuffix}${presentationSuffix}.xlsx`;
@@ -665,7 +692,7 @@ export const TimesheetPage: FC = () => {
       });
       toast.success(`Сотрудник ${candidate.full_name} переведён в отдел ${selectedDeptName} с ${effectiveFrom}`);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, activeSegment, activeGridDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-overview'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-team-search'] }),
       ]);
@@ -676,7 +703,7 @@ export const TimesheetPage: FC = () => {
     } finally {
       setTeamPendingEmployeeId(null);
     }
-  }, [activeSegment, activeGridDeptId, monthStr, queryClient, selectedDeptName, toast]);
+  }, [rangeStart, rangeEnd, activeGridDeptId, monthStr, queryClient, selectedDeptName, toast]);
 
   const handleExcludeEmployeeFromDepartment = useCallback(async (employee: TimesheetEmployee) => {
     if (!activeGridDeptId) return;
@@ -697,7 +724,7 @@ export const TimesheetPage: FC = () => {
       }
       toast.success(`Сотрудник ${employee.full_name} исключён из табеля`);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, activeSegment, activeGridDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-overview'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-team-search'] }),
       ]);
@@ -707,7 +734,7 @@ export const TimesheetPage: FC = () => {
     } finally {
       setTeamPendingEmployeeId(null);
     }
-  }, [activeSegment, activeGridDeptId, monthStr, panelEmployee?.id, queryClient, toast]);
+  }, [rangeStart, rangeEnd, activeGridDeptId, monthStr, panelEmployee?.id, queryClient, toast]);
 
   const modalDefaultHours = useMemo(() => {
     if (modalMode === 'object') {
@@ -1026,7 +1053,7 @@ export const TimesheetPage: FC = () => {
 
         clearBulkState();
         await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, activeSegment, activeGridDeptId ?? 'none'] }),
+          queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
           queryClient.invalidateQueries({ queryKey: ['timesheet-overview'] }),
         ]);
         toast.success(`Корректировка по объектам применена для ${bulkObjectTargets.length} ячеек`);
@@ -1050,7 +1077,7 @@ export const TimesheetPage: FC = () => {
 
       clearBulkState();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, activeSegment, activeGridDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-overview'] }),
       ]);
       toast.success(`Корректировка применена для ${result.processed} ячеек`);
@@ -1065,7 +1092,8 @@ export const TimesheetPage: FC = () => {
     clearBulkState,
     queryClient,
     monthStr,
-    activeSegment,
+    rangeStart,
+    rangeEnd,
     activeGridDeptId,
     toast,
   ]);
@@ -1117,15 +1145,31 @@ export const TimesheetPage: FC = () => {
     bulkTargets.length,
   ]);
 
-  const handleSegmentChange = useCallback((segment: TimesheetDisplaySegment) => {
+  const handleRangeChange = useCallback((startDate: string, endDate: string) => {
     clearBulkState();
+    const clamped = clampRangeToMonth({ startDate, endDate }, monthStr)
+      ?? { startDate: `${monthStr}-01`, endDate: `${monthStr}-${String(daysInMonth).padStart(2, '0')}` };
     setSearchParams(current => {
       const next = new URLSearchParams(current);
       next.set('month', monthStr);
-      next.set('half', segment);
+      next.set('from', clamped.startDate);
+      next.set('to', clamped.endDate);
+      next.delete('half');
       return next;
     });
-  }, [clearBulkState, monthStr, setSearchParams]);
+  }, [clearBulkState, monthStr, daysInMonth, setSearchParams]);
+
+  const handleRangePreset = useCallback((preset: 'H1' | 'H2' | 'FULL') => {
+    const monthPad = String(month).padStart(2, '0');
+    if (preset === 'H1') {
+      handleRangeChange(`${year}-${monthPad}-01`, `${year}-${monthPad}-${String(Math.min(15, daysInMonth)).padStart(2, '0')}`);
+    } else if (preset === 'H2') {
+      if (daysInMonth < 16) return;
+      handleRangeChange(`${year}-${monthPad}-16`, `${year}-${monthPad}-${String(daysInMonth).padStart(2, '0')}`);
+    } else {
+      handleRangeChange(`${year}-${monthPad}-01`, `${year}-${monthPad}-${String(daysInMonth).padStart(2, '0')}`);
+    }
+  }, [year, month, daysInMonth, handleRangeChange]);
 
   const handleViewModeChange = useCallback((nextViewMode: TimesheetViewMode) => {
     clearBulkState();
@@ -1356,29 +1400,78 @@ export const TimesheetPage: FC = () => {
   const selectorControl = timesheetMode === 'assigned' ? assigneeControl : departmentControl;
   const isAssignedMode = timesheetMode === 'assigned';
 
+  const monthBoundsFirst = `${year}-${String(month).padStart(2, '0')}-01`;
+  const monthBoundsLast = `${year}-${String(month).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
+  const isPresetH1 = rangeStart === monthBoundsFirst
+    && rangeEnd === `${year}-${String(month).padStart(2, '0')}-${String(Math.min(15, daysInMonth)).padStart(2, '0')}`;
+  const isPresetH2 = daysInMonth >= 16
+    && rangeStart === `${year}-${String(month).padStart(2, '0')}-16`
+    && rangeEnd === monthBoundsLast;
+  const isPresetFull = rangeStart === monthBoundsFirst && rangeEnd === monthBoundsLast;
+
   const segmentControl = (isAssignedMode ? selectedAssigneeId : effectiveSelectedDeptId) ? (
-    <section className="ts-half-switch">
-      {(['H1', 'H2'] as TimesheetApprovalHalf[]).map(half => (
+    <section className="ts-range-control">
+      <div className="ts-range-inputs">
+        <label className="ts-range-label">
+          <span>С</span>
+          <input
+            type="date"
+            className="ts-range-input"
+            value={rangeStart}
+            min={monthBoundsFirst}
+            max={monthBoundsLast}
+            onChange={e => {
+              const nextStart = e.target.value;
+              if (!nextStart) return;
+              const nextEnd = nextStart > rangeEnd ? nextStart : rangeEnd;
+              handleRangeChange(nextStart, nextEnd);
+            }}
+          />
+        </label>
+        <label className="ts-range-label">
+          <span>по</span>
+          <input
+            type="date"
+            className="ts-range-input"
+            value={rangeEnd}
+            min={rangeStart}
+            max={monthBoundsLast}
+            onChange={e => {
+              const nextEnd = e.target.value;
+              if (!nextEnd) return;
+              handleRangeChange(rangeStart, nextEnd);
+            }}
+          />
+        </label>
+      </div>
+      <div className="ts-range-presets">
         <button
-          key={half}
           type="button"
-          className={`ts-half-chip ${activeSegment === half ? ' ts-half-chip--active' : ''}`}
-          onClick={() => handleSegmentChange(half)}
+          className={`ts-half-chip${isPresetH1 ? ' ts-half-chip--active' : ''}`}
+          onClick={() => handleRangePreset('H1')}
         >
-          <span className="ts-half-chip-label">{formatTimesheetHalfLabel(half, year, month)}</span>
-          <span className="ts-half-chip-subtitle">
-            {half === 'H1' ? 'Первая половина' : 'Вторая половина'}
-          </span>
+          <span className="ts-half-chip-label">1–15</span>
+          <span className="ts-half-chip-subtitle">Первая половина</span>
         </button>
-      ))}
-      <button
-        type="button"
-        className={`ts-half-chip ${activeSegment === 'FULL' ? ' ts-half-chip--active' : ''}`}
-        onClick={() => handleSegmentChange('FULL')}
-      >
-        <span className="ts-half-chip-label">Весь месяц</span>
-        <span className="ts-half-chip-subtitle">Полный табель</span>
-      </button>
+        {daysInMonth >= 16 && (
+          <button
+            type="button"
+            className={`ts-half-chip${isPresetH2 ? ' ts-half-chip--active' : ''}`}
+            onClick={() => handleRangePreset('H2')}
+          >
+            <span className="ts-half-chip-label">16–{daysInMonth}</span>
+            <span className="ts-half-chip-subtitle">Вторая половина</span>
+          </button>
+        )}
+        <button
+          type="button"
+          className={`ts-half-chip${isPresetFull ? ' ts-half-chip--active' : ''}`}
+          onClick={() => handleRangePreset('FULL')}
+        >
+          <span className="ts-half-chip-label">Весь месяц</span>
+          <span className="ts-half-chip-subtitle">{formatTimesheetRangeLabel(monthBoundsFirst, monthBoundsLast)}</span>
+        </button>
+      </div>
     </section>
   ) : null;
   const viewControl = (isAssignedMode ? selectedAssigneeId : effectiveSelectedDeptId) ? (
@@ -1467,23 +1560,12 @@ export const TimesheetPage: FC = () => {
                 <button
                   type="button"
                   className="ts-btn ts-btn--icon"
-                  onClick={() => handleExport('hr')}
+                  onClick={() => handleExport(exportPresentation)}
                   disabled={!canExport}
-                  aria-label="Экспорт: факт"
-                  title="Выгрузить факт"
+                  aria-label="Экспорт табеля"
+                  title={exportPresentation === 'manager' ? 'Экспорт (урезано по графику)' : 'Экспорт'}
                 >
                   <Download size={16} />
-                </button>
-                <button
-                  type="button"
-                  className="ts-btn ts-btn--icon"
-                  onClick={() => handleExport('manager')}
-                  disabled={!canExport}
-                  aria-label="Экспорт: руководитель"
-                  title="Выгрузить для руководителя (урезано по графику)"
-                >
-                  <Download size={16} />
-                  <span style={{ fontSize: 10, marginLeft: 2 }}>Р</span>
                 </button>
               </div>
             </div>
@@ -1498,6 +1580,8 @@ export const TimesheetPage: FC = () => {
                 <TimesheetApprovalBar
                   departmentId={effectiveSelectedDeptId}
                   month={`${year}-${String(month).padStart(2, '0')}`}
+                  startDate={rangeStart}
+                  endDate={rangeEnd}
                   compact
                   allowReview={false}
                 />
@@ -1518,6 +1602,8 @@ export const TimesheetPage: FC = () => {
                   <TimesheetApprovalBar
                     departmentId={effectiveSelectedDeptId}
                     month={`${year}-${String(month).padStart(2, '0')}`}
+                    startDate={rangeStart}
+                    endDate={rangeEnd}
                     allowReview={false}
                   />
                 </div>
@@ -1530,19 +1616,15 @@ export const TimesheetPage: FC = () => {
           <div className="ts-toolbar">
             <div className="ts-toolbar-left">
               <TimesheetStats stats={stats} />
-              <button type="button" className="ts-btn" onClick={() => handleExport('hr')} disabled={!canExport}>
-                <Download size={16} />
-                Факт
-              </button>
               <button
                 type="button"
                 className="ts-btn"
-                onClick={() => handleExport('manager')}
+                onClick={() => handleExport(exportPresentation)}
                 disabled={!canExport}
-                title="Табель урезан по графику работы"
+                title={exportPresentation === 'manager' ? 'Табель урезан по графику работы' : undefined}
               >
                 <Download size={16} />
-                Руководитель
+                Экспорт
               </button>
             </div>
             <div className="ts-toolbar-right">
@@ -1682,6 +1764,8 @@ export const TimesheetPage: FC = () => {
                           <TimesheetApprovalBar
                             departmentId={dept.id}
                             month={`${year}-${String(month).padStart(2, '0')}`}
+                            startDate={rangeStart}
+                            endDate={rangeEnd}
                             allowReview={false}
                           />
                         </div>
@@ -1781,6 +1865,8 @@ export const TimesheetPage: FC = () => {
                         <TimesheetApprovalBar
                           departmentId={effectiveSelectedDeptId}
                           month={`${year}-${String(month).padStart(2, '0')}`}
+                          startDate={rangeStart}
+                          endDate={rangeEnd}
                           allowReview={false}
                         />
                       </div>

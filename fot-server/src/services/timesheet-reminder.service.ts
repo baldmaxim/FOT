@@ -4,6 +4,7 @@ import { pushService } from './push.service.js';
 import { settingsService } from './settings.service.js';
 import {
   formatTimesheetHalfLabel,
+  getTimesheetPeriodDateRange,
   getTimesheetReminderEventsForDate,
   type ITimesheetReminderEvent,
   parseTimesheetApprovalPeriod,
@@ -20,9 +21,9 @@ let startupTimeout: ReturnType<typeof setTimeout> | null = null;
 let runInFlight: Promise<void> | null = null;
 
 function getTimesheetPath(period: string, stage: string): string {
-  const parsed = parseTimesheetApprovalPeriod(period);
-  if (!parsed) return '/timesheet';
-  return `/timesheet?month=${parsed.year}-${String(parsed.month).padStart(2, '0')}&half=${parsed.half}&stage=${stage}`;
+  const range = getTimesheetPeriodDateRange(period);
+  if (!range) return '/timesheet';
+  return `/timesheet?from=${range.startDate}&to=${range.endDate}&stage=${stage}`;
 }
 
 function buildDepartmentReminderMessage(period: string, departmentName: string, stage: string): { title: string; body: string } {
@@ -105,17 +106,33 @@ async function loadDepartmentNameMap(departmentIds: string[]): Promise<Map<strin
 async function loadApprovalStatusMap(period: string, departmentIds: string[]): Promise<Map<string, string>> {
   if (departmentIds.length === 0) return new Map();
 
+  const range = getTimesheetPeriodDateRange(period);
+  if (!range) return new Map();
+
+  // Берём все submitted/approved диапазоны, которые полностью покрывают полумесячный период.
+  // «Полностью» = approval.start_date <= range.start AND approval.end_date >= range.end.
+  // Если покрытие частичное — напоминание отправляем: период не закрыт.
   const { data, error } = await supabase
     .from('timesheet_approvals')
-    .select('department_id, status')
-    .eq('period', period)
-    .in('department_id', departmentIds);
+    .select('department_id, status, start_date, end_date')
+    .in('department_id', departmentIds)
+    .in('status', ['submitted', 'approved'])
+    .lte('start_date', range.startDate)
+    .gte('end_date', range.endDate);
 
   if (error) {
     throw error;
   }
 
-  return new Map((data || []).map(item => [item.department_id as string, item.status as string]));
+  const result = new Map<string, string>();
+  for (const item of data || []) {
+    const existing = result.get(item.department_id as string);
+    // 'approved' приоритетнее 'submitted' — чтобы одно покрытие approved не перекрывалось submitted.
+    if (!existing || existing === 'submitted') {
+      result.set(item.department_id as string, item.status as string);
+    }
+  }
+  return result;
 }
 
 async function hasReminderLog(departmentId: string, period: string, userId: string, stage: string): Promise<boolean> {

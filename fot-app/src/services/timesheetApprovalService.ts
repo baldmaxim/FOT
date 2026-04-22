@@ -1,14 +1,14 @@
 import { apiClient } from '../api/client';
 
 export type TimesheetApprovalStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'returned';
-export type TimesheetApprovalHalf = 'H1' | 'H2';
 export type TimesheetApprovalEventAction = 'submitted' | 'approved' | 'rejected' | 'returned_to_rework';
 export type TimesheetResolvedApprovalStatus = 'submitted' | 'approved' | 'rejected' | 'returned';
 
 export interface ITimesheetApproval {
   id: number;
   department_id: string;
-  period: string;
+  start_date: string;
+  end_date: string;
   status: TimesheetApprovalStatus;
   submitted_by: string | null;
   submitted_at: string | null;
@@ -23,7 +23,8 @@ export interface ITimesheetApprovalEvent {
   id: number;
   approval_id: number;
   department_id: string;
-  period: string;
+  start_date: string;
+  end_date: string;
   action: TimesheetApprovalEventAction;
   from_status: TimesheetApprovalStatus | null;
   to_status: TimesheetResolvedApprovalStatus;
@@ -66,13 +67,24 @@ interface ApiResponse<T> {
 }
 
 export const timesheetApprovalService = {
-  submit: async (department_id: string, period: string) => {
-    const res = await apiClient.post<ApiResponse<ITimesheetApproval>>('/timesheet-approvals/submit', { department_id, period });
+  submit: async (department_id: string, start_date: string, end_date: string) => {
+    const res = await apiClient.post<ApiResponse<ITimesheetApproval>>('/timesheet-approvals/submit', {
+      department_id,
+      start_date,
+      end_date,
+    });
     return res.data;
   },
 
-  getStatus: async (department_id: string, period: string) => {
-    const res = await apiClient.get<ApiResponse<ITimesheetApproval | null>>(`/timesheet-approvals/status?department_id=${encodeURIComponent(department_id)}&period=${encodeURIComponent(period)}`);
+  getStatus: async (department_id: string, start_date: string, end_date: string) => {
+    const params = new URLSearchParams({ department_id, start_date, end_date });
+    const res = await apiClient.get<ApiResponse<ITimesheetApproval | null>>(`/timesheet-approvals/status?${params.toString()}`);
+    return res.data;
+  },
+
+  listDepartment: async (department_id: string, month: string) => {
+    const params = new URLSearchParams({ department_id, month });
+    const res = await apiClient.get<ApiResponse<ITimesheetApproval[]>>(`/timesheet-approvals/department?${params.toString()}`);
     return res.data;
   },
 

@@ -34,6 +34,7 @@ interface ITimesheetGridProps {
   visibleDays?: number[];
   selectedCellKeys?: Set<string>;
   splitDayKeys?: Set<string>;
+  lockedDates?: Set<string>;
   canManageTeam?: boolean;
   pendingEmployeeId?: number | null;
   onBulkSelectionChange?: (cellKeys: Set<string>) => void;
@@ -246,6 +247,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   visibleDays,
   selectedCellKeys = EMPTY_CELL_SELECTION,
   splitDayKeys = EMPTY_CELL_SELECTION,
+  lockedDates,
   canManageTeam = false,
   pendingEmployeeId = null,
   onBulkSelectionChange,
