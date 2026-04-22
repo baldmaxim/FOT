@@ -56,6 +56,10 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
     return { error: { status: 403, message: 'Недостаточно прав для экспорта назначенных' } };
   }
 
+  // Источники в employee_department_access:
+  //   'sigur_sync' — членство (миграция 049 + employee-lifecycle), в HR-список не включаем.
+  //   остальные (manual_admin_ui, excel_admin_ui, manager_excel_admin_ui, …) — ручные
+  //   назначения начальников участков, их и показываем.
   let accessQuery = supabase
     .from('employee_department_access')
     .select(`
@@ -65,7 +69,7 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
       org_departments!inner(id, kind, is_active)
     `)
     .eq('is_active', true)
-    .eq('source', 'manual_admin_ui')
+    .neq('source', 'sigur_sync')
     .eq('employees.employment_status', 'active')
     .eq('employees.is_archived', false)
     .eq('employees.excluded_from_timesheet', false)
