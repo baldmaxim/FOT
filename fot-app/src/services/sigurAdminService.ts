@@ -164,7 +164,6 @@ export const sigurAdminService = {
     departmentId?: number | null;
     search?: string;
     blocked?: boolean;
-    includeChildren?: boolean;
     page?: number;
     pageSize?: number;
     connection?: SigurConnectionScope;
@@ -173,7 +172,6 @@ export const sigurAdminService = {
     if (params?.departmentId != null) searchParams.set('departmentId', String(params.departmentId));
     if (params?.search) searchParams.set('search', params.search);
     if (params?.blocked !== undefined) searchParams.set('blocked', String(params.blocked));
-    if (params?.includeChildren !== undefined) searchParams.set('includeChildren', String(params.includeChildren));
     if (params?.page != null) searchParams.set('page', String(params.page));
     if (params?.pageSize != null) searchParams.set('pageSize', String(params.pageSize));
     if (params?.connection) searchParams.set('connection', params.connection);

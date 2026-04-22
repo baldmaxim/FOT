@@ -129,16 +129,11 @@ export interface ISigurDepartmentUpsertInput {
 }
 
 const ACCESS_POINT_META_CACHE_TTL_MS = 5 * 60 * 1000;
-const SUBTREE_EMPLOYEE_CACHE_TTL_MS = 60 * 1000;
 const EMPLOYEE_CARD_STATUS_CACHE_TTL_MS = 5 * 60 * 1000;
 
 const accessPointObjectMetaCache = createCache<{ map: Map<string, IAccessPointObjectMeta> }>({
   max: 1,
   ttlMs: ACCESS_POINT_META_CACHE_TTL_MS,
-});
-const subtreeEmployeeCache = createCache<{ items: ISigurEmployeeSummary[] }>({
-  max: 100,
-  ttlMs: SUBTREE_EMPLOYEE_CACHE_TTL_MS,
 });
 const employeeCardStatusCache = createCache<ISigurEmployeeCardAccessStatus>({
   max: 10000,
@@ -146,13 +141,6 @@ const employeeCardStatusCache = createCache<ISigurEmployeeCardAccessStatus>({
 });
 
 let accessPointObjectMetaInFlight: Promise<Map<string, IAccessPointObjectMeta>> | null = null;
-
-function buildSubtreeEmployeeCacheKey(
-  departmentId: number,
-  connection?: ConnectionType,
-): string {
-  return `${connection || 'default'}:${departmentId}`;
-}
 
 function buildEmployeeCardStatusCacheKey(
   employeeId: number,
@@ -162,7 +150,6 @@ function buildEmployeeCardStatusCacheKey(
 }
 
 function invalidateSigurDirectoryCaches(): void {
-  subtreeEmployeeCache.clear();
   employeeCardStatusCache.clear();
 }
 
@@ -663,45 +650,6 @@ function buildSearchHaystack(employee: ISigurEmployeeSummary): string {
     .toLocaleLowerCase('ru');
 }
 
-async function getCachedSubtreeEmployees(
-  departmentId: number,
-  departments: Array<{ id: number; parentId: number | null; name: string }>,
-  departmentNameMap: Map<number, string>,
-  connection?: ConnectionType,
-): Promise<ISigurEmployeeSummary[]> {
-  const cacheKey = buildSubtreeEmployeeCacheKey(departmentId, connection);
-  const cached = subtreeEmployeeCache.get(cacheKey);
-  if (cached) {
-    return cached.items;
-  }
-
-  const descendantIds = [...collectSigurDepartmentDescendantIds(departmentId, departments)];
-  let employeesRaw: Record<string, unknown>[];
-
-  try {
-    employeesRaw = await sigurService.getEmployeesByDepartments(descendantIds, connection);
-  } catch (error) {
-    console.warn(
-      '[sigur live admin] subtree employee fetch failed, falling back to full employee cache:',
-      error,
-    );
-    const fallbackEmployees = await sigurService.getEmployeesCached(connection);
-    const allowedDepartmentIds = new Set(descendantIds);
-    employeesRaw = fallbackEmployees.filter(raw => {
-      const departmentIdValue = normalizeInt(resolveField(raw, 'departmentId', 'department_id'));
-      return departmentIdValue != null && allowedDepartmentIds.has(departmentIdValue);
-    });
-  }
-
-  const items = employeesRaw
-    .map(raw => normalizeSigurEmployeeSummary(raw, departmentNameMap))
-    .filter((employee): employee is ISigurEmployeeSummary => !!employee)
-    .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
-
-  subtreeEmployeeCache.set(cacheKey, { items });
-  return items;
-}
-
 async function searchEmployeesDirectly(
   search: string,
   departmentNameMap: Map<number, string>,
@@ -852,7 +800,6 @@ export async function listSigurEmployees(
     departmentId?: number | null;
     search?: string | null;
     blocked?: boolean | null;
-    includeChildren?: boolean | null;
   },
   pagination: { page?: number | null; pageSize?: number | null } = {},
   connection?: ConnectionType,
@@ -866,7 +813,6 @@ export async function listSigurEmployees(
     ? filters.departmentId
     : null;
   const blocked = filters.blocked ?? null;
-  const includeChildren = filters.includeChildren === true;
 
   if (!selectedDepartmentId && search) {
     return searchEmployeesDirectly(
@@ -899,80 +845,30 @@ export async function listSigurEmployees(
   }
 
   const directCounts = await getDirectDepartmentCounts(connection);
-  if (!includeChildren) {
-    if (search) {
-      return searchEmployeesDirectly(
-        search,
-        departmentNameMap,
-        { page: safePage, pageSize: safePageSize },
-        connection,
-        selectedDepartmentId,
-        blocked,
-      );
-    }
-
-    const offset = (safePage - 1) * safePageSize;
-    const items = (await sigurService.getEmployeesPage(
-      { departmentId: selectedDepartmentId, ...(blocked == null ? {} : { blocked }) },
-      { limit: safePageSize, offset },
+  if (search) {
+    return searchEmployeesDirectly(
+      search,
+      departmentNameMap,
+      { page: safePage, pageSize: safePageSize },
       connection,
-    ))
-      .map(raw => normalizeSigurEmployeeSummary(raw, departmentNameMap))
-      .filter((employee): employee is ISigurEmployeeSummary => !!employee)
-      .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
-
-    return {
-      items,
-      total: blocked == null ? (directCounts.get(selectedDepartmentId) || 0) : items.length,
-      page: safePage,
-      pageSize: safePageSize,
-    };
+      selectedDepartmentId,
+      blocked,
+    );
   }
 
-  const subtreeIds = collectSigurDepartmentDescendantIds(selectedDepartmentId, departments);
-  if (subtreeIds.size === 1) {
-    if (search) {
-      return searchEmployeesDirectly(
-        search,
-        departmentNameMap,
-        { page: safePage, pageSize: safePageSize },
-        connection,
-        selectedDepartmentId,
-        blocked,
-      );
-    }
-
-    const offset = (safePage - 1) * safePageSize;
-    const items = (await sigurService.getEmployeesPage(
-      { departmentId: selectedDepartmentId, ...(blocked == null ? {} : { blocked }) },
-      { limit: safePageSize, offset },
-      connection,
-    ))
-      .map(raw => normalizeSigurEmployeeSummary(raw, departmentNameMap))
-      .filter((employee): employee is ISigurEmployeeSummary => !!employee)
-      .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
-
-    return {
-      items,
-      total: blocked == null ? (directCounts.get(selectedDepartmentId) || 0) : items.length,
-      page: safePage,
-      pageSize: safePageSize,
-    };
-  }
-
-  const allItems = await getCachedSubtreeEmployees(selectedDepartmentId, departments, departmentNameMap, connection);
-  const filteredItems = allItems.filter(employee => {
-    if (blocked != null && employee.blocked !== blocked) {
-      return false;
-    }
-    if (!search) return true;
-    return buildSearchHaystack(employee).includes(search);
-  });
-  const startIndex = (safePage - 1) * safePageSize;
+  const offset = (safePage - 1) * safePageSize;
+  const items = (await sigurService.getEmployeesPage(
+    { departmentId: selectedDepartmentId, ...(blocked == null ? {} : { blocked }) },
+    { limit: safePageSize, offset },
+    connection,
+  ))
+    .map(raw => normalizeSigurEmployeeSummary(raw, departmentNameMap))
+    .filter((employee): employee is ISigurEmployeeSummary => !!employee)
+    .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
 
   return {
-    items: filteredItems.slice(startIndex, startIndex + safePageSize),
-    total: filteredItems.length,
+    items,
+    total: blocked == null ? (directCounts.get(selectedDepartmentId) || 0) : items.length,
     page: safePage,
     pageSize: safePageSize,
   };

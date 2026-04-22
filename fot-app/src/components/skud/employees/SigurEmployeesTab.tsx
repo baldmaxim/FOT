@@ -355,7 +355,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [debouncedEmployeeSearch, setDebouncedEmployeeSearch] = useState('');
   const [employeeStatusFilter, setEmployeeStatusFilter] = useState<EmployeeStatusFilter>('all');
-  const [includeChildDepartments, setIncludeChildDepartments] = useState(false);
   const [departmentDialog, setDepartmentDialog] = useState<DepartmentDialogState>(null);
   const [departmentContextMenu, setDepartmentContextMenu] = useState<DepartmentContextMenuState>(null);
   const [employeeDialog, setEmployeeDialog] = useState<EmployeeDialogState>(null);
@@ -389,12 +388,11 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
     : employeeStatusFilter === 'blocked';
 
   const employeesQuery = useQuery({
-    queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'employees', selectedDeptId, debouncedEmployeeSearch, employeeStatusFilter, includeChildDepartments, employeePage],
+    queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'employees', selectedDeptId, debouncedEmployeeSearch, employeeStatusFilter, employeePage],
     queryFn: () => sigurAdminService.getEmployees({
       departmentId: selectedDeptId,
       search: debouncedEmployeeSearch || undefined,
       blocked: blockedFilter,
-      includeChildren: includeChildDepartments,
       page: employeePage,
       pageSize: EMPLOYEES_PAGE_SIZE,
     }),
@@ -520,15 +518,11 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
 
   useEffect(() => {
     setEmployeePage(1);
-  }, [selectedDeptId, debouncedEmployeeSearch, employeeStatusFilter, includeChildDepartments]);
+  }, [selectedDeptId, debouncedEmployeeSearch, employeeStatusFilter]);
 
   useEffect(() => {
     setSelectedEmployeeIds(new Set());
-  }, [selectedDeptId, debouncedEmployeeSearch, employeeStatusFilter, includeChildDepartments]);
-
-  useEffect(() => {
-    setIncludeChildDepartments(false);
-  }, [selectedDeptId]);
+  }, [selectedDeptId, debouncedEmployeeSearch, employeeStatusFilter]);
 
   useEffect(() => {
     if (employeePage <= totalEmployeePages) return;
@@ -879,7 +873,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
         return next;
       });
       setDepartmentSearch('');
-      setIncludeChildDepartments(false);
       setSelectedDeptId(employee.departmentId);
       setEmployeeSearch('');
     }
@@ -1172,22 +1165,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
           </div>
           <div className="ep-toolbar-filters">
             <div className="ep-chip-group">
-              {selectedDeptId != null && (
-                <>
-                  <button
-                    className={`ep-filter-chip ${!includeChildDepartments ? 'active' : ''}`}
-                    onClick={() => setIncludeChildDepartments(false)}
-                  >
-                    Только отдел
-                  </button>
-                  <button
-                    className={`ep-filter-chip ${includeChildDepartments ? 'active' : ''}`}
-                    onClick={() => setIncludeChildDepartments(true)}
-                  >
-                    С подпапками
-                  </button>
-                </>
-              )}
               <button
                 className={`ep-filter-chip ${employeeStatusFilter === 'all' ? 'active' : ''}`}
                 onClick={() => setEmployeeStatusFilter('all')}

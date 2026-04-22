@@ -297,13 +297,8 @@ export const sigurAdminController = {
 
       const search = typeof req.query.search === 'string' ? req.query.search : null;
       const blocked = parseBooleanQuery(req.query.blocked);
-      const includeChildren = parseBooleanQuery(req.query.includeChildren);
       if (blocked === null) {
         res.status(400).json({ success: false, error: 'blocked должен быть boolean' });
-        return;
-      }
-      if (includeChildren === null) {
-        res.status(400).json({ success: false, error: 'includeChildren должен быть boolean' });
         return;
       }
       const page = req.query.page == null ? 1 : parseInteger(req.query.page);
@@ -318,7 +313,7 @@ export const sigurAdminController = {
       }
       const connection = parseConnection(req.query.connection);
       const data = await listSigurEmployees(
-        { departmentId, search, blocked, includeChildren: includeChildren === true },
+        { departmentId, search, blocked },
         { page, pageSize },
         connection,
       );
