@@ -12,6 +12,8 @@ import { employeeChangesService } from './employee-changes.service.js';
 import { employeeCache } from './employee-cache.service.js';
 import { assignEmployeesToArchiveDepartment } from './employee-archive-department.service.js';
 import { invalidatePresencePollingEmployeeCache } from './presence-polling-cache.service.js';
+import { batchMoveSigurEmployees } from './sigur-live-admin.service.js';
+import { settingsService } from './settings.service.js';
 
 // ─── Типы результатов ───
 
@@ -564,6 +566,63 @@ export async function syncEmployeesLogic(
 
   if (autoFired > 0) {
     console.log(`[syncEmployees] auto-fired ${autoFired} employees not found in Sigur`);
+  }
+
+  // Перенос всех fired сотрудников в архивную папку Sigur (идемпотентно).
+  // Сотрудников без sigur_employee_id пропускаем — их нет в Sigur, переносить некуда.
+  try {
+    const sigurSettings = await settingsService.getSigurConnectionSettings();
+    if (!sigurSettings.archiveDepartmentId) {
+      console.warn('[syncEmployees] archive department not configured — skip fired->archive sync');
+    } else {
+      const archiveDepartmentId = sigurSettings.archiveDepartmentId;
+
+      const sigurDeptById = new Map<number, number | null>();
+      for (const emp of sigurEmployees) {
+        if (emp.id != null) sigurDeptById.set(emp.id, emp.departmentId ?? null);
+      }
+
+      const { data: firedRows, error: firedErr } = await supabase
+        .from('employees')
+        .select('id, sigur_employee_id')
+        .eq('employment_status', 'fired')
+        .not('sigur_employee_id', 'is', null);
+
+      if (firedErr) {
+        errors.push(`fired->archive select: ${firedErr.message}`);
+      } else {
+        const toMove: number[] = [];
+        let skippedNotInSigur = 0;
+        let skippedAlreadyArchived = 0;
+
+        for (const row of firedRows ?? []) {
+          const sid = row.sigur_employee_id as number | null;
+          if (sid == null) continue;
+          if (!sigurDeptById.has(sid)) { skippedNotInSigur++; continue; }
+          if (sigurDeptById.get(sid) === archiveDepartmentId) { skippedAlreadyArchived++; continue; }
+          toMove.push(sid);
+        }
+
+        if (toMove.length > 0) {
+          const moveResult = await batchMoveSigurEmployees(toMove, archiveDepartmentId, connection);
+          console.log(
+            `[syncEmployees] fired->archive moved=${moveResult.moved}/${moveResult.requested} ` +
+            `failed=${moveResult.failedIds.length} skipped_not_in_sigur=${skippedNotInSigur} ` +
+            `skipped_already_archived=${skippedAlreadyArchived}`,
+          );
+          if (moveResult.failedIds.length > 0) {
+            errors.push(`fired->archive failed ids: ${moveResult.failedIds.join(',')}`);
+          }
+        } else if (skippedNotInSigur > 0 || skippedAlreadyArchived > 0) {
+          console.log(
+            `[syncEmployees] fired->archive moved=0 ` +
+            `skipped_not_in_sigur=${skippedNotInSigur} skipped_already_archived=${skippedAlreadyArchived}`,
+          );
+        }
+      }
+    }
+  } catch (archiveSyncErr) {
+    errors.push(`fired->archive sync: ${(archiveSyncErr as Error).message}`);
   }
 
   console.log(`[syncEmployees] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${unmatchedList.length} unmatched, ${autoFired} auto-fired`);
