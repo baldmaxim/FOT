@@ -45,6 +45,7 @@ const SchedulesPage = lazy(() => import('./pages/admin/SchedulesPage').then(m =>
 // Employees & SKUD
 const EmployeeCardPage = lazy(() => import('./pages/employees/EmployeeCardPage').then(m => ({ default: m.EmployeeCardPage })));
 const SigurSettingsPage = lazy(() => import('./pages/skud/SigurSettingsPage').then(m => ({ default: m.SigurSettingsPage })));
+const SigurPage = lazy(() => import('./pages/skud/SigurPage').then(m => ({ default: m.SigurPage })));
 const SigurRawDataPage = lazy(() => import('./pages/skud/SigurRawDataPage').then(m => ({ default: m.SigurRawDataPage })));
 const SkudSupabasePage = lazy(() => import('./pages/skud/SkudSupabasePage').then(m => ({ default: m.SkudSupabasePage })));
 
@@ -354,7 +355,18 @@ const AppRoutes = () => {
         <Route element={<ProtectedRoute requiredPage="/skud-settings" />}>
           <Route
             path="/employees"
-            element={<Navigate to="/skud-settings?tab=employees" replace />}
+            element={<Navigate to="/sigur" replace />}
+          />
+        </Route>
+
+        <Route element={<ProtectedRoute requiredPage="/skud-settings" />}>
+          <Route
+            path="/sigur"
+            element={
+              <Layout title="SIGUR" theme={theme} onToggleTheme={toggleTheme}>
+                <SigurPage />
+              </Layout>
+            }
           />
         </Route>
 

@@ -1,6 +1,6 @@
 import { Suspense, lazy, useState, useEffect, useCallback } from 'react';
-import { Settings, MapPin, Filter, Database, Users, ShieldCheck } from 'lucide-react';
-import { useSearchParams } from 'react-router-dom';
+import { Settings, MapPin, Filter, Database } from 'lucide-react';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import { sigurService } from '../../services/sigurService';
 import { useAuth } from '../../contexts/AuthContext';
 import type { SettingsTab } from '../../components/skud/sigur-settings.types';
@@ -21,21 +21,13 @@ const TravelObjectsTab = lazy(() => import('../../components/skud/TravelObjectsT
 const TravelConfigTab = lazy(() => import('../../components/skud/TravelConfigTab').then(module => ({
   default: module.TravelConfigTab,
 })));
-const SigurEmployeesTab = lazy(() => import('../../components/skud/employees/SigurEmployeesTab').then(module => ({
-  default: module.SigurEmployeesTab,
-})));
-const SigurAdminTab = lazy(() => import('../../components/skud/sigur-admin/SigurAdminTab').then(module => ({
-  default: module.SigurAdminTab,
-})));
 
 const SETTINGS_TABS: SettingsTab[] = [
   'settings',
-  'employees',
+  'sync-filter',
   'access-points',
   'objects',
   'travel-config',
-  'sync-filter',
-  'sigur',
 ];
 
 const resolveSettingsTab = (value: string | null): SettingsTab => (
@@ -48,6 +40,13 @@ export const SigurSettingsPage = () => {
   const { canEditPage } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const canEdit = canEditPage('/skud-settings');
+
+  const legacyTab = searchParams.get('tab');
+  const legacyRedirect = legacyTab === 'employees'
+    ? '/sigur'
+    : legacyTab === 'sigur'
+      ? `/sigur?view=settings${searchParams.get('sub') ? `&sub=${searchParams.get('sub')}` : ''}`
+      : null;
 
   const [activeTab, setActiveTabState] = useState<SettingsTab>(() => resolveSettingsTab(searchParams.get('tab')));
 
@@ -114,10 +113,14 @@ export const SigurSettingsPage = () => {
       const next = new URLSearchParams(prev);
       if (tab === 'settings') next.delete('tab');
       else next.set('tab', tab);
-      if (tab !== 'sigur') next.delete('sub');
+      next.delete('sub');
       return next;
     }, { replace: true });
   }, [setSearchParams]);
+
+  if (legacyRedirect) {
+    return <Navigate to={legacyRedirect} replace />;
+  }
 
   const syncFilterSummary = syncFilterCount === null
     ? 'Фильтр отделов не загружен'
@@ -147,11 +150,11 @@ export const SigurSettingsPage = () => {
           Настройки
         </button>
         <button
-          className={`sigur-tab ${activeTab === 'employees' ? 'active' : ''}`}
-          onClick={() => setActiveTab('employees')}
+          className={`sigur-tab ${activeTab === 'sync-filter' ? 'active' : ''}`}
+          onClick={() => setActiveTab('sync-filter')}
         >
-          <Users size={14} />
-          Сотрудники
+          <Filter size={14} />
+          Синхронизация
         </button>
         <button
           className={`sigur-tab ${activeTab === 'access-points' ? 'active' : ''}`}
@@ -174,20 +177,6 @@ export const SigurSettingsPage = () => {
           <MapPin size={14} />
           Лимит передвижения
         </button>
-        <button
-          className={`sigur-tab ${activeTab === 'sync-filter' ? 'active' : ''}`}
-          onClick={() => setActiveTab('sync-filter')}
-        >
-          <Filter size={14} />
-          Синхронизация
-        </button>
-        <button
-          className={`sigur-tab ${activeTab === 'sigur' ? 'active' : ''}`}
-          onClick={() => setActiveTab('sigur')}
-        >
-          <ShieldCheck size={14} />
-          SIGUR
-        </button>
       </div>
 
       {error && (
@@ -209,15 +198,6 @@ export const SigurSettingsPage = () => {
             checkConnection={checkConnection}
             setActiveTab={setActiveTab}
             syncFilterSummary={syncFilterSummary}
-          />
-        </Suspense>
-      )}
-
-      {activeTab === 'employees' && (
-        <Suspense fallback={tabFallback}>
-          <SigurEmployeesTab
-            canEdit={canEdit}
-            setError={setError}
           />
         </Suspense>
       )}
@@ -257,16 +237,6 @@ export const SigurSettingsPage = () => {
         <Suspense fallback={tabFallback}>
           <TravelConfigTab
             canEdit={canEdit}
-            setError={setError}
-          />
-        </Suspense>
-      )}
-
-      {activeTab === 'sigur' && (
-        <Suspense fallback={tabFallback}>
-          <SigurAdminTab
-            canEdit={canEdit}
-            selectedConnection="external"
             setError={setError}
           />
         </Suspense>
