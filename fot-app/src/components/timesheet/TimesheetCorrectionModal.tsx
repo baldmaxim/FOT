@@ -1,4 +1,4 @@
-import { type FC, type ReactNode, useState, useEffect, useCallback } from 'react';
+import { type FC, type ReactNode, useState, useEffect, useCallback, useRef } from 'react';
 import { X, LogIn, LogOut, Timer } from 'lucide-react';
 import type { TimesheetEntry, TimesheetStatus, SkudEvent } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
@@ -264,27 +264,45 @@ const CorrectionTab: FC<{
           <div className="ts-hours-hint">Для удалёнки автоматически будет проставлен полный день по графику.</div>
         )}
 
-        {HOURS_EDITABLE_STATUSES.has(selectedStatus) && (
-          <div className="ts-form-group">
-            <label className="ts-form-label">Часы</label>
-            <input
-              type="number"
-              className="ts-form-input"
-              value={hours}
-              onChange={e => {
-                const nextValue = parseFloat(e.target.value) || 0;
-                setHours(maxHours != null ? Math.max(0, Math.min(nextValue, maxHours)) : nextValue);
-              }}
-              min={0}
-              max={maxHours ?? 24}
-              step={0.5}
-            />
-            <span className="ts-hours-hint">
-              {formatHM(hours)}
-              {maxHours != null ? ` • максимум по графику ${formatHM(maxHours)}` : ''}
-            </span>
-          </div>
-        )}
+        {HOURS_EDITABLE_STATUSES.has(selectedStatus) && (() => {
+          const wholeHours = Math.floor(hours);
+          const minutes = Math.round((hours - wholeHours) * 60);
+          const applyHM = (h: number, m: number) => {
+            const clampedM = Math.max(0, Math.min(59, m));
+            const clampedH = Math.max(0, h);
+            const total = clampedH + clampedM / 60;
+            const normalized = maxHours != null ? Math.min(total, maxHours) : total;
+            setHours(Math.max(0, normalized));
+          };
+          return (
+            <div className="ts-form-group">
+              <label className="ts-form-label">Часы</label>
+              <div className="ts-hours-inputs">
+                <input
+                  type="number"
+                  className="ts-form-input ts-form-input--hm"
+                  value={wholeHours}
+                  onChange={e => applyHM(parseInt(e.target.value, 10) || 0, minutes)}
+                  min={0}
+                  max={maxHours != null ? Math.floor(maxHours) : 24}
+                />
+                <span className="ts-hours-separator">ч</span>
+                <input
+                  type="number"
+                  className="ts-form-input ts-form-input--hm"
+                  value={minutes}
+                  onChange={e => applyHM(wholeHours, parseInt(e.target.value, 10) || 0)}
+                  min={0}
+                  max={59}
+                />
+                <span className="ts-hours-separator">м</span>
+              </div>
+              {maxHours != null && (
+                <span className="ts-hours-hint">Максимум по графику {formatHM(maxHours)}</span>
+              )}
+            </div>
+          );
+        })()}
 
         <div className="ts-form-group">
           <label className="ts-form-label">Комментарий</label>
@@ -443,12 +461,23 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   );
 };
 
-export const TimesheetCorrectionModal: FC<ICorrectionModalProps> = ({ open, ...rest }) =>
-  open ? (
+export const TimesheetCorrectionModal: FC<ICorrectionModalProps> = ({ open, ...rest }) => {
+  const overlayMouseDownRef = useRef(false);
+  if (!open) return null;
+  return (
     <div
       className="ts-modal-overlay ts-modal-overlay--open"
-      onClick={rest.onClose}
+      onMouseDown={e => {
+        overlayMouseDownRef.current = e.target === e.currentTarget;
+      }}
+      onMouseUp={e => {
+        if (overlayMouseDownRef.current && e.target === e.currentTarget) {
+          rest.onClose();
+        }
+        overlayMouseDownRef.current = false;
+      }}
     >
       <ModalContent {...rest} />
     </div>
-  ) : null;
+  );
+};

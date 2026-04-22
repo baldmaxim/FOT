@@ -1942,7 +1942,7 @@ export const TimesheetPage: FC = () => {
             employeeName={modalMode === 'object' ? undefined : modalEmployee?.full_name}
             employeeId={modalEmployee?.id}
             workDate={modalWorkDate}
-            hideSkudTab={modalMode !== 'day'}
+            hideSkudTab={modalMode === 'split-view'}
             allowAccessPointMap={canViewPage('/skud-settings')}
             hideCorrectionTab={modalMode === 'split-view'}
             allowedStatuses={modalMode === 'object' ? ['manual'] : undefined}

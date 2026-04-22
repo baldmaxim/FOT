@@ -2795,6 +2795,24 @@
   color: #8a8a8e;
 }
 
+.ts-hours-inputs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ts-form-input--hm {
+  width: 72px;
+  text-align: center;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.ts-hours-separator {
+  font-size: 14px;
+  color: var(--text-secondary, #8a8a8e);
+}
+
 /* Type options grid */
 .ts-type-options {
   display: grid;
