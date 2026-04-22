@@ -6,7 +6,10 @@ import type { AuthenticatedRequest, ChatInboundMode, UserProfile } from '../type
 import { logSupabaseError } from './admin-helpers.js';
 import { getAllRoles, getRoleByCode } from '../services/roles-cache.service.js';
 import { ensureCriticalAdminAccess } from '../services/critical-admin-access.service.js';
-import { loadExplicitDepartmentMap, loadEmployeeAccessMap } from '../services/department-access.service.js';
+import {
+  loadEmployeeManagerAssignmentMap,
+  loadExplicitManagerAssignmentMap,
+} from '../services/department-access.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
 import {
@@ -92,6 +95,11 @@ async function validateDepartmentIds(departmentIds: string[]): Promise<{ missing
   };
 }
 
+// sigur_sync-строки — это членство (миграция 049 + employee-lifecycle),
+// их никогда не трогаем: data-scope и chat-policy опираются на них,
+// а HR-назначения должны заменяться независимо.
+const MEMBERSHIP_SOURCE = 'sigur_sync';
+
 async function replaceExplicitDepartmentAccess(params: {
   targetTable: 'employee_department_access' | 'user_department_access';
   targetField: 'employee_id' | 'user_id';
@@ -104,8 +112,9 @@ async function replaceExplicitDepartmentAccess(params: {
 
   const { data: existingAccessRows, error: existingAccessError } = await supabase
     .from(params.targetTable)
-    .select('department_id, is_active')
-    .eq(params.targetField, params.targetValue);
+    .select('department_id, is_active, source')
+    .eq(params.targetField, params.targetValue)
+    .neq('source', MEMBERSHIP_SOURCE);
 
   if (existingAccessError) {
     throw existingAccessError;
@@ -150,7 +159,8 @@ async function replaceExplicitDepartmentAccess(params: {
         updated_at: now,
       })
       .eq(params.targetField, params.targetValue)
-      .in('department_id', departmentIdsToDeactivate);
+      .in('department_id', departmentIdsToDeactivate)
+      .neq('source', MEMBERSHIP_SOURCE);
 
     if (deactivateError) {
       throw deactivateError;
@@ -210,7 +220,7 @@ export const adminUsersController = {
         return;
       }
 
-      const assignedDepartmentMap = await loadExplicitDepartmentMap(
+      const assignedDepartmentMap = await loadExplicitManagerAssignmentMap(
         users.map((u: UserProfile) => ({
           user_id: u.id,
           employee_id: u.employee_id,
@@ -294,7 +304,10 @@ export const adminUsersController = {
       }
 
       const employeeIds = (employees || []).map(employee => employee.id as number);
-      const explicitDepartmentMap = await loadEmployeeAccessMap(employeeIds);
+      // HR-экран «Назначения сотрудников»: показываем только ручные
+      // назначения (manual/excel/manager_excel), sigur_sync (членство) сюда
+      // не попадает — иначе каждый сотрудник виднелся бы с 1 «назначением».
+      const explicitDepartmentMap = await loadEmployeeManagerAssignmentMap(employeeIds);
 
       const payload = (employees || []).map(employee => ({
         employee_id: employee.id,
@@ -736,7 +749,10 @@ export const adminUsersController = {
 
       if (employee_id) {
         try {
-          const accessMap = await loadEmployeeAccessMap([employee_id]);
+          // Уведомляем только если на пользователя есть ручные назначения
+          // (manual/excel). Membership (sigur_sync) — это просто «числится
+          // в отделе», а не «отвечает за табели».
+          const accessMap = await loadEmployeeManagerAssignmentMap([employee_id]);
           const departmentIds = accessMap.get(employee_id) || [];
 
           if (departmentIds.length > 0) {

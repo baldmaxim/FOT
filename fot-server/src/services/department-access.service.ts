@@ -53,16 +53,27 @@ async function listEmployeeAccessDepartmentIds(employeeId: number): Promise<stri
 
 const IN_FILTER_THRESHOLD = 300;
 
-export async function loadEmployeeAccessMap(employeeIds: number[]): Promise<Map<number, string[]>> {
+interface ILoadEmployeeAccessOptions {
+  /** Исключить из выборки строки с данным source (например 'sigur_sync' — членство). */
+  excludeSource?: string;
+}
+
+export async function loadEmployeeAccessMap(
+  employeeIds: number[],
+  options: ILoadEmployeeAccessOptions = {},
+): Promise<Map<number, string[]>> {
   const unique = [...new Set(employeeIds.filter((v): v is number => Number.isInteger(v)))];
   const result = new Map<number, string[]>(unique.map(id => [id, []]));
   if (unique.length === 0) return result;
 
   const useInFilter = unique.length <= IN_FILTER_THRESHOLD;
-  const query = supabase
+  let query = supabase
     .from('employee_department_access')
     .select('employee_id, department_id')
     .eq('is_active', true);
+  if (options.excludeSource) {
+    query = query.neq('source', options.excludeSource);
+  }
 
   const { data, error } = useInFilter
     ? await query.in('employee_id', unique)
@@ -86,14 +97,27 @@ export async function loadEmployeeAccessMap(employeeIds: number[]): Promise<Map<
   return result;
 }
 
+/**
+ * Карта «руководительских» назначений: только ручные строки (manual_admin_ui,
+ * excel_admin_ui, manager_excel_admin_ui). Membership-строки от Sigur
+ * (source='sigur_sync') в выдачу не попадают — для HR-представлений и
+ * экрана «Назначения сотрудников».
+ */
+export async function loadEmployeeManagerAssignmentMap(
+  employeeIds: number[],
+): Promise<Map<number, string[]>> {
+  return loadEmployeeAccessMap(employeeIds, { excludeSource: 'sigur_sync' });
+}
+
 export async function loadExplicitDepartmentMap(
   seeds: Array<{ user_id: string; employee_id?: number | null }>,
+  options: ILoadEmployeeAccessOptions = {},
 ): Promise<Map<string, string[]>> {
   const result = new Map<string, string[]>();
   const employeeIds = seeds
     .map(seed => seed.employee_id)
     .filter((id): id is number => Number.isInteger(id));
-  const employeeAccessMap = await loadEmployeeAccessMap(employeeIds);
+  const employeeAccessMap = await loadEmployeeAccessMap(employeeIds, options);
 
   for (const seed of seeds) {
     const departmentIds = seed.employee_id != null
@@ -103,6 +127,13 @@ export async function loadExplicitDepartmentMap(
   }
 
   return result;
+}
+
+/** HR-аналог loadExplicitDepartmentMap: исключает членство (sigur_sync). */
+export async function loadExplicitManagerAssignmentMap(
+  seeds: Array<{ user_id: string; employee_id?: number | null }>,
+): Promise<Map<string, string[]>> {
+  return loadExplicitDepartmentMap(seeds, { excludeSource: 'sigur_sync' });
 }
 
 export async function listUserIdsAssignedToDepartment(departmentId: string): Promise<string[]> {
