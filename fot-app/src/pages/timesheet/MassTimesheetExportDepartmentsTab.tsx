@@ -13,7 +13,6 @@ import { timesheetService } from '../../services/timesheetService';
 import type { OrgDepartmentNode } from '../../types';
 import { filterDepartmentTree, filterDepartmentTreeByIds, sortDepartmentTree } from '../../utils/departmentUtils';
 
-type TimesheetDisplaySegment = 'H1' | 'H2' | 'FULL';
 type TimesheetGroupingMode = 'employees' | 'objects';
 type TimesheetExportPresentation = 'hr' | 'manager';
 
@@ -124,7 +123,8 @@ const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expa
 interface IMassTimesheetExportDepartmentsTabProps {
   year: number;
   month: number;
-  activeSegment: TimesheetDisplaySegment;
+  rangeStart: string;
+  rangeEnd: string;
   groupBy: TimesheetGroupingMode;
   exportAs1C: boolean;
 }
@@ -132,7 +132,8 @@ interface IMassTimesheetExportDepartmentsTabProps {
 export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmentsTabProps> = ({
   year,
   month,
-  activeSegment,
+  rangeStart,
+  rangeEnd,
   groupBy,
   exportAs1C,
 }) => {
@@ -237,15 +238,17 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
       const blob = await timesheetService.exportMass({
         month: monthStr,
         department_ids: selectedDeptIds,
-        half: activeSegment,
+        from: rangeStart,
+        to: rangeEnd,
         group_by: groupBy,
         presentation: presentationOverride,
         export_as_1c: exportAs1C,
       });
       const daysInMonth = new Date(year, month, 0).getDate();
-      const segmentSuffix = activeSegment === 'FULL'
-        ? ''
-        : `_${activeSegment === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
+      const startDay = Number.parseInt(rangeStart.slice(-2), 10);
+      const endDay = Number.parseInt(rangeEnd.slice(-2), 10);
+      const isFullMonth = startDay === 1 && endDay === daysInMonth;
+      const segmentSuffix = isFullMonth ? '' : `_${startDay}-${endDay}`;
       const groupingSuffix = groupBy === 'objects' ? '_по_объектам' : '';
       const templateSuffix = exportAs1C ? '_1С' : '';
       const presentationSuffix = presentationOverride === 'manager' ? '_Руководитель' : '';

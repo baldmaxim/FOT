@@ -26,7 +26,6 @@ import { getScheduleForTimesheetDay, getWorkHoursForDay } from '../../utils/sche
 import { useIsMobile } from '../../hooks/useIsMobile';
 import {
   clampRangeToMonth,
-  formatTimesheetRangeLabel,
   getDefaultRangeForMonth,
 } from '../../utils/timesheetApprovalPeriod';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
@@ -1159,18 +1158,6 @@ export const TimesheetPage: FC = () => {
     });
   }, [clearBulkState, monthStr, daysInMonth, setSearchParams]);
 
-  const handleRangePreset = useCallback((preset: 'H1' | 'H2' | 'FULL') => {
-    const monthPad = String(month).padStart(2, '0');
-    if (preset === 'H1') {
-      handleRangeChange(`${year}-${monthPad}-01`, `${year}-${monthPad}-${String(Math.min(15, daysInMonth)).padStart(2, '0')}`);
-    } else if (preset === 'H2') {
-      if (daysInMonth < 16) return;
-      handleRangeChange(`${year}-${monthPad}-16`, `${year}-${monthPad}-${String(daysInMonth).padStart(2, '0')}`);
-    } else {
-      handleRangeChange(`${year}-${monthPad}-01`, `${year}-${monthPad}-${String(daysInMonth).padStart(2, '0')}`);
-    }
-  }, [year, month, daysInMonth, handleRangeChange]);
-
   const handleViewModeChange = useCallback((nextViewMode: TimesheetViewMode) => {
     clearBulkState();
     setSearchParams(current => {
@@ -1402,12 +1389,6 @@ export const TimesheetPage: FC = () => {
 
   const monthBoundsFirst = `${year}-${String(month).padStart(2, '0')}-01`;
   const monthBoundsLast = `${year}-${String(month).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
-  const isPresetH1 = rangeStart === monthBoundsFirst
-    && rangeEnd === `${year}-${String(month).padStart(2, '0')}-${String(Math.min(15, daysInMonth)).padStart(2, '0')}`;
-  const isPresetH2 = daysInMonth >= 16
-    && rangeStart === `${year}-${String(month).padStart(2, '0')}-16`
-    && rangeEnd === monthBoundsLast;
-  const isPresetFull = rangeStart === monthBoundsFirst && rangeEnd === monthBoundsLast;
 
   const segmentControl = (isAssignedMode ? selectedAssigneeId : effectiveSelectedDeptId) ? (
     <section className="ts-range-control">
@@ -1443,34 +1424,6 @@ export const TimesheetPage: FC = () => {
             }}
           />
         </label>
-      </div>
-      <div className="ts-range-presets">
-        <button
-          type="button"
-          className={`ts-half-chip${isPresetH1 ? ' ts-half-chip--active' : ''}`}
-          onClick={() => handleRangePreset('H1')}
-        >
-          <span className="ts-half-chip-label">1–15</span>
-          <span className="ts-half-chip-subtitle">Первая половина</span>
-        </button>
-        {daysInMonth >= 16 && (
-          <button
-            type="button"
-            className={`ts-half-chip${isPresetH2 ? ' ts-half-chip--active' : ''}`}
-            onClick={() => handleRangePreset('H2')}
-          >
-            <span className="ts-half-chip-label">16–{daysInMonth}</span>
-            <span className="ts-half-chip-subtitle">Вторая половина</span>
-          </button>
-        )}
-        <button
-          type="button"
-          className={`ts-half-chip${isPresetFull ? ' ts-half-chip--active' : ''}`}
-          onClick={() => handleRangePreset('FULL')}
-        >
-          <span className="ts-half-chip-label">Весь месяц</span>
-          <span className="ts-half-chip-subtitle">{formatTimesheetRangeLabel(monthBoundsFirst, monthBoundsLast)}</span>
-        </button>
       </div>
     </section>
   ) : null;
@@ -1818,11 +1771,8 @@ export const TimesheetPage: FC = () => {
             </div>
           ) : (overviewQuery.data || []).map(summary => {
             const expanded = summary.department_id === effectiveSelectedDeptId;
-            const approvalValues: Array<{ key: 'H1' | 'H2' | 'FULL'; label: string }> = [
-              { key: 'H1', label: 'H1' },
-              { key: 'H2', label: 'H2' },
-              { key: 'FULL', label: 'Месяц' },
-            ];
+            const summaryApprovals = summary.approvals ?? [];
+            const dominantStatus = summary.approval_status;
 
             return (
               <article key={summary.department_id} className={`ts-accordion-item${expanded ? ' ts-accordion-item--expanded' : ''}`}>
@@ -1847,14 +1797,14 @@ export const TimesheetPage: FC = () => {
                     </div>
                   </div>
                   <div className="ts-accordion-statuses">
-                    {approvalValues.map(item => {
-                      const status = summary.approval_by_half[item.key];
-                      return (
-                        <span key={item.key} className={`ts-accordion-status ts-accordion-status--${status || 'draft'}`}>
-                          {item.label}: {status ? APPROVAL_STATUS_META[status] : 'Нет'}
-                        </span>
-                      );
-                    })}
+                    <span className={`ts-accordion-status ts-accordion-status--${dominantStatus || 'draft'}`}>
+                      {dominantStatus ? APPROVAL_STATUS_META[dominantStatus] : 'Нет согласований'}
+                    </span>
+                    {summaryApprovals.length > 0 && (
+                      <span className="ts-accordion-status ts-accordion-status--draft">
+                        Диапазонов: {summaryApprovals.length}
+                      </span>
+                    )}
                   </div>
                 </button>
 

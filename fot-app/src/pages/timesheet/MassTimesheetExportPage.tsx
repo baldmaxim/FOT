@@ -5,30 +5,20 @@ import { MassTimesheetExportDepartmentsTab } from './MassTimesheetExportDepartme
 import { MassTimesheetExportAssignedTab } from './MassTimesheetExportAssignedTab';
 import './MassTimesheetExportPage.css';
 
-type TimesheetHalf = 'H1' | 'H2';
-type TimesheetDisplaySegment = TimesheetHalf | 'FULL';
 type TimesheetGroupingMode = 'employees' | 'objects';
 type ExportTab = 'departments' | 'assigned';
 
-const getDaysInMonthUtil = (year: number, month: number): number => new Date(year, month, 0).getDate();
-
-const formatHalfRangeLabel = (half: TimesheetHalf, year: number, month: number): string =>
-  half === 'H1' ? '1-15' : `16-${getDaysInMonthUtil(year, month)}`;
-
 const ACTIVE_TAB_STORAGE_KEY = 'timesheet_export_active_tab_v1';
 
-const toMonthIndex = (year: number, month: number): number => year * 12 + month - 1;
+const pad2 = (value: number): string => String(value).padStart(2, '0');
 
-const resolveDefaultSegment = (year: number, month: number, now: Date): TimesheetDisplaySegment => {
-  const currentYear = now.getFullYear();
-  const currentMonth = now.getMonth() + 1;
-  const currentDay = now.getDate();
-  const currentMonthIndex = toMonthIndex(currentYear, currentMonth);
-  const selectedMonthIndex = toMonthIndex(year, month);
-
-  if (selectedMonthIndex < currentMonthIndex) return 'FULL';
-  if (selectedMonthIndex === currentMonthIndex && currentDay > 15) return 'H2';
-  return 'H1';
+const getMonthRange = (year: number, month: number): { first: string; last: string; daysInMonth: number } => {
+  const daysInMonth = new Date(year, month, 0).getDate();
+  return {
+    first: `${year}-${pad2(month)}-01`,
+    last: `${year}-${pad2(month)}-${pad2(daysInMonth)}`,
+    daysInMonth,
+  };
 };
 
 const loadStoredActiveTab = (): ExportTab => {
@@ -53,19 +43,18 @@ export const MassTimesheetExportPage: FC = () => {
   const now = useMemo(() => new Date(), []);
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
-  const [segmentOverride, setSegmentOverride] = useState<TimesheetDisplaySegment | null>(null);
+  const monthRange = useMemo(() => getMonthRange(year, month), [year, month]);
+  const [rangeStart, setRangeStart] = useState<string>(monthRange.first);
+  const [rangeEnd, setRangeEnd] = useState<string>(monthRange.last);
   const [groupBy, setGroupBy] = useState<TimesheetGroupingMode>('employees');
   const [exportAs1C, setExportAs1C] = useState(false);
   const [activeTab, setActiveTab] = useState<ExportTab>(() => loadStoredActiveTab());
 
-  const activeSegment = useMemo<TimesheetDisplaySegment>(
-    () => segmentOverride ?? resolveDefaultSegment(year, month, now),
-    [segmentOverride, year, month, now],
-  );
-
   useEffect(() => {
-    setSegmentOverride(null);
-  }, [year, month]);
+    // При смене месяца сбрасываем диапазон на полный месяц.
+    setRangeStart(monthRange.first);
+    setRangeEnd(monthRange.last);
+  }, [monthRange.first, monthRange.last]);
 
   useEffect(() => {
     saveStoredActiveTab(activeTab);
@@ -81,9 +70,18 @@ export const MassTimesheetExportPage: FC = () => {
     else setMonth(m => m + 1);
   }, [month]);
 
-  const handleSegmentChange = useCallback((segment: TimesheetDisplaySegment) => {
-    setSegmentOverride(segment);
-  }, []);
+  const handleRangeStart = useCallback((value: string) => {
+    if (!value) return;
+    const clamped = value < monthRange.first ? monthRange.first : (value > monthRange.last ? monthRange.last : value);
+    setRangeStart(clamped);
+    if (rangeEnd < clamped) setRangeEnd(clamped);
+  }, [monthRange.first, monthRange.last, rangeEnd]);
+
+  const handleRangeEnd = useCallback((value: string) => {
+    if (!value) return;
+    const clamped = value < monthRange.first ? monthRange.first : (value > monthRange.last ? monthRange.last : value);
+    setRangeEnd(clamped < rangeStart ? rangeStart : clamped);
+  }, [monthRange.first, monthRange.last, rangeStart]);
 
   return (
     <div className="mte-page">
@@ -100,28 +98,29 @@ export const MassTimesheetExportPage: FC = () => {
         </div>
       </div>
 
-      <section className="mte-half-switch" aria-label="Период выгрузки табелей">
-        {(['H1', 'H2'] as TimesheetHalf[]).map(half => (
-          <button
-            key={half}
-            type="button"
-            className={`mte-half-chip ${activeSegment === half ? ' mte-half-chip--active' : ''}`}
-            onClick={() => handleSegmentChange(half)}
-          >
-            <span className="mte-half-chip-label">{formatHalfRangeLabel(half, year, month)}</span>
-            <span className="mte-half-chip-subtitle">
-              {half === 'H1' ? 'Первая половина' : 'Вторая половина'}
-            </span>
-          </button>
-        ))}
-        <button
-          type="button"
-          className={`mte-half-chip ${activeSegment === 'FULL' ? ' mte-half-chip--active' : ''}`}
-          onClick={() => handleSegmentChange('FULL')}
-        >
-          <span className="mte-half-chip-label">Весь месяц</span>
-          <span className="mte-half-chip-subtitle">Полный табель</span>
-        </button>
+      <section className="mte-range" aria-label="Период выгрузки табелей">
+        <label className="mte-range-label">
+          <span>С</span>
+          <input
+            type="date"
+            className="mte-range-input"
+            value={rangeStart}
+            min={monthRange.first}
+            max={monthRange.last}
+            onChange={e => handleRangeStart(e.target.value)}
+          />
+        </label>
+        <label className="mte-range-label">
+          <span>по</span>
+          <input
+            type="date"
+            className="mte-range-input"
+            value={rangeEnd}
+            min={rangeStart}
+            max={monthRange.last}
+            onChange={e => handleRangeEnd(e.target.value)}
+          />
+        </label>
       </section>
 
       <section className="mte-mode-switch" aria-label="Формат выгрузки">
@@ -184,7 +183,8 @@ export const MassTimesheetExportPage: FC = () => {
           <MassTimesheetExportDepartmentsTab
             year={year}
             month={month}
-            activeSegment={activeSegment}
+            rangeStart={rangeStart}
+            rangeEnd={rangeEnd}
             groupBy={groupBy}
             exportAs1C={exportAs1C}
           />
@@ -192,7 +192,8 @@ export const MassTimesheetExportPage: FC = () => {
           <MassTimesheetExportAssignedTab
             year={year}
             month={month}
-            activeSegment={activeSegment}
+            rangeStart={rangeStart}
+            rangeEnd={rangeEnd}
             groupBy={groupBy}
             exportAs1C={exportAs1C}
           />

@@ -5,7 +5,6 @@ import { timesheetService } from '../../services/timesheetService';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { useToast } from '../../contexts/ToastContext';
 
-type TimesheetDisplaySegment = 'H1' | 'H2' | 'FULL';
 type TimesheetGroupingMode = 'employees' | 'objects';
 type TimesheetExportPresentation = 'hr' | 'manager';
 
@@ -37,7 +36,8 @@ const saveStoredAssignedIds = (ids: Set<number>): void => {
 interface IMassTimesheetExportAssignedTabProps {
   year: number;
   month: number;
-  activeSegment: TimesheetDisplaySegment;
+  rangeStart: string;
+  rangeEnd: string;
   groupBy: TimesheetGroupingMode;
   exportAs1C: boolean;
 }
@@ -45,7 +45,8 @@ interface IMassTimesheetExportAssignedTabProps {
 export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabProps> = ({
   year,
   month,
-  activeSegment,
+  rangeStart,
+  rangeEnd,
   groupBy,
   exportAs1C,
 }) => {
@@ -114,7 +115,8 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
       const monthStr = `${year}-${String(month).padStart(2, '0')}`;
       const result = await timesheetService.emailAssigned({
         month: monthStr,
-        half: activeSegment,
+        from: rangeStart,
+        to: rangeEnd,
         group_by: groupBy,
         export_as_1c: exportAs1C,
         employee_ids: [...checkedIds],
@@ -142,16 +144,18 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
       const monthStr = `${year}-${String(month).padStart(2, '0')}`;
       const blob = await timesheetService.exportAssigned({
         month: monthStr,
-        half: activeSegment,
+        from: rangeStart,
+        to: rangeEnd,
         group_by: groupBy,
         presentation: presentationOverride,
         export_as_1c: exportAs1C,
         employee_ids: [...checkedIds],
       });
       const daysInMonth = new Date(year, month, 0).getDate();
-      const segmentSuffix = activeSegment === 'FULL'
-        ? ''
-        : `_${activeSegment === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
+      const startDay = Number.parseInt(rangeStart.slice(-2), 10);
+      const endDay = Number.parseInt(rangeEnd.slice(-2), 10);
+      const isFullMonth = startDay === 1 && endDay === daysInMonth;
+      const segmentSuffix = isFullMonth ? '' : `_${startDay}-${endDay}`;
       const templateSuffix = exportAs1C ? '_1С' : '';
       const presentationSuffix = presentationOverride === 'manager' ? '_Руководитель' : '';
       const filename = `Назначенные${templateSuffix}_${MONTH_NAMES[month]}_${year}${segmentSuffix}${presentationSuffix}.zip`;

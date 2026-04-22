@@ -58,6 +58,8 @@ export interface TimesheetTeamManagementCandidate {
   excluded_from_timesheet?: boolean;
 }
 
+export type ManagedDepartmentApprovalStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'returned';
+
 export interface ManagedDepartmentTimesheetSummary {
   department_id: string;
   department_name: string;
@@ -65,11 +67,13 @@ export interface ManagedDepartmentTimesheetSummary {
   norm_hours: number;
   actual_hours: number;
   deviations: { late: number; absent: number; sick: number };
-  approval_by_half: {
-    H1: 'draft' | 'submitted' | 'approved' | 'rejected' | 'returned' | null;
-    H2: 'draft' | 'submitted' | 'approved' | 'rejected' | 'returned' | null;
-    FULL: 'draft' | 'submitted' | 'approved' | 'rejected' | 'returned' | null;
-  };
+  approval_status: ManagedDepartmentApprovalStatus | null;
+  approvals: Array<{
+    id: number;
+    start_date: string;
+    end_date: string;
+    status: ManagedDepartmentApprovalStatus;
+  }>;
   is_primary: boolean;
 }
 

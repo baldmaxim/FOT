@@ -229,6 +229,8 @@ export const timesheetService = {
   async emailAssigned(filters: {
     month: string;
     half?: string;
+    from?: string;
+    to?: string;
     group_by?: string;
     presentation?: string;
     export_as_1c?: boolean;
