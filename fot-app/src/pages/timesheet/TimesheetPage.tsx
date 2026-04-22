@@ -83,6 +83,22 @@ const getTodayDateInputValue = (): string => new Date().toISOString().slice(0, 1
 const UNASSIGNED_OBJECT_KEY = '__timesheet_unassigned__';
 const UNASSIGNED_OBJECT_NAME = 'Не определён / без объекта';
 
+const MONTH_NAMES_RU = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+
+const formatFioWithInitials = (fullName?: string | null): string => {
+  if (!fullName) return '';
+  const [last, first, middle] = fullName.trim().split(/\s+/);
+  if (!last) return '';
+  const initials = [first, middle]
+    .filter(Boolean)
+    .map(part => `${part!.charAt(0).toUpperCase()}.`)
+    .join('');
+  return initials ? `${last} ${initials}` : last;
+};
+
+const sanitizeDownloadName = (name: string): string => name.replace(/[\\/:*?"<>|]/g, '_');
+
 const buildObjectBulkMetaKey = (employeeId: number, objectKey: string): string => `${employeeId}:${objectKey}`;
 
 const parseBulkCellKey = (
@@ -534,28 +550,62 @@ export const TimesheetPage: FC = () => {
   }, [modalEmployee, modalObjectTarget, modalObjectEntry?.adjustment_id, year, month, modalDay, closeModal, queryClient, monthStr, activeSegment, effectiveSelectedDeptId, toast]);
 
   // Export
+  const canExport = timesheetMode === 'assigned'
+    ? Boolean(selectedAssigneeId)
+    : Boolean(effectiveSelectedDeptId);
+
   const handleExport = async () => {
+    if (!canExport) {
+      toast.error(timesheetMode === 'assigned' ? 'Выберите начальника участка' : 'Выберите отдел');
+      return;
+    }
     try {
       const monthStr = `${year}-${String(month).padStart(2, '0')}`;
-      const blob = await timesheetService.export({
-        month: monthStr,
-        department_id: effectiveSelectedDeptId || undefined,
-        half: activeSegment,
-      });
-      const monthNames = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
       const segmentSuffix = activeSegment === 'FULL'
         ? ''
         : `_${activeSegment === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
-      const filename = `${selectedDeptName}_${monthNames[month]}_${year}${segmentSuffix}.xlsx`;
+      const monthName = MONTH_NAMES_RU[month];
+
+      let blob: Blob;
+      let filename: string;
+
+      if (timesheetMode === 'assigned' && selectedAssigneeId) {
+        blob = await timesheetService.exportAssigned({
+          month: monthStr,
+          half: activeSegment,
+          employee_ids: [selectedAssigneeId],
+          group_by: viewMode,
+        });
+        const assignee = assigneesQuery.data?.find(emp => emp.id === selectedAssigneeId);
+        const assigneeName = formatFioWithInitials(assignee?.full_name) || 'Участок';
+        const suffix = viewMode === 'objects' ? '_объекты' : '';
+        filename = `Участок_${assigneeName}${suffix}_${monthName}_${year}${segmentSuffix}.zip`;
+      } else if (viewMode === 'objects' && effectiveSelectedDeptId) {
+        blob = await timesheetService.exportMass({
+          month: monthStr,
+          half: activeSegment,
+          department_ids: [effectiveSelectedDeptId],
+          group_by: 'objects',
+        });
+        filename = `${selectedDeptName}_объекты_${monthName}_${year}${segmentSuffix}.zip`;
+      } else {
+        blob = await timesheetService.export({
+          month: monthStr,
+          department_id: effectiveSelectedDeptId || undefined,
+          half: activeSegment,
+        });
+        filename = `${selectedDeptName}_${monthName}_${year}${segmentSuffix}.xlsx`;
+      }
+
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = filename;
+      a.download = sanitizeDownloadName(filename);
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Export error:', err);
+      toast.error(err instanceof Error ? err.message : 'Ошибка экспорта');
     }
   };
 
@@ -1410,11 +1460,15 @@ export const TimesheetPage: FC = () => {
                     {mobileApprovalVisible ? 'Скрыть согласование' : 'Согласование'}
                   </button>
                 )}
-                {!isAssignedMode && (
-                  <button type="button" className="ts-btn ts-btn--icon" onClick={handleExport} aria-label="Экспорт табеля">
-                    <Download size={16} />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="ts-btn ts-btn--icon"
+                  onClick={handleExport}
+                  disabled={!canExport}
+                  aria-label="Экспорт табеля"
+                >
+                  <Download size={16} />
+                </button>
               </div>
             </div>
             <div className="ts-mobile-header-row ts-mobile-header-row--controls">
@@ -1460,7 +1514,7 @@ export const TimesheetPage: FC = () => {
           <div className="ts-toolbar">
             <div className="ts-toolbar-left">
               <TimesheetStats stats={stats} />
-              <button type="button" className="ts-btn" onClick={handleExport}>
+              <button type="button" className="ts-btn" onClick={handleExport} disabled={!canExport}>
                 <Download size={16} />
                 Экспорт
               </button>
