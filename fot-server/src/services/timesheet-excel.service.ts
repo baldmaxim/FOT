@@ -13,6 +13,29 @@ const thinBorder: Partial<ExcelJS.Borders> = {
   top: { style: 'thin' }, left: { style: 'thin' },
   bottom: { style: 'thin' }, right: { style: 'thin' },
 };
+
+const applyA4PrintSetup = (ws: ExcelJS.Worksheet, titleRows: number): void => {
+  ws.pageSetup = {
+    paperSize: 9,
+    orientation: 'landscape',
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    horizontalCentered: true,
+    verticalCentered: false,
+    margins: {
+      left: 0.3, right: 0.3,
+      top: 0.5, bottom: 0.5,
+      header: 0.3, footer: 0.3,
+    },
+    printTitlesRow: `1:${titleRows}`,
+    showGridLines: false,
+  };
+  ws.views = [{ state: 'normal', showGridLines: true, style: 'pageLayout' }];
+  ws.headerFooter = {
+    oddFooter: '&C&"Arial"&8Стр. &P из &N',
+  };
+};
 // Цвета как в образце "Тердерный отдел.xls"
 const headerFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC0C0C0' } };
 const docRowFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDE8DF' } };
@@ -340,6 +363,7 @@ export async function build1CTimesheetWorkbook(
     throw new Error('1C template worksheet is missing');
   }
   fillOneCWorksheet(worksheet, buildEmployeeRowsForOneC(data));
+  applyA4PrintSetup(worksheet, 3);
   return workbook;
 }
 
@@ -354,6 +378,7 @@ export async function build1CObjectTimesheetWorkbook(
     throw new Error('1C template worksheet is missing');
   }
   fillOneCWorksheet(worksheet, buildObjectRowsForOneC(data, target));
+  applyA4PrintSetup(worksheet, 3);
   return workbook;
 }
 
@@ -673,6 +698,8 @@ export function buildTimesheetSheet(
       row.getCell(c).border = thinBorder;
     }
   }
+
+  applyA4PrintSetup(ws, 6);
 }
 
 export function buildObjectTimesheetSheet(
@@ -935,6 +962,8 @@ export function buildObjectTimesheetSheet(
       row.getCell(c).border = thinBorder;
     }
   }
+
+  applyA4PrintSetup(ws, 7);
 }
 
 /** Sanitize sheet name for Excel (max 31 chars, no special chars) */
