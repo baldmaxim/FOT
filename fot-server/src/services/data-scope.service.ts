@@ -19,8 +19,8 @@ export async function resolveRequestDataScope(req: AuthenticatedRequest): Promis
 /**
  * Возвращает id отделов, к которым пользователь имеет доступ.
  * - is_admin → 'all' (полный доступ, фильтр по отделам не применяется)
- * - иначе объединение: собственный department_id + назначенные через
- *   employee_department_access. Пустой массив → только свои /employee/*.
+ * - иначе только явно назначенные через employee_department_access.
+ *   Пустой массив → только свои /employee/*.
  */
 export async function resolveAccessibleDepartmentIds(
   req: AuthenticatedRequest,
@@ -30,8 +30,7 @@ export async function resolveAccessibleDepartmentIds(
   }
 
   const assigned = await listExplicitDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null);
-  const ownDept = req.user.department_id;
-  return [...new Set([...(ownDept ? [ownDept] : []), ...assigned])];
+  return [...new Set(assigned)];
 }
 
 export async function canAccessEmployeeInScope(

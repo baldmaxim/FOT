@@ -116,8 +116,7 @@ async function replaceExplicitDepartmentAccess(params: {
   actorUserId: string;
   source: string;
 }): Promise<string[]> {
-  const explicitDepartmentIds = uniqueStringValues(params.departmentIds)
-    .filter(departmentId => departmentId !== params.primaryDepartmentId);
+  const explicitDepartmentIds = uniqueStringValues(params.departmentIds);
 
   const { data: existingAccessRows, error: existingAccessError } = await supabase
     .from(params.targetTable)
@@ -183,9 +182,8 @@ async function upsertEmployeeDepartmentAccess(params: {
   actorUserId: string;
   source: string;
 }): Promise<string[]> {
-  const primaryDepartmentId = await getPrimaryDepartmentIdForEmployee(params.employeeId);
   const additionalDepartmentIds = [...new Set(params.departmentIds.map(value => value.trim()))]
-    .filter(departmentId => departmentId && departmentId !== primaryDepartmentId);
+    .filter(departmentId => Boolean(departmentId));
 
   if (additionalDepartmentIds.length === 0) {
     return [];
@@ -304,8 +302,7 @@ export const adminUsersController = {
 
       const sanitizedUsers = users.map((u: UserProfile) => {
         const deptId = u.employee_id ? empDeptMap[u.employee_id] || null : null;
-        const additionalDepartmentIds = (additionalDepartmentMap.get(u.id) || [])
-          .filter(accessDepartmentId => accessDepartmentId !== deptId);
+        const additionalDepartmentIds = (additionalDepartmentMap.get(u.id) || []);
         const authInfo = authEmailMap[u.id];
         return {
           id: u.id,
@@ -316,7 +313,7 @@ export const adminUsersController = {
           department_name: deptId ? (deptNameMap[deptId] || null) : null,
           additional_department_ids: additionalDepartmentIds,
           managed_department_ids: [...new Set(
-            [deptId, ...additionalDepartmentIds].filter((value): value is string => Boolean(value)),
+            additionalDepartmentIds.filter((value): value is string => Boolean(value)),
           )],
           position_type: roleCodeById.get(u.system_role_id) ?? '',
           imported_position: u.imported_position,
@@ -358,15 +355,14 @@ export const adminUsersController = {
 
       const payload = (employees || []).map(employee => {
         const primaryDepartmentId = employee.org_department_id as string | null;
-        const additionalDepartmentIds = (explicitDepartmentMap.get(employee.id as number) || [])
-          .filter(departmentId => departmentId !== primaryDepartmentId);
+        const additionalDepartmentIds = explicitDepartmentMap.get(employee.id as number) || [];
 
         return {
           employee_id: employee.id,
           full_name: employee.full_name,
           department_id: primaryDepartmentId,
           additional_department_ids: additionalDepartmentIds,
-          managed_department_ids: uniqueStringValues([primaryDepartmentId, ...additionalDepartmentIds]),
+          managed_department_ids: uniqueStringValues(additionalDepartmentIds),
         };
       });
 
@@ -1206,7 +1202,7 @@ export const adminUsersController = {
         data: {
           additional_department_ids: explicitDepartmentIds,
           managed_department_ids: [...new Set(
-            [primaryDepartmentId, ...explicitDepartmentIds].filter((value): value is string => Boolean(value)),
+            explicitDepartmentIds.filter((value): value is string => Boolean(value)),
           )],
         },
       });
@@ -1273,7 +1269,7 @@ export const adminUsersController = {
         success: true,
         data: {
           additional_department_ids: explicitDepartmentIds,
-          managed_department_ids: uniqueStringValues([employee.org_department_id || null, ...explicitDepartmentIds]),
+          managed_department_ids: uniqueStringValues(explicitDepartmentIds),
         },
       });
     } catch (error) {

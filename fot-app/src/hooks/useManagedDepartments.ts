@@ -14,11 +14,8 @@ export const useManagedDepartments = (options?: UseManagedDepartmentsOptions) =>
 
   const managedDepartmentIds = useMemo(() => {
     const ids = profile?.managed_department_ids?.filter(Boolean) || [];
-    if (profile?.department_id && !ids.includes(profile.department_id)) {
-      ids.unshift(profile.department_id);
-    }
     return [...new Set(ids)];
-  }, [profile?.department_id, profile?.managed_department_ids]);
+  }, [profile?.managed_department_ids]);
 
   const allDepartments = useMemo<IFlatDepartmentOption[]>(
     () => getSortedFlatDepartments(structureQuery.data?.departments || []),

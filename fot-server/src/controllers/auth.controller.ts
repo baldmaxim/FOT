@@ -66,7 +66,7 @@ async function buildProfileResponse(
 
   const managed_department_ids = await listManagedDepartmentIdsForUser(
     profile.id,
-    departmentId,
+    null,
     profile.employee_id,
   );
 

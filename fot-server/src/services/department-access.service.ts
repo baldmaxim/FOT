@@ -157,11 +157,11 @@ export async function listExplicitDepartmentIdsForUser(
 
 export async function listManagedDepartmentIdsForUser(
   userId: string,
-  primaryDepartmentId?: string | null,
+  _primaryDepartmentId?: string | null,
   employeeId?: number | null,
 ): Promise<string[]> {
   const explicit = await listExplicitDepartmentIdsForUser(userId, employeeId);
-  return uniqueDepartmentIds([primaryDepartmentId ?? null, ...explicit]);
+  return uniqueDepartmentIds(explicit);
 }
 
 export async function loadManagedDepartmentMap(
@@ -172,7 +172,7 @@ export async function loadManagedDepartmentMap(
       seed.user_id,
       {
         primary_department_id: seed.primary_department_id ?? null,
-        managed_department_ids: uniqueDepartmentIds([seed.primary_department_id ?? null]),
+        managed_department_ids: [],
       },
     ]),
   );
@@ -181,10 +181,7 @@ export async function loadManagedDepartmentMap(
   for (const seed of seeds) {
     const current = result.get(seed.user_id);
     if (!current) continue;
-    current.managed_department_ids = uniqueDepartmentIds([
-      current.primary_department_id,
-      ...(explicitMap.get(seed.user_id) || []),
-    ]);
+    current.managed_department_ids = uniqueDepartmentIds(explicitMap.get(seed.user_id) || []);
   }
 
   return result;

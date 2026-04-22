@@ -1001,7 +1001,7 @@
 
 .userListTableHeader {
   display: grid;
-  grid-template-columns: 1fr 120px 180px 110px 28px;
+  grid-template-columns: 1fr 120px 140px 28px;
   align-items: center;
   padding: 6px 16px;
   gap: 12px;
@@ -1023,7 +1023,7 @@
 
 .userRowHeader {
   display: grid;
-  grid-template-columns: 1fr 120px 180px 110px 28px;
+  grid-template-columns: 1fr 120px 140px 28px;
   align-items: center;
   padding: 10px 16px;
   cursor: pointer;

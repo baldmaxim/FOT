@@ -15,8 +15,8 @@ interface IEmployeeDepartmentAssignmentsTabProps {
   onReload: () => Promise<void>;
 }
 
-const normalizeAdditionalDepartmentIds = (departmentIds: string[], primaryDepartmentId: string | null): string[] => (
-  [...new Set(departmentIds.filter(Boolean))].filter(departmentId => departmentId !== primaryDepartmentId)
+const normalizeAdditionalDepartmentIds = (departmentIds: string[]): string[] => (
+  [...new Set(departmentIds.filter(Boolean))]
 );
 
 const areDepartmentSelectionsEqual = (left: string[], right: string[]): boolean => {
@@ -101,7 +101,6 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
   const getAdditionalDepartmentIds = (employee: EmployeeDepartmentAssignmentFromApi): string[] => (
     normalizeAdditionalDepartmentIds(
       departmentAccessDrafts[employee.employee_id] ?? employee.additional_department_ids ?? [],
-      employee.department_id,
     )
   );
 
@@ -113,14 +112,14 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
 
     setDepartmentAccessDrafts(prev => ({
       ...prev,
-      [employee.employee_id]: normalizeAdditionalDepartmentIds(nextDepartmentIds, employee.department_id),
+      [employee.employee_id]: normalizeAdditionalDepartmentIds(nextDepartmentIds),
     }));
   };
 
   const handleDepartmentAccessReset = (employee: EmployeeDepartmentAssignmentFromApi) => {
     setDepartmentAccessDrafts(prev => ({
       ...prev,
-      [employee.employee_id]: normalizeAdditionalDepartmentIds(employee.additional_department_ids ?? [], employee.department_id),
+      [employee.employee_id]: normalizeAdditionalDepartmentIds(employee.additional_department_ids ?? []),
     }));
     setDepartmentAccessQuery(prev => ({
       ...prev,
@@ -163,9 +162,9 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
         <div>
           <h3>Назначения сотрудников</h3>
           <p>
-            Здесь отображаются все дополнительные отделы и бригады, назначенные сотрудникам напрямую.
-            Это работает и для людей без аккаунта портала: после регистрации и привязки к тому же сотруднику
-            доступы автоматически начнут действовать в табелях и связанных разделах.
+            Здесь назначаются отделы и бригады, за которые сотрудник отвечает как руководитель.
+            Без явного назначения сотрудник не видит ни одного отдела в табелях и связанных разделах.
+            Назначения работают и для людей без аккаунта портала: после регистрации доступы активируются автоматически.
           </p>
         </div>
         <div className={styles.assignmentFilters}>
@@ -204,8 +203,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
           <div className={styles.userListTableHeader}>
             <span>Сотрудник</span>
             <span>Аккаунт</span>
-            <span>Основной отдел</span>
-            <span>Доступы</span>
+            <span>Назначено отделов</span>
             <span></span>
           </div>
 
@@ -213,11 +211,10 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
             const isExpanded = expandedEmployeeId === employee.employee_id;
             const linkedUser = linkedUserByEmployeeId.get(employee.employee_id) || null;
             const additionalDepartmentIds = getAdditionalDepartmentIds(employee);
-            const initialDepartmentIds = normalizeAdditionalDepartmentIds(employee.additional_department_ids ?? [], employee.department_id);
+            const initialDepartmentIds = normalizeAdditionalDepartmentIds(employee.additional_department_ids ?? []);
             const hasDepartmentAccessChanges = !areDepartmentSelectionsEqual(additionalDepartmentIds, initialDepartmentIds);
-            const availableAdditionalDepartments = flatDepts.filter(department => department.id !== employee.department_id);
             const departmentSearchQuery = normalizeText(departmentAccessQuery[employee.employee_id] || '');
-            const filteredAdditionalDepartments = availableAdditionalDepartments.filter(department => (
+            const filteredAdditionalDepartments = flatDepts.filter(department => (
               !departmentSearchQuery || normalizeText(department.name).includes(departmentSearchQuery)
             ));
             const selectedDepartments = additionalDepartmentIds
@@ -226,9 +223,6 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
                 name: `Не найденный отдел (${departmentId.slice(0, 8)})`,
                 level: 0,
               });
-            const primaryDepartmentName = employee.department_id
-              ? (departmentMap.get(employee.department_id)?.name || employee.department_id)
-              : 'Не назначен';
 
             return (
               <div key={employee.employee_id} className={`${styles.userRow} ${isExpanded ? styles.expanded : ''}`}>
@@ -253,10 +247,9 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
                     <span className={styles.userRowRole}>
                       {linkedUser ? 'Есть аккаунт' : 'Без аккаунта'}
                     </span>
-                    <span className={styles.userRowOrg}>{primaryDepartmentName}</span>
                     <div className={styles.userRowStatusCell}>
                       <span className={styles.departmentAccessCount}>
-                        {additionalDepartmentIds.length} доп.
+                        {additionalDepartmentIds.length}
                       </span>
                     </div>
                   </div>
@@ -279,19 +272,14 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
                     <div className={styles.departmentAccessSection}>
                       <div className={styles.departmentAccessHeader}>
                         <div>
-                          <div className={styles.departmentAccessTitle}>Дополнительный доступ к отделам и бригадам</div>
+                          <div className={styles.departmentAccessTitle}>Назначенные отделы и бригады</div>
                           <div className={styles.departmentAccessHint}>
-                            Основной отдел сотрудника задаётся отдельно в кадровой структуре.
-                            Здесь управляются только дополнительные зоны ответственности для табелей и связанных разделов.
+                            Сотрудник видит табели и управляет только теми отделами, которые назначены здесь.
                           </div>
                         </div>
                         <div className={styles.departmentAccessCount}>
                           {additionalDepartmentIds.length} выбрано
                         </div>
-                      </div>
-
-                      <div className={styles.departmentAccessPrimary}>
-                        Основной отдел: <strong>{primaryDepartmentName}</strong>
                       </div>
 
                       <div className={styles.departmentAccessPrimary}>
