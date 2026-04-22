@@ -323,9 +323,7 @@ describe('sigur-monitor.service', () => {
     expect(mockedState.tables.sigur_incidents[0].status).toBe('open');
     expect(mockedState.tables.sigur_incidents[0].severity).toBe('critical');
     expect(mockedState.tables.sigur_incidents[0].detected_by).toBe('presence_polling');
-    expect(mockedState.notificationServiceMock.createMany).toHaveBeenCalledTimes(1);
-    const openedNotificationBatch = ((mockedState.notificationServiceMock.createMany.mock.calls as unknown) as Array<[Array<{ type: string }>]>)[0]?.[0];
-    expect(openedNotificationBatch?.[0]?.type).toBe('sigur_incident_opened');
+    expect(mockedState.notificationServiceMock.createMany).not.toHaveBeenCalled();
   });
 
   it('resolves a critical incident after the configured recovery threshold', async () => {
@@ -358,9 +356,7 @@ describe('sigur-monitor.service', () => {
 
     expect(mockedState.tables.sigur_incidents[0].status).toBe('resolved');
     expect(mockedState.tables.sigur_incidents[0].resolved_at).toBe('2026-04-11T07:03:00.000Z');
-    expect(mockedState.notificationServiceMock.createMany).toHaveBeenCalledTimes(2);
-    const resolvedNotificationBatch = ((mockedState.notificationServiceMock.createMany.mock.calls as unknown) as Array<[Array<{ type: string }>]>)[1]?.[0];
-    expect(resolvedNotificationBatch?.[0]?.type).toBe('sigur_incident_resolved');
+    expect(mockedState.notificationServiceMock.createMany).not.toHaveBeenCalled();
   });
 
   it('does not open a silence incident when historical baseline is below threshold', async () => {
@@ -408,7 +404,7 @@ describe('sigur-monitor.service', () => {
     expect(mockedState.tables.sigur_incidents[0].severity).toBe('warning');
     expect(mockedState.tables.sigur_incidents[0].detected_by).toBe('silence_detector');
     expect(mockedState.tables.sigur_health_checks.at(-1)?.status).toBe('silence');
-    expect(mockedState.notificationServiceMock.createMany).toHaveBeenCalledTimes(1);
+    expect(mockedState.notificationServiceMock.createMany).not.toHaveBeenCalled();
   });
 
   it('uses the external background channel for direct probes', async () => {

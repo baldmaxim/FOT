@@ -1,6 +1,5 @@
 import { supabase } from '../config/database.js';
 import { sigurService } from './sigur.service.js';
-import { notificationService } from './notification.service.js';
 import { settingsService, type ISigurMonitorSettings } from './settings.service.js';
 import {
   SIGUR_MONITOR_LEASE_TTL_SECONDS,
@@ -453,96 +452,6 @@ async function updateIncident(id: number, patch: Partial<ISigurIncident>): Promi
   return data as ISigurIncident;
 }
 
-async function listAlertRecipients(): Promise<string[]> {
-  const { data, error } = await supabase
-    .from('user_profiles')
-    .select('id')
-    .eq('is_approved', true)
-    .in('position_type', ['admin', 'super_admin']);
-
-  if (error) {
-    throw new Error(`Failed to load Sigur incident recipients: ${error.message}`);
-  }
-
-  return (data || []).map(user => user.id);
-}
-
-async function shouldSendOpenNotification(now: Date, settings: ISigurMonitorSettings): Promise<boolean> {
-  const { data, error } = await supabase
-    .from('sigur_incidents')
-    .select('opened_notification_sent_at')
-    .not('opened_notification_sent_at', 'is', null)
-    .order('opened_notification_sent_at', { ascending: false })
-    .limit(1);
-
-  if (error) {
-    throw new Error(`Failed to load Sigur notification cooldown state: ${error.message}`);
-  }
-
-  const lastSentAt = data?.[0]?.opened_notification_sent_at;
-  if (!lastSentAt) return true;
-
-  return now.getTime() - new Date(lastSentAt).getTime() >= settings.alertCooldownMinutes * 60_000;
-}
-
-async function sendIncidentOpenedNotification(incident: ISigurIncident, settings: ISigurMonitorSettings): Promise<ISigurIncident> {
-  if (!(await shouldSendOpenNotification(new Date(), settings))) {
-    return incident;
-  }
-
-  const recipients = await listAlertRecipients();
-  if (recipients.length === 0) return incident;
-
-  const title = incident.severity === 'critical'
-    ? 'Сбой подключения к Sigur'
-    : 'Аномалия потока событий Sigur';
-
-  const body = incident.severity === 'critical'
-    ? 'Канал Sigur недоступен или отвечает с ошибкой. Проверьте интеграцию и журнал мониторинга.'
-    : 'В ожидаемое рабочее окно пропали события Sigur. Проверьте журнал и затронутое окно времени.';
-
-  await notificationService.createMany(recipients.map(userId => ({
-    userId,
-    type: 'sigur_incident_opened',
-    title,
-    body,
-    metadata: {
-      incidentId: incident.id,
-      severity: incident.severity,
-      detectedBy: incident.detected_by,
-      startedAt: incident.started_at,
-      affectedFrom: incident.affected_from,
-    },
-  })));
-
-  return updateIncident(incident.id, {
-    opened_notification_sent_at: new Date().toISOString(),
-  });
-}
-
-async function sendIncidentResolvedNotification(incident: ISigurIncident): Promise<ISigurIncident> {
-  const recipients = await listAlertRecipients();
-  if (recipients.length === 0) return incident;
-
-  await notificationService.createMany(recipients.map(userId => ({
-    userId,
-    type: 'sigur_incident_resolved',
-    title: 'Sigur восстановлен',
-    body: 'Канал Sigur снова работает. Проверьте журнал инцидента и при необходимости скорректируйте табель.',
-    metadata: {
-      incidentId: incident.id,
-      severity: incident.severity,
-      resolvedAt: incident.resolved_at,
-      affectedFrom: incident.affected_from,
-      affectedTo: incident.affected_to,
-    },
-  })));
-
-  return updateIncident(incident.id, {
-    resolved_notification_sent_at: new Date().toISOString(),
-  });
-}
-
 async function openIncident(params: {
   severity: SigurIncidentSeverity;
   detectedBy: SigurMonitorSource;
@@ -589,7 +498,7 @@ async function resolveIncident(incident: ISigurIncident, checkedAt: Date): Promi
   });
 
   runtimeState.activeIncident = null;
-  return sendIncidentResolvedNotification(resolved);
+  return resolved;
 }
 
 async function promoteOpenIncidentToCritical(incident: ISigurIncident, params: {
@@ -655,7 +564,7 @@ async function maybeOpenFailureIncident(input: Required<Pick<IHealthSignalInput,
     meta: input.meta,
   });
 
-  runtimeState.activeIncident = await sendIncidentOpenedNotification(incident, settings);
+  runtimeState.activeIncident = incident;
 }
 
 async function maybeResolveIncident(settings: ISigurMonitorSettings, checkedAt: Date): Promise<void> {
@@ -762,7 +671,7 @@ async function maybeDetectSilence(now = new Date()): Promise<void> {
     },
   });
 
-  runtimeState.activeIncident = await sendIncidentOpenedNotification(incident, settings);
+  runtimeState.activeIncident = incident;
 }
 
 async function performDirectProbe(now = new Date()): Promise<void> {
