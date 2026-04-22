@@ -5,6 +5,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, UserRoundX } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
+import { ApiError } from '../api/client';
 import { scheduleService } from '../services/scheduleService';
 import { workCategoryService } from '../services/workCategoryService';
 import type {
@@ -245,8 +246,13 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   const handleDepartment = async () => {
     if (!deptVal) return;
     setSaving(true);
-    await onSaveDepartment(modalEmp.id, deptVal);
-    setSaving(false);
+    try {
+      await onSaveDepartment(modalEmp.id, deptVal);
+    } catch {
+      // ошибка уже показана в верхнем хендлере через toast
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleCategory = async () => {
@@ -1359,11 +1365,17 @@ export const StaffControlPage: FC = () => {
   }, [closeModal, patchEmployee]);
 
   const handleSaveDepartment = useCallback(async (empId: number, newDeptId: string) => {
-    await employeeService.moveDepartment(empId, newDeptId);
-    closeModal();
-    const deptName = allDepts.find(d => d.id === newDeptId)?.name;
-    patchEmployee(empId, { org_department_id: newDeptId, department: deptName });
-  }, [closeModal, patchEmployee, allDepts]);
+    try {
+      await employeeService.moveDepartment(empId, newDeptId);
+      closeModal();
+      const deptName = allDepts.find(d => d.id === newDeptId)?.name;
+      patchEmployee(empId, { org_department_id: newDeptId, department: deptName });
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : 'Не удалось перенести сотрудника';
+      toast.error(msg);
+      throw e;
+    }
+  }, [closeModal, patchEmployee, allDepts, toast]);
 
   const handleSaveCategory = useCallback(async (empId: number, category: string | null) => {
     await employeeService.changeCategory(empId, category);
