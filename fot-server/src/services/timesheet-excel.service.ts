@@ -17,9 +17,10 @@ const thinBorder: Partial<ExcelJS.Borders> = {
 const applyA4PrintSetup = (ws: ExcelJS.Worksheet, _titleRows: number): void => {
   ws.pageSetup.paperSize = 9;
   ws.pageSetup.orientation = 'landscape';
-  ws.pageSetup.fitToPage = true;
-  ws.pageSetup.fitToWidth = 1;
-  ws.pageSetup.fitToHeight = 0;
+  // fitToPage НЕ ставим: ExcelJS рендерит <sheetPr> в порядке
+  // pageSetUpPr → outlinePr, а OOXML требует outlinePr → pageSetUpPr.
+  // Excel отвергает файл как битый, если оба элемента присутствуют.
+  // Без fitToPage <pageSetUpPr> не попадает в <sheetPr>, конфликта нет.
 };
 // Цвета как в образце "Тердерный отдел.xls"
 const headerFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC0C0C0' } };
