@@ -21,6 +21,15 @@ export const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+export const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: IS_PRODUCTION ? 120 : 300,
+  skip: skipInDev,
+  message: { success: false, error: 'Слишком много запросов обновления сессии, попробуйте позже' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 export const twoFactorLimiter = rateLimit({
   windowMs: 5 * 60 * 1000,
   max: IS_PRODUCTION ? 5 : 20,

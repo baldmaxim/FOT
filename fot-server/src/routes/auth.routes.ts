@@ -2,14 +2,14 @@ import { Router } from 'express';
 import { authController } from '../controllers/auth.controller.js';
 import { auth2faSelfController } from '../controllers/auth-2fa-self.controller.js';
 import { authenticate } from '../middleware/auth.js';
-import { authLimiter, twoFactorLimiter } from '../middleware/rateLimit.js';
+import { authLimiter, refreshLimiter, twoFactorLimiter } from '../middleware/rateLimit.js';
 
 const router = Router();
 
 // Публичные роуты
 router.post('/register', authLimiter, authController.register);
 router.post('/login', authLimiter, authController.login);
-router.post('/refresh', authLimiter, authController.refresh);
+router.post('/refresh', refreshLimiter, authController.refresh);
 router.post('/logout', authController.logout);
 router.post('/forgot-password', authLimiter, authController.forgotPassword);
 router.post('/reset-password', authLimiter, authController.resetPassword);
