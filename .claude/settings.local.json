@@ -51,7 +51,8 @@
       "Read(//tmp/**)",
       "Bash(npx vitest *)",
       "Bash(./node_modules/.bin/tsc --noEmit -p tsconfig.app.json)",
-      "mcp__claude_ai_Supabase__list_projects"
+      "mcp__claude_ai_Supabase__list_projects",
+      "Bash(grep -A6 \"SigurEmployeesTab.tsx$\")"
     ]
   }
 }
