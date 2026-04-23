@@ -467,7 +467,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
       page: employeePage,
       pageSize: EMPLOYEES_PAGE_SIZE,
     }),
-    enabled: selectedDeptId != null || debouncedEmployeeSearch.length > 0,
     placeholderData: previousData => previousData,
   });
 
@@ -519,7 +518,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
     : positionsQuery.error
       ? 'Не удалось загрузить справочник должностей Sigur'
       : '';
-  const isInitialLoading = departmentsQuery.isPending || (employeesQuery.isPending && (selectedDeptId != null || isGlobalSearchMode));
+  const isInitialLoading = departmentsQuery.isPending || employeesQuery.isPending;
 
   const activeManageDepartmentIds = useMemo(() => (
     selectedManageDeptIds.size > 0
@@ -1046,18 +1045,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
   };
 
   const renderEmployeesTable = () => {
-    if (selectedDeptId == null && !isGlobalSearchMode) {
-      return (
-        <div className="ep-emp-list">
-          <div className="ep-empty">
-            <div className="ep-empty-icon"><Users size={28} /></div>
-            <h3>Выберите отдел или ищите глобально</h3>
-            <p>Слева видны все отделы и точные счётчики. Полный список сотрудников загружается только по отделу или явному поиску.</p>
-          </div>
-        </div>
-      );
-    }
-
     if (isInitialLoading && employees.length === 0) {
       return <div className="ep-emp-list"><div className="ep-loading">Загрузка сотрудников Sigur...</div></div>;
     }

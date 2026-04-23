@@ -853,9 +853,20 @@ export async function listSigurEmployees(
   }
 
   if (!selectedDepartmentId) {
+    const offset = (safePage - 1) * safePageSize;
+    const filters = blocked == null ? {} : { blocked };
+    const [pageItems, countRaw] = await Promise.all([
+      sigurService.getEmployeesPage(filters, { limit: safePageSize, offset }, connection),
+      sigurService.getEmployeesCount(filters, connection).catch(() => null),
+    ]);
+    const items = pageItems
+      .map(raw => normalizeSigurEmployeeSummary(raw, departmentNameMap))
+      .filter((employee): employee is ISigurEmployeeSummary => !!employee)
+      .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
+    const total = normalizeInt(countRaw);
     return {
-      items: [],
-      total: 0,
+      items,
+      total: total != null && total >= 0 ? total : items.length,
       page: safePage,
       pageSize: safePageSize,
     };
