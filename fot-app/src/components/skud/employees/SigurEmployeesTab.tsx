@@ -1020,7 +1020,11 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
         >
           <Users size={16} className="ep-dept-icon" />
           <span className="ep-dept-name">Все отделы</span>
-          <span className="ep-dept-count">{totalEmployeesCount}</span>
+          <span className="ep-dept-count">
+            {(selectedDeptId == null && employeesPayload?.meta.total != null)
+              ? employeesPayload.meta.total
+              : totalEmployeesCount}
+          </span>
         </div>
         {departments.map(node => (
           <DepartmentTreeNode

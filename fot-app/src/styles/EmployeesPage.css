@@ -2388,11 +2388,15 @@
 .ep-emp-list {
   padding: 0;
   background: #fff;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .ep-table-shell {
-  min-height: 100%;
-  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: visible;
   border-top: 1px solid #e5e7eb;
 }
 
