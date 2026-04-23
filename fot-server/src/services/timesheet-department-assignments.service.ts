@@ -122,15 +122,19 @@ export const resolveTimesheetDateRange = (
 
 export async function listEmployeeIdsAssignedToDepartmentPeriod(
   departmentId: string,
-  startDate: string,
+  _startDate: string,
   endDate: string,
 ): Promise<number[]> {
+  // Берём только открытые назначения на отдел: сотрудник считается прикреплённым,
+  // пока у него есть строка employee_assignments с effective_to IS NULL.
+  // Закрытые строки (после exclude/перевода) намеренно не учитываем — иначе
+  // сотрудник висит в прежнем отделе до конца периода.
   const { data, error } = await supabase
     .from('employee_assignments')
     .select('employee_id')
     .eq('org_department_id', departmentId)
     .lte('effective_from', endDate)
-    .or(`effective_to.is.null,effective_to.gte.${startDate}`);
+    .is('effective_to', null);
 
   if (error) throw error;
 
