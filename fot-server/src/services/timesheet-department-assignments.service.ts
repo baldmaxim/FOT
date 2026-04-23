@@ -134,7 +134,21 @@ export async function listEmployeeIdsAssignedToDepartmentPeriod(
 
   if (error) throw error;
 
-  const assignmentEmployeeIds = [...new Set((data || []).map(row => Number(row.employee_id)).filter(Number.isFinite))];
+  const rawAssignmentIds = [...new Set((data || []).map(row => Number(row.employee_id)).filter(Number.isFinite))];
+
+  let assignmentEmployeeIds: number[] = [];
+  if (rawAssignmentIds.length > 0) {
+    const { data: activeRows, error: activeError } = await supabase
+      .from('employees')
+      .select('id')
+      .in('id', rawAssignmentIds)
+      .eq('is_archived', false)
+      .eq('excluded_from_timesheet', false)
+      .eq('employment_status', 'active');
+
+    if (activeError) throw activeError;
+    assignmentEmployeeIds = (activeRows || []).map(row => Number(row.id)).filter(Number.isFinite);
+  }
 
   const { data: snapshotEmployees, error: snapshotError } = await supabase
     .from('employees')

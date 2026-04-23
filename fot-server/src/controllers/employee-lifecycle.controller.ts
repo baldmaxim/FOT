@@ -33,7 +33,7 @@ interface IHttpError extends Error {
   code?: string;
 }
 
-interface ITargetDepartmentRow {
+export interface ITargetDepartmentRow {
   id: string;
   sigur_department_id: number | null;
   name: string;
@@ -46,18 +46,18 @@ function createHttpError(status: number, message: string, code?: string): IHttpE
   return error;
 }
 
-function getHttpErrorStatus(error: unknown): number | null {
+export function getHttpErrorStatus(error: unknown): number | null {
   if (!error || typeof error !== 'object') return null;
   const status = 'status' in error ? Number(error.status) : Number.NaN;
   return Number.isFinite(status) ? status : null;
 }
 
-function getHttpErrorCode(error: unknown): string | null {
+export function getHttpErrorCode(error: unknown): string | null {
   if (!error || typeof error !== 'object' || !('code' in error)) return null;
   return typeof error.code === 'string' ? error.code : null;
 }
 
-function getErrorMessage(error: unknown, fallback: string): string {
+export function getErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
   if (error && typeof error === 'object') {
     const e = error as Record<string, unknown>;
@@ -68,7 +68,7 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return typeof error === 'string' && error ? error : fallback;
 }
 
-async function loadEmployeeLifecycleRow(employeeId: number): Promise<EmployeeEncrypted | null> {
+export async function loadEmployeeLifecycleRow(employeeId: number): Promise<EmployeeEncrypted | null> {
   const { data, error } = await supabase
     .from('employees')
     .select(EMPLOYEE_LIFECYCLE_COLUMNS)
@@ -82,7 +82,7 @@ async function loadEmployeeLifecycleRow(employeeId: number): Promise<EmployeeEnc
   return (data as EmployeeEncrypted | null) ?? null;
 }
 
-async function loadTargetDepartment(id: string): Promise<ITargetDepartmentRow | null> {
+export async function loadTargetDepartment(id: string): Promise<ITargetDepartmentRow | null> {
   const { data, error } = await supabase
     .from('org_departments')
     .select('id, sigur_department_id, name')
@@ -115,7 +115,7 @@ async function assertDepartmentMoveAllowed(
   }
 }
 
-async function moveEmployeeToDepartmentInternal(params: {
+export async function moveEmployeeToDepartmentInternal(params: {
   req: AuthenticatedRequest;
   employee: EmployeeEncrypted;
   targetDepartment: ITargetDepartmentRow;

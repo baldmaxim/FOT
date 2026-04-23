@@ -21,7 +21,6 @@ import {
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
 import { hasPageEdit, hasPageView } from '../services/access-control.service.js';
-import { employeeChangesService } from '../services/employee-changes.service.js';
 import { employeeCache } from '../services/employee-cache.service.js';
 import {
   buildAttendanceEntries,
@@ -33,12 +32,21 @@ import {
 import { formatDateToISO } from '../utils/date.utils.js';
 import { OBJECT_ADJUSTMENT_SOURCE_TYPE } from '../services/timesheet-object.service.js';
 import {
+  formatDateShift,
   isEmployeeAssignedToDepartmentOnDate,
   listEmployeeIdsAssignedToDepartmentPeriod,
   resolveTimesheetDateRange,
   resolveTimesheetPeriodRange,
 } from '../services/timesheet-department-assignments.service.js';
 import { fetchTimesheetDataForDepartment } from '../services/timesheet-export.service.js';
+import {
+  getErrorMessage,
+  getHttpErrorCode,
+  getHttpErrorStatus,
+  loadEmployeeLifecycleRow,
+  loadTargetDepartment,
+  moveEmployeeToDepartmentInternal,
+} from './employee-lifecycle.controller.js';
 
 const validStatuses = ['work', 'vacation', 'dayoff', 'remote', 'unpaid', 'absent', 'sick', 'business_trip', 'manual'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
 
@@ -1296,29 +1304,40 @@ export const timesheetController = {
         return res.status(403).json({ success: false, error: 'Нет доступа к управлению составом этого отдела' });
       }
 
-      const { data: employee, error } = await supabase
-        .from('employees')
-        .select('id, full_name, org_department_id, employment_status, excluded_from_timesheet')
-        .eq('id', parsed.employee_id)
-        .single();
-      if (error || !employee) {
+      const [employeeRow, targetDepartment, excludedFlagRow] = await Promise.all([
+        loadEmployeeLifecycleRow(parsed.employee_id),
+        loadTargetDepartment(targetDepartmentId),
+        supabase
+          .from('employees')
+          .select('excluded_from_timesheet')
+          .eq('id', parsed.employee_id)
+          .maybeSingle(),
+      ]);
+
+      if (!employeeRow) {
         return res.status(404).json({ success: false, error: 'Сотрудник не найден' });
       }
-      if (employee.employment_status !== 'active') {
+      if (!targetDepartment) {
+        return res.status(400).json({ success: false, error: 'Целевой отдел не найден' });
+      }
+      if (employeeRow.employment_status !== 'active') {
         return res.status(409).json({ success: false, error: 'Можно добавлять только активных сотрудников' });
       }
       if (await isEmployeeAssignedToDepartmentOnDate(parsed.employee_id, targetDepartmentId, parsed.effective_from)) {
         return res.status(409).json({ success: false, error: 'Сотрудник уже находится в выбранном отделе' });
       }
 
-      await employeeChangesService.changeDepartment(parsed.employee_id, targetDepartmentId, {
+      const fromDepartmentId = employeeRow.org_department_id;
+      const restoredFromExclusion = Boolean(excludedFlagRow.data?.excluded_from_timesheet);
+
+      const moveResult = await moveEmployeeToDepartmentInternal({
+        req,
+        employee: employeeRow,
+        targetDepartment,
         reason: 'Перевод из табеля',
-        createdBy: req.user.id,
-        lockDepartment: true,
         effectiveDate: parsed.effective_from,
       });
 
-      const restoredFromExclusion = Boolean(employee.excluded_from_timesheet);
       if (restoredFromExclusion) {
         const { error: unexcludeError } = await supabase
           .from('employees')
@@ -1338,7 +1357,8 @@ export const timesheetController = {
         entityId: String(parsed.employee_id),
         details: {
           source: 'timesheet_team_management',
-          from_department_id: employee.org_department_id,
+          move_result: moveResult,
+          from_department_id: fromDepartmentId,
           to_department_id: targetDepartmentId,
           effective_from: parsed.effective_from,
           restored_from_exclusion: restoredFromExclusion,
@@ -1351,11 +1371,21 @@ export const timesheetController = {
           employee_id: parsed.employee_id,
           department_id: targetDepartmentId,
           effective_from: parsed.effective_from,
+          move_result: moveResult,
         },
       });
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+      }
+      const status = getHttpErrorStatus(err);
+      if (status) {
+        const code = getHttpErrorCode(err);
+        return res.status(status).json({
+          success: false,
+          error: getErrorMessage(err, 'Ошибка добавления сотрудника в отдел табеля'),
+          ...(code ? { code } : {}),
+        });
       }
       console.error('timesheet.addEmployeeToDepartment error:', err);
       res.status(500).json({ success: false, error: 'Ошибка добавления сотрудника в отдел табеля' });
@@ -1404,6 +1434,16 @@ export const timesheetController = {
         })
         .eq('id', parsed.employee_id);
       if (updateError) throw updateError;
+
+      const todayIso = excludedAt.slice(0, 10);
+      const previousDay = formatDateShift(todayIso, -1);
+      const { error: closeAssignmentError } = await supabase
+        .from('employee_assignments')
+        .update({ effective_to: previousDay, updated_at: excludedAt })
+        .eq('employee_id', parsed.employee_id)
+        .eq('org_department_id', targetDepartmentId)
+        .is('effective_to', null);
+      if (closeAssignmentError) throw closeAssignmentError;
 
       employeeCache.invalidate(parsed.employee_id);
 
