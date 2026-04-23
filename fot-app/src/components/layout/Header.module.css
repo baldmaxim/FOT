@@ -15,11 +15,18 @@
   display: flex;
   align-items: center;
   gap: 16px;
+  min-width: 0;
 }
 
 .title {
   font-size: 15px;
   font-weight: 600;
+}
+
+.titleAddon {
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 
 .right {

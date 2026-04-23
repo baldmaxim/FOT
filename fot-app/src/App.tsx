@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { ProtectedRoute, PublicRoute } from './components/auth/ProtectedRoute';
+import { SigurHeaderBadges } from './components/skud/SigurHeaderBadges';
 import { useTheme } from './hooks/useTheme';
 import { useChatUnreadCount } from './hooks/useChatUnreadCount';
 import { PageLoader } from './components/ui/PageLoader';
@@ -363,7 +364,12 @@ const AppRoutes = () => {
           <Route
             path="/sigur"
             element={
-              <Layout title="SIGUR" theme={theme} onToggleTheme={toggleTheme}>
+              <Layout
+                title="SIGUR"
+                theme={theme}
+                onToggleTheme={toggleTheme}
+                titleAddon={<SigurHeaderBadges />}
+              >
                 <SigurPage />
               </Layout>
             }

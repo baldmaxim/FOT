@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from 'react';
-import type { FC } from 'react';
+import type { FC, ReactNode } from 'react';
 import styles from './Header.module.css';
 import { IconButton } from '../ui/Button';
 import { Tabs } from '../ui/Tabs';
@@ -13,12 +13,20 @@ interface IHeaderProps {
   onToggleTheme: () => void;
   onMenuOpen?: () => void;
   showPeriodTabs?: boolean;
+  titleAddon?: ReactNode;
 }
 
 const periodTabs = ['Сегодня', 'Неделя', 'Месяц'];
 const NotificationBellContent = lazy(() => import('../ui/NotificationBellContent').then(m => ({ default: m.NotificationBellContent })));
 
-export const Header: FC<IHeaderProps> = ({ title, theme, onToggleTheme, onMenuOpen, showPeriodTabs = false }) => {
+export const Header: FC<IHeaderProps> = ({
+  title,
+  theme,
+  onToggleTheme,
+  onMenuOpen,
+  showPeriodTabs = false,
+  titleAddon,
+}) => {
   const [activeTab, setActiveTab] = useState(0);
   const [bellOpen, setBellOpen] = useState(false);
   const [notificationsActivated, setNotificationsActivated] = useState(false);
@@ -46,6 +54,7 @@ export const Header: FC<IHeaderProps> = ({ title, theme, onToggleTheme, onMenuOp
           </button>
         )}
         <h1 className={styles.title}>{title}</h1>
+        {titleAddon && <div className={styles.titleAddon}>{titleAddon}</div>}
         {showPeriodTabs && <Tabs tabs={periodTabs} activeTab={activeTab} onTabChange={setActiveTab} />}
       </div>
 

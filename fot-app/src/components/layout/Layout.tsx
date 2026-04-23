@@ -11,9 +11,17 @@ interface ILayoutProps {
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
   showPeriodTabs?: boolean;
+  titleAddon?: ReactNode;
 }
 
-export const Layout: FC<ILayoutProps> = ({ children, title, theme, onToggleTheme, showPeriodTabs = false }) => {
+export const Layout: FC<ILayoutProps> = ({
+  children,
+  title,
+  theme,
+  onToggleTheme,
+  showPeriodTabs = false,
+  titleAddon,
+}) => {
   const { isOpen, open, close } = useMobileMenu();
   const swipeHandlers = useSwipe({ isOpen, onOpen: open, onClose: close });
 
@@ -22,7 +30,14 @@ export const Layout: FC<ILayoutProps> = ({ children, title, theme, onToggleTheme
       {isOpen && <div className={styles.overlay} onClick={close} />}
       <Sidebar theme={theme} isOpen={isOpen} onClose={close} />
       <main className={styles.main}>
-        <Header title={title} theme={theme} onToggleTheme={onToggleTheme} onMenuOpen={open} showPeriodTabs={showPeriodTabs} />
+        <Header
+          title={title}
+          theme={theme}
+          onToggleTheme={onToggleTheme}
+          onMenuOpen={open}
+          showPeriodTabs={showPeriodTabs}
+          titleAddon={titleAddon}
+        />
         <div className={styles.content}>
           {children}
         </div>

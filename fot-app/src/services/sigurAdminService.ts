@@ -184,10 +184,10 @@ export const sigurAdminService = {
     return {
       items,
       meta: {
-        total: Number(meta?.total || items.length),
-        page: Number(meta?.page || params?.page || 1),
-        pageSize: Number(meta?.pageSize || params?.pageSize || items.length || 1),
-        cacheCount: Number(meta?.cacheCount || items.length),
+        total: Number(meta?.total ?? items.length),
+        page: Number(meta?.page ?? params?.page ?? 1),
+        pageSize: Number(meta?.pageSize ?? params?.pageSize ?? (items.length || 1)),
+        cacheCount: Number(meta?.cacheCount ?? items.length),
         cacheLoading: meta?.cacheLoading === true,
         cacheComplete: meta?.cacheComplete !== false,
       },

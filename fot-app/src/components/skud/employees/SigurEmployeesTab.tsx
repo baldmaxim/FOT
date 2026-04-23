@@ -506,8 +506,11 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
   );
   const isGlobalSearchMode = selectedDeptId == null && debouncedEmployeeSearch.length > 0;
   const selectedDepartmentName = selectedDepartment?.name || (isGlobalSearchMode ? 'Глобальный поиск' : 'Все отделы Sigur');
-  const selectedDepartmentTotal = employeesPayload?.meta.total
+  const rawSelectedDepartmentTotal = employeesPayload?.meta.total
     ?? (isGlobalSearchMode || selectedDeptId != null ? employees.length : totalEmployeesCount);
+  const selectedDepartmentTotal = selectedDeptId == null && !isGlobalSearchMode && employeeStatusFilter === 'all'
+    ? Math.max(rawSelectedDepartmentTotal, totalEmployeesCount)
+    : rawSelectedDepartmentTotal;
   const totalEmployeePages = Math.max(1, Math.ceil(Math.max(1, selectedDepartmentTotal) / EMPLOYEES_PAGE_SIZE));
   const loadError = departmentsQuery.error || employeesQuery.error || null;
   const loadErrorMessage = loadError instanceof Error
@@ -1022,7 +1025,9 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
           <span className="ep-dept-name">Все отделы</span>
           <span className="ep-dept-count">
             {(selectedDeptId == null && employeesPayload?.meta.total != null)
-              ? employeesPayload.meta.total
+              ? (!isGlobalSearchMode && employeeStatusFilter === 'all'
+                ? Math.max(employeesPayload.meta.total, totalEmployeesCount)
+                : employeesPayload.meta.total)
               : totalEmployeesCount}
           </span>
         </div>

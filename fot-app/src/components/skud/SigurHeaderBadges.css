@@ -1,0 +1,68 @@
+.sigur-header-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sigur-header-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.sigur-header-badge__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.sigur-header-badge--active {
+  color: #15803d;
+  background: rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.24);
+}
+
+.sigur-header-badge--inactive {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.22);
+}
+
+.sigur-header-badge--unknown {
+  color: #475569;
+  background: rgba(148, 163, 184, 0.16);
+  border-color: rgba(148, 163, 184, 0.24);
+}
+
+.sigur-header-badge--count {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border-color: var(--border);
+}
+
+@media (max-width: 768px) {
+  .sigur-header-badges {
+    gap: 6px;
+  }
+
+  .sigur-header-badge {
+    padding: 4px 7px;
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 560px) {
+  .sigur-header-badge--count {
+    display: none;
+  }
+}

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../config/database.js', () => ({
   supabase: {
@@ -19,8 +19,40 @@ vi.mock('./sigur-linked-employees.service.js', () => ({
 import {
   buildSigurDepartmentTree,
   collectSigurDepartmentDescendantIds,
+  listSigurEmployees,
   normalizeSigurEmployeeSummary,
 } from './sigur-live-admin.service.js';
+import { sigurService } from './sigur.service.js';
+
+const mockedSigurService = sigurService as unknown as Record<string, ReturnType<typeof vi.fn>>;
+
+const testDepartments = [
+  { id: 1, parentId: null, name: 'Root' },
+  { id: 2, parentId: 1, name: 'Assembly' },
+  { id: 3, parentId: 1, name: 'Warehouse' },
+];
+
+const buildEmployees = (count: number, departmentId = 2, blocked = false): Record<string, unknown>[] => (
+  Array.from({ length: count }, (_, index) => {
+    const id = index + 1;
+    return {
+      id,
+      name: `Employee ${String(id).padStart(3, '0')}`,
+      departmentId,
+      positionId: null,
+      positionName: null,
+      tabId: null,
+      blocked,
+    };
+  })
+);
+
+beforeEach(() => {
+  mockedSigurService.getDepartmentsCached = vi.fn(async () => testDepartments);
+  mockedSigurService.getEmployeeCountByDepartmentCached = vi.fn(async () => new Map([[2, 120], [3, 80]]));
+  mockedSigurService.getEmployeesPage = vi.fn(async () => buildEmployees(100));
+  mockedSigurService.getEmployeesCount = vi.fn(async () => 100);
+});
 
 describe('sigur-live-admin helpers', () => {
   it('collects selected department with all descendants', () => {
@@ -110,6 +142,7 @@ describe('sigur-live-admin helpers', () => {
         name: 'База',
         hasChildren: true,
         employeeCount: 3,
+        employeeCountLoaded: true,
         children: [
           {
             id: 3,
@@ -117,6 +150,7 @@ describe('sigur-live-admin helpers', () => {
             name: 'Администрация',
             hasChildren: true,
             employeeCount: 2,
+            employeeCountLoaded: true,
             children: [
               {
                 id: 4,
@@ -124,6 +158,7 @@ describe('sigur-live-admin helpers', () => {
                 name: 'Бухгалтерия',
                 hasChildren: false,
                 employeeCount: 1,
+                employeeCountLoaded: true,
                 children: [],
               },
             ],
@@ -134,10 +169,61 @@ describe('sigur-live-admin helpers', () => {
             name: 'Склад',
             hasChildren: false,
             employeeCount: 1,
+            employeeCountLoaded: true,
             children: [],
           },
         ],
       },
     ]);
+  });
+
+  it('uses object count for all employees pagination', async () => {
+    mockedSigurService.getEmployeesCount.mockResolvedValueOnce({ count: 237 });
+
+    const result = await listSigurEmployees(
+      { departmentId: null, search: null, blocked: null },
+      { page: 1, pageSize: 100 },
+    );
+
+    expect(result.items).toHaveLength(100);
+    expect(result.total).toBe(237);
+    expect(mockedSigurService.getEmployeesPage).toHaveBeenCalledWith({}, { limit: 100, offset: 0 }, undefined);
+    expect(mockedSigurService.getEmployeeCountByDepartmentCached).not.toHaveBeenCalled();
+  });
+
+  it('falls back to department count sum when all employees count is not parseable', async () => {
+    mockedSigurService.getEmployeesCount.mockResolvedValueOnce({ unexpected: true });
+
+    const result = await listSigurEmployees(
+      { departmentId: null, search: null, blocked: null },
+      { page: 1, pageSize: 100 },
+    );
+
+    expect(result.items).toHaveLength(100);
+    expect(result.total).toBe(200);
+    expect(mockedSigurService.getEmployeeCountByDepartmentCached).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses count endpoint for filtered department employees', async () => {
+    mockedSigurService.getEmployeesPage.mockResolvedValueOnce(buildEmployees(100, 2, false));
+    mockedSigurService.getEmployeesCount.mockResolvedValueOnce({ data: { totalCount: 142 } });
+
+    const result = await listSigurEmployees(
+      { departmentId: 2, search: null, blocked: false },
+      { page: 1, pageSize: 100 },
+    );
+
+    expect(result.items).toHaveLength(100);
+    expect(result.total).toBe(142);
+    expect(mockedSigurService.getEmployeesPage).toHaveBeenCalledWith(
+      { departmentId: 2, blocked: false },
+      { limit: 100, offset: 0 },
+      undefined,
+    );
+    expect(mockedSigurService.getEmployeesCount).toHaveBeenCalledWith(
+      { departmentId: 2, blocked: false },
+      undefined,
+    );
+    expect(mockedSigurService.getEmployeeCountByDepartmentCached).not.toHaveBeenCalled();
   });
 });

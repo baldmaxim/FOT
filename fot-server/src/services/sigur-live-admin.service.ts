@@ -166,6 +166,30 @@ function normalizeInt(value: unknown): number | null {
   return null;
 }
 
+function normalizeSigurEmployeesCount(value: unknown): number | null {
+  const normalized = normalizeInt(value);
+  if (normalized != null && normalized >= 0) {
+    return normalized;
+  }
+
+  if (Array.isArray(value)) {
+    return value.length === 1 ? normalizeSigurEmployeesCount(value[0]) : null;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const preferredKeys = ['count', 'total', 'totalCount', 'employeeCount'];
+  for (const key of preferredKeys) {
+    const count = normalizeSigurEmployeesCount(record[key]);
+    if (count != null) return count;
+  }
+
+  return normalizeSigurEmployeesCount(record.data);
+}
+
 function normalizeBoolean(value: unknown): boolean | null {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') return value !== 0;
@@ -706,7 +730,7 @@ async function searchEmployeesDirectly(
 
   const total = variants.length > 1
     ? items.length
-    : (normalizeInt(countRaw) || items.length);
+    : (normalizeSigurEmployeesCount(countRaw) ?? items.length);
   return {
     items,
     total,
@@ -863,10 +887,15 @@ export async function listSigurEmployees(
       .map(raw => normalizeSigurEmployeeSummary(raw, departmentNameMap))
       .filter((employee): employee is ISigurEmployeeSummary => !!employee)
       .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
-    const total = normalizeInt(countRaw);
+    let total = normalizeSigurEmployeesCount(countRaw);
+    if (total == null) {
+      total = blocked == null
+        ? sumDirectEmployeeCounts(await getDirectDepartmentCounts(connection))
+        : items.length;
+    }
     return {
       items,
-      total: total != null && total >= 0 ? total : items.length,
+      total,
       page: safePage,
       pageSize: safePageSize,
     };
@@ -882,7 +911,6 @@ export async function listSigurEmployees(
     };
   }
 
-  const directCounts = await getDirectDepartmentCounts(connection);
   if (search) {
     return searchEmployeesDirectly(
       search,
@@ -895,18 +923,30 @@ export async function listSigurEmployees(
   }
 
   const offset = (safePage - 1) * safePageSize;
-  const items = (await sigurService.getEmployeesPage(
-    { departmentId: selectedDepartmentId, ...(blocked == null ? {} : { blocked }) },
-    { limit: safePageSize, offset },
-    connection,
-  ))
+  const employeeFilters = { departmentId: selectedDepartmentId, ...(blocked == null ? {} : { blocked }) };
+  const [pageItems, countRaw, directCounts] = await Promise.all([
+    sigurService.getEmployeesPage(
+      employeeFilters,
+      { limit: safePageSize, offset },
+      connection,
+    ),
+    blocked == null
+      ? Promise.resolve(null)
+      : sigurService.getEmployeesCount(employeeFilters, connection).catch(() => null),
+    blocked == null
+      ? getDirectDepartmentCounts(connection)
+      : Promise.resolve(new Map<number, number>()),
+  ]);
+  const items = pageItems
     .map(raw => normalizeSigurEmployeeSummary(raw, departmentNameMap))
     .filter((employee): employee is ISigurEmployeeSummary => !!employee)
     .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
 
   return {
     items,
-    total: blocked == null ? (directCounts.get(selectedDepartmentId) || 0) : items.length,
+    total: blocked == null
+      ? (directCounts.get(selectedDepartmentId) || 0)
+      : (normalizeSigurEmployeesCount(countRaw) ?? items.length),
     page: safePage,
     pageSize: safePageSize,
   };
