@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { getFullDayThresholdHoursForDate, isWorkingDay } from './schedule.service.js';
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 
@@ -17,11 +18,32 @@ const thinBorder: Partial<ExcelJS.Borders> = {
 const applyA4PrintSetup = (ws: ExcelJS.Worksheet, _titleRows: number): void => {
   ws.pageSetup.paperSize = 9;
   ws.pageSetup.orientation = 'landscape';
-  // fitToPage НЕ ставим: ExcelJS рендерит <sheetPr> в порядке
-  // pageSetUpPr → outlinePr, а OOXML требует outlinePr → pageSetUpPr.
-  // Excel отвергает файл как битый, если оба элемента присутствуют.
-  // Без fitToPage <pageSetUpPr> не попадает в <sheetPr>, конфликта нет.
+  ws.pageSetup.fitToPage = true;
+  ws.pageSetup.fitToWidth = 1;
+  ws.pageSetup.fitToHeight = 1;
 };
+
+/**
+ * ExcelJS 4.4.0 рендерит дочерние элементы <sheetPr> в порядке
+ * pageSetUpPr → outlinePr, но OOXML (CT_SheetPr) требует outlinePr → pageSetUpPr.
+ * Excel строго валидирует по XSD и считает такой файл битым («часть sheet1.xml
+ * с ошибкой XML»). Этот хелпер берёт выхлоп writeBuffer, распаковывает zip,
+ * меняет порядок внутри <sheetPr> и запаковывает обратно.
+ */
+export async function writeTimesheetWorkbookBuffer(wb: ExcelJS.Workbook): Promise<Buffer> {
+  const raw = Buffer.from(await wb.xlsx.writeBuffer() as ArrayBuffer);
+  const zip = await JSZip.loadAsync(raw);
+  const reorder = (xml: string): string => xml.replace(
+    /<sheetPr(\s[^>]*)?>(<pageSetUpPr[^/]*\/>)(<outlinePr[^/]*\/>)<\/sheetPr>/,
+    '<sheetPr$1>$3$2</sheetPr>',
+  );
+  const sheetPaths = Object.keys(zip.files).filter(p => /^xl\/worksheets\/sheet\d+\.xml$/.test(p));
+  for (const p of sheetPaths) {
+    const content = await zip.file(p)!.async('string');
+    zip.file(p, reorder(content));
+  }
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
 // Цвета как в образце "Тердерный отдел.xls"
 const headerFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC0C0C0' } };
 const docRowFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDE8DF' } };

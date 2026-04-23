@@ -19,6 +19,7 @@ import {
   buildTimesheetSheet,
   listObjectExportTargets,
   sanitizeSheetName,
+  writeTimesheetWorkbookBuffer,
 } from '../services/timesheet-excel.service.js';
 import { formatAssignedFolderName, formatNameWithInitials } from '../utils/fio.utils.js';
 
@@ -188,13 +189,13 @@ async function buildFilesForAssignedEmployee(params: {
         if (!exportAs1C) {
           buildObjectTimesheetSheet(wb, sanitizeSheetName(target.object_name), data, target);
         }
-        const buf = await wb.xlsx.writeBuffer();
+        const buf = await writeTimesheetWorkbookBuffer(wb);
         let base = sanitizeFileName(`${data.departmentName}_${target.object_name}_${MONTH_NAMES[mon]}_${year}`);
         base += halfSuffix;
         base += templateSuffix;
         base += presentationSuffix;
         const unique = dedupeName(usedNames, base);
-        files.push({ name: `${unique}.xlsx`, data: Buffer.from(buf) });
+        files.push({ name: `${unique}.xlsx`, data: buf });
       }
       continue;
     }
@@ -205,13 +206,13 @@ async function buildFilesForAssignedEmployee(params: {
     if (!exportAs1C) {
       buildTimesheetSheet(wb, sanitizeSheetName(data.departmentName), data);
     }
-    const buf = await wb.xlsx.writeBuffer();
+    const buf = await writeTimesheetWorkbookBuffer(wb);
     let base = sanitizeFileName(`${data.departmentName}_${MONTH_NAMES[mon]}_${year}_${leaderFio || 'Руководитель'}`);
     base += halfSuffix;
     base += templateSuffix;
     base += presentationSuffix;
     const unique = dedupeName(usedNames, base);
-    files.push({ name: `${unique}.xlsx`, data: Buffer.from(buf) });
+    files.push({ name: `${unique}.xlsx`, data: buf });
   }
 
   return files;

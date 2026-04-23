@@ -17,6 +17,7 @@ import {
   buildTimesheetSheet,
   listObjectExportTargets,
   sanitizeSheetName,
+  writeTimesheetWorkbookBuffer,
 } from '../services/timesheet-excel.service.js';
 
 const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
@@ -126,7 +127,7 @@ export async function exportTimesheetMass(req: AuthenticatedRequest, res: Respon
               buildObjectTimesheetSheet(wb, sanitizeSheetName(target.object_name), data, target);
             }
 
-            const buf = await wb.xlsx.writeBuffer();
+            const buf = await writeTimesheetWorkbookBuffer(wb);
 
             let baseName = `${data.departmentName}_${target.object_name}_${MONTH_NAMES[mon]}_${year}`
               .replace(/[\/\\?%*:|"<>]/g, '_');
@@ -140,7 +141,7 @@ export async function exportTimesheetMass(req: AuthenticatedRequest, res: Respon
             }
             usedNames.add(baseName);
 
-            archive.append(Buffer.from(buf), { name: `${baseName}.xlsx` });
+            archive.append(buf, { name: `${baseName}.xlsx` });
           }
           continue;
         }
@@ -153,7 +154,7 @@ export async function exportTimesheetMass(req: AuthenticatedRequest, res: Respon
           buildTimesheetSheet(wb, sanitizeSheetName(data.departmentName), data);
         }
 
-        const buf = await wb.xlsx.writeBuffer();
+        const buf = await writeTimesheetWorkbookBuffer(wb);
 
         let baseName = `${data.departmentName}_${MONTH_NAMES[mon]}_${year}`
           .replace(/[\/\\?%*:|"<>]/g, '_');
@@ -167,7 +168,7 @@ export async function exportTimesheetMass(req: AuthenticatedRequest, res: Respon
         }
         usedNames.add(baseName);
 
-        archive.append(Buffer.from(buf), { name: `${baseName}.xlsx` });
+        archive.append(buf, { name: `${baseName}.xlsx` });
       }
     }
 

@@ -5,7 +5,7 @@ import {
   fetchTimesheetDataForDepartment,
   type TimesheetExportRangeArg,
 } from '../services/timesheet-export.service.js';
-import { buildTimesheetSheet } from '../services/timesheet-excel.service.js';
+import { buildTimesheetSheet, writeTimesheetWorkbookBuffer } from '../services/timesheet-excel.service.js';
 import { resolveRequestDataScope, resolveScopedDepartmentId } from '../services/data-scope.service.js';
 
 const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
@@ -56,7 +56,7 @@ export async function exportTimesheet(req: AuthenticatedRequest, res: Response) 
     const wb = new ExcelJS.Workbook();
     buildTimesheetSheet(wb, 'Табель', data);
 
-    const buf = await wb.xlsx.writeBuffer();
+    const buf = await writeTimesheetWorkbookBuffer(wb);
     const isCustomRange = typeof rangeArg === 'object';
     let segmentSuffix = '';
     if (isCustomRange) {
@@ -74,7 +74,7 @@ export async function exportTimesheet(req: AuthenticatedRequest, res: Response) 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition',
       `attachment; filename="${encodeURIComponent(safeFileName)}"; filename*=UTF-8''${encodeURIComponent(safeFileName)}`);
-    res.send(Buffer.from(buf));
+    res.send(buf);
   } catch (err) {
     console.error('timesheet.export error:', err);
     if (!res.headersSent) {
