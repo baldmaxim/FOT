@@ -77,6 +77,8 @@ export async function exportTimesheet(req: AuthenticatedRequest, res: Response) 
     res.send(Buffer.from(buf));
   } catch (err) {
     console.error('timesheet.export error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка экспорта' });
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, error: 'Ошибка экспорта' });
+    }
   }
 }

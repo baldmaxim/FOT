@@ -391,6 +391,9 @@ export function buildTimesheetSheet(
   const totalCols = colHours + 1;                      // last col
 
   const ws = wb.addWorksheet(sheetName);
+  // Баг ExcelJS 4.4.0: worksheet.properties.dyDescent по дефолту = 55 (должно быть 0.25).
+  // Excel считает x14ac:dyDescent="55" невалидным и отказывается открывать файл.
+  ws.properties.dyDescent = 0.25;
   ws.properties.outlineLevelRow = 1;
   ws.properties.outlineProperties = {
     summaryBelow: false,
@@ -729,6 +732,7 @@ export function buildObjectTimesheetSheet(
     .sort((left, right) => left.full_name.localeCompare(right.full_name, 'ru'));
 
   const ws = wb.addWorksheet(sheetName);
+  ws.properties.dyDescent = 0.25;
   const centerAlign: Partial<ExcelJS.Alignment> = { horizontal: 'center', vertical: 'middle', wrapText: true };
 
   ws.getColumn(COL_NUM).width = 6;
