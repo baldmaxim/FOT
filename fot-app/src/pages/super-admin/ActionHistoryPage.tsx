@@ -138,6 +138,21 @@ function formatDetails(action: string, details: Record<string, unknown> | null):
   const fio = asString(details.employee_full_name) || asString(details.full_name);
 
   switch (action) {
+    case 'LOGIN_FAILED': {
+      const email = asString(details.email);
+      const reason = asString(details.reason);
+      const ru = reason === 'Invalid login credentials' ? 'неверный email или пароль' : reason;
+      if (email && ru) return `${email} — ${ru}`;
+      return email || ru || '';
+    }
+    case 'PASSWORD_RESET_REQUESTED': {
+      const email = asString(details.email);
+      return email ? `Email: ${email}` : '';
+    }
+    case 'PASSWORD_RESET_COMPLETED': {
+      const method = asString(details.method);
+      return method === 'reset_token' ? 'По ссылке сброса' : (method || '');
+    }
     case 'MOVE_EMPLOYEE_DEPARTMENT': {
       const from = asString(details.from_department_name) || asString(details.from_department_id) || '—';
       const to = asString(details.to_department_name) || asString(details.to_department_id) || asString(details.org_department_id) || '—';
