@@ -189,8 +189,10 @@ function formatDetails(action: string, details: Record<string, unknown> | null):
     case 'POSITION_CHANGED': {
       const to = asString(details.new_position_type) || asString(details.to) || asString(details.position_type);
       const from = asString(details.from) || asString(details.old);
-      if (from && to) return `«${from}» → «${to}»`;
-      return to ? `Новая должность: ${to}` : '';
+      const full = asString(details.full_name);
+      const prefix = full ? `${full}: ` : '';
+      if (from && to) return `${prefix}«${from}» → «${to}»`;
+      return to ? `${prefix}Новая должность: ${to}` : '';
     }
     case 'NAME_CHANGED': {
       const full = asString(details.full_name);
@@ -209,8 +211,15 @@ function formatDetails(action: string, details: Record<string, unknown> | null):
     }
     case 'USER_DEPARTMENT_ACCESS_CHANGED': {
       const n = asString(details.assigned_department_count) || asString(details.imported_department_count);
-      const name = asString(details.employee_name);
+      const name = asString(details.employee_full_name) || asString(details.employee_name) || asString(details.full_name);
+      const raw = details.assigned_department_names;
+      const depts = Array.isArray(raw) ? raw.map(String).filter(Boolean) : [];
+      const deptList = depts.length
+        ? (depts.length <= 3 ? depts.join(', ') : `${depts.slice(0, 3).join(', ')} (+${depts.length - 3})`)
+        : '';
+      if (name && deptList) return `${name} → ${deptList}`;
       if (name && n) return `${name}: ${n} отдел(ов)`;
+      if (deptList) return deptList;
       if (n) return `Назначено: ${n} отдел(ов)`;
       return '';
     }
@@ -237,7 +246,17 @@ function formatDetails(action: string, details: Record<string, unknown> | null):
         const s = asString(details.status);
         const label = s ? (TIMESHEET_STATUS_LABELS[s] ?? s) : null;
         const emps = typeof details.employees === 'number' ? details.employees : null;
-        return `Массово: ${details.count} записей${emps ? `, ${emps} сотруд.` : ''}${label ? `, ${label}` : ''}`;
+        const rawNames = details.employee_names;
+        const names = Array.isArray(rawNames) ? rawNames.map(String).filter(Boolean) : [];
+        const namesStr = names.length
+          ? (names.length <= 2 ? names.join(', ') : `${names.slice(0, 2).join(', ')} (+${names.length - 2})`)
+          : '';
+        const df = fmtDate(asString(details.date_from));
+        const dt = fmtDate(asString(details.date_to));
+        const period = df && dt ? (df === dt ? df : `${df} – ${dt}`) : '';
+        const head = namesStr || (emps ? `${emps} сотруд.` : '');
+        const parts = [label, period, `${details.count} записей`].filter(Boolean).join(', ');
+        return head ? `${head}: ${parts}` : `Массово: ${parts}`;
       }
       const objName = asString(details.object_name);
       if (objName || asString(details.object_key)) {

@@ -47,6 +47,11 @@ import {
   loadTargetDepartment,
   moveEmployeeToDepartmentInternal,
 } from './employee-lifecycle.controller.js';
+import {
+  loadEmployeeFullName as loadEmployeeFullNameForAudit,
+  loadDepartmentName as loadDepartmentNameForAudit,
+  loadEmployeeFullNamesMap,
+} from '../services/audit-context.helpers.js';
 
 const validStatuses = ['work', 'vacation', 'dayoff', 'remote', 'unpaid', 'absent', 'sick', 'business_trip', 'manual'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
 
@@ -106,33 +111,6 @@ const teamManagementAddEmployeeSchema = teamManagementMutationSchema.extend({
 
 const MANAGED_TIMESHEET_PAGE_KEYS = ['/timesheet', '/timesheet-hr'] as const;
 const TIMESHEET_TEAM_MANAGEMENT_PAGE_KEY = '/timesheet/team-management';
-
-async function loadEmployeeFullNameForAudit(employeeId: number): Promise<string | null> {
-  try {
-    const { data } = await supabase
-      .from('employees')
-      .select('full_name')
-      .eq('id', employeeId)
-      .maybeSingle();
-    return (data?.full_name as string | null) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-async function loadDepartmentNameForAudit(departmentId: string | null | undefined): Promise<string | null> {
-  if (!departmentId) return null;
-  try {
-    const { data } = await supabase
-      .from('org_departments')
-      .select('name')
-      .eq('id', departmentId)
-      .maybeSingle();
-    return (data?.name as string | null) ?? null;
-  } catch {
-    return null;
-  }
-}
 
 interface IManagedDepartmentTimesheetSummary {
   department_id: string;
@@ -1133,6 +1111,21 @@ export const timesheetController = {
         created_by: req.user.id,
       })));
 
+      const auditNamesMap = await loadEmployeeFullNamesMap(employeeIds);
+      const auditEmployeeNames = employeeIds
+        .map(empId => auditNamesMap.get(empId))
+        .filter((name): name is string => Boolean(name));
+      const MAX_AUDIT_NAMES = 10;
+      const truncatedNames = auditEmployeeNames.length > MAX_AUDIT_NAMES
+        ? [
+            ...auditEmployeeNames.slice(0, MAX_AUDIT_NAMES),
+            `+${auditEmployeeNames.length - MAX_AUDIT_NAMES}`,
+          ]
+        : auditEmployeeNames;
+      const sortedDates = uniqueItems.map(item => item.work_date).sort();
+      const dateFrom = sortedDates[0] ?? null;
+      const dateTo = sortedDates[sortedDates.length - 1] ?? null;
+
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_TIMESHEET_ENTRY', {
         entityType: 'timesheet',
         entityId: `bulk:${Date.now()}`,
@@ -1140,6 +1133,9 @@ export const timesheetController = {
           count: uniqueItems.length,
           employees: employeeIds.length,
           status: parsed.status,
+          employee_names: truncatedNames,
+          date_from: dateFrom,
+          date_to: dateTo,
         },
       });
 

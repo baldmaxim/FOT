@@ -18,6 +18,11 @@ import {
 } from '../services/manager-department-import.service.js';
 import { employeeChangesService } from '../services/employee-changes.service.js';
 import { employeeCache } from '../services/employee-cache.service.js';
+import {
+  loadEmployeeFullNamesMap,
+  loadDepartmentNamesMap,
+  loadUserFullName,
+} from '../services/audit-context.helpers.js';
 
 const approveUserSchema = z.object({
   position_type: z.string().min(1),
@@ -491,6 +496,13 @@ export const adminUsersController = {
       let appliedUsers = 0;
       let appliedLinks = 0;
 
+      const auditEmployeeNames = await loadEmployeeFullNamesMap(
+        normalizedAssignments.map(assignment => assignment.employee_id),
+      );
+      const auditDepartmentNames = await loadDepartmentNamesMap(
+        normalizedAssignments.flatMap(assignment => assignment.department_ids),
+      );
+
       for (const assignment of normalizedAssignments) {
         const savedDepartmentIds = await upsertEmployeeDepartmentAccess({
           employeeId: assignment.employee_id,
@@ -506,6 +518,10 @@ export const adminUsersController = {
         appliedUsers += 1;
         appliedLinks += savedDepartmentIds.length;
 
+        const assignedDepartmentNames = savedDepartmentIds
+          .map(deptId => auditDepartmentNames.get(deptId))
+          .filter((name): name is string => Boolean(name));
+
         await auditService.logFromRequest(req, req.user.id, 'USER_DEPARTMENT_ACCESS_CHANGED', {
           entityType: 'employee',
           entityId: String(assignment.employee_id),
@@ -515,6 +531,8 @@ export const adminUsersController = {
             imported_department_ids: savedDepartmentIds,
             imported_department_count: savedDepartmentIds.length,
             employee_id: assignment.employee_id,
+            employee_full_name: auditEmployeeNames.get(assignment.employee_id) ?? null,
+            assigned_department_names: assignedDepartmentNames,
           },
         });
       }
@@ -934,6 +952,18 @@ export const adminUsersController = {
         return;
       }
 
+      const { data: beforeProfileRaw } = await supabase
+        .from('user_profiles')
+        .select('full_name, system_roles:system_role_id(code)')
+        .eq('id', id)
+        .maybeSingle();
+      const beforeProfile = beforeProfileRaw as
+        | { full_name: string | null; system_roles: { code: string | null } | { code: string | null }[] | null }
+        | null;
+      const beforeRoleCode = Array.isArray(beforeProfile?.system_roles)
+        ? (beforeProfile?.system_roles[0]?.code ?? null)
+        : (beforeProfile?.system_roles?.code ?? null);
+
       const { error } = await supabase
         .from('user_profiles')
         .update({
@@ -950,7 +980,11 @@ export const adminUsersController = {
       await auditService.logFromRequest(req, req.user.id, 'POSITION_CHANGED', {
         entityType: 'user',
         entityId: id,
-        details: { new_position_type: roleAssignment.code },
+        details: {
+          new_position_type: roleAssignment.code,
+          from: beforeRoleCode,
+          full_name: beforeProfile?.full_name ?? null,
+        },
       });
 
       res.json({ success: true, message: 'Position updated successfully' });
@@ -1096,12 +1130,22 @@ export const adminUsersController = {
         source: 'manual_admin_ui',
       });
 
+      const [userFullName, departmentNamesMap] = await Promise.all([
+        loadUserFullName(id),
+        loadDepartmentNamesMap(explicitDepartmentIds),
+      ]);
+      const assignedDepartmentNames = explicitDepartmentIds
+        .map(deptId => departmentNamesMap.get(deptId))
+        .filter((name): name is string => Boolean(name));
+
       await auditService.logFromRequest(req, req.user.id, 'USER_DEPARTMENT_ACCESS_CHANGED', {
         entityType: 'user',
         entityId: id,
         details: {
           assigned_department_ids: explicitDepartmentIds,
           assigned_department_count: explicitDepartmentIds.length,
+          full_name: userFullName,
+          assigned_department_names: assignedDepartmentNames,
         },
       });
 
@@ -1157,14 +1201,21 @@ export const adminUsersController = {
         source: 'manual_admin_ui',
       });
 
+      const departmentNamesMap = await loadDepartmentNamesMap(explicitDepartmentIds);
+      const assignedDepartmentNames = explicitDepartmentIds
+        .map(deptId => departmentNamesMap.get(deptId))
+        .filter((name): name is string => Boolean(name));
+
       await auditService.logFromRequest(req, req.user.id, 'USER_DEPARTMENT_ACCESS_CHANGED', {
         entityType: 'employee',
         entityId: String(employeeId),
         details: {
           employee_id: employeeId,
           employee_name: employee.full_name,
+          employee_full_name: employee.full_name,
           assigned_department_ids: explicitDepartmentIds,
           assigned_department_count: explicitDepartmentIds.length,
+          assigned_department_names: assignedDepartmentNames,
         },
       });
 
