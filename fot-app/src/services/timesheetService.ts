@@ -39,6 +39,35 @@ interface BulkTimesheetCorrectionResult {
   employees: number;
 }
 
+export interface ITimesheetCorrectionRow {
+  id: number;
+  employee_id: number;
+  employee_full_name: string | null;
+  work_date: string;
+  status: TimesheetStatus;
+  hours_override: number | null;
+  source_type: string;
+  reason: string | null;
+  author_name: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  can_edit: boolean;
+  can_delete: boolean;
+  approval_locked: boolean;
+}
+
+export interface ITimesheetRefreshResult {
+  sync: {
+    sigurTotal?: number;
+    imported?: number;
+    skipped?: number;
+    errors_count?: number;
+    matched?: number;
+  } | null;
+  conflicts: Array<{ employee_id: number; work_date: string; skud_minutes: number }>;
+}
+
 export const timesheetService = {
   async getAll(filters: TimesheetFilters): Promise<TimesheetResponse> {
     const params = new URLSearchParams();
@@ -90,6 +119,27 @@ export const timesheetService = {
   async update(id: number, data: Partial<Pick<TimesheetEntry, 'status' | 'hours_worked' | 'notes'>>): Promise<TimesheetEntry> {
     const res = await apiClient.put<ApiResponse<TimesheetEntry>>(`/timesheet/${id}`, data);
     if (!res.data) throw new Error(res.error || 'Ошибка обновления записи');
+    return res.data;
+  },
+
+  async delete(id: number): Promise<void> {
+    const res = await apiClient.request<ApiResponse<null>>(`/timesheet/${id}`, { method: 'DELETE' });
+    if (res.error) throw new Error(res.error);
+  },
+
+  async listCorrections(filters: { start_date: string; end_date: string; department_id?: string }): Promise<ITimesheetCorrectionRow[]> {
+    const params = new URLSearchParams();
+    params.append('start_date', filters.start_date);
+    params.append('end_date', filters.end_date);
+    if (filters.department_id) params.append('department_id', filters.department_id);
+    const res = await apiClient.get<ApiResponse<ITimesheetCorrectionRow[]>>(`/timesheet/corrections?${params.toString()}`);
+    if (!res.data) throw new Error(res.error || 'Ошибка загрузки корректировок');
+    return res.data;
+  },
+
+  async refresh(payload: { start_date: string; end_date: string }): Promise<ITimesheetRefreshResult> {
+    const res = await apiClient.post<ApiResponse<ITimesheetRefreshResult>>('/timesheet/refresh', payload);
+    if (!res.data) throw new Error(res.error || 'Ошибка обновления табеля');
     return res.data;
   },
 

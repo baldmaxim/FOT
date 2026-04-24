@@ -10,6 +10,7 @@ import {
 } from '../../services/timesheetApprovalService';
 import { useTimesheetApprovalStatus, useTimesheetDepartmentApprovals } from '../../hooks/useTimesheetApprovalData';
 import { formatTimesheetRangeLabel } from '../../utils/timesheetApprovalPeriod';
+import { TimesheetSubmitModal } from './TimesheetSubmitModal';
 
 interface IProps {
   departmentId: string | null;
@@ -144,6 +145,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const monthApprovals = useTimesheetDepartmentApprovals(departmentId, month);
   const [loading, setLoading] = useState(false);
   const [comment, setComment] = useState('');
+  const [submitModalOpen, setSubmitModalOpen] = useState(false);
 
   const invalidate = () => Promise.all([
     queryClient.invalidateQueries({ queryKey: ['timesheet-approval'] }),
@@ -163,7 +165,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
 
   const handleSubmit = async () => {
     if (!departmentId) return;
-    await runAction(() => timesheetApprovalService.submit(departmentId, startDate, endDate).then(() => undefined));
+    setSubmitModalOpen(true);
   };
 
   const handleApprove = async () => {
@@ -228,6 +230,19 @@ export const TimesheetApprovalBar: FC<IProps> = ({
             })}
           </ul>
         </div>
+      )}
+      {departmentId && (
+        <TimesheetSubmitModal
+          open={submitModalOpen}
+          departmentId={departmentId}
+          startDate={startDate}
+          endDate={endDate}
+          onClose={() => setSubmitModalOpen(false)}
+          onSubmitted={async () => {
+            setSubmitModalOpen(false);
+            await invalidate();
+          }}
+        />
       )}
     </div>
   );

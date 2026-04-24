@@ -10,6 +10,7 @@ import {
   calculateWorkSeconds,
   findFirstExternalEntry,
   findLastExternalExit,
+  sumBreakSeconds,
 } from '../../utils/skudDisplay';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 
@@ -129,6 +130,7 @@ const EventsTab: FC<{
   const totalSec = visibleHours != null
     ? Math.max(0, Math.round(visibleHours * 3600))
     : fallbackTotalSec;
+  const breakSec = sumBreakSeconds(displayItems);
   const firstEntry = timesheetEntry?.first_entry || fallbackFirstEntry?.event_time || null;
   const lastExit = timesheetEntry?.last_exit || fallbackLastExit?.event_time || null;
 
@@ -193,6 +195,11 @@ const EventsTab: FC<{
         {totalSec > 0 && (
           <span className="skud-time-badge duration">
             <Timer size={12} /> {formatDuration(totalSec)}
+          </span>
+        )}
+        {breakSec > 0 && (
+          <span className="skud-time-badge break" title="Сумма перерывов">
+            <Timer size={12} /> Перерывы: {formatDuration(breakSec)}
           </span>
         )}
       </div>

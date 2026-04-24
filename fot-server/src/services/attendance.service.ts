@@ -33,9 +33,15 @@ export interface IAttendanceAdjustment {
   source_id: string;
   reason: string | null;
   created_by: string | null;
+  updated_by: string | null;
   created_at: string;
   updated_at: string;
   metadata: Record<string, unknown>;
+}
+
+export interface IAttendanceAdjustmentWithAuthor extends IAttendanceAdjustment {
+  employee_full_name: string | null;
+  author_name: string | null;
 }
 
 export interface IAttendanceEntry {
@@ -167,7 +173,7 @@ export async function loadAttendanceAdjustments(
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
     const { data, error } = await supabase
       .from('attendance_adjustments')
-      .select('id, employee_id, work_date, status, hours_override, source_type, source_id, reason, created_by, created_at, updated_at, metadata')
+      .select('id, employee_id, work_date, status, hours_override, source_type, source_id, reason, created_by, updated_by, created_at, updated_at, metadata')
       .in('employee_id', batch)
       .gte('work_date', startDate)
       .lte('work_date', endDate);
@@ -185,6 +191,7 @@ export async function loadAttendanceAdjustments(
         source_id: String(row.source_id ?? ''),
         reason: typeof row.reason === 'string' ? row.reason : null,
         created_by: typeof row.created_by === 'string' ? row.created_by : null,
+        updated_by: typeof row.updated_by === 'string' ? row.updated_by : null,
         created_at: String(row.created_at),
         updated_at: String(row.updated_at ?? row.created_at),
         metadata: (row.metadata && typeof row.metadata === 'object' ? row.metadata : {}) as Record<string, unknown>,
@@ -610,6 +617,7 @@ export async function upsertAttendanceAdjustment(input: {
   source_id?: string;
   reason?: string | null;
   created_by?: string | null;
+  updated_by?: string | null;
   metadata?: Record<string, unknown>;
 }): Promise<Record<string, unknown>> {
   const payload = {
@@ -621,6 +629,7 @@ export async function upsertAttendanceAdjustment(input: {
     source_id: input.source_id ?? input.source_type,
     reason: input.reason ?? null,
     created_by: input.created_by ?? null,
+    updated_by: input.updated_by ?? input.created_by ?? null,
     metadata: input.metadata ?? {},
     updated_at: new Date().toISOString(),
   };
@@ -670,13 +679,17 @@ export async function getAttendanceAdjustmentById(id: number): Promise<Record<st
 
 export async function updateAttendanceAdjustmentById(
   id: number,
-  patch: Partial<Pick<IAttendanceAdjustment, 'status' | 'hours_override' | 'reason'>> & { created_by?: string | null },
+  patch: Partial<Pick<IAttendanceAdjustment, 'status' | 'hours_override' | 'reason'>> & {
+    created_by?: string | null;
+    updated_by?: string | null;
+  },
 ): Promise<Record<string, unknown> | null> {
   const updates = {
     ...(patch.status ? { status: patch.status } : {}),
     ...(patch.hours_override !== undefined ? { hours_override: patch.hours_override } : {}),
     ...(patch.reason !== undefined ? { reason: patch.reason } : {}),
     ...(patch.created_by !== undefined ? { created_by: patch.created_by } : {}),
+    ...(patch.updated_by !== undefined ? { updated_by: patch.updated_by } : {}),
     updated_at: new Date().toISOString(),
   };
 
@@ -693,4 +706,60 @@ export async function updateAttendanceAdjustmentById(
   }
 
   return result.data as Record<string, unknown>;
+}
+
+export async function deleteAttendanceAdjustmentById(id: number): Promise<boolean> {
+  const result = await supabase
+    .from('attendance_adjustments')
+    .delete()
+    .eq('id', id)
+    .select('id')
+    .maybeSingle();
+
+  if (result.error) throw result.error;
+  return Boolean(result.data);
+}
+
+export async function loadAttendanceAdjustmentsWithAuthors(
+  employeeIds: number[],
+  startDate: string,
+  endDate: string,
+): Promise<IAttendanceAdjustmentWithAuthor[]> {
+  if (employeeIds.length === 0) return [];
+
+  const adjustments = await loadAttendanceAdjustments(employeeIds, startDate, endDate);
+  const manualAdjustments = adjustments.filter((item) => item.source_type !== OBJECT_ADJUSTMENT_SOURCE_TYPE);
+  if (manualAdjustments.length === 0) return [];
+
+  const authorIds = [...new Set(
+    manualAdjustments
+      .flatMap((item) => [item.updated_by, item.created_by])
+      .filter((id): id is string => Boolean(id)),
+  )];
+
+  const employeeIdsPresent = [...new Set(manualAdjustments.map((item) => item.employee_id))];
+
+  const [authorsRes, employeesRes] = await Promise.all([
+    authorIds.length > 0
+      ? supabase.from('user_profiles').select('id, full_name').in('id', authorIds)
+      : Promise.resolve({ data: [], error: null }),
+    employeeIdsPresent.length > 0
+      ? supabase.from('employees').select('id, full_name').in('id', employeeIdsPresent)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  if (authorsRes.error) throw authorsRes.error;
+  if (employeesRes.error) throw employeesRes.error;
+
+  const authorNames = new Map((authorsRes.data || []).map((row) => [String(row.id), String(row.full_name || '')]));
+  const employeeNames = new Map((employeesRes.data || []).map((row) => [Number(row.id), String(row.full_name || '')]));
+
+  return manualAdjustments.map((item) => {
+    const latestAuthorId = item.updated_by ?? item.created_by;
+    return {
+      ...item,
+      employee_full_name: employeeNames.get(item.employee_id) ?? null,
+      author_name: latestAuthorId ? authorNames.get(latestAuthorId) ?? null : null,
+    };
+  });
 }

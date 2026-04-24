@@ -2,7 +2,8 @@ import type { Response } from 'express';
 import { supabase } from '../config/database.js';
 import { r2Service } from '../services/r2.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
+import { canAccessEmployeeInScope, resolveScopedDepartmentId } from '../services/data-scope.service.js';
+import { hasPageView } from '../services/access-control.service.js';
 
 const DOCUMENT_SELECT_COLUMNS = 'id, employee_id, leave_request_id, category, file_name, file_size, mime_type, r2_key, uploaded_by, created_at';
 const CATEGORY_CACHE_TTL_MS = 60_000;
@@ -220,7 +221,35 @@ const getDownloadUrl = async (req: AuthenticatedRequest, res: Response): Promise
       return;
     }
 
-    if (!(await canAccessEmployeeInScope(req, doc.employee_id))) {
+    let allowed = false;
+    if (doc.employee_id != null) {
+      allowed = await canAccessEmployeeInScope(req, doc.employee_id);
+    } else {
+      const linkRes = await supabase
+        .from('document_links')
+        .select('entity_type, entity_id')
+        .eq('document_id', doc.id)
+        .maybeSingle();
+      if (linkRes.error) throw linkRes.error;
+      const link = linkRes.data as { entity_type?: string; entity_id?: string } | null;
+      if (link?.entity_type === 'timesheet_approval' && link.entity_id) {
+        const approvalRes = await supabase
+          .from('timesheet_approvals')
+          .select('department_id')
+          .eq('id', link.entity_id)
+          .maybeSingle();
+        if (approvalRes.error) throw approvalRes.error;
+        const deptId = approvalRes.data ? String(approvalRes.data.department_id) : null;
+        if (deptId) {
+          const scoped = await resolveScopedDepartmentId(req, deptId);
+          allowed = !!scoped && scoped === deptId;
+          if (!allowed) {
+            allowed = await hasPageView(req.user.role_code, '/timesheet-hr');
+          }
+        }
+      }
+    }
+    if (!allowed) {
       res.status(403).json({ success: false, error: 'Нет доступа' });
       return;
     }

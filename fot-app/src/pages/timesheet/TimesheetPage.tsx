@@ -1,9 +1,10 @@
 import { type FC, Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, ChevronDown, Download, UserPlus, Mail } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, UserPlus, Mail } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { TimesheetStats } from '../../components/timesheet/TimesheetStats';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
+import { TimesheetCorrectionsList } from '../../components/timesheet/TimesheetCorrectionsList';
 import { TimesheetTeamManagementModal } from '../../components/timesheet/TimesheetTeamManagementModal';
 import { timesheetService } from '../../services/timesheetService';
 import { useAuth } from '../../contexts/AuthContext';
@@ -71,7 +72,7 @@ interface IObjectModalTarget {
   object_name: string;
 }
 
-type TimesheetViewMode = 'employees' | 'objects';
+type TimesheetViewMode = 'employees' | 'objects' | 'corrections';
 
 const getTodayDateInputValue = (): string => new Date().toISOString().slice(0, 10);
 const UNASSIGNED_OBJECT_KEY = '__timesheet_unassigned__';
@@ -232,6 +233,7 @@ export const TimesheetPage: FC = () => {
   const [teamManagementOpen, setTeamManagementOpen] = useState(false);
   const [teamSearch, setTeamSearch] = useState('');
   const [teamPendingEmployeeId, setTeamPendingEmployeeId] = useState<number | null>(null);
+  const [refreshInFlight, setRefreshInFlight] = useState(false);
 
   const deptOptions = useMemo<IFlatDepartmentOption[]>(() => {
     const allNodes = structureQuery.data?.departments ?? [];
@@ -244,7 +246,11 @@ export const TimesheetPage: FC = () => {
   const effectiveSelectedDeptId = isTimesheetDepartmentScope
     ? (selectedDeptId || primaryDepartmentId || null)
     : selectedDeptId;
-  const viewMode: TimesheetViewMode = queryView === 'objects' ? 'objects' : 'employees';
+  const viewMode: TimesheetViewMode = queryView === 'objects'
+    ? 'objects'
+    : queryView === 'corrections'
+      ? 'corrections'
+      : 'employees';
 
   useEffect(() => {
     if (!isMultiDepartmentManager) return;
@@ -1188,10 +1194,10 @@ export const TimesheetPage: FC = () => {
     clearBulkState();
     setSearchParams(current => {
       const next = new URLSearchParams(current);
-      if (nextViewMode === 'objects') {
-        next.set('view', 'objects');
-      } else {
+      if (nextViewMode === 'employees') {
         next.delete('view');
+      } else {
+        next.set('view', nextViewMode);
       }
       return next;
     });
@@ -1237,6 +1243,31 @@ export const TimesheetPage: FC = () => {
       return next;
     });
   }, [clearBulkState, closeTeamManagement, setSearchParams]);
+
+  const handleRefreshTimesheet = useCallback(async () => {
+    if (!rangeStart || !rangeEnd || refreshInFlight) return;
+    setRefreshInFlight(true);
+    try {
+      const result = await timesheetService.refresh({ start_date: rangeStart, end_date: rangeEnd });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+      ]);
+      const parts: string[] = [];
+      if (result.sync) {
+        parts.push(`события: ${result.sync.imported ?? 0}/${result.sync.sigurTotal ?? 0}`);
+      }
+      if (result.conflicts.length > 0) {
+        parts.push(`коллизий: ${result.conflicts.length}`);
+      }
+      toast.success?.(parts.length > 0 ? `Обновлено (${parts.join(', ')})` : 'Табель обновлён');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Ошибка обновления табеля';
+      toast.error?.(message);
+    } finally {
+      setRefreshInFlight(false);
+    }
+  }, [rangeStart, rangeEnd, refreshInFlight, queryClient, monthStr, effectiveSelectedDeptId, toast]);
 
   const handleSelectBrigade = useCallback((departmentId: string) => {
     clearBulkState();
@@ -1518,6 +1549,13 @@ export const TimesheetPage: FC = () => {
       >
         По объектам
       </button>
+      <button
+        type="button"
+        className={`ts-view-chip ${viewMode === 'corrections' ? ' ts-view-chip--active' : ''}`}
+        onClick={() => handleViewModeChange('corrections')}
+      >
+        Корректировки
+      </button>
     </section>
   ) : null;
 
@@ -1654,6 +1692,16 @@ export const TimesheetPage: FC = () => {
                 <Download size={16} />
                 Экспорт
               </button>
+              <button
+                type="button"
+                className="ts-btn"
+                onClick={handleRefreshTimesheet}
+                disabled={refreshInFlight || !rangeStart || !rangeEnd}
+                title="Пересинхронизировать события СКУД и обновить табель"
+              >
+                <RefreshCw size={16} className={refreshInFlight ? 'ts-refresh-spinning' : undefined} />
+                Обновить
+              </button>
             </div>
             <div className="ts-toolbar-right">
               {canUseTeamManagement && (
@@ -1756,7 +1804,30 @@ export const TimesheetPage: FC = () => {
         </section>
       )}
 
-      {isAssignedMode ? (
+      {viewMode === 'corrections' ? (
+        <div className="ts-table-container">
+          <TimesheetCorrectionsList
+            startDate={rangeStart}
+            endDate={rangeEnd}
+            departmentId={effectiveSelectedDeptId ?? null}
+            onEdit={(row) => {
+              const [yearPart, monthPart, dayPart] = row.work_date.split('-').map(Number);
+              if (yearPart !== year || monthPart !== month) {
+                toast.info?.('Переключитесь на месяц этой корректировки для редактирования');
+                return;
+              }
+              const employee = employees.find(e => e.id === row.employee_id);
+              if (!employee) {
+                toast.info?.('Сотрудник не в текущем списке отдела');
+                return;
+              }
+              const workDate = row.work_date;
+              const dayEntry = entries.find(e => e.employee_id === row.employee_id && e.work_date === workDate) ?? null;
+              handleDayClick(employee, dayPart, dayEntry);
+            }}
+          />
+        </div>
+      ) : isAssignedMode ? (
         !selectedAssigneeId ? (
           <div className="ts-table-container">
             <div className="ts-loading">Выберите назначенного сотрудника</div>
@@ -1784,7 +1855,7 @@ export const TimesheetPage: FC = () => {
             objectEntries={objectEntries}
             year={year}
             month={month}
-            viewMode={viewMode}
+            viewMode={viewMode === 'corrections' ? 'employees' : viewMode}
             schedules={schedules}
             dailySchedules={dailySchedules}
             calendar={calendar}
@@ -1818,7 +1889,7 @@ export const TimesheetPage: FC = () => {
           objectEntries={objectEntries}
           year={year}
           month={month}
-          viewMode={viewMode}
+          viewMode={viewMode === 'corrections' ? 'employees' : viewMode}
           schedules={schedules}
           dailySchedules={dailySchedules}
           calendar={calendar}

@@ -24,8 +24,10 @@ import { hasPageEdit, hasPageView } from '../services/access-control.service.js'
 import { employeeCache } from '../services/employee-cache.service.js';
 import {
   buildAttendanceEntries,
+  deleteAttendanceAdjustmentById,
   deleteAttendanceAdjustmentBySource,
   getAttendanceAdjustmentById,
+  loadAttendanceAdjustmentsWithAuthors,
   updateAttendanceAdjustmentById,
   upsertAttendanceAdjustment,
 } from '../services/attendance.service.js';
@@ -52,6 +54,13 @@ import {
   loadDepartmentName as loadDepartmentNameForAudit,
   loadEmployeeFullNamesMap,
 } from '../services/audit-context.helpers.js';
+import { sigurService } from '../services/sigur.service.js';
+import {
+  acquirePresencePollingLock,
+  releasePresencePollingLock,
+  ManualSyncInProgressError,
+} from '../services/presence-polling.service.js';
+import { syncEventsLogic } from '../services/sigur-sync-events.service.js';
 
 const validStatuses = ['work', 'vacation', 'dayoff', 'remote', 'unpaid', 'absent', 'sick', 'business_trip', 'manual'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
 
@@ -977,6 +986,10 @@ export const timesheetController = {
 	      if (!(await canAccessEmployeeForTimesheetDate(req, Number(existing.employee_id), String(existing.work_date)))) {
 	        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
 	      }
+	      const existingCreatedBy = typeof existing.created_by === 'string' ? existing.created_by : null;
+	      if (scope === 'department' && existingCreatedBy && existingCreatedBy !== req.user.id) {
+	        return res.status(403).json({ success: false, error: 'Редактировать можно только свои корректировки' });
+	      }
 	      const approvalLockUpdate = await ensureNotLockedForScope(
 	        req,
 	        scope,
@@ -1004,7 +1017,7 @@ export const timesheetController = {
             ? { hours_override: normalizedHours }
             : (normalizedHours !== undefined ? { hours_override: normalizedHours } : {})),
 	        ...(parsed.notes !== undefined ? { reason: parsed.notes ?? null } : {}),
-	        created_by: req.user.id,
+	        updated_by: req.user.id,
 	      });
 	      if (!updated) return res.status(404).json({ success: false, error: 'Запись не найдена' });
 
@@ -1562,6 +1575,244 @@ export const timesheetController = {
       }
       console.error('timesheet.deleteObjectEntry error:', err);
       res.status(500).json({ success: false, error: 'Ошибка удаления корректировки по объекту' });
+    }
+  },
+
+  /** GET /api/timesheet/corrections?start_date&end_date&department_id? */
+  async listCorrections(req: AuthenticatedRequest, res: Response) {
+    try {
+      const scope = await resolveTimesheetScope(req);
+      if (!scope) return res.status(403).json({ success: false, error: 'Нет доступа' });
+      if (scope === 'self') return res.status(403).json({ success: false, error: 'Нет доступа' });
+
+      const startDate = String(req.query.start_date ?? '');
+      const endDate = String(req.query.end_date ?? '');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || endDate < startDate) {
+        return res.status(400).json({ success: false, error: 'Некорректный диапазон дат' });
+      }
+
+      const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
+      let employeeIds: number[] = [];
+      if (scope === 'department') {
+        const managedIds = await resolveManagedDepartmentIds(req);
+        const departmentIds = requestedDepartmentId && managedIds.includes(requestedDepartmentId)
+          ? [requestedDepartmentId]
+          : managedIds;
+        const ids = new Set<number>();
+        for (const deptId of departmentIds) {
+          const list = await listEmployeeIdsAssignedToDepartmentPeriod(deptId, startDate, endDate);
+          for (const id of list) ids.add(id);
+        }
+        employeeIds = [...ids];
+      } else if (requestedDepartmentId) {
+        employeeIds = await listEmployeeIdsAssignedToDepartmentPeriod(requestedDepartmentId, startDate, endDate);
+      } else {
+        const { data, error } = await supabase.from('employees').select('id');
+        if (error) throw error;
+        employeeIds = (data || []).map((row) => Number(row.id));
+      }
+
+      if (employeeIds.length === 0) {
+        return res.json({ success: true, data: [] });
+      }
+
+      const adjustments = await loadAttendanceAdjustmentsWithAuthors(employeeIds, startDate, endDate);
+      const rows = await Promise.all(adjustments.map(async (item) => {
+        const lockInfo = scope === 'department'
+          ? await ensureNotLockedForScope(req, 'department', item.employee_id, item.work_date)
+          : null;
+        const approvalLocked = Boolean(lockInfo);
+        const isOwner = scope === 'department' ? item.created_by === req.user.id : true;
+        const canEdit = scope === 'all'
+          ? !(lockInfo && lockInfo.status === 'approved')
+          : isOwner && !approvalLocked && item.source_type === 'manual';
+        const canDelete = canEdit && item.source_type === 'manual';
+        return {
+          id: item.id,
+          employee_id: item.employee_id,
+          employee_full_name: item.employee_full_name,
+          work_date: item.work_date,
+          status: item.status,
+          hours_override: item.hours_override,
+          source_type: item.source_type,
+          reason: item.reason,
+          author_name: item.author_name,
+          created_by: item.created_by,
+          created_at: item.created_at,
+          updated_at: item.updated_at,
+          can_edit: canEdit,
+          can_delete: canDelete,
+          approval_locked: approvalLocked,
+        };
+      }));
+
+      res.json({ success: true, data: rows });
+    } catch (err) {
+      console.error('timesheet.listCorrections error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка получения корректировок' });
+    }
+  },
+
+  /** DELETE /api/timesheet/:id */
+  async deleteEntry(req: AuthenticatedRequest, res: Response) {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ success: false, error: 'Некорректный id' });
+      }
+
+      const scope = await resolveTimesheetScope(req);
+      if (!scope) return res.status(403).json({ success: false, error: 'Нет доступа' });
+      if (scope === 'self') return res.status(403).json({ success: false, error: 'Нет доступа' });
+
+      const existing = await getAttendanceAdjustmentById(id);
+      if (!existing) return res.status(404).json({ success: false, error: 'Запись не найдена' });
+
+      const sourceType = String(existing.source_type ?? '');
+      if (sourceType !== 'manual') {
+        return res.status(409).json({ success: false, error: 'Эта корректировка не удаляется' });
+      }
+
+      if (!(await canAccessEmployeeForTimesheetDate(req, Number(existing.employee_id), String(existing.work_date)))) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
+
+      const existingCreatedBy = typeof existing.created_by === 'string' ? existing.created_by : null;
+      if (scope === 'department' && existingCreatedBy && existingCreatedBy !== req.user.id) {
+        return res.status(403).json({ success: false, error: 'Удалять можно только свои корректировки' });
+      }
+
+      const approvalLockDel = await ensureNotLockedForScope(
+        req,
+        scope,
+        Number(existing.employee_id),
+        String(existing.work_date),
+      );
+      if (approvalLockDel) {
+        return res.status(409).json({
+          success: false,
+          error: `Период ${approvalLockDel.start_date} – ${approvalLockDel.end_date} уже ${approvalLockDel.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
+        });
+      }
+
+      const ok = await deleteAttendanceAdjustmentById(id);
+      if (!ok) return res.status(404).json({ success: false, error: 'Запись не найдена' });
+
+      const auditFullName = await loadEmployeeFullNameForAudit(Number(existing.employee_id));
+      await auditService.logFromRequest(req, req.user.id, 'DELETE_TIMESHEET_ENTRY', {
+        entityType: 'timesheet',
+        entityId: String(id),
+        details: {
+          employee_id: Number(existing.employee_id),
+          employee_full_name: auditFullName,
+          work_date: String(existing.work_date),
+        },
+      });
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error('timesheet.deleteEntry error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка удаления корректировки' });
+    }
+  },
+
+  /** POST /api/timesheet/refresh { start_date, end_date } */
+  async refresh(req: AuthenticatedRequest, res: Response) {
+    try {
+      const scope = await resolveTimesheetScope(req);
+      if (!scope) return res.status(403).json({ success: false, error: 'Нет доступа' });
+
+      const startDate = String(req.body?.start_date ?? '');
+      const endDate = String(req.body?.end_date ?? '');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || endDate < startDate) {
+        return res.status(400).json({ success: false, error: 'Некорректный диапазон дат' });
+      }
+
+      const diffDays = Math.round((new Date(endDate).getTime() - new Date(startDate).getTime()) / 86_400_000);
+      if (diffDays > 62) {
+        return res.status(400).json({ success: false, error: 'Диапазон не должен превышать 62 дня' });
+      }
+
+      let syncResult: { sigurTotal?: number; imported?: number; skipped?: number; errors_count?: number; matched?: number } | null = null;
+      if (await sigurService.isConfigured()) {
+        try {
+          await acquirePresencePollingLock();
+        } catch (err) {
+          if (err instanceof ManualSyncInProgressError) {
+            return res.status(409).json({ success: false, error: 'Синхронизация уже выполняется', code: 'SYNC_IN_PROGRESS' });
+          }
+          throw err;
+        }
+        try {
+          const result = await syncEventsLogic(startDate, endDate);
+          syncResult = {
+            sigurTotal: result?.sigurTotal,
+            imported: result?.imported,
+            skipped: result?.skipped,
+            errors_count: Array.isArray(result?.errors) ? result.errors.length : 0,
+            matched: result?.matched,
+          };
+        } finally {
+          await releasePresencePollingLock();
+        }
+      }
+
+      let employeeIds: number[] = [];
+      if (scope === 'department') {
+        const managedIds = await resolveManagedDepartmentIds(req);
+        const ids = new Set<number>();
+        for (const deptId of managedIds) {
+          const list = await listEmployeeIdsAssignedToDepartmentPeriod(deptId, startDate, endDate);
+          for (const id of list) ids.add(id);
+        }
+        employeeIds = [...ids];
+      }
+
+      let conflicts: Array<{ employee_id: number; work_date: string; skud_minutes: number }> = [];
+      if (employeeIds.length > 0 || scope === 'all') {
+        const adjQuery = supabase
+          .from('attendance_adjustments')
+          .select('employee_id, work_date')
+          .eq('source_type', 'manual')
+          .eq('status', 'absent')
+          .gte('work_date', startDate)
+          .lte('work_date', endDate);
+        if (employeeIds.length > 0) adjQuery.in('employee_id', employeeIds);
+        const adjRes = await adjQuery;
+        if (adjRes.error) throw adjRes.error;
+        const absentRows = (adjRes.data || []) as Array<{ employee_id: number; work_date: string }>;
+        if (absentRows.length > 0) {
+          const empIdsForCheck = [...new Set(absentRows.map((r) => Number(r.employee_id)))];
+          const skudRes = await supabase
+            .from('skud_daily_summary')
+            .select('employee_id, date, total_minutes')
+            .in('employee_id', empIdsForCheck)
+            .gte('date', startDate)
+            .lte('date', endDate)
+            .gt('total_minutes', 0);
+          if (skudRes.error) throw skudRes.error;
+          const skudMap = new Map<string, number>();
+          for (const row of skudRes.data || []) {
+            skudMap.set(`${Number(row.employee_id)}_${String(row.date)}`, Number(row.total_minutes ?? 0));
+          }
+          for (const row of absentRows) {
+            const mins = skudMap.get(`${Number(row.employee_id)}_${String(row.work_date)}`);
+            if (mins && mins > 0) {
+              conflicts.push({ employee_id: Number(row.employee_id), work_date: String(row.work_date), skud_minutes: mins });
+            }
+          }
+        }
+      }
+
+      await auditService.logFromRequest(req, req.user.id, 'TIMESHEET_REFRESH', {
+        entityType: 'timesheet',
+        details: { start_date: startDate, end_date: endDate, sync: syncResult, conflicts_count: conflicts.length },
+      });
+
+      res.json({ success: true, data: { sync: syncResult, conflicts } });
+    } catch (err) {
+      console.error('timesheet.refresh error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка обновления табеля' });
     }
   },
 

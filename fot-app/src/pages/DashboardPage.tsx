@@ -133,10 +133,26 @@ export const DashboardPage: React.FC = () => {
     }
   }, [period, searchParams, selectedMonth, setSearchParams]);
 
+  const getPrevMonth = () => {
+    const now = new Date();
+    const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  };
+  const prevMonthLimit = getPrevMonth();
+  const isTooOldMonth = isDepartmentScope && selectedMonth <= prevMonthLimit;
+
+  useEffect(() => {
+    if (isDepartmentScope && selectedMonth < prevMonthLimit) {
+      setSelectedMonth(prevMonthLimit);
+    }
+  }, [isDepartmentScope, prevMonthLimit, selectedMonth]);
+
   const shiftMonth = (delta: number) => {
     const [y, m] = selectedMonth.split('-').map(Number);
     const d = new Date(y, m - 1 + delta, 1);
-    setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    const next = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    if (isDepartmentScope && delta < 0 && next < prevMonthLimit) return;
+    setSelectedMonth(next);
   };
 
   const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -352,7 +368,12 @@ export const DashboardPage: React.FC = () => {
                 </div>
                 {period === 'month' && (
                   <div className="month-picker">
-                    <button className="month-picker-btn" onClick={() => shiftMonth(-1)}>
+                    <button
+                      className="month-picker-btn"
+                      onClick={() => shiftMonth(-1)}
+                      disabled={isTooOldMonth}
+                      title={isTooOldMonth ? 'Доступны только текущий и прошлый месяц' : undefined}
+                    >
                       <ChevronLeft size={16} />
                     </button>
                     <span className="month-picker-label">{formatMonth(selectedMonth)}</span>

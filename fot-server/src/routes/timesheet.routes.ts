@@ -78,6 +78,20 @@ router.post(
   timesheetController.emailAssigned
 );
 
+// GET /api/timesheet/corrections
+router.get(
+  '/corrections',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'view'),
+  timesheetController.listCorrections
+);
+
+// POST /api/timesheet/refresh
+router.post(
+  '/refresh',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'view'),
+  timesheetController.refresh
+);
+
 // POST /api/timesheet
 router.post(
   '/',
@@ -111,6 +125,13 @@ router.put(
   '/:id',
   requireAnyPageAccess(['/employee', '/timesheet', '/timesheet-hr'], 'edit'),
   timesheetController.update
+);
+
+// DELETE /api/timesheet/:id
+router.delete(
+  '/:id',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
+  timesheetController.deleteEntry
 );
 
 export default router;

@@ -54,6 +54,7 @@ const SkudSupabasePage = lazy(() => import('./pages/skud/SkudSupabasePage').then
 // Timesheet
 const TimesheetPage = lazy(() => import('./pages/timesheet/TimesheetPage').then(m => ({ default: m.TimesheetPage })));
 const TimesheetHrPage = lazy(() => import('./pages/timesheet/TimesheetHrPage').then(m => ({ default: m.TimesheetHrPage })));
+const ApprovalsPage = lazy(() => import('./pages/approvals/ApprovalsPage').then(m => ({ default: m.ApprovalsPage })));
 
 // Discipline Analytics
 const DisciplineAnalyticsPage = lazy(() => import('./pages/DisciplineAnalyticsPage').then(m => ({ default: m.DisciplineAnalyticsPage })));
@@ -322,6 +323,14 @@ const AppRoutes = () => {
             element={
               <Layout title="Табели HR" theme={theme} onToggleTheme={toggleTheme}>
                 <TimesheetHrPage />
+              </Layout>
+            }
+          />
+          <Route
+            path="/approvals"
+            element={
+              <Layout title="Согласования" theme={theme} onToggleTheme={toggleTheme}>
+                <ApprovalsPage />
               </Layout>
             }
           />

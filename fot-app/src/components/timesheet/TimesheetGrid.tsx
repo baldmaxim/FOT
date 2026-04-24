@@ -486,10 +486,17 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     });
   };
 
-  const mergeBulkSelections = useCallback((base: Set<string>, nextRange: Set<string>): Set<string> => {
+  const [bulkDragMode, setBulkDragMode] = useState<'add' | 'remove'>('add');
+
+  const mergeBulkSelections = useCallback((
+    base: Set<string>,
+    nextRange: Set<string>,
+    mode: 'add' | 'remove',
+  ): Set<string> => {
     const merged = new Set(base);
     for (const cellKey of nextRange) {
-      merged.add(cellKey);
+      if (mode === 'remove') merged.delete(cellKey);
+      else merged.add(cellKey);
     }
     return merged;
   }, []);
@@ -606,9 +613,13 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     event.preventDefault();
     const anchor = { rowKey, day };
     const baseSelection = new Set(selectedCellKeys);
+    const anchorRange = buildBulkRangeSelection(anchor, anchor);
+    const anchorAlreadySelected = [...anchorRange].every((key) => baseSelection.has(key));
+    const mode: 'add' | 'remove' = anchorAlreadySelected && anchorRange.size > 0 ? 'remove' : 'add';
+    setBulkDragMode(mode);
     setBulkDragAnchor(anchor);
     setBulkDragBaseKeys(baseSelection);
-    setBulkDragPreviewKeys(mergeBulkSelections(baseSelection, buildBulkRangeSelection(anchor, anchor)));
+    setBulkDragPreviewKeys(mergeBulkSelections(baseSelection, anchorRange, mode));
   }, [
     buildBulkRangeSelection,
     bulkEditMode,
@@ -623,9 +634,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       mergeBulkSelections(
         bulkDragBaseKeys,
         buildBulkRangeSelection(bulkDragAnchor, { rowKey, day }),
+        bulkDragMode,
       ),
     );
-  }, [buildBulkRangeSelection, bulkDragAnchor, bulkDragBaseKeys, bulkEditMode, mergeBulkSelections]);
+  }, [buildBulkRangeSelection, bulkDragAnchor, bulkDragBaseKeys, bulkDragMode, bulkEditMode, mergeBulkSelections]);
 
   if (compact && viewMode === 'objects') {
     const jsDow = new Date(year, month - 1, 1).getDay();

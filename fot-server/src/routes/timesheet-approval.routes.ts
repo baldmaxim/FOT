@@ -26,4 +26,13 @@ router.post('/:id/approve', requirePageAccess('/timesheet-hr', 'edit'), timeshee
 router.post('/:id/reject', requirePageAccess('/timesheet-hr', 'edit'), timesheetApprovalController.reject);
 router.post('/:id/return-to-rework', requirePageAccess('/timesheet-hr', 'edit'), timesheetApprovalController.returnToRework);
 
+// Вложения к подаче табеля (подтверждения работы в выходные).
+router.post('/attachments/upload-url', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.getAttachmentUploadUrl);
+router.post('/attachments/confirm', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.confirmAttachmentUpload);
+router.get('/attachments', requirePageAccess('/timesheet', 'view'), timesheetApprovalController.listAttachments);
+router.delete('/attachments/:document_id', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.deleteAttachment);
+
+// Объединённый review-list для админской страницы согласований.
+router.get('/review-list', requirePageAccess('/timesheet-hr', 'view'), timesheetApprovalController.getReviewList);
+
 export default router;
