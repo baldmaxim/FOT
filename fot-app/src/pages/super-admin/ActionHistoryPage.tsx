@@ -66,6 +66,24 @@ const ACTION_LABELS: Record<string, string> = {
   ENRICH_SALARY_HISTORY: 'Обогащение истории зарплат',
 };
 
+const TIMESHEET_STATUS_LABELS: Record<string, string> = {
+  work: 'Работа',
+  manual: 'Работа',
+  remote: 'Удалёнка',
+  sick: 'Больничный',
+  vacation: 'Отпуск',
+  dayoff: 'Выходной',
+  absent: 'Неявка',
+  business_trip: 'Командировка',
+  unpaid: 'Без содержания',
+};
+
+const CHAT_INBOUND_LABELS: Record<string, string> = {
+  open: 'Открыт',
+  requests_only: 'Только по запросу',
+  disabled: 'Запрещён',
+};
+
 const ACTION_GROUPS: Record<string, string[]> = {
   'Аутентификация': ['LOGIN', 'LOGOUT', 'LOGIN_FAILED', 'PASSWORD_RESET_REQUESTED', 'PASSWORD_RESET_COMPLETED', '2FA_ENABLED', '2FA_DISABLED', '2FA_VERIFIED', '2FA_FAILED'],
   'Пользователи': ['USER_APPROVED', 'USER_REJECTED', 'USER_DELETED', 'EMAIL_CONFIRMED', 'POSITION_CHANGED', 'ROLE_CHANGED', 'NAME_CHANGED', 'USER_DEPARTMENT_ACCESS_CHANGED', 'CHAT_INBOUND_MODE_CHANGED', 'ORG_ASSIGNED'],
@@ -101,6 +119,19 @@ function asString(value: unknown): string | null {
   return null;
 }
 
+function fmtDate(iso: string | null | undefined): string {
+  if (!iso || typeof iso !== 'string') return '';
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : iso;
+}
+
+function employeeTag(details: Record<string, unknown>): string {
+  const fio = asString(details.employee_full_name) || asString(details.employee_name) || asString(details.full_name);
+  if (fio) return fio;
+  const id = asString(details.employee_id);
+  return id ? `сотрудник #${id}` : '';
+}
+
 function formatDetails(action: string, details: Record<string, unknown> | null): string {
   if (!details || typeof details !== 'object') return '';
 
@@ -134,20 +165,125 @@ function formatDetails(action: string, details: Record<string, unknown> | null):
       if (from && to) return `${from} → ${to} ₽`;
       return fio || '';
     }
-    case 'POSITION_CHANGED':
-    case 'ROLE_CHANGED':
-    case 'NAME_CHANGED': {
+    case 'ROLE_CHANGED': {
       const from = asString(details.from) || asString(details.old) || asString(details.previous);
       const to = asString(details.to) || asString(details.new) || asString(details.current);
       if (from && to) return `«${from}» → «${to}»`;
       return to || from || '';
     }
+    case 'POSITION_CHANGED': {
+      const to = asString(details.new_position_type) || asString(details.to) || asString(details.position_type);
+      const from = asString(details.from) || asString(details.old);
+      if (from && to) return `«${from}» → «${to}»`;
+      return to ? `Новая должность: ${to}` : '';
+    }
+    case 'NAME_CHANGED': {
+      const full = asString(details.full_name);
+      const from = asString(details.from) || asString(details.old);
+      const to = asString(details.to) || asString(details.new) || full;
+      if (from && to) return `«${from}» → «${to}»`;
+      return to || '';
+    }
+    case 'USER_APPROVED': {
+      const pt = asString(details.position_type);
+      return pt ? `Должность: ${pt}` : '';
+    }
+    case 'CHAT_INBOUND_MODE_CHANGED': {
+      const mode = asString(details.chat_inbound_mode);
+      return mode ? `Режим: ${CHAT_INBOUND_LABELS[mode] ?? mode}` : '';
+    }
+    case 'USER_DEPARTMENT_ACCESS_CHANGED': {
+      const n = asString(details.assigned_department_count) || asString(details.imported_department_count);
+      const name = asString(details.employee_name);
+      if (name && n) return `${name}: ${n} отдел(ов)`;
+      if (n) return `Назначено: ${n} отдел(ов)`;
+      return '';
+    }
     case 'UPDATE_EMPLOYEE': {
-      const fields = Array.isArray(details.changed_fields) ? details.changed_fields : null;
+      const raw = details.updated_fields ?? details.changed_fields;
+      const fields = Array.isArray(raw) ? raw.map(String) : null;
+      const source = asString(details.source);
       if (fields && fields.length > 0) {
-        return `Изменены: ${fields.slice(0, 3).join(', ')}${fields.length > 3 ? ` (+${fields.length - 3})` : ''}`;
+        const list = `${fields.slice(0, 3).join(', ')}${fields.length > 3 ? ` (+${fields.length - 3})` : ''}`;
+        return source ? `Поля: ${list} (источник: ${source})` : `Поля: ${list}`;
       }
       return fio || '';
+    }
+    case 'CREATE_TIMESHEET_ENTRY': {
+      const status = asString(details.status);
+      const label = status ? (TIMESHEET_STATUS_LABELS[status] ?? status) : null;
+      const d = fmtDate(asString(details.work_date));
+      const who = employeeTag(details);
+      const parts = [label, d].filter(Boolean).join(', ');
+      return who ? `${who}: ${parts}` : parts;
+    }
+    case 'UPDATE_TIMESHEET_ENTRY': {
+      if (typeof details.count === 'number') {
+        const s = asString(details.status);
+        const label = s ? (TIMESHEET_STATUS_LABELS[s] ?? s) : null;
+        const emps = typeof details.employees === 'number' ? details.employees : null;
+        return `Массово: ${details.count} записей${emps ? `, ${emps} сотруд.` : ''}${label ? `, ${label}` : ''}`;
+      }
+      const objName = asString(details.object_name);
+      if (objName || asString(details.object_key)) {
+        const who = employeeTag(details);
+        const d = fmtDate(asString(details.work_date));
+        const hours = asString(details.hours_worked);
+        const parts = [objName && `объект «${objName}»`, hours && `${hours} ч`, d].filter(Boolean).join(', ');
+        return who ? `${who}: ${parts}` : parts;
+      }
+      const status = asString(details.status);
+      const label = status ? (TIMESHEET_STATUS_LABELS[status] ?? status) : null;
+      const d = fmtDate(asString(details.work_date));
+      const who = employeeTag(details);
+      const parts = [label, d].filter(Boolean).join(', ');
+      return who ? `${who}: ${parts}` : parts;
+    }
+    case 'TIMESHEET_APPROVAL_SUBMITTED':
+    case 'TIMESHEET_APPROVAL_APPROVED':
+    case 'TIMESHEET_APPROVAL_REJECTED':
+    case 'TIMESHEET_APPROVAL_RETURNED_TO_REWORK': {
+      const deptName = asString(details.department_name);
+      const deptId = asString(details.department_id);
+      const dept = deptName ? `«${deptName}»` : (deptId ? `отдел #${deptId}` : '');
+      const from = fmtDate(asString(details.start_date));
+      const to = fmtDate(asString(details.end_date));
+      const period = from && to ? `${from} – ${to}` : '';
+      return [dept, period].filter(Boolean).join(', ');
+    }
+    case 'EXCLUDE_FROM_TIMESHEET': {
+      const deptName = asString(details.department_name);
+      const deptId = asString(details.department_id);
+      const dept = deptName ? `«${deptName}»` : (deptId ? `отдел #${deptId}` : '');
+      const who = employeeTag(details);
+      return [who, dept].filter(Boolean).join(' → ');
+    }
+    case 'IMPORT_TIMESHEET': {
+      const count = asString(details.count) || asString(details.imported);
+      return count ? `Импортировано записей: ${count}` : '';
+    }
+    case 'IMPORT_EMPLOYEES':
+    case 'ENRICH_EMPLOYEES':
+    case 'ENRICH_EMPLOYEES_CONTACTS':
+    case 'ENRICH_SALARY':
+    case 'ENRICH_SALARY_HISTORY': {
+      const u = asString(details.updated);
+      const t = asString(details.total);
+      const e = Array.isArray(details.errors) ? details.errors.length : asString(details.errors);
+      if (u && t) return `Обновлено ${u} из ${t}${e ? ` (ошибок: ${e})` : ''}`;
+      if (u) return `Обновлено: ${u}`;
+      return '';
+    }
+    case 'VIEW_EMPLOYEES':
+    case 'VIEW_TIMESHEET':
+    case 'VIEW_SALARY':
+    case 'VIEW_SKUD': {
+      const c = asString(details.count);
+      return c ? `Записей: ${c}` : '';
+    }
+    case 'DELETE_ALL_EMPLOYEES': {
+      const d = asString(details.deleted);
+      return d ? `Удалено: ${d}` : '';
     }
     default: {
       try {

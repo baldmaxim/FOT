@@ -107,6 +107,33 @@ const teamManagementAddEmployeeSchema = teamManagementMutationSchema.extend({
 const MANAGED_TIMESHEET_PAGE_KEYS = ['/timesheet', '/timesheet-hr'] as const;
 const TIMESHEET_TEAM_MANAGEMENT_PAGE_KEY = '/timesheet/team-management';
 
+async function loadEmployeeFullNameForAudit(employeeId: number): Promise<string | null> {
+  try {
+    const { data } = await supabase
+      .from('employees')
+      .select('full_name')
+      .eq('id', employeeId)
+      .maybeSingle();
+    return (data?.full_name as string | null) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadDepartmentNameForAudit(departmentId: string | null | undefined): Promise<string | null> {
+  if (!departmentId) return null;
+  try {
+    const { data } = await supabase
+      .from('org_departments')
+      .select('name')
+      .eq('id', departmentId)
+      .maybeSingle();
+    return (data?.name as string | null) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 interface IManagedDepartmentTimesheetSummary {
   department_id: string;
   department_name: string;
@@ -924,11 +951,14 @@ export const timesheetController = {
 	        corrected_by_name: null,
 	      };
 
+	      const auditFullName = await loadEmployeeFullNameForAudit(parsed.employee_id);
+
 	      await auditService.logFromRequest(req, req.user.id, 'CREATE_TIMESHEET_ENTRY', {
 	        entityType: 'timesheet',
 	        entityId: String(data.id),
 	        details: {
 	          employee_id: parsed.employee_id,
+          employee_full_name: auditFullName,
           work_date: parsed.work_date,
           status: parsed.status,
         },
@@ -1020,10 +1050,17 @@ export const timesheetController = {
 	        corrected_by_name: null,
 	      };
 
+	      const auditFullNameUpd = await loadEmployeeFullNameForAudit(Number(updated.employee_id));
+
 	      await auditService.logFromRequest(req, req.user.id, 'UPDATE_TIMESHEET_ENTRY', {
 	        entityType: 'timesheet',
 	        entityId: String(id),
-	        details: { ...parsed },
+	        details: {
+	          ...parsed,
+	          employee_id: Number(updated.employee_id),
+	          employee_full_name: auditFullNameUpd,
+	          work_date: String(updated.work_date),
+	        },
       });
 
       res.json({ success: true, data });
@@ -1166,11 +1203,14 @@ export const timesheetController = {
         },
       });
 
+      const auditFullNameObj = await loadEmployeeFullNameForAudit(parsed.employee_id);
+
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_TIMESHEET_ENTRY', {
         entityType: 'timesheet_object_entry',
         entityId: `${parsed.employee_id}:${parsed.work_date}:${parsed.object_key}`,
         details: {
           employee_id: parsed.employee_id,
+          employee_full_name: auditFullNameObj,
           work_date: parsed.work_date,
           object_key: parsed.object_key,
           object_name: parsed.object_name,
@@ -1447,12 +1487,17 @@ export const timesheetController = {
 
       employeeCache.invalidate(parsed.employee_id);
 
+      const auditDeptName = await loadDepartmentNameForAudit(targetDepartmentId);
+
       await auditService.logFromRequest(req, req.user.id, 'EXCLUDE_FROM_TIMESHEET', {
         entityType: 'employee',
         entityId: String(parsed.employee_id),
         details: {
           source: 'timesheet_team_management',
+          employee_id: parsed.employee_id,
+          employee_full_name: (employee.full_name as string | null) ?? null,
           department_id: targetDepartmentId,
+          department_name: auditDeptName,
         },
       });
 
@@ -1501,11 +1546,14 @@ export const timesheetController = {
         source_id: parsed.object_key,
       });
 
+      const auditFullNameObjDel = await loadEmployeeFullNameForAudit(parsed.employee_id);
+
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_TIMESHEET_ENTRY', {
         entityType: 'timesheet_object_entry',
         entityId: `${parsed.employee_id}:${parsed.work_date}:${parsed.object_key}`,
         details: {
           employee_id: parsed.employee_id,
+          employee_full_name: auditFullNameObjDel,
           work_date: parsed.work_date,
           object_key: parsed.object_key,
         },

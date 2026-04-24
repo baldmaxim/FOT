@@ -97,10 +97,24 @@ async function logApprovalAudit(
   action: keyof typeof AUDIT_ACTIONS,
   details: Record<string, unknown>,
 ): Promise<void> {
+  let enrichedDetails = details;
+  const deptId = details.department_id;
+  if (typeof deptId === 'string' && deptId && details.department_name === undefined) {
+    try {
+      const { data } = await supabase
+        .from('org_departments')
+        .select('name')
+        .eq('id', deptId)
+        .maybeSingle();
+      enrichedDetails = { ...details, department_name: (data?.name as string | null) ?? null };
+    } catch {
+      // best-effort enrichment; keep original details
+    }
+  }
   await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS[action], {
     entityType: 'timesheet_approval',
     entityId: String(approvalId),
-    details,
+    details: enrichedDetails,
   });
 }
 
