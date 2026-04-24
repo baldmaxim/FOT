@@ -369,6 +369,7 @@ export const calculateAttendanceFromTimesheet = (params: {
   calendar?: IProductionCalendarMonth | null;
   liveDayEvents?: SkudEvent[];
   internalPoints?: Set<string>;
+  capToSchedule?: boolean;
 }) => {
   const {
     employeeId,
@@ -380,6 +381,7 @@ export const calculateAttendanceFromTimesheet = (params: {
     calendar,
     liveDayEvents,
     internalPoints,
+    capToSchedule,
   } = params;
 
   const today = new Date();
@@ -455,9 +457,15 @@ export const calculateAttendanceFromTimesheet = (params: {
       .filter(event => event.direction === 'entry')
       .sort((a, b) => a.event_time.localeCompare(b.event_time));
 
-    const totalSeconds = shouldUseLiveTodayEvents
+    const liveSeconds = shouldUseLiveTodayEvents
       ? calcWorkSeconds(liveTodayEvents, liveInternalPoints, true)
+      : 0;
+    const rawTotalSeconds = shouldUseLiveTodayEvents
+      ? liveSeconds
       : Math.max(0, Math.round((entry?.hours_worked ?? 0) * 3600));
+    const totalSeconds = capToSchedule && plannedHours > 0
+      ? Math.min(rawTotalSeconds, Math.round(plannedHours * 3600))
+      : rawTotalSeconds;
     const arrivalTime = shouldUseLiveTodayEvents
       ? liveTodayEntries[0]?.event_time.slice(0, 5)
       : entry?.first_entry?.slice(0, 5);

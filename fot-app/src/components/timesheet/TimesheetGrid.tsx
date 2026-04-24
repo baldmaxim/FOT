@@ -154,9 +154,16 @@ const getDayCellClass = (
     if (future) classes.push('ts-day--empty');
     return classes.join(' ');
   }
+  const hasSkudEvents = Boolean(entry.first_entry || entry.last_exit);
+  const zeroHours = !hasPositiveHours(visibleHours);
+  const incompleteSkud = hasSkudEvents && zeroHours;
   switch (entry.status) {
     case 'work':
     case 'manual': {
+      if (incompleteSkud) {
+        classes.push('ts-day--incomplete-skud');
+        break;
+      }
       const hoursOk = hasPositiveHours(visibleHours) && (visibleHours as number) >= thresholdHours;
       const spanOk = entry.presence_covers_shift !== false;
       classes.push(hoursOk && spanOk ? 'ts-day--full' : 'ts-day--partial');
@@ -173,7 +180,11 @@ const getDayCellClass = (
       classes.push('ts-day--vacation');
       break;
     case 'absent':
-      classes.push('ts-day--absent');
+      if (hasSkudEvents) {
+        classes.push('ts-day--incomplete-skud');
+      } else {
+        classes.push('ts-day--absent');
+      }
       break;
     case 'business_trip':
       classes.push('ts-day--trip');
@@ -217,6 +228,11 @@ const getDayCellTitle = (entry: TimesheetEntry | null, weekend: boolean): string
   }
   if ((entry.status === 'work' || entry.status === 'manual') && entry.presence_covers_shift === false) {
     parts.push('Присутствие меньше длительности смены');
+  }
+  const hasSkudEventsTooltip = Boolean(entry.first_entry || entry.last_exit);
+  const zeroHoursTooltip = !hasPositiveHours(visibleHours);
+  if (hasSkudEventsTooltip && zeroHoursTooltip) {
+    parts.push('Есть события СКУД, но время не учтено (только вход или только выход)');
   }
   if ((entry.travel_delay_minutes || 0) > 0) {
     parts.push(`Превышение лимита передвижения: ${formatHM((entry.travel_delay_minutes || 0) / 60)}`);
@@ -1037,6 +1053,9 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
           </div>
           <div className="ts-legend-item">
             <span className="ts-legend-dot ts-legend-dot--absent">Н</span>Неявка
+          </div>
+          <div className="ts-legend-item">
+            <span className="ts-legend-dot ts-legend-dot--incomplete-skud">Н</span>СКУД без пары
           </div>
           <div className="ts-legend-item">
             <span className="ts-legend-dot ts-legend-dot--weekend">—</span>Выходной

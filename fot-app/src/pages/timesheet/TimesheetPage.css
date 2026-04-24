@@ -1141,6 +1141,11 @@
   color: var(--error);
 }
 
+.ts-legend-dot--incomplete-skud {
+  background: rgba(168, 85, 247, 0.18);
+  color: #7e22ce;
+}
+
 .ts-legend-dot--weekend {
   background: var(--bg-tertiary, var(--bg-secondary));
   color: var(--text-tertiary);
@@ -1617,12 +1622,13 @@
 .ts-table--objects thead th {
   position: sticky;
   top: 0;
-  z-index: 20;
+  z-index: 50;
   background: var(--bg-secondary);
+  box-shadow: 0 1px 0 var(--border-color, rgba(0, 0, 0, 0.1));
 }
 
 .ts-table--objects thead th.ts-col-sticky {
-  z-index: 30;
+  z-index: 60;
 }
 
 /* ===== Вкладка «Корректировки» ===== */
@@ -2117,6 +2123,11 @@
 .ts-day--absent {
   background: rgba(239, 68, 68, 0.12);
   color: var(--error);
+}
+
+.ts-day--incomplete-skud {
+  background: rgba(168, 85, 247, 0.18);
+  color: #7e22ce;
 }
 
 .ts-day--trip {

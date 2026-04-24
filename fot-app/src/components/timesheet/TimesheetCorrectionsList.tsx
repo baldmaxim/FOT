@@ -3,12 +3,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Lock, Pencil, Trash2 } from 'lucide-react';
 import { timesheetService, type ITimesheetCorrectionRow } from '../../services/timesheetService';
 import type { TimesheetStatus } from '../../types';
+import { TimesheetCorrectionModal } from './TimesheetCorrectionModal';
 
 interface IProps {
   startDate: string;
   endDate: string;
   departmentId: string | null;
-  onEdit: (row: ITimesheetCorrectionRow) => void;
 }
 
 const STATUS_LABELS: Record<TimesheetStatus, string> = {
@@ -36,10 +36,25 @@ const formatHours = (hours: number | null): string => {
   return `${h}:${String(m).padStart(2, '0')}`;
 };
 
-export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, departmentId, onEdit }) => {
+export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, departmentId }) => {
   const queryClient = useQueryClient();
   const [filterAuthor, setFilterAuthor] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<'' | TimesheetStatus>('');
+  const [editingRow, setEditingRow] = useState<ITimesheetCorrectionRow | null>(null);
+
+  const invalidateAll = () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+    queryClient.invalidateQueries({ queryKey: ['timesheet-page'] }),
+  ]);
+
+  const updateMutation = useMutation({
+    mutationFn: (payload: { id: number; status: TimesheetStatus; hours: number | null; notes: string }) =>
+      timesheetService.update(payload.id, { status: payload.status, hours_worked: payload.hours, notes: payload.notes }),
+    onSuccess: async () => {
+      await invalidateAll();
+      setEditingRow(null);
+    },
+  });
 
   const query = useQuery({
     queryKey: ['timesheet-corrections', startDate, endDate, departmentId],
@@ -146,7 +161,7 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
                       type="button"
                       className="ts-corrections-btn"
                       disabled={!row.can_edit}
-                      onClick={() => onEdit(row)}
+                      onClick={() => setEditingRow(row)}
                       title={row.can_edit ? 'Редактировать' : 'Нет прав на редактирование'}
                     >
                       <Pencil size={14} />
@@ -166,6 +181,39 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
             </tbody>
           </table>
         </div>
+      )}
+
+      {editingRow && (
+        <TimesheetCorrectionModal
+          open={true}
+          title="Редактирование корректировки"
+          subtitle={formatDate(editingRow.work_date)}
+          dayLabel={formatDate(editingRow.work_date)}
+          employeeName={editingRow.employee_full_name ?? `#${editingRow.employee_id}`}
+          employeeId={editingRow.employee_id}
+          workDate={editingRow.work_date}
+          initialStatus={editingRow.status}
+          initialHours={editingRow.hours_override}
+          initialNotes={editingRow.reason ?? ''}
+          correctionInfo={{
+            is_correction: true,
+            corrected_at: editingRow.updated_at,
+            corrected_by_name: editingRow.author_name,
+          }}
+          onClose={() => setEditingRow(null)}
+          onSave={(status, hours, notes) => {
+            if (!editingRow) return;
+            updateMutation.mutate({ id: editingRow.id, status, hours, notes });
+          }}
+          onDelete={editingRow.can_delete ? () => {
+            if (!editingRow) return;
+            const ok = window.confirm(`Удалить корректировку на ${formatDate(editingRow.work_date)}?`);
+            if (!ok) return;
+            deleteMutation.mutate(editingRow.id, {
+              onSuccess: () => setEditingRow(null),
+            });
+          } : undefined}
+        />
       )}
     </div>
   );

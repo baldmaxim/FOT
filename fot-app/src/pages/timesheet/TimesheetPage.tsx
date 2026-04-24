@@ -525,6 +525,7 @@ export const TimesheetPage: FC = () => {
       closeModal();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
       ]);
     } catch (err) {
       console.error('Save correction error:', err);
@@ -547,6 +548,7 @@ export const TimesheetPage: FC = () => {
       closeModal();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
       ]);
     } catch (error) {
       console.error('Save object correction error:', error);
@@ -576,6 +578,7 @@ export const TimesheetPage: FC = () => {
       closeModal();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
       ]);
     } catch (error) {
       console.error('Delete object correction error:', error);
@@ -704,6 +707,7 @@ export const TimesheetPage: FC = () => {
       toast.success(`Сотрудник ${candidate.full_name} переведён в отдел ${selectedDeptName} с ${effectiveFrom}`);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-team-search'] }),
       ]);
       closeTeamManagement();
@@ -735,6 +739,7 @@ export const TimesheetPage: FC = () => {
       toast.success(`Сотрудник ${employee.full_name} исключён из табеля`);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-team-search'] }),
       ]);
     } catch (error) {
@@ -1063,6 +1068,7 @@ export const TimesheetPage: FC = () => {
         clearBulkState();
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
         ]);
         toast.success(`Корректировка по объектам применена для ${bulkObjectTargets.length} ячеек`);
       } catch (error) {
@@ -1086,6 +1092,7 @@ export const TimesheetPage: FC = () => {
       clearBulkState();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
       ]);
       toast.success(`Корректировка применена для ${result.processed} ячеек`);
     } catch (error) {
@@ -1251,6 +1258,7 @@ export const TimesheetPage: FC = () => {
       const result = await timesheetService.refresh({ start_date: rangeStart, end_date: rangeEnd });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
       ]);
       const parts: string[] = [];
@@ -1810,21 +1818,6 @@ export const TimesheetPage: FC = () => {
             startDate={rangeStart}
             endDate={rangeEnd}
             departmentId={effectiveSelectedDeptId ?? null}
-            onEdit={(row) => {
-              const [yearPart, monthPart, dayPart] = row.work_date.split('-').map(Number);
-              if (yearPart !== year || monthPart !== month) {
-                toast.info?.('Переключитесь на месяц этой корректировки для редактирования');
-                return;
-              }
-              const employee = employees.find(e => e.id === row.employee_id);
-              if (!employee) {
-                toast.info?.('Сотрудник не в текущем списке отдела');
-                return;
-              }
-              const workDate = row.work_date;
-              const dayEntry = entries.find(e => e.employee_id === row.employee_id && e.work_date === workDate) ?? null;
-              handleDayClick(employee, dayPart, dayEntry);
-            }}
           />
         </div>
       ) : isAssignedMode ? (
