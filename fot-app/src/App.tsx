@@ -1,13 +1,14 @@
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useSearchParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
+import { ChatProvider } from './contexts/ChatContext';
 import { ProtectedRoute, PublicRoute } from './components/auth/ProtectedRoute';
 import { SigurHeaderBadges } from './components/skud/SigurHeaderBadges';
 import { useTheme } from './hooks/useTheme';
-import { useChatUnreadCount } from './hooks/useChatUnreadCount';
 import { PageLoader } from './components/ui/PageLoader';
+import { ChatPanelMount } from './components/chat/ChatPanelMount';
 import './App.css';
 
 const queryClient = new QueryClient({
@@ -70,9 +71,6 @@ const SalaryRaisePage = lazy(() => import('./pages/employee/SalaryRaisePage').th
 const SalaryRaiseFormPage = lazy(() => import('./pages/employee/SalaryRaiseFormPage').then(m => ({ default: m.SalaryRaiseFormPage })));
 const SalaryRaiseViewPage = lazy(() => import('./pages/employee/SalaryRaiseViewPage').then(m => ({ default: m.SalaryRaiseViewPage })));
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage').then(m => ({ default: m.NotFoundPage })));
-const ChatRoot = lazy(() => import('./components/chat/ChatRoot').then(m => ({ default: m.ChatRoot })));
-const ChatLauncher = lazy(() => import('./components/chat/ChatLauncher').then(m => ({ default: m.ChatLauncher })));
-
 // Salary raise review (header/hr/admin) — используется в /salary-raise-review/:id
 const SalaryRaiseReviewPage = lazy(() => import('./pages/SalaryRaiseReviewPage').then(m => ({ default: m.SalaryRaiseReviewPage })));
 
@@ -112,30 +110,6 @@ const EmployeeHomeRoute = () => {
   }
 
   return <Navigate to="/unauthorized" replace />;
-};
-
-const ChatEntryPoint = () => {
-  const { isAuthenticated, isApproved } = useAuth();
-  const [chatActivated, setChatActivated] = useState(false);
-  const { unreadCount } = useChatUnreadCount(isAuthenticated && isApproved && !chatActivated);
-
-  if (!isAuthenticated || !isApproved) {
-    return null;
-  }
-
-  if (!chatActivated) {
-    return (
-      <Suspense fallback={null}>
-        <ChatLauncher unreadCount={unreadCount} onOpen={() => setChatActivated(true)} />
-      </Suspense>
-    );
-  }
-
-  return (
-    <Suspense fallback={null}>
-      <ChatRoot initialOpen />
-    </Suspense>
-  );
 };
 
 const AppRoutes = () => {
@@ -544,8 +518,10 @@ const App = () => {
       <BrowserRouter>
         <AuthProvider>
           <ToastProvider>
-            <AppRoutes />
-            <ChatEntryPoint />
+            <ChatProvider>
+              <AppRoutes />
+              <ChatPanelMount />
+            </ChatProvider>
           </ToastProvider>
         </AuthProvider>
       </BrowserRouter>

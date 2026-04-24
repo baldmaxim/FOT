@@ -1,4 +1,5 @@
 import { type FC, useMemo, useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { X, ChevronDown, ChevronRight, LogIn, LogOut, Timer } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee, SkudEvent, IProductionCalendarMonth } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
@@ -232,7 +233,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
 
   const displayName = formatTimesheetEmployeeName(employee.full_name);
 
-  return (
+  return createPortal(
     <>
       <div
         className={`ts-backdrop ${open ? 'ts-backdrop--open' : ''}`}
@@ -390,6 +391,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
         </div>
       </div>
       {accessPointMapModal}
-    </>
+    </>,
+    document.body,
   );
 };

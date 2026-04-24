@@ -194,6 +194,16 @@ const getDayCellText = (entry: TimesheetEntry | null, weekend: boolean): string 
   return '';
 };
 
+const getDayCellTextMobile = (entry: TimesheetEntry | null, weekend: boolean): string => {
+  const visibleHours = getVisibleHours(entry);
+  if (weekend && !entry) return '—';
+  if (!entry) return '';
+  const special = STATUS_CELL_TEXT[entry.status];
+  if (special) return special;
+  if (visibleHours != null) return String(Math.round(visibleHours));
+  return '';
+};
+
 const getDayCellTitle = (entry: TimesheetEntry | null, weekend: boolean): string | undefined => {
   const visibleHours = getVisibleHours(entry);
   if (weekend && !entry) return 'Выходной';
@@ -696,26 +706,25 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                 className={`ts-mobile-card${expanded ? ' ts-mobile-card--expanded' : ''}`}
               >
                 <div className="ts-mobile-card-header">
-                  <div className="ts-mobile-card-meta">
-                    <div className="ts-mobile-card-name-row">
-                      <span className="ts-employee-index">{employeeIndex}.</span>
-                      <div className="ts-mobile-card-name">{displayName}</div>
-                    </div>
+                  <div className="ts-mobile-card-name-row">
+                    <span className="ts-employee-index">{employeeIndex}.</span>
+                    <div className="ts-mobile-card-name">{displayName}</div>
                   </div>
-                </div>
-
-                <div className="ts-mobile-card-actions">
                   {canManageTeam && onExcludeEmployee && (
                     <button
                       type="button"
-                      className="ts-mobile-action-btn ts-mobile-action-btn--danger"
+                      className="ts-mobile-exclude-btn"
                       onClick={() => onExcludeEmployee(row.employee)}
                       disabled={pendingEmployeeId === row.employee.id}
+                      title="Исключить"
+                      aria-label="Исключить"
                     >
-                      <UserMinus size={14} />
-                      {pendingEmployeeId === row.employee.id ? 'Исключение...' : 'Исключить'}
+                      <UserMinus size={16} />
                     </button>
                   )}
+                </div>
+
+                <div className="ts-mobile-card-actions">
                   <button
                     type="button"
                     className="ts-mobile-action-btn"
@@ -734,12 +743,27 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   </button>
                 </div>
 
-                {expanded && (
+                {expanded && (() => {
+                  const jsDow = new Date(year, month - 1, 1).getDay();
+                  const firstDayOffset = (jsDow + 6) % 7;
+                  return (
                   <div className="ts-mobile-days-wrap">
                     <div className="ts-mobile-days-caption">
                       Нажмите на день, чтобы посмотреть или скорректировать отметку
                     </div>
+                    <div className="ts-mobile-weekdays-header" aria-hidden>
+                      <span>Пн</span>
+                      <span>Вт</span>
+                      <span>Ср</span>
+                      <span>Чт</span>
+                      <span>Пт</span>
+                      <span className="ts-mobile-weekday--weekend">Сб</span>
+                      <span className="ts-mobile-weekday--weekend">Вс</span>
+                    </div>
                     <div className="ts-mobile-days">
+                      {Array.from({ length: firstDayOffset }).map((_, i) => (
+                        <div key={`pad-${i}`} className="ts-mobile-day-empty" aria-hidden />
+                      ))}
                       {days.map(day => {
                         const sched = getScheduleForTimesheetDay(schedules, dailySchedules, row.employee.id, year, month, day);
                         const dayOff = isScheduleDayOff(sched, calendar, year, month, day);
@@ -748,7 +772,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const entry = row.days.get(day) || null;
                         const thresholdHours = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
                         const cls = getDayCellClass(entry, dayOff, today, future, thresholdHours);
-                        const text = getDayCellText(entry, dayOff);
+                        const text = getDayCellTextMobile(entry, dayOff);
                         const title = getDayCellTitle(entry, dayOff);
 
                         return (
@@ -759,10 +783,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             title={title}
                             onClick={() => onDayClick(row.employee, day, entry)}
                           >
-                            <span className="ts-mobile-day-head">
-                              <span className="ts-mobile-day-num">{day}</span>
-                              <span className="ts-mobile-day-weekday">{getWeekdayShort(year, month, day)}</span>
-                            </span>
+                            <span className="ts-mobile-day-num">{day}</span>
                             <span className="ts-mobile-day-value">{text || '·'}</span>
                           </button>
                         );
@@ -799,7 +820,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       </div>
                     )}
                   </div>
-                )}
+                  );
+                })()}
               </article>
             );
           })}

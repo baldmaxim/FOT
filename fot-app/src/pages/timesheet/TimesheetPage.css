@@ -1177,7 +1177,9 @@
 
 .ts-mobile-card-header {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
@@ -1194,6 +1196,7 @@
   align-items: flex-start;
   gap: 8px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .ts-mobile-card-name {
@@ -1201,6 +1204,30 @@
   font-weight: 700;
   color: var(--text-primary);
   min-width: 0;
+}
+
+.ts-mobile-exclude-btn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: #ef4444;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition);
+}
+
+.ts-mobile-exclude-btn:hover {
+  background: #dc2626;
+}
+
+.ts-mobile-exclude-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .ts-employee-index {
@@ -1385,49 +1412,64 @@
   color: var(--error);
 }
 
+.ts-mobile-weekdays-header {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  padding: 0 2px;
+}
+
+.ts-mobile-weekdays-header > span {
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  letter-spacing: 0.04em;
+}
+
+.ts-mobile-weekday--weekend {
+  color: var(--error);
+  opacity: 0.85;
+}
+
 .ts-mobile-days {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+
+.ts-mobile-day-empty {
+  min-height: 52px;
+  background: transparent;
+  border: none;
 }
 
 .ts-mobile-day-btn {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  min-height: 64px;
-  padding: 10px 8px;
-  border: 1px solid transparent;
-  border-radius: 14px;
-  cursor: pointer;
-  text-align: left;
-}
-
-.ts-mobile-day-head {
-  display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  min-height: 52px;
+  padding: 6px 2px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: center;
 }
 
 .ts-mobile-day-num {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
-}
-
-.ts-mobile-day-weekday {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  opacity: 0.72;
+  line-height: 1;
 }
 
 .ts-mobile-day-value {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
+  line-height: 1;
 }
 
 .ts-mobile-empty {
@@ -1915,7 +1957,7 @@
   right: 0;
   bottom: 0;
   background: rgba(0, 0, 0, 0.4);
-  z-index: 150;
+  z-index: 1100;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.3s ease;
@@ -1935,7 +1977,7 @@
   background: var(--surface);
   border-left: 1px solid var(--border);
   box-shadow: -4px 0 20px rgba(0, 0, 0, 0.12);
-  z-index: 200;
+  z-index: 1200;
   transition: right 0.3s ease;
   display: flex;
   flex-direction: column;
@@ -3069,8 +3111,9 @@
   }
 
   .ts-side-panel {
-    width: 100%;
-    right: -100%;
+    width: 100vw;
+    right: -100vw;
+    height: 100dvh;
   }
   .ts-modal,
   .ts-late-modal {
@@ -3208,13 +3251,21 @@
   }
 
   .ts-mobile-days {
-    grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
-    gap: 6px;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+  }
+
+  .ts-mobile-weekdays-header {
+    gap: 4px;
   }
 
   .ts-mobile-day-btn {
-    min-height: 58px;
-    padding: 8px 5px;
+    min-height: 46px;
+    padding: 4px 2px;
+  }
+
+  .ts-mobile-day-empty {
+    min-height: 46px;
   }
 
   .ts-table thead th {

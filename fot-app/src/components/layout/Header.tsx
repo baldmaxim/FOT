@@ -2,10 +2,12 @@ import { lazy, Suspense, useState } from 'react';
 import type { FC, ReactNode } from 'react';
 import styles from './Header.module.css';
 import { IconButton } from '../ui/Button';
+import buttonStyles from '../ui/Button.module.css';
 import { Tabs } from '../ui/Tabs';
 import { MoonIcon, SunIcon, BellIcon } from '../ui/Icons';
 import dropdownStyles from '../ui/NotificationDropdown.module.css';
 import { useUnreadNotificationsCount } from '../../hooks/useUnreadNotificationsCount';
+import { ChatHeaderButton } from '../chat/ChatHeaderButton';
 
 interface IHeaderProps {
   title: string;
@@ -62,6 +64,8 @@ export const Header: FC<IHeaderProps> = ({
         <IconButton onClick={onToggleTheme} title="Переключить тему">
           {theme === 'dark' ? <MoonIcon /> : <SunIcon />}
         </IconButton>
+
+        <ChatHeaderButton buttonClassName={buttonStyles.iconButton} />
 
         <div className={dropdownStyles.wrapper}>
           <IconButton

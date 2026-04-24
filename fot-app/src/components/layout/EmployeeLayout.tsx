@@ -8,6 +8,7 @@ import { useTheme } from '../../hooks/useTheme';
 import { useMyPresence } from '../../hooks/useMyPresence';
 import dropdownStyles from '../ui/NotificationDropdown.module.css';
 import { useUnreadNotificationsCount } from '../../hooks/useUnreadNotificationsCount';
+import { ChatHeaderButton } from '../chat/ChatHeaderButton';
 
 interface IEmployeeLayoutProps {
   children: ReactNode;
@@ -76,6 +77,7 @@ export const EmployeeLayout: FC<IEmployeeLayoutProps> = ({ children, title }) =>
                 </svg>
               )}
             </button>
+            <ChatHeaderButton buttonClassName={styles.headerBtn} />
             <div className={dropdownStyles.wrapper}>
               <button
                 className={styles.headerBtn}
