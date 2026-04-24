@@ -1,4 +1,5 @@
-import { type FC, useEffect, useMemo, useState } from 'react';
+import { type FC, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowRight, Search, UserPlus, X } from 'lucide-react';
 import type { TimesheetTeamManagementCandidate } from '../../types';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
@@ -42,13 +43,28 @@ export const TimesheetTeamManagementModal: FC<ITimesheetTeamManagementModalProps
     selectedCandidate?.department_name || 'Без отдела'
   ), [selectedCandidate]);
 
+  const mouseDownOnOverlayRef = useRef(false);
+
   if (!open) return null;
 
-  return (
-    <>
-      <div className="ts-backdrop ts-backdrop--open" onClick={onClose} />
-      <div className="ts-modal-overlay ts-modal-overlay--open" onClick={onClose}>
-        <div className="ts-modal ts-team-modal" onClick={event => event.stopPropagation()}>
+  const handleOverlayMouseDown = (event: React.MouseEvent) => {
+    mouseDownOnOverlayRef.current = event.target === event.currentTarget;
+  };
+
+  const handleOverlayClick = (event: React.MouseEvent) => {
+    if (event.target === event.currentTarget && mouseDownOnOverlayRef.current) {
+      onClose();
+    }
+    mouseDownOnOverlayRef.current = false;
+  };
+
+  return createPortal(
+    <div
+      className="ts-modal-overlay ts-modal-overlay--open"
+      onMouseDown={handleOverlayMouseDown}
+      onClick={handleOverlayClick}
+    >
+      <div className="ts-modal ts-team-modal">
           <div className="ts-modal-header ts-team-modal-header">
             <div>
               <div className="ts-modal-title">Перевести сотрудника</div>
@@ -163,7 +179,7 @@ export const TimesheetTeamManagementModal: FC<ITimesheetTeamManagementModalProps
             )}
           </div>
         </div>
-      </div>
-    </>
+      </div>,
+    document.body,
   );
 };
