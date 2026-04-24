@@ -620,6 +620,7 @@ export const TimesheetPage: FC = () => {
       const segmentSuffix = isFullMonth ? '' : `_${startDay}-${endDay}`;
       const monthName = MONTH_NAMES_RU[month];
       const presentationSuffix = presentation === 'manager' ? '_Руководитель' : '';
+      const exportGrouping = viewMode === 'objects' ? 'objects' : 'employees';
 
       let blob: Blob;
       let filename: string;
@@ -630,12 +631,12 @@ export const TimesheetPage: FC = () => {
           from: rangeStart,
           to: rangeEnd,
           employee_ids: [selectedAssigneeId],
-          group_by: viewMode,
+          group_by: exportGrouping,
           presentation,
         });
         const assignee = assigneesQuery.data?.find(emp => emp.id === selectedAssigneeId);
         const assigneeName = formatFioWithInitials(assignee?.full_name) || 'Участок';
-        const suffix = viewMode === 'objects' ? '_объекты' : '';
+        const suffix = exportGrouping === 'objects' ? '_объекты' : '';
         filename = `Участок_${assigneeName}${suffix}_${monthName}_${year}${segmentSuffix}${presentationSuffix}.zip`;
       } else if (viewMode === 'objects' && effectiveSelectedDeptId) {
         blob = await timesheetService.exportMass({
@@ -1863,7 +1864,7 @@ export const TimesheetPage: FC = () => {
             objectEntries={objectEntries}
             year={year}
             month={month}
-            viewMode={viewMode === 'corrections' ? 'employees' : viewMode}
+            viewMode={viewMode}
             schedules={schedules}
             dailySchedules={dailySchedules}
             calendar={calendar}
@@ -1897,7 +1898,7 @@ export const TimesheetPage: FC = () => {
           objectEntries={objectEntries}
           year={year}
           month={month}
-          viewMode={viewMode === 'corrections' ? 'employees' : viewMode}
+          viewMode={viewMode}
           schedules={schedules}
           dailySchedules={dailySchedules}
           calendar={calendar}

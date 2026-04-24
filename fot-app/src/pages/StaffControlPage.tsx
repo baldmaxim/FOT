@@ -45,6 +45,7 @@ const isActiveScheduleAssignment = (effectiveFrom: string, effectiveTo: string |
   effectiveFrom <= date && (effectiveTo === null || effectiveTo >= date);
 
 type ModalType = 'salary' | 'salary_actual' | 'position' | 'department' | 'category' | 'schedule';
+type StaffStatusFilter = 'active' | 'fired' | 'excluded';
 
 type ScheduleSource = 'employee' | 'category' | 'default';
 
@@ -1140,7 +1141,7 @@ export const StaffControlPage: FC = () => {
   const isMobile = useIsMobile(768);
   const [search, setSearch] = useState(() => urlParams.get('q') || '');
   const [deptId, setDeptId] = useState(() => urlParams.get('dept') || '');
-  const [statusFilter, setStatusFilter] = useState<'active' | 'fired'>('active');
+  const [statusFilter, setStatusFilter] = useState<StaffStatusFilter>('active');
   const [page, setPage] = useState(1);
   const debouncedSearch = useDebouncedValue(search, 300);
   const queryClient = useQueryClient();
