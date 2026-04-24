@@ -28,6 +28,7 @@ import {
   clampRangeToMonth,
   getDefaultRangeForMonth,
 } from '../../utils/timesheetApprovalPeriod';
+import { getTimesheetMonthAccess, parseMonthFromIso } from '../../utils/timesheetMonthAccess';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
 import { type IFlatDepartmentOption, getTreeFlatDepartments, filterDepartmentTreeByIds } from '../../utils/departmentUtils';
 import './TimesheetPage.css';
@@ -184,6 +185,10 @@ export const TimesheetPage: FC = () => {
   const currentMonthIndex = toMonthIndex(currentYear, currentMonth);
   const previousMonthIndex = currentMonthIndex - 1;
   const isRestrictedManagerView = isTimesheetDepartmentScope;
+  const monthAccess = useMemo(
+    () => getTimesheetMonthAccess(isRestrictedManagerView, now),
+    [isRestrictedManagerView, now],
+  );
   const requestedMonth = useMemo(() => parseMonthParam(queryMonth), [queryMonth]);
   const requestedMonthIndex = requestedMonth
     ? toMonthIndex(requestedMonth.year, requestedMonth.month)
@@ -1155,17 +1160,28 @@ export const TimesheetPage: FC = () => {
 
   const handleRangeChange = useCallback((startDate: string, endDate: string) => {
     clearBulkState();
-    const clamped = clampRangeToMonth({ startDate, endDate }, monthStr)
-      ?? { startDate: `${monthStr}-01`, endDate: `${monthStr}-${String(daysInMonth).padStart(2, '0')}` };
+    const startMonth = parseMonthFromIso(startDate);
+    const endMonth = parseMonthFromIso(endDate);
+    const targetSource = startMonth ?? endMonth;
+    let targetYear = year;
+    let targetMonthNum = month;
+    if (targetSource && monthAccess.isMonthAllowed(targetSource.year, targetSource.month)) {
+      targetYear = targetSource.year;
+      targetMonthNum = targetSource.month;
+    }
+    const targetMonthStr = `${targetYear}-${String(targetMonthNum).padStart(2, '0')}`;
+    const targetDaysInMonth = new Date(targetYear, targetMonthNum, 0).getDate();
+    const clamped = clampRangeToMonth({ startDate, endDate }, targetMonthStr)
+      ?? { startDate: `${targetMonthStr}-01`, endDate: `${targetMonthStr}-${String(targetDaysInMonth).padStart(2, '0')}` };
     setSearchParams(current => {
       const next = new URLSearchParams(current);
-      next.set('month', monthStr);
+      next.set('month', targetMonthStr);
       next.set('from', clamped.startDate);
       next.set('to', clamped.endDate);
       next.delete('half');
       return next;
     });
-  }, [clearBulkState, monthStr, daysInMonth, setSearchParams]);
+  }, [clearBulkState, year, month, monthAccess, setSearchParams]);
 
   const handleViewModeChange = useCallback((nextViewMode: TimesheetViewMode) => {
     clearBulkState();
@@ -1396,8 +1412,8 @@ export const TimesheetPage: FC = () => {
   const selectorControl = timesheetMode === 'assigned' ? assigneeControl : departmentControl;
   const isAssignedMode = timesheetMode === 'assigned';
 
-  const monthBoundsFirst = `${year}-${String(month).padStart(2, '0')}-01`;
-  const monthBoundsLast = `${year}-${String(month).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
+  const rangeInputMin = monthAccess.minDate;
+  const rangeInputMax = monthAccess.maxDate;
 
   const segmentControl = (isAssignedMode ? selectedAssigneeId : effectiveSelectedDeptId) ? (
     <section className="ts-range-control">
@@ -1408,8 +1424,8 @@ export const TimesheetPage: FC = () => {
             type="date"
             className="ts-range-input"
             value={rangeStart}
-            min={monthBoundsFirst}
-            max={monthBoundsLast}
+            min={rangeInputMin}
+            max={rangeInputMax}
             onChange={e => {
               const nextStart = e.target.value;
               if (!nextStart) return;
@@ -1425,7 +1441,7 @@ export const TimesheetPage: FC = () => {
             className="ts-range-input"
             value={rangeEnd}
             min={rangeStart}
-            max={monthBoundsLast}
+            max={rangeInputMax}
             onChange={e => {
               const nextEnd = e.target.value;
               if (!nextEnd) return;

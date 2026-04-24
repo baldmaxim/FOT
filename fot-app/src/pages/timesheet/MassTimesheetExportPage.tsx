@@ -1,6 +1,9 @@
 import { type FC, useState, useMemo, useCallback, useEffect } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { getMonthLabel } from '../../utils/calendarUtils';
+import { useAuth } from '../../contexts/AuthContext';
+import { useManagedDepartments } from '../../hooks/useManagedDepartments';
+import { getTimesheetMonthAccess } from '../../utils/timesheetMonthAccess';
 import { MassTimesheetExportDepartmentsTab } from './MassTimesheetExportDepartmentsTab';
 import { MassTimesheetExportAssignedTab } from './MassTimesheetExportAssignedTab';
 import './MassTimesheetExportPage.css';
@@ -39,8 +42,29 @@ const saveStoredActiveTab = (tab: ExportTab): void => {
   }
 };
 
+const toMonthIndex = (year: number, month: number): number => year * 12 + month - 1;
+
+const parseMonth = (iso: string): { year: number; month: number } | null => {
+  const match = /^(\d{4})-(\d{2})/.exec(iso);
+  if (!match) return null;
+  const y = Number.parseInt(match[1], 10);
+  const m = Number.parseInt(match[2], 10);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) return null;
+  return { year: y, month: m };
+};
+
 export const MassTimesheetExportPage: FC = () => {
   const now = useMemo(() => new Date(), []);
+  const { hasPermission, profile } = useAuth();
+  const { isDepartmentScope } = useManagedDepartments();
+  const isSuperAdmin = profile?.position_type === 'super_admin';
+  const canManageAllDepartments = isSuperAdmin || hasPermission('data.scope.all');
+  const isRestrictedManagerView = !canManageAllDepartments && isDepartmentScope;
+  const monthAccess = useMemo(
+    () => getTimesheetMonthAccess(isRestrictedManagerView, now),
+    [isRestrictedManagerView, now],
+  );
+
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const monthRange = useMemo(() => getMonthRange(year, month), [year, month]);
@@ -49,6 +73,25 @@ export const MassTimesheetExportPage: FC = () => {
   const [groupBy, setGroupBy] = useState<TimesheetGroupingMode>('employees');
   const [exportAs1C, setExportAs1C] = useState(false);
   const [activeTab, setActiveTab] = useState<ExportTab>(() => loadStoredActiveTab());
+
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+  const currentMonthIndex = toMonthIndex(currentYear, currentMonth);
+  const previousMonthIndex = currentMonthIndex - 1;
+  const selectedMonthIndex = toMonthIndex(year, month);
+
+  const canGoPrev = !isRestrictedManagerView || selectedMonthIndex > previousMonthIndex;
+  const canGoNext = !isRestrictedManagerView || selectedMonthIndex < currentMonthIndex;
+
+  useEffect(() => {
+    if (!isRestrictedManagerView) return;
+    if (selectedMonthIndex > currentMonthIndex) {
+      setYear(currentYear); setMonth(currentMonth);
+    } else if (selectedMonthIndex < previousMonthIndex) {
+      const d = new Date(currentYear, currentMonth - 2, 1);
+      setYear(d.getFullYear()); setMonth(d.getMonth() + 1);
+    }
+  }, [isRestrictedManagerView, selectedMonthIndex, currentMonthIndex, previousMonthIndex, currentYear, currentMonth]);
 
   useEffect(() => {
     // При смене месяца сбрасываем диапазон на полный месяц.
@@ -61,38 +104,65 @@ export const MassTimesheetExportPage: FC = () => {
   }, [activeTab]);
 
   const prevMonth = useCallback(() => {
+    if (!canGoPrev) return;
     if (month === 1) { setMonth(12); setYear(y => y - 1); }
     else setMonth(m => m - 1);
-  }, [month]);
+  }, [canGoPrev, month]);
 
   const nextMonth = useCallback(() => {
+    if (!canGoNext) return;
     if (month === 12) { setMonth(1); setYear(y => y + 1); }
     else setMonth(m => m + 1);
-  }, [month]);
+  }, [canGoNext, month]);
+
+  const applyDate = useCallback((value: string, kind: 'start' | 'end') => {
+    const parsed = parseMonth(value);
+    if (!parsed) return;
+    const jumpsMonth = parsed.year !== year || parsed.month !== month;
+    const jumpAllowed = jumpsMonth && monthAccess.isMonthAllowed(parsed.year, parsed.month);
+    if (jumpAllowed) {
+      const nextRange = getMonthRange(parsed.year, parsed.month);
+      setYear(parsed.year);
+      setMonth(parsed.month);
+      if (kind === 'start') {
+        setRangeStart(value);
+        setRangeEnd(nextRange.last);
+      } else {
+        setRangeStart(nextRange.first);
+        setRangeEnd(value);
+      }
+      return;
+    }
+    const bounds = getMonthRange(year, month);
+    const clamped = value < bounds.first ? bounds.first : (value > bounds.last ? bounds.last : value);
+    if (kind === 'start') {
+      setRangeStart(clamped);
+      if (rangeEnd < clamped) setRangeEnd(clamped);
+    } else {
+      setRangeEnd(clamped < rangeStart ? rangeStart : clamped);
+    }
+  }, [year, month, monthAccess, rangeStart, rangeEnd]);
 
   const handleRangeStart = useCallback((value: string) => {
     if (!value) return;
-    const clamped = value < monthRange.first ? monthRange.first : (value > monthRange.last ? monthRange.last : value);
-    setRangeStart(clamped);
-    if (rangeEnd < clamped) setRangeEnd(clamped);
-  }, [monthRange.first, monthRange.last, rangeEnd]);
+    applyDate(value, 'start');
+  }, [applyDate]);
 
   const handleRangeEnd = useCallback((value: string) => {
     if (!value) return;
-    const clamped = value < monthRange.first ? monthRange.first : (value > monthRange.last ? monthRange.last : value);
-    setRangeEnd(clamped < rangeStart ? rangeStart : clamped);
-  }, [monthRange.first, monthRange.last, rangeStart]);
+    applyDate(value, 'end');
+  }, [applyDate]);
 
   return (
     <div className="mte-page">
       <div className="mte-header">
         <h2 className="mte-title">Массовый экспорт</h2>
         <div className="mte-month-nav">
-          <button className="mte-month-btn" onClick={prevMonth}>
+          <button className="mte-month-btn" onClick={prevMonth} disabled={!canGoPrev}>
             <ChevronLeft size={16} />
           </button>
           <span className="mte-month-label">{getMonthLabel(year, month)}</span>
-          <button className="mte-month-btn" onClick={nextMonth}>
+          <button className="mte-month-btn" onClick={nextMonth} disabled={!canGoNext}>
             <ChevronRight size={16} />
           </button>
         </div>
@@ -105,8 +175,8 @@ export const MassTimesheetExportPage: FC = () => {
             type="date"
             className="mte-range-input"
             value={rangeStart}
-            min={monthRange.first}
-            max={monthRange.last}
+            min={monthAccess.minDate}
+            max={monthAccess.maxDate}
             onChange={e => handleRangeStart(e.target.value)}
           />
         </label>
@@ -117,7 +187,7 @@ export const MassTimesheetExportPage: FC = () => {
             className="mte-range-input"
             value={rangeEnd}
             min={rangeStart}
-            max={monthRange.last}
+            max={monthAccess.maxDate}
             onChange={e => handleRangeEnd(e.target.value)}
           />
         </label>

@@ -22,6 +22,7 @@ import {
   writeTimesheetWorkbookBuffer,
 } from '../services/timesheet-excel.service.js';
 import { formatAssignedFolderName, formatNameWithInitials } from '../utils/fio.utils.js';
+import { isDepartmentMonthAllowed, DEPARTMENT_MONTH_FORBIDDEN_MESSAGE } from '../utils/timesheet-month-access.js';
 
 const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
   'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -336,6 +337,9 @@ export async function exportTimesheetAssigned(req: AuthenticatedRequest, res: Re
     if ('error' in collected) {
       return res.status(collected.error.status).json({ success: false, error: collected.error.message });
     }
+    if (collected.scope === 'department' && Number.isFinite(year) && Number.isFinite(mon) && !isDepartmentMonthAllowed(year, mon)) {
+      return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
+    }
 
     let assignedEmployees = collected.employees;
 
@@ -446,6 +450,9 @@ export async function emailTimesheetAssigned(req: AuthenticatedRequest, res: Res
     const collected = await collectAssignedEmployees(req);
     if ('error' in collected) {
       return res.status(collected.error.status).json({ success: false, error: collected.error.message });
+    }
+    if (collected.scope === 'department' && Number.isFinite(year) && Number.isFinite(mon) && !isDepartmentMonthAllowed(year, mon)) {
+      return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
     }
 
     let assignedEmployees = collected.employees;
