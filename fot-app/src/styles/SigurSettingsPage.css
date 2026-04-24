@@ -10,8 +10,9 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: calc(100vh - var(--header-height));
   min-height: 0;
+  margin: -24px;
 }
 
 .sigur-fullpage__content {
@@ -939,6 +940,10 @@
     padding: 0;
   }
 
+  .sigur-fullpage {
+    margin: -16px;
+  }
+
   .sigur-header {
     margin-bottom: 1rem;
   }
@@ -1055,6 +1060,10 @@
 }
 
 @media (max-width: 430px) {
+  .sigur-fullpage {
+    margin: -12px;
+  }
+
   .sigur-section {
     padding: 0.75rem;
   }

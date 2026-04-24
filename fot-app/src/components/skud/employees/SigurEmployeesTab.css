@@ -3,9 +3,14 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  height: 100%;
 }
 
 .sigur-live-page .employees-page.sigur-live-employees-layout {
+  margin: 0;
+  height: auto;
+  flex: 1;
+  min-height: 0;
   border: none;
   border-radius: 0;
   overflow: hidden;

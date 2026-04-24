@@ -1,6 +1,6 @@
 .page {
-  padding: 28px;
-  max-width: 800px;
+  padding: 0;
+  width: 100%;
 }
 
 .section {
@@ -179,13 +179,13 @@
 }
 
 @media (max-width: 768px) {
-  .page { padding: 16px; }
+  .page { padding: 0; }
   .formGrid { grid-template-columns: 1fr; }
   .actions { flex-direction: column; }
   .btnPrimary, .btnSecondary { width: 100%; text-align: center; }
 }
 
 @media (max-width: 430px) {
-  .page { padding: 12px; }
+  .page { padding: 0; }
   .section { padding: 16px; border-radius: 8px; }
 }
