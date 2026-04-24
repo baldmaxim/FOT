@@ -18,7 +18,7 @@ interface IUseStaffDataParams {
   pageSize?: number;
   search?: string;
   departmentId?: string;
-  status?: 'active' | 'fired';
+  status?: 'active' | 'fired' | 'excluded';
 }
 
 export const useStaffData = (params: IUseStaffDataParams) => {

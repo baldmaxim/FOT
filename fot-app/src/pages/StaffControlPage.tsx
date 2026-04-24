@@ -5,6 +5,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
+import { timesheetService } from '../services/timesheetService';
 import { ApiError } from '../api/client';
 import { scheduleService } from '../services/scheduleService';
 import { workCategoryService } from '../services/workCategoryService';
@@ -90,6 +91,7 @@ interface IStaffRowProps {
   onOpenHistory: (emp: Employee) => void;
   onRehire?: (emp: Employee) => void;
   onFire?: (emp: Employee) => void;
+  onReturn?: (emp: Employee) => void;
 }
 
 const openEmployeeInNewTab = (empId: number) => {
@@ -101,7 +103,7 @@ const handleMiddleClickMouseDown = (e: ReactMouseEvent) => {
   if (e.button === 1) e.preventDefault();
 };
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
 
@@ -129,7 +131,14 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, categoryLabels, schedul
         />
       </td>
       <td className="sc-td-num">{index + 1}</td>
-      <td className="sc-td-name">{emp.full_name}</td>
+      <td className="sc-td-name">
+        {emp.full_name}
+        {emp.excluded_from_timesheet && (
+          <span className="sc-excluded-badge" title={emp.excluded_from_timesheet_at ? `Исключён из табеля: ${new Date(emp.excluded_from_timesheet_at).toLocaleString('ru-RU')}` : 'Исключён из табеля'}>
+            Исключён
+          </span>
+        )}
+      </td>
       <td>
         <span className="sc-cell-with-btn">
           {emp.department || '—'}
@@ -182,7 +191,11 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, categoryLabels, schedul
         </span>
       </td>
       <td className="sc-td-hist" onClick={e => e.stopPropagation()}>
-        {onRehire && emp.employment_status === 'fired' ? (
+        {onReturn && emp.excluded_from_timesheet ? (
+          <button className="sc-btn apply" style={{ fontSize: 11, padding: '2px 8px' }} title="Вернуть сотрудника в табель" onClick={() => onReturn(emp)}>
+            Вернуть в табель
+          </button>
+        ) : onRehire && emp.employment_status === 'fired' ? (
           <button className="sc-btn secondary" style={{ fontSize: 11, padding: '2px 8px' }} title="Восстановить сотрудника" onClick={() => onRehire(emp)}>
             Восстановить
           </button>
@@ -494,6 +507,7 @@ interface IVirtualTableProps {
   onOpenHistory: (emp: Employee) => void;
   onRehire?: (emp: Employee) => void;
   onFire?: (emp: Employee) => void;
+  onReturn?: (emp: Employee) => void;
 }
 
 const ROW_HEIGHT = 36;
@@ -511,6 +525,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   onOpenHistory,
   onRehire,
   onFire,
+  onReturn,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -570,6 +585,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     onOpenHistory={onOpenHistory}
                     onRehire={onRehire}
                     onFire={onFire}
+                    onReturn={onReturn}
                   />
                 );
               })}
@@ -601,6 +617,7 @@ interface IVirtualCardsProps {
   onOpenHistory: (emp: Employee) => void;
   onRehire?: (emp: Employee) => void;
   onFire?: (emp: Employee) => void;
+  onReturn?: (emp: Employee) => void;
 }
 
 const CARD_HEIGHT = 270;
@@ -616,7 +633,8 @@ const MobileCard: FC<{
   onOpenHistory: (emp: Employee) => void;
   onRehire?: (emp: Employee) => void;
   onFire?: (emp: Employee) => void;
-}> = memo(({ emp, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire }) => {
+  onReturn?: (emp: Employee) => void;
+}> = memo(({ emp, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
   const handleAuxClick = (e: ReactMouseEvent) => {
@@ -633,7 +651,14 @@ const MobileCard: FC<{
       onMouseDown={handleMiddleClickMouseDown}
     >
       <div className="sc-card-head">
-        <div className="sc-card-name">{emp.full_name}</div>
+        <div className="sc-card-name">
+          {emp.full_name}
+          {emp.excluded_from_timesheet && (
+            <span className="sc-excluded-badge" title={emp.excluded_from_timesheet_at ? `Исключён из табеля: ${new Date(emp.excluded_from_timesheet_at).toLocaleString('ru-RU')}` : 'Исключён из табеля'}>
+              Исключён
+            </span>
+          )}
+        </div>
         <div className="sc-card-check" onClick={e => e.stopPropagation()}>
           <input
             className="sc-check"
@@ -672,7 +697,11 @@ const MobileCard: FC<{
         <span>{fmt(emp.salary_calculated)}</span>
       </div>
       <div className="sc-card-actions">
-        {onRehire && emp.employment_status === 'fired' ? (
+        {onReturn && emp.excluded_from_timesheet ? (
+          <button className="sc-btn apply" style={{ fontSize: 12, padding: '4px 10px' }} onClick={e => { e.stopPropagation(); onReturn(emp); }}>
+            Вернуть в табель
+          </button>
+        ) : onRehire && emp.employment_status === 'fired' ? (
           <button className="sc-btn secondary" style={{ fontSize: 12, padding: '4px 10px' }} onClick={e => { e.stopPropagation(); onRehire(emp); }}>
             Восстановить
           </button>
@@ -713,7 +742,7 @@ const MobileCard: FC<{
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire }) => {
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -740,6 +769,7 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, categoryLabels, s
                 onOpenHistory={onOpenHistory}
                 onRehire={onRehire}
                 onFire={onFire}
+                onReturn={onReturn}
               />
             </div>
           );
@@ -1425,16 +1455,38 @@ export const StaffControlPage: FC = () => {
 
   const handleSaveDepartment = useCallback(async (empId: number, newDeptId: string) => {
     try {
-      await employeeService.moveDepartment(empId, newDeptId);
+      const target = employees.find(emp => emp.id === empId);
+      const isReturn = Boolean(target?.excluded_from_timesheet);
+      if (isReturn) {
+        await timesheetService.addEmployeeToDepartment({
+          employee_id: empId,
+          department_id: newDeptId,
+          effective_from: getLocalISODate(),
+        });
+      } else {
+        await employeeService.moveDepartment(empId, newDeptId);
+      }
       closeModal();
       const deptName = allDepts.find(d => d.id === newDeptId)?.name;
-      patchEmployee(empId, { org_department_id: newDeptId, department: deptName });
+      patchEmployee(empId, {
+        org_department_id: newDeptId,
+        department: deptName,
+        ...(isReturn ? { excluded_from_timesheet: false, excluded_from_timesheet_at: null } : {}),
+      });
+      if (isReturn) {
+        refresh();
+        toast.success('Сотрудник возвращён в табель');
+      }
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : 'Не удалось перенести сотрудника';
       toast.error(msg);
       throw e;
     }
-  }, [closeModal, patchEmployee, allDepts, toast]);
+  }, [closeModal, patchEmployee, allDepts, toast, employees, refresh]);
+
+  const handleReturnToTimesheet = useCallback((emp: Employee) => {
+    openModal(emp, 'department');
+  }, [openModal]);
 
   const handleSaveCategory = useCallback(async (empId: number, category: string | null) => {
     await employeeService.changeCategory(empId, category);
@@ -1759,6 +1811,15 @@ export const StaffControlPage: FC = () => {
         >
           Уволенные
         </button>
+        {isAdmin && (
+          <button
+            className={`sc-btn${statusFilter === 'excluded' ? ' apply' : ' secondary'}`}
+            onClick={() => { setStatusFilter('excluded'); setPage(1); }}
+            title="Активные сотрудники, исключённые из табеля и не закреплённые ни за одним отделом"
+          >
+            Исключённые из табеля
+          </button>
+        )}
       </div>
       <div className="sc-filter-count">
         {meta.total}{statusFilter === 'active' ? ` из ${totalActive}` : ''}
@@ -1815,6 +1876,14 @@ export const StaffControlPage: FC = () => {
             >
               Уволенные
             </button>
+            {isAdmin && (
+              <button
+                className={`sc-btn${statusFilter === 'excluded' ? ' apply' : ' secondary'}`}
+                onClick={() => { setStatusFilter('excluded'); setPage(1); }}
+              >
+                Исключённые
+              </button>
+            )}
           </div>
         </div>
       ) : (
@@ -1854,6 +1923,7 @@ export const StaffControlPage: FC = () => {
           onOpenHistory={openHistory}
           onRehire={statusFilter === 'fired' ? handleRehire : undefined}
           onFire={statusFilter === 'active' ? handleFire : undefined}
+          onReturn={statusFilter === 'excluded' ? handleReturnToTimesheet : undefined}
         />
       ) : (
         <VirtualTable
@@ -1869,6 +1939,7 @@ export const StaffControlPage: FC = () => {
           onOpenHistory={openHistory}
           onRehire={statusFilter === 'fired' ? handleRehire : undefined}
           onFire={statusFilter === 'active' ? handleFire : undefined}
+          onReturn={statusFilter === 'excluded' ? handleReturnToTimesheet : undefined}
         />
       )}
 

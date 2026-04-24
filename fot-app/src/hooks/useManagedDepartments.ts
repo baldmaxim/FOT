@@ -9,7 +9,10 @@ interface UseManagedDepartmentsOptions {
 
 export const useManagedDepartments = (options?: UseManagedDepartmentsOptions) => {
   const { hasPermission, profile } = useAuth();
-  const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
+  const isSuperAdmin = profile?.position_type === 'super_admin';
+  const isAdminLike = isSuperAdmin || hasPermission('data.scope.all');
+  const hasManagedDepartmentsRaw = (profile?.managed_department_ids?.filter(Boolean).length ?? 0) > 0;
+  const isDepartmentScope = !isAdminLike && (hasPermission('data.scope.department') || hasManagedDepartmentsRaw);
   const structureQuery = useStructureTree(options?.enabled ?? true);
 
   const managedDepartmentIds = useMemo(() => {

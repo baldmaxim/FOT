@@ -10,7 +10,7 @@ export interface PaginatedParams {
   page: number;
   pageSize?: number;
   search?: string;
-  status?: 'active' | 'fired';
+  status?: 'active' | 'fired' | 'excluded';
   departmentId?: string;
   archived?: boolean;
   view?: 'list' | 'staff';

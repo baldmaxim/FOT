@@ -692,6 +692,11 @@ export async function moveDepartment(req: AuthenticatedRequest, res: Response): 
       return;
     }
 
+    const fromDepartmentId = employeeRow.org_department_id ?? null;
+    const fromDepartmentName = fromDepartmentId
+      ? (await loadTargetDepartment(fromDepartmentId))?.name ?? null
+      : null;
+
     const connection = (req.body.connection as 'external' | 'internal') || undefined;
     const source = await moveEmployeeToDepartmentInternal({
       req,
@@ -707,7 +712,11 @@ export async function moveDepartment(req: AuthenticatedRequest, res: Response): 
       entityType: 'employee',
       entityId: id,
       details: {
-        org_department_id,
+        employee_full_name: employeeRow.full_name ?? null,
+        from_department_id: fromDepartmentId,
+        from_department_name: fromDepartmentName,
+        to_department_id: targetDepartment.id,
+        to_department_name: targetDepartment.name,
         source: source === 'noop' ? (employeeRow.sigur_employee_id ? 'sigur' : 'portal') : source,
       },
     });
@@ -787,6 +796,11 @@ export async function batchMoveEmployees(req: AuthenticatedRequest, res: Respons
         continue;
       }
 
+      const fromDepartmentId = employeeRow.org_department_id ?? null;
+      const fromDepartmentName = fromDepartmentId
+        ? (await loadTargetDepartment(fromDepartmentId))?.name ?? null
+        : null;
+
       try {
         const source = await moveEmployeeToDepartmentInternal({
           req,
@@ -806,7 +820,11 @@ export async function batchMoveEmployees(req: AuthenticatedRequest, res: Respons
           entityType: 'employee',
           entityId: String(employeeId),
           details: {
-            org_department_id,
+            employee_full_name: employeeRow.full_name ?? null,
+            from_department_id: fromDepartmentId,
+            from_department_name: fromDepartmentName,
+            to_department_id: targetDepartment.id,
+            to_department_name: targetDepartment.name,
             source,
             batch: true,
           },

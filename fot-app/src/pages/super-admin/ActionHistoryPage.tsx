@@ -94,6 +94,72 @@ function actionClass(action: string): string {
   return styles.tagDefault;
 }
 
+function asString(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === 'string') return value.trim() || null;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return null;
+}
+
+function formatDetails(action: string, details: Record<string, unknown> | null): string {
+  if (!details || typeof details !== 'object') return '';
+
+  const fio = asString(details.employee_full_name) || asString(details.full_name);
+
+  switch (action) {
+    case 'MOVE_EMPLOYEE_DEPARTMENT': {
+      const from = asString(details.from_department_name) || asString(details.from_department_id) || '—';
+      const to = asString(details.to_department_name) || asString(details.to_department_id) || asString(details.org_department_id) || '—';
+      const prefix = fio ? `${fio}: ` : '';
+      return `${prefix}«${from}» → «${to}»`;
+    }
+    case 'CREATE_EMPLOYEE': {
+      const dept = asString(details.department_name) || asString(details.org_department_id);
+      if (fio && dept) return `${fio}, отдел «${dept}»`;
+      return fio || dept || '';
+    }
+    case 'FIRE_EMPLOYEE':
+    case 'REHIRE_EMPLOYEE':
+    case 'ARCHIVE_EMPLOYEE':
+    case 'RESTORE_EMPLOYEE':
+    case 'DELETE_EMPLOYEE': {
+      const reason = asString(details.reason);
+      if (fio && reason) return `${fio}, причина: ${reason}`;
+      return fio || '';
+    }
+    case 'UPDATE_SALARY': {
+      const from = asString(details.old_salary) || asString(details.from);
+      const to = asString(details.new_salary) || asString(details.to);
+      if (fio && from && to) return `${fio}: ${from} → ${to} ₽`;
+      if (from && to) return `${from} → ${to} ₽`;
+      return fio || '';
+    }
+    case 'POSITION_CHANGED':
+    case 'ROLE_CHANGED':
+    case 'NAME_CHANGED': {
+      const from = asString(details.from) || asString(details.old) || asString(details.previous);
+      const to = asString(details.to) || asString(details.new) || asString(details.current);
+      if (from && to) return `«${from}» → «${to}»`;
+      return to || from || '';
+    }
+    case 'UPDATE_EMPLOYEE': {
+      const fields = Array.isArray(details.changed_fields) ? details.changed_fields : null;
+      if (fields && fields.length > 0) {
+        return `Изменены: ${fields.slice(0, 3).join(', ')}${fields.length > 3 ? ` (+${fields.length - 3})` : ''}`;
+      }
+      return fio || '';
+    }
+    default: {
+      try {
+        const json = JSON.stringify(details);
+        return json.length > 80 ? `${json.slice(0, 80)}…` : json;
+      } catch {
+        return '';
+      }
+    }
+  }
+}
+
 export const ActionHistoryPage: FC = () => {
   const [action, setAction] = useState('');
   const [dateFrom, setDateFrom] = useState('');
@@ -175,6 +241,7 @@ export const ActionHistoryPage: FC = () => {
               <th>Дата и время</th>
               <th>Пользователь</th>
               <th>Действие</th>
+              <th>Подробности</th>
               <th>Объект</th>
               <th>ID объекта</th>
               <th>IP</th>
@@ -183,26 +250,33 @@ export const ActionHistoryPage: FC = () => {
           <tbody>
             {isLoading ? (
               <tr>
-                <td colSpan={6} className={styles.loading}>Загрузка…</td>
+                <td colSpan={7} className={styles.loading}>Загрузка…</td>
               </tr>
             ) : logs.length === 0 ? (
               <tr>
-                <td colSpan={6} className={styles.empty}>Записей не найдено</td>
+                <td colSpan={7} className={styles.empty}>Записей не найдено</td>
               </tr>
-            ) : logs.map(log => (
-              <tr key={log.id}>
-                <td className={styles.date}>{formatDate(log.created_at)}</td>
-                <td className={styles.user}>{log.user_name ?? <span className={styles.muted}>—</span>}</td>
-                <td>
-                  <span className={`${styles.tag} ${actionClass(log.action)}`}>
-                    {actionLabel(log.action)}
-                  </span>
-                </td>
-                <td className={styles.muted}>{log.entity_type ?? '—'}</td>
-                <td className={styles.muted}>{log.entity_id ?? '—'}</td>
-                <td className={styles.ip}>{log.ip_address ?? '—'}</td>
-              </tr>
-            ))}
+            ) : logs.map(log => {
+              const detailsText = formatDetails(log.action, log.details);
+              const detailsTitle = log.details ? JSON.stringify(log.details, null, 2) : undefined;
+              return (
+                <tr key={log.id}>
+                  <td className={styles.date}>{formatDate(log.created_at)}</td>
+                  <td className={styles.user}>{log.user_name ?? <span className={styles.muted}>—</span>}</td>
+                  <td>
+                    <span className={`${styles.tag} ${actionClass(log.action)}`}>
+                      {actionLabel(log.action)}
+                    </span>
+                  </td>
+                  <td title={detailsTitle}>
+                    {detailsText || <span className={styles.muted}>—</span>}
+                  </td>
+                  <td className={styles.muted}>{log.entity_type ?? '—'}</td>
+                  <td className={styles.muted}>{log.entity_id ?? '—'}</td>
+                  <td className={styles.ip}>{log.ip_address ?? '—'}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

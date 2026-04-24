@@ -1,5 +1,6 @@
 import { type FC, useMemo, useState } from 'react';
 import { useEmployeeTimesheetMonth } from '../../hooks/useEmployeeTimesheet';
+import { getFullDayThresholdHoursForDay } from '../../utils/scheduleUtils';
 import type { TimesheetEntry, TimesheetStatus } from '../../types';
 import styles from './MyMonthTimesheet.module.css';
 
@@ -68,6 +69,9 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activ
     return map;
   }, [timesheetQuery.data, employeeId]);
 
+  const employeeSchedule = employeeId ? timesheetQuery.data?.schedules?.[employeeId] : undefined;
+  const calendar = timesheetQuery.data?.calendar ?? null;
+
   const daysInMonth = new Date(year, month, 0).getDate();
   const firstDow = (() => {
     const d = new Date(year, month - 1, 1).getDay();
@@ -93,8 +97,12 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activ
   const monthLabel = new Date(year, month - 1, 1)
     .toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
 
-  const getCellStatus = (entry: TimesheetEntry | null, status: TimesheetStatus | null): string => {
+  const getCellStatus = (entry: TimesheetEntry | null, status: TimesheetStatus | null, day: number): string => {
     if (!entry || !status) return '';
+    if ((status === 'work' || status === 'manual') && entry.hours_worked && entry.hours_worked > 0) {
+      const threshold = getFullDayThresholdHoursForDay(employeeSchedule, calendar, year, month, day);
+      if (entry.hours_worked < threshold) return 'cellUnderwork';
+    }
     return STATUS_CSS[status] || '';
   };
 
@@ -131,7 +139,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activ
             styles.cell,
             cell.isToday ? styles.cellToday : '',
             cell.isWeekend && !cell.entry ? styles.cellWeekend : '',
-            cell.entry ? styles[getCellStatus(cell.entry, status)] : '',
+            cell.entry ? styles[getCellStatus(cell.entry, status, cell.day)] : '',
             cell.isFuture && !cell.entry ? styles.cellEmpty : '',
             isActive ? styles.cellActive : '',
             cell.entry?.is_correction ? styles.cellCorrection : '',
@@ -160,6 +168,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activ
 
       <div className={styles.legend}>
         <span><i className={`${styles.dot} ${styles.cellWork}`}/>Работа</span>
+        <span><i className={`${styles.dot} ${styles.cellUnderwork}`}/>Недоработка</span>
         <span><i className={`${styles.dot} ${styles.cellRemote}`}/>Удалёнка</span>
         <span><i className={`${styles.dot} ${styles.cellSick}`}/>Больничный</span>
         <span><i className={`${styles.dot} ${styles.cellVacation}`}/>Отпуск</span>

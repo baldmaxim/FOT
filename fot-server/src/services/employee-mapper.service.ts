@@ -96,6 +96,8 @@ export function decryptEmployeeList(encrypted: EmployeeEncrypted, structureCache
     created_at: encrypted.created_at,
     updated_at: encrypted.updated_at,
     work_category: encrypted.work_category ?? null,
+    excluded_from_timesheet: Boolean(encrypted.excluded_from_timesheet ?? false),
+    excluded_from_timesheet_at: encrypted.excluded_from_timesheet_at ?? null,
   };
 }
 

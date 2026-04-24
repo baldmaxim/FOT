@@ -38,6 +38,8 @@ export interface Employee {
   created_at: string;
   updated_at: string;
   work_category: string | null;
+  excluded_from_timesheet?: boolean;
+  excluded_from_timesheet_at?: string | null;
   schedule_override_id?: string | null;
   schedule_override_name?: string | null;
   schedule_override_effective_from?: string | null;

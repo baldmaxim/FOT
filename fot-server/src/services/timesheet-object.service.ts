@@ -114,8 +114,7 @@ const getSummaryEventStream = (events: IRawEventRow[], internalPoints: Set<strin
     const point = normalizeAccessPoint(event.access_point);
     return !point || !internalPoints.has(point);
   });
-  const source = externalEvents.length > 0 ? externalEvents : events;
-  return [...source].sort((left, right) => left.event_time.localeCompare(right.event_time));
+  return [...externalEvents].sort((left, right) => left.event_time.localeCompare(right.event_time));
 };
 
 const buildRawFallbackSummary = (

@@ -119,6 +119,8 @@ export interface EmployeeEncrypted {
   created_at: string;
   updated_at: string;
   work_category: string | null;
+  excluded_from_timesheet?: boolean | null;
+  excluded_from_timesheet_at?: string | null;
 }
 
 // Сотрудник для API
@@ -158,6 +160,8 @@ export interface Employee {
   created_at: string;
   updated_at: string;
   work_category: string | null;
+  excluded_from_timesheet?: boolean;
+  excluded_from_timesheet_at?: string | null;
   site_name?: string | null;
   site_manager_full_name?: string | null;
 }

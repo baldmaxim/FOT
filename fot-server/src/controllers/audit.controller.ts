@@ -50,7 +50,7 @@ export const auditController = {
 
       let query = supabase
         .from('audit_logs')
-        .select('id, user_id, action, entity_type, entity_id, ip_address, created_at', { count: 'exact' });
+        .select('id, user_id, action, entity_type, entity_id, details, ip_address, created_at', { count: 'exact' });
 
       if (action) query = query.eq('action', action);
       if (user_id) query = query.eq('user_id', user_id);

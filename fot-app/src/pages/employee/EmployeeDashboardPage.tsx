@@ -48,8 +48,7 @@ const formatActiveDayLabel = (iso: string): string =>
   new Date(iso + 'T00:00:00').toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
 
 const buildPairs = (events: SkudEvent[], internalPoints: Set<string>, isToday: boolean): IEntryExitPair[] => {
-  const ext = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
-  const sorted = ext.length > 0 ? ext : events;
+  const sorted = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
   const pairs: IEntryExitPair[] = [];
   let currentEntry: SkudEvent | null = null;
 
@@ -90,8 +89,7 @@ const buildDayGroup = (
   const entry = timesheetEntries.find(e => e.work_date === dateStr) ?? null;
   const dayEvents = [...events].sort((a, b) => a.event_time.localeCompare(b.event_time));
 
-  const ext = dayEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point));
-  const src = ext.length > 0 ? ext : dayEvents;
+  const src = dayEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point));
   const directionEntries = src.filter(e => e.direction === 'entry');
   const exits = src.filter(e => e.direction === 'exit');
 

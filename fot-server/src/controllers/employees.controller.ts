@@ -105,7 +105,7 @@ export const employeesController = {
         ? await resolveDepartmentFilterIds(departmentId)
         : (managedDepartmentIds.length > 0 ? managedDepartmentIds : await resolveDepartmentFilterIds(departmentId));
       const isListView = req.query.view === 'list';
-      const listColumns = 'id, full_name, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at, work_category';
+      const listColumns = 'id, full_name, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at, work_category, excluded_from_timesheet, excluded_from_timesheet_at';
       const staffColumns = listColumns + ', salary_actual, salary_calculated, current_salary';
 
       // --- Paginated mode ---
@@ -114,7 +114,7 @@ export const employeesController = {
         const page = Math.max(1, parseInt(pageParam) || 1);
         const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize as string) || 50));
         const search = (req.query.search as string || '').trim();
-        const status = req.query.status as string | undefined; // 'active' | 'fired'
+        const status = req.query.status as string | undefined; // 'active' | 'fired' | 'excluded'
         const offset = (page - 1) * pageSize;
         if (status === 'fired' && departmentId) {
           const archiveDepartment = await getKnownArchiveDepartment();
@@ -129,8 +129,11 @@ export const employeesController = {
           .from('employees')
           .select(selectCols, { count: 'exact' })
           .eq('is_archived', showArchived)
-          .order('full_name')
           .range(offset, offset + pageSize - 1);
+
+        q = status === 'excluded'
+          ? q.order('excluded_from_timesheet_at', { ascending: false })
+          : q.order('full_name');
 
         if (scope === 'self') {
           if (!req.user.employee_id) {
@@ -149,6 +152,7 @@ export const employeesController = {
         }
         if (search) q = q.ilike('full_name', `%${search}%`);
         if (status === 'fired') q = q.eq('employment_status', 'fired');
+        else if (status === 'excluded') q = q.eq('excluded_from_timesheet', true).neq('employment_status', 'fired');
         else if (status === 'active' || !status) q = q.neq('employment_status', 'fired');
 
         const { data, error, count } = await q;

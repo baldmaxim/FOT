@@ -144,6 +144,11 @@
   color: #16a34a;
 }
 
+.cellUnderwork {
+  background: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+}
+
 .cellRemote {
   background: rgba(59, 130, 246, 0.15);
   color: #2563eb;

@@ -303,6 +303,21 @@
   white-space: nowrap;
 }
 
+.sc-excluded-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: #d97706;
+  background: rgba(245, 158, 11, 0.15);
+  border-radius: 6px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
 .sc-td-salary {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
