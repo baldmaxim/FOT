@@ -31,8 +31,9 @@ import notificationRoutes from './routes/notification.routes.js';
 
 const app = express();
 
-// Trust nginx proxy (needed for correct IP in rate limiting behind reverse proxy)
-app.set('trust proxy', 1);
+// Trust local reverse proxies so rate limiting uses the real client IP.
+// Production traffic comes through rw-core -> nginx -> node on loopback.
+app.set('trust proxy', 'loopback');
 
 // Security middleware
 app.use(helmet());
