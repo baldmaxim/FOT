@@ -12,7 +12,6 @@ import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { getMonthLabel, formatDateRu, getDaysInMonth } from '../../utils/calendarUtils';
 import type {
-  ManagedDepartmentTimesheetSummary,
   TimesheetEntry,
   TimesheetEmployee,
   TimesheetObjectEntry,
@@ -73,14 +72,6 @@ interface IObjectModalTarget {
 }
 
 type TimesheetViewMode = 'employees' | 'objects';
-
-const APPROVAL_STATUS_META: Record<'draft' | 'submitted' | 'approved' | 'rejected' | 'returned', string> = {
-  draft: 'Черновик',
-  submitted: 'На проверке',
-  approved: 'Утверждён',
-  rejected: 'Отклонён',
-  returned: 'На доработке',
-};
 
 const getTodayDateInputValue = (): string => new Date().toISOString().slice(0, 10);
 const UNASSIGNED_OBJECT_KEY = '__timesheet_unassigned__';
@@ -216,6 +207,11 @@ export const TimesheetPage: FC = () => {
   const assigneeRef = useRef<HTMLDivElement>(null);
   const assigneesQuery = useAssignedEmployees(canUseAssignedMode && timesheetMode === 'assigned');
 
+  // Brigade selector (assigned-mode, multi-brigade assignee)
+  const [brigadeOpen, setBrigadeOpen] = useState(false);
+  const [brigadeSearch, setBrigadeSearch] = useState('');
+  const brigadeRef = useRef<HTMLDivElement>(null);
+
   // Side panel
   const [panelEmployee, setPanelEmployee] = useState<TimesheetEmployee | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -256,7 +252,7 @@ export const TimesheetPage: FC = () => {
     setSelectedDeptId(primaryDepartmentId || managedDepartmentIds[0] || null);
   }, [effectiveSelectedDeptId, isMultiDepartmentManager, managedDepartmentIds, primaryDepartmentId]);
 
-  // Close dept/assignee dropdown on outside click
+  // Close dept/assignee/brigade dropdown on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (deptRef.current && !deptRef.current.contains(e.target as Node)) {
@@ -264,6 +260,9 @@ export const TimesheetPage: FC = () => {
       }
       if (assigneeRef.current && !assigneeRef.current.contains(e.target as Node)) {
         setAssigneeOpen(false);
+      }
+      if (brigadeRef.current && !brigadeRef.current.contains(e.target as Node)) {
+        setBrigadeOpen(false);
       }
     };
     document.addEventListener('mousedown', handler);
@@ -297,13 +296,6 @@ export const TimesheetPage: FC = () => {
       to: rangeEnd,
     }),
     enabled: Boolean(activeGridDeptId),
-    staleTime: 30_000,
-    placeholderData: previousData => previousData,
-  });
-  const overviewQuery = useQuery({
-    queryKey: ['timesheet-overview', monthStr, rangeStart, rangeEnd],
-    queryFn: () => timesheetService.getOverview({ month: monthStr, from: rangeStart, to: rangeEnd }),
-    enabled: timesheetMode === 'department' && isMultiDepartmentManager,
     staleTime: 30_000,
     placeholderData: previousData => previousData,
   });
@@ -527,7 +519,6 @@ export const TimesheetPage: FC = () => {
       closeModal();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-overview'] }),
       ]);
     } catch (err) {
       console.error('Save correction error:', err);
@@ -550,7 +541,6 @@ export const TimesheetPage: FC = () => {
       closeModal();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-overview'] }),
       ]);
     } catch (error) {
       console.error('Save object correction error:', error);
@@ -580,7 +570,6 @@ export const TimesheetPage: FC = () => {
       closeModal();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-overview'] }),
       ]);
     } catch (error) {
       console.error('Delete object correction error:', error);
@@ -675,7 +664,6 @@ export const TimesheetPage: FC = () => {
     : undefined;
   const selectedDeptName = activeGridDeptId
     ? deptOptions.find(d => d.id === activeGridDeptId)?.name
-      || overviewQuery.data?.find((summary: ManagedDepartmentTimesheetSummary) => summary.department_id === activeGridDeptId)?.department_name
       || assigneeDeptName
       || 'Отдел'
     : 'Все отделы';
@@ -710,17 +698,16 @@ export const TimesheetPage: FC = () => {
       toast.success(`Сотрудник ${candidate.full_name} переведён в отдел ${selectedDeptName} с ${effectiveFrom}`);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-overview'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-team-search'] }),
       ]);
-      setTeamSearch('');
+      closeTeamManagement();
     } catch (error) {
       console.error('Add employee to department error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось добавить сотрудника в отдел');
     } finally {
       setTeamPendingEmployeeId(null);
     }
-  }, [rangeStart, rangeEnd, activeGridDeptId, monthStr, queryClient, selectedDeptName, toast]);
+  }, [rangeStart, rangeEnd, activeGridDeptId, monthStr, queryClient, selectedDeptName, toast, closeTeamManagement]);
 
   const handleExcludeEmployeeFromDepartment = useCallback(async (employee: TimesheetEmployee) => {
     if (!activeGridDeptId) return;
@@ -742,7 +729,6 @@ export const TimesheetPage: FC = () => {
       toast.success(`Сотрудник ${employee.full_name} исключён из табеля`);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-overview'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-team-search'] }),
       ]);
     } catch (error) {
@@ -1071,7 +1057,6 @@ export const TimesheetPage: FC = () => {
         clearBulkState();
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-          queryClient.invalidateQueries({ queryKey: ['timesheet-overview'] }),
         ]);
         toast.success(`Корректировка по объектам применена для ${bulkObjectTargets.length} ячеек`);
       } catch (error) {
@@ -1095,7 +1080,6 @@ export const TimesheetPage: FC = () => {
       clearBulkState();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-overview'] }),
       ]);
       toast.success(`Корректировка применена для ${result.processed} ячеек`);
     } catch (error) {
@@ -1254,20 +1238,17 @@ export const TimesheetPage: FC = () => {
     });
   }, [clearBulkState, closeTeamManagement, setSearchParams]);
 
-  const handleAssignedDeptToggle = useCallback((departmentId: string) => {
+  const handleSelectBrigade = useCallback((departmentId: string) => {
     clearBulkState();
     closeTeamManagement();
     setPanelOpen(false);
     setModalOpen(false);
     setSearchParams(current => {
       const next = new URLSearchParams(current);
-      if (next.get('dept') === departmentId) {
-        next.delete('dept');
-      } else {
-        next.set('dept', departmentId);
-      }
+      next.set('dept', departmentId);
       return next;
     });
+    setBrigadeOpen(false);
   }, [clearBulkState, closeTeamManagement, setSearchParams]);
 
   const assignedEmployees = useMemo(() => assigneesQuery.data || [], [assigneesQuery.data]);
@@ -1282,17 +1263,17 @@ export const TimesheetPage: FC = () => {
     return assignedEmployees.find(emp => emp.id === selectedAssigneeId) || null;
   }, [selectedAssigneeId, assignedEmployees]);
 
-  // Auto-expand the only department when assignee has exactly one
+  // Auto-select the first brigade of the selected assignee
   useEffect(() => {
     if (timesheetMode !== 'assigned') return;
     if (!selectedAssignee) return;
     if (assignedExpandedDeptId) return;
     const depts = selectedAssignee.departments || [];
-    if (depts.length === 1) {
-      const only = depts[0];
+    if (depts.length >= 1) {
+      const first = depts[0];
       setSearchParams(current => {
         const next = new URLSearchParams(current);
-        next.set('dept', only.id);
+        next.set('dept', first.id);
         return next;
       }, { replace: true });
     }
@@ -1301,6 +1282,20 @@ export const TimesheetPage: FC = () => {
   const assigneeButtonLabel = selectedAssignee
     ? formatTimesheetEmployeeName(selectedAssignee.full_name)
     : 'Выберите сотрудника';
+
+  const assigneeBrigades = useMemo(
+    () => selectedAssignee?.departments || [],
+    [selectedAssignee],
+  );
+  const filteredBrigades = useMemo(() => {
+    const q = brigadeSearch.trim().toLowerCase();
+    if (!q) return assigneeBrigades;
+    return assigneeBrigades.filter(d => d.name.toLowerCase().includes(q));
+  }, [assigneeBrigades, brigadeSearch]);
+  const selectedBrigadeName = assignedExpandedDeptId
+    ? assigneeBrigades.find(d => d.id === assignedExpandedDeptId)?.name || 'Бригада'
+    : 'Выберите бригаду';
+  const showBrigadeSelector = timesheetMode === 'assigned' && assigneeBrigades.length > 1;
 
   const monthNavigation = (
     <div className="ts-month-nav">
@@ -1314,11 +1309,13 @@ export const TimesheetPage: FC = () => {
     </div>
   );
 
+  const isSingleDeptManager = isTimesheetDepartmentScope && managedDepartmentIds.length === 1;
+
   const departmentControl = (
     <div className="ts-dept-wrap" ref={deptRef}>
-      {isTimesheetDepartmentScope ? (
+      {isSingleDeptManager ? (
         <button type="button" className="ts-dept-btn" style={{ cursor: 'default', opacity: 0.8 }}>
-          {isMultiDepartmentManager ? 'Мои бригады' : selectedDeptName}
+          {selectedDeptName}
         </button>
       ) : (
         <>
@@ -1335,12 +1332,14 @@ export const TimesheetPage: FC = () => {
                 onChange={e => setDeptSearch(e.target.value)}
                 autoFocus
               />
-              <div
-                className={`ts-dept-item ${!selectedDeptId ? 'ts-dept-item--active' : ''}`}
-                onClick={() => { clearBulkState(); closeTeamManagement(); setSelectedDeptId(null); setDeptOpen(false); }}
-              >
-                Все отделы
-              </div>
+              {!isTimesheetDepartmentScope && (
+                <div
+                  className={`ts-dept-item ${!selectedDeptId ? 'ts-dept-item--active' : ''}`}
+                  onClick={() => { clearBulkState(); closeTeamManagement(); setSelectedDeptId(null); setDeptOpen(false); }}
+                >
+                  Все отделы
+                </div>
+              )}
               {filteredDepts.map(d =>
                 d.hasChildren ? (
                   <div key={d.id} className="ts-dept-item ts-dept-item--header">
@@ -1406,6 +1405,35 @@ export const TimesheetPage: FC = () => {
       )}
     </div>
   );
+
+  const brigadeControl = showBrigadeSelector ? (
+    <div className="ts-dept-wrap" ref={brigadeRef}>
+      <button type="button" className="ts-dept-btn" onClick={() => setBrigadeOpen(!brigadeOpen)}>
+        {selectedBrigadeName}
+        <ChevronDown size={16} />
+      </button>
+      {brigadeOpen && (
+        <div className="ts-dept-dropdown">
+          <input
+            className="ts-dept-search"
+            placeholder="Поиск бригады..."
+            value={brigadeSearch}
+            onChange={e => setBrigadeSearch(e.target.value)}
+            autoFocus
+          />
+          {filteredBrigades.map(d => (
+            <div
+              key={d.id}
+              className={`ts-dept-item ${assignedExpandedDeptId === d.id ? 'ts-dept-item--active' : ''}`}
+              onClick={() => handleSelectBrigade(d.id)}
+            >
+              {d.name}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  ) : null;
 
   const modeControl = canUseAssignedMode ? (
     <section className="ts-mode-switch">
@@ -1572,10 +1600,11 @@ export const TimesheetPage: FC = () => {
             <div className="ts-mobile-header-row ts-mobile-header-row--controls">
               {monthNavigation}
               {selectorControl}
+              {isAssignedMode && brigadeControl}
             </div>
             {modeControl}
             {!isAssignedMode && <TimesheetStats stats={stats} compact />}
-            {mobileApprovalVisible && !isMultiDepartmentManager && !isAssignedMode && (
+            {mobileApprovalVisible && !isAssignedMode && (
               <div className="ts-mobile-approval-panel">
                 <TimesheetApprovalBar
                   departmentId={effectiveSelectedDeptId}
@@ -1595,19 +1624,18 @@ export const TimesheetPage: FC = () => {
                 <h1 className="ts-title">Табель</h1>
                 {monthNavigation}
                 {selectorControl}
+                {isAssignedMode && brigadeControl}
                 {modeControl}
               </div>
-              {!isMultiDepartmentManager && (
-                <div className="ts-header-right">
-                  <TimesheetApprovalBar
-                    departmentId={effectiveSelectedDeptId}
-                    month={`${year}-${String(month).padStart(2, '0')}`}
-                    startDate={rangeStart}
-                    endDate={rangeEnd}
-                    allowReview={false}
-                  />
-                </div>
-              )}
+              <div className="ts-header-right">
+                <TimesheetApprovalBar
+                  departmentId={activeGridDeptId}
+                  month={`${year}-${String(month).padStart(2, '0')}`}
+                  startDate={rangeStart}
+                  endDate={rangeEnd}
+                  allowReview={false}
+                />
+              </div>
             </div>
           </section>
         )}
@@ -1737,173 +1765,44 @@ export const TimesheetPage: FC = () => {
           <div className="ts-table-container">
             <div className="ts-loading">Загрузка...</div>
           </div>
-        ) : (selectedAssignee.departments?.length ?? 0) === 0 ? (
+        ) : assigneeBrigades.length === 0 ? (
           <div className="ts-table-container">
             <div className="ts-loading">У сотрудника нет доступных отделов</div>
           </div>
+        ) : !assignedExpandedDeptId ? (
+          <div className="ts-table-container">
+            <div className="ts-loading">Выберите бригаду</div>
+          </div>
+        ) : timesheetQuery.isLoading ? (
+          <div className="ts-table-container">
+            <div className="ts-loading">Загрузка табеля...</div>
+          </div>
         ) : (
-          <section className="ts-accordion">
-            {(selectedAssignee.departments || []).map(dept => {
-              const expanded = assignedExpandedDeptId === dept.id;
-              return (
-                <article key={dept.id} className={`ts-accordion-item${expanded ? ' ts-accordion-item--expanded' : ''}`}>
-                  <button
-                    type="button"
-                    className="ts-accordion-summary"
-                    onClick={() => handleAssignedDeptToggle(dept.id)}
-                  >
-                    <div className="ts-accordion-main">
-                      <div className="ts-accordion-name">{dept.name}</div>
-                    </div>
-                  </button>
-
-                  {expanded && (
-                    <div className="ts-accordion-detail">
-                      {!isMobile && (
-                        <div className="ts-accordion-detail-bar">
-                          <TimesheetApprovalBar
-                            departmentId={dept.id}
-                            month={`${year}-${String(month).padStart(2, '0')}`}
-                            startDate={rangeStart}
-                            endDate={rangeEnd}
-                            allowReview={false}
-                          />
-                        </div>
-                      )}
-                      {timesheetQuery.isLoading ? (
-                        <div className="ts-table-container">
-                          <div className="ts-loading">Загрузка табеля...</div>
-                        </div>
-                      ) : (
-                        <TimesheetGrid
-                          employees={employees}
-                          entries={entries}
-                          objectEntries={objectEntries}
-                          year={year}
-                          month={month}
-                          viewMode={viewMode}
-                          schedules={schedules}
-                          dailySchedules={dailySchedules}
-                          calendar={calendar}
-                          compact={isMobile}
-                          bulkEditMode={bulkModeEnabled}
-                          visibleDays={visibleDays}
-                          selectedCellKeys={bulkSelectedCellKeys}
-                          splitDayKeys={splitDayKeys}
-                          canManageTeam={canManageTeam}
-                          pendingEmployeeId={teamPendingEmployeeId}
-                          onBulkSelectionChange={handleBulkSelectionChange}
-                          onBulkBlockedSelectionAttempt={handleBulkBlockedSelectionAttempt}
-                          onEmployeeClick={handleEmployeeClick}
-                          onExcludeEmployee={handleExcludeEmployeeFromDepartment}
-                          onDayClick={handleDayClick}
-                          onObjectDayClick={handleObjectDayClick}
-                        />
-                      )}
-                    </div>
-                  )}
-                </article>
-              );
-            })}
-          </section>
+          <TimesheetGrid
+            employees={employees}
+            entries={entries}
+            objectEntries={objectEntries}
+            year={year}
+            month={month}
+            viewMode={viewMode}
+            schedules={schedules}
+            dailySchedules={dailySchedules}
+            calendar={calendar}
+            compact={isMobile}
+            bulkEditMode={bulkModeEnabled}
+            visibleDays={visibleDays}
+            selectedCellKeys={bulkSelectedCellKeys}
+            splitDayKeys={splitDayKeys}
+            canManageTeam={canManageTeam}
+            pendingEmployeeId={teamPendingEmployeeId}
+            onBulkSelectionChange={handleBulkSelectionChange}
+            onBulkBlockedSelectionAttempt={handleBulkBlockedSelectionAttempt}
+            onEmployeeClick={handleEmployeeClick}
+            onExcludeEmployee={handleExcludeEmployeeFromDepartment}
+            onDayClick={handleDayClick}
+            onObjectDayClick={handleObjectDayClick}
+          />
         )
-      ) : (
-      <>
-      {/* Grid */}
-      {isMultiDepartmentManager ? (
-        <section className="ts-accordion">
-          {(overviewQuery.isLoading && !overviewQuery.data) ? (
-            <div className="ts-table-container">
-              <div className="ts-loading">Загрузка обзора табелей...</div>
-            </div>
-          ) : (overviewQuery.data || []).map(summary => {
-            const expanded = summary.department_id === effectiveSelectedDeptId;
-            const summaryApprovals = summary.approvals ?? [];
-            const dominantStatus = summary.approval_status;
-
-            return (
-              <article key={summary.department_id} className={`ts-accordion-item${expanded ? ' ts-accordion-item--expanded' : ''}`}>
-                <button
-                  type="button"
-                  className="ts-accordion-summary"
-                  onClick={() => {
-                    clearBulkState();
-                    closeTeamManagement();
-                    setSelectedDeptId(summary.department_id);
-                  }}
-                >
-                  <div className="ts-accordion-main">
-                    <div className="ts-accordion-name">{summary.department_name}</div>
-                    <div className="ts-accordion-meta">
-                      <span>{summary.employee_count} чел.</span>
-                      <span>{summary.norm_hours.toFixed(1)} норма</span>
-                      <span>{summary.actual_hours.toFixed(1)} факт</span>
-                      <span>Опозданий: {summary.deviations.late}</span>
-                      <span>Неявок: {summary.deviations.absent}</span>
-                      <span>Больничных: {summary.deviations.sick}</span>
-                    </div>
-                  </div>
-                  <div className="ts-accordion-statuses">
-                    <span className={`ts-accordion-status ts-accordion-status--${dominantStatus || 'draft'}`}>
-                      {dominantStatus ? APPROVAL_STATUS_META[dominantStatus] : 'Нет согласований'}
-                    </span>
-                    {summaryApprovals.length > 0 && (
-                      <span className="ts-accordion-status ts-accordion-status--draft">
-                        Диапазонов: {summaryApprovals.length}
-                      </span>
-                    )}
-                  </div>
-                </button>
-
-                {expanded && (
-                  <div className="ts-accordion-detail">
-                    {!isMobile && (
-                      <div className="ts-accordion-detail-bar">
-                        <TimesheetApprovalBar
-                          departmentId={effectiveSelectedDeptId}
-                          month={`${year}-${String(month).padStart(2, '0')}`}
-                          startDate={rangeStart}
-                          endDate={rangeEnd}
-                          allowReview={false}
-                        />
-                      </div>
-                    )}
-                    {loading ? (
-                      <div className="ts-table-container">
-                        <div className="ts-loading">Загрузка табеля...</div>
-                      </div>
-                    ) : (
-                      <TimesheetGrid
-                        employees={employees}
-                        entries={entries}
-                        objectEntries={objectEntries}
-                        year={year}
-                        month={month}
-                        viewMode={viewMode}
-                        schedules={schedules}
-                        dailySchedules={dailySchedules}
-                        calendar={calendar}
-                        compact={isMobile}
-                        bulkEditMode={bulkModeEnabled}
-                        visibleDays={visibleDays}
-                        selectedCellKeys={bulkSelectedCellKeys}
-                        splitDayKeys={splitDayKeys}
-                        canManageTeam={canManageTeam}
-                        pendingEmployeeId={teamPendingEmployeeId}
-                        onBulkSelectionChange={handleBulkSelectionChange}
-                        onBulkBlockedSelectionAttempt={handleBulkBlockedSelectionAttempt}
-                        onEmployeeClick={handleEmployeeClick}
-                        onExcludeEmployee={handleExcludeEmployeeFromDepartment}
-                        onDayClick={handleDayClick}
-                        onObjectDayClick={handleObjectDayClick}
-                      />
-                    )}
-                  </div>
-                )}
-              </article>
-            );
-          })}
-        </section>
       ) : loading ? (
         <div className="ts-table-container">
           <div className="ts-loading">Загрузка табеля...</div>
@@ -1937,9 +1836,6 @@ export const TimesheetPage: FC = () => {
           onDayClick={handleDayClick}
           onObjectDayClick={handleObjectDayClick}
         />
-      )}
-
-      </>
       )}
 
       {teamManagementOpen && (
