@@ -1,5 +1,5 @@
 import { Fragment, type FC, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronUp, UserMinus } from 'lucide-react';
+import { ChevronDown, ChevronUp, Menu, UserMinus } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee, TimesheetObjectEntry, TimesheetStatus } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
 import type { IProductionCalendarMonth } from '../../types/timesheet';
@@ -709,38 +709,40 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   <div className="ts-mobile-card-name-row">
                     <span className="ts-employee-index">{employeeIndex}.</span>
                     <div className="ts-mobile-card-name">{displayName}</div>
-                  </div>
-                  {canManageTeam && onExcludeEmployee && (
                     <button
                       type="button"
-                      className="ts-mobile-exclude-btn"
-                      onClick={() => onExcludeEmployee(row.employee)}
-                      disabled={pendingEmployeeId === row.employee.id}
-                      title="Исключить"
-                      aria-label="Исключить"
+                      className="ts-mobile-chip-btn"
+                      onClick={() => toggleEmployeeExpanded(row.employee.id)}
+                      aria-expanded={expanded}
+                      title={expanded ? 'Скрыть детали' : row.hasExpandableObjects ? 'Показать дни и объекты' : 'Показать дни'}
+                      aria-label={expanded ? 'Скрыть детали' : row.hasExpandableObjects ? 'Показать дни и объекты' : 'Показать дни'}
                     >
-                      <UserMinus size={16} />
+                      {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                     </button>
-                  )}
-                </div>
-
-                <div className="ts-mobile-card-actions">
-                  <button
-                    type="button"
-                    className="ts-mobile-action-btn"
-                    onClick={() => toggleEmployeeExpanded(row.employee.id)}
-                    aria-expanded={expanded}
-                  >
-                    {expanded ? 'Скрыть детали' : row.hasExpandableObjects ? 'Показать дни и объекты' : 'Показать дни'}
-                    {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                  </button>
-                  <button
-                    type="button"
-                    className="ts-mobile-action-btn ts-mobile-action-btn--secondary"
-                    onClick={() => onEmployeeClick(row.employee)}
-                  >
-                    Детализация
-                  </button>
+                  </div>
+                  <div className="ts-mobile-header-actions">
+                    <button
+                      type="button"
+                      className="ts-mobile-chip-btn"
+                      onClick={() => onEmployeeClick(row.employee)}
+                      title="Детализация"
+                      aria-label="Детализация"
+                    >
+                      <Menu size={16} />
+                    </button>
+                    {canManageTeam && onExcludeEmployee && (
+                      <button
+                        type="button"
+                        className="ts-mobile-exclude-btn"
+                        onClick={() => onExcludeEmployee(row.employee)}
+                        disabled={pendingEmployeeId === row.employee.id}
+                        title="Исключить"
+                        aria-label="Исключить"
+                      >
+                        <UserMinus size={16} />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {expanded && (() => {

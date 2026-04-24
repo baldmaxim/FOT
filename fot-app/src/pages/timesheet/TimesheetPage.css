@@ -1158,6 +1158,10 @@
   flex-direction: column;
   gap: 10px;
   padding: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .ts-mobile-card {
@@ -1230,6 +1234,33 @@
   cursor: not-allowed;
 }
 
+.ts-mobile-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ts-mobile-chip-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition), color var(--transition);
+}
+
+.ts-mobile-chip-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
 .ts-employee-index {
   min-width: 22px;
   font-size: 12px;
@@ -1239,12 +1270,6 @@
 }
 
 .ts-mobile-summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.ts-mobile-card-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
