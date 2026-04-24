@@ -623,61 +623,133 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   }, [buildBulkRangeSelection, bulkDragAnchor, bulkDragBaseKeys, bulkEditMode, mergeBulkSelections]);
 
   if (compact && viewMode === 'objects') {
+    const jsDow = new Date(year, month - 1, 1).getDay();
+    const firstDayOffset = (jsDow + 6) % 7;
+    const formatHourCell = (hours: number): string => {
+      if (hours <= 0) return '';
+      return String(Math.round(hours));
+    };
+
     return (
       <div className="ts-table-container">
         <div className="ts-table-header-bar ts-table-header-bar--mobile">
           <h3 className="ts-table-title">По объектам</h3>
           <div className="ts-mobile-list-hint">
-            {objectViewGroups.length > 0 ? `${objectViewGroups.length} объектов` : 'Нет данных за выбранный период'}
+            {employeeRows.length > 0 ? `${employeeRows.length} чел. • часы по объектам` : 'Нет данных за выбранный период'}
           </div>
         </div>
 
         <div className="ts-mobile-list">
-          {objectViewGroups.map(group => (
-            <article key={group.object_key} className="ts-mobile-card ts-mobile-card--expanded">
-              <div className="ts-object-group-card-header">
-                <div className="ts-object-group-card-title">{group.object_name}</div>
-                <div className="ts-object-group-card-meta">{group.rows.length} чел.</div>
-              </div>
+          {employeeRows.map((row, index) => {
+            const sortedObjects = [...row.objectRows]
+              .map(objRow => {
+                let total = 0;
+                for (const entry of objRow.days.values()) {
+                  total += getObjectVisibleHours(entry) || 0;
+                }
+                return { objRow, total };
+              })
+              .sort((a, b) => b.total - a.total)
+              .map(x => x.objRow);
+            const [topObj, bottomObj] = sortedObjects;
+            const extraObjects = sortedObjects.slice(2);
+            const employeeIndex = index + 1;
+            const displayName = formatTimesheetEmployeeName(row.employee.full_name);
 
-              <div className="ts-object-group-mobile-list">
-                {group.rows.map(row => (
-                  <div key={`${group.object_key}_${row.employee.id}`} className="ts-mobile-object-row">
-                    <div className="ts-mobile-object-name">{formatTimesheetEmployeeName(row.employee.full_name)}</div>
-                    <div className="ts-mobile-object-days">
+            return (
+              <article key={row.employee.id} className="ts-mobile-card ts-mobile-card--expanded">
+                <div className="ts-mobile-card-header">
+                  <div className="ts-mobile-card-name-row">
+                    <span className="ts-employee-index">{employeeIndex}.</span>
+                    <div className="ts-mobile-card-name">{displayName}</div>
+                  </div>
+                </div>
+
+                {sortedObjects.length === 0 ? (
+                  <div className="ts-mobile-empty">Нет отметок по объектам</div>
+                ) : (
+                  <>
+                    <div className="ts-mobile-weekdays-header" aria-hidden>
+                      <span>Пн</span>
+                      <span>Вт</span>
+                      <span>Ср</span>
+                      <span>Чт</span>
+                      <span>Пт</span>
+                      <span className="ts-mobile-weekday--weekend">Сб</span>
+                      <span className="ts-mobile-weekday--weekend">Вс</span>
+                    </div>
+                    <div className="ts-mobile-days">
+                      {Array.from({ length: firstDayOffset }).map((_, i) => (
+                        <div key={`pad-${row.employee.id}-${i}`} className="ts-mobile-day-empty" aria-hidden />
+                      ))}
                       {days.map(day => {
-                        const objectEntry = row.days.get(day) || null;
-                        if (!objectEntry) return null;
+                        const topEntry = topObj ? topObj.days.get(day) || null : null;
+                        const bottomEntry = bottomObj ? bottomObj.days.get(day) || null : null;
+                        const topHours = topEntry ? getObjectVisibleHours(topEntry) : 0;
+                        const bottomHours = bottomEntry ? getObjectVisibleHours(bottomEntry) : 0;
+                        const hasAny = topHours > 0 || bottomHours > 0;
+                        const weekend = isWeekend(year, month, day);
+                        const today = isToday(year, month, day);
+                        const clickEntry = topEntry || bottomEntry;
+                        const clickObj = topEntry ? topObj : bottomObj;
+                        const classes = ['ts-mobile-day-btn', 'ts-mobile-day-btn--dual'];
+                        if (weekend) classes.push('ts-day--weekend');
+                        if (today) classes.push('ts-day--today');
+                        if (hasAny) classes.push('ts-day--full');
+
                         return (
                           <button
-                            key={`${group.object_key}_${row.employee.id}_${day}`}
+                            key={`obj-${row.employee.id}-${day}`}
                             type="button"
-                            className={`ts-mobile-object-chip${objectEntry.is_correction ? ' ts-mobile-object-chip--corrected' : ''}`}
+                            className={classes.join(' ')}
                             onClick={() => {
-                              if (row.isSynthetic) {
-                                onDayClick(row.employee, day, row.dailyEntries.get(day) || null);
-                                return;
+                              if (clickEntry && clickObj) {
+                                onObjectDayClick(row.employee, day, {
+                                  object_key: clickObj.object_key,
+                                  object_id: clickObj.object_id,
+                                  object_name: clickObj.object_name,
+                                }, clickEntry);
+                              } else {
+                                onDayClick(row.employee, day, row.days.get(day) || null);
                               }
-                              onObjectDayClick(row.employee, day, {
-                                object_key: row.object_key,
-                                object_id: row.object_id,
-                                object_name: row.object_name,
-                              }, objectEntry);
                             }}
                           >
-                            {day}: {formatCellHM(getObjectVisibleHours(objectEntry))}
+                            <span className="ts-mobile-day-num">{day}</span>
+                            <span className="ts-mobile-day-dual-top">{formatHourCell(topHours) || '·'}</span>
+                            {bottomObj && (
+                              <span className="ts-mobile-day-dual-bottom">{formatHourCell(bottomHours) || '·'}</span>
+                            )}
                           </button>
                         );
                       })}
                     </div>
-                  </div>
-                ))}
-              </div>
-            </article>
-          ))}
+                    <div className="ts-mobile-objects-legend">
+                      {topObj && (
+                        <div className="ts-mobile-objects-legend-row">
+                          <span className="ts-mobile-objects-legend-marker">↑</span>
+                          <span className="ts-mobile-objects-legend-name">{topObj.object_name}</span>
+                        </div>
+                      )}
+                      {bottomObj && (
+                        <div className="ts-mobile-objects-legend-row">
+                          <span className="ts-mobile-objects-legend-marker">↓</span>
+                          <span className="ts-mobile-objects-legend-name">{bottomObj.object_name}</span>
+                        </div>
+                      )}
+                      {extraObjects.length > 0 && (
+                        <div className="ts-mobile-objects-legend-extra">
+                          + ещё {extraObjects.length} {extraObjects.length === 1 ? 'объект' : 'объекта'}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </article>
+            );
+          })}
 
-          {objectViewGroups.length === 0 && (
-            <div className="ts-mobile-empty">Нет объектов для отображения</div>
+          {employeeRows.length === 0 && (
+            <div className="ts-mobile-empty">Нет сотрудников для отображения</div>
           )}
         </div>
       </div>
@@ -714,8 +786,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       className="ts-mobile-chip-btn"
                       onClick={() => toggleEmployeeExpanded(row.employee.id)}
                       aria-expanded={expanded}
-                      title={expanded ? 'Скрыть детали' : row.hasExpandableObjects ? 'Показать дни и объекты' : 'Показать дни'}
-                      aria-label={expanded ? 'Скрыть детали' : row.hasExpandableObjects ? 'Показать дни и объекты' : 'Показать дни'}
+                      title={expanded ? 'Скрыть дни' : 'Показать дни'}
+                      aria-label={expanded ? 'Скрыть дни' : 'Показать дни'}
                     >
                       {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                     </button>
@@ -791,36 +863,6 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         );
                       })}
                     </div>
-                    {row.hasExpandableObjects && (
-                      <div className="ts-mobile-objects">
-                        <div className="ts-mobile-objects-title">Объекты</div>
-                        {row.objectRows.map(objectRow => (
-                          <div key={objectRow.object_key} className="ts-mobile-object-row">
-                            <div className="ts-mobile-object-name">{objectRow.object_name}</div>
-                            <div className="ts-mobile-object-days">
-                              {days.map(day => {
-                                const objectEntry = objectRow.days.get(day) || null;
-                                if (!objectEntry) return null;
-                                return (
-                                  <button
-                                    key={`${objectRow.object_key}_${day}`}
-                                    type="button"
-                                    className={`ts-mobile-object-chip${objectEntry.is_correction ? ' ts-mobile-object-chip--corrected' : ''}`}
-                                    onClick={() => onObjectDayClick(row.employee, day, {
-                                      object_key: objectRow.object_key,
-                                      object_id: objectRow.object_id,
-                                      object_name: objectRow.object_name,
-                                    }, objectEntry)}
-                                  >
-                                    {day}: {formatCellHM(getObjectVisibleHours(objectEntry))}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
                   </div>
                   );
                 })()}
