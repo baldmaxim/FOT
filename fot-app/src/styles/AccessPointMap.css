@@ -23,7 +23,7 @@
 .skud-map-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 420;
+  z-index: 1300;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -165,4 +165,74 @@
   .skud-map-modal-title {
     font-size: 16px;
   }
+}
+
+.skud-map-preview-popover {
+  position: fixed;
+  z-index: 1350;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(17, 24, 39, 0.96);
+  color: #f8fafc;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.3);
+  pointer-events: auto;
+}
+
+.skud-map-preview-title {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.skud-map-preview-subtitle {
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(248, 250, 252, 0.74);
+}
+
+.skud-map-preview-stage {
+  position: relative;
+  margin-top: 8px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.skud-map-preview-image {
+  display: block;
+  width: 100%;
+  height: 120px;
+  object-fit: cover;
+}
+
+.skud-map-preview-marker {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #22c55e;
+  border: 2px solid rgba(15, 23, 42, 0.9);
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.28);
+}
+
+.skud-map-preview-loading,
+.skud-map-preview-empty {
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 11px;
+  color: rgba(248, 250, 252, 0.8);
+  text-align: center;
+}
+
+.skud-map-preview-spin {
+  animation: skud-map-preview-spin 0.9s linear infinite;
+}
+
+@keyframes skud-map-preview-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }

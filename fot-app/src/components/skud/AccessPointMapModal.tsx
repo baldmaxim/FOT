@@ -1,4 +1,5 @@
 import { type FC } from 'react';
+import { createPortal } from 'react-dom';
 import type { IAccessPointMapView } from '../../types';
 import '../../styles/AccessPointMap.css';
 
@@ -9,9 +10,9 @@ interface IAccessPointMapModalProps {
 }
 
 export const AccessPointMapModal: FC<IAccessPointMapModalProps> = ({ open, data, onClose }) => {
-  if (!open || !data) return null;
+  if (!open || !data || typeof document === 'undefined') return null;
 
-  return (
+  return createPortal(
     <div className="skud-map-modal-overlay" onClick={onClose}>
       <div className="skud-map-modal" onClick={event => event.stopPropagation()}>
         <div className="skud-map-modal-header">
@@ -46,6 +47,7 @@ export const AccessPointMapModal: FC<IAccessPointMapModalProps> = ({ open, data,
           Маркер показывает конкретную точку прохода, к которой привязано выбранное событие СКУД.
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };

@@ -1,5 +1,7 @@
 import { useMemo, type FC } from 'react';
 import { Clock, LogIn, LogOut } from 'lucide-react';
+import { useAuth } from '../../contexts/AuthContext';
+import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
 import type { Employee, SkudEvent } from '../../types';
 import type { IAlert, IDayAttendance, IWeekdayPattern } from '../../utils/attendanceCalc';
 import {
@@ -9,6 +11,7 @@ import {
   findLastExternalExit,
   sumBreakSeconds,
 } from '../../utils/skudDisplay';
+import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 import { AttendanceCalendar } from './AttendanceCalendar';
 import { EmployeeCardSidebar } from './EmployeeCardSidebar';
 
@@ -61,6 +64,13 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
   alerts,
   internalPoints,
 }) => {
+  const { canViewPage } = useAuth();
+  const {
+    canOpenAccessPointMap,
+    openAccessPointMap,
+    accessPointMapModal,
+  } = useAccessPointMapViewer(canViewPage('/skud-settings'));
+
   const { items, totalSec, firstEntry, lastExit, breakSec } = useMemo(() => {
     const sortedEvents = [...showEvents].sort((a, b) => a.event_time.localeCompare(b.event_time));
     const displayItems = buildDisplayItems(sortedEvents, internalPoints, showDate);
@@ -115,7 +125,14 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
                   </span>
                   <span className="ec-event-time">{event.event_time.slice(0, 5)}</span>
                   <span className="ec-event-dir">{event.direction === 'entry' ? 'Вход' : 'Выход'}</span>
-                  {event.access_point && <span className="ec-event-point">{event.access_point}</span>}
+                  {event.access_point && (
+                    <AccessPointTrigger
+                      accessPointName={event.access_point}
+                      className="ec-event-point"
+                      canOpen={canOpenAccessPointMap}
+                      onOpen={openAccessPointMap}
+                    />
+                  )}
                   {pairDurationSeconds !== null && pairDurationSeconds > 0 && (
                     <span className="ec-pair-duration-inline">{formatHM(pairDurationSeconds)}</span>
                   )}
@@ -169,6 +186,7 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
         alerts={alerts}
         employee={employee}
       />
+      {accessPointMapModal}
     </div>
   );
 };
