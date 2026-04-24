@@ -3115,6 +3115,9 @@
     right: -100vw;
     height: 100dvh;
   }
+  .ts-side-panel--open {
+    right: 0;
+  }
   .ts-modal,
   .ts-late-modal {
     width: calc(100% - 32px);
