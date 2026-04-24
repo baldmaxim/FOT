@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useMemo, type CSSProperties, type FC, type ReactNode } from 'react';
+import { Suspense, useEffect, useMemo, type FC, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import styles from './HubShell.module.css';
@@ -59,11 +59,9 @@ export const HubShell: FC<IHubShellProps> = ({ tabs, defaultTab }) => {
 
   const current = visibleTabs.find(tab => tab.key === activeTab) ?? visibleTabs[0];
 
-  const tabsStyle = { '--hub-tabs-count': visibleTabs.length } as CSSProperties;
-
   return (
     <div className={styles.hub}>
-      <div className={styles.tabs} style={tabsStyle}>
+      <div className={styles.tabs}>
         {visibleTabs.map(tab => {
           const Icon = tab.icon;
           return (
@@ -73,7 +71,7 @@ export const HubShell: FC<IHubShellProps> = ({ tabs, defaultTab }) => {
               className={`${styles.tab} ${current.key === tab.key ? styles.tabActive : ''}`}
               onClick={() => setActiveTab(tab.key)}
             >
-              {Icon && <Icon size={14} />}
+              {Icon && <Icon size={12} />}
               {tab.label}
             </button>
           );

@@ -1,13 +1,13 @@
 .page {
   width: 100%;
-  padding: 24px;
+  padding: 0;
   min-width: 0;
 }
 
 .tabs {
   display: flex;
   gap: 6px;
-  margin-bottom: 24px;
+  margin-bottom: 12px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -548,7 +548,7 @@
 
 @media (max-width: 720px) {
   .page {
-    padding: 16px;
+    padding: 0;
   }
 
   .section,

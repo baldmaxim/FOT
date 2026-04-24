@@ -1,12 +1,11 @@
 .container {
-  padding: 24px;
-  max-width: 1200px;
-  margin: 0 auto;
+  padding: 0;
+  width: 100%;
   overflow-x: hidden;
 }
 
 .header {
-  margin-bottom: 24px;
+  margin-bottom: 12px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -14,7 +13,7 @@
 }
 
 .header h1 {
-  font-size: 24px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
   margin: 0;
@@ -37,22 +36,25 @@
 
 .tabs {
   display: flex;
-  gap: 8px;
-  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 12px;
   border-bottom: 1px solid var(--border);
-  padding-bottom: 8px;
+  padding-bottom: 6px;
 }
 
 .tab {
-  padding: 8px 16px;
+  padding: 4px 10px;
   border: none;
   background: none;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--text-secondary);
   cursor: pointer;
   border-radius: 6px;
   transition: all 0.2s;
+  min-height: 26px;
+  white-space: nowrap;
 }
 
 .tab:hover {
@@ -635,39 +637,43 @@
 }
 
 .userList {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 10px;
 }
 
 .empty {
   text-align: center;
-  padding: 40px;
+  padding: 24px;
   color: var(--text-secondary);
   background: var(--bg-secondary);
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px dashed var(--border);
+  grid-column: 1 / -1;
 }
 
 .userCard {
   background: var(--bg-secondary);
-  border-radius: 12px;
-  padding: 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
   border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .userInfo {
-  margin-bottom: 16px;
+  margin-bottom: 0;
 }
 
 .userName {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .adminBadge {
@@ -680,21 +686,23 @@
 }
 
 .userEmail {
-  font-size: 14px;
+  font-size: 12px;
   color: var(--text-secondary);
-  margin-top: 4px;
+  margin-top: 2px;
+  word-break: break-all;
 }
 
 .userDate {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-tertiary);
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .userMeta {
   display: flex;
-  gap: 12px;
-  margin-top: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
 }
 
 .approved {
@@ -731,16 +739,18 @@
 
 .userActions {
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
 }
 
 .approveBtn {
-  padding: 8px 16px;
+  padding: 6px 12px;
   background: var(--success);
   color: white;
   border: none;
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: opacity 0.2s;
@@ -751,12 +761,12 @@
 }
 
 .rejectBtn {
-  padding: 8px 16px;
+  padding: 6px 12px;
   background: transparent;
   color: var(--error);
   border: 1px solid var(--error);
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
@@ -803,12 +813,12 @@
 }
 
 .primaryBtn {
-  padding: 8px 16px;
+  padding: 6px 12px;
   background: var(--accent);
   color: white;
   border: none;
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: opacity 0.2s;
