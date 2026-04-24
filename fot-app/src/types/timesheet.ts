@@ -28,6 +28,7 @@ export interface TimesheetEntry {
   object_detail_mode?: 'none' | 'available' | 'legacy_blocked';
   object_detail_message?: string | null;
   object_detail_count?: number;
+  presence_covers_shift?: boolean;
 }
 
 export interface TimesheetObjectEntry {

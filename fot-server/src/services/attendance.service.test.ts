@@ -717,4 +717,160 @@ describe('attendance.service', () => {
       last_exit: null,
     });
   });
+
+  describe('presence_covers_shift', () => {
+    const buildResolver = (summaryRow: Record<string, unknown> | null) => (query: QueryRecord): QueryResponse => {
+      if (query.table === 'skud_daily_summary') {
+        return { data: summaryRow ? [summaryRow] : [], error: null };
+      }
+      if (query.table === 'attendance_adjustments' || query.table === 'user_profiles' || query.table === 'employees') {
+        return { data: [], error: null };
+      }
+      throw new Error(`Unexpected query for table ${query.table}`);
+    };
+
+    it('flags span=8h as insufficient when shift needs 9h (entered 9 left 17 without lunch)', async () => {
+      mockedState.resolver = buildResolver({
+        employee_id: 1,
+        date: '2026-04-01',
+        first_entry: '09:00:00',
+        last_exit: '17:00:00',
+        total_hours: 8,
+        total_minutes: 480,
+      });
+
+      const schedule = { work_hours: 9, lunch_minutes: 60 } as unknown as IResolvedSchedule;
+      const result = await buildAttendanceEntries({
+        employees: [{ id: 1, full_name: 'A', work_category: 'office' }],
+        startDate: '2026-04-01',
+        endDate: '2026-04-01',
+        dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
+        calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+        todayStr: '2026-04-03',
+      });
+
+      expect(result.entries[0].presence_covers_shift).toBe(false);
+    });
+
+    it('accepts full 9:00-18:00 with proper lunch break', async () => {
+      mockedState.resolver = buildResolver({
+        employee_id: 1,
+        date: '2026-04-01',
+        first_entry: '09:00:00',
+        last_exit: '18:00:00',
+        total_hours: 8,
+        total_minutes: 480,
+      });
+
+      const schedule = { work_hours: 9, lunch_minutes: 60 } as unknown as IResolvedSchedule;
+      const result = await buildAttendanceEntries({
+        employees: [{ id: 1, full_name: 'A', work_category: 'office' }],
+        startDate: '2026-04-01',
+        endDate: '2026-04-01',
+        dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
+        calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+        todayStr: '2026-04-03',
+      });
+
+      expect(result.entries[0].presence_covers_shift).toBe(true);
+    });
+
+    it('rejects day when gaps exceed allotted lunch (90min absence while lunch=60)', async () => {
+      mockedState.resolver = buildResolver({
+        employee_id: 1,
+        date: '2026-04-01',
+        first_entry: '09:00:00',
+        last_exit: '18:30:00',
+        total_hours: 8,
+        total_minutes: 480,
+      });
+
+      const schedule = { work_hours: 9, lunch_minutes: 60 } as unknown as IResolvedSchedule;
+      const result = await buildAttendanceEntries({
+        employees: [{ id: 1, full_name: 'A', work_category: 'office' }],
+        startDate: '2026-04-01',
+        endDate: '2026-04-01',
+        dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
+        calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+        todayStr: '2026-04-03',
+      });
+
+      expect(result.entries[0].presence_covers_shift).toBe(false);
+    });
+
+    it('flags past day with missing last_exit as not covering shift', async () => {
+      mockedState.needsSkudCheck = true;
+      mockedState.resolver = buildResolver(null);
+      mockedState.objectAttendanceData.rawFallbackSummaries = new Map([
+        [1, new Map([['2026-04-01', {
+          employee_id: 1,
+          date: '2026-04-01',
+          first_entry: '09:00:00',
+          last_exit: null,
+          total_hours: 0,
+          total_minutes: 0,
+        }]])],
+      ]);
+
+      const schedule = { work_hours: 9, lunch_minutes: 60 } as unknown as IResolvedSchedule;
+      const result = await buildAttendanceEntries({
+        employees: [{ id: 1, full_name: 'A', work_category: 'office' }],
+        startDate: '2026-04-01',
+        endDate: '2026-04-01',
+        dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
+        calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+        todayStr: '2026-04-05',
+      });
+
+      expect(result.entries[0].presence_covers_shift).toBe(false);
+    });
+
+    it('marks remote day as covering shift without SKUD check', async () => {
+      mockedState.needsSkudCheck = false;
+      mockedState.resolver = buildResolver(null);
+
+      const schedule = { work_hours: 8, lunch_minutes: 0 } as unknown as IResolvedSchedule;
+      const result = await buildAttendanceEntries({
+        employees: [{ id: 1, full_name: 'A', work_category: 'office' }],
+        startDate: '2026-04-01',
+        endDate: '2026-04-01',
+        dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
+        calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+        todayStr: '2026-04-05',
+      });
+
+      expect(result.entries[0]).toMatchObject({
+        status: 'remote',
+        presence_covers_shift: true,
+      });
+    });
+
+    it('preserves presence_covers_shift flag in capped_to_schedule mode', async () => {
+      mockedState.resolver = buildResolver({
+        employee_id: 1,
+        date: '2026-04-01',
+        first_entry: '09:00:00',
+        last_exit: '17:00:00',
+        total_hours: 8,
+        total_minutes: 480,
+      });
+
+      const schedule = { work_hours: 9, lunch_minutes: 60 } as unknown as IResolvedSchedule;
+      const result = await buildAttendanceEntries({
+        employees: [{ id: 1, full_name: 'A', work_category: 'office' }],
+        startDate: '2026-04-01',
+        endDate: '2026-04-01',
+        dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
+        calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+        todayStr: '2026-04-03',
+        displayMode: 'capped_to_schedule',
+      });
+
+      expect(result.entries[0]).toMatchObject({
+        first_entry: null,
+        last_exit: null,
+        presence_covers_shift: false,
+      });
+    });
+  });
 });

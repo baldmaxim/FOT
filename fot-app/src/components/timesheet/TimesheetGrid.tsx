@@ -156,10 +156,12 @@ const getDayCellClass = (
   }
   switch (entry.status) {
     case 'work':
-    case 'manual':
-      if (hasPositiveHours(visibleHours) && (visibleHours as number) >= thresholdHours) classes.push('ts-day--full');
-      else classes.push('ts-day--partial');
+    case 'manual': {
+      const hoursOk = hasPositiveHours(visibleHours) && (visibleHours as number) >= thresholdHours;
+      const spanOk = entry.presence_covers_shift !== false;
+      classes.push(hoursOk && spanOk ? 'ts-day--full' : 'ts-day--partial');
       break;
+    }
     case 'remote':
       classes.push('ts-day--remote');
       break;
@@ -212,6 +214,9 @@ const getDayCellTitle = (entry: TimesheetEntry | null, weekend: boolean): string
   const parts: string[] = [];
   if (visibleHours != null) {
     parts.push(`Часы: ${formatHM(visibleHours)}`);
+  }
+  if ((entry.status === 'work' || entry.status === 'manual') && entry.presence_covers_shift === false) {
+    parts.push('Присутствие меньше длительности смены');
   }
   if ((entry.travel_delay_minutes || 0) > 0) {
     parts.push(`Превышение лимита передвижения: ${formatHM((entry.travel_delay_minutes || 0) / 60)}`);

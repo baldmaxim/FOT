@@ -64,6 +64,7 @@ export interface IAttendanceEntry {
   object_detail_mode?: 'none' | 'available' | 'legacy_blocked';
   object_detail_message?: string | null;
   object_detail_count?: number;
+  presence_covers_shift?: boolean;
 }
 
 export interface IAttendanceBuildResult {
@@ -105,6 +106,43 @@ function getSummaryHours(summary: ISummaryRow): number {
     return roundHours(summary.total_minutes / 60);
   }
   return roundHours(summary.total_hours || 0);
+}
+
+function getSummaryMinutes(summary: ISummaryRow): number {
+  if (typeof summary.total_minutes === 'number') return summary.total_minutes;
+  return Math.round((summary.total_hours || 0) * 60);
+}
+
+function parseTimeToSeconds(value: string): number {
+  const [hours, minutes, seconds = 0] = value.split(':').map(Number);
+  return hours * 3600 + minutes * 60 + (seconds || 0);
+}
+
+function formatNowHMS(date: Date): string {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
+}
+
+function computePresenceCoversShift(params: {
+  firstEntry: string | null;
+  lastExit: string | null;
+  totalMinutes: number;
+  plannedHours: number;
+  lunchMinutes: number;
+  workDate: string;
+  todayStr: string;
+  nowHMS: string;
+}): boolean {
+  const { firstEntry, lastExit, totalMinutes, plannedHours, lunchMinutes, workDate, todayStr, nowHMS } = params;
+  if (!firstEntry) return false;
+  const firstSec = parseTimeToSeconds(firstEntry);
+  const lastSec = lastExit
+    ? parseTimeToSeconds(lastExit)
+    : (workDate === todayStr ? parseTimeToSeconds(nowHMS) : null);
+  if (lastSec === null) return false;
+  const spanSec = Math.max(0, lastSec - firstSec);
+  const workSec = totalMinutes * 60;
+  const gapsSec = Math.max(0, spanSec - workSec);
+  return spanSec >= plannedHours * 3600 && gapsSec <= lunchMinutes * 60;
 }
 
 function getAdjustmentPriority(sourceType: string): number {
@@ -219,6 +257,7 @@ export async function buildAttendanceEntries(params: {
   const { employees, startDate, endDate, dailySchedulesMap, calendarMonth } = params;
   const todayStr = params.todayStr ?? formatDateToISO(new Date());
   const displayMode = params.displayMode ?? 'actual';
+  const nowHMS = formatNowHMS(new Date());
   const employeeIds = employees.map((employee) => employee.id);
 
   const [summaries, adjustments, travelSummaries] = await Promise.all([
@@ -312,6 +351,26 @@ export async function buildAttendanceEntries(params: {
     const hoursWorked = roundHours(baseHours);
     const isPresent = baseHours > 0 || summary.first_entry !== null;
 
+    const schedule = dailySchedulesMap.get(summary.employee_id)?.get(summary.date);
+    let presenceCoversShift: boolean | undefined;
+    if (!isPresent) {
+      presenceCoversShift = false;
+    } else if (schedule) {
+      const [yearPart, monthPart, dayPart] = summary.date.split('-').map(Number);
+      const dateObject = new Date(yearPart, monthPart - 1, dayPart);
+      const plannedHours = getScheduleForDate(schedule, dateObject).work_hours;
+      presenceCoversShift = computePresenceCoversShift({
+        firstEntry: summary.first_entry,
+        lastExit: summary.last_exit,
+        totalMinutes: getSummaryMinutes(summary),
+        plannedHours,
+        lunchMinutes: schedule.lunch_minutes || 0,
+        workDate: summary.date,
+        todayStr,
+        nowHMS,
+      });
+    }
+
     pushEntry({
       id: null,
       employee_id: summary.employee_id,
@@ -328,6 +387,7 @@ export async function buildAttendanceEntries(params: {
       is_correction: false,
       first_entry: summary.first_entry,
       last_exit: summary.last_exit,
+      presence_covers_shift: presenceCoversShift,
     });
   }
 
@@ -365,6 +425,19 @@ export async function buildAttendanceEntries(params: {
           }
           skudMap.get(employee.id)!.set(workDate, { hours: hoursWorked, corrected: false });
 
+          const presenceCoversShift = isPresent
+            ? computePresenceCoversShift({
+              firstEntry: rawSummary.first_entry,
+              lastExit: rawSummary.last_exit,
+              totalMinutes: getSummaryMinutes(rawSummary),
+              plannedHours,
+              lunchMinutes: schedule.lunch_minutes || 0,
+              workDate,
+              todayStr,
+              nowHMS,
+            })
+            : false;
+
           pushEntry({
             id: null,
             employee_id: employee.id,
@@ -381,6 +454,7 @@ export async function buildAttendanceEntries(params: {
             is_correction: false,
             first_entry: rawSummary.first_entry,
             last_exit: rawSummary.last_exit,
+            presence_covers_shift: presenceCoversShift,
           });
         } else {
           pushEntry({
@@ -399,6 +473,7 @@ export async function buildAttendanceEntries(params: {
             is_correction: false,
             first_entry: null,
             last_exit: null,
+            presence_covers_shift: false,
           });
         }
         continue;
@@ -421,6 +496,7 @@ export async function buildAttendanceEntries(params: {
         is_correction: false,
         first_entry: null,
         last_exit: null,
+        presence_covers_shift: true,
       });
     }
   }
