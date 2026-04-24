@@ -5,6 +5,7 @@ import { corsAllowedOrigins, env } from './config/env.js';
 import { startPresencePolling } from './services/presence-polling.service.js';
 import { startSigurMonitor } from './services/sigur-monitor.service.js';
 import { startStructureSyncScheduler } from './services/sigur-structure-scheduler.service.js';
+import { startSigurEventsDailyScheduler } from './services/sigur-events-daily-scheduler.service.js';
 import { startTimesheetReminderScheduler } from './services/timesheet-reminder.service.js';
 import { startPatentExpiryReminderScheduler } from './services/patent-expiry-reminder.service.js';
 import { setupChatSocket } from './socket/chatHandler.js';
@@ -32,6 +33,7 @@ httpServer.listen(PORT, () => {
   void startPresencePolling();
   void startSigurMonitor();
   void startStructureSyncScheduler();
+  void startSigurEventsDailyScheduler();
   startTimesheetReminderScheduler();
   startPatentExpiryReminderScheduler();
 });
