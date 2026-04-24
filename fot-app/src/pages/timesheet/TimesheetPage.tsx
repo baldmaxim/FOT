@@ -283,6 +283,10 @@ export const TimesheetPage: FC = () => {
   }, [monthStr, daysInMonth, queryFrom, queryTo]);
   const rangeStart = activeRange.startDate;
   const rangeEnd = activeRange.endDate;
+  const [draftRangeStart, setDraftRangeStart] = useState(rangeStart);
+  const [draftRangeEnd, setDraftRangeEnd] = useState(rangeEnd);
+  useEffect(() => { setDraftRangeStart(rangeStart); }, [rangeStart]);
+  useEffect(() => { setDraftRangeEnd(rangeEnd); }, [rangeEnd]);
   const activeGridDeptId = timesheetMode === 'assigned' ? assignedExpandedDeptId : effectiveSelectedDeptId;
   const timesheetQuery = useQuery({
     queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'],
@@ -1183,6 +1187,19 @@ export const TimesheetPage: FC = () => {
     });
   }, [clearBulkState, year, month, monthAccess, setSearchParams]);
 
+  const commitRangeStart = useCallback((value: string) => {
+    if (!value) { setDraftRangeStart(rangeStart); return; }
+    if (value === rangeStart) return;
+    const nextEnd = value > rangeEnd ? value : rangeEnd;
+    handleRangeChange(value, nextEnd);
+  }, [rangeStart, rangeEnd, handleRangeChange]);
+
+  const commitRangeEnd = useCallback((value: string) => {
+    if (!value) { setDraftRangeEnd(rangeEnd); return; }
+    if (value === rangeEnd) return;
+    handleRangeChange(rangeStart, value);
+  }, [rangeStart, rangeEnd, handleRangeChange]);
+
   const handleViewModeChange = useCallback((nextViewMode: TimesheetViewMode) => {
     clearBulkState();
     setSearchParams(current => {
@@ -1423,14 +1440,16 @@ export const TimesheetPage: FC = () => {
           <input
             type="date"
             className="ts-range-input"
-            value={rangeStart}
+            value={draftRangeStart}
             min={rangeInputMin}
             max={rangeInputMax}
-            onChange={e => {
-              const nextStart = e.target.value;
-              if (!nextStart) return;
-              const nextEnd = nextStart > rangeEnd ? nextStart : rangeEnd;
-              handleRangeChange(nextStart, nextEnd);
+            onChange={e => setDraftRangeStart(e.target.value)}
+            onBlur={e => commitRangeStart(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                commitRangeStart(e.currentTarget.value);
+              }
             }}
           />
         </label>
@@ -1439,13 +1458,16 @@ export const TimesheetPage: FC = () => {
           <input
             type="date"
             className="ts-range-input"
-            value={rangeEnd}
+            value={draftRangeEnd}
             min={rangeStart}
             max={rangeInputMax}
-            onChange={e => {
-              const nextEnd = e.target.value;
-              if (!nextEnd) return;
-              handleRangeChange(rangeStart, nextEnd);
+            onChange={e => setDraftRangeEnd(e.target.value)}
+            onBlur={e => commitRangeEnd(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                commitRangeEnd(e.currentTarget.value);
+              }
             }}
           />
         </label>
