@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { apiClient, ApiError, getSessionToken, setSessionToken, subscribeSessionToken } from '../api/client';
+import { wsService } from '../services/websocket';
 import type {
   User,
   UserProfile,
@@ -196,6 +197,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
   }, [logout]);
+
+  // Держим актуальную ссылку, чтобы socket-подписка не пересоздавалась на каждый рефреш.
+  const refreshProfileRef = useRef(refreshProfile);
+  useEffect(() => { refreshProfileRef.current = refreshProfile; }, [refreshProfile]);
+
+  // Когда админ меняет назначение отделов, бэк шлёт 'profile:access_changed' в user:${id} —
+  // тихо тянем /auth/me, чтобы managed_department_ids обновились без релогина.
+  useEffect(() => {
+    if (!token || !state.isAuthenticated) return;
+    wsService.connect(token, 'auth-context');
+    const unsubscribe = wsService.on('profile:access_changed', () => {
+      void refreshProfileRef.current();
+    });
+    return () => {
+      unsubscribe();
+      wsService.disconnect('auth-context');
+    };
+  }, [token, state.isAuthenticated]);
 
   const getRoleLabel = useCallback((code: string): string => {
     return roles.find(r => r.code === code)?.name ?? code;

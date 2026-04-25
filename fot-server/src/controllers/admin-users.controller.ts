@@ -18,6 +18,14 @@ import {
 } from '../services/manager-department-import.service.js';
 import { employeeChangesService } from '../services/employee-changes.service.js';
 import { employeeCache } from '../services/employee-cache.service.js';
+import { getIo } from '../socket/io-instance.js';
+
+function emitDepartmentAccessChanged(targetUserId: string | null | undefined): void {
+  if (!targetUserId) return;
+  const io = getIo();
+  if (!io) return;
+  io.to(`user:${targetUserId}`).emit('profile:access_changed');
+}
 import {
   loadEmployeeFullNamesMap,
   loadDepartmentNamesMap,
@@ -1149,6 +1157,8 @@ export const adminUsersController = {
         },
       });
 
+      emitDepartmentAccessChanged(id);
+
       res.json({
         success: true,
         data: {
@@ -1218,6 +1228,13 @@ export const adminUsersController = {
           assigned_department_names: assignedDepartmentNames,
         },
       });
+
+      const { data: linkedProfile } = await supabase
+        .from('user_profiles')
+        .select('id')
+        .eq('employee_id', employeeId)
+        .maybeSingle();
+      emitDepartmentAccessChanged(linkedProfile?.id as string | null | undefined);
 
       res.json({
         success: true,

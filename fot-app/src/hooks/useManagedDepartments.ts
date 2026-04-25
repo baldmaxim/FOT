@@ -12,7 +12,11 @@ export const useManagedDepartments = (options?: UseManagedDepartmentsOptions) =>
   const isSuperAdmin = profile?.position_type === 'super_admin';
   const isAdminLike = isSuperAdmin || hasPermission('data.scope.all');
   const hasManagedDepartmentsRaw = (profile?.managed_department_ids?.filter(Boolean).length ?? 0) > 0;
-  const isDepartmentScope = !isAdminLike && (hasPermission('data.scope.department') || hasManagedDepartmentsRaw);
+  // Руководитель = не-админ и не рядовой сотрудник (employee_variant null у ролей head/hr/etc).
+  // Даже если у него СЕЙЧАС нет назначенных отделов (например, админ снял назначение),
+  // scope должен оставаться включённым — иначе UI рисует ему «всё» как суперадмину.
+  const isManagerRole = !isAdminLike && !profile?.is_admin && profile?.employee_variant == null;
+  const isDepartmentScope = !isAdminLike && (hasPermission('data.scope.department') || hasManagedDepartmentsRaw || isManagerRole);
   const structureQuery = useStructureTree(options?.enabled ?? true);
 
   const managedDepartmentIds = useMemo(() => {
