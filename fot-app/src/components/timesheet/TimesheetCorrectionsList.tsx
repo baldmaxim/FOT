@@ -162,7 +162,12 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
                       className="ts-corrections-btn"
                       disabled={!row.can_edit}
                       onClick={() => setEditingRow(row)}
-                      title={row.can_edit ? 'Редактировать' : 'Нет прав на редактирование'}
+                      title={
+                        row.can_edit ? 'Редактировать'
+                          : row.month_out_of_range ? 'Период старше прошлого месяца — обратитесь к администратору'
+                            : row.approval_locked ? 'Период подан, доступ закрыт'
+                              : 'Нет прав на редактирование'
+                      }
                     >
                       <Pencil size={14} />
                     </button>
@@ -171,7 +176,12 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
                       className="ts-corrections-btn ts-corrections-btn--danger"
                       disabled={!row.can_delete || deleteMutation.isPending}
                       onClick={() => handleDelete(row)}
-                      title={row.can_delete ? 'Удалить' : 'Нет прав на удаление'}
+                      title={
+                        row.can_delete ? 'Удалить'
+                          : row.month_out_of_range ? 'Период старше прошлого месяца — обратитесь к администратору'
+                            : row.approval_locked ? 'Период подан, доступ закрыт'
+                              : 'Нет прав на удаление'
+                      }
                     >
                       <Trash2 size={14} />
                     </button>

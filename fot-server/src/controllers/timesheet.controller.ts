@@ -1060,6 +1060,13 @@ export const timesheetController = {
         return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
       }
       console.error('timesheet.update error:', err);
+      const message = err instanceof Error ? err.message : '';
+      if (/schema cache/i.test(message)) {
+        return res.status(503).json({
+          success: false,
+          error: 'Схема БД устарела в кэше PostgREST. Выполните NOTIFY pgrst, \'reload schema\' и повторите.',
+        });
+      }
       res.status(500).json({ success: false, error: 'Ошибка обновления записи' });
     }
   },
@@ -1623,9 +1630,13 @@ export const timesheetController = {
           : null;
         const approvalLocked = Boolean(lockInfo);
         const isOwner = scope === 'department' ? item.created_by === req.user.id : true;
+        const [yStr, mStr] = item.work_date.split('-');
+        const monthAllowed = scope === 'all'
+          ? true
+          : isDepartmentMonthAllowed(Number(yStr), Number(mStr));
         const canEdit = scope === 'all'
           ? !(lockInfo && lockInfo.status === 'approved')
-          : isOwner && !approvalLocked && item.source_type === 'manual';
+          : isOwner && !approvalLocked && monthAllowed && item.source_type === 'manual';
         const canDelete = canEdit && item.source_type === 'manual';
         return {
           id: item.id,
@@ -1643,6 +1654,7 @@ export const timesheetController = {
           can_edit: canEdit,
           can_delete: canDelete,
           approval_locked: approvalLocked,
+          month_out_of_range: scope === 'department' ? !monthAllowed : false,
         };
       }));
 
@@ -1671,6 +1683,17 @@ export const timesheetController = {
       const sourceType = String(existing.source_type ?? '');
       if (sourceType !== 'manual') {
         return res.status(409).json({ success: false, error: 'Эта корректировка не удаляется' });
+      }
+
+      if (scope === 'department') {
+        const workDate = String(existing.work_date ?? '');
+        const [yearStr, monthStr] = workDate.split('-');
+        if (!isDepartmentMonthAllowed(Number(yearStr), Number(monthStr))) {
+          return res.status(403).json({
+            success: false,
+            error: 'Руководителю доступен только текущий и предыдущий месяц табеля',
+          });
+        }
       }
 
       if (!(await canAccessEmployeeForTimesheetDate(req, Number(existing.employee_id), String(existing.work_date)))) {
@@ -1712,6 +1735,13 @@ export const timesheetController = {
       res.json({ success: true });
     } catch (err) {
       console.error('timesheet.deleteEntry error:', err);
+      const message = err instanceof Error ? err.message : '';
+      if (/schema cache/i.test(message)) {
+        return res.status(503).json({
+          success: false,
+          error: 'Схема БД устарела в кэше PostgREST. Выполните NOTIFY pgrst, \'reload schema\' и повторите.',
+        });
+      }
       res.status(500).json({ success: false, error: 'Ошибка удаления корректировки' });
     }
   },

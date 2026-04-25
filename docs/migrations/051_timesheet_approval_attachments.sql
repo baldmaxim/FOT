@@ -20,3 +20,7 @@ ON CONFLICT (code) DO NOTHING;
 CREATE INDEX IF NOT EXISTS idx_document_links_timesheet_approval
   ON document_links (entity_id, purpose)
   WHERE entity_type = 'timesheet_approval';
+
+-- 5. Заставляем PostgREST перечитать схему — иначе PUT/POST к обновлённой таблице
+-- падает с "Could not find the 'updated_by' column in the schema cache" в течение 5–10 минут.
+NOTIFY pgrst, 'reload schema';

@@ -55,6 +55,7 @@ export interface ITimesheetCorrectionRow {
   can_edit: boolean;
   can_delete: boolean;
   approval_locked: boolean;
+  month_out_of_range?: boolean;
 }
 
 export interface ITimesheetRefreshResult {
