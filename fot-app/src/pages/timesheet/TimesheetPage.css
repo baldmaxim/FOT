@@ -1793,9 +1793,23 @@
 
 /* Пустой placeholder для pair-duration (резервирует колонку) */
 .ts-modal-event-pair-duration--empty {
-  background: transparent;
-  color: transparent;
+  visibility: hidden;
   min-width: 70px;
+}
+
+/* Подсказка-звёздочка и ошибка для обязательного комментария */
+.ts-form-required {
+  color: var(--error, #ef4444);
+  margin-left: 2px;
+}
+.ts-form-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.ts-form-hint--error {
+  color: var(--error, #ef4444);
 }
 
 @keyframes ts-refresh-rotate {
@@ -2876,7 +2890,13 @@
 }
 
 .ts-modal-event-row.internal {
-  opacity: 0.45;
+  color: var(--text-tertiary);
+}
+.ts-modal-event-row.internal .ts-modal-event-icon {
+  color: var(--text-tertiary);
+}
+.ts-modal-event-row.internal .ts-modal-event-point {
+  color: var(--text-tertiary);
 }
 
 .ts-modal-event-row.ts-modal-event-row--break {
@@ -2896,13 +2916,12 @@
 
 .ts-modal-event-pair-duration {
   margin-left: 0;
-  padding: 2px 8px;
-  border-radius: 6px;
-  background: rgba(99, 102, 241, 0.12);
-  color: var(--accent, #6366f1);
+  padding: 0;
+  background: transparent;
+  color: var(--text-tertiary);
   font-family: 'Space Mono', monospace;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   white-space: nowrap;
   min-width: 70px;
   text-align: right;

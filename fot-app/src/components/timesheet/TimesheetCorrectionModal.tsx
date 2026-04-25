@@ -245,12 +245,16 @@ const CorrectionTab: FC<{
   const statusOptions = TYPE_OPTIONS.filter(option => !allowedStatuses || allowedStatuses.includes(option.status));
   const showStatusPicker = statusOptions.length > 1;
 
+  const trimmedNotes = notes.trim();
+  const canSave = trimmedNotes.length > 0;
+
   const handleSave = () => {
+    if (!canSave) return;
     const needsHours = HOURS_EDITABLE_STATUSES.has(selectedStatus);
     const normalizedHours = needsHours && maxHours != null
       ? Math.max(0, Math.min(hours, maxHours))
       : hours;
-    onSave(selectedStatus, needsHours ? normalizedHours : null, notes);
+    onSave(selectedStatus, needsHours ? normalizedHours : null, trimmedNotes);
   };
 
   if (mode === 'view' && hasExistingCorrection) {
@@ -369,14 +373,18 @@ const CorrectionTab: FC<{
         })()}
 
         <div className="ts-form-group">
-          <label className="ts-form-label">Комментарий</label>
+          <label className="ts-form-label">Комментарий <span className="ts-form-required">*</span></label>
           <input
             type="text"
             className="ts-form-input"
             value={notes}
             onChange={e => setNotes(e.target.value)}
             placeholder="Причина корректировки..."
+            required
           />
+          {!canSave && (
+            <span className="ts-form-hint ts-form-hint--error">Комментарий обязателен для сохранения</span>
+          )}
         </div>
       </div>
       <div className="ts-modal-footer">
@@ -387,7 +395,15 @@ const CorrectionTab: FC<{
         >
           Отмена
         </button>
-        <button className="ts-btn ts-btn--primary" onClick={handleSave} type="button">{confirmLabel || 'Сохранить'}</button>
+        <button
+          className="ts-btn ts-btn--primary"
+          onClick={handleSave}
+          type="button"
+          disabled={!canSave}
+          title={canSave ? undefined : 'Укажите комментарий перед сохранением'}
+        >
+          {confirmLabel || 'Сохранить'}
+        </button>
       </div>
     </>
   );

@@ -700,34 +700,11 @@ const skudReadController = {
       );
 
       if (!departmentId) {
-        const scope = await resolveRequestDataScope(req);
-        if (scope === 'department') {
-          const managedDepartmentIds = await resolveManagedDepartmentIds(req);
-          if (managedDepartmentIds.length === 0) {
-            res.json({ success: true, data: [] });
-            return;
-          }
-          const { data, error } = await supabase
-            .from('skud_access_point_settings')
-            .select('access_point_name, is_internal')
-            .in('department_id', managedDepartmentIds);
-
-          if (error) {
-            console.error('Get access point settings error:', error);
-            res.status(500).json({ success: false, error: 'Ошибка получения настроек' });
-            return;
-          }
-
-          res.json({
-            success: true,
-            data: (data || []).map(row => ({
-              access_point_name: row.access_point_name.trim(),
-              is_internal: row.is_internal,
-            })),
-          });
-          return;
-        }
-
+        // Признак «внутренняя точка» — это физическое свойство точки, а не привилегия
+        // отдела: если точка помечена internal хотя бы в одном отделе, она internal везде.
+        // Поэтому без department_id отдаём объединённый список (BOOL_OR по имени),
+        // иначе события с точки «Коридор» у руководителя, не управляющего отделом,
+        // где она настроена, попадали бы в подсчёт перерывов как external.
         const { data, error } = await supabase
           .from('skud_access_point_settings')
           .select('access_point_name, is_internal');
@@ -738,11 +715,20 @@ const skudReadController = {
           return;
         }
 
-        const result = (data || []).map(row => ({
-          access_point_name: row.access_point_name.trim(),
-          is_internal: row.is_internal,
-        }));
-        res.json({ success: true, data: result });
+        const aggregated = new Map<string, boolean>();
+        for (const row of data || []) {
+          const name = (row.access_point_name as string).trim();
+          const current = aggregated.get(name) ?? false;
+          aggregated.set(name, current || Boolean(row.is_internal));
+        }
+
+        res.json({
+          success: true,
+          data: Array.from(aggregated.entries()).map(([access_point_name, is_internal]) => ({
+            access_point_name,
+            is_internal,
+          })),
+        });
         return;
       }
 

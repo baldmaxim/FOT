@@ -566,6 +566,21 @@ export const TimesheetPage: FC = () => {
     [modalMode, handleSaveCorrection, handleSaveObjectCorrection],
   );
 
+  const handleDeleteDayCorrection = useCallback(async () => {
+    if (!modalEntry?.id) return;
+    try {
+      await timesheetService.delete(modalEntry.id);
+      closeModal();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+      ]);
+    } catch (error) {
+      console.error('Delete day correction error:', error);
+      toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку');
+    }
+  }, [modalEntry?.id, closeModal, queryClient, monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId, toast]);
+
   const handleDeleteObjectCorrection = useCallback(async () => {
     if (!modalEmployee || !modalObjectTarget || !modalObjectEntry?.adjustment_id) return;
     try {
@@ -1940,7 +1955,13 @@ export const TimesheetPage: FC = () => {
             open={modalOpen}
             onClose={closeModal}
             onSave={handleSaveModalCorrection}
-            onDelete={modalMode === 'object' && modalObjectEntry?.adjustment_id ? handleDeleteObjectCorrection : undefined}
+            onDelete={
+              modalMode === 'object' && modalObjectEntry?.adjustment_id
+                ? handleDeleteObjectCorrection
+                : (modalMode === 'day' && modalEntry?.is_correction && modalEntry?.id)
+                  ? handleDeleteDayCorrection
+                  : undefined
+            }
             initialStatus={
               modalMode === 'object' && modalObjectEntry?.adjustment_id
                 ? 'manual'
