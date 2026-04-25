@@ -1,4 +1,5 @@
 import { supabase } from '../config/database.js';
+import { collectDeptIds } from './skud-shared.service.js';
 
 export type TimesheetDisplayHalf = 'H1' | 'H2' | 'FULL';
 
@@ -125,14 +126,16 @@ export async function listEmployeeIdsAssignedToDepartmentPeriod(
   _startDate: string,
   endDate: string,
 ): Promise<number[]> {
-  // Берём только открытые назначения на отдел: сотрудник считается прикреплённым,
-  // пока у него есть строка employee_assignments с effective_to IS NULL.
-  // Закрытые строки (после exclude/перевода) намеренно не учитываем — иначе
-  // сотрудник висит в прежнем отделе до конца периода.
+  // Разворачиваем иерархию отделов: если руководителю назначен родительский отдел,
+  // сотрудники находятся в под-отделах (employees.org_department_id = под-отдел).
+  // По аналогии с /employees и dashboard раскрываем через collectDeptIds.
+  const deptIds = await collectDeptIds(departmentId);
+
+  // Открытые назначения на любой из отделов поддерева.
   const { data, error } = await supabase
     .from('employee_assignments')
     .select('employee_id')
-    .eq('org_department_id', departmentId)
+    .in('org_department_id', deptIds)
     .lte('effective_from', endDate)
     .is('effective_to', null);
 
@@ -157,7 +160,7 @@ export async function listEmployeeIdsAssignedToDepartmentPeriod(
   const { data: snapshotEmployees, error: snapshotError } = await supabase
     .from('employees')
     .select('id')
-    .eq('org_department_id', departmentId)
+    .in('org_department_id', deptIds)
     .eq('is_archived', false)
     .eq('excluded_from_timesheet', false)
     .eq('employment_status', 'active');
@@ -173,11 +176,15 @@ export async function isEmployeeAssignedToDepartmentOnDate(
   departmentId: string,
   date: string,
 ): Promise<boolean> {
+  // Семантика: сотрудник числится в поддереве departmentId на дату.
+  // Это нужно для руководителя родительского отдела с сотрудниками в под-отделах.
+  const deptIds = await collectDeptIds(departmentId);
+
   const { data, error } = await supabase
     .from('employee_assignments')
-    .select('id, effective_from, effective_to')
+    .select('id, org_department_id, effective_from, effective_to')
     .eq('employee_id', employeeId)
-    .eq('org_department_id', departmentId)
+    .in('org_department_id', deptIds)
     .lte('effective_from', date)
     .or(`effective_to.is.null,effective_to.gte.${date}`)
     .order('effective_from', { ascending: false })
@@ -193,7 +200,8 @@ export async function isEmployeeAssignedToDepartmentOnDate(
       .maybeSingle();
 
     if (employeeError) throw employeeError;
-    return String(employee?.org_department_id || '') === departmentId;
+    const empDept = String(employee?.org_department_id || '');
+    return empDept.length > 0 && deptIds.includes(empDept);
   }
 
   return isAssignmentActiveOnDateInclusive(

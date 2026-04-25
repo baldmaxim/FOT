@@ -174,9 +174,9 @@ const EventsTab: FC<{
               ) : (
                 <span className="ts-modal-event-point">—</span>
               )}
-              {pairDurationSeconds !== null && pairDurationSeconds > 0 && (
-                <span className="ts-modal-event-pair-duration">{formatDuration(pairDurationSeconds)}</span>
-              )}
+              <span className={`ts-modal-event-pair-duration${pairDurationSeconds && pairDurationSeconds > 0 ? '' : ' ts-modal-event-pair-duration--empty'}`}>
+                {pairDurationSeconds && pairDurationSeconds > 0 ? formatDuration(pairDurationSeconds) : ''}
+              </span>
             </div>
           );
         })}
@@ -219,6 +219,11 @@ const CorrectionTab: FC<{
   deleteLabel?: string;
   allowedStatuses?: TimesheetStatus[];
   maxHours?: number | null;
+  correctionInfo?: {
+    is_correction: boolean;
+    corrected_at?: string | null;
+    corrected_by_name?: string | null;
+  } | null;
 }> = ({
   onClose,
   onSave,
@@ -230,7 +235,10 @@ const CorrectionTab: FC<{
   deleteLabel,
   allowedStatuses,
   maxHours,
+  correctionInfo,
 }) => {
+  const hasExistingCorrection = Boolean(correctionInfo?.is_correction);
+  const [mode, setMode] = useState<'view' | 'edit'>(hasExistingCorrection ? 'view' : 'edit');
   const [selectedStatus, setSelectedStatus] = useState<TimesheetStatus>(initialStatus);
   const [hours, setHours] = useState<number>(initialHours);
   const [notes, setNotes] = useState(initialNotes || '');
@@ -244,6 +252,55 @@ const CorrectionTab: FC<{
       : hours;
     onSave(selectedStatus, needsHours ? normalizedHours : null, notes);
   };
+
+  if (mode === 'view' && hasExistingCorrection) {
+    const statusOption = TYPE_OPTIONS.find(option => option.status === initialStatus);
+    const statusLabel = statusOption?.label ?? initialStatus;
+    const statusIcon = statusOption?.icon ?? '✎';
+    const hoursLabel = HOURS_EDITABLE_STATUSES.has(initialStatus)
+      ? formatHM(initialHours)
+      : '—';
+    const authorLine = [
+      correctionInfo?.corrected_by_name ?? null,
+      correctionInfo?.corrected_at ? formatCorrectionDate(correctionInfo.corrected_at) : null,
+    ].filter(Boolean).join(' • ');
+    return (
+      <>
+        <div className="ts-modal-body">
+          <ul className="ts-correction-view-list">
+            <li className="ts-correction-view-item">
+              <div className="ts-correction-view-main">
+                <span className="ts-correction-view-icon">{statusIcon}</span>
+                <div className="ts-correction-view-text">
+                  <div className="ts-correction-view-status">{statusLabel}</div>
+                  <div className="ts-correction-view-meta">
+                    Часы: <b>{hoursLabel}</b>
+                    {initialNotes ? <span className="ts-correction-view-notes"> • {initialNotes}</span> : null}
+                  </div>
+                  {authorLine && <div className="ts-correction-view-author">{authorLine}</div>}
+                </div>
+              </div>
+            </li>
+          </ul>
+        </div>
+        <div className="ts-modal-footer">
+          <button className="ts-btn" onClick={onClose} type="button">Закрыть</button>
+          {onDelete && (
+            <button className="ts-btn ts-btn--danger" onClick={onDelete} type="button">
+              {deleteLabel || 'Удалить'}
+            </button>
+          )}
+          <button
+            className="ts-btn ts-btn--primary"
+            onClick={() => setMode('edit')}
+            type="button"
+          >
+            Изменить
+          </button>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -323,11 +380,14 @@ const CorrectionTab: FC<{
         </div>
       </div>
       <div className="ts-modal-footer">
-        <button className="ts-btn" onClick={onClose}>Отмена</button>
-        {onDelete && (
-          <button className="ts-btn" onClick={onDelete}>{deleteLabel || 'Удалить'}</button>
-        )}
-        <button className="ts-btn ts-btn--primary" onClick={handleSave}>{confirmLabel || 'Сохранить'}</button>
+        <button
+          className="ts-btn"
+          onClick={() => (hasExistingCorrection ? setMode('view') : onClose())}
+          type="button"
+        >
+          Отмена
+        </button>
+        <button className="ts-btn ts-btn--primary" onClick={handleSave} type="button">{confirmLabel || 'Сохранить'}</button>
       </div>
     </>
   );
@@ -367,6 +427,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   const showCorrectionTab = !hideCorrectionTab;
   const [tab, setTab] = useState<ModalTab>(() => {
     if (!showEventsTab && showCorrectionTab) return 'correction';
+    if (showCorrectionTab && correctionInfo?.is_correction) return 'correction';
     return 'events';
   });
   const shortName = employeeName ? formatTimesheetEmployeeName(employeeName) : null;
@@ -462,6 +523,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           deleteLabel={deleteLabel}
           allowedStatuses={allowedStatuses}
           maxHours={maxHours}
+          correctionInfo={correctionInfo}
         />
       ) : null}
     </div>

@@ -32,7 +32,15 @@ export const useManagedDepartments = (options?: UseManagedDepartmentsOptions) =>
     return allDepartments.filter(department => managedDepartmentIds.includes(department.id));
   }, [allDepartments, isDepartmentScope, managedDepartmentIds]);
 
-  const primaryDepartmentId = profile?.department_id || managedDepartmentIds[0] || null;
+  // Safe-pick: если `profile.department_id` (рабочий отдел по должности) не входит
+  // в managed (отделы, которыми руководитель управляет) — берём первый managed.
+  // Иначе страницы шлют в API department_id, который бэк отвергает как «не в scope».
+  const primaryDepartmentId = (() => {
+    const own = profile?.department_id || null;
+    if (managedDepartmentIds.length === 0) return own;
+    if (own && managedDepartmentIds.includes(own)) return own;
+    return managedDepartmentIds[0];
+  })();
   const managedDepartmentNameById = useMemo(
     () => new Map(managedDepartments.map(department => [department.id, department.name])),
     [managedDepartments],

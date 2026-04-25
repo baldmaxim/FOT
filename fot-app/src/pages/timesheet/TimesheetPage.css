@@ -1685,18 +1685,22 @@
   top: 0;
   background: var(--bg-secondary);
   text-align: left;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border-color, #e5e7eb);
-  font-weight: 600;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--text-tertiary);
   z-index: 1;
 }
 .ts-corrections-table tbody td {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border-color, #f1f5f9);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
   vertical-align: middle;
+  color: var(--text-secondary);
 }
-.ts-corrections-table tbody tr:hover {
-  background: var(--surface-hover, rgba(0, 0, 0, 0.02));
+.ts-corrections-table tbody tr:hover td {
+  background: var(--surface-hover);
 }
 .ts-corrections-row--locked td {
   opacity: 0.7;
@@ -1737,6 +1741,61 @@
 }
 .ts-corrections-lock {
   color: var(--text-tertiary);
+}
+
+/* ===== Модалка дня: view-карточка текущей корректировки ===== */
+.ts-correction-view-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ts-correction-view-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--bg-secondary);
+}
+.ts-correction-view-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.ts-correction-view-icon {
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.ts-correction-view-text {
+  flex: 1;
+  min-width: 0;
+}
+.ts-correction-view-status {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+.ts-correction-view-meta {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.ts-correction-view-notes {
+  color: var(--text-tertiary);
+}
+.ts-correction-view-author {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 6px;
+}
+
+/* Пустой placeholder для pair-duration (резервирует колонку) */
+.ts-modal-event-pair-duration--empty {
+  background: transparent;
+  color: transparent;
+  min-width: 70px;
 }
 
 @keyframes ts-refresh-rotate {
@@ -2836,7 +2895,7 @@
 }
 
 .ts-modal-event-pair-duration {
-  margin-left: auto;
+  margin-left: 0;
   padding: 2px 8px;
   border-radius: 6px;
   background: rgba(99, 102, 241, 0.12);
@@ -2845,6 +2904,9 @@
   font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
+  min-width: 70px;
+  text-align: right;
+  flex: 0 0 auto;
 }
 
 .ts-modal-event-time {
@@ -2852,11 +2914,13 @@
   font-weight: 600;
   font-size: 13px;
   min-width: 42px;
+  flex: 0 0 auto;
 }
 
 .ts-modal-event-dir {
   min-width: 44px;
   font-size: 12px;
+  flex: 0 0 auto;
 }
 
 .ts-modal-event-point {
@@ -2866,6 +2930,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
 }
 
 .ts-modal-events-summary {
