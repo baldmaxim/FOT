@@ -41,13 +41,6 @@ router.get(
   documentsController.getByLeaveRequest
 );
 
-// GET /api/documents/attendance-adjustment/:adjustmentId — документы корректировки табеля
-router.get(
-  '/attendance-adjustment/:adjustmentId',
-  requireAnyPageAccess(['/timesheet', '/timesheet-hr', '/employee', '/employee/requests'], 'view'),
-  documentsController.getByAttendanceAdjustment
-);
-
 // GET /api/documents/:id/download — скачать
 router.get(
   '/:id/download',

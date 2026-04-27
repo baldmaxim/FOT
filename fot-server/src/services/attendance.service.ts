@@ -37,6 +37,10 @@ export interface IAttendanceAdjustment {
   created_at: string;
   updated_at: string;
   metadata: Record<string, unknown>;
+  approval_status: 'auto_approved' | 'pending' | 'approved' | 'rejected';
+  approval_comment: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
 }
 
 export interface IAttendanceAdjustmentWithAuthor extends IAttendanceAdjustment {
@@ -173,7 +177,7 @@ export async function loadAttendanceAdjustments(
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
     const { data, error } = await supabase
       .from('attendance_adjustments')
-      .select('id, employee_id, work_date, status, hours_override, source_type, source_id, reason, created_by, updated_by, created_at, updated_at, metadata')
+      .select('id, employee_id, work_date, status, hours_override, source_type, source_id, reason, created_by, updated_by, created_at, updated_at, metadata, approval_status, approval_comment, approved_by, approved_at')
       .in('employee_id', batch)
       .gte('work_date', startDate)
       .lte('work_date', endDate);
@@ -195,6 +199,10 @@ export async function loadAttendanceAdjustments(
         created_at: String(row.created_at),
         updated_at: String(row.updated_at ?? row.created_at),
         metadata: (row.metadata && typeof row.metadata === 'object' ? row.metadata : {}) as Record<string, unknown>,
+        approval_status: (typeof row.approval_status === 'string' ? row.approval_status : 'auto_approved') as IAttendanceAdjustment['approval_status'],
+        approval_comment: typeof row.approval_comment === 'string' ? row.approval_comment : null,
+        approved_by: typeof row.approved_by === 'string' ? row.approved_by : null,
+        approved_at: typeof row.approved_at === 'string' ? row.approved_at : null,
       })) satisfies IAttendanceAdjustment[]),
     );
   }
@@ -608,6 +616,8 @@ export async function buildAttendanceEntries(params: {
   };
 }
 
+export type AdjustmentApprovalStatus = 'auto_approved' | 'pending' | 'approved' | 'rejected';
+
 export async function upsertAttendanceAdjustment(input: {
   employee_id: number;
   work_date: string;
@@ -619,8 +629,9 @@ export async function upsertAttendanceAdjustment(input: {
   created_by?: string | null;
   updated_by?: string | null;
   metadata?: Record<string, unknown>;
+  approval_status?: AdjustmentApprovalStatus;
 }): Promise<Record<string, unknown>> {
-  const payload = {
+  const payload: Record<string, unknown> = {
     employee_id: input.employee_id,
     work_date: input.work_date,
     status: input.status,
@@ -633,6 +644,14 @@ export async function upsertAttendanceAdjustment(input: {
     metadata: input.metadata ?? {},
     updated_at: new Date().toISOString(),
   };
+  if (input.approval_status) {
+    payload.approval_status = input.approval_status;
+    if (input.approval_status !== 'approved' && input.approval_status !== 'rejected') {
+      payload.approved_by = null;
+      payload.approved_at = null;
+      payload.approval_comment = null;
+    }
+  }
 
   const result = await supabase
     .from('attendance_adjustments')
@@ -682,9 +701,10 @@ export async function updateAttendanceAdjustmentById(
   patch: Partial<Pick<IAttendanceAdjustment, 'status' | 'hours_override' | 'reason'>> & {
     created_by?: string | null;
     updated_by?: string | null;
+    approval_status?: AdjustmentApprovalStatus;
   },
 ): Promise<Record<string, unknown> | null> {
-  const updates = {
+  const updates: Record<string, unknown> = {
     ...(patch.status ? { status: patch.status } : {}),
     ...(patch.hours_override !== undefined ? { hours_override: patch.hours_override } : {}),
     ...(patch.reason !== undefined ? { reason: patch.reason } : {}),
@@ -692,6 +712,14 @@ export async function updateAttendanceAdjustmentById(
     ...(patch.updated_by !== undefined ? { updated_by: patch.updated_by } : {}),
     updated_at: new Date().toISOString(),
   };
+  if (patch.approval_status) {
+    updates.approval_status = patch.approval_status;
+    if (patch.approval_status !== 'approved' && patch.approval_status !== 'rejected') {
+      updates.approved_by = null;
+      updates.approved_at = null;
+      updates.approval_comment = null;
+    }
+  }
 
   const result = await supabase
     .from('attendance_adjustments')

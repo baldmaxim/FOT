@@ -1669,45 +1669,6 @@
   border-radius: 6px;
   background: var(--bg-secondary);
 }
-.ts-correction-attachments {
-  margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.ts-correction-attachments-title {
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-.ts-correction-attachment-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--bg-tertiary);
-  border: 0;
-  border-radius: 6px;
-  padding: 6px 10px;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--text-primary);
-  text-align: left;
-  word-break: break-all;
-}
-.ts-correction-attachment-link:hover {
-  background: var(--bg-secondary);
-}
-.ts-correction-attachment-preview {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  padding: 4px 10px;
-  background: var(--bg-tertiary);
-  border-radius: 6px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  word-break: break-all;
-}
 @media (max-width: 480px) {
   .ts-table th.ts-col-deviation-sticky,
   .ts-table td.ts-col-deviation-sticky {

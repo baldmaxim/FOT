@@ -287,8 +287,8 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     if (!correctionCheck.ok) {
       res.status(400).json({
         success: false,
-        error: 'Не приложены файлы к корректировкам — подача невозможна',
-        code: 'CORRECTION_ATTACHMENTS_MISSING',
+        error: 'Есть несогласованные корректировки или незакрытые работы в выходные — подача невозможна',
+        code: 'CORRECTION_VALIDATION_FAILED',
         missing_days: correctionCheck.missing,
       });
       return;
@@ -573,8 +573,40 @@ async function changeApprovalReviewState(
   }
 }
 
-/** HR утверждает табель. */
+/** HR утверждает табель. Блокируется, если в периоде остались pending корректировки. */
 const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const approval = await loadApprovalById(req.params.id);
+    if (approval) {
+      const { count, error } = await supabase
+        .from('attendance_adjustments')
+        .select('id', { count: 'exact', head: true })
+        .eq('approval_status', 'pending')
+        .in(
+          'employee_id',
+          await import('../services/timesheet-department-assignments.service.js').then(m =>
+            m.listEmployeeIdsAssignedToDepartmentPeriod(approval.department_id, approval.start_date, approval.end_date),
+          ),
+        )
+        .gte('work_date', approval.start_date)
+        .lte('work_date', approval.end_date);
+      if (error) throw error;
+      if ((count ?? 0) > 0) {
+        res.status(409).json({
+          success: false,
+          error: 'Сначала согласуйте корректировки в выходные дни',
+          code: 'PENDING_CORRECTIONS_EXIST',
+          pending_count: count,
+        });
+        return;
+      }
+    }
+  } catch (err) {
+    console.error('timesheet-approval.approve precheck error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка проверки корректировок' });
+    return;
+  }
+
   await changeApprovalReviewState(req, res, {
     allowedFrom: 'submitted',
     nextStatus: 'approved',

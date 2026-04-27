@@ -25,7 +25,7 @@ interface IMissingDay {
   date: string;
   employee_id: number;
   employee_name: string | null;
-  kind: 'adjustment' | 'leave_request' | 'weekend_no_correction';
+  kind: 'pending_correction' | 'leave_request' | 'weekend_no_correction';
   reason: string;
 }
 
@@ -186,7 +186,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
       await timesheetApprovalService.submit(departmentId, startDate, endDate);
       await invalidate();
     } catch (err) {
-      if (err instanceof ApiError && err.code === 'CORRECTION_ATTACHMENTS_MISSING') {
+      if (err instanceof ApiError && err.code === 'CORRECTION_VALIDATION_FAILED') {
         const days = (err.details?.missing_days as IMissingDay[] | undefined) ?? [];
         setMissingDays(days);
         setSubmitError(err.message);

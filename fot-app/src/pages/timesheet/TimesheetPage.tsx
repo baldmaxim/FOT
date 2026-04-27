@@ -512,12 +512,12 @@ export const TimesheetPage: FC = () => {
   }, [entryMap, year, month]);
 
   // Save correction
-  const handleSaveCorrection = useCallback(async (status: TimesheetStatus, hours: number | null, notes: string, attachments?: number[]) => {
+  const handleSaveCorrection = useCallback(async (status: TimesheetStatus, hours: number | null, notes: string) => {
     if (!modalEmployee) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
       if (modalEntry?.id) {
-        await timesheetService.update(modalEntry.id, { status, hours_worked: hours, notes, attachments });
+        await timesheetService.update(modalEntry.id, { status, hours_worked: hours, notes });
       } else {
         await timesheetService.create({
           employee_id: modalEmployee.id,
@@ -525,7 +525,6 @@ export const TimesheetPage: FC = () => {
           status,
           hours_worked: hours,
           notes,
-          attachments,
         });
       }
       closeModal();
@@ -539,7 +538,7 @@ export const TimesheetPage: FC = () => {
     }
   }, [modalEmployee, year, month, modalDay, modalEntry, closeModal, queryClient, monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId, toast]);
 
-  const handleSaveObjectCorrection = useCallback(async (_status: TimesheetStatus, hours: number | null, notes: string, _attachments?: number[]) => {
+  const handleSaveObjectCorrection = useCallback(async (_status: TimesheetStatus, hours: number | null, notes: string) => {
     if (!modalEmployee || !modalObjectTarget || hours == null) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
@@ -564,11 +563,11 @@ export const TimesheetPage: FC = () => {
   }, [modalEmployee, modalObjectTarget, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId, toast]);
 
   const handleSaveModalCorrection = useCallback(
-    (status: TimesheetStatus, hours: number | null, notes: string, attachments?: number[]) => {
+    (status: TimesheetStatus, hours: number | null, notes: string) => {
       if (modalMode === 'object' && (status === 'work' || status === 'manual')) {
-        return handleSaveObjectCorrection(status, hours, notes, attachments);
+        return handleSaveObjectCorrection(status, hours, notes);
       }
-      return handleSaveCorrection(status, hours, notes, attachments);
+      return handleSaveCorrection(status, hours, notes);
     },
     [modalMode, handleSaveCorrection, handleSaveObjectCorrection],
   );
@@ -2007,11 +2006,6 @@ export const TimesheetPage: FC = () => {
               corrected_at: modalEntry.corrected_at,
               corrected_by_name: modalEntry.corrected_by_name,
             } : null}
-            correctionId={
-              modalMode === 'object'
-                ? (modalObjectEntry?.adjustment_id ?? null)
-                : (modalEntry?.is_correction ? (modalEntry?.id ?? null) : null)
-            }
           />
         </Suspense>
       )}

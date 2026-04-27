@@ -340,56 +340,6 @@ const getByLeaveRequest = async (req: AuthenticatedRequest, res: Response): Prom
   }
 };
 
-/** Документы по корректировке табеля */
-const getByAttendanceAdjustment = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    const adjustmentId = Number(req.params.adjustmentId);
-    if (!adjustmentId || Number.isNaN(adjustmentId)) {
-      res.status(400).json({ success: false, error: 'Некорректный adjustmentId' });
-      return;
-    }
-
-    const { data: adj, error: adjErr } = await supabase
-      .from('attendance_adjustments')
-      .select('id, employee_id')
-      .eq('id', adjustmentId)
-      .single();
-    if (adjErr || !adj) {
-      res.status(404).json({ success: false, error: 'Корректировка не найдена' });
-      return;
-    }
-    if (!(await canAccessEmployeeInScope(req, Number(adj.employee_id)))) {
-      res.status(403).json({ success: false, error: 'Нет доступа' });
-      return;
-    }
-
-    const { data: links, error: linksError } = await supabase
-      .from('document_links')
-      .select('document_id')
-      .eq('entity_type', 'attendance_adjustment')
-      .eq('entity_id', String(adjustmentId));
-    if (linksError) throw linksError;
-
-    const ids = [...new Set((links || []).map((l) => Number(l.document_id)).filter(Number.isFinite))];
-    if (ids.length === 0) {
-      res.json({ success: true, data: [] });
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from('documents')
-      .select(DOCUMENT_SELECT_COLUMNS)
-      .in('id', ids)
-      .order('created_at', { ascending: false });
-    if (error) throw error;
-
-    res.json({ success: true, data: data || [] });
-  } catch (err) {
-    console.error('documents.getByAttendanceAdjustment error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка получения вложений корректировки' });
-  }
-};
-
 /** Документы сотрудника (header/hr/admin) */
 const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -456,6 +406,5 @@ export const documentsController = {
   getMy,
   getByEmployee,
   getByLeaveRequest,
-  getByAttendanceAdjustment,
   remove,
 };

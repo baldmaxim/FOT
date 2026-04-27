@@ -111,7 +111,6 @@ export const timesheetService = {
     status: TimesheetStatus;
     hours_worked?: number | null;
     notes?: string | null;
-    attachments?: number[];
   }): Promise<TimesheetEntry> {
     const res = await apiClient.post<ApiResponse<TimesheetEntry>>('/timesheet', data);
     if (!res.data) throw new Error(res.error || 'Ошибка создания записи');
@@ -120,7 +119,7 @@ export const timesheetService = {
 
   async update(
     id: number,
-    data: Partial<Pick<TimesheetEntry, 'status' | 'hours_worked' | 'notes'>> & { attachments?: number[] },
+    data: Partial<Pick<TimesheetEntry, 'status' | 'hours_worked' | 'notes'>>,
   ): Promise<TimesheetEntry> {
     const res = await apiClient.put<ApiResponse<TimesheetEntry>>(`/timesheet/${id}`, data);
     if (!res.data) throw new Error(res.error || 'Ошибка обновления записи');

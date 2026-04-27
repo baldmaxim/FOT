@@ -64,22 +64,18 @@ import { syncEventsLogic } from '../services/sigur-sync-events.service.js';
 
 const validStatuses = ['work', 'vacation', 'dayoff', 'remote', 'unpaid', 'absent', 'sick', 'business_trip', 'manual'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
 
-const attachmentsSchema = z.array(z.number().int().positive()).optional();
-
 const createEntrySchema = z.object({
   employee_id: z.number().int().positive(),
   work_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   status: z.enum(validStatuses),
   hours_worked: z.number().min(0).max(24).nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
-  attachments: attachmentsSchema,
 });
 
 const updateEntrySchema = z.object({
   status: z.enum(validStatuses).optional(),
   hours_worked: z.number().min(0).max(24).nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
-  attachments: attachmentsSchema,
 });
 
 const bulkCorrectionSchema = z.object({
@@ -122,48 +118,36 @@ const teamManagementAddEmployeeSchema = teamManagementMutationSchema.extend({
   effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
 
-async function validateAndLinkCorrectionAttachments(
-  attachmentIds: number[],
+/**
+ * Корректировка считается автоматически согласованной (`auto_approved`), если день
+ * рабочий по графику сотрудника. Иначе (Сб/Вс/праздник либо нерабочий по графику)
+ * требуется отдельное согласование админом — `pending`.
+ */
+async function resolveAdjustmentApprovalStatus(
   employeeId: number,
-  adjustmentId: number,
-): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
-  if (attachmentIds.length === 0) return { ok: true };
-  const { data: docs, error } = await supabase
-    .from('documents')
-    .select('id, employee_id')
-    .in('id', attachmentIds);
-  if (error) return { ok: false, error: 'Не удалось проверить вложения', status: 500 };
-  const owned = (docs || []).filter((d) => Number(d.employee_id) === Number(employeeId));
-  if (owned.length !== attachmentIds.length) {
-    return { ok: false, error: 'Файл-вложение не принадлежит этому сотруднику', status: 400 };
-  }
-  const links = attachmentIds.map((documentId) => ({
-    document_id: documentId,
-    entity_type: 'attendance_adjustment',
-    entity_id: String(adjustmentId),
-    purpose: 'attendance_correction',
-  }));
-  const { error: linkErr } = await supabase
-    .from('document_links')
-    .upsert(links, { onConflict: 'document_id,entity_type,entity_id,purpose' });
-  if (linkErr) {
-    console.error('attendance_adjustment.link error:', linkErr);
-    return { ok: false, error: 'Не удалось привязать вложение', status: 500 };
-  }
-  return { ok: true };
-}
+  workDate: string,
+): Promise<'auto_approved' | 'pending'> {
+  const { data: employee, error } = await supabase
+    .from('employees')
+    .select('id, work_category')
+    .eq('id', employeeId)
+    .maybeSingle();
+  if (error || !employee) return 'auto_approved';
 
-async function hasAttendanceAdjustmentAttachment(adjustmentId: number): Promise<boolean> {
-  const { count, error } = await supabase
-    .from('document_links')
-    .select('*', { count: 'exact', head: true })
-    .eq('entity_type', 'attendance_adjustment')
-    .eq('entity_id', String(adjustmentId));
-  if (error) {
-    console.error('attendance_adjustment.has_attachment error:', error);
-    return false;
-  }
-  return (count ?? 0) > 0;
+  const schedules = await resolveSchedulesForPeriod(
+    [{
+      id: Number(employee.id),
+      work_category: (employee.work_category as WorkCategory | null) ?? null,
+    }],
+    workDate,
+    workDate,
+  );
+  const schedule = schedules.get(employeeId)?.get(workDate);
+  if (!schedule) return 'auto_approved';
+
+  const dateObj = new Date(`${workDate}T00:00:00`);
+  const monthCalendar = await loadCalendarMonth(dateObj.getFullYear(), dateObj.getMonth() + 1);
+  return isWorkingDay(schedule, dateObj, monthCalendar) ? 'auto_approved' : 'pending';
 }
 
 const MANAGED_TIMESHEET_PAGE_KEYS = ['/timesheet', '/timesheet-hr'] as const;
@@ -747,11 +731,25 @@ export const timesheetController = {
         return res.json(emptyResponse);
       }
 
-      const departmentEmployeeIds = hasDeptFilter
+      // При фильтре по конкретному сотруднику доступ уже проверен в canAccessEmployeeForTimesheetPeriod;
+      // дополнительный AND по авто-резолвнутому department_id ломает кейс «руководитель ведёт несколько отделов,
+      // сотрудник числится не в первом».
+      const shouldApplyDeptFilter = hasDeptFilter && !hasEmployeeFilter;
+      const departmentEmployeeIds = shouldApplyDeptFilter
         ? await listEmployeeIdsAssignedToDepartmentPeriod(department_id as string, startDate, endDate)
         : [];
-      if (hasDeptFilter && departmentEmployeeIds.length === 0) {
+      if (shouldApplyDeptFilter && departmentEmployeeIds.length === 0) {
         return res.json(emptyResponse);
+      }
+
+      // Для approvals при запросе конкретного сотрудника берём его фактический отдел в managed-поддереве,
+      // иначе approval_locked_dates прилетят от чужого отдела.
+      let effectiveApprovalDeptId: string | null = department_id ?? null;
+      if (hasEmployeeFilter && scope === 'department') {
+        effectiveApprovalDeptId =
+          (await resolveEmployeeManagedDepartment(req, requestedEmployeeId as number, endDate))
+          ?? department_id
+          ?? null;
       }
 
       let empQuery = supabase
@@ -762,7 +760,7 @@ export const timesheetController = {
         .eq('excluded_from_timesheet', false)
         .order('full_name');
 
-      if (hasDeptFilter) {
+      if (shouldApplyDeptFilter) {
         empQuery = empQuery.in('id', departmentEmployeeIds);
       }
       if (hasEmployeeFilter) {
@@ -773,6 +771,22 @@ export const timesheetController = {
 
       const { data: employees, error: empError } = await empQuery;
       if (empError) throw empError;
+
+      // [DEBUG] временный лог — удалю после починки
+      console.log('[DEBUG timesheet.getAll]', {
+        scope,
+        is_admin: req.user.is_admin,
+        user_employee_id: req.user.employee_id,
+        requestedEmployeeId,
+        requestedDepartmentId,
+        resolved_department_id: department_id,
+        hasDeptFilter,
+        hasEmployeeFilter,
+        shouldApplyDeptFilter,
+        departmentEmployeeIds_len: departmentEmployeeIds.length,
+        employees_returned: (employees || []).length,
+        employee_ids_returned: (employees || []).map(e => e.id),
+      });
 
       const employeeIds = (employees || []).map(e => Number(e.id)).filter(Number.isFinite);
 
@@ -889,11 +903,11 @@ export const timesheetController = {
       // Для scope=department они дают список заблокированных дат (руководитель не может редактировать submitted/approved/returned).
       let departmentApprovals: Array<{ id: number; start_date: string; end_date: string; status: TimesheetApprovalStatus }> = [];
       let approvalLockedDates: string[] = [];
-      if (hasDeptFilter) {
+      if (effectiveApprovalDeptId) {
         const { data: approvalsRows, error: approvalsErr } = await supabase
           .from('timesheet_approvals')
           .select('id, start_date, end_date, status')
-          .eq('department_id', department_id as string)
+          .eq('department_id', effectiveApprovalDeptId)
           .lte('start_date', endDate)
           .gte('end_date', startDate)
           .order('start_date', { ascending: true });
@@ -906,7 +920,7 @@ export const timesheetController = {
         }));
         if (scope === 'department') {
           approvalLockedDates = await loadApprovalLockedDatesForDepartment(
-            department_id as string,
+            effectiveApprovalDeptId,
             startDate,
             endDate,
           );
@@ -966,15 +980,13 @@ export const timesheetController = {
           error: `Период ${approvalLock.start_date} – ${approvalLock.end_date} уже ${approvalLock.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
         });
       }
-      const attachmentIds = parsed.attachments ?? [];
-      if (attachmentIds.length === 0) {
-        return res.status(400).json({ success: false, error: 'Прикрепите файл-подтверждение к корректировке' });
-      }
       const plannedHours = (await resolvePlannedHoursByItems([{ employee_id: parsed.employee_id, work_date: parsed.work_date }]))
         .get(`${parsed.employee_id}_${parsed.work_date}`) ?? null;
       const normalizedHours = parsed.status === 'remote'
         ? (plannedHours ?? 8)
         : (clampInputHoursForScope(scope, parsed.hours_worked ?? null, plannedHours) ?? null);
+
+      const approvalStatus = await resolveAdjustmentApprovalStatus(parsed.employee_id, parsed.work_date);
 
 	      const raw = await upsertAttendanceAdjustment({
 	        employee_id: parsed.employee_id,
@@ -985,12 +997,8 @@ export const timesheetController = {
 	        source_id: 'manual',
 	        reason: parsed.notes ?? null,
 	        created_by: req.user.id,
+          approval_status: approvalStatus,
 	      });
-
-        const linkResult = await validateAndLinkCorrectionAttachments(attachmentIds, parsed.employee_id, Number(raw.id));
-        if (!linkResult.ok) {
-          return res.status(linkResult.status).json({ success: false, error: linkResult.error });
-        }
 
 	      const data = {
 	        id: Number(raw.id),
@@ -1078,13 +1086,10 @@ export const timesheetController = {
           ? (plannedHours ?? 8)
           : clampInputHoursForScope(scope, parsed.hours_worked, plannedHours);
 
-        const attachmentIds = parsed.attachments ?? [];
-        if (attachmentIds.length === 0) {
-          const hasExisting = await hasAttendanceAdjustmentAttachment(id);
-          if (!hasExisting) {
-            return res.status(400).json({ success: false, error: 'Прикрепите файл-подтверждение к корректировке' });
-          }
-        }
+        const approvalStatus = await resolveAdjustmentApprovalStatus(
+          Number(existing.employee_id),
+          String(existing.work_date),
+        );
 
 	      const updated = await updateAttendanceAdjustmentById(id, {
 	        ...(parsed.status ? { status: parsed.status } : {}),
@@ -1093,15 +1098,9 @@ export const timesheetController = {
             : (normalizedHours !== undefined ? { hours_override: normalizedHours } : {})),
 	        ...(parsed.notes !== undefined ? { reason: parsed.notes ?? null } : {}),
 	        updated_by: req.user.id,
+          approval_status: approvalStatus,
 	      });
 	      if (!updated) return res.status(404).json({ success: false, error: 'Запись не найдена' });
-
-        if (attachmentIds.length > 0) {
-          const linkResult = await validateAndLinkCorrectionAttachments(attachmentIds, Number(updated.employee_id), id);
-          if (!linkResult.ok) {
-            return res.status(linkResult.status).json({ success: false, error: linkResult.error });
-          }
-        }
 
         const actualHours = typeof updated.hours_override === 'number'
           ? updated.hours_override

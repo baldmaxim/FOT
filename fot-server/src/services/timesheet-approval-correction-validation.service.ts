@@ -5,7 +5,7 @@ import type { ITimesheetDateRange } from './timesheet-range.service.js';
 
 const ATTACHMENT_REQUIRED_LEAVE_TYPES = ['remote', 'vacation'] as const;
 
-export type MissingDayKind = 'adjustment' | 'leave_request' | 'weekend_no_correction';
+export type MissingDayKind = 'pending_correction' | 'leave_request' | 'weekend_no_correction';
 
 export interface IMissingDay {
   date: string;
@@ -77,11 +77,17 @@ async function collectWeekendDates(startDate: string, endDate: string): Promise<
   return weekends;
 }
 
-interface IAdjustmentRow {
+interface IPendingAdjustmentRow {
   id: number;
   employee_id: number;
   work_date: string;
   status: string;
+  approval_status: string;
+}
+
+interface IAdjustmentDateRow {
+  employee_id: number;
+  work_date: string;
 }
 
 interface ILeaveRow {
@@ -93,6 +99,12 @@ interface ILeaveRow {
   correction_date: string | null;
 }
 
+/**
+ * Подача табеля блокируется в трёх случаях:
+ * 1) есть pending-корректировки (выходные дни, ждут согласования админом);
+ * 2) есть approved leave_requests типа remote/vacation без файла-подтверждения;
+ * 3) есть работа в выходной по СКУД, для которой не создана корректировка.
+ */
 export async function validateCorrectionAttachments(
   departmentId: string,
   range: ITimesheetDateRange,
@@ -108,12 +120,12 @@ export async function validateCorrectionAttachments(
 
   const adjRes = await supabase
     .from('attendance_adjustments')
-    .select('id, employee_id, work_date, status')
+    .select('id, employee_id, work_date, status, approval_status')
     .in('employee_id', employeeIds)
     .gte('work_date', range.startDate)
     .lte('work_date', range.endDate);
   if (adjRes.error) throw adjRes.error;
-  const adjustments = (adjRes.data || []) as IAdjustmentRow[];
+  const adjustments = (adjRes.data || []) as IPendingAdjustmentRow[];
 
   const leaveRes = await supabase
     .from('leave_requests')
@@ -126,23 +138,8 @@ export async function validateCorrectionAttachments(
   if (leaveRes.error) throw leaveRes.error;
   const leaves = (leaveRes.data || []) as ILeaveRow[];
 
-  const adjustmentIdSet = new Set(adjustments.map(a => String(a.id)));
   const leaveIdSet = new Set(leaves.map(l => String(l.id)));
-
-  const linkedAdjustmentIds = new Set<string>();
   const linkedLeaveIds = new Set<string>();
-
-  if (adjustmentIdSet.size > 0) {
-    const linkRes = await supabase
-      .from('document_links')
-      .select('entity_id')
-      .eq('entity_type', 'attendance_adjustment')
-      .in('entity_id', [...adjustmentIdSet]);
-    if (linkRes.error) throw linkRes.error;
-    for (const row of linkRes.data || []) {
-      linkedAdjustmentIds.add(String(row.entity_id));
-    }
-  }
 
   if (leaveIdSet.size > 0) {
     const linkRes = await supabase
@@ -158,7 +155,7 @@ export async function validateCorrectionAttachments(
 
   const weekendDates = await collectWeekendDates(range.startDate, range.endDate);
   const adjustmentByEmployeeDate = new Set<string>();
-  for (const adj of adjustments) {
+  for (const adj of adjustments as IAdjustmentDateRow[]) {
     adjustmentByEmployeeDate.add(`${adj.employee_id}|${adj.work_date}`);
   }
 
@@ -195,14 +192,14 @@ export async function validateCorrectionAttachments(
   const missing: IMissingDay[] = [];
 
   for (const adj of adjustments) {
-    if (linkedAdjustmentIds.has(String(adj.id))) continue;
+    if (adj.approval_status !== 'pending') continue;
     const statusLabel = STATUS_LABELS_RU[adj.status] ?? adj.status;
     missing.push({
       date: adj.work_date,
       employee_id: adj.employee_id,
       employee_name: nameMap.get(adj.employee_id) ?? null,
-      kind: 'adjustment',
-      reason: `Корректировка «${statusLabel}» без файла-подтверждения`,
+      kind: 'pending_correction',
+      reason: `Корректировка «${statusLabel}» в выходной не согласована администратором`,
     });
   }
 
@@ -226,7 +223,7 @@ export async function validateCorrectionAttachments(
       employee_id: row.employee_id,
       employee_name: nameMap.get(row.employee_id) ?? null,
       kind: 'weekend_no_correction',
-      reason: 'Работа в выходной без корректировки — создайте корректировку с файлом-подтверждением',
+      reason: 'Работа в выходной без корректировки — создайте корректировку',
     });
   }
 
