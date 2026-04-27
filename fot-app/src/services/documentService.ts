@@ -1,6 +1,6 @@
 import { apiClient } from '../api/client';
 
-export type DocumentCategory = 'certificate' | 'scan' | 'approval' | 'payslip' | 'patent_check' | 'other';
+export type DocumentCategory = 'certificate' | 'scan' | 'approval' | 'payslip' | 'patent_check' | 'other' | 'leave_request_attachment' | 'attendance_correction';
 
 export interface IDocument {
   id: number;
@@ -22,6 +22,8 @@ export const CATEGORY_LABELS: Record<DocumentCategory, string> = {
   payslip: 'Расчётный листок',
   patent_check: 'Чек от патента',
   other: 'Другое',
+  leave_request_attachment: 'Вложение к заявлению',
+  attendance_correction: 'Подтверждение корректировки табеля',
 };
 
 interface ApiResponse<T> {
@@ -75,6 +77,11 @@ export const documentService = {
 
   getByLeaveRequest: async (leaveRequestId: number) => {
     const res = await apiClient.get<ApiResponse<IDocument[]>>(`/documents/leave-request/${leaveRequestId}`);
+    return res.data;
+  },
+
+  getByAttendanceAdjustment: async (adjustmentId: number) => {
+    const res = await apiClient.get<ApiResponse<IDocument[]>>(`/documents/attendance-adjustment/${adjustmentId}`);
     return res.data;
   },
 

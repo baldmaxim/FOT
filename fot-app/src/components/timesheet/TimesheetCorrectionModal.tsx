@@ -1,9 +1,10 @@
 import { type FC, type ReactNode, useState, useEffect, useCallback, useRef } from 'react';
-import { X, LogIn, LogOut, Timer } from 'lucide-react';
+import { X, LogIn, LogOut, Timer, Paperclip } from 'lucide-react';
 import type { TimesheetEntry, TimesheetStatus, SkudEvent } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
 import { skudService } from '../../services/skudService';
+import { documentService, type IDocument } from '../../services/documentService';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import {
   buildDisplayItems,
@@ -17,7 +18,7 @@ import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 interface ICorrectionModalProps {
   open: boolean;
   onClose: () => void;
-  onSave: (status: TimesheetStatus, hours: number | null, notes: string) => void;
+  onSave: (status: TimesheetStatus, hours: number | null, notes: string, attachments?: number[]) => void;
   onDelete?: () => void;
   initialStatus?: TimesheetStatus;
   initialHours?: number | null;
@@ -43,6 +44,8 @@ interface ICorrectionModalProps {
     corrected_at?: string | null;
     corrected_by_name?: string | null;
   } | null;
+  /** id adjustment-а для подгрузки уже прикреплённых вложений (только при is_correction=true). */
+  correctionId?: number | null;
 }
 
 interface ITypeOption {
@@ -210,7 +213,7 @@ const EventsTab: FC<{
 
 const CorrectionTab: FC<{
   onClose: () => void;
-  onSave: (status: TimesheetStatus, hours: number | null, notes: string) => void;
+  onSave: (status: TimesheetStatus, hours: number | null, notes: string, attachments?: number[]) => void;
   onDelete?: () => void;
   initialStatus: TimesheetStatus;
   initialHours: number;
@@ -224,6 +227,8 @@ const CorrectionTab: FC<{
     corrected_at?: string | null;
     corrected_by_name?: string | null;
   } | null;
+  employeeId?: number;
+  correctionId?: number | null;
 }> = ({
   onClose,
   onSave,
@@ -236,25 +241,69 @@ const CorrectionTab: FC<{
   allowedStatuses,
   maxHours,
   correctionInfo,
+  employeeId,
+  correctionId,
 }) => {
   const hasExistingCorrection = Boolean(correctionInfo?.is_correction);
   const [mode, setMode] = useState<'view' | 'edit'>(hasExistingCorrection ? 'view' : 'edit');
   const [selectedStatus, setSelectedStatus] = useState<TimesheetStatus>(initialStatus);
   const [hours, setHours] = useState<number>(initialHours);
   const [notes, setNotes] = useState(initialNotes || '');
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
+  const [existingAttachments, setExistingAttachments] = useState<IDocument[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const statusOptions = TYPE_OPTIONS.filter(option => !allowedStatuses || allowedStatuses.includes(option.status));
   const showStatusPicker = statusOptions.length > 1;
 
-  const trimmedNotes = notes.trim();
-  const canSave = trimmedNotes.length > 0;
+  useEffect(() => {
+    if (correctionId && hasExistingCorrection) {
+      documentService.getByAttendanceAdjustment(correctionId)
+        .then(docs => setExistingAttachments(docs || []))
+        .catch(err => console.warn('load attachments error:', err));
+    }
+  }, [correctionId, hasExistingCorrection]);
 
-  const handleSave = () => {
+  const trimmedNotes = notes.trim();
+  const hasAttachment = attachmentFile != null || existingAttachments.length > 0;
+  const canSave = trimmedNotes.length > 0 && hasAttachment && !uploading;
+
+  const handleSave = async () => {
     if (!canSave) return;
+    setError(null);
     const needsHours = HOURS_EDITABLE_STATUSES.has(selectedStatus);
     const normalizedHours = needsHours && maxHours != null
       ? Math.max(0, Math.min(hours, maxHours))
       : hours;
-    onSave(selectedStatus, needsHours ? normalizedHours : null, trimmedNotes);
+    let attachmentIds: number[] | undefined;
+    if (attachmentFile) {
+      if (!employeeId) {
+        setError('Не удалось определить сотрудника');
+        return;
+      }
+      setUploading(true);
+      try {
+        const uploaded = await documentService.uploadFile(attachmentFile, employeeId, 'attendance_correction');
+        attachmentIds = [uploaded.id];
+      } catch (err) {
+        console.error('upload attachment error:', err);
+        setError(err instanceof Error ? err.message : 'Ошибка загрузки файла');
+        setUploading(false);
+        return;
+      }
+      setUploading(false);
+    }
+    onSave(selectedStatus, needsHours ? normalizedHours : null, trimmedNotes, attachmentIds);
+  };
+
+  const handleDownloadExisting = async (id: number) => {
+    try {
+      const { download_url } = await documentService.getDownloadUrl(id);
+      window.open(download_url, '_blank', 'noopener');
+    } catch (err) {
+      console.warn('download attachment error:', err);
+    }
   };
 
   if (mode === 'view' && hasExistingCorrection) {
@@ -286,6 +335,21 @@ const CorrectionTab: FC<{
               </div>
             </li>
           </ul>
+          {existingAttachments.length > 0 && (
+            <div className="ts-correction-attachments">
+              <div className="ts-correction-attachments-title">Прикреплённые файлы:</div>
+              {existingAttachments.map(doc => (
+                <button
+                  key={doc.id}
+                  type="button"
+                  className="ts-correction-attachment-link"
+                  onClick={() => handleDownloadExisting(doc.id)}
+                >
+                  <Paperclip size={14} /> {doc.file_name}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <div className="ts-modal-footer">
           <button className="ts-btn" onClick={onClose} type="button">Закрыть</button>
@@ -382,16 +446,44 @@ const CorrectionTab: FC<{
             placeholder="Причина корректировки..."
             required
           />
-          {!canSave && (
+          {trimmedNotes.length === 0 && (
             <span className="ts-form-hint ts-form-hint--error">Комментарий обязателен для сохранения</span>
           )}
         </div>
+
+        <div className="ts-form-group">
+          <label className="ts-form-label">
+            Файл-подтверждение <span className="ts-form-required">*</span>
+          </label>
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="ts-form-input"
+            onChange={e => setAttachmentFile(e.target.files?.[0] || null)}
+            accept="image/*,application/pdf"
+          />
+          {attachmentFile && (
+            <div className="ts-correction-attachment-preview">
+              <Paperclip size={14} /> {attachmentFile.name}
+            </div>
+          )}
+          {!attachmentFile && existingAttachments.length > 0 && (
+            <div className="ts-form-hint">
+              Уже прикреплено: {existingAttachments.map(d => d.file_name).join(', ')}. Можно сохранить без замены.
+            </div>
+          )}
+          {!hasAttachment && (
+            <span className="ts-form-hint ts-form-hint--error">Прикрепите файл-подтверждение</span>
+          )}
+        </div>
+        {error && <div className="ts-form-hint ts-form-hint--error">{error}</div>}
       </div>
       <div className="ts-modal-footer">
         <button
           className="ts-btn"
           onClick={() => (hasExistingCorrection ? setMode('view') : onClose())}
           type="button"
+          disabled={uploading}
         >
           Отмена
         </button>
@@ -400,9 +492,9 @@ const CorrectionTab: FC<{
           onClick={handleSave}
           type="button"
           disabled={!canSave}
-          title={canSave ? undefined : 'Укажите комментарий перед сохранением'}
+          title={canSave ? undefined : 'Заполните комментарий и прикрепите файл'}
         >
-          {confirmLabel || 'Сохранить'}
+          {uploading ? 'Загрузка…' : (confirmLabel || 'Сохранить')}
         </button>
       </div>
     </>
@@ -438,6 +530,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   initialNotes,
   deleteLabel,
   maxHours,
+  correctionId,
 }) => {
   const showEventsTab = !hideSkudTab;
   const showCorrectionTab = !hideCorrectionTab;
@@ -540,6 +633,8 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           allowedStatuses={allowedStatuses}
           maxHours={maxHours}
           correctionInfo={correctionInfo}
+          employeeId={employeeId}
+          correctionId={correctionId}
         />
       ) : null}
     </div>

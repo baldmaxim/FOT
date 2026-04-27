@@ -64,9 +64,11 @@ async function loadEmployeeIdsByDepartments(
 }
 
 /** Создание заявления (worker+) */
+const ATTACHMENT_REQUIRED_TYPES = new Set(['remote', 'time_correction']);
+
 const create = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { request_type, start_date, end_date, reason, correction_date, correction_status, correction_hours } = req.body;
+    const { request_type, start_date, end_date, reason, correction_date, correction_status, correction_hours, attachments } = req.body;
     if (!request_type || !start_date || !end_date) {
       res.status(400).json({ success: false, error: 'request_type, start_date, end_date обязательны' });
       return;
@@ -84,10 +86,32 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       }
     }
 
+    const attachmentIds = Array.isArray(attachments)
+      ? attachments.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)
+      : [];
+
+    if (ATTACHMENT_REQUIRED_TYPES.has(request_type) && attachmentIds.length === 0) {
+      res.status(400).json({ success: false, error: 'Прикрепите файл-подтверждение к заявлению' });
+      return;
+    }
+
     const employeeId = req.user.employee_id;
     if (!employeeId) {
       res.status(400).json({ success: false, error: 'У пользователя нет привязки к сотруднику' });
       return;
+    }
+
+    if (attachmentIds.length > 0) {
+      const { data: docs, error: docsErr } = await supabase
+        .from('documents')
+        .select('id, employee_id')
+        .in('id', attachmentIds);
+      if (docsErr) throw docsErr;
+      const owned = (docs || []).filter((d) => Number(d.employee_id) === Number(employeeId));
+      if (owned.length !== attachmentIds.length) {
+        res.status(400).json({ success: false, error: 'Файл-вложение не принадлежит этому сотруднику' });
+        return;
+      }
     }
 
     const insertData: Record<string, unknown> = {
@@ -111,6 +135,26 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       .single();
 
     if (error) throw error;
+
+    if (attachmentIds.length > 0) {
+      const links = attachmentIds.map((documentId) => ({
+        document_id: documentId,
+        entity_type: 'leave_request',
+        entity_id: String(data.id),
+        purpose: 'leave_request_attachment',
+      }));
+      const { error: linkError } = await supabase
+        .from('document_links')
+        .upsert(links, { onConflict: 'document_id,entity_type,entity_id,purpose' });
+      if (linkError) {
+        console.error('leave-requests.create: link attachments error', linkError);
+      }
+      await supabase
+        .from('documents')
+        .update({ leave_request_id: data.id })
+        .in('id', attachmentIds)
+        .is('leave_request_id', null);
+    }
 
     // Уведомляем руководителя отдела и админов (fire-and-forget)
     const label = LEAVE_TYPE_LABELS[request_type] || request_type;

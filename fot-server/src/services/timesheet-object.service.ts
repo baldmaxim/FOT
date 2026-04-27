@@ -77,7 +77,7 @@ interface IAggregatedObjectEntry {
 
 const normalizeAccessPoint = (value: string | null | undefined): string | null => {
   if (!value) return null;
-  const normalized = value.trim();
+  const normalized = value.trim().replace(/\s+/g, ' ');
   return normalized || null;
 };
 
@@ -131,9 +131,12 @@ const buildRawFallbackSummary = (
 
   for (const event of summaryEvents) {
     if (event.direction === 'entry') {
-      if (openEntrySeconds === null) {
-        openEntrySeconds = timeToSeconds(event.event_time);
+      const seconds = timeToSeconds(event.event_time);
+      // Повторная entry без exit: закрываем предыдущий открытый интервал на момент новой entry.
+      if (openEntrySeconds !== null) {
+        totalSeconds += Math.max(0, seconds - openEntrySeconds);
       }
+      openEntrySeconds = seconds;
       continue;
     }
 
@@ -208,9 +211,9 @@ const buildObjectIntervals = ({
 
     const entryPoint = normalizeAccessPoint(entryEvent.access_point);
     const exitPoint = normalizeAccessPoint(exitEvent?.access_point);
-    const objectId = [entryPoint, exitPoint]
-      .map(point => (point ? accessPointToObjectId.get(point) || null : null))
-      .find((value): value is string => Boolean(value)) || null;
+    const entryObjectId = entryPoint ? accessPointToObjectId.get(entryPoint) || null : null;
+    const exitObjectId = exitPoint ? accessPointToObjectId.get(exitPoint) || null : null;
+    const objectId = entryObjectId || exitObjectId || null;
     const objectKey = objectId || UNKNOWN_OBJECT_KEY;
     const objectName = objectId
       ? objectNameById.get(objectId) || UNKNOWN_OBJECT_NAME
@@ -226,9 +229,13 @@ const buildObjectIntervals = ({
 
   for (const event of summaryEvents) {
     if (event.direction === 'entry') {
-      if (openEntry === null) {
-        openEntry = event;
+      // Если уже есть открытая entry без exit — закрываем её на момент новой entry,
+      // иначе третья+ точка теряется (последовательность entry1-entry2-exit3 раньше отдавала
+      // только пару entry1-exit3, а entry2 игнорировалась).
+      if (openEntry) {
+        pushInterval(openEntry, event, event.event_time);
       }
+      openEntry = event;
       continue;
     }
 

@@ -2,7 +2,7 @@ import { Fragment, type FC, type MouseEvent as ReactMouseEvent, useCallback, use
 import { ChevronDown, ChevronUp, Menu, UserMinus } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee, TimesheetObjectEntry, TimesheetStatus } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
-import type { IProductionCalendarMonth } from '../../types/timesheet';
+import type { IProductionCalendarMonth, IEmployeeStats } from '../../types/timesheet';
 import {
   getDaysInMonth,
   isWeekend,
@@ -23,6 +23,7 @@ interface ITimesheetGridProps {
   employees: TimesheetEmployee[];
   entries: TimesheetEntry[];
   objectEntries: TimesheetObjectEntry[];
+  employeeStats?: IEmployeeStats[];
   year: number;
   month: number;
   viewMode?: TimesheetViewMode;
@@ -115,6 +116,19 @@ const formatHM = (decimal: number): string => {
   const m = Math.round((decimal - h) * 60);
   if (m === 0) return `${h}ч`;
   return `${h}ч${m}м`;
+};
+
+const formatDeviationHours = (value: number): string => {
+  const abs = Math.abs(value);
+  const rounded = Math.round(abs * 10) / 10;
+  const sign = value > 0.05 ? '+' : value < -0.05 ? '−' : '';
+  return `${sign}${rounded.toFixed(1)} ч`;
+};
+
+const getDeviationCellClass = (deviation: number): string => {
+  if (deviation > 0.05) return 'ts-day--deviation-undertime';
+  if (deviation < -0.05) return 'ts-day--deviation-overtime';
+  return 'ts-day--deviation-zero';
 };
 
 const formatCellHM = (decimal: number): string => {
@@ -267,6 +281,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   employees,
   entries,
   objectEntries,
+  employeeStats = [],
   year,
   month,
   viewMode = 'employees',
@@ -289,6 +304,14 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
 }) => {
   const daysCount = getDaysInMonth(year, month);
   const days = visibleDays || Array.from({ length: daysCount }, (_, i) => i + 1);
+  const employeeStatsMap = useMemo(() => {
+    const map = new Map<number, IEmployeeStats>();
+    for (const stat of employeeStats) {
+      map.set(stat.employee_id, stat);
+    }
+    return map;
+  }, [employeeStats]);
+  const showDeviationColumn = viewMode === 'employees';
   const [expandedEmployeeIds, setExpandedEmployeeIds] = useState<Set<number>>(new Set());
   const [bulkDragAnchor, setBulkDragAnchor] = useState<IBulkCellCoord | null>(null);
   const [bulkDragBaseKeys, setBulkDragBaseKeys] = useState<Set<string>>(new Set());
@@ -804,6 +827,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
             const expanded = activeExpandedEmployeeIds.has(row.employee.id);
             const employeeIndex = index + 1;
             const displayName = formatTimesheetEmployeeName(row.employee.full_name);
+            const stat = employeeStatsMap.get(row.employee.id);
 
             return (
               <article
@@ -814,6 +838,14 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   <div className="ts-mobile-card-name-row">
                     <span className="ts-employee-index">{employeeIndex}.</span>
                     <div className="ts-mobile-card-name">{displayName}</div>
+                    {stat && (
+                      <span
+                        className={`ts-mobile-deviation ${getDeviationCellClass(stat.deviation_hours)}`}
+                        title={`План ${stat.norm_hours.toFixed(1)} ч, факт ${stat.fact_hours.toFixed(1)} ч`}
+                      >
+                        {formatDeviationHours(stat.deviation_hours)}
+                      </span>
+                    )}
                     <button
                       type="button"
                       className="ts-mobile-chip-btn"
@@ -1087,6 +1119,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   </th>
                 );
               })}
+              {showDeviationColumn && (
+                <th className="ts-col-deviation-sticky" title="План минус факт. Положительное — недоработка, отрицательное — переработка.">
+                  Откл.
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -1180,6 +1217,20 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         </td>
                       );
                     })}
+                    {showDeviationColumn && (() => {
+                      const stat = employeeStatsMap.get(row.employee.id);
+                      if (!stat) {
+                        return <td className="ts-col-deviation-sticky ts-day--deviation-zero">—</td>;
+                      }
+                      const dev = stat.deviation_hours;
+                      const cls = getDeviationCellClass(dev);
+                      const tip = `План ${stat.norm_hours.toFixed(1)} ч, факт ${stat.fact_hours.toFixed(1)} ч`;
+                      return (
+                        <td className={`ts-col-deviation-sticky ${cls}`} title={tip}>
+                          {formatDeviationHours(dev)}
+                        </td>
+                      );
+                    })()}
                   </tr>
                   {expanded && row.hasExpandableObjects && row.objectRows.map(objectRow => (
                     <tr key={`${row.employee.id}_${objectRow.object_key}`} className="ts-object-row">
@@ -1211,6 +1262,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           </td>
                         );
                       })}
+                      {showDeviationColumn && <td className="ts-col-deviation-sticky" />}
                     </tr>
                   ))}
                 </Fragment>
@@ -1218,7 +1270,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
             })}
             {employeeRows.length === 0 && (
               <tr>
-                <td colSpan={days.length + 1} className="ts-loading">
+                <td colSpan={days.length + 1 + (showDeviationColumn ? 1 : 0)} className="ts-loading">
                   Нет сотрудников для отображения
                 </td>
               </tr>

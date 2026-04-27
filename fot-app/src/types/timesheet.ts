@@ -86,6 +86,13 @@ export interface TimesheetStats {
   deviations: { late: number; absent: number; sick: number };
 }
 
+export interface IEmployeeStats {
+  employee_id: number;
+  norm_hours: number;
+  fact_hours: number;
+  deviation_hours: number;
+}
+
 export interface TimesheetEmployee {
   id: number;
   full_name: string;
@@ -116,6 +123,7 @@ export interface TimesheetResponse {
   entries: TimesheetEntry[];
   object_entries: TimesheetObjectEntry[];
   stats: TimesheetStats;
+  employee_stats?: IEmployeeStats[];
   schedules?: Record<number, IResolvedSchedule>;
   daily_schedules?: Record<number, Record<string, IResolvedSchedule>>;
   calendar?: IProductionCalendarMonth | null;

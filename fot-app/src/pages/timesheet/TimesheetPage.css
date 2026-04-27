@@ -1631,6 +1631,91 @@
   z-index: 60;
 }
 
+/* Sticky deviation column (rightmost) */
+.ts-table th.ts-col-deviation-sticky,
+.ts-table td.ts-col-deviation-sticky {
+  position: sticky;
+  right: 0;
+  z-index: 15;
+  background: var(--surface);
+  text-align: center;
+  font-weight: 600;
+  white-space: nowrap;
+  min-width: 64px;
+  box-shadow: -4px 0 8px -4px rgba(0, 0, 0, 0.15);
+}
+.ts-table thead th.ts-col-deviation-sticky {
+  z-index: 25;
+  background: var(--bg-secondary);
+}
+.ts-table tbody tr:hover td.ts-col-deviation-sticky {
+  background: var(--bg-hover, var(--surface));
+}
+.ts-day--deviation-undertime {
+  color: var(--error, #ef4444);
+}
+.ts-day--deviation-overtime {
+  color: var(--success, #16a34a);
+}
+.ts-day--deviation-zero {
+  color: var(--text-tertiary, var(--text-secondary));
+}
+.ts-mobile-deviation {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+}
+.ts-correction-attachments {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ts-correction-attachments-title {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.ts-correction-attachment-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-tertiary);
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary);
+  text-align: left;
+  word-break: break-all;
+}
+.ts-correction-attachment-link:hover {
+  background: var(--bg-secondary);
+}
+.ts-correction-attachment-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 4px 10px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+@media (max-width: 480px) {
+  .ts-table th.ts-col-deviation-sticky,
+  .ts-table td.ts-col-deviation-sticky {
+    min-width: 52px;
+    font-size: 11px;
+  }
+}
+
 /* ===== Вкладка «Корректировки» ===== */
 .ts-corrections {
   display: flex;
@@ -1817,6 +1902,22 @@
 }
 .ts-refresh-spinning {
   animation: ts-refresh-rotate 1s linear infinite;
+}
+.ts-refresh-status {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  margin-left: 4px;
+}
+.ts-refresh-status--error {
+  color: var(--error, #ef4444);
+}
+@media (max-width: 600px) {
+  .ts-refresh-status {
+    font-size: 11px;
+  }
 }
 
 /* ===== Модалка подачи табеля ===== */

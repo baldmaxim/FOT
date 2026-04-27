@@ -54,6 +54,7 @@ export const leaveRequestService = {
     correction_date?: string;
     correction_status?: string;
     correction_hours?: number;
+    attachments?: number[];
   }) => {
     const res = await apiClient.post<ApiResponse<ILeaveRequest>>('/leave-requests', data);
     return res.data;

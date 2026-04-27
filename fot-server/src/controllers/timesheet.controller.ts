@@ -64,18 +64,22 @@ import { syncEventsLogic } from '../services/sigur-sync-events.service.js';
 
 const validStatuses = ['work', 'vacation', 'dayoff', 'remote', 'unpaid', 'absent', 'sick', 'business_trip', 'manual'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
 
+const attachmentsSchema = z.array(z.number().int().positive()).optional();
+
 const createEntrySchema = z.object({
   employee_id: z.number().int().positive(),
   work_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   status: z.enum(validStatuses),
   hours_worked: z.number().min(0).max(24).nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
+  attachments: attachmentsSchema,
 });
 
 const updateEntrySchema = z.object({
   status: z.enum(validStatuses).optional(),
   hours_worked: z.number().min(0).max(24).nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
+  attachments: attachmentsSchema,
 });
 
 const bulkCorrectionSchema = z.object({
@@ -117,6 +121,50 @@ const teamManagementMutationSchema = z.object({
 const teamManagementAddEmployeeSchema = teamManagementMutationSchema.extend({
   effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
+
+async function validateAndLinkCorrectionAttachments(
+  attachmentIds: number[],
+  employeeId: number,
+  adjustmentId: number,
+): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
+  if (attachmentIds.length === 0) return { ok: true };
+  const { data: docs, error } = await supabase
+    .from('documents')
+    .select('id, employee_id')
+    .in('id', attachmentIds);
+  if (error) return { ok: false, error: 'Не удалось проверить вложения', status: 500 };
+  const owned = (docs || []).filter((d) => Number(d.employee_id) === Number(employeeId));
+  if (owned.length !== attachmentIds.length) {
+    return { ok: false, error: 'Файл-вложение не принадлежит этому сотруднику', status: 400 };
+  }
+  const links = attachmentIds.map((documentId) => ({
+    document_id: documentId,
+    entity_type: 'attendance_adjustment',
+    entity_id: String(adjustmentId),
+    purpose: 'attendance_correction',
+  }));
+  const { error: linkErr } = await supabase
+    .from('document_links')
+    .upsert(links, { onConflict: 'document_id,entity_type,entity_id,purpose' });
+  if (linkErr) {
+    console.error('attendance_adjustment.link error:', linkErr);
+    return { ok: false, error: 'Не удалось привязать вложение', status: 500 };
+  }
+  return { ok: true };
+}
+
+async function hasAttendanceAdjustmentAttachment(adjustmentId: number): Promise<boolean> {
+  const { count, error } = await supabase
+    .from('document_links')
+    .select('*', { count: 'exact', head: true })
+    .eq('entity_type', 'attendance_adjustment')
+    .eq('entity_id', String(adjustmentId));
+  if (error) {
+    console.error('attendance_adjustment.has_attachment error:', error);
+    return false;
+  }
+  return (count ?? 0) > 0;
+}
 
 const MANAGED_TIMESHEET_PAGE_KEYS = ['/timesheet', '/timesheet-hr'] as const;
 const TIMESHEET_TEAM_MANAGEMENT_PAGE_KEY = '/timesheet/team-management';
@@ -774,6 +822,7 @@ export const timesheetController = {
       // Compute stats (schedule-aware)
       let normHours = 0;
       let totalWorkingDays = 0;
+      const employeeStatsMap = new Map<number, { norm_hours: number; fact_hours: number }>();
       for (const empId of employeeIds) {
         let empWorkDays = 0;
         let empNormHours = 0;
@@ -792,6 +841,7 @@ export const timesheetController = {
 
         normHours += empNormHours;
         totalWorkingDays = Math.max(totalWorkingDays, empWorkDays);
+        employeeStatsMap.set(empId, { norm_hours: empNormHours, fact_hours: 0 });
       }
 
       let actualHours = 0;
@@ -801,6 +851,8 @@ export const timesheetController = {
         const visibleHours = entry.display_hours_worked ?? entry.hours_worked;
         if (typeof visibleHours === 'number') {
           actualHours += visibleHours;
+          const empStats = employeeStatsMap.get(entry.employee_id as number);
+          if (empStats) empStats.fact_hours += visibleHours;
         }
         if (entry.status === 'absent') deviations.absent++;
         if (entry.status === 'sick') deviations.sick++;
@@ -877,6 +929,12 @@ export const timesheetController = {
             actualHours,
             deviations,
           },
+          employee_stats: [...employeeStatsMap.entries()].map(([employee_id, value]) => ({
+            employee_id,
+            norm_hours: Math.round(value.norm_hours * 100) / 100,
+            fact_hours: Math.round(value.fact_hours * 100) / 100,
+            deviation_hours: Math.round((value.norm_hours - value.fact_hours) * 100) / 100,
+          })),
           approvals: departmentApprovals,
           approval_locked_dates: approvalLockedDates,
         },
@@ -908,6 +966,10 @@ export const timesheetController = {
           error: `Период ${approvalLock.start_date} – ${approvalLock.end_date} уже ${approvalLock.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
         });
       }
+      const attachmentIds = parsed.attachments ?? [];
+      if (attachmentIds.length === 0) {
+        return res.status(400).json({ success: false, error: 'Прикрепите файл-подтверждение к корректировке' });
+      }
       const plannedHours = (await resolvePlannedHoursByItems([{ employee_id: parsed.employee_id, work_date: parsed.work_date }]))
         .get(`${parsed.employee_id}_${parsed.work_date}`) ?? null;
       const normalizedHours = parsed.status === 'remote'
@@ -924,6 +986,11 @@ export const timesheetController = {
 	        reason: parsed.notes ?? null,
 	        created_by: req.user.id,
 	      });
+
+        const linkResult = await validateAndLinkCorrectionAttachments(attachmentIds, parsed.employee_id, Number(raw.id));
+        if (!linkResult.ok) {
+          return res.status(linkResult.status).json({ success: false, error: linkResult.error });
+        }
 
 	      const data = {
 	        id: Number(raw.id),
@@ -1011,6 +1078,14 @@ export const timesheetController = {
           ? (plannedHours ?? 8)
           : clampInputHoursForScope(scope, parsed.hours_worked, plannedHours);
 
+        const attachmentIds = parsed.attachments ?? [];
+        if (attachmentIds.length === 0) {
+          const hasExisting = await hasAttendanceAdjustmentAttachment(id);
+          if (!hasExisting) {
+            return res.status(400).json({ success: false, error: 'Прикрепите файл-подтверждение к корректировке' });
+          }
+        }
+
 	      const updated = await updateAttendanceAdjustmentById(id, {
 	        ...(parsed.status ? { status: parsed.status } : {}),
 	        ...(nextStatus === 'remote'
@@ -1020,6 +1095,13 @@ export const timesheetController = {
 	        updated_by: req.user.id,
 	      });
 	      if (!updated) return res.status(404).json({ success: false, error: 'Запись не найдена' });
+
+        if (attachmentIds.length > 0) {
+          const linkResult = await validateAndLinkCorrectionAttachments(attachmentIds, Number(updated.employee_id), id);
+          if (!linkResult.ok) {
+            return res.status(linkResult.status).json({ success: false, error: linkResult.error });
+          }
+        }
 
         const actualHours = typeof updated.hours_override === 'number'
           ? updated.hours_override

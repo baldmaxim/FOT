@@ -233,7 +233,11 @@ export const TimesheetPage: FC = () => {
   const [teamManagementOpen, setTeamManagementOpen] = useState(false);
   const [teamSearch, setTeamSearch] = useState('');
   const [teamPendingEmployeeId, setTeamPendingEmployeeId] = useState<number | null>(null);
-  const [refreshInFlight, setRefreshInFlight] = useState(false);
+  const [refreshState, setRefreshState] = useState<{
+    phase: 'idle' | 'syncing' | 'invalidating' | 'error';
+    message: string;
+  }>({ phase: 'idle', message: '' });
+  const refreshInFlight = refreshState.phase === 'syncing' || refreshState.phase === 'invalidating';
 
   const deptOptions = useMemo<IFlatDepartmentOption[]>(() => {
     const allNodes = structureQuery.data?.departments ?? [];
@@ -318,6 +322,7 @@ export const TimesheetPage: FC = () => {
     [timesheetQuery.data],
   );
   const stats = timesheetQuery.data?.stats || DEFAULT_STATS;
+  const employeeStats = timesheetQuery.data?.employee_stats || [];
   const schedules = timesheetQuery.data?.schedules || EMPTY_SCHEDULES;
   const dailySchedules = timesheetQuery.data?.daily_schedules || EMPTY_DAILY_SCHEDULES;
   const calendar = timesheetQuery.data?.calendar || null;
@@ -507,12 +512,12 @@ export const TimesheetPage: FC = () => {
   }, [entryMap, year, month]);
 
   // Save correction
-  const handleSaveCorrection = useCallback(async (status: TimesheetStatus, hours: number | null, notes: string) => {
+  const handleSaveCorrection = useCallback(async (status: TimesheetStatus, hours: number | null, notes: string, attachments?: number[]) => {
     if (!modalEmployee) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
       if (modalEntry?.id) {
-        await timesheetService.update(modalEntry.id, { status, hours_worked: hours, notes });
+        await timesheetService.update(modalEntry.id, { status, hours_worked: hours, notes, attachments });
       } else {
         await timesheetService.create({
           employee_id: modalEmployee.id,
@@ -520,6 +525,7 @@ export const TimesheetPage: FC = () => {
           status,
           hours_worked: hours,
           notes,
+          attachments,
         });
       }
       closeModal();
@@ -529,10 +535,11 @@ export const TimesheetPage: FC = () => {
       ]);
     } catch (err) {
       console.error('Save correction error:', err);
+      toast.error?.(err instanceof Error ? err.message : 'Не удалось сохранить корректировку');
     }
-  }, [modalEmployee, year, month, modalDay, modalEntry, closeModal, queryClient, monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId]);
+  }, [modalEmployee, year, month, modalDay, modalEntry, closeModal, queryClient, monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId, toast]);
 
-  const handleSaveObjectCorrection = useCallback(async (_status: TimesheetStatus, hours: number | null, notes: string) => {
+  const handleSaveObjectCorrection = useCallback(async (_status: TimesheetStatus, hours: number | null, notes: string, _attachments?: number[]) => {
     if (!modalEmployee || !modalObjectTarget || hours == null) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
@@ -557,11 +564,11 @@ export const TimesheetPage: FC = () => {
   }, [modalEmployee, modalObjectTarget, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId, toast]);
 
   const handleSaveModalCorrection = useCallback(
-    (status: TimesheetStatus, hours: number | null, notes: string) => {
+    (status: TimesheetStatus, hours: number | null, notes: string, attachments?: number[]) => {
       if (modalMode === 'object' && (status === 'work' || status === 'manual')) {
-        return handleSaveObjectCorrection(status, hours, notes);
+        return handleSaveObjectCorrection(status, hours, notes, attachments);
       }
-      return handleSaveCorrection(status, hours, notes);
+      return handleSaveCorrection(status, hours, notes, attachments);
     },
     [modalMode, handleSaveCorrection, handleSaveObjectCorrection],
   );
@@ -1269,12 +1276,12 @@ export const TimesheetPage: FC = () => {
 
   const handleRefreshTimesheet = useCallback(async () => {
     if (!rangeStart || !rangeEnd || refreshInFlight) return;
-    setRefreshInFlight(true);
+    setRefreshState({ phase: 'syncing', message: 'Синхронизация СКУД…' });
     try {
       const result = await timesheetService.refresh({ start_date: rangeStart, end_date: rangeEnd });
+      setRefreshState({ phase: 'invalidating', message: 'Обновление данных табеля…' });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
       ]);
       const parts: string[] = [];
@@ -1285,11 +1292,12 @@ export const TimesheetPage: FC = () => {
         parts.push(`коллизий: ${result.conflicts.length}`);
       }
       toast.success?.(parts.length > 0 ? `Обновлено (${parts.join(', ')})` : 'Табель обновлён');
+      setRefreshState({ phase: 'idle', message: '' });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Ошибка обновления табеля';
       toast.error?.(message);
-    } finally {
-      setRefreshInFlight(false);
+      setRefreshState({ phase: 'error', message: 'Ошибка обновления' });
+      setTimeout(() => setRefreshState({ phase: 'idle', message: '' }), 3000);
     }
   }, [rangeStart, rangeEnd, refreshInFlight, queryClient, monthStr, effectiveSelectedDeptId, toast]);
 
@@ -1726,6 +1734,15 @@ export const TimesheetPage: FC = () => {
                 <RefreshCw size={16} className={refreshInFlight ? 'ts-refresh-spinning' : undefined} />
                 Обновить
               </button>
+              {refreshState.phase !== 'idle' && (
+                <span
+                  className={`ts-refresh-status${refreshState.phase === 'error' ? ' ts-refresh-status--error' : ''}`}
+                  role="status"
+                  aria-live="polite"
+                >
+                  {refreshState.message}
+                </span>
+              )}
             </div>
             <div className="ts-toolbar-right">
               {canUseTeamManagement && (
@@ -1862,6 +1879,7 @@ export const TimesheetPage: FC = () => {
             employees={employees}
             entries={entries}
             objectEntries={objectEntries}
+            employeeStats={employeeStats}
             year={year}
             month={month}
             viewMode={viewMode}
@@ -1896,6 +1914,7 @@ export const TimesheetPage: FC = () => {
           employees={employees}
           entries={entries}
           objectEntries={objectEntries}
+          employeeStats={employeeStats}
           year={year}
           month={month}
           viewMode={viewMode}
@@ -1988,6 +2007,11 @@ export const TimesheetPage: FC = () => {
               corrected_at: modalEntry.corrected_at,
               corrected_by_name: modalEntry.corrected_by_name,
             } : null}
+            correctionId={
+              modalMode === 'object'
+                ? (modalObjectEntry?.adjustment_id ?? null)
+                : (modalEntry?.is_correction ? (modalEntry?.id ?? null) : null)
+            }
           />
         </Suspense>
       )}

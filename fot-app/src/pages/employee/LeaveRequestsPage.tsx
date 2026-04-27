@@ -1,7 +1,7 @@
-import { type FC, useState } from 'react';
+import { type FC, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Plus, X, Clock, CheckCircle, XCircle, Ban, ChevronRight } from 'lucide-react';
+import { Plus, X, Clock, CheckCircle, XCircle, Ban, ChevronRight, Paperclip } from 'lucide-react';
 import {
   leaveRequestService,
   REQUEST_TYPE_LABELS,
@@ -10,8 +10,12 @@ import {
   type LeaveRequestType,
   type LeaveRequestStatus,
 } from '../../services/leaveRequestService';
+import { documentService } from '../../services/documentService';
+import { useAuth } from '../../contexts/AuthContext';
 import { getMyLeaveRequestsQueryKey, useMyLeaveRequests } from '../../hooks/usePortalData';
 import './LeaveRequestsPage.css';
+
+const ATTACHMENT_REQUIRED_TYPES = new Set<LeaveRequestType>(['remote', 'time_correction']);
 
 const STATUS_ICONS: Record<LeaveRequestStatus, FC<{ size?: number }>> = {
   pending: Clock,
@@ -33,8 +37,11 @@ const EMPTY_REQUESTS: ILeaveRequest[] = [];
 export const LeaveRequestsPage: FC = () => {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { profile } = useAuth();
+  const employeeId = profile?.employee_id ?? null;
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
   const { data, isLoading } = useMyLeaveRequests();
   const requests = data ?? EMPTY_REQUESTS;
 
@@ -43,12 +50,29 @@ export const LeaveRequestsPage: FC = () => {
   const [formStart, setFormStart] = useState('');
   const [formEnd, setFormEnd] = useState('');
   const [formReason, setFormReason] = useState('');
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   // Correction-specific fields
   const [correctionDate, setCorrectionDate] = useState('');
   const [correctionStatus, setCorrectionStatus] = useState('work');
   const [correctionHours, setCorrectionHours] = useState<number>(8);
 
   const isCorrection = formType === 'time_correction';
+  const requireAttachment = ATTACHMENT_REQUIRED_TYPES.has(formType);
+
+  const resetForm = () => {
+    setShowForm(false);
+    setFormType('vacation');
+    setFormStart('');
+    setFormEnd('');
+    setFormReason('');
+    setCorrectionDate('');
+    setCorrectionStatus('work');
+    setCorrectionHours(8);
+    setAttachmentFile(null);
+    setFormError(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   const handleSubmit = async () => {
     if (isCorrection) {
@@ -56,8 +80,22 @@ export const LeaveRequestsPage: FC = () => {
     } else {
       if (!formStart || !formEnd) return;
     }
+    if (requireAttachment && !attachmentFile) {
+      setFormError('Прикрепите файл-подтверждение');
+      return;
+    }
+    if (requireAttachment && !employeeId) {
+      setFormError('Не удалось определить сотрудника. Перезайдите в систему.');
+      return;
+    }
     setSaving(true);
+    setFormError(null);
     try {
+      let attachmentIds: number[] | undefined;
+      if (attachmentFile && employeeId) {
+        const uploaded = await documentService.uploadFile(attachmentFile, employeeId, 'leave_request_attachment');
+        attachmentIds = [uploaded.id];
+      }
       const payload: Record<string, unknown> = {
         request_type: formType,
         start_date: isCorrection ? correctionDate : formStart,
@@ -69,18 +107,15 @@ export const LeaveRequestsPage: FC = () => {
         payload.correction_status = correctionStatus;
         payload.correction_hours = correctionHours;
       }
+      if (attachmentIds) {
+        payload.attachments = attachmentIds;
+      }
       await leaveRequestService.create(payload as Parameters<typeof leaveRequestService.create>[0]);
-      setShowForm(false);
-      setFormType('vacation');
-      setFormStart('');
-      setFormEnd('');
-      setFormReason('');
-      setCorrectionDate('');
-      setCorrectionStatus('work');
-      setCorrectionHours(8);
+      resetForm();
       await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
     } catch (err) {
       console.error('Create leave request error:', err);
+      setFormError(err instanceof Error ? err.message : 'Ошибка создания заявления');
     } finally {
       setSaving(false);
     }
@@ -162,7 +197,34 @@ export const LeaveRequestsPage: FC = () => {
               Причина / комментарий
               <textarea className="lr-form-textarea" value={formReason} onChange={e => setFormReason(e.target.value)} placeholder={isCorrection ? 'Укажите причину корректировки' : 'Необязательно'} />
             </label>
-            <button className="lr-submit-btn" onClick={handleSubmit} disabled={saving || (isCorrection ? !correctionDate : (!formStart || !formEnd))}>
+            <label className="lr-form-label">
+              Файл {requireAttachment && <span style={{ color: 'var(--error, #ef4444)' }}>*</span>}
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="lr-form-input"
+                onChange={e => setAttachmentFile(e.target.files?.[0] || null)}
+                accept="image/*,application/pdf"
+              />
+              {attachmentFile && (
+                <div className="lr-attachment-preview">
+                  <Paperclip size={14} /> {attachmentFile.name}
+                </div>
+              )}
+              {requireAttachment && !attachmentFile && (
+                <div className="lr-form-hint">Для удалёнки и корректировки табеля файл обязателен</div>
+              )}
+            </label>
+            {formError && <div className="lr-form-error">{formError}</div>}
+            <button
+              className="lr-submit-btn"
+              onClick={handleSubmit}
+              disabled={
+                saving
+                || (isCorrection ? !correctionDate : (!formStart || !formEnd))
+                || (requireAttachment && !attachmentFile)
+              }
+            >
               {saving ? 'Отправка...' : 'Отправить'}
             </button>
           </div>
