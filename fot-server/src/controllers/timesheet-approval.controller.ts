@@ -23,6 +23,7 @@ import { timesheetResponsiblesService } from '../services/timesheet-responsibles
 import { timesheetApprovalHistoryService } from '../services/timesheet-approval-history.service.js';
 import { listTimesheetWorkflowRecipientIds } from '../services/timesheet-workflow-recipients.service.js';
 import { checkWeekendWorkRequirement } from '../services/timesheet-approval-weekend-check.service.js';
+import { validateCorrectionAttachments } from '../services/timesheet-approval-correction-validation.service.js';
 import {
   APPROVAL_ATTACHMENT_CATEGORY,
   countApprovalAttachments,
@@ -282,24 +283,15 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     const existing = (exactRow as TimesheetApproval | null) ?? null;
 
-    const weekendCheck = await checkWeekendWorkRequirement({
-      departmentId: deptId,
-      startDate: range.startDate,
-      endDate: range.endDate,
-    });
-    if (weekendCheck.requires) {
-      const attachmentsCount = existing
-        ? await countApprovalAttachments(existing.id)
-        : 0;
-      if (attachmentsCount === 0) {
-        res.status(400).json({
-          success: false,
-          error: 'Необходимо прикрепить подтверждение работы в выходные дни',
-          code: 'WEEKEND_CONFIRMATION_REQUIRED',
-          weekend_work_dates: weekendCheck.weekendWorkDates,
-        });
-        return;
-      }
+    const correctionCheck = await validateCorrectionAttachments(deptId, range);
+    if (!correctionCheck.ok) {
+      res.status(400).json({
+        success: false,
+        error: 'Не приложены файлы к корректировкам — подача невозможна',
+        code: 'CORRECTION_ATTACHMENTS_MISSING',
+        missing_days: correctionCheck.missing,
+      });
+      return;
     }
 
     if (existing?.status === 'approved') {

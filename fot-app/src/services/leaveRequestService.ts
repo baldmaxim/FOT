@@ -1,6 +1,6 @@
 import { apiClient } from '../api/client';
 
-export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'dayoff' | 'business_trip' | 'certificate' | 'time_correction';
+export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'dayoff' | 'certificate' | 'time_correction';
 export type LeaveRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 
 export interface ILeaveRequest {
@@ -23,7 +23,7 @@ export interface ILeaveRequest {
   reviewer?: { id: string; full_name: string | null } | null;
 }
 
-export const REQUEST_TYPE_LABELS: Record<LeaveRequestType, string> = {
+export const REQUEST_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск',
   sick_leave: 'Больничный',
   remote: 'Удалёнка',

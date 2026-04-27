@@ -1920,82 +1920,55 @@
   }
 }
 
-/* ===== Модалка подачи табеля ===== */
-.ts-submit-modal {
-  width: min(560px, 95vw);
-  max-height: 90vh;
-  display: flex;
-  flex-direction: column;
-}
-.ts-submit-period {
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin: 0 0 8px;
-}
-.ts-submit-hint {
-  font-size: 13px;
-  color: var(--text-tertiary);
-  margin: 0 0 16px;
-}
-.ts-submit-attachments {
-  border: 1px solid var(--border-color, #e5e7eb);
+/* ===== Ошибки подачи табеля (inline) ===== */
+.ts-approval-submit-error {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.25);
   border-radius: 8px;
-  padding: 12px;
-  margin-bottom: 12px;
+  color: var(--error, #ef4444);
+  font-size: 13px;
 }
-.ts-submit-attachments-header {
+.ts-approval-submit-error-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: 8px;
+  font-weight: 500;
 }
-.ts-submit-attachments-empty {
-  font-size: 13px;
-  color: var(--text-tertiary);
-  padding: 8px 0;
+.ts-approval-submit-error-header > span {
+  flex: 1;
 }
-.ts-submit-attachments-list {
+.ts-approval-submit-error-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 2px;
+  color: inherit;
+  opacity: 0.7;
+}
+.ts-approval-submit-error-close:hover {
+  opacity: 1;
+}
+.ts-approval-submit-error-list {
   list-style: none;
   padding: 0;
-  margin: 0;
+  margin: 8px 0 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+  color: var(--text-primary, #111827);
+  font-weight: 400;
 }
-.ts-submit-attachment-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-}
-.ts-submit-attachment-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ts-submit-attachment-size {
-  color: var(--text-tertiary);
-  font-size: 12px;
-}
-.ts-submit-error {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: rgba(239, 68, 68, 0.08);
+.ts-approval-submit-error-list strong {
   color: var(--error, #ef4444);
-  border-radius: 6px;
-  font-size: 13px;
-  margin-bottom: 8px;
+  margin-right: 2px;
 }
-.ts-submit-weekend-info {
-  padding: 8px 12px;
-  background: rgba(234, 179, 8, 0.08);
-  color: #b45309;
-  border-radius: 6px;
-  font-size: 12px;
+.ts-approval-submit-error-reason {
+  color: var(--text-secondary);
 }
 
 .ts-col-sticky-label {

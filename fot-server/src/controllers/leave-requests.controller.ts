@@ -12,17 +12,16 @@ import {
 import { upsertAttendanceAdjustment } from '../services/attendance.service.js';
 import type { TimeStatus } from '../types/index.js';
 
-const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'dayoff', 'business_trip', 'certificate', 'time_correction'] as const;
+const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'dayoff', 'certificate', 'time_correction'] as const;
 const LEAVE_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск', sick_leave: 'Больничный', remote: 'Удалёнка',
   dayoff: 'Отгул', business_trip: 'Командировка', certificate: 'Справка', time_correction: 'Корректировка',
 };
-const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote' | 'dayoff' | 'business_trip', TimeStatus> = {
+const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote' | 'dayoff', TimeStatus> = {
   vacation: 'vacation',
   sick_leave: 'sick',
   remote: 'remote',
   dayoff: 'dayoff',
-  business_trip: 'business_trip',
 };
 
 function isTimeStatus(value: unknown): value is TimeStatus {
@@ -64,7 +63,7 @@ async function loadEmployeeIdsByDepartments(
 }
 
 /** Создание заявления (worker+) */
-const ATTACHMENT_REQUIRED_TYPES = new Set(['remote', 'time_correction']);
+const ATTACHMENT_REQUIRED_TYPES = new Set(['remote', 'vacation']);
 
 const create = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {

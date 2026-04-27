@@ -46,12 +46,14 @@ const tokenListeners = new Set<(token: string | null) => void>();
 export class ApiError extends Error {
   status: number;
   code?: string;
+  details?: Record<string, unknown>;
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(message: string, status: number, code?: string, details?: Record<string, unknown>) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -169,7 +171,8 @@ export const apiClient = {
       throw new ApiError(
         error.error || error.message || 'Произошла ошибка',
         response.status,
-        error.code
+        error.code,
+        error,
       );
     }
 

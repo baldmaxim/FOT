@@ -15,7 +15,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { getMyLeaveRequestsQueryKey, useMyLeaveRequests } from '../../hooks/usePortalData';
 import './LeaveRequestsPage.css';
 
-const ATTACHMENT_REQUIRED_TYPES = new Set<LeaveRequestType>(['remote', 'time_correction']);
+const ATTACHMENT_REQUIRED_TYPES = new Set<LeaveRequestType>(['remote', 'vacation']);
 
 const STATUS_ICONS: Record<LeaveRequestStatus, FC<{ size?: number }>> = {
   pending: Clock,
@@ -31,7 +31,7 @@ const STATUS_COLORS: Record<LeaveRequestStatus, string> = {
   cancelled: '#6b7280',
 };
 
-const REQUEST_TYPES = Object.keys(REQUEST_TYPE_LABELS) as LeaveRequestType[];
+const REQUEST_TYPES: LeaveRequestType[] = ['vacation', 'sick_leave', 'remote', 'dayoff', 'certificate', 'time_correction'];
 const EMPTY_REQUESTS: ILeaveRequest[] = [];
 
 export const LeaveRequestsPage: FC = () => {
@@ -171,7 +171,6 @@ export const LeaveRequestsPage: FC = () => {
                       <option value="remote">Удалёнка</option>
                       <option value="sick">Больничный</option>
                       <option value="vacation">Отпуск</option>
-                      <option value="business_trip">Командировка</option>
                       <option value="manual">Ручная корр.</option>
                     </select>
                   </label>
