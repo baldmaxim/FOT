@@ -95,35 +95,35 @@ router.post(
 // POST /api/timesheet
 router.post(
   '/',
-  requireAnyPageAccess(['/employee', '/timesheet', '/timesheet-hr'], 'edit'),
+  requireAnyPageAccess(['/employee/requests', '/timesheet', '/timesheet-hr'], 'edit'),
   timesheetController.create
 );
 
 // POST /api/timesheet/bulk
 router.post(
   '/bulk',
-  requireAnyPageAccess(['/employee', '/timesheet', '/timesheet-hr'], 'edit'),
+  requireAnyPageAccess(['/employee/requests', '/timesheet', '/timesheet-hr'], 'edit'),
   timesheetController.bulkSave
 );
 
 // PUT /api/timesheet/object-entry
 router.put(
   '/object-entry',
-  requireAnyPageAccess(['/employee', '/timesheet', '/timesheet-hr'], 'edit'),
+  requireAnyPageAccess(['/employee/requests', '/timesheet', '/timesheet-hr'], 'edit'),
   timesheetController.upsertObjectEntry
 );
 
 // DELETE /api/timesheet/object-entry
 router.delete(
   '/object-entry',
-  requireAnyPageAccess(['/employee', '/timesheet', '/timesheet-hr'], 'edit'),
+  requireAnyPageAccess(['/employee/requests', '/timesheet', '/timesheet-hr'], 'edit'),
   timesheetController.deleteObjectEntry
 );
 
 // PUT /api/timesheet/:id
 router.put(
   '/:id',
-  requireAnyPageAccess(['/employee', '/timesheet', '/timesheet-hr'], 'edit'),
+  requireAnyPageAccess(['/employee/requests', '/timesheet', '/timesheet-hr'], 'edit'),
   timesheetController.update
 );
 

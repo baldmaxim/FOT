@@ -106,29 +106,20 @@ vi.mock('../config/database.js', () => ({
 import { buildManagerDepartmentImportPreviewFromBuffer } from './manager-department-import.service.js';
 
 async function buildWorkbookBuffer(): Promise<Buffer> {
+  // Multi-column формат: B3='Тип' маркер; начиная с row 4 col B = тип, col C = имя.
+  // Имя менеджера в скобках содержит «N. <название участка>», его выделяет
+  // parseSectionFromManagerRow, см. manager-department-import.service.ts.
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet('Sheet1');
 
-  worksheet.getCell('B1').value = 'Участок 1';
-  worksheet.getCell('B1').fill = {
-    type: 'pattern',
-    pattern: 'solid',
-    fgColor: { argb: 'FFE6E6E6' },
-  };
+  worksheet.getCell('B3').value = 'Тип';
+  worksheet.getCell('C3').value = 'Имя';
 
-  worksheet.getCell('B2').value = 'Иванов И.И.';
-  worksheet.getCell('B2').fill = {
-    type: 'pattern',
-    pattern: 'solid',
-    fgColor: { argb: 'FFFAFAD2' },
-  };
+  worksheet.getCell('B4').value = 'нач.уч.';
+  worksheet.getCell('C4').value = 'Иванов И.И. (1. Участок 1)';
 
-  worksheet.getCell('B3').value = 'Проблемная бригада';
-  worksheet.getCell('B3').fill = {
-    type: 'pattern',
-    pattern: 'solid',
-    fgColor: { argb: 'FFE6E6FA' },
-  };
+  worksheet.getCell('B5').value = 'бригада';
+  worksheet.getCell('C5').value = 'Проблемная бригада';
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);

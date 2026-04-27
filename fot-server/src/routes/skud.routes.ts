@@ -102,7 +102,7 @@ router.get(
 // GET /api/skud/access-points - точки доступа (header+)
 router.get(
   '/access-points',
-  requireAnyPageAccess(['/skud-settings', '/skud-travel'], 'view'),
+  requirePageAccess('/skud-settings', 'view'),
   skudController.getAccessPoints
 );
 
@@ -228,14 +228,14 @@ router.delete(
 // GET /api/skud/travel-segments - предрасчитанные передвижения сотрудников (header+)
 router.get(
   '/travel-segments',
-  requirePageAccess('/skud-travel', 'view'),
+  requirePageAccess('/skud-settings', 'view'),
   skudController.getTravelSegments
 );
 
 // POST /api/skud/travel-segments/rebuild - принудительный пересчёт передвижений (header+)
 router.post(
   '/travel-segments/rebuild',
-  requirePageAccess('/skud-travel', 'edit'),
+  requirePageAccess('/skud-settings', 'edit'),
   skudController.rebuildTravelSegments
 );
 
