@@ -22,12 +22,9 @@ import '../../styles/EmployeeCardV2.css';
 const EmployeeAttendanceSection = lazy(() => import('../../components/employees/EmployeeAttendanceSection').then(module => ({
   default: module.EmployeeAttendanceSection,
 })));
-const EmployeeInfoSection = lazy(() => import('../../components/employees/EmployeeInfoSection').then(module => ({
-  default: module.EmployeeInfoSection,
-})));
-const EmployeeHistorySection = lazy(() => import('../../components/employees/EmployeeHistorySection').then(module => ({
-  default: module.EmployeeHistorySection,
-})));
+// const EmployeeHistorySection = lazy(() => import('../../components/employees/EmployeeHistorySection').then(module => ({
+//   default: module.EmployeeHistorySection,
+// })));
 const EmployeeSkudControls = lazy(() => import('../../components/employees/EmployeeSkudControls').then(module => ({
   default: module.EmployeeSkudControls,
 })));
@@ -35,12 +32,11 @@ const EmployeeSkudSection = lazy(() => import('../../components/employees/Employ
   default: module.EmployeeSkudSection,
 })));
 
-type Tab = 'attendance' | 'info' | 'history' | 'skud';
+type Tab = 'attendance' | 'skud';
 type SkudViewMode = 'day' | 'week' | 'month' | 'range';
 const TABS: { key: Tab; label: string }[] = [
   { key: 'attendance', label: 'Посещаемость' },
-  { key: 'info', label: 'Информация' },
-  { key: 'history', label: 'История' },
+  // { key: 'history', label: 'История' },
   { key: 'skud', label: 'СКУД' },
 ];
 
@@ -175,7 +171,7 @@ export const EmployeeCardPage: FC = () => {
   const queryClient = useQueryClient();
   const empIdNum = Number(id);
   const [error, setError] = useState('');
-  const [activeTab, setActiveTab] = useState<Tab>(urlTab && ['attendance', 'info', 'history', 'skud'].includes(urlTab) ? urlTab : 'attendance');
+  const [activeTab, setActiveTab] = useState<Tab>(urlTab && ['attendance', 'skud'].includes(urlTab) ? urlTab : 'attendance');
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<Partial<EmployeeInput>>({});
   const [skudViewMode, setSkudViewMode] = useState<SkudViewMode>(urlDate ? 'day' : 'month');
@@ -211,14 +207,14 @@ export const EmployeeCardPage: FC = () => {
   const employee = employeeQuery.data ?? null;
   const loading = employeeQuery.isLoading;
 
-  // История сотрудника
-  const historyQuery = useQuery({
-    queryKey: ['employee-history', empIdNum],
-    queryFn: () => employeeService.getHistory(empIdNum).catch(() => []),
-    enabled: !!empIdNum && !Number.isNaN(empIdNum) && activeTab === 'history',
-    staleTime: 60_000,
-  });
-  const history = historyQuery.data ?? [];
+  // История сотрудника — вкладка временно скрыта
+  // const historyQuery = useQuery({
+  //   queryKey: ['employee-history', empIdNum],
+  //   queryFn: () => employeeService.getHistory(empIdNum).catch(() => []),
+  //   enabled: !!empIdNum && !Number.isNaN(empIdNum) && activeTab === 'history',
+  //   staleTime: 60_000,
+  // });
+  // const history = historyQuery.data ?? [];
 
   // Структура (для редактирования отделов и модалки восстановления) — общий query key
   const structureQuery = useStructureTree(true);
@@ -435,7 +431,7 @@ export const EmployeeCardPage: FC = () => {
       }),
     });
     setIsEditing(true);
-    setActiveTab('info');
+    setActiveTab('attendance');
   };
 
   const saveEditing = async () => {
@@ -698,36 +694,26 @@ export const EmployeeCardPage: FC = () => {
             showDate={attendanceViewModel.showDate}
             showEvents={attendanceViewModel.showEvents}
             showEventsLoading={attendanceViewModel.showEventsLoading}
-            weeklyPattern={periodData.weeklyPattern}
             alerts={attendance?.alerts ?? []}
             internalPoints={internalPoints}
+            isEditing={isEditing}
+            isSigurLinked={employee.sigur_employee_id != null}
+            editData={editData}
+            onEditDataChange={setEditData}
+            onSave={saveEditing}
+            onCancel={() => { setIsEditing(false); setEditData({}); }}
           />
         </Suspense>
       )}
 
-      {activeTab === 'info' && (
-        <div className="ec-tab-content-full">
-          <Suspense fallback={<div className="ec-loading">Загрузка раздела...</div>}>
-            <EmployeeInfoSection
-              employee={employee}
-              isEditing={isEditing}
-              isSigurLinked={employee.sigur_employee_id != null}
-              editData={editData}
-              onEditDataChange={setEditData}
-              onSave={saveEditing}
-              onCancel={() => { setIsEditing(false); setEditData({}); }}
-            />
-          </Suspense>
-        </div>
-      )}
-
-      {activeTab === 'history' && (
+      {/* Вкладка «История» временно скрыта */}
+      {/* {activeTab === 'history' && (
         <div className="ec-tab-content-full">
           <Suspense fallback={<div className="ec-loading">Загрузка истории...</div>}>
             <EmployeeHistorySection history={history} />
           </Suspense>
         </div>
-      )}
+      )} */}
 
       {activeTab === 'skud' && (
         <Suspense fallback={<div className="ec-loading">Загрузка СКУД...</div>}>

@@ -475,10 +475,17 @@
   gap: 16px;
 }
 
+/* ==================== Attendance Merged Wrapper ==================== */
+.ec-attendance-merged {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 /* ==================== Attendance 3-col Layout ==================== */
 .ec-attendance-3col {
   display: grid;
-  grid-template-columns: 1fr 1.2fr 1fr 1fr;
+  grid-template-columns: 1fr 1.2fr 1fr;
   gap: 12px;
   align-items: start;
 }
@@ -1620,6 +1627,9 @@
     font-size: 14px;
   }
   /* Attendance: stack to single column */
+  .ec-attendance-merged {
+    gap: 10px;
+  }
   .ec-attendance-3col {
     grid-template-columns: 1fr;
   }
@@ -1870,6 +1880,9 @@
   }
 
   /* Attendance Layout */
+  .ec-attendance-merged {
+    gap: 8px;
+  }
   .ec-attendance-3col {
     gap: 8px;
   }
