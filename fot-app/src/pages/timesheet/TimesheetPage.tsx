@@ -1,11 +1,12 @@
 import { type FC, Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, UserPlus, Mail } from 'lucide-react';
+import { ArrowRightLeft, ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, UserPlus, Mail } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { TimesheetStats } from '../../components/timesheet/TimesheetStats';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { TimesheetCorrectionsList } from '../../components/timesheet/TimesheetCorrectionsList';
 import { TimesheetTeamManagementModal } from '../../components/timesheet/TimesheetTeamManagementModal';
+import { TimesheetTransfersModal } from '../../components/timesheet/TimesheetTransfersModal';
 import { TimesheetExcludeEmployeeModal } from '../../components/timesheet/TimesheetExcludeEmployeeModal';
 import { timesheetService } from '../../services/timesheetService';
 import { useAuth } from '../../contexts/AuthContext';
@@ -32,7 +33,6 @@ import {
   getCurrentHalf,
   type TimesheetHalf,
 } from '../../utils/timesheetApprovalPeriod';
-import { getTimesheetMonthAccess } from '../../utils/timesheetMonthAccess';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
 import { type IFlatDepartmentOption, getTreeFlatDepartments, filterDepartmentTreeByIds } from '../../utils/departmentUtils';
 import './TimesheetPage.css';
@@ -162,7 +162,6 @@ export const TimesheetPage: FC = () => {
   const isMultiDepartmentManager = isTimesheetDepartmentScope && managedDepartmentIds.length > 1;
   const queryMonth = searchParams.get('month');
   const queryFrom = searchParams.get('from');
-  const queryTo = searchParams.get('to');
   const queryHalf = searchParams.get('half');
   const queryView = searchParams.get('view');
   const queryMode = searchParams.get('mode');
@@ -182,10 +181,6 @@ export const TimesheetPage: FC = () => {
   const currentMonthIndex = toMonthIndex(currentYear, currentMonth);
   const previousMonthIndex = currentMonthIndex - 1;
   const isRestrictedManagerView = isTimesheetDepartmentScope;
-  const monthAccess = useMemo(
-    () => getTimesheetMonthAccess(isRestrictedManagerView, now),
-    [isRestrictedManagerView, now],
-  );
   const requestedMonth = useMemo(() => parseMonthParam(queryMonth), [queryMonth]);
   const requestedMonthIndex = requestedMonth
     ? toMonthIndex(requestedMonth.year, requestedMonth.month)
@@ -236,6 +231,7 @@ export const TimesheetPage: FC = () => {
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkSelectedCellKeys, setBulkSelectedCellKeys] = useState<Set<string>>(new Set());
   const [teamManagementOpen, setTeamManagementOpen] = useState(false);
+  const [transfersModalOpen, setTransfersModalOpen] = useState(false);
   const [teamSearch, setTeamSearch] = useState('');
   const [teamPendingEmployeeId, setTeamPendingEmployeeId] = useState<number | null>(null);
   const [refreshState, setRefreshState] = useState<{
@@ -1595,6 +1591,18 @@ export const TimesheetPage: FC = () => {
                     Добавить сотрудника
                   </button>
                 )}
+                {!isAssignedMode && isSuperAdmin && (
+                  <button
+                    type="button"
+                    className="ts-btn ts-btn--icon"
+                    onClick={() => setTransfersModalOpen(true)}
+                    disabled={!effectiveSelectedDeptId}
+                    aria-label="Переводы и исключения"
+                    title={!effectiveSelectedDeptId ? 'Сначала выберите отдел' : 'Переводы и исключения'}
+                  >
+                    <ArrowRightLeft size={16} />
+                  </button>
+                )}
                 {!isAssignedMode && (
                   <button
                     type="button"
@@ -1694,6 +1702,18 @@ export const TimesheetPage: FC = () => {
               )}
             </div>
             <div className="ts-toolbar-right">
+              {isSuperAdmin && (
+                <button
+                  type="button"
+                  className="ts-btn ts-btn--chip"
+                  onClick={() => setTransfersModalOpen(true)}
+                  disabled={!activeGridDeptId}
+                  title={!activeGridDeptId ? 'Сначала выберите отдел' : 'Просмотр и корректировка переводов и исключений'}
+                >
+                  <ArrowRightLeft size={16} />
+                  Переводы
+                </button>
+              )}
               {canUseTeamManagement && (
                 <button
                   type="button"
@@ -1899,6 +1919,15 @@ export const TimesheetPage: FC = () => {
           pendingEmployeeId={teamPendingEmployeeId}
           onSearchQueryChange={setTeamSearch}
           onAddEmployee={handleAddEmployeeToDepartment}
+        />
+      )}
+
+      {transfersModalOpen && (
+        <TimesheetTransfersModal
+          open={transfersModalOpen}
+          onClose={() => setTransfersModalOpen(false)}
+          departmentId={effectiveSelectedDeptId ?? activeGridDeptId ?? null}
+          departmentName={selectedDeptName}
         />
       )}
 

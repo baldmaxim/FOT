@@ -58,6 +58,28 @@ export interface ITimesheetCorrectionRow {
   month_out_of_range?: boolean;
 }
 
+export interface IDepartmentTransferRow {
+  assignment_new_id: string;
+  assignment_old_id: string;
+  employee_id: number;
+  employee_full_name: string;
+  to_department_id: string;
+  to_department_name: string;
+  transfer_date: string;
+}
+
+export interface IDepartmentExclusionRow {
+  employee_id: number;
+  employee_full_name: string;
+  exclusion_date: string | null;
+  excluded_at: string | null;
+}
+
+export interface IDepartmentTransfersListing {
+  transfers: IDepartmentTransferRow[];
+  exclusions: IDepartmentExclusionRow[];
+}
+
 export interface ITimesheetRefreshResult {
   sync: {
     sigurTotal?: number;
@@ -221,6 +243,45 @@ export const timesheetService = {
   }): Promise<void> {
     const res = await apiClient.post<ApiResponse<null>>('/timesheet/team-management/exclude-employee', data);
     if (res.error) throw new Error(res.error || 'Ошибка исключения сотрудника');
+  },
+
+  async listDepartmentTransfers(departmentId: string): Promise<IDepartmentTransfersListing> {
+    const params = new URLSearchParams({ department_id: departmentId });
+    const res = await apiClient.get<ApiResponse<IDepartmentTransfersListing>>(`/timesheet/team-management/transfers?${params.toString()}`);
+    if (!res.data) throw new Error(res.error || 'Ошибка загрузки списка переводов');
+    return res.data;
+  },
+
+  async updateTransfer(assignmentId: string, effectiveFrom: string): Promise<void> {
+    const res = await apiClient.patch<ApiResponse<null>>(
+      `/timesheet/team-management/transfers/${assignmentId}`,
+      { effective_from: effectiveFrom },
+    );
+    if (res.error) throw new Error(res.error || 'Ошибка изменения даты перевода');
+  },
+
+  async deleteTransfer(assignmentId: string): Promise<void> {
+    const res = await apiClient.request<ApiResponse<null>>(
+      `/timesheet/team-management/transfers/${assignmentId}`,
+      { method: 'DELETE' },
+    );
+    if (res.error) throw new Error(res.error || 'Ошибка отмены перевода');
+  },
+
+  async updateExclusion(employeeId: number, effectiveDate: string): Promise<void> {
+    const res = await apiClient.patch<ApiResponse<null>>(
+      `/timesheet/team-management/exclusions/${employeeId}`,
+      { effective_date: effectiveDate },
+    );
+    if (res.error) throw new Error(res.error || 'Ошибка изменения даты исключения');
+  },
+
+  async deleteExclusion(employeeId: number): Promise<void> {
+    const res = await apiClient.request<ApiResponse<null>>(
+      `/timesheet/team-management/exclusions/${employeeId}`,
+      { method: 'DELETE' },
+    );
+    if (res.error) throw new Error(res.error || 'Ошибка отмены исключения');
   },
 
   async exportMass(filters: {

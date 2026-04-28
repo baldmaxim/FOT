@@ -43,6 +43,36 @@ router.post(
   timesheetController.excludeEmployeeFromDepartment
 );
 
+router.get(
+  '/team-management/transfers',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
+  timesheetController.listTransfers
+);
+
+router.patch(
+  '/team-management/transfers/:assignmentId',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
+  timesheetController.patchTransfer
+);
+
+router.delete(
+  '/team-management/transfers/:assignmentId',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
+  timesheetController.deleteTransferEntry
+);
+
+router.patch(
+  '/team-management/exclusions/:employeeId',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
+  timesheetController.patchExclusion
+);
+
+router.delete(
+  '/team-management/exclusions/:employeeId',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
+  timesheetController.deleteExclusionEntry
+);
+
 // GET /api/timesheet/export?month=YYYY-MM&department_id=...
 router.get(
   '/export',

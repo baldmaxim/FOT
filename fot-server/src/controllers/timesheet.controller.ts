@@ -42,6 +42,14 @@ import {
   resolveTimesheetPeriodRange,
   type IDepartmentEmployeeMembership,
 } from '../services/timesheet-department-assignments.service.js';
+import {
+  deleteExclusion,
+  deleteTransfer,
+  listDepartmentTransfers,
+  loadAssignmentEmployeeId,
+  updateExclusionDate,
+  updateTransferDate,
+} from '../services/timesheet-transfers.service.js';
 import { fetchTimesheetDataForDepartment } from '../services/timesheet-export.service.js';
 import {
   getErrorMessage,
@@ -123,6 +131,20 @@ const teamManagementAddEmployeeSchema = teamManagementMutationSchema.extend({
 const teamManagementExcludeSchema = teamManagementMutationSchema.extend({
   effective_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
+
+const transfersListQuerySchema = z.object({
+  department_id: z.string().uuid(),
+});
+
+const transferUpdateSchema = z.object({
+  effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});
+
+const exclusionUpdateSchema = z.object({
+  effective_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});
+
+const uuidParamSchema = z.string().uuid();
 
 /**
  * Корректировка считается автоматически согласованной (`auto_approved`), если день
@@ -1928,6 +1950,172 @@ export const timesheetController = {
     } catch (err) {
       console.error('timesheet.refresh error:', err);
       res.status(500).json({ success: false, error: 'Ошибка обновления табеля' });
+    }
+  },
+
+  /** GET /api/timesheet/team-management/transfers?department_id=... */
+  async listTransfers(req: AuthenticatedRequest, res: Response) {
+    try {
+      if (!req.user.is_admin) {
+        return res.status(403).json({ success: false, error: 'Доступно только администраторам' });
+      }
+      const parsed = transfersListQuerySchema.parse(req.query);
+      const data = await listDepartmentTransfers(parsed.department_id);
+      res.json({ success: true, data });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+      }
+      console.error('timesheet.listTransfers error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка загрузки списка переводов' });
+    }
+  },
+
+  /** PATCH /api/timesheet/team-management/transfers/:assignmentId */
+  async patchTransfer(req: AuthenticatedRequest, res: Response) {
+    try {
+      if (!req.user.is_admin) {
+        return res.status(403).json({ success: false, error: 'Доступно только администраторам' });
+      }
+      const assignmentId = uuidParamSchema.parse(req.params.assignmentId);
+      const parsed = transferUpdateSchema.parse(req.body);
+
+      const result = await updateTransferDate(assignmentId, parsed.effective_from);
+      employeeCache.invalidate(result.employee_id);
+
+      const auditFullName = await loadEmployeeFullNameForAudit(result.employee_id);
+      await auditService.logFromRequest(req, req.user.id, 'UPDATE_TRANSFER', {
+        entityType: 'employee',
+        entityId: String(result.employee_id),
+        details: {
+          source: 'timesheet_team_management',
+          employee_id: result.employee_id,
+          employee_full_name: auditFullName,
+          assignment_new_id: result.assignment_new_id,
+          assignment_old_id: result.assignment_old_id,
+          new_effective_from: result.effective_from,
+          new_effective_to_old: result.effective_to_old,
+        },
+      });
+
+      res.json({ success: true, data: result });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+      }
+      const message = err instanceof Error ? err.message : 'Ошибка изменения даты перевода';
+      console.error('timesheet.patchTransfer error:', err);
+      res.status(400).json({ success: false, error: message });
+    }
+  },
+
+  /** DELETE /api/timesheet/team-management/transfers/:assignmentId */
+  async deleteTransferEntry(req: AuthenticatedRequest, res: Response) {
+    try {
+      if (!req.user.is_admin) {
+        return res.status(403).json({ success: false, error: 'Доступно только администраторам' });
+      }
+      const assignmentId = uuidParamSchema.parse(req.params.assignmentId);
+      const employeeIdBefore = await loadAssignmentEmployeeId(assignmentId);
+
+      const result = await deleteTransfer(assignmentId);
+      employeeCache.invalidate(result.employee_id);
+
+      const auditFullName = await loadEmployeeFullNameForAudit(result.employee_id);
+      await auditService.logFromRequest(req, req.user.id, 'REVERT_TRANSFER_LOCAL_ONLY', {
+        entityType: 'employee',
+        entityId: String(result.employee_id),
+        details: {
+          source: 'timesheet_team_management',
+          employee_id: result.employee_id,
+          employee_full_name: auditFullName,
+          removed_assignment_id: result.removed_assignment_id,
+          reopened_assignment_id: result.reopened_assignment_id,
+          restored_department_id: result.restored_department_id,
+          assignment_employee_id_before: employeeIdBefore,
+        },
+      });
+
+      res.json({ success: true, data: result });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+      }
+      const message = err instanceof Error ? err.message : 'Ошибка отмены перевода';
+      console.error('timesheet.deleteTransferEntry error:', err);
+      res.status(400).json({ success: false, error: message });
+    }
+  },
+
+  /** PATCH /api/timesheet/team-management/exclusions/:employeeId */
+  async patchExclusion(req: AuthenticatedRequest, res: Response) {
+    try {
+      if (!req.user.is_admin) {
+        return res.status(403).json({ success: false, error: 'Доступно только администраторам' });
+      }
+      const employeeId = Number(req.params.employeeId);
+      if (!Number.isFinite(employeeId) || employeeId <= 0) {
+        return res.status(400).json({ success: false, error: 'Некорректный id сотрудника' });
+      }
+      const parsed = exclusionUpdateSchema.parse(req.body);
+
+      const result = await updateExclusionDate(employeeId, parsed.effective_date);
+      employeeCache.invalidate(employeeId);
+
+      const auditFullName = await loadEmployeeFullNameForAudit(employeeId);
+      await auditService.logFromRequest(req, req.user.id, 'UPDATE_EXCLUSION', {
+        entityType: 'employee',
+        entityId: String(employeeId),
+        details: {
+          source: 'timesheet_team_management',
+          employee_id: employeeId,
+          employee_full_name: auditFullName,
+          excluded_from_timesheet_date: result.excluded_from_timesheet_date,
+        },
+      });
+
+      res.json({ success: true, data: result });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+      }
+      const message = err instanceof Error ? err.message : 'Ошибка изменения даты исключения';
+      console.error('timesheet.patchExclusion error:', err);
+      res.status(400).json({ success: false, error: message });
+    }
+  },
+
+  /** DELETE /api/timesheet/team-management/exclusions/:employeeId */
+  async deleteExclusionEntry(req: AuthenticatedRequest, res: Response) {
+    try {
+      if (!req.user.is_admin) {
+        return res.status(403).json({ success: false, error: 'Доступно только администраторам' });
+      }
+      const employeeId = Number(req.params.employeeId);
+      if (!Number.isFinite(employeeId) || employeeId <= 0) {
+        return res.status(400).json({ success: false, error: 'Некорректный id сотрудника' });
+      }
+
+      const result = await deleteExclusion(employeeId);
+      employeeCache.invalidate(employeeId);
+
+      const auditFullName = await loadEmployeeFullNameForAudit(employeeId);
+      await auditService.logFromRequest(req, req.user.id, 'REVERT_EXCLUSION', {
+        entityType: 'employee',
+        entityId: String(employeeId),
+        details: {
+          source: 'timesheet_team_management',
+          employee_id: employeeId,
+          employee_full_name: auditFullName,
+          reopened_assignment_id: result.reopened_assignment_id,
+        },
+      });
+
+      res.json({ success: true, data: result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Ошибка отмены исключения';
+      console.error('timesheet.deleteExclusionEntry error:', err);
+      res.status(400).json({ success: false, error: message });
     }
   },
 
