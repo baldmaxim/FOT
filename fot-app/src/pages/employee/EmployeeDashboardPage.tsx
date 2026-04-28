@@ -37,7 +37,7 @@ const STATUS_LABELS: Record<TimesheetStatus, string> = {
   vacation: 'Отпуск',
   dayoff: 'Выходной',
   absent: 'Неявка',
-  unpaid: 'Без сохранения ЗП',
+  unpaid: 'За свой счёт',
   educational_leave: 'Учебный отпуск',
 };
 const WORKED_STATUSES = new Set<TimesheetStatus>(['work', 'manual', 'remote']);

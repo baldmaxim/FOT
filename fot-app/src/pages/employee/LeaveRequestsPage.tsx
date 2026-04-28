@@ -31,7 +31,7 @@ const STATUS_COLORS: Record<LeaveRequestStatus, string> = {
   cancelled: '#6b7280',
 };
 
-const REQUEST_TYPES: LeaveRequestType[] = ['vacation', 'sick_leave', 'remote', 'dayoff', 'certificate', 'time_correction'];
+const REQUEST_TYPES: LeaveRequestType[] = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction'];
 const EMPTY_REQUESTS: ILeaveRequest[] = [];
 
 export const LeaveRequestsPage: FC = () => {
@@ -171,7 +171,6 @@ export const LeaveRequestsPage: FC = () => {
                       <option value="remote">Удалёнка</option>
                       <option value="sick">Больничный</option>
                       <option value="vacation">Отпуск</option>
-                      <option value="manual">Ручная корр.</option>
                     </select>
                   </label>
                   <label className="lr-form-label">

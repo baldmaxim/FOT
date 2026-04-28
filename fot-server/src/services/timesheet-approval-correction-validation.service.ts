@@ -26,7 +26,7 @@ const STATUS_LABELS_RU: Record<string, string> = {
   sick: 'Больничный',
   dayoff: 'Отгул',
   remote: 'Удалёнка',
-  unpaid: 'Без сохранения ЗП',
+  unpaid: 'За свой счёт',
   educational_leave: 'Учебный отпуск',
   manual: 'Ручная корр.',
 };

@@ -35,7 +35,7 @@ const STATUS_LABELS: Record<string, string> = {
   absent: 'Неявка',
   manual: 'Ручная корр.',
   dayoff: 'Отгул',
-  unpaid: 'Без сохранения ЗП',
+  unpaid: 'За свой счёт',
   educational_leave: 'Учебный отпуск',
 };
 
@@ -54,6 +54,13 @@ const STATUS_ICONS: Record<string, string> = {
 const formatDate = (iso: string): string => {
   const d = new Date(iso + 'T00:00:00');
   return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+};
+
+const WEEKDAY_SHORT_RU = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+
+const formatDateWithWeekday = (iso: string): string => {
+  const d = new Date(iso + 'T00:00:00');
+  return `${formatDate(iso)} (${WEEKDAY_SHORT_RU[d.getDay()]})`;
 };
 
 const formatHM = (decimal: number | null): string => {
@@ -175,7 +182,7 @@ const CorrectionsTab: FC = () => {
                       const noNotes = trimmed.length === 0;
                       return (
                         <li key={item.id} className="cor-item">
-                          <span className="cor-item-date">{formatDate(item.work_date)}</span>
+                          <span className="cor-item-date">{formatDateWithWeekday(item.work_date)}</span>
                           <span className="cor-item-employee">{item.employee_name ?? `#${item.employee_id}`}</span>
                           <span className="cor-item-status">
                             {STATUS_ICONS[item.status] ?? '•'} {STATUS_LABELS[item.status] ?? item.status}

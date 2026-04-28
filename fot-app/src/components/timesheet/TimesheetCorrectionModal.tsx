@@ -77,12 +77,15 @@ const TYPE_OPTIONS: ITypeOption[] = [
   { status: 'remote',            icon: '🏠', label: 'Удалёнка' },
   { status: 'sick',              icon: '🏥', label: 'Больничный' },
   { status: 'vacation',          icon: '🏖', label: 'Отпуск' },
-  { status: 'dayoff',            icon: '📅', label: 'Отгул' },
-  { status: 'unpaid',            icon: '💸', label: 'Без сохранения ЗП' },
+  { status: 'unpaid',            icon: '💸', label: 'За свой счёт' },
   { status: 'educational_leave', icon: '🎓', label: 'Учебный отпуск' },
   { status: 'absent',            icon: '❌', label: 'Неявка' },
-  { status: 'manual',            icon: '✏️', label: 'Ручная корр.' },
 ];
+
+const LEGACY_TYPE_OPTIONS: Record<string, ITypeOption> = {
+  dayoff: { status: 'dayoff', icon: '📅', label: 'Отгул' },
+  manual: { status: 'manual', icon: '✏️', label: 'Ручная корр.' },
+};
 
 const EventsTab: FC<{
   employeeId: number;
@@ -260,7 +263,7 @@ const CorrectionTab: FC<{
   };
 
   if (mode === 'view' && hasExistingCorrection) {
-    const statusOption = TYPE_OPTIONS.find(option => option.status === initialStatus);
+    const statusOption = TYPE_OPTIONS.find(option => option.status === initialStatus) ?? LEGACY_TYPE_OPTIONS[initialStatus];
     const statusLabel = statusOption?.label ?? initialStatus;
     const statusIcon = statusOption?.icon ?? '✎';
     const hoursLabel = HOURS_EDITABLE_STATUSES.has(initialStatus)

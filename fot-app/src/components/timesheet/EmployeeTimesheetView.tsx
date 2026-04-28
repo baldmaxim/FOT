@@ -38,7 +38,7 @@ const STATUS_LABELS: Record<string, string> = {
   vacation: 'Отпуск',
   dayoff: 'Выходной',
   absent: 'Неявка',
-  unpaid: 'Без сохранения ЗП',
+  unpaid: 'За свой счёт',
   educational_leave: 'Учебный отпуск',
 };
 

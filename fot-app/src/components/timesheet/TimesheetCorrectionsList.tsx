@@ -19,7 +19,7 @@ const STATUS_LABELS: Record<TimesheetStatus, string> = {
   vacation: 'Отпуск',
   dayoff: 'Отгул',
   remote: 'Удалёнка',
-  unpaid: 'Без сохранения ЗП',
+  unpaid: 'За свой счёт',
   absent: 'Неявка',
   sick: 'Больничный',
   manual: 'Ручная',

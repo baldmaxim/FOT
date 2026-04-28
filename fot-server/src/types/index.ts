@@ -320,7 +320,7 @@ export interface OrgStructureTree {
   departments: OrgDepartmentNode[];
 }
 
-export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'dayoff' | 'certificate';
+export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'certificate';
 export type LeaveRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 
 export interface LeaveRequest {

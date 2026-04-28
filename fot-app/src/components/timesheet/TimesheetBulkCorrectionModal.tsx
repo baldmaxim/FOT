@@ -21,15 +21,13 @@ const STATUS_OPTIONS: { value: TimesheetStatus; label: string }[] = [
   { value: 'vacation',          label: '🏖 Отпуск' },
   { value: 'sick',              label: '🏥 Больничный' },
   { value: 'remote',            label: '🏠 Удалёнка' },
-  { value: 'dayoff',            label: '📅 Отгул' },
-  { value: 'unpaid',            label: '💸 Без сохранения ЗП' },
+  { value: 'unpaid',            label: '💸 За свой счёт' },
   { value: 'educational_leave', label: '🎓 Учебный отпуск' },
   { value: 'absent',            label: '❌ Неявка' },
   { value: 'work',              label: '✔ Присутствие' },
-  { value: 'manual',            label: '✏️ Ручная корр.' },
 ];
 
-const HOURS_EDITABLE = new Set<TimesheetStatus>(['work', 'manual', 'remote']);
+const HOURS_EDITABLE = new Set<TimesheetStatus>(['work', 'remote']);
 const MAX_RANGE_DAYS = 60;
 
 const todayIso = (): string => new Date().toISOString().slice(0, 10);
