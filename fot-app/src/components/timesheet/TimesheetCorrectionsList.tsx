@@ -43,6 +43,7 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
   const queryClient = useQueryClient();
   const [filterAuthor, setFilterAuthor] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<'' | TimesheetStatus>('');
+  const [filterEmployeeId, setFilterEmployeeId] = useState<string>('');
   const [editingRow, setEditingRow] = useState<ITimesheetCorrectionRow | null>(null);
   const [bulkOpen, setBulkOpen] = useState(false);
 
@@ -104,14 +105,26 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
     return [...set.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   }, [query.data]);
 
+  const employeeOptions = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const row of query.data ?? []) {
+      map.set(row.employee_id, row.employee_full_name ?? `#${row.employee_id}`);
+    }
+    return [...map.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  }, [query.data]);
+
   const rows = useMemo(() => {
     const all = query.data ?? [];
-    return all.filter(row => {
+    const filtered = all.filter(row => {
       if (filterAuthor && row.created_by !== filterAuthor) return false;
       if (filterStatus && row.status !== filterStatus) return false;
+      if (filterEmployeeId && String(row.employee_id) !== filterEmployeeId) return false;
       return true;
     });
-  }, [query.data, filterAuthor, filterStatus]);
+    return filtered.sort((a, b) => a.work_date.localeCompare(b.work_date));
+  }, [query.data, filterAuthor, filterStatus, filterEmployeeId]);
 
   const handleDelete = (row: ITimesheetCorrectionRow) => {
     if (!row.can_delete) return;
@@ -130,6 +143,17 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
   return (
     <div className="ts-corrections">
       <div className="ts-corrections-filters">
+        {employeeOptions.length > 1 && (
+          <label className="ts-corrections-filter">
+            Сотрудник:
+            <select value={filterEmployeeId} onChange={(e) => setFilterEmployeeId(e.target.value)}>
+              <option value="">Все</option>
+              {employeeOptions.map(emp => (
+                <option key={emp.id} value={String(emp.id)}>{emp.name}</option>
+              ))}
+            </select>
+          </label>
+        )}
         {authors.length > 1 && (
           <label className="ts-corrections-filter">
             Автор:
