@@ -78,8 +78,15 @@ SET
   is_system = EXCLUDED.is_system,
   updated_at = NOW();
 
--- По умолчанию доступ к новой странице получают только super_admin (is_admin = true).
--- Остальные роли явно не получают доступ — добавлять при необходимости через UI.
+-- Доступ к UI-странице: даём роли admin (is_admin = true) полный view+edit,
+-- остальные роли получают доступ через UI управления ролями при необходимости.
+INSERT INTO role_page_access (role_code, page_path, can_view, can_edit)
+SELECT sr.code, '/admin/data-api', true, true
+FROM system_roles sr
+WHERE sr.is_admin = true
+ON CONFLICT (role_code, page_path) DO UPDATE
+  SET can_view = EXCLUDED.can_view,
+      can_edit = EXCLUDED.can_edit;
 
 -- Возвращает список таблиц схемы public с их колонками. Используется UI
 -- управления Data API, чтобы показать чек-лист «таблица → поля». Доступ
