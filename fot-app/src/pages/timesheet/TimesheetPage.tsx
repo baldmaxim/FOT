@@ -254,7 +254,7 @@ export const TimesheetPage: FC = () => {
     ? 'objects'
     : queryView === 'corrections'
       ? 'corrections'
-      : (queryView === 'transfers' && isSuperAdmin)
+      : (queryView === 'transfers' && isSuperAdmin && timesheetMode !== 'assigned')
         ? 'transfers'
         : 'employees';
 
@@ -1542,6 +1542,15 @@ export const TimesheetPage: FC = () => {
       >
         Корректировки
       </button>
+      {isSuperAdmin && !isAssignedMode && (
+        <button
+          type="button"
+          className={`ts-view-chip ${viewMode === 'transfers' ? ' ts-view-chip--active' : ''}`}
+          onClick={() => handleViewModeChange('transfers')}
+        >
+          <ArrowRightLeft size={14} /> Переводы
+        </button>
+      )}
     </section>
   ) : null;
 
@@ -1801,7 +1810,15 @@ export const TimesheetPage: FC = () => {
         </section>
       )}
 
-      {viewMode === 'corrections' ? (
+      {viewMode === 'transfers' ? (
+        <div className="ts-table-container">
+          <TimesheetTransfersTab
+            key={effectiveSelectedDeptId ?? activeGridDeptId ?? 'none'}
+            departmentId={effectiveSelectedDeptId ?? activeGridDeptId ?? null}
+            departmentName={selectedDeptName}
+          />
+        </div>
+      ) : viewMode === 'corrections' ? (
         <div className="ts-table-container">
           <TimesheetCorrectionsList
             startDate={rangeStart}

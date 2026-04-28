@@ -48,7 +48,7 @@ import {
   listDepartmentTransfers,
   loadAssignmentEmployeeId,
   updateExclusionDate,
-  updateTransferDate,
+  updateTransfer,
 } from '../services/timesheet-transfers.service.js';
 import { fetchTimesheetDataForDepartment } from '../services/timesheet-export.service.js';
 import {
@@ -137,8 +137,13 @@ const transfersListQuerySchema = z.object({
 });
 
 const transferUpdateSchema = z.object({
-  effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-});
+  effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to_department_id: z.string().uuid().optional(),
+  from_department_id: z.string().uuid().optional(),
+}).refine(
+  data => data.effective_from !== undefined || data.to_department_id !== undefined || data.from_department_id !== undefined,
+  { message: 'Должно быть указано хотя бы одно поле для изменения' },
+);
 
 const exclusionUpdateSchema = z.object({
   effective_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -1987,7 +1992,11 @@ export const timesheetController = {
       const assignmentId = uuidParamSchema.parse(req.params.assignmentId);
       const parsed = transferUpdateSchema.parse(req.body);
 
-      const result = await updateTransferDate(assignmentId, parsed.effective_from);
+      const result = await updateTransfer(assignmentId, {
+        effective_from: parsed.effective_from,
+        to_department_id: parsed.to_department_id,
+        from_department_id: parsed.from_department_id,
+      });
       employeeCache.invalidate(result.employee_id);
 
       const auditFullName = await loadEmployeeFullNameForAudit(result.employee_id);
@@ -2002,6 +2011,9 @@ export const timesheetController = {
           assignment_old_id: result.assignment_old_id,
           new_effective_from: result.effective_from,
           new_effective_to_old: result.effective_to_old,
+          to_department_id: result.to_department_id,
+          from_department_id: result.from_department_id,
+          changed: result.changed,
         },
       });
 

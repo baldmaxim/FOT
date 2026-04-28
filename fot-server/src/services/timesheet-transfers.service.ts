@@ -229,14 +229,40 @@ export interface IUpdateTransferResult {
   effective_from: string;
   effective_to_old: string;
   employee_id: number;
+  to_department_id: string;
+  from_department_id: string;
+  changed: { date: boolean; to_dept: boolean; from_dept: boolean };
+}
+
+export interface IUpdateTransferInput {
+  effective_from?: string;
+  to_department_id?: string;
+  from_department_id?: string;
+}
+
+async function ensureDepartmentExists(deptId: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('org_departments')
+    .select('id')
+    .eq('id', deptId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error('Отдел не найден');
 }
 
 /**
- * Изменить дату перевода. effective_from нового назначения = newDate, effective_to старого = newDate − 1.
+ * Унифицированное обновление перевода: дата перевода и/или отдел назначения и/или исходный отдел.
+ * Хотя бы одно поле должно отличаться от текущего значения.
+ *
+ * Семантика:
+ * - effective_from — дата нового назначения; effective_to старого синхронно сдвигается на newDate-1.
+ * - to_department_id — отдел открытого (нового) назначения. Если new — последнее открытое назначение
+ *   сотрудника, то employees.org_department_id тоже синхронизируется.
+ * - from_department_id — отдел закрытого (предыдущего) назначения. employees.org_department_id не трогаем.
  */
-export async function updateTransferDate(
+export async function updateTransfer(
   assignmentNewId: string,
-  newDate: string,
+  input: IUpdateTransferInput,
 ): Promise<IUpdateTransferResult> {
   const newA = await loadAssignmentById(assignmentNewId);
   if (!newA) throw new Error('Назначение не найдено');
@@ -245,53 +271,100 @@ export async function updateTransferDate(
   const oldA = await findPreviousClosedAssignment(newA);
   if (!oldA) throw new Error('Парное предыдущее назначение не найдено — возможно, перевод создан вручную');
 
-  if (newDate <= oldA.effective_from) {
+  const nextDate = input.effective_from ?? newA.effective_from;
+  const nextToDept = input.to_department_id ?? newA.org_department_id;
+  const nextFromDept = input.from_department_id ?? oldA.org_department_id;
+
+  const dateChanged = input.effective_from != null && input.effective_from !== newA.effective_from;
+  const toDeptChanged = input.to_department_id != null && input.to_department_id !== newA.org_department_id;
+  const fromDeptChanged = input.from_department_id != null && input.from_department_id !== oldA.org_department_id;
+
+  if (!dateChanged && !toDeptChanged && !fromDeptChanged) {
+    throw new Error('Не указаны изменения');
+  }
+
+  if (nextToDept === nextFromDept) {
+    throw new Error('Отдел назначения не может совпадать с исходным отделом');
+  }
+
+  if (toDeptChanged) await ensureDepartmentExists(nextToDept);
+  if (fromDeptChanged) await ensureDepartmentExists(nextFromDept);
+
+  if (nextDate <= oldA.effective_from) {
     throw new Error('Дата перевода не может быть раньше начала предыдущего назначения');
   }
 
-  // Проверка: между oldA.effective_from и newDate-1 нет других назначений того же сотрудника, кроме oldA.
-  const previousDay = formatDateShift(newDate, -1);
-  const { data: overlap, error: overlapErr } = await supabase
-    .from('employee_assignments')
-    .select('id, effective_from, effective_to')
-    .eq('employee_id', newA.employee_id)
-    .neq('id', oldA.id)
-    .neq('id', newA.id)
-    .lte('effective_from', previousDay)
-    .or(`effective_to.is.null,effective_to.gte.${oldA.effective_from}`);
-  if (overlapErr) throw overlapErr;
-  if ((overlap || []).length > 0) {
-    throw new Error('Новая дата пересекается с другими назначениями сотрудника');
+  const previousDay = formatDateShift(nextDate, -1);
+
+  if (dateChanged) {
+    const { data: overlap, error: overlapErr } = await supabase
+      .from('employee_assignments')
+      .select('id, effective_from, effective_to')
+      .eq('employee_id', newA.employee_id)
+      .neq('id', oldA.id)
+      .neq('id', newA.id)
+      .lte('effective_from', previousDay)
+      .or(`effective_to.is.null,effective_to.gte.${oldA.effective_from}`);
+    if (overlapErr) throw overlapErr;
+    if ((overlap || []).length > 0) {
+      throw new Error('Новая дата пересекается с другими назначениями сотрудника');
+    }
   }
 
   const nowIso = new Date().toISOString();
 
-  // Сначала закрываем старое — затем сдвигаем новое.
-  const { error: oldUpdErr } = await supabase
-    .from('employee_assignments')
-    .update({ effective_to: previousDay, updated_at: nowIso })
-    .eq('id', oldA.id);
-  if (oldUpdErr) throw oldUpdErr;
+  const oldUpdate: Record<string, unknown> = { updated_at: nowIso };
+  if (dateChanged) oldUpdate.effective_to = previousDay;
+  if (fromDeptChanged) oldUpdate.org_department_id = nextFromDept;
 
-  const { error: newUpdErr } = await supabase
-    .from('employee_assignments')
-    .update({ effective_from: newDate, updated_at: nowIso })
-    .eq('id', newA.id);
-  if (newUpdErr) {
-    // Откатываем закрытие старого, чтобы не потерять инвариант.
-    await supabase
+  if (Object.keys(oldUpdate).length > 1) {
+    const { error: oldUpdErr } = await supabase
       .from('employee_assignments')
-      .update({ effective_to: oldA.effective_to, updated_at: nowIso })
+      .update(oldUpdate)
       .eq('id', oldA.id);
-    throw newUpdErr;
+    if (oldUpdErr) throw oldUpdErr;
+  }
+
+  const newUpdate: Record<string, unknown> = { updated_at: nowIso };
+  if (dateChanged) newUpdate.effective_from = nextDate;
+  if (toDeptChanged) newUpdate.org_department_id = nextToDept;
+
+  if (Object.keys(newUpdate).length > 1) {
+    const { error: newUpdErr } = await supabase
+      .from('employee_assignments')
+      .update(newUpdate)
+      .eq('id', newA.id);
+    if (newUpdErr) {
+      // Откатываем изменения старого назначения.
+      const rollback: Record<string, unknown> = { updated_at: nowIso };
+      if (dateChanged) rollback.effective_to = oldA.effective_to;
+      if (fromDeptChanged) rollback.org_department_id = oldA.org_department_id;
+      await supabase
+        .from('employee_assignments')
+        .update(rollback)
+        .eq('id', oldA.id);
+      throw newUpdErr;
+    }
+  }
+
+  // Если поменялся отдел открытого назначения — синхронизируем employees.org_department_id.
+  if (toDeptChanged) {
+    const { error: empErr } = await supabase
+      .from('employees')
+      .update({ org_department_id: nextToDept, updated_at: nowIso })
+      .eq('id', newA.employee_id);
+    if (empErr) throw empErr;
   }
 
   return {
     assignment_new_id: newA.id,
     assignment_old_id: oldA.id,
-    effective_from: newDate,
+    effective_from: nextDate,
     effective_to_old: previousDay,
     employee_id: newA.employee_id,
+    to_department_id: nextToDept,
+    from_department_id: nextFromDept,
+    changed: { date: dateChanged, to_dept: toDeptChanged, from_dept: fromDeptChanged },
   };
 }
 

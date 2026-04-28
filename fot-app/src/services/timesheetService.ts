@@ -252,12 +252,19 @@ export const timesheetService = {
     return res.data;
   },
 
-  async updateTransfer(assignmentId: string, effectiveFrom: string): Promise<void> {
+  async updateTransfer(
+    assignmentId: string,
+    patch: { effective_from?: string; to_department_id?: string; from_department_id?: string },
+  ): Promise<void> {
+    const body: Record<string, string> = {};
+    if (patch.effective_from) body.effective_from = patch.effective_from;
+    if (patch.to_department_id) body.to_department_id = patch.to_department_id;
+    if (patch.from_department_id) body.from_department_id = patch.from_department_id;
     const res = await apiClient.patch<ApiResponse<null>>(
       `/timesheet/team-management/transfers/${assignmentId}`,
-      { effective_from: effectiveFrom },
+      body,
     );
-    if (res.error) throw new Error(res.error || 'Ошибка изменения даты перевода');
+    if (res.error) throw new Error(res.error || 'Ошибка изменения перевода');
   },
 
   async deleteTransfer(assignmentId: string): Promise<void> {

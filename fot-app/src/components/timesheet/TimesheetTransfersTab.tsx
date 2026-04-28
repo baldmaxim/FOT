@@ -1,4 +1,4 @@
-import { type FC, useEffect, useMemo, useState } from 'react';
+import { type FC, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRightLeft, Check, Loader2, Pencil, Trash2, UserMinus } from 'lucide-react';
 import {
@@ -41,15 +41,6 @@ export const TimesheetTransfersTab: FC<ITimesheetTransfersTabProps> = ({
     enabled: !!departmentId,
     staleTime: 0,
   });
-
-  useEffect(() => {
-    setEditingTransferId(null);
-    setEditingExclusionEmployeeId(null);
-    setDraftDate('');
-    setDraftToDeptId('');
-    setDraftFromDeptId('');
-    setError(null);
-  }, [departmentId]);
 
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ['timesheet-transfers'] });
