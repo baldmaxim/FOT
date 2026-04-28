@@ -1987,7 +1987,7 @@ export const TimesheetPage: FC = () => {
                 : (modalEntry?.status || 'work')
             }
             initialHours={modalDefaultHours}
-            initialNotes={modalMode === 'object' ? (modalObjectEntry?.notes ?? '') : ''}
+            initialNotes={modalMode === 'object' ? (modalObjectEntry?.notes ?? '') : (modalEntry?.notes ?? '')}
             dayLabel={`${formatDateRu(modalDay, month)}`}
             title={modalMode === 'object' ? modalObjectTarget?.object_name : undefined}
             subtitle={modalMode === 'object' ? `${modalEmployee?.full_name || ''} • ${formatDateRu(modalDay, month)}` : undefined}
