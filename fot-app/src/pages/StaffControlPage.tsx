@@ -5,6 +5,8 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
+import { sigurAdminService } from '../services/sigurAdminService';
+import type { SigurEmployeeSummary, SigurDepartmentNode } from '../types';
 import { timesheetService } from '../services/timesheetService';
 import { ApiError } from '../api/client';
 import { scheduleService } from '../services/scheduleService';
@@ -1328,6 +1330,62 @@ export const StaffControlPage: FC = () => {
     enabled: showAddModal,
     staleTime: 5 * 60_000,
   });
+
+  // ─── Sigur duplicate detection (live search by full_name) ───
+  const sigurDuplicatesQueryDebounced = useDebouncedValue(
+    showAddModal ? addForm.full_name.trim() : '',
+    300,
+  );
+  const sigurDuplicatesEnabled = showAddModal && sigurDuplicatesQueryDebounced.length >= 2;
+  const sigurDuplicatesResult = useQuery({
+    queryKey: ['sigur-duplicates', sigurDuplicatesQueryDebounced],
+    queryFn: () => sigurAdminService.getEmployees({
+      search: sigurDuplicatesQueryDebounced,
+      pageSize: 8,
+    }),
+    enabled: sigurDuplicatesEnabled,
+    staleTime: 30_000,
+  });
+  const sigurDuplicates = sigurDuplicatesResult.data?.items || [];
+
+  // ─── Sigur edit dialog state ───
+  const [sigurEditDialog, setSigurEditDialog] = useState<{
+    sigurEmployeeId: number;
+    name: string;
+    departmentId: string;
+    positionId: string;
+    tabId: string;
+    description: string;
+    blocked: boolean;
+  } | null>(null);
+  const [loadingSigurProfile, setLoadingSigurProfile] = useState(false);
+  const [sigurEditSaving, setSigurEditSaving] = useState(false);
+  const [sigurEditError, setSigurEditError] = useState<string | null>(null);
+
+  const sigurDeptsQuery = useQuery({
+    queryKey: ['sigur-admin', 'departments-tree'],
+    queryFn: () => sigurAdminService.getDepartmentsTree(),
+    enabled: sigurEditDialog !== null,
+    staleTime: 5 * 60_000,
+  });
+  const sigurPositionsQuery = useQuery({
+    queryKey: ['sigur-admin', 'positions'],
+    queryFn: () => sigurAdminService.getPositions(),
+    enabled: sigurEditDialog !== null,
+    staleTime: 5 * 60_000,
+  });
+
+  const sigurDeptOptions = useMemo(() => {
+    const flatten = (
+      nodes: SigurDepartmentNode[],
+      level = 0,
+    ): Array<{ id: number; name: string; level: number }> =>
+      nodes.flatMap(node => [
+        { id: node.id, name: node.name, level },
+        ...flatten(node.children || [], level + 1),
+      ]);
+    return flatten(sigurDeptsQuery.data || []);
+  }, [sigurDeptsQuery.data]);
   const [enrichPreview, setEnrichPreview] = useState<EnrichPreview | null>(null);
   const [enrichFile, setEnrichFile] = useState<File | null>(null);
   const [enrichLoading, setEnrichLoading] = useState(false);
@@ -1789,6 +1847,67 @@ export const StaffControlPage: FC = () => {
     }
   };
 
+  const handleSelectSigurDuplicate = async (suggestion: SigurEmployeeSummary) => {
+    try {
+      setLoadingSigurProfile(true);
+      setAddError(null);
+      const profile = await sigurAdminService.getEmployeeProfile(suggestion.id);
+      setShowAddModal(false);
+      resetAddForm();
+      setSigurEditDialog({
+        sigurEmployeeId: profile.sigurEmployeeId,
+        name: profile.profile.fullName ?? suggestion.name,
+        departmentId: profile.profile.departmentId != null ? String(profile.profile.departmentId) : '',
+        positionId: profile.profile.positionId != null ? String(profile.profile.positionId) : '',
+        tabId: profile.profile.tabNumber ?? '',
+        description: profile.profile.description ?? '',
+        blocked: profile.profile.blocked === true,
+      });
+      setSigurEditError(null);
+    } catch (err) {
+      const msg = err instanceof Error && err.message ? err.message : 'Не удалось загрузить профиль из Sigur';
+      setAddError(msg);
+      toast.error(msg);
+    } finally {
+      setLoadingSigurProfile(false);
+    }
+  };
+
+  const closeSigurEditDialog = () => {
+    if (sigurEditSaving) return;
+    setSigurEditDialog(null);
+    setSigurEditError(null);
+  };
+
+  const handleSaveSigurEdit = async () => {
+    if (!sigurEditDialog) return;
+    if (!sigurEditDialog.name.trim() || !sigurEditDialog.departmentId) {
+      setSigurEditError('Заполните ФИО и отдел');
+      return;
+    }
+    setSigurEditSaving(true);
+    setSigurEditError(null);
+    try {
+      await sigurAdminService.updateEmployee(sigurEditDialog.sigurEmployeeId, {
+        name: sigurEditDialog.name.trim(),
+        departmentId: Number(sigurEditDialog.departmentId),
+        positionId: sigurEditDialog.positionId ? Number(sigurEditDialog.positionId) : null,
+        tabId: sigurEditDialog.tabId.trim() || null,
+        description: sigurEditDialog.description.trim() || null,
+        blocked: sigurEditDialog.blocked,
+      });
+      toast.success('Профиль в Sigur обновлён');
+      setSigurEditDialog(null);
+      refresh();
+    } catch (err) {
+      const msg = err instanceof Error && err.message ? err.message : 'Не удалось обновить профиль в Sigur';
+      setSigurEditError(msg);
+      toast.error(msg);
+    } finally {
+      setSigurEditSaving(false);
+    }
+  };
+
   const filtersContent = (
     <div className="sc-filters">
       <DeptSelect
@@ -2067,8 +2186,33 @@ export const StaffControlPage: FC = () => {
                   onChange={e => setAddForm({ ...addForm, full_name: e.target.value })}
                   placeholder="Иванов Иван Иванович"
                   autoFocus
-                  disabled={addSaving}
+                  disabled={addSaving || loadingSigurProfile}
                 />
+                {sigurDuplicatesEnabled && (sigurDuplicatesResult.isFetching || sigurDuplicates.length > 0) && (
+                  <div className="sc-sigur-suggestions">
+                    <div className="sc-sigur-suggestions-hint">
+                      {sigurDuplicatesResult.isFetching
+                        ? 'Поиск в Sigur...'
+                        : `Найдены похожие в Sigur (${sigurDuplicates.length}). Кликните, чтобы редактировать.`}
+                    </div>
+                    {sigurDuplicates.map(suggestion => (
+                      <button
+                        key={suggestion.id}
+                        type="button"
+                        className="sc-sigur-suggestion-row"
+                        onClick={() => void handleSelectSigurDuplicate(suggestion)}
+                        disabled={loadingSigurProfile || addSaving}
+                      >
+                        <span className="sc-sigur-suggestion-name">{suggestion.name}</span>
+                        <span className="sc-sigur-suggestion-meta">
+                          {[suggestion.departmentName, suggestion.positionName, suggestion.tabId ? `Таб. ${suggestion.tabId}` : null]
+                            .filter(Boolean)
+                            .join(' · ') || '—'}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="sc-field">
                 <label>Дата найма *</label>
@@ -2128,6 +2272,100 @@ export const StaffControlPage: FC = () => {
                 disabled={addSaving || !addForm.full_name.trim() || !addForm.hire_date || !addForm.org_department_id || !addForm.position_id}
               >
                 {addSaving ? 'Создаём в Sigur...' : 'Добавить'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Sigur Edit Modal (открывается при клике на дубликат) ─── */}
+      {sigurEditDialog && (
+        <div className="sc-overlay" onClick={closeSigurEditDialog}>
+          <div className="sc-modal" onClick={e => e.stopPropagation()}>
+            <div className="sc-modal-header">
+              <h3>Редактирование сотрудника Sigur</h3>
+              <button className="sc-modal-close" onClick={closeSigurEditDialog} disabled={sigurEditSaving}>&times;</button>
+            </div>
+            <div className="sc-modal-body">
+              <div className="sc-field">
+                <label>ФИО *</label>
+                <input
+                  value={sigurEditDialog.name}
+                  onChange={e => setSigurEditDialog(prev => prev ? { ...prev, name: e.target.value } : prev)}
+                  disabled={sigurEditSaving}
+                />
+              </div>
+              <div className="sc-field">
+                <label>Отдел Sigur *</label>
+                <select
+                  value={sigurEditDialog.departmentId}
+                  onChange={e => setSigurEditDialog(prev => prev ? { ...prev, departmentId: e.target.value } : prev)}
+                  disabled={sigurEditSaving || sigurDeptsQuery.isLoading}
+                >
+                  <option value="">
+                    {sigurDeptsQuery.isLoading ? 'Загрузка...' : '— Выберите отдел —'}
+                  </option>
+                  {sigurDeptOptions.map(option => (
+                    <option key={option.id} value={option.id}>
+                      {'  '.repeat(option.level)}{option.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="sc-field">
+                <label>Должность Sigur</label>
+                <select
+                  value={sigurEditDialog.positionId}
+                  onChange={e => setSigurEditDialog(prev => prev ? { ...prev, positionId: e.target.value } : prev)}
+                  disabled={sigurEditSaving || sigurPositionsQuery.isLoading}
+                >
+                  <option value="">
+                    {sigurPositionsQuery.isLoading ? 'Загрузка...' : '— Не указана —'}
+                  </option>
+                  {(sigurPositionsQuery.data || []).map(pos => (
+                    <option key={pos.id} value={pos.id}>{pos.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="sc-field">
+                <label>Табельный номер</label>
+                <input
+                  value={sigurEditDialog.tabId}
+                  onChange={e => setSigurEditDialog(prev => prev ? { ...prev, tabId: e.target.value } : prev)}
+                  placeholder="(опционально)"
+                  disabled={sigurEditSaving}
+                />
+              </div>
+              <div className="sc-field">
+                <label>Описание</label>
+                <textarea
+                  value={sigurEditDialog.description}
+                  onChange={e => setSigurEditDialog(prev => prev ? { ...prev, description: e.target.value } : prev)}
+                  rows={3}
+                  disabled={sigurEditSaving}
+                />
+              </div>
+              <div className="sc-field sc-checkbox-row">
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={sigurEditDialog.blocked}
+                    onChange={e => setSigurEditDialog(prev => prev ? { ...prev, blocked: e.target.checked } : prev)}
+                    disabled={sigurEditSaving}
+                  />
+                  <span>Заблокирован в Sigur</span>
+                </label>
+              </div>
+              {sigurEditError && <div className="sc-error" style={{ color: '#dc2626', fontSize: 13 }}>{sigurEditError}</div>}
+            </div>
+            <div className="sc-modal-footer">
+              <button className="sc-btn cancel" onClick={closeSigurEditDialog} disabled={sigurEditSaving}>Отмена</button>
+              <button
+                className="sc-btn apply"
+                onClick={() => void handleSaveSigurEdit()}
+                disabled={sigurEditSaving || !sigurEditDialog.name.trim() || !sigurEditDialog.departmentId}
+              >
+                {sigurEditSaving ? 'Сохранение...' : 'Сохранить'}
               </button>
             </div>
           </div>
