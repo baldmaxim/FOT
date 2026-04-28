@@ -1,8 +1,10 @@
-import { type FC, useState, useMemo } from 'react';
+import { type FC, Fragment, useState, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Save, RotateCcw } from 'lucide-react';
 import { productionCalendarService, type IProductionCalendarEntry } from '../../services/productionCalendarService';
 import { getProductionCalendarQueryKey, useProductionCalendar } from '../../hooks/useSettingsData';
+import { computeWorkingNorm } from '../../utils/calendarUtils';
+import { MonthCalendar, type CalendarMode } from './MonthCalendar';
 import styles from './ProductionCalendarPage.module.css';
 
 const MONTH_NAMES = [
@@ -14,19 +16,15 @@ interface IEditingRow {
   month: number;
   norm_days: number;
   norm_hours: number;
-  holidays: string;
-  mandatory_holidays: string;
+  holidays: string[];
+  mandatory_holidays: string[];
+  mode: CalendarMode;
 }
 
-const datesToString = (arr: string[] | undefined): string =>
-  (arr || []).join(', ');
-
-const stringToDates = (str: string): string[] =>
-  str
-    .split(/[\s,;]+/)
-    .map(s => s.trim())
-    .filter(s => /^\d{4}-\d{2}-\d{2}$/.test(s));
 const EMPTY_ENTRIES: IProductionCalendarEntry[] = [];
+
+const toggleInArray = (arr: string[], iso: string): string[] =>
+  arr.includes(iso) ? arr.filter(d => d !== iso) : [...arr, iso].sort();
 
 export const ProductionCalendarPage: FC = () => {
   const [year, setYear] = useState(new Date().getFullYear());
@@ -39,14 +37,35 @@ export const ProductionCalendarPage: FC = () => {
   const entryMap = useMemo(() => new Map(entries.map(e => [e.month, e])), [entries]);
 
   const handleEdit = (month: number) => {
+    if (editing?.month === month) {
+      setEditing(null);
+      return;
+    }
     const entry = entryMap.get(month);
+    const holidays = entry?.holidays ?? [];
+    const mandatory_holidays = entry?.mandatory_holidays ?? [];
     setEditing({
       month,
-      norm_days: entry?.norm_days ?? 22,
-      norm_hours: entry?.norm_hours ?? 176,
-      holidays: datesToString(entry?.holidays),
-      mandatory_holidays: datesToString(entry?.mandatory_holidays),
+      norm_days: entry?.norm_days ?? 0,
+      norm_hours: entry?.norm_hours ?? 0,
+      holidays,
+      mandatory_holidays,
+      mode: 'holiday',
     });
+  };
+
+  const handleToggleDay = (iso: string) => {
+    if (!editing) return;
+    const next: IEditingRow = { ...editing };
+    if (editing.mode === 'holiday') {
+      next.holidays = toggleInArray(editing.holidays, iso);
+    } else {
+      next.mandatory_holidays = toggleInArray(editing.mandatory_holidays, iso);
+    }
+    const norm = computeWorkingNorm(year, editing.month, next.holidays, next.mandatory_holidays);
+    next.norm_days = norm.norm_days;
+    next.norm_hours = norm.norm_hours;
+    setEditing(next);
   };
 
   const handleSave = async () => {
@@ -56,8 +75,8 @@ export const ProductionCalendarPage: FC = () => {
       const updated = await productionCalendarService.update(year, editing.month, {
         norm_days: editing.norm_days,
         norm_hours: editing.norm_hours,
-        holidays: stringToDates(editing.holidays),
-        mandatory_holidays: stringToDates(editing.mandatory_holidays),
+        holidays: editing.holidays,
+        mandatory_holidays: editing.mandatory_holidays,
       });
       queryClient.setQueryData<IProductionCalendarEntry[]>(
         getProductionCalendarQueryKey(year),
@@ -86,11 +105,11 @@ export const ProductionCalendarPage: FC = () => {
       <div className={styles.header}>
         <h2 className={styles.title}>Производственный календарь</h2>
         <div className={styles.yearNav}>
-          <button className={styles.yearBtn} onClick={() => setYear(y => y - 1)}>
+          <button className={styles.yearBtn} onClick={() => { setEditing(null); setYear(y => y - 1); }}>
             <ChevronLeft size={18} />
           </button>
           <span className={styles.yearLabel}>{year}</span>
-          <button className={styles.yearBtn} onClick={() => setYear(y => y + 1)}>
+          <button className={styles.yearBtn} onClick={() => { setEditing(null); setYear(y => y + 1); }}>
             <ChevronRight size={18} />
           </button>
         </div>
@@ -119,90 +138,111 @@ export const ProductionCalendarPage: FC = () => {
                 const isEditing = editing?.month === month;
 
                 return (
-                  <tr key={month} className={entry?.is_custom ? styles.customRow : ''}>
-                    <td className={styles.monthCell}>{name}</td>
-                    <td>
-                      {isEditing ? (
-                        <input
-                          type="number"
-                          className={styles.input}
-                          value={editing.norm_days}
-                          onChange={e => setEditing({ ...editing, norm_days: parseInt(e.target.value) || 0 })}
-                          min={0}
-                          max={31}
-                        />
-                      ) : (
-                        entry?.norm_days ?? '—'
-                      )}
-                    </td>
-                    <td>
-                      {isEditing ? (
-                        <input
-                          type="number"
-                          className={styles.input}
-                          value={editing.norm_hours}
-                          onChange={e => setEditing({ ...editing, norm_hours: parseFloat(e.target.value) || 0 })}
-                          min={0}
-                          max={248}
-                          step={0.5}
-                        />
-                      ) : (
-                        entry?.norm_hours ?? '—'
-                      )}
-                    </td>
-                    <td>
-                      {isEditing ? (
-                        <input
-                          type="text"
-                          className={styles.input}
-                          value={editing.holidays}
-                          onChange={e => setEditing({ ...editing, holidays: e.target.value })}
-                          placeholder="2026-05-01, 2026-05-09"
-                        />
-                      ) : (
-                        <span style={{ fontSize: 11 }}>{(entry?.holidays || []).length} дат</span>
-                      )}
-                    </td>
-                    <td>
-                      {isEditing ? (
-                        <input
-                          type="text"
-                          className={styles.input}
-                          value={editing.mandatory_holidays}
-                          onChange={e => setEditing({ ...editing, mandatory_holidays: e.target.value })}
-                          placeholder="2026-01-01, 2026-01-07"
-                        />
-                      ) : (
-                        <span style={{ fontSize: 11 }}>{(entry?.mandatory_holidays || []).length} дат</span>
-                      )}
-                    </td>
-                    <td className={styles.customCell}>
-                      {entry?.is_custom && (
-                        <span className={styles.customBadge}>Изменено</span>
-                      )}
-                    </td>
-                    <td>
-                      {isEditing ? (
-                        <div className={styles.actions}>
-                          <button
-                            className={styles.saveBtn}
-                            onClick={handleSave}
-                            disabled={saving === month}
-                          >
-                            <Save size={14} />
-                            {saving === month ? 'Сохранение...' : 'Сохранить'}
-                          </button>
-                          <button className={styles.cancelBtn} onClick={handleCancel}>
-                            <RotateCcw size={14} />
-                          </button>
-                        </div>
-                      ) : (
-                        <button className={styles.editBtn} onClick={() => handleEdit(month)}>
-                          Изменить
+                  <Fragment key={month}>
+                    <tr className={entry?.is_custom ? styles.customRow : ''}>
+                      <td className={styles.monthCell}>{name}</td>
+                      <td>
+                        {isEditing ? (
+                          <input
+                            type="number"
+                            className={styles.input}
+                            value={editing.norm_days}
+                            onChange={e => setEditing({ ...editing, norm_days: parseInt(e.target.value) || 0 })}
+                            min={0}
+                            max={31}
+                          />
+                        ) : (
+                          entry?.norm_days ?? '—'
+                        )}
+                      </td>
+                      <td>
+                        {isEditing ? (
+                          <input
+                            type="number"
+                            className={styles.input}
+                            value={editing.norm_hours}
+                            onChange={e => setEditing({ ...editing, norm_hours: parseFloat(e.target.value) || 0 })}
+                            min={0}
+                            max={248}
+                            step={0.5}
+                          />
+                        ) : (
+                          entry?.norm_hours ?? '—'
+                        )}
+                      </td>
+                      <td>
+                        <span className={styles.countBadge}>
+                          {(isEditing ? editing.holidays : entry?.holidays || []).length} дат
+                        </span>
+                      </td>
+                      <td>
+                        <span className={styles.countBadge}>
+                          {(isEditing ? editing.mandatory_holidays : entry?.mandatory_holidays || []).length} дат
+                        </span>
+                      </td>
+                      <td className={styles.customCell}>
+                        {entry?.is_custom && (
+                          <span className={styles.customBadge}>Изменено</span>
+                        )}
+                      </td>
+                      <td>
+                        <button
+                          className={styles.editBtn}
+                          onClick={() => handleEdit(month)}
+                        >
+                          {isEditing ? 'Закрыть' : 'Изменить'}
                         </button>
-                      )}
-                    </td>
-                  </tr>
+                      </td>
+                    </tr>
+                    {isEditing && (
+                      <tr className={styles.calendarRow}>
+                        <td colSpan={7}>
+                          <div className={styles.calendarPanel}>
+                            <div className={styles.modeSwitch}>
+                              <button
+                                type="button"
+                                className={`${styles.modeBtn} ${editing.mode === 'holiday' ? styles.modeBtnActive : ''}`}
+                                onClick={() => setEditing({ ...editing, mode: 'holiday' })}
+                              >
+                                <span className={`${styles.modeDot} ${styles.modeDotHoliday}`} />
+                                Праздник
+                              </button>
+                              <button
+                                type="button"
+                                className={`${styles.modeBtn} ${editing.mode === 'mandatory' ? styles.modeBtnActive : ''}`}
+                                onClick={() => setEditing({ ...editing, mode: 'mandatory' })}
+                              >
+                                <span className={`${styles.modeDot} ${styles.modeDotMandatory}`} />
+                                Всегда-выходной
+                              </button>
+                            </div>
+                            <MonthCalendar
+                              year={year}
+                              month={month}
+                              holidays={editing.holidays}
+                              mandatoryHolidays={editing.mandatory_holidays}
+                              mode={editing.mode}
+                              onToggleDay={handleToggleDay}
+                            />
+                            <div className={styles.calendarActions}>
+                              <button
+                                className={styles.saveBtn}
+                                onClick={handleSave}
+                                disabled={saving === month}
+                              >
+                                <Save size={14} />
+                                {saving === month ? 'Сохранение...' : 'Сохранить'}
+                              </button>
+                              <button className={styles.cancelBtn} onClick={handleCancel}>
+                                <RotateCcw size={14} />
+                                Отмена
+                              </button>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
               <tr className={styles.totalRow}>
@@ -213,10 +253,11 @@ export const ProductionCalendarPage: FC = () => {
               </tr>
             </tbody>
           </table>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
-            Даты в формате YYYY-MM-DD через запятую. «Праздники» учитываются только графиками с
-            флагом «учитывать праздники РФ». «Всегда-выходные» (1 января, 7 января, 9 мая) — для
-            всех графиков.
+          <div className={styles.legend}>
+            Кликните «Изменить» для месяца — раскроется календарик. Переключайте режим «Праздник» / «Всегда-выходной»
+            и кликом помечайте дни. Поля «Рабочих дней» и «Рабочих часов» пересчитываются автоматически
+            (можно перебить руками для сокращённых предпраздничных дней). «Праздники» учитываются только
+            графиками с флагом «учитывать праздники РФ»; «Всегда-выходные» — для всех графиков.
           </div>
         </div>
       )}

@@ -193,6 +193,180 @@
   font-weight: 600;
 }
 
+.countBadge {
+  display: inline-block;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.legend {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  line-height: 1.5;
+}
+
+.calendarRow {
+  background: var(--bg-secondary);
+}
+
+.calendarRow td {
+  padding: 16px !important;
+}
+
+.calendarPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.modeSwitch {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.modeBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.modeBtn:hover {
+  border-color: var(--accent);
+}
+
+.modeBtnActive {
+  border-color: var(--accent);
+  background: var(--accent-muted, rgba(59, 130, 246, 0.1));
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.modeDot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.modeDotHoliday {
+  background: #3b82f6;
+}
+
+.modeDotMandatory {
+  background: #ef4444;
+}
+
+.calendar {
+  width: 100%;
+  max-width: 360px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  padding: 8px;
+}
+
+.weekdayHeader {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  margin-bottom: 4px;
+}
+
+.weekdayCell {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  padding: 4px 0;
+}
+
+.daysGrid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.dayBtn {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+  padding: 0;
+  min-height: 32px;
+}
+
+.dayBtn:hover:not(.dayBtnOutside) {
+  background: var(--bg-secondary);
+  border-color: var(--border);
+}
+
+.dayBtnOutside {
+  cursor: default;
+  visibility: hidden;
+}
+
+.dayBtnWeekend {
+  color: var(--text-secondary);
+}
+
+.dayBtnToday {
+  border-color: var(--accent);
+  font-weight: 700;
+}
+
+.dayBtnHoliday {
+  background: #3b82f6;
+  color: #fff;
+  border-color: #3b82f6;
+}
+
+.dayBtnHoliday:hover:not(.dayBtnOutside) {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.dayBtnMandatory {
+  background: #ef4444;
+  color: #fff;
+  border-color: #ef4444;
+}
+
+.dayBtnMandatory:hover:not(.dayBtnOutside) {
+  background: #dc2626;
+  border-color: #dc2626;
+}
+
+.dayBtnHoliday.dayBtnMandatory {
+  background: linear-gradient(135deg, #ef4444 50%, #3b82f6 50%);
+  border-color: #ef4444;
+}
+
+.calendarActions {
+  display: flex;
+  gap: 8px;
+}
+
 @media (max-width: 768px) {
   .page {
     padding: 16px;
@@ -206,5 +380,25 @@
 
   .input {
     width: 60px;
+  }
+
+  .calendar {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 430px) {
+  .dayBtn {
+    min-height: 36px;
+    font-size: 14px;
+  }
+
+  .table th:nth-child(4),
+  .table th:nth-child(5),
+  .table th:nth-child(6),
+  .table td:nth-child(4),
+  .table td:nth-child(5),
+  .table td:nth-child(6) {
+    display: none;
   }
 }

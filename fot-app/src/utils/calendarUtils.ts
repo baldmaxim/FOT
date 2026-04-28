@@ -69,6 +69,29 @@ export const isFutureDay = (year: number, month: number, day: number): boolean =
   return d > today;
 };
 
+export const toISODate = (year: number, month: number, day: number): string => {
+  const m = String(month).padStart(2, '0');
+  const d = String(day).padStart(2, '0');
+  return `${year}-${m}-${d}`;
+};
+
+export const computeWorkingNorm = (
+  year: number,
+  month: number,
+  holidays: string[],
+  mandatoryHolidays: string[],
+): { norm_days: number; norm_hours: number } => {
+  const days = getDaysInMonth(year, month);
+  const offDays = new Set<string>([...holidays, ...mandatoryHolidays]);
+  let normDays = 0;
+  for (let d = 1; d <= days; d++) {
+    if (isWeekend(year, month, d)) continue;
+    if (offDays.has(toISODate(year, month, d))) continue;
+    normDays++;
+  }
+  return { norm_days: normDays, norm_hours: normDays * 8 };
+};
+
 export const getWorkingDaysUpToToday = (year: number, month: number): number => {
   const now = new Date();
   const curYear = now.getFullYear();
