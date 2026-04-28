@@ -101,6 +101,25 @@ const getObjectBulkCellKey = (employeeId: number, objectKey: string, day: number
   `${getObjectBulkRowKey(employeeId, objectKey)}:${day}`
 );
 
+type ParsedRowKey =
+  | { kind: 'employee'; employeeId: number }
+  | { kind: 'object'; employeeId: number; objectKey: string };
+
+const parseBulkRowKey = (rowKey: string): ParsedRowKey | null => {
+  const parts = rowKey.split(':');
+  if (parts[0] === 'employee' && parts.length === 2) {
+    const employeeId = Number.parseInt(parts[1] || '', 10);
+    return Number.isFinite(employeeId) ? { kind: 'employee', employeeId } : null;
+  }
+  if (parts[0] === 'object' && parts.length === 3) {
+    const employeeId = Number.parseInt(parts[1] || '', 10);
+    const objectKey = decodeURIComponent(parts[2] || '');
+    if (!Number.isFinite(employeeId) || !objectKey) return null;
+    return { kind: 'object', employeeId, objectKey };
+  }
+  return null;
+};
+
 const roundHours = (value: number): number => Math.round(value * 100) / 100;
 const getVisibleHours = (entry: TimesheetEntry | null | undefined): number | null => (
   entry?.display_hours_worked ?? entry?.hours_worked ?? null
@@ -541,6 +560,21 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   const objectRowIndexByKey = useMemo(() => (
     new Map(objectViewRowsFlat.map((row, index) => [getObjectBulkRowKey(row.employee.id, row.object_key), index]))
   ), [objectViewRowsFlat]);
+  const expandedObjectRowsByEmployee = useMemo(() => {
+    const map = new Map<number, { rowKey: string; objectKey: string }[]>();
+    for (const row of employeeRows) {
+      if (!activeExpandedEmployeeIds.has(row.employee.id)) continue;
+      if (!row.hasExpandableObjects) continue;
+      map.set(
+        row.employee.id,
+        row.objectRows.map(objectRow => ({
+          rowKey: getObjectBulkRowKey(row.employee.id, objectRow.object_key),
+          objectKey: objectRow.object_key,
+        })),
+      );
+    }
+    return map;
+  }, [employeeRows, activeExpandedEmployeeIds]);
   const dayIndexByValue = useMemo(() => (
     new Map(days.map((day, index) => [day, index]))
   ), [days]);
@@ -570,12 +604,12 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     return merged;
   }, []);
 
-  const buildBulkRangeSelection = useCallback((anchor: IBulkCellCoord, current: IBulkCellCoord): Set<string> => {
+  const buildBulkRangeSelection = useCallback((anchor: IBulkCellCoord, current: IBulkCellCoord): Set<string> | null => {
     const anchorDayIndex = dayIndexByValue.get(anchor.day);
     const currentDayIndex = dayIndexByValue.get(current.day);
 
     if (anchorDayIndex == null || currentDayIndex == null) {
-      return new Set();
+      return null;
     }
 
     const startDayIndex = Math.min(anchorDayIndex, currentDayIndex);
@@ -586,7 +620,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       const anchorRowIndex = objectRowIndexByKey.get(anchor.rowKey);
       const currentRowIndex = objectRowIndexByKey.get(current.rowKey);
       if (anchorRowIndex == null || currentRowIndex == null) {
-        return new Set();
+        return null;
       }
 
       const startRowIndex = Math.min(anchorRowIndex, currentRowIndex);
@@ -607,10 +641,40 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       return nextSelection;
     }
 
+    const anchorParsed = parseBulkRowKey(anchor.rowKey);
+    const currentParsed = parseBulkRowKey(current.rowKey);
+    if (!anchorParsed || !currentParsed) return null;
+
+    if (anchorParsed.kind === 'object') {
+      if (currentParsed.kind !== 'object' || currentParsed.employeeId !== anchorParsed.employeeId) {
+        return null;
+      }
+      const list = expandedObjectRowsByEmployee.get(anchorParsed.employeeId);
+      if (!list) return null;
+      const anchorIdx = list.findIndex(item => item.rowKey === anchor.rowKey);
+      const currentIdx = list.findIndex(item => item.rowKey === current.rowKey);
+      if (anchorIdx < 0 || currentIdx < 0) return null;
+
+      const startRowIdx = Math.min(anchorIdx, currentIdx);
+      const endRowIdx = Math.max(anchorIdx, currentIdx);
+      for (let rowIdx = startRowIdx; rowIdx <= endRowIdx; rowIdx += 1) {
+        const item = list[rowIdx];
+        if (!item) continue;
+        for (let dayIndex = startDayIndex; dayIndex <= endDayIndex; dayIndex += 1) {
+          const day = days[dayIndex];
+          if (day == null) continue;
+          nextSelection.add(getObjectBulkCellKey(anchorParsed.employeeId, item.objectKey, day));
+        }
+      }
+      return nextSelection;
+    }
+
+    if (currentParsed.kind !== 'employee') return null;
+
     const anchorRowIndex = employeeRowIndexByKey.get(anchor.rowKey);
     const currentRowIndex = employeeRowIndexByKey.get(current.rowKey);
     if (anchorRowIndex == null || currentRowIndex == null) {
-      return new Set();
+      return null;
     }
 
     const startEmployeeRowIndex = Math.min(anchorRowIndex, currentRowIndex);
@@ -635,6 +699,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     viewMode,
     objectRowIndexByKey,
     employeeRowIndexByKey,
+    expandedObjectRowsByEmployee,
     days,
     objectViewRowsFlat,
     employeeRows,
@@ -682,7 +747,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     event.preventDefault();
     const anchor = { rowKey, day };
     const baseSelection = new Set(selectedCellKeys);
-    const anchorRange = buildBulkRangeSelection(anchor, anchor);
+    const anchorRange = buildBulkRangeSelection(anchor, anchor) ?? new Set<string>();
     const anchorAlreadySelected = [...anchorRange].every((key) => baseSelection.has(key));
     const mode: 'add' | 'remove' = anchorAlreadySelected && anchorRange.size > 0 ? 'remove' : 'add';
     setBulkDragMode(mode);
@@ -699,10 +764,12 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
 
   const handleBulkCellMouseEnter = useCallback((rowKey: string, day: number) => {
     if (!bulkEditMode || !bulkDragAnchor) return;
+    const range = buildBulkRangeSelection(bulkDragAnchor, { rowKey, day });
+    if (range == null) return;
     setBulkDragPreviewKeys(
       mergeBulkSelections(
         bulkDragBaseKeys,
-        buildBulkRangeSelection(bulkDragAnchor, { rowKey, day }),
+        range,
         bulkDragMode,
       ),
     );
@@ -1316,14 +1383,30 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const dayOff = isScheduleDayOff(sched, calendar, year, month, day);
                         const future = isFutureDay(year, month, day);
                         const text = objectEntry ? formatCellHM(getObjectVisibleHours(objectEntry)) : '';
-                        const title = getObjectCellTitle(objectEntry, objectRow.object_name);
+                        const targeted = bulkEditMode && activeSelectedCellKeys.has(getObjectBulkCellKey(row.employee.id, objectRow.object_key, day));
+                        const baseTitle = getObjectCellTitle(objectEntry, objectRow.object_name);
+                        const title = bulkEditMode
+                          ? [baseTitle, 'Зажмите левую кнопку мыши и протяните диапазон для массовой корректировки по объектам']
+                            .filter(Boolean)
+                            .join(' • ')
+                          : baseTitle;
                         const isClickable = !future && !dayOff;
                         return (
                           <td
                             key={`${objectRow.object_key}_${day}`}
-                            className={`ts-day ts-day--object${objectEntry?.is_correction ? ' ts-day--corrected' : ''}`}
+                            className={`ts-day ts-day--object${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode ? ' ts-day--bulk-selectable' : ''}`}
                             title={title}
-                            onClick={isClickable ? () => onObjectDayClick(row.employee, day, {
+                            onMouseDown={bulkEditMode && isClickable ? (event) => handleBulkCellMouseDown(
+                              event,
+                              getObjectBulkRowKey(row.employee.id, objectRow.object_key),
+                              day,
+                              false,
+                            ) : undefined}
+                            onMouseEnter={bulkEditMode && isClickable ? () => handleBulkCellMouseEnter(
+                              getObjectBulkRowKey(row.employee.id, objectRow.object_key),
+                              day,
+                            ) : undefined}
+                            onClick={!bulkEditMode && isClickable ? () => onObjectDayClick(row.employee, day, {
                               object_key: objectRow.object_key,
                               object_id: objectRow.object_id,
                               object_name: objectRow.object_name,

@@ -6,7 +6,7 @@ import { TimesheetStats } from '../../components/timesheet/TimesheetStats';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { TimesheetCorrectionsList } from '../../components/timesheet/TimesheetCorrectionsList';
 import { TimesheetTeamManagementModal } from '../../components/timesheet/TimesheetTeamManagementModal';
-import { TimesheetTransfersModal } from '../../components/timesheet/TimesheetTransfersModal';
+import { TimesheetTransfersTab } from '../../components/timesheet/TimesheetTransfersTab';
 import { TimesheetExcludeEmployeeModal } from '../../components/timesheet/TimesheetExcludeEmployeeModal';
 import { timesheetService } from '../../services/timesheetService';
 import { useAuth } from '../../contexts/AuthContext';
@@ -76,7 +76,7 @@ interface IObjectModalTarget {
   object_name: string;
 }
 
-type TimesheetViewMode = 'employees' | 'objects' | 'corrections';
+type TimesheetViewMode = 'employees' | 'objects' | 'corrections' | 'transfers';
 
 const getTodayDateInputValue = (): string => new Date().toISOString().slice(0, 10);
 const UNASSIGNED_OBJECT_KEY = '__timesheet_unassigned__';
@@ -231,7 +231,6 @@ export const TimesheetPage: FC = () => {
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkSelectedCellKeys, setBulkSelectedCellKeys] = useState<Set<string>>(new Set());
   const [teamManagementOpen, setTeamManagementOpen] = useState(false);
-  const [transfersModalOpen, setTransfersModalOpen] = useState(false);
   const [teamSearch, setTeamSearch] = useState('');
   const [teamPendingEmployeeId, setTeamPendingEmployeeId] = useState<number | null>(null);
   const [refreshState, setRefreshState] = useState<{
@@ -255,7 +254,9 @@ export const TimesheetPage: FC = () => {
     ? 'objects'
     : queryView === 'corrections'
       ? 'corrections'
-      : 'employees';
+      : (queryView === 'transfers' && isSuperAdmin)
+        ? 'transfers'
+        : 'employees';
 
   useEffect(() => {
     if (!isMultiDepartmentManager) return;
@@ -931,7 +932,7 @@ export const TimesheetPage: FC = () => {
   ]);
 
   const bulkObjectTargets = useMemo<IBulkObjectCorrectionTarget[]>(() => {
-    if (!bulkModeEnabled || viewMode !== 'objects') return [];
+    if (!bulkModeEnabled) return [];
 
     const targets = new Map<string, IBulkObjectCorrectionTarget>();
     bulkSelectedCellKeys.forEach(cellKey => {
@@ -965,7 +966,6 @@ export const TimesheetPage: FC = () => {
     });
   }, [
     bulkModeEnabled,
-    viewMode,
     bulkSelectedCellKeys,
     bulkObjectRowMetaMap,
     year,
@@ -974,18 +974,23 @@ export const TimesheetPage: FC = () => {
     employeeOrder,
   ]);
 
+  const isObjectBulkOperation = (
+    viewMode === 'objects'
+    || (viewMode === 'employees' && bulkObjectTargets.length > 0 && bulkTargets.length === 0)
+  );
+
   const bulkInitialStatus = useMemo<TimesheetStatus>(() => {
-    if (viewMode === 'objects') {
+    if (isObjectBulkOperation) {
       return 'manual';
     }
     if (bulkTargets.length === 1 && bulkTargets[0].entry?.status) {
       return bulkTargets[0].entry.status;
     }
     return 'work';
-  }, [bulkTargets, viewMode]);
+  }, [bulkTargets, isObjectBulkOperation]);
 
   const bulkDefaultHours = useMemo(() => {
-    if (viewMode === 'objects') {
+    if (isObjectBulkOperation) {
       if (bulkObjectTargets.length === 0) return 0;
       const firstTarget = bulkObjectTargets[0];
       return firstTarget.objectEntry?.display_hours_worked
@@ -1006,11 +1011,11 @@ export const TimesheetPage: FC = () => {
       firstTarget.day,
     );
     return getWorkHoursForDay(sched, year, month, firstTarget.day);
-  }, [viewMode, bulkObjectTargets, bulkTargets, schedules, dailySchedules, year, month]);
+  }, [isObjectBulkOperation, bulkObjectTargets, bulkTargets, schedules, dailySchedules, year, month]);
 
   const bulkMaxHours = useMemo(() => {
     if (!isTimesheetDepartmentScope) return null;
-    if (viewMode === 'objects') {
+    if (isObjectBulkOperation) {
       if (bulkObjectTargets.length === 0) return null;
       return bulkObjectTargets.reduce<number | null>((minValue, target) => {
         const sched = getScheduleForTimesheetDay(
@@ -1046,7 +1051,7 @@ export const TimesheetPage: FC = () => {
     return getWorkHoursForDay(sched, year, month, firstTarget.day);
   }, [
     isTimesheetDepartmentScope,
-    viewMode,
+    isObjectBulkOperation,
     bulkObjectTargets,
     bulkTargets,
     schedules,
@@ -1057,7 +1062,11 @@ export const TimesheetPage: FC = () => {
   ]);
 
   const handleOpenBulkModal = useCallback(() => {
-    if (viewMode === 'objects') {
+    if (viewMode === 'employees' && bulkTargets.length > 0 && bulkObjectTargets.length > 0) {
+      toast.info('Сначала примените или сбросьте выделение одного типа: либо по сотрудникам, либо по объектам.');
+      return;
+    }
+    if (isObjectBulkOperation) {
       if (bulkObjectTargets.length === 0) {
         toast.info('Выделите диапазон ячеек по объектам. Строка "Не определён / без объекта" корректируется только точечно.');
         return;
@@ -1070,10 +1079,10 @@ export const TimesheetPage: FC = () => {
       return;
     }
     setBulkModalOpen(true);
-  }, [viewMode, bulkObjectTargets.length, bulkTargets.length, toast]);
+  }, [viewMode, isObjectBulkOperation, bulkObjectTargets.length, bulkTargets.length, toast]);
 
   const handleSaveBulkCorrection = useCallback(async (status: TimesheetStatus, hours: number | null, notes: string) => {
-    if (viewMode === 'objects') {
+    if (isObjectBulkOperation) {
       if (bulkObjectTargets.length === 0) return;
       try {
         await Promise.all(bulkObjectTargets.map(target => timesheetService.upsertObjectEntry({
@@ -1121,7 +1130,7 @@ export const TimesheetPage: FC = () => {
       toast.error(error instanceof Error ? error.message : 'Не удалось применить массовую корректировку');
     }
   }, [
-    viewMode,
+    isObjectBulkOperation,
     bulkObjectTargets,
     bulkTargets,
     clearBulkState,
@@ -1158,7 +1167,7 @@ export const TimesheetPage: FC = () => {
     ).size
   ), [bulkSelectedCellKeys]);
   const bulkSelectionSummary = useMemo(() => {
-    if (viewMode === 'objects') {
+    if (isObjectBulkOperation) {
       return [
         `${bulkSelectedObjectRowsCount} строк объектов`,
         `${bulkSelectedDaysCount} дней`,
@@ -1172,7 +1181,7 @@ export const TimesheetPage: FC = () => {
       `${bulkTargets.length} ячеек`,
     ].join(' • ');
   }, [
-    viewMode,
+    isObjectBulkOperation,
     bulkSelectedObjectRowsCount,
     bulkSelectedDaysCount,
     bulkObjectTargets.length,
@@ -1591,18 +1600,6 @@ export const TimesheetPage: FC = () => {
                     Добавить сотрудника
                   </button>
                 )}
-                {!isAssignedMode && isSuperAdmin && (
-                  <button
-                    type="button"
-                    className="ts-btn ts-btn--icon"
-                    onClick={() => setTransfersModalOpen(true)}
-                    disabled={!effectiveSelectedDeptId}
-                    aria-label="Переводы и исключения"
-                    title={!effectiveSelectedDeptId ? 'Сначала выберите отдел' : 'Переводы и исключения'}
-                  >
-                    <ArrowRightLeft size={16} />
-                  </button>
-                )}
                 {!isAssignedMode && (
                   <button
                     type="button"
@@ -1702,18 +1699,6 @@ export const TimesheetPage: FC = () => {
               )}
             </div>
             <div className="ts-toolbar-right">
-              {isSuperAdmin && (
-                <button
-                  type="button"
-                  className="ts-btn ts-btn--chip"
-                  onClick={() => setTransfersModalOpen(true)}
-                  disabled={!activeGridDeptId}
-                  title={!activeGridDeptId ? 'Сначала выберите отдел' : 'Просмотр и корректировка переводов и исключений'}
-                >
-                  <ArrowRightLeft size={16} />
-                  Переводы
-                </button>
-              )}
               {canUseTeamManagement && (
                 <button
                   type="button"
@@ -1786,9 +1771,11 @@ export const TimesheetPage: FC = () => {
           ) : (
             <>
               <div className="ts-bulk-info">
-                <div className="ts-bulk-title">Массовая корректировка</div>
+                <div className="ts-bulk-title">
+                  {isObjectBulkOperation ? 'Массовая корректировка по объектам' : 'Массовая корректировка'}
+                </div>
                 <div className="ts-bulk-hint">
-                  Зажмите левую кнопку мыши и протяните по таблице нужный диапазон. Новая протяжка добавит дни к уже выбранным. {bulkSelectionSummary}
+                  Зажмите левую кнопку мыши и протяните по таблице нужный диапазон. Новая протяжка добавит дни к уже выбранным. Раскройте объекты у сотрудника с несколькими объектами, чтобы массово править часы по конкретному объекту. {bulkSelectionSummary}
                 </div>
               </div>
               <div className="ts-bulk-actions">
@@ -1804,7 +1791,7 @@ export const TimesheetPage: FC = () => {
                   type="button"
                   className="ts-btn ts-btn--primary"
                   onClick={handleOpenBulkModal}
-                  disabled={bulkTargets.length === 0}
+                  disabled={bulkTargets.length === 0 && bulkObjectTargets.length === 0}
                 >
                   Внести корректировку
                 </button>
@@ -1922,15 +1909,6 @@ export const TimesheetPage: FC = () => {
         />
       )}
 
-      {transfersModalOpen && (
-        <TimesheetTransfersModal
-          open={transfersModalOpen}
-          onClose={() => setTransfersModalOpen(false)}
-          departmentId={effectiveSelectedDeptId ?? activeGridDeptId ?? null}
-          departmentName={selectedDeptName}
-        />
-      )}
-
       <TimesheetExcludeEmployeeModal
         open={!!excludeModalEmployee}
         employee={excludeModalEmployee}
@@ -2006,12 +1984,12 @@ export const TimesheetPage: FC = () => {
             onSave={handleSaveBulkCorrection}
             initialStatus={bulkInitialStatus}
             initialHours={bulkDefaultHours}
-            title={viewMode === 'objects' ? 'Массовая корректировка по объектам' : 'Массовая корректировка'}
+            title={isObjectBulkOperation ? 'Массовая корректировка по объектам' : 'Массовая корректировка'}
             subtitle={bulkSelectionSummary}
-            confirmLabel={viewMode === 'objects' ? 'Применить по объектам' : 'Применить'}
+            confirmLabel={isObjectBulkOperation ? 'Применить по объектам' : 'Применить'}
             hideSkudTab
             maxHours={bulkMaxHours}
-            allowedStatuses={viewMode === 'objects' ? ['manual'] : undefined}
+            allowedStatuses={isObjectBulkOperation ? ['manual'] : undefined}
           />
         </Suspense>
       )}
