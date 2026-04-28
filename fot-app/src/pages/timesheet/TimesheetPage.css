@@ -2137,6 +2137,14 @@
   white-space: normal;
   word-break: break-word;
   line-height: 1.25;
+  text-align: left;
+}
+
+.ts-expand-placeholder {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
 }
 
 .ts-employee-cell-content {

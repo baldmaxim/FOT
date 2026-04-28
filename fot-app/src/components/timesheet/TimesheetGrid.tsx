@@ -1256,7 +1256,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       onClick={bulkEditMode ? undefined : () => onEmployeeClick(row.employee)}
                     >
                       <div className="ts-employee-cell-content">
-                        {row.hasExpandableObjects && (
+                        {row.hasExpandableObjects ? (
                           <button
                             type="button"
                             className="ts-expand-btn"
@@ -1268,6 +1268,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           >
                             {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                           </button>
+                        ) : (
+                          <span className="ts-expand-placeholder" aria-hidden="true" />
                         )}
                         <span className="ts-employee-index">{employeeIndex}.</span>
                         <div className="ts-employee-name" title={row.employee.full_name}>
