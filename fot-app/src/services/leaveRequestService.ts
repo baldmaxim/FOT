@@ -28,7 +28,6 @@ export const REQUEST_TYPE_LABELS: Record<string, string> = {
   sick_leave: 'Больничный',
   remote: 'Удалёнка',
   dayoff: 'Отгул',
-  business_trip: 'Командировка',
   certificate: 'Справка',
   time_correction: 'Корректировка табеля',
 };

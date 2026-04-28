@@ -19,11 +19,11 @@ const STATUS_LABELS: Record<TimesheetStatus, string> = {
   vacation: 'Отпуск',
   dayoff: 'Отгул',
   remote: 'Удалёнка',
-  unpaid: 'Без оплаты',
-  absent: 'Отсутствие',
+  unpaid: 'Без сохранения ЗП',
+  absent: 'Неявка',
   sick: 'Больничный',
-  business_trip: 'Командировка',
   manual: 'Ручная',
+  educational_leave: 'Учебный отпуск',
 };
 
 const formatDate = (iso: string): string => {

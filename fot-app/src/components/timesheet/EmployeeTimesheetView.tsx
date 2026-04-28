@@ -38,8 +38,8 @@ const STATUS_LABELS: Record<string, string> = {
   vacation: 'Отпуск',
   dayoff: 'Выходной',
   absent: 'Неявка',
-  business_trip: 'Командировка',
-  unpaid: 'Без содержания',
+  unpaid: 'Без сохранения ЗП',
+  educational_leave: 'Учебный отпуск',
 };
 
 const STATUS_CSS: Record<string, string> = {
@@ -50,11 +50,11 @@ const STATUS_CSS: Record<string, string> = {
   vacation: 'statusVacation',
   dayoff: 'statusDayoff',
   absent: 'statusAbsent',
-  business_trip: 'statusTrip',
   unpaid: 'statusUnpaid',
+  educational_leave: 'statusVacation',
 };
 
-const WORKED_STATUSES = new Set(['work', 'manual', 'remote', 'business_trip']);
+const WORKED_STATUSES = new Set(['work', 'manual', 'remote']);
 const EMPTY_SCHEDULES: Record<number, IResolvedSchedule> = {};
 
 const formatHM = (decimal: number): string => {
@@ -186,9 +186,6 @@ export const EmployeeTimesheetView: FC<IEmployeeTimesheetViewProps> = ({ employe
         break;
       case 'absent':
         classes.push(s.dayCellAbsent);
-        break;
-      case 'business_trip':
-        classes.push(s.dayCellTrip);
         break;
     }
 

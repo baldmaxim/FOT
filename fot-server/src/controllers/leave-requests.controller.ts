@@ -15,7 +15,7 @@ import type { TimeStatus } from '../types/index.js';
 const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'dayoff', 'certificate', 'time_correction'] as const;
 const LEAVE_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск', sick_leave: 'Больничный', remote: 'Удалёнка',
-  dayoff: 'Отгул', business_trip: 'Командировка', certificate: 'Справка', time_correction: 'Корректировка',
+  dayoff: 'Отгул', certificate: 'Справка', time_correction: 'Корректировка',
 };
 const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote' | 'dayoff', TimeStatus> = {
   vacation: 'vacation',
@@ -25,7 +25,7 @@ const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote' | 'dayoff'
 };
 
 function isTimeStatus(value: unknown): value is TimeStatus {
-  return ['work', 'vacation', 'dayoff', 'remote', 'unpaid', 'absent', 'sick', 'business_trip', 'manual'].includes(String(value));
+  return ['work', 'vacation', 'dayoff', 'remote', 'unpaid', 'absent', 'sick', 'manual', 'educational_leave'].includes(String(value));
 }
 
 async function loadEmployeeIdsByDepartment(departmentId: string): Promise<Array<{ id: number; full_name: string | null }>> {

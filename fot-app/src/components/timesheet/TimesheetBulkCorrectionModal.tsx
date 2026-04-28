@@ -18,14 +18,15 @@ interface IProps {
 }
 
 const STATUS_OPTIONS: { value: TimesheetStatus; label: string }[] = [
-  { value: 'vacation', label: '🏖 Отпуск' },
-  { value: 'sick', label: '🏥 Больничный' },
-  { value: 'business_trip', label: '✈️ Командировка' },
-  { value: 'remote', label: '🏠 Удалёнка' },
-  { value: 'dayoff', label: '📅 Отгул' },
-  { value: 'absent', label: '❌ Прогул' },
-  { value: 'work', label: '✔ Присутствие' },
-  { value: 'manual', label: '✏️ Ручная корр.' },
+  { value: 'vacation',          label: '🏖 Отпуск' },
+  { value: 'sick',              label: '🏥 Больничный' },
+  { value: 'remote',            label: '🏠 Удалёнка' },
+  { value: 'dayoff',            label: '📅 Отгул' },
+  { value: 'unpaid',            label: '💸 Без сохранения ЗП' },
+  { value: 'educational_leave', label: '🎓 Учебный отпуск' },
+  { value: 'absent',            label: '❌ Неявка' },
+  { value: 'work',              label: '✔ Присутствие' },
+  { value: 'manual',            label: '✏️ Ручная корр.' },
 ];
 
 const HOURS_EDITABLE = new Set<TimesheetStatus>(['work', 'manual', 'remote']);

@@ -14,8 +14,8 @@ const STATUS_LABELS: Record<string, string> = {
   vacation: 'Отпуск',
   dayoff: 'Выходной',
   absent: 'Неявка',
-  business_trip: 'Командировка',
-  unpaid: 'Без содержания',
+  unpaid: 'Без сохранения ЗП',
+  educational_leave: 'Учебный отпуск',
 };
 
 const STATUS_CSS: Record<string, string> = {
@@ -26,8 +26,8 @@ const STATUS_CSS: Record<string, string> = {
   vacation: 'cellVacation',
   dayoff: 'cellWeekend',
   absent: 'cellAbsent',
-  business_trip: 'cellTrip',
   unpaid: 'cellAbsent',
+  educational_leave: 'cellVacation',
 };
 
 const pad = (n: number) => String(n).padStart(2, '0');

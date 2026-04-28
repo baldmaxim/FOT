@@ -73,13 +73,15 @@ const formatDuration = (seconds: number): string => {
 };
 
 const TYPE_OPTIONS: ITypeOption[] = [
-  { status: 'work', icon: '✔', label: 'Присутствие' },
-  { status: 'remote', icon: '🏠', label: 'Удалёнка' },
-  { status: 'sick', icon: '🏥', label: 'Больничный' },
-  { status: 'vacation', icon: '🏖', label: 'Отпуск' },
-  { status: 'business_trip', icon: '✈️', label: 'Командировка' },
-  { status: 'absent', icon: '❌', label: 'Прогул' },
-  { status: 'manual', icon: '✏️', label: 'Ручная корр.' },
+  { status: 'work',              icon: '✔',  label: 'Присутствие' },
+  { status: 'remote',            icon: '🏠', label: 'Удалёнка' },
+  { status: 'sick',              icon: '🏥', label: 'Больничный' },
+  { status: 'vacation',          icon: '🏖', label: 'Отпуск' },
+  { status: 'dayoff',            icon: '📅', label: 'Отгул' },
+  { status: 'unpaid',            icon: '💸', label: 'Без сохранения ЗП' },
+  { status: 'educational_leave', icon: '🎓', label: 'Учебный отпуск' },
+  { status: 'absent',            icon: '❌', label: 'Неявка' },
+  { status: 'manual',            icon: '✏️', label: 'Ручная корр.' },
 ];
 
 const EventsTab: FC<{
@@ -312,19 +314,15 @@ const CorrectionTab: FC<{
         {showStatusPicker && (
           <div className="ts-form-group">
             <label className="ts-form-label">Тип записи</label>
-            <div className="ts-type-options">
+            <select
+              className="ts-form-select"
+              value={selectedStatus}
+              onChange={e => setSelectedStatus(e.target.value as TimesheetStatus)}
+            >
               {statusOptions.map(opt => (
-                <button
-                  key={opt.status}
-                  type="button"
-                  className={`ts-type-option ${selectedStatus === opt.status ? 'ts-type-option--selected' : ''}`}
-                  onClick={() => setSelectedStatus(opt.status)}
-                >
-                  <div className="ts-type-option-icon">{opt.icon}</div>
-                  <div className="ts-type-option-label">{opt.label}</div>
-                </button>
+                <option key={opt.status} value={opt.status}>{opt.icon} {opt.label}</option>
               ))}
-            </div>
+            </select>
           </div>
         )}
 

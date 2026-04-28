@@ -636,8 +636,7 @@
 .ec-legend-dot.late { background: var(--warning); }
 .ec-legend-dot.absent { background: var(--error); }
 .ec-legend-dot.weekend { background: var(--bg-elevated); }
-.ec-legend-dot.sick,
-.ec-legend-dot.business_trip { background: var(--primary); }
+.ec-legend-dot.sick { background: var(--primary); }
 .ec-legend-dot.vacation { background: #8b5cf6; }
 .ec-legend-dot.remote { background: #059669; }
 .ec-legend-dot.incomplete_skud { background: #a855f7; }
@@ -718,12 +717,6 @@
   background: rgba(139, 92, 246, 0.12);
   color: #8b5cf6;
   border-color: rgba(139, 92, 246, 0.3);
-}
-
-.ec-cal-day.business_trip {
-  background: rgba(59, 130, 246, 0.12);
-  color: var(--primary);
-  border-color: rgba(59, 130, 246, 0.3);
 }
 
 .ec-cal-day.remote {

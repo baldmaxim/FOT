@@ -37,10 +37,10 @@ const STATUS_LABELS: Record<TimesheetStatus, string> = {
   vacation: 'Отпуск',
   dayoff: 'Выходной',
   absent: 'Неявка',
-  business_trip: 'Командировка',
-  unpaid: 'Без содержания',
+  unpaid: 'Без сохранения ЗП',
+  educational_leave: 'Учебный отпуск',
 };
-const WORKED_STATUSES = new Set<TimesheetStatus>(['work', 'manual', 'remote', 'business_trip']);
+const WORKED_STATUSES = new Set<TimesheetStatus>(['work', 'manual', 'remote']);
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 

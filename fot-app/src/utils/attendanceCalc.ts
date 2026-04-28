@@ -34,7 +34,6 @@ export interface IDayAttendance {
     | 'future'
     | 'sick'
     | 'vacation'
-    | 'business_trip'
     | 'remote'
     | 'incomplete_skud';
   arrivalTime?: string;
@@ -429,7 +428,7 @@ export const calculateAttendanceFromTimesheet = (params: {
   const arrivalMins: number[] = [];
   const arrivalDiffs: number[] = [];
   const arrivalByDow: number[][] = [[], [], [], [], []];
-  const workedLikeStatuses = new Set(['work', 'manual', 'remote', 'business_trip']);
+  const workedLikeStatuses = new Set(['work', 'manual', 'remote']);
 
   for (let day = 1; day <= daysInMonth; day++) {
     const schedule = getScheduleForTimesheetDay(schedules, dailySchedules, employeeId, year, month + 1, day);
@@ -514,9 +513,6 @@ export const calculateAttendanceFromTimesheet = (params: {
       case 'vacation':
       case 'dayoff':
         status = 'vacation';
-        break;
-      case 'business_trip':
-        status = 'business_trip';
         break;
       case 'remote':
         status = 'remote';

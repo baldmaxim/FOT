@@ -73,14 +73,13 @@ export const AttendanceCalendar: FC<IAttendanceCalendarProps> = ({
           </div>
           <div className="ec-cal-legend">
             <div className="ec-legend-item"><span className="ec-legend-dot present" /> Норма</div>
-            <div className="ec-legend-item"><span className="ec-legend-dot underwork" /> Недоработка</div>
-            <div className="ec-legend-item"><span className="ec-legend-dot absent" /> Отсутствие</div>
-            <div className="ec-legend-item"><span className="ec-legend-dot sick" /> Больничный</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot underwork" /> Недобор</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot absent" /> Прогул</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot sick" /> Б/л</div>
             <div className="ec-legend-item"><span className="ec-legend-dot vacation" /> Отпуск</div>
-            <div className="ec-legend-item"><span className="ec-legend-dot business_trip" /> Командировка</div>
-            <div className="ec-legend-item"><span className="ec-legend-dot remote" /> Удалёнка</div>
-            <div className="ec-legend-item"><span className="ec-legend-dot incomplete_skud" /> СКУД без часов</div>
-            <div className="ec-legend-item"><span className="ec-legend-dot weekend" /> Выходной</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot remote" /> Удал.</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot incomplete_skud" /> СКУД 0ч</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot weekend" /> Вых.</div>
           </div>
         </div>
 

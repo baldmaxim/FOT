@@ -212,7 +212,6 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
     if (entry.status === 'absent') return 'Неявка';
     if (entry.status === 'sick') return 'Б/л';
     if (entry.status === 'vacation') return 'Отпуск';
-    if (entry.status === 'business_trip') return 'Ком-ка';
     if (visibleHours != null) return formatHM(visibleHours);
     return '—';
   };
