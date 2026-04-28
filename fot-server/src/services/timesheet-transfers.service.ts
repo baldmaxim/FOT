@@ -280,9 +280,11 @@ export async function updateTransfer(
   if (oldA.employee_id !== newA.employee_id) {
     throw new Error('Старое и новое назначения принадлежат разным сотрудникам');
   }
-  const expectedOldClose = formatDateShift(newA.effective_from, -1);
-  if (oldA.effective_to !== expectedOldClose) {
-    throw new Error('Парное закрытое назначение не соответствует текущему открытому');
+  if (oldA.effective_to == null) {
+    throw new Error('Парное предыдущее назначение должно быть закрыто');
+  }
+  if (oldA.effective_to >= newA.effective_from) {
+    throw new Error('Парное закрытое назначение должно завершаться до начала текущего перевода');
   }
 
   const nextDate = input.effective_from ?? newA.effective_from;
