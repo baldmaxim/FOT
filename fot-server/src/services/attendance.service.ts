@@ -15,6 +15,10 @@ const ADJUSTMENT_PRIORITY: Record<string, number> = {
   legacy_tender_timesheet: 100,
 };
 
+const NON_WORK_ADJUSTMENT_STATUSES = new Set<TimeStatus>([
+  'absent', 'sick', 'vacation', 'dayoff', 'unpaid', 'educational_leave', 'remote',
+]);
+
 const BATCH_SIZE = 500;
 
 export interface IAttendanceEmployee {
@@ -539,6 +543,13 @@ export async function buildAttendanceEntries(params: {
       entry.object_detail_mode = 'none';
       entry.object_detail_message = null;
       entry.object_detail_count = 0;
+      continue;
+    }
+
+    if (entry.is_correction && NON_WORK_ADJUSTMENT_STATUSES.has(entry.status)) {
+      entry.object_detail_mode = employeesWithMultiObjects.has(entry.employee_id) ? 'available' : 'none';
+      entry.object_detail_message = null;
+      entry.object_detail_count = employeesWithMultiObjects.has(entry.employee_id) ? dayObjectEntries.length : 0;
       continue;
     }
 

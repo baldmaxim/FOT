@@ -385,6 +385,99 @@ describe('attendance.service', () => {
     });
   });
 
+  it('keeps absent adjustment intact when day has object entries (does not overwrite status/hours)', async () => {
+    const objectEntry = {
+      adjustment_id: null,
+      employee_id: 1,
+      work_date: '2026-04-01',
+      object_key: 'obj-a',
+      object_id: 'obj-a',
+      object_name: 'Объект A',
+      hours_worked: 6,
+      display_hours_worked: 6,
+      base_hours_worked: 6,
+      is_correction: false,
+    };
+
+    mockedState.objectAttendanceData = {
+      objectEntries: [objectEntry],
+      objectEntriesByEmployeeDate: new Map([
+        [1, new Map([['2026-04-01', [objectEntry]]])],
+      ]),
+      employeeDistinctObjectKeys: new Map([[1, new Set(['obj-a'])]]),
+      legacyBlockedDays: new Map(),
+      rawFallbackSummaries: new Map(),
+    };
+
+    mockedState.resolver = (query) => {
+      if (query.table === 'skud_daily_summary') {
+        return {
+          data: [{
+            employee_id: 1,
+            date: '2026-04-01',
+            first_entry: '09:00:00',
+            last_exit: '15:00:00',
+            total_hours: 6,
+            total_minutes: 360,
+          }],
+          error: null,
+        };
+      }
+
+      if (query.table === 'attendance_adjustments') {
+        return {
+          data: [{
+            id: 42,
+            employee_id: 1,
+            work_date: '2026-04-01',
+            status: 'absent',
+            hours_override: null,
+            source_type: 'manual',
+            source_id: 'manual',
+            reason: 'Сотрудник не вышел',
+            created_by: 'user-1',
+            created_at: '2026-04-01T07:00:00.000Z',
+            updated_at: '2026-04-01T07:05:00.000Z',
+            metadata: {},
+          }],
+          error: null,
+        };
+      }
+
+      if (query.table === 'user_profiles') {
+        return { data: [{ id: 'user-1', full_name: 'HR Admin' }], error: null };
+      }
+
+      if (query.table === 'employees') {
+        return { data: [], error: null };
+      }
+
+      throw new Error(`Unexpected query for table ${query.table}`);
+    };
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
+      startDate: '2026-04-01',
+      endDate: '2026-04-01',
+      dailySchedulesMap: new Map([
+        [1, new Map([['2026-04-01', {} as IResolvedSchedule]])],
+      ]),
+      calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-01',
+    });
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      id: 42,
+      employee_id: 1,
+      work_date: '2026-04-01',
+      status: 'absent',
+      hours_worked: null,
+      display_hours_worked: null,
+      is_correction: true,
+    });
+  });
+
   it('writes attendance adjustments into canonical attendance_adjustments table', async () => {
     mockedState.resolver = (query) => {
       if (query.table === 'attendance_adjustments') {
