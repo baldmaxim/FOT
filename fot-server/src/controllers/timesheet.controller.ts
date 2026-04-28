@@ -772,22 +772,6 @@ export const timesheetController = {
       const { data: employees, error: empError } = await empQuery;
       if (empError) throw empError;
 
-      // [DEBUG] временный лог — удалю после починки
-      console.log('[DEBUG timesheet.getAll]', {
-        scope,
-        is_admin: req.user.is_admin,
-        user_employee_id: req.user.employee_id,
-        requestedEmployeeId,
-        requestedDepartmentId,
-        resolved_department_id: department_id,
-        hasDeptFilter,
-        hasEmployeeFilter,
-        shouldApplyDeptFilter,
-        departmentEmployeeIds_len: departmentEmployeeIds.length,
-        employees_returned: (employees || []).length,
-        employee_ids_returned: (employees || []).map(e => e.id),
-      });
-
       const employeeIds = (employees || []).map(e => Number(e.id)).filter(Number.isFinite);
 
       const empList = (employees || []).map(e => ({
