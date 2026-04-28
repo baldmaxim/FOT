@@ -37,8 +37,10 @@ import {
   formatDateShift,
   isEmployeeAssignedToDepartmentOnDate,
   listEmployeeIdsAssignedToDepartmentPeriod,
+  listEmployeeMembershipsForDepartmentPeriod,
   resolveTimesheetDateRange,
   resolveTimesheetPeriodRange,
+  type IDepartmentEmployeeMembership,
 } from '../services/timesheet-department-assignments.service.js';
 import { fetchTimesheetDataForDepartment } from '../services/timesheet-export.service.js';
 import {
@@ -116,6 +118,10 @@ const teamManagementMutationSchema = z.object({
 
 const teamManagementAddEmployeeSchema = teamManagementMutationSchema.extend({
   effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});
+
+const teamManagementExcludeSchema = teamManagementMutationSchema.extend({
+  effective_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 /**
@@ -735,9 +741,13 @@ export const timesheetController = {
       // дополнительный AND по авто-резолвнутому department_id ломает кейс «руководитель ведёт несколько отделов,
       // сотрудник числится не в первом».
       const shouldApplyDeptFilter = hasDeptFilter && !hasEmployeeFilter;
-      const departmentEmployeeIds = shouldApplyDeptFilter
-        ? await listEmployeeIdsAssignedToDepartmentPeriod(department_id as string, startDate, endDate)
+      const departmentMemberships: IDepartmentEmployeeMembership[] = shouldApplyDeptFilter
+        ? await listEmployeeMembershipsForDepartmentPeriod(department_id as string, startDate, endDate)
         : [];
+      const departmentEmployeeIds = departmentMemberships.map(m => m.employee_id);
+      const transferredOutByEmployeeId = new Map<number, string | null>(
+        departmentMemberships.map(m => [m.employee_id, m.transferred_out_date]),
+      );
       if (shouldApplyDeptFilter && departmentEmployeeIds.length === 0) {
         return res.json(emptyResponse);
       }
@@ -754,14 +764,16 @@ export const timesheetController = {
 
       let empQuery = supabase
         .from('employees')
-        .select('id, full_name, position_id, org_department_id, employment_status, work_category')
+        .select('id, full_name, position_id, org_department_id, employment_status, work_category, excluded_from_timesheet, excluded_from_timesheet_date')
         .eq('employment_status', 'active')
         .eq('is_archived', false)
-        .eq('excluded_from_timesheet', false)
         .order('full_name');
 
       if (shouldApplyDeptFilter) {
         empQuery = empQuery.in('id', departmentEmployeeIds);
+      } else {
+        // Без deptFilter (self/employee-filter) сохраняем прежнее поведение: исключённые не видны.
+        empQuery = empQuery.eq('excluded_from_timesheet', false);
       }
       if (hasEmployeeFilter) {
         empQuery = empQuery.eq('id', requestedEmployeeId as number);
@@ -868,6 +880,8 @@ export const timesheetController = {
       const employeesWithNames = (employees || []).map(e => ({
         ...e,
         position_name: e.position_id ? posMap.get(e.position_id) || null : null,
+        transferred_out_date: transferredOutByEmployeeId.get(Number(e.id)) ?? null,
+        excluded_from_timesheet_date: (e.excluded_from_timesheet_date as string | null) ?? null,
       }));
 
       // Сериализация графиков для фронтенда
@@ -1465,6 +1479,7 @@ export const timesheetController = {
           .update({
             excluded_from_timesheet: false,
             excluded_from_timesheet_at: null,
+            excluded_from_timesheet_date: null,
             updated_at: new Date().toISOString(),
           })
           .eq('id', parsed.employee_id);
@@ -1521,7 +1536,7 @@ export const timesheetController = {
         return res.status(403).json({ success: false, error: 'Недостаточно прав для управления составом табеля' });
       }
 
-      const parsed = teamManagementMutationSchema.parse(req.body);
+      const parsed = teamManagementExcludeSchema.parse(req.body);
       const targetDepartmentId = await resolveManagedDepartmentId(req, parsed.department_id);
       if (!targetDepartmentId) {
         return res.status(403).json({ success: false, error: 'Нет доступа к управлению составом этого отдела' });
@@ -1546,18 +1561,21 @@ export const timesheetController = {
       }
 
       const excludedAt = new Date().toISOString();
+      const todayIso = excludedAt.slice(0, 10);
+      const effectiveDate = parsed.effective_date ?? todayIso;
+      const previousDay = formatDateShift(effectiveDate, -1);
+
       const { error: updateError } = await supabase
         .from('employees')
         .update({
           excluded_from_timesheet: true,
           excluded_from_timesheet_at: excludedAt,
+          excluded_from_timesheet_date: effectiveDate,
           updated_at: excludedAt,
         })
         .eq('id', parsed.employee_id);
       if (updateError) throw updateError;
 
-      const todayIso = excludedAt.slice(0, 10);
-      const previousDay = formatDateShift(todayIso, -1);
       const { error: closeAssignmentError } = await supabase
         .from('employee_assignments')
         .update({ effective_to: previousDay, updated_at: excludedAt })
@@ -1579,6 +1597,7 @@ export const timesheetController = {
           employee_full_name: (employee.full_name as string | null) ?? null,
           department_id: targetDepartmentId,
           department_name: auditDeptName,
+          effective_date: effectiveDate,
         },
       });
 
@@ -1587,6 +1606,7 @@ export const timesheetController = {
         data: {
           employee_id: parsed.employee_id,
           excluded_from_timesheet_at: excludedAt,
+          excluded_from_timesheet_date: effectiveDate,
         },
       });
     } catch (err) {

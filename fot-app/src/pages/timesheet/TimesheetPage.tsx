@@ -6,6 +6,7 @@ import { TimesheetStats } from '../../components/timesheet/TimesheetStats';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { TimesheetCorrectionsList } from '../../components/timesheet/TimesheetCorrectionsList';
 import { TimesheetTeamManagementModal } from '../../components/timesheet/TimesheetTeamManagementModal';
+import { TimesheetExcludeEmployeeModal } from '../../components/timesheet/TimesheetExcludeEmployeeModal';
 import { timesheetService } from '../../services/timesheetService';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -741,24 +742,29 @@ export const TimesheetPage: FC = () => {
     }
   }, [rangeStart, rangeEnd, activeGridDeptId, monthStr, queryClient, selectedDeptName, toast, closeTeamManagement]);
 
-  const handleExcludeEmployeeFromDepartment = useCallback(async (employee: TimesheetEmployee) => {
+  const [excludeModalEmployee, setExcludeModalEmployee] = useState<TimesheetEmployee | null>(null);
+
+  const handleExcludeEmployeeFromDepartment = useCallback((employee: TimesheetEmployee) => {
     if (!activeGridDeptId) return;
-    if (!window.confirm(
-      `Исключить ${employee.full_name} из табеля?\n\nСотрудник пропадёт из таблицы, но останется активным в системе. Вернуть его можно через «Перевести сотрудника».`,
-    )) {
-      return;
-    }
+    setExcludeModalEmployee(employee);
+  }, [activeGridDeptId]);
+
+  const handleConfirmExclude = useCallback(async (effectiveDate: string) => {
+    if (!excludeModalEmployee || !activeGridDeptId) return;
+    const employee = excludeModalEmployee;
     setTeamPendingEmployeeId(employee.id);
     try {
       await timesheetService.excludeEmployeeFromDepartment({
         employee_id: employee.id,
         department_id: activeGridDeptId,
+        effective_date: effectiveDate,
       });
       if (panelEmployee?.id === employee.id) {
         setPanelOpen(false);
         setPanelEmployee(null);
       }
-      toast.success(`Сотрудник ${employee.full_name} исключён из табеля`);
+      toast.success(`Сотрудник ${employee.full_name} исключён из табеля с ${effectiveDate}`);
+      setExcludeModalEmployee(null);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
@@ -770,7 +776,7 @@ export const TimesheetPage: FC = () => {
     } finally {
       setTeamPendingEmployeeId(null);
     }
-  }, [rangeStart, rangeEnd, activeGridDeptId, monthStr, panelEmployee?.id, queryClient, toast]);
+  }, [excludeModalEmployee, rangeStart, rangeEnd, activeGridDeptId, monthStr, panelEmployee?.id, queryClient, toast]);
 
   const modalDefaultHours = useMemo(() => {
     if (modalMode === 'object') {
@@ -1850,6 +1856,7 @@ export const TimesheetPage: FC = () => {
             startDate={rangeStart}
             endDate={rangeEnd}
             departmentId={effectiveSelectedDeptId ?? null}
+            employees={employees}
           />
         </div>
       ) : isAssignedMode ? (
@@ -1950,6 +1957,14 @@ export const TimesheetPage: FC = () => {
           onAddEmployee={handleAddEmployeeToDepartment}
         />
       )}
+
+      <TimesheetExcludeEmployeeModal
+        open={!!excludeModalEmployee}
+        employee={excludeModalEmployee}
+        pending={teamPendingEmployeeId === excludeModalEmployee?.id}
+        onClose={() => setExcludeModalEmployee(null)}
+        onConfirm={handleConfirmExclude}
+      />
 
       {panelOpen && (
         <Suspense fallback={null}>

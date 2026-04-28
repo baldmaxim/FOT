@@ -221,7 +221,16 @@ export const employeeChangesService = {
     if (updates.change_reason !== undefined) updateData.change_reason = updates.change_reason;
     if (updates.note !== undefined) updateData.note = updates.note;
 
-    await supabase.from('salary_history').update(updateData).eq('id', historyId).eq('employee_id', employeeId);
+    const { data: updated, error } = await supabase
+      .from('salary_history')
+      .update(updateData)
+      .eq('id', historyId)
+      .eq('employee_id', employeeId)
+      .select('id');
+    if (error) throw error;
+    if (!updated || updated.length === 0) {
+      throw new Error('Salary history record not found');
+    }
 
     // Пересчитать актуальный оклад
     const { data: latest } = await supabase
@@ -244,7 +253,16 @@ export const employeeChangesService = {
    * Удалить запись salary_history
    */
   async deleteSalaryHistory(historyId: number, employeeId: number): Promise<void> {
-    await supabase.from('salary_history').delete().eq('id', historyId).eq('employee_id', employeeId);
+    const { data: deleted, error } = await supabase
+      .from('salary_history')
+      .delete()
+      .eq('id', historyId)
+      .eq('employee_id', employeeId)
+      .select('id');
+    if (error) throw error;
+    if (!deleted || deleted.length === 0) {
+      throw new Error('Salary history record not found');
+    }
 
     const { data: latest } = await supabase
       .from('salary_history')
@@ -256,6 +274,7 @@ export const employeeChangesService = {
       .single();
 
     await syncEmployeeSalarySnapshot(employeeId, latest?.salary || null);
+    employeeCache.invalidate(employeeId);
   },
 
   /**
@@ -272,7 +291,16 @@ export const employeeChangesService = {
     if (updates.effective_from !== undefined) updateData.effective_from = updates.effective_from;
     if (updates.change_reason !== undefined) updateData.change_reason = updates.change_reason;
 
-    await supabase.from('employee_assignments').update(updateData).eq('id', assignmentId).eq('employee_id', employeeId);
+    const { data: updated, error } = await supabase
+      .from('employee_assignments')
+      .update(updateData)
+      .eq('id', assignmentId)
+      .eq('employee_id', employeeId)
+      .select('id');
+    if (error) throw error;
+    if (!updated || updated.length === 0) {
+      throw new Error('Assignment record not found');
+    }
 
     await syncEmployeeAssignmentSnapshot(employeeId);
 
@@ -283,7 +311,16 @@ export const employeeChangesService = {
    * Удалить запись employee_assignments
    */
   async deleteAssignment(assignmentId: string, employeeId: number): Promise<void> {
-    await supabase.from('employee_assignments').delete().eq('id', assignmentId).eq('employee_id', employeeId);
+    const { data: deleted, error } = await supabase
+      .from('employee_assignments')
+      .delete()
+      .eq('id', assignmentId)
+      .eq('employee_id', employeeId)
+      .select('id');
+    if (error) throw error;
+    if (!deleted || deleted.length === 0) {
+      throw new Error('Assignment record not found');
+    }
 
     await syncEmployeeAssignmentSnapshot(employeeId);
 

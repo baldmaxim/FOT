@@ -217,6 +217,7 @@ export const timesheetService = {
   async excludeEmployeeFromDepartment(data: {
     employee_id: number;
     department_id: string;
+    effective_date?: string;
   }): Promise<void> {
     const res = await apiClient.post<ApiResponse<null>>('/timesheet/team-management/exclude-employee', data);
     if (res.error) throw new Error(res.error || 'Ошибка исключения сотрудника');

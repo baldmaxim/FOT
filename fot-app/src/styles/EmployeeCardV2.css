@@ -1217,6 +1217,146 @@
   font-size: 13px;
 }
 
+.ec-history-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ec-history-add-bar {
+  display: flex;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.ec-history-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  font-size: 12px;
+  background: var(--bg-elevated, #f3f4f6);
+  color: var(--text-primary);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.ec-history-add-btn:hover {
+  background: var(--bg-hover, #e5e7eb);
+}
+
+.ec-history-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg-elevated, #f9fafb);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+}
+
+.ec-history-add-form input {
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
+}
+
+.ec-history-add-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ec-history-add-row input {
+  flex: 1;
+}
+
+.ec-history-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-elevated, #f9fafb);
+  border-radius: 6px;
+}
+
+.ec-history-edit-form input {
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 4px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
+}
+
+.ec-history-edit-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.ec-history-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 4px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.ec-history-edit-btn.save {
+  background: #059669;
+  border-color: #059669;
+  color: #fff;
+}
+
+.ec-history-edit-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ec-history-actions {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.ec-history-act-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.ec-history-act-btn:hover {
+  background: var(--bg-hover, #e5e7eb);
+  color: var(--text-primary);
+}
+
+.ec-history-act-btn.danger:hover {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.ec-history-reason {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
 /* ==================== Change Modals ==================== */
 .ec-overlay {
   position: fixed;

@@ -22,9 +22,9 @@ import '../../styles/EmployeeCardV2.css';
 const EmployeeAttendanceSection = lazy(() => import('../../components/employees/EmployeeAttendanceSection').then(module => ({
   default: module.EmployeeAttendanceSection,
 })));
-// const EmployeeHistorySection = lazy(() => import('../../components/employees/EmployeeHistorySection').then(module => ({
-//   default: module.EmployeeHistorySection,
-// })));
+const EmployeeHistorySection = lazy(() => import('../../components/employees/EmployeeHistorySection').then(module => ({
+  default: module.EmployeeHistorySection,
+})));
 const EmployeeSkudControls = lazy(() => import('../../components/employees/EmployeeSkudControls').then(module => ({
   default: module.EmployeeSkudControls,
 })));
@@ -32,13 +32,13 @@ const EmployeeSkudSection = lazy(() => import('../../components/employees/Employ
   default: module.EmployeeSkudSection,
 })));
 
-type Tab = 'attendance' | 'skud';
+type Tab = 'attendance' | 'skud' | 'history';
 type SkudViewMode = 'day' | 'week' | 'month' | 'range';
-const TABS: { key: Tab; label: string }[] = [
+const TABS_BASE: { key: Tab; label: string }[] = [
   { key: 'attendance', label: 'Посещаемость' },
-  // { key: 'history', label: 'История' },
   { key: 'skud', label: 'СКУД' },
 ];
+const HISTORY_TAB: { key: Tab; label: string } = { key: 'history', label: 'История' };
 
 const getInitials = (name: string) => {
   const parts = name.split(' ').filter(Boolean);
@@ -158,8 +158,12 @@ export const EmployeeCardPage: FC = () => {
     }
     navigate('/employees', { replace: true });
   };
-  const { canEditPage, hasPermission } = useAuth();
+  const { canEditPage, hasPermission, isAdmin } = useAuth();
   const canEdit = canEditPage('/employees') || canEditPage('/staff-control');
+  const TABS = useMemo<{ key: Tab; label: string }[]>(
+    () => (isAdmin ? [...TABS_BASE, HISTORY_TAB] : TABS_BASE),
+    [isAdmin],
+  );
   const capToSchedule = hasPermission('timesheet.workflow.submit')
     && !hasPermission('timesheet.workflow.review')
     && !hasPermission('timesheet.workflow.monitor');
@@ -171,7 +175,11 @@ export const EmployeeCardPage: FC = () => {
   const queryClient = useQueryClient();
   const empIdNum = Number(id);
   const [error, setError] = useState('');
-  const [activeTab, setActiveTab] = useState<Tab>(urlTab && ['attendance', 'skud'].includes(urlTab) ? urlTab : 'attendance');
+  const [activeTab, setActiveTab] = useState<Tab>(() => {
+    if (!urlTab) return 'attendance';
+    if (urlTab === 'history' && !isAdmin) return 'attendance';
+    return ['attendance', 'skud', 'history'].includes(urlTab) ? urlTab : 'attendance';
+  });
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<Partial<EmployeeInput>>({});
   const [skudViewMode, setSkudViewMode] = useState<SkudViewMode>(urlDate ? 'day' : 'month');
@@ -207,14 +215,14 @@ export const EmployeeCardPage: FC = () => {
   const employee = employeeQuery.data ?? null;
   const loading = employeeQuery.isLoading;
 
-  // История сотрудника — вкладка временно скрыта
-  // const historyQuery = useQuery({
-  //   queryKey: ['employee-history', empIdNum],
-  //   queryFn: () => employeeService.getHistory(empIdNum).catch(() => []),
-  //   enabled: !!empIdNum && !Number.isNaN(empIdNum) && activeTab === 'history',
-  //   staleTime: 60_000,
-  // });
-  // const history = historyQuery.data ?? [];
+  // История сотрудника — только для admin-роли
+  const historyQuery = useQuery({
+    queryKey: ['employee-history', empIdNum],
+    queryFn: () => employeeService.getHistory(empIdNum).catch(() => []),
+    enabled: !!empIdNum && !Number.isNaN(empIdNum) && activeTab === 'history' && isAdmin,
+    staleTime: 60_000,
+  });
+  const history = historyQuery.data ?? [];
 
   // Структура (для редактирования отделов и модалки восстановления) — общий query key
   const structureQuery = useStructureTree(true);
@@ -706,14 +714,21 @@ export const EmployeeCardPage: FC = () => {
         </Suspense>
       )}
 
-      {/* Вкладка «История» временно скрыта */}
-      {/* {activeTab === 'history' && (
+      {activeTab === 'history' && isAdmin && employee && (
         <div className="ec-tab-content-full">
           <Suspense fallback={<div className="ec-loading">Загрузка истории...</div>}>
-            <EmployeeHistorySection history={history} />
+            <EmployeeHistorySection
+              employeeId={employee.id}
+              history={history}
+              loading={historyQuery.isLoading}
+              onRefresh={() => {
+                historyQuery.refetch();
+                queryClient.invalidateQueries({ queryKey: ['employee', empIdNum] });
+              }}
+            />
           </Suspense>
         </div>
-      )} */}
+      )}
 
       {activeTab === 'skud' && (
         <Suspense fallback={<div className="ec-loading">Загрузка СКУД...</div>}>

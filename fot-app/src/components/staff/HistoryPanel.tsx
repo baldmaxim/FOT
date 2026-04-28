@@ -63,7 +63,7 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
     setSaving(true);
     const body: Record<string, unknown> = { effective_date: editDate, change_reason: editReason };
     if (ev.event_type === 'salary') body.salary = Number(editSalary);
-    await employeeService.updateHistoryEvent(employee.id, ev.event_id, body);
+    await employeeService.updateHistoryEvent(employee.id, ev.event_id, ev.event_type, body);
     setEditingId(null);
     setSaving(false);
     onRefresh();
@@ -72,7 +72,7 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
 
   const handleDelete = useCallback(async (ev: EmployeeHistoryEvent) => {
     if (!confirm('Удалить запись?')) return;
-    await employeeService.deleteHistoryEvent(employee.id, ev.event_id);
+    await employeeService.deleteHistoryEvent(employee.id, ev.event_id, ev.event_type);
     onRefresh();
     onDataChanged();
   }, [employee.id, onRefresh, onDataChanged]);

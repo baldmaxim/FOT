@@ -121,54 +121,111 @@ export const resolveTimesheetDateRange = (
   };
 };
 
+export interface IDepartmentEmployeeMembership {
+  employee_id: number;
+  /** Дата (включительно), с которой сотрудник перестал быть в этом отделе из-за перевода в другой; null = ещё в отделе. */
+  transferred_out_date: string | null;
+}
+
 export async function listEmployeeIdsAssignedToDepartmentPeriod(
   departmentId: string,
-  _startDate: string,
+  startDate: string,
   endDate: string,
 ): Promise<number[]> {
-  // Разворачиваем иерархию отделов: если руководителю назначен родительский отдел,
-  // сотрудники находятся в под-отделах (employees.org_department_id = под-отдел).
-  // По аналогии с /employees и dashboard раскрываем через collectDeptIds.
+  const memberships = await listEmployeeMembershipsForDepartmentPeriod(departmentId, startDate, endDate);
+  return memberships.map(m => m.employee_id);
+}
+
+/**
+ * Возвращает сотрудников, чьё назначение в отдел (или поддерево) пересекалось с периодом
+ * [startDate, endDate]. Для каждого вычисляет дату выхода (transferred_out_date) — это
+ * effective_to ПОСЛЕДНЕГО закрытого назначения в этом отделе, ПРИ УСЛОВИИ что у сотрудника
+ * больше нет открытого назначения сюда. Если сотрудник всё ещё числится в отделе —
+ * transferred_out_date = null.
+ *
+ * Также фильтрует по excluded_from_timesheet_date: если сотрудник исключён ДО начала
+ * периода — отбрасываем; если позже — оставляем (фронт зачеркнёт оставшиеся дни).
+ */
+export async function listEmployeeMembershipsForDepartmentPeriod(
+  departmentId: string,
+  startDate: string,
+  endDate: string,
+): Promise<IDepartmentEmployeeMembership[]> {
   const deptIds = await collectDeptIds(departmentId);
 
-  // Открытые назначения на любой из отделов поддерева.
-  const { data, error } = await supabase
+  // Все назначения, чей период пересекается с [startDate, endDate]:
+  // effective_from <= endDate AND (effective_to IS NULL OR effective_to >= startDate).
+  const { data: assignments, error } = await supabase
     .from('employee_assignments')
-    .select('employee_id')
+    .select('employee_id, effective_from, effective_to, org_department_id')
     .in('org_department_id', deptIds)
     .lte('effective_from', endDate)
-    .is('effective_to', null);
-
+    .or(`effective_to.is.null,effective_to.gte.${startDate}`);
   if (error) throw error;
 
-  const rawAssignmentIds = [...new Set((data || []).map(row => Number(row.employee_id)).filter(Number.isFinite))];
-
-  let assignmentEmployeeIds: number[] = [];
-  if (rawAssignmentIds.length > 0) {
-    const { data: activeRows, error: activeError } = await supabase
-      .from('employees')
-      .select('id')
-      .in('id', rawAssignmentIds)
-      .eq('is_archived', false)
-      .eq('excluded_from_timesheet', false)
-      .eq('employment_status', 'active');
-
-    if (activeError) throw activeError;
-    assignmentEmployeeIds = (activeRows || []).map(row => Number(row.id)).filter(Number.isFinite);
+  // Группируем: для каждого employee_id определяем, есть ли открытое назначение.
+  const map = new Map<number, IDepartmentEmployeeMembership>();
+  for (const row of assignments || []) {
+    const empId = Number(row.employee_id);
+    if (!Number.isFinite(empId)) continue;
+    const eff_to = (row.effective_to as string | null) ?? null;
+    const existing = map.get(empId);
+    if (!existing) {
+      map.set(empId, { employee_id: empId, transferred_out_date: eff_to });
+    } else if (eff_to == null) {
+      // Открытое назначение всегда побеждает — сотрудник в отделе.
+      existing.transferred_out_date = null;
+    } else if (existing.transferred_out_date != null && eff_to > existing.transferred_out_date) {
+      existing.transferred_out_date = eff_to;
+    }
   }
 
+  // Также включаем тех, у кого employees.org_department_id уже указывает в поддерево
+  // (snapshot), но assignment мог не успеть синхронизироваться — добавляем безопасным дефолтом.
   const { data: snapshotEmployees, error: snapshotError } = await supabase
     .from('employees')
     .select('id')
-    .in('org_department_id', deptIds)
-    .eq('is_archived', false)
-    .eq('excluded_from_timesheet', false)
-    .eq('employment_status', 'active');
-
+    .in('org_department_id', deptIds);
   if (snapshotError) throw snapshotError;
+  for (const row of snapshotEmployees || []) {
+    const empId = Number(row.id);
+    if (!Number.isFinite(empId)) continue;
+    if (!map.has(empId)) {
+      map.set(empId, { employee_id: empId, transferred_out_date: null });
+    } else {
+      // Если в snapshot он в этом отделе — точно ещё не переведён.
+      const m = map.get(empId)!;
+      m.transferred_out_date = null;
+    }
+  }
 
-  const snapshotEmployeeIds = (snapshotEmployees || []).map(row => Number(row.id)).filter(Number.isFinite);
-  return [...new Set([...assignmentEmployeeIds, ...snapshotEmployeeIds])];
+  const candidateIds = [...map.keys()];
+  if (candidateIds.length === 0) return [];
+
+  // Финальный фильтр: активные, не архивные. Исключённых — оставляем, если дата исключения > startDate.
+  const { data: activeRows, error: activeError } = await supabase
+    .from('employees')
+    .select('id, excluded_from_timesheet, excluded_from_timesheet_date')
+    .in('id', candidateIds)
+    .eq('is_archived', false)
+    .eq('employment_status', 'active');
+  if (activeError) throw activeError;
+
+  const result: IDepartmentEmployeeMembership[] = [];
+  for (const row of activeRows || []) {
+    const empId = Number(row.id);
+    const m = map.get(empId);
+    if (!m) continue;
+    const excluded = !!row.excluded_from_timesheet;
+    const excludedDate = (row.excluded_from_timesheet_date as string | null) ?? null;
+    if (excluded) {
+      // Если дата исключения известна и она ПОСЛЕ начала периода — оставляем.
+      // Иначе (дата неизвестна или раньше начала) — отбрасываем.
+      if (!excludedDate || excludedDate <= startDate) continue;
+    }
+    result.push(m);
+  }
+  return result;
 }
 
 export async function isEmployeeAssignedToDepartmentOnDate(

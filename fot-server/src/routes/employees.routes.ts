@@ -5,7 +5,7 @@ import { employeeEnrichController } from '../controllers/employee-enrich.control
 import { employeeSalaryEnrichController } from '../controllers/employee-enrich-salary.controller.js';
 import { employeeSalaryHistoryController } from '../controllers/employee-enrich-salary-history.controller.js';
 import { employeeEnrichContactsController } from '../controllers/employee-enrich-contacts.controller.js';
-import { authenticate, requireAnyPageAccess, requireCritical2FA } from '../middleware/auth.js';
+import { authenticate, requireAnyPageAccess, requireCritical2FA, requireAdmin } from '../middleware/auth.js';
 import { importLimiter } from '../middleware/rateLimit.js';
 
 const router = Router();
@@ -101,18 +101,18 @@ router.get(
   employeesController.getHistory
 );
 
-// PUT /api/employees/:id/history/:eventId - редактирование записи истории (admin+, 2FA)
+// PUT /api/employees/:id/history/:eventId - редактирование записи истории (только admin, 2FA)
 router.put(
   '/:id/history/:eventId',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requireAdmin,
   requireCritical2FA,
   employeesController.updateHistoryEvent
 );
 
-// DELETE /api/employees/:id/history/:eventId - удаление записи истории (admin+, 2FA)
+// DELETE /api/employees/:id/history/:eventId - удаление записи истории (только admin, 2FA)
 router.delete(
   '/:id/history/:eventId',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requireAdmin,
   requireCritical2FA,
   employeesController.deleteHistoryEvent
 );

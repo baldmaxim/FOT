@@ -125,6 +125,30 @@ const formatDeviationHours = (value: number): string => {
   return `${sign}${rounded.toFixed(1)} ч`;
 };
 
+const formatBadgeDate = (iso: string): string => {
+  const [, m, d] = iso.split('-');
+  if (!m || !d) return iso;
+  return `${d}.${m}`;
+};
+
+/**
+ * Дата выхода из табеля (включительно): минимум из transferred_out_date и excluded_from_timesheet_date.
+ * После неё — день рендерится как inactive (серый, line-through).
+ */
+const getInactiveFromDate = (employee: TimesheetEmployee): string | null => {
+  const a = employee.transferred_out_date ?? null;
+  const b = employee.excluded_from_timesheet_date ?? null;
+  if (a && b) return a < b ? a : b;
+  return a || b || null;
+};
+
+const isDayInactiveForEmployee = (employee: TimesheetEmployee, year: number, month: number, day: number): boolean => {
+  const cutoff = getInactiveFromDate(employee);
+  if (!cutoff) return false;
+  const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  return dateStr >= cutoff;
+};
+
 const getDeviationCellClass = (deviation: number): string => {
   if (deviation > 0.05) return 'ts-day--deviation-undertime';
   if (deviation < -0.05) return 'ts-day--deviation-overtime';
@@ -838,6 +862,16 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   <div className="ts-mobile-card-name-row">
                     <span className="ts-employee-index">{employeeIndex}.</span>
                     <div className="ts-mobile-card-name">{displayName}</div>
+                    {row.employee.transferred_out_date && (
+                      <span className="ts-employee-badge ts-employee-badge--transfer" title={`Переведён ${formatBadgeDate(row.employee.transferred_out_date)}`}>
+                        Переведён {formatBadgeDate(row.employee.transferred_out_date)}
+                      </span>
+                    )}
+                    {row.employee.excluded_from_timesheet_date && !row.employee.transferred_out_date && (
+                      <span className="ts-employee-badge ts-employee-badge--excluded" title={`Исключён с ${formatBadgeDate(row.employee.excluded_from_timesheet_date)}`}>
+                        Исключён {formatBadgeDate(row.employee.excluded_from_timesheet_date)}
+                      </span>
+                    )}
                     {stat && (
                       <span
                         className={`ts-mobile-deviation ${getDeviationCellClass(stat.deviation_hours)}`}
@@ -910,17 +944,20 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const future = isFutureDay(year, month, day);
                         const entry = row.days.get(day) || null;
                         const thresholdHours = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
+                        const inactive = isDayInactiveForEmployee(row.employee, year, month, day);
                         const cls = getDayCellClass(entry, dayOff, today, future, thresholdHours);
                         const text = getDayCellTextMobile(entry, dayOff);
                         const title = getDayCellTitle(entry, dayOff);
+                        const inactiveCls = inactive ? ' ts-day--inactive' : '';
 
                         return (
                           <button
                             key={day}
                             type="button"
-                            className={`${cls} ts-mobile-day-btn`}
+                            className={`${cls}${inactiveCls} ts-mobile-day-btn`}
                             title={title}
-                            onClick={() => onDayClick(row.employee, day, entry)}
+                            disabled={inactive}
+                            onClick={() => !inactive && onDayClick(row.employee, day, entry)}
                           >
                             <span className="ts-mobile-day-num">{day}</span>
                             <span className="ts-mobile-day-value">{text || '·'}</span>
@@ -1158,6 +1195,16 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           <div className="ts-employee-name" title={row.employee.full_name}>
                             {displayName}
                           </div>
+                          {row.employee.transferred_out_date && (
+                            <span className="ts-employee-badge ts-employee-badge--transfer" title={`Переведён ${formatBadgeDate(row.employee.transferred_out_date)}`}>
+                              Пер. {formatBadgeDate(row.employee.transferred_out_date)}
+                            </span>
+                          )}
+                          {row.employee.excluded_from_timesheet_date && !row.employee.transferred_out_date && (
+                            <span className="ts-employee-badge ts-employee-badge--excluded" title={`Исключён с ${formatBadgeDate(row.employee.excluded_from_timesheet_date)}`}>
+                              Искл. {formatBadgeDate(row.employee.excluded_from_timesheet_date)}
+                            </span>
+                          )}
                         </div>
                         {canManageTeam && onExcludeEmployee && (
                           <div
@@ -1187,10 +1234,12 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       const entry = row.days.get(day) || null;
                       const thresholdHours = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
                       const targeted = bulkEditMode && activeSelectedCellKeys.has(getEmployeeBulkCellKey(row.employee.id, day));
-                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours)}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode ? ' ts-day--bulk-selectable' : ''}`;
-                      const text = getDayCellText(entry, dayOff);
+                      const inactive = isDayInactiveForEmployee(row.employee, year, month, day);
+                      const inactiveCls = inactive ? ' ts-day--inactive' : '';
+                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours)}${inactiveCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive ? ' ts-day--bulk-selectable' : ''}`;
+                      const text = inactive ? '' : getDayCellText(entry, dayOff);
                       const title = getDayCellTitle(entry, dayOff);
-                      const bulkTitle = bulkEditMode
+                      const bulkTitle = bulkEditMode && !inactive
                         ? [title, 'Зажмите левую кнопку мыши и протяните диапазон для массовой корректировки']
                           .filter(Boolean)
                           .join(' • ')
@@ -1200,18 +1249,18 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         <td
                           key={day}
                           className={cls}
-                          title={bulkTitle}
-                          onMouseDown={bulkEditMode ? (event) => handleBulkCellMouseDown(
+                          title={inactive ? 'Сотрудник не в отделе на эту дату' : bulkTitle}
+                          onMouseDown={bulkEditMode && !inactive ? (event) => handleBulkCellMouseDown(
                             event,
                             getEmployeeBulkRowKey(row.employee.id),
                             day,
                             splitDayKeys.has(`${row.employee.id}_${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`),
                           ) : undefined}
-                          onMouseEnter={bulkEditMode ? () => handleBulkCellMouseEnter(
+                          onMouseEnter={bulkEditMode && !inactive ? () => handleBulkCellMouseEnter(
                             getEmployeeBulkRowKey(row.employee.id),
                             day,
                           ) : undefined}
-                          onClick={bulkEditMode ? undefined : () => onDayClick(row.employee, day, entry)}
+                          onClick={bulkEditMode || inactive ? undefined : () => onDayClick(row.employee, day, entry)}
                         >
                           {text}
                         </td>

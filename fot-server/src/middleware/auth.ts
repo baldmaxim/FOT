@@ -119,6 +119,22 @@ export const requirePageAccess = (pagePath: string, action: AccessAction = 'view
   };
 };
 
+export const requireAdmin = (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+): void => {
+  if (!req.user) {
+    res.status(401).json({ success: false, error: 'Authentication required' });
+    return;
+  }
+  if (!req.user.is_admin) {
+    res.status(403).json({ success: false, error: 'Доступно только администраторам' });
+    return;
+  }
+  next();
+};
+
 export const requireAnyPageAccess = (pagePaths: string[], action: AccessAction = 'view') => {
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     if (!req.user) {

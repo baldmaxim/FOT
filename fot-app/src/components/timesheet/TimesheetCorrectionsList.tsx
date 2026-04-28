@@ -1,14 +1,17 @@
 import { type FC, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Lock, Pencil, Trash2 } from 'lucide-react';
+import { Lock, Pencil, Trash2, Plus } from 'lucide-react';
 import { timesheetService, type ITimesheetCorrectionRow } from '../../services/timesheetService';
-import type { TimesheetStatus } from '../../types';
+import type { TimesheetStatus, TimesheetEmployee } from '../../types';
 import { TimesheetCorrectionModal } from './TimesheetCorrectionModal';
+import { TimesheetBulkCorrectionModal } from './TimesheetBulkCorrectionModal';
+import { generateDateRange } from '../../utils/calendarUtils';
 
 interface IProps {
   startDate: string;
   endDate: string;
   departmentId: string | null;
+  employees: TimesheetEmployee[];
 }
 
 const STATUS_LABELS: Record<TimesheetStatus, string> = {
@@ -36,16 +39,40 @@ const formatHours = (hours: number | null): string => {
   return `${h}:${String(m).padStart(2, '0')}`;
 };
 
-export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, departmentId }) => {
+export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, departmentId, employees }) => {
   const queryClient = useQueryClient();
   const [filterAuthor, setFilterAuthor] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<'' | TimesheetStatus>('');
   const [editingRow, setEditingRow] = useState<ITimesheetCorrectionRow | null>(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
 
   const invalidateAll = () => Promise.all([
     queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
     queryClient.invalidateQueries({ queryKey: ['timesheet-page'] }),
   ]);
+
+  const bulkMutation = useMutation({
+    mutationFn: (params: {
+      employeeId: number;
+      dateFrom: string;
+      dateTo: string;
+      status: TimesheetStatus;
+      hours: number | null;
+      notes: string;
+    }) => {
+      const dates = generateDateRange(params.dateFrom, params.dateTo);
+      return timesheetService.bulkCorrect({
+        items: dates.map(work_date => ({ employee_id: params.employeeId, work_date })),
+        status: params.status,
+        hours_worked: params.hours,
+        notes: params.notes,
+      });
+    },
+    onSuccess: async () => {
+      await invalidateAll();
+      setBulkOpen(false);
+    },
+  });
 
   const updateMutation = useMutation({
     mutationFn: (payload: { id: number; status: TimesheetStatus; hours: number | null; notes: string }) =>
@@ -124,6 +151,16 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
           </select>
         </label>
         <div className="ts-corrections-count">Всего: {rows.length}</div>
+        <button
+          type="button"
+          className="ts-corrections-add-btn"
+          onClick={() => setBulkOpen(true)}
+          disabled={employees.length === 0}
+          title={employees.length === 0 ? 'Нет сотрудников для корректировки' : 'Создать корректировку на диапазон дат'}
+        >
+          <Plus size={14} />
+          Добавить
+        </button>
       </div>
 
       {rows.length === 0 ? (
@@ -192,6 +229,14 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
           </table>
         </div>
       )}
+
+      <TimesheetBulkCorrectionModal
+        open={bulkOpen}
+        employees={employees}
+        pending={bulkMutation.isPending}
+        onClose={() => setBulkOpen(false)}
+        onConfirm={(params) => bulkMutation.mutate(params)}
+      />
 
       {editingRow && (
         <TimesheetCorrectionModal

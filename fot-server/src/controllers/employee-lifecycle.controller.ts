@@ -942,8 +942,18 @@ export async function updateHistoryEvent(req: AuthenticatedRequest, res: Respons
     }
 
     const eventId = req.params.eventId;
-    if (eventId.startsWith('sal_')) {
-      const historyId = Number(eventId.replace('sal_', ''));
+    const eventType = req.body.event_type;
+    if (eventType !== 'salary' && eventType !== 'assignment') {
+      res.status(400).json({ success: false, error: 'event_type must be "salary" or "assignment"' });
+      return;
+    }
+
+    if (eventType === 'salary') {
+      const historyId = Number(eventId);
+      if (!Number.isFinite(historyId)) {
+        res.status(400).json({ success: false, error: 'Invalid salary event id' });
+        return;
+      }
       await employeeChangesService.updateSalaryHistory(historyId, employeeId, {
         salary: req.body.salary,
         effective_date: req.body.effective_date,
@@ -962,7 +972,8 @@ export async function updateHistoryEvent(req: AuthenticatedRequest, res: Respons
     res.json({ success: true });
   } catch (error) {
     console.error('Update history event error:', error);
-    res.status(500).json({ success: false, error: 'Failed to update history event' });
+    const message = error instanceof Error ? error.message : 'Failed to update history event';
+    res.status(500).json({ success: false, error: message });
   }
 }
 
@@ -975,8 +986,18 @@ export async function deleteHistoryEvent(req: AuthenticatedRequest, res: Respons
     }
 
     const eventId = req.params.eventId;
-    if (eventId.startsWith('sal_')) {
-      const historyId = Number(eventId.replace('sal_', ''));
+    const eventType = req.query.event_type;
+    if (eventType !== 'salary' && eventType !== 'assignment') {
+      res.status(400).json({ success: false, error: 'event_type must be "salary" or "assignment"' });
+      return;
+    }
+
+    if (eventType === 'salary') {
+      const historyId = Number(eventId);
+      if (!Number.isFinite(historyId)) {
+        res.status(400).json({ success: false, error: 'Invalid salary event id' });
+        return;
+      }
       await employeeChangesService.deleteSalaryHistory(historyId, employeeId);
     } else {
       await employeeChangesService.deleteAssignment(eventId, employeeId);
@@ -985,6 +1006,7 @@ export async function deleteHistoryEvent(req: AuthenticatedRequest, res: Respons
     res.json({ success: true });
   } catch (error) {
     console.error('Delete history event error:', error);
-    res.status(500).json({ success: false, error: 'Failed to delete history event' });
+    const message = error instanceof Error ? error.message : 'Failed to delete history event';
+    res.status(500).json({ success: false, error: message });
   }
 }

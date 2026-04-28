@@ -8,6 +8,20 @@ export const getDaysInMonth = (year: number, month: number): number => {
   return new Date(year, month, 0).getDate();
 };
 
+export const generateDateRange = (from: string, to: string): string[] => {
+  const result: string[] = [];
+  const cursor = new Date(`${from}T00:00:00`);
+  const end = new Date(`${to}T00:00:00`);
+  while (cursor <= end) {
+    const y = cursor.getFullYear();
+    const m = String(cursor.getMonth() + 1).padStart(2, '0');
+    const d = String(cursor.getDate()).padStart(2, '0');
+    result.push(`${y}-${m}-${d}`);
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return result;
+};
+
 export const isWeekend = (year: number, month: number, day: number): boolean => {
   const d = new Date(year, month - 1, day).getDay();
   return d === 0 || d === 6;

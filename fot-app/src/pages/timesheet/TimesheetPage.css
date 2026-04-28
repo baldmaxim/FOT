@@ -1716,6 +1716,180 @@
   font-size: 13px;
   color: var(--text-tertiary);
 }
+
+.ts-corrections-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  font-size: 13px;
+  background: var(--primary, #2563eb);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.ts-corrections-add-btn:hover {
+  background: var(--primary-hover, #1d4ed8);
+}
+
+.ts-corrections-add-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ===== Bulk correction modal ===== */
+.ts-bulk-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  padding: 16px;
+}
+
+.ts-bulk-modal {
+  width: min(480px, 100%);
+  background: var(--surface, #fff);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 32px);
+  overflow: hidden;
+}
+
+.ts-bulk-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+}
+
+.ts-bulk-modal-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ts-bulk-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.ts-bulk-modal-close:hover {
+  background: var(--bg-hover, #f3f4f6);
+}
+
+.ts-bulk-modal-body {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.ts-bulk-modal-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ts-bulk-modal-row label {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.ts-bulk-modal-required {
+  color: #dc2626;
+}
+
+.ts-bulk-modal-row input,
+.ts-bulk-modal-row select,
+.ts-bulk-modal-row textarea {
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
+}
+
+.ts-bulk-modal-row textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+.ts-bulk-modal-row-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.ts-bulk-modal-info {
+  padding: 8px 10px;
+  font-size: 12px;
+  background: rgba(59, 130, 246, 0.08);
+  color: #1e40af;
+  border-radius: 6px;
+}
+
+.ts-bulk-modal-info.error {
+  background: rgba(239, 68, 68, 0.1);
+  color: #b91c1c;
+}
+
+.ts-bulk-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border, #e5e7eb);
+  background: var(--bg-elevated, #f9fafb);
+}
+
+.ts-bulk-modal-cancel,
+.ts-bulk-modal-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #d1d5db);
+  cursor: pointer;
+}
+
+.ts-bulk-modal-cancel {
+  background: var(--surface, #fff);
+  color: var(--text-primary);
+}
+
+.ts-bulk-modal-confirm {
+  background: var(--primary, #2563eb);
+  border-color: var(--primary, #2563eb);
+  color: #fff;
+}
+
+.ts-bulk-modal-cancel:disabled,
+.ts-bulk-modal-confirm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .ts-corrections-scroll {
   flex: 1;
   overflow: auto;
@@ -2245,6 +2419,170 @@
 
 .ts-day--corrected {
   position: relative;
+}
+
+.ts-day--inactive {
+  background: var(--bg-elevated, #f3f4f6) !important;
+  color: var(--text-tertiary, #9ca3af) !important;
+  text-decoration: line-through;
+  cursor: not-allowed !important;
+  opacity: 0.6;
+}
+
+.ts-day--inactive:hover {
+  background: var(--bg-elevated, #f3f4f6) !important;
+}
+
+.ts-employee-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ts-employee-badge--transfer {
+  background: rgba(59, 130, 246, 0.15);
+  color: #2563eb;
+}
+
+.ts-employee-badge--excluded {
+  background: rgba(107, 114, 128, 0.18);
+  color: #6b7280;
+}
+
+/* ===== Exclude employee modal ===== */
+.ts-exclude-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+}
+
+.ts-exclude-modal {
+  width: min(440px, calc(100vw - 32px));
+  background: var(--surface, #fff);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.ts-exclude-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+}
+
+.ts-exclude-modal-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ts-exclude-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.ts-exclude-modal-close:hover {
+  background: var(--bg-hover, #f3f4f6);
+}
+
+.ts-exclude-modal-body {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ts-exclude-modal-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ts-exclude-modal-label {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.ts-exclude-modal-value {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.ts-exclude-modal-row input[type="date"] {
+  padding: 8px 10px;
+  font-size: 13px;
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
+}
+
+.ts-exclude-modal-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+
+.ts-exclude-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border, #e5e7eb);
+  background: var(--bg-elevated, #f9fafb);
+}
+
+.ts-exclude-modal-cancel,
+.ts-exclude-modal-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #d1d5db);
+  cursor: pointer;
+}
+
+.ts-exclude-modal-cancel {
+  background: var(--surface, #fff);
+  color: var(--text-primary);
+}
+
+.ts-exclude-modal-confirm {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+}
+
+.ts-exclude-modal-confirm:disabled,
+.ts-exclude-modal-cancel:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .ts-day--corrected::before {
