@@ -1,7 +1,7 @@
 import { supabase } from '../config/database.js';
 import type { IProductionCalendarMonth, IResolvedSchedule, TimeStatus } from '../types/index.js';
 import { getTravelHoursSummaryForRange } from './skud-travel.service.js';
-import { getScheduleForDate, isWorkingDay, needsSkudCheck } from './schedule.service.js';
+import { getScheduleForDate, getShiftDurationHours, isWorkingDay, needsSkudCheck } from './schedule.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import {
   buildObjectAttendanceData,
@@ -112,7 +112,9 @@ function getPlannedHoursForScheduleOnDate(
 ): number | null {
   if (!schedule) return null;
   const [yearPart, monthPart, dayPart] = workDate.split('-').map(Number);
-  return getScheduleForDate(schedule, new Date(yearPart, monthPart - 1, dayPart)).work_hours;
+  // Лимит для отображения руководителю = длительность смены (start–end, без вычета обеда),
+  // а не work_hours (которое уже за вычетом обеда).
+  return getShiftDurationHours(getScheduleForDate(schedule, new Date(yearPart, monthPart - 1, dayPart)));
 }
 
 function getSummaryHours(summary: ISummaryRow): number {
@@ -547,6 +549,15 @@ export async function buildAttendanceEntries(params: {
     }
 
     if (entry.is_correction && NON_WORK_ADJUSTMENT_STATUSES.has(entry.status)) {
+      entry.object_detail_mode = employeesWithMultiObjects.has(entry.employee_id) ? 'available' : 'none';
+      entry.object_detail_message = null;
+      entry.object_detail_count = employeesWithMultiObjects.has(entry.employee_id) ? dayObjectEntries.length : 0;
+      continue;
+    }
+
+    // Дневная корректировка с явным hours_override — приоритет над СКУД-объектами.
+    // Иначе ввод 8:59 в модалке «Корректировка» затирался агрегатом из object_entries (см. plan).
+    if (entry.is_correction && entry.id != null && entry.hours_worked != null) {
       entry.object_detail_mode = employeesWithMultiObjects.has(entry.employee_id) ? 'available' : 'none';
       entry.object_detail_message = null;
       entry.object_detail_count = employeesWithMultiObjects.has(entry.employee_id) ? dayObjectEntries.length : 0;

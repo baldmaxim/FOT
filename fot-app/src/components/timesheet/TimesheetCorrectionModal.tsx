@@ -251,15 +251,13 @@ const CorrectionTab: FC<{
   const showStatusPicker = statusOptions.length > 1;
 
   const trimmedNotes = notes.trim();
-  const canSave = trimmedNotes.length > 0;
+  const needsHoursForStatus = HOURS_EDITABLE_STATUSES.has(selectedStatus);
+  const exceedsMax = needsHoursForStatus && maxHours != null && hours > maxHours;
+  const canSave = trimmedNotes.length > 0 && !exceedsMax;
 
   const handleSave = () => {
     if (!canSave) return;
-    const needsHours = HOURS_EDITABLE_STATUSES.has(selectedStatus);
-    const normalizedHours = needsHours && maxHours != null
-      ? Math.max(0, Math.min(hours, maxHours))
-      : hours;
-    onSave(selectedStatus, needsHours ? normalizedHours : null, trimmedNotes);
+    onSave(selectedStatus, needsHoursForStatus ? hours : null, trimmedNotes);
   };
 
   if (mode === 'view' && hasExistingCorrection) {
@@ -339,9 +337,7 @@ const CorrectionTab: FC<{
           const applyHM = (h: number, m: number) => {
             const clampedM = Math.max(0, Math.min(59, m));
             const clampedH = Math.max(0, h);
-            const total = clampedH + clampedM / 60;
-            const normalized = maxHours != null ? Math.min(total, maxHours) : total;
-            setHours(Math.max(0, normalized));
+            setHours(clampedH + clampedM / 60);
           };
           return (
             <div className="ts-form-group">
@@ -353,7 +349,7 @@ const CorrectionTab: FC<{
                   value={wholeHours}
                   onChange={e => applyHM(parseInt(e.target.value, 10) || 0, minutes)}
                   min={0}
-                  max={maxHours != null ? Math.floor(maxHours) : 24}
+                  max={24}
                 />
                 <span className="ts-hours-separator">ч</span>
                 <input
@@ -366,8 +362,13 @@ const CorrectionTab: FC<{
                 />
                 <span className="ts-hours-separator">м</span>
               </div>
-              {maxHours != null && (
-                <span className="ts-hours-hint">Максимум по графику {formatHM(maxHours)}</span>
+              {maxHours != null && !exceedsMax && (
+                <span className="ts-hours-hint">Максимум по смене {formatHM(maxHours)}</span>
+              )}
+              {exceedsMax && maxHours != null && (
+                <span className="ts-form-hint ts-form-hint--error">
+                  Превышает длительность смены ({formatHM(maxHours)})
+                </span>
               )}
             </div>
           );
@@ -401,7 +402,11 @@ const CorrectionTab: FC<{
           onClick={handleSave}
           type="button"
           disabled={!canSave}
-          title={canSave ? undefined : 'Заполните комментарий'}
+          title={
+            exceedsMax && maxHours != null
+              ? `Часы превышают длительность смены (${formatHM(maxHours)})`
+              : (canSave ? undefined : 'Заполните комментарий')
+          }
         >
           {confirmLabel || 'Сохранить'}
         </button>

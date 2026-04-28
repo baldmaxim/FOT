@@ -13,7 +13,7 @@ import type { DataScope } from '../config/access-control.js';
 import { exportTimesheet } from './timesheet-export.controller.js';
 import { exportTimesheetMass } from './timesheet-mass-export.controller.js';
 import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned } from './timesheet-assigned-export.controller.js';
-import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, loadCalendarMonth } from '../services/schedule.service.js';
+import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, getShiftDurationHours, loadCalendarMonth } from '../services/schedule.service.js';
 import {
   getMinSelfHistoryDate,
   isSelfEmployeeRequest,
@@ -341,6 +341,41 @@ async function resolvePlannedHoursByItems(items: Array<{ employee_id: number; wo
   }));
 }
 
+/** Лимит ввода часов для руководителя = длительность смены (work_end − work_start), без вычета обеда. */
+async function resolveShiftDurationByItems(
+  items: Array<{ employee_id: number; work_date: string }>,
+): Promise<Map<string, number>> {
+  const uniqueItems = Array.from(
+    new Map(items.map(item => [`${item.employee_id}_${item.work_date}`, item] as const)).values(),
+  );
+  if (uniqueItems.length === 0) return new Map();
+
+  const employeeIds = [...new Set(uniqueItems.map(item => item.employee_id))];
+  const { data: employees, error } = await supabase
+    .from('employees')
+    .select('id, work_category')
+    .in('id', employeeIds);
+  if (error) throw error;
+
+  const employeeRows = (employees || []).map(employee => ({
+    id: Number(employee.id),
+    work_category: (employee.work_category as WorkCategory | null) ?? null,
+  }));
+
+  const startDate = uniqueItems.reduce((min, item) => (item.work_date < min ? item.work_date : min), uniqueItems[0].work_date);
+  const endDate = uniqueItems.reduce((max, item) => (item.work_date > max ? item.work_date : max), uniqueItems[0].work_date);
+  const schedules = await resolveSchedulesForPeriod(employeeRows, startDate, endDate);
+
+  return new Map(uniqueItems.map(item => {
+    const schedule = schedules.get(item.employee_id)?.get(item.work_date);
+    const dayParams = schedule
+      ? getScheduleForDate(schedule, new Date(`${item.work_date}T00:00:00`))
+      : null;
+    const shiftHours = dayParams ? getShiftDurationHours(dayParams) : 9;
+    return [`${item.employee_id}_${item.work_date}`, shiftHours] as const;
+  }));
+}
+
 async function resolvePlannedHoursForObjectItem(params: {
   employee_id: number;
   work_date: string;
@@ -448,16 +483,11 @@ async function canAccessEmployeeForTimesheetPeriod(
   return employeeIdsByDepartment.flat().includes(employeeId);
 }
 
-function clampInputHoursForScope(
-  scope: string | null,
-  hoursWorked: number | null | undefined,
-  plannedHours: number | null | undefined,
-): number | null | undefined {
-  if (hoursWorked == null || plannedHours == null || scope !== 'department') {
-    return hoursWorked;
-  }
-
-  return Math.max(0, Math.min(hoursWorked, plannedHours));
+function formatHoursLabel(hours: number): string {
+  const totalMinutes = Math.max(0, Math.round(hours * 60));
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return m === 0 ? `${h}ч` : `${h}ч ${m}м`;
 }
 
 async function resolveAllowedObjectHours(
@@ -1014,9 +1044,19 @@ export const timesheetController = {
       }
       const plannedHours = (await resolvePlannedHoursByItems([{ employee_id: parsed.employee_id, work_date: parsed.work_date }]))
         .get(`${parsed.employee_id}_${parsed.work_date}`) ?? null;
+      if (scope === 'department' && parsed.status !== 'remote' && parsed.hours_worked != null) {
+        const shiftDuration = (await resolveShiftDurationByItems([{ employee_id: parsed.employee_id, work_date: parsed.work_date }]))
+          .get(`${parsed.employee_id}_${parsed.work_date}`) ?? null;
+        if (shiftDuration != null && parsed.hours_worked > shiftDuration) {
+          return res.status(422).json({
+            success: false,
+            error: `Часы (${formatHoursLabel(parsed.hours_worked)}) превышают длительность смены (${formatHoursLabel(shiftDuration)})`,
+          });
+        }
+      }
       const normalizedHours = parsed.status === 'remote'
         ? (plannedHours ?? 8)
-        : (clampInputHoursForScope(scope, parsed.hours_worked ?? null, plannedHours) ?? null);
+        : (parsed.hours_worked ?? null);
 
       const approvalStatus = await resolveAdjustmentApprovalStatus(parsed.employee_id, parsed.work_date, parsed.status);
 
@@ -1114,9 +1154,21 @@ export const timesheetController = {
           employee_id: Number(existing.employee_id),
           work_date: String(existing.work_date),
         }])).get(`${Number(existing.employee_id)}_${String(existing.work_date)}`) ?? null;
+        if (scope === 'department' && nextStatus !== 'remote' && parsed.hours_worked != null) {
+          const shiftDuration = (await resolveShiftDurationByItems([{
+            employee_id: Number(existing.employee_id),
+            work_date: String(existing.work_date),
+          }])).get(`${Number(existing.employee_id)}_${String(existing.work_date)}`) ?? null;
+          if (shiftDuration != null && parsed.hours_worked > shiftDuration) {
+            return res.status(422).json({
+              success: false,
+              error: `Часы (${formatHoursLabel(parsed.hours_worked)}) превышают длительность смены (${formatHoursLabel(shiftDuration)})`,
+            });
+          }
+        }
         const normalizedHours = nextStatus === 'remote'
           ? (plannedHours ?? 8)
-          : clampInputHoursForScope(scope, parsed.hours_worked, plannedHours);
+          : parsed.hours_worked;
 
         const approvalStatus = await resolveAdjustmentApprovalStatus(
           Number(existing.employee_id),
@@ -1138,9 +1190,7 @@ export const timesheetController = {
         const actualHours = typeof updated.hours_override === 'number'
           ? updated.hours_override
           : (typeof updated.hours_worked === 'number' ? updated.hours_worked : null);
-        const displayHours = typeof actualHours === 'number'
-          ? (clampInputHoursForScope(scope, actualHours, plannedHours) ?? actualHours)
-          : actualHours;
+        const displayHours = actualHours;
 
 	      const data = {
 	        id: Number(updated.id),
@@ -1227,6 +1277,18 @@ export const timesheetController = {
       }
       const employeeIds = [...new Set(uniqueItems.map(item => item.employee_id))];
       const plannedHoursByItem = await resolvePlannedHoursByItems(uniqueItems);
+      if (scope === 'department' && parsed.status !== 'remote' && parsed.hours_worked != null) {
+        const shiftDurations = await resolveShiftDurationByItems(uniqueItems);
+        for (const item of uniqueItems) {
+          const shiftDuration = shiftDurations.get(`${item.employee_id}_${item.work_date}`) ?? null;
+          if (shiftDuration != null && parsed.hours_worked > shiftDuration) {
+            return res.status(422).json({
+              success: false,
+              error: `Часы (${formatHoursLabel(parsed.hours_worked)}) превышают длительность смены (${formatHoursLabel(shiftDuration)}) у сотрудника ${item.employee_id} за ${item.work_date}`,
+            });
+          }
+        }
+      }
 
       await Promise.all(uniqueItems.map(async item => {
         const approvalStatus = await resolveAdjustmentApprovalStatus(
@@ -1240,11 +1302,7 @@ export const timesheetController = {
           status: parsed.status,
           hours_override: parsed.status === 'remote'
             ? (plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) ?? 8)
-            : (clampInputHoursForScope(
-              scope,
-              parsed.hours_worked ?? null,
-              plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) ?? null,
-            ) ?? null),
+            : (parsed.hours_worked ?? null),
           source_type: 'manual',
           source_id: 'manual',
           reason: parsed.notes ?? null,

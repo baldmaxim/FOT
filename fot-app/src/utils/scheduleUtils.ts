@@ -40,6 +40,34 @@ export const getWorkHoursForDay = (
   return sched.work_hours;
 };
 
+/** Длительность смены (start–end, без вычета обеда). Учитывает day_overrides и ночные смены. */
+export const getShiftDurationForDay = (
+  sched: IResolvedSchedule | undefined,
+  year: number,
+  month: number,
+  day: number,
+): number => {
+  if (!sched) return 9;
+  let workStart = sched.work_start;
+  let workEnd = sched.work_end;
+  if (sched.day_overrides) {
+    const dow = String(getISODow(new Date(year, month - 1, day)));
+    const override = sched.day_overrides[dow];
+    if (override) {
+      workStart = override.work_start;
+      workEnd = override.work_end;
+    }
+  }
+  const parse = (value: string): number => {
+    const [h = 0, m = 0] = value.split(':').map(Number);
+    return h * 60 + m;
+  };
+  const startMin = parse(workStart);
+  let endMin = parse(workEnd);
+  if (endMin <= startMin) endMin += 24 * 60;
+  return Math.max(0, (endMin - startMin) / 60);
+};
+
 export const isHolidayForSchedule = (
   sched: IResolvedSchedule | undefined,
   calendar: IProductionCalendarMonth | null,

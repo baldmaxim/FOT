@@ -24,7 +24,7 @@ import type {
 } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
 import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
-import { getScheduleForTimesheetDay, getWorkHoursForDay } from '../../utils/scheduleUtils';
+import { getScheduleForTimesheetDay, getShiftDurationForDay, getWorkHoursForDay } from '../../utils/scheduleUtils';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import {
   getHalfRange,
@@ -786,9 +786,9 @@ export const TimesheetPage: FC = () => {
   const modalMaxHours = useMemo(() => {
     if (!isTimesheetDepartmentScope || !modalEmployee) return null;
     const sched = getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay);
-    const plannedHours = getWorkHoursForDay(sched, year, month, modalDay);
+    const shiftDuration = getShiftDurationForDay(sched, year, month, modalDay);
     if (modalMode !== 'object' || !modalObjectTarget) {
-      return plannedHours;
+      return shiftDuration;
     }
 
     const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
@@ -799,7 +799,7 @@ export const TimesheetPage: FC = () => {
       }
       return sum + (item.display_hours_worked ?? item.hours_worked ?? 0);
     }, 0);
-    return Math.max(0, plannedHours - otherHours);
+    return Math.max(0, shiftDuration - otherHours);
   }, [
     isTimesheetDepartmentScope,
     modalEmployee,
@@ -1026,7 +1026,7 @@ export const TimesheetPage: FC = () => {
           month,
           target.day,
         );
-        const plannedHours = getWorkHoursForDay(sched, year, month, target.day);
+        const shiftDuration = getShiftDurationForDay(sched, year, month, target.day);
         const dayObjectEntries = objectEntriesByEmployeeDate.get(target.employee.id)?.get(target.workDate) || [];
         const otherHours = dayObjectEntries.reduce((sum, item) => {
           if (item.object_key === target.objectTarget.object_key) {
@@ -1034,7 +1034,7 @@ export const TimesheetPage: FC = () => {
           }
           return sum + (item.display_hours_worked ?? item.hours_worked ?? 0);
         }, 0);
-        const allowedHours = Math.max(0, plannedHours - otherHours);
+        const allowedHours = Math.max(0, shiftDuration - otherHours);
         return minValue == null ? allowedHours : Math.min(minValue, allowedHours);
       }, null);
     }
@@ -1048,7 +1048,7 @@ export const TimesheetPage: FC = () => {
       month,
       firstTarget.day,
     );
-    return getWorkHoursForDay(sched, year, month, firstTarget.day);
+    return getShiftDurationForDay(sched, year, month, firstTarget.day);
   }, [
     isTimesheetDepartmentScope,
     isObjectBulkOperation,

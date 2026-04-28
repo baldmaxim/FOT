@@ -104,6 +104,18 @@ export const getNetHours = (schedule: Pick<IResolvedSchedule, 'work_hours' | 'lu
   return Math.max(0, schedule.work_hours - schedule.lunch_minutes / 60);
 };
 
+/** Длительность смены = work_end − work_start (без вычета обеда). Учитывает ночные смены. */
+export const getShiftDurationHours = (daySchedule: IDayScheduleParams): number => {
+  const parse = (value: string): number => {
+    const [h = 0, m = 0] = value.split(':').map(Number);
+    return h * 60 + m;
+  };
+  const startMin = parse(daySchedule.work_start);
+  let endMin = parse(daySchedule.work_end);
+  if (endMin <= startMin) endMin += 24 * 60;
+  return Math.max(0, (endMin - startMin) / 60);
+};
+
 /** Порог полного дня для конкретной даты: как в UI табеля */
 export const getFullDayThresholdHoursForDate = (
   schedule: IResolvedSchedule,

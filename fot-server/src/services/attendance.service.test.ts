@@ -101,7 +101,12 @@ vi.mock('./skud-travel.service.js', () => ({
 vi.mock('./schedule.service.js', () => ({
   getScheduleForDate: vi.fn((schedule?: { work_hours?: number }) => ({
     work_hours: schedule?.work_hours ?? mockedState.scheduleWorkHours,
+    work_start: '09:00',
+    work_end: '18:00',
   })),
+  getShiftDurationHours: vi.fn((dayParams?: { work_hours?: number }) => (
+    dayParams?.work_hours ?? mockedState.scheduleWorkHours
+  )),
   isWorkingDay: vi.fn(() => mockedState.isWorkingDay),
   needsSkudCheck: vi.fn(() => mockedState.needsSkudCheck),
 }));
