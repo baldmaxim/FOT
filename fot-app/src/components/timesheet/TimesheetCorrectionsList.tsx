@@ -15,14 +15,14 @@ interface IProps {
 }
 
 const STATUS_LABELS: Record<TimesheetStatus, string> = {
-  work: 'Работа',
+  work: 'Присутствие',
   vacation: 'Отпуск',
   dayoff: 'Отгул',
   remote: 'Удалёнка',
   unpaid: 'За свой счёт',
   absent: 'Неявка',
   sick: 'Больничный',
-  manual: 'Ручная',
+  manual: 'Ручная корр.',
   educational_leave: 'Учебный отпуск',
 };
 
