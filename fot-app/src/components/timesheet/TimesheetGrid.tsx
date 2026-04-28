@@ -16,6 +16,7 @@ import {
   isScheduleDayOff,
 } from '../../utils/scheduleUtils';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
+import '../../pages/timesheet/TimesheetPage.css';
 
 type TimesheetViewMode = 'employees' | 'objects';
 
