@@ -36,6 +36,7 @@ interface ITimesheetGridProps {
   selectedCellKeys?: Set<string>;
   splitDayKeys?: Set<string>;
   lockedDates?: Set<string>;
+  problemDates?: { red?: Set<string>; yellow?: Set<string> };
   canManageTeam?: boolean;
   pendingEmployeeId?: number | null;
   onBulkSelectionChange?: (cellKeys: Set<string>) => void;
@@ -317,6 +318,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   visibleDays,
   selectedCellKeys = EMPTY_CELL_SELECTION,
   splitDayKeys = EMPTY_CELL_SELECTION,
+  problemDates,
   canManageTeam = false,
   pendingEmployeeId = null,
   onBulkSelectionChange,
@@ -945,16 +947,22 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const entry = row.days.get(day) || null;
                         const thresholdHours = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
                         const inactive = isDayInactiveForEmployee(row.employee, year, month, day);
-                        const cls = getDayCellClass(entry, dayOff, today, future, thresholdHours);
+                        const baseCls = getDayCellClass(entry, dayOff, today, future, thresholdHours);
                         const text = getDayCellTextMobile(entry, dayOff);
                         const title = getDayCellTitle(entry, dayOff);
                         const inactiveCls = inactive ? ' ts-day--inactive' : '';
+                        const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                        const problemCls = problemDates?.red?.has(isoDate)
+                          ? ' ts-day--problem-red'
+                          : problemDates?.yellow?.has(isoDate)
+                            ? ' ts-day--problem-yellow'
+                            : '';
 
                         return (
                           <button
                             key={day}
                             type="button"
-                            className={`${cls}${inactiveCls} ts-mobile-day-btn`}
+                            className={`${baseCls}${inactiveCls}${problemCls} ts-mobile-day-btn`}
                             title={title}
                             disabled={inactive}
                             onClick={() => !inactive && onDayClick(row.employee, day, entry)}
@@ -1240,7 +1248,13 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       const targeted = bulkEditMode && activeSelectedCellKeys.has(getEmployeeBulkCellKey(row.employee.id, day));
                       const inactive = isDayInactiveForEmployee(row.employee, year, month, day);
                       const inactiveCls = inactive ? ' ts-day--inactive' : '';
-                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours)}${inactiveCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive ? ' ts-day--bulk-selectable' : ''}`;
+                      const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                      const problemCls = problemDates?.red?.has(isoDate)
+                        ? ' ts-day--problem-red'
+                        : problemDates?.yellow?.has(isoDate)
+                          ? ' ts-day--problem-yellow'
+                          : '';
+                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours)}${inactiveCls}${problemCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive ? ' ts-day--bulk-selectable' : ''}`;
                       const text = inactive ? '' : getDayCellText(entry, dayOff);
                       const title = getDayCellTitle(entry, dayOff);
                       const bulkTitle = bulkEditMode && !inactive

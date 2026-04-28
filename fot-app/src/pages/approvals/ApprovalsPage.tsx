@@ -12,6 +12,8 @@ import {
   type ICorrectionDepartmentGroup,
   type ICorrectionPendingItem,
 } from '../../services/correctionApprovalService';
+import { timesheetService } from '../../services/timesheetService';
+import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import './ApprovalsPage.css';
@@ -218,6 +220,164 @@ const CorrectionsTab: FC = () => {
   );
 };
 
+interface IApprovalCardBodyProps {
+  row: IApprovalReviewItem;
+  canReview: boolean;
+  isApproving: boolean;
+  isRejecting: boolean;
+  isReturning: boolean;
+  onApprove: () => void;
+  onSendToRework: () => void;
+  onReturnApproved: () => void;
+}
+
+const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
+  row,
+  canReview,
+  isApproving,
+  isRejecting,
+  isReturning,
+  onApprove,
+  onSendToRework,
+  onReturnApproved,
+}) => {
+  const startDate = useMemo(() => new Date(row.start_date + 'T00:00:00'), [row.start_date]);
+  const year = startDate.getFullYear();
+  const month = startDate.getMonth() + 1;
+  const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+
+  const tsQuery = useQuery({
+    queryKey: ['approval-timesheet', row.id],
+    queryFn: () => timesheetService.getAll({
+      month: monthStr,
+      department_id: row.department_id,
+      from: row.start_date,
+      to: row.end_date,
+    }),
+    staleTime: 30_000,
+  });
+
+  const problemDates = useMemo(() => {
+    const red = new Set<string>();
+    const yellow = new Set<string>();
+    if (row.problem_flags.weekend_work_without_attachment) {
+      for (const d of row.weekend_work_dates) red.add(d);
+    } else {
+      for (const d of row.weekend_work_dates) yellow.add(d);
+    }
+    for (const e of tsQuery.data?.entries ?? []) {
+      if (e.is_correction || e.status === 'absent') {
+        if (!red.has(e.work_date)) yellow.add(e.work_date);
+      }
+    }
+    return { red, yellow };
+  }, [row.problem_flags.weekend_work_without_attachment, row.weekend_work_dates, tsQuery.data?.entries]);
+
+  return (
+    <div className="approvals-card-body">
+      <div className="approvals-flags">
+        {row.problem_flags.weekend_work_without_attachment && (
+          <span className="approvals-flag approvals-flag--red">
+            <AlertTriangle size={12} /> Работа в выходной без вложений
+          </span>
+        )}
+        {row.problem_flags.correction_exceeds_skud && (
+          <span className="approvals-flag approvals-flag--red">
+            <AlertTriangle size={12} /> Корректировка &gt; факта СКУД
+          </span>
+        )}
+        {row.problem_flags.any_correction && (
+          <span className="approvals-flag approvals-flag--yellow">
+            Корректировки руководителя
+          </span>
+        )}
+        {row.problem_flags.absent_days && (
+          <span className="approvals-flag approvals-flag--yellow">
+            Есть отсутствия
+          </span>
+        )}
+        {row.weekend_work_dates.length > 0 && (
+          <span className="approvals-flag approvals-flag--info">
+            Выходные с работой: {row.weekend_work_dates.join(', ')}
+          </span>
+        )}
+      </div>
+
+      {row.attachments_count > 0 && (
+        <div className="approvals-attachments">
+          <FileText size={14} />
+          Вложений: {row.attachments_count}
+        </div>
+      )}
+
+      {row.review_comment && (
+        <div className="approvals-comment">Комментарий: {row.review_comment}</div>
+      )}
+
+      <div className="approvals-timesheet-frame">
+        {tsQuery.isLoading ? (
+          <div className="approvals-timesheet-loading">Загрузка табеля…</div>
+        ) : tsQuery.isError ? (
+          <div className="approvals-timesheet-error">
+            Не удалось загрузить табель: {tsQuery.error instanceof Error ? tsQuery.error.message : 'ошибка'}
+          </div>
+        ) : tsQuery.data ? (
+          <TimesheetGrid
+            employees={tsQuery.data.employees}
+            entries={tsQuery.data.entries}
+            objectEntries={tsQuery.data.object_entries}
+            employeeStats={tsQuery.data.employee_stats}
+            year={year}
+            month={month}
+            schedules={tsQuery.data.schedules}
+            dailySchedules={tsQuery.data.daily_schedules}
+            calendar={tsQuery.data.calendar}
+            problemDates={problemDates}
+            onEmployeeClick={() => {}}
+            onDayClick={() => {}}
+            onObjectDayClick={() => {}}
+          />
+        ) : null}
+      </div>
+
+      {canReview && (
+        <div className="approvals-actions">
+          {row.status === 'submitted' && (
+            <>
+              <button
+                type="button"
+                className="approvals-action-btn approvals-action-btn--approve"
+                onClick={onApprove}
+                disabled={isApproving}
+              >
+                <Check size={16} /> Утвердить
+              </button>
+              <button
+                type="button"
+                className="approvals-action-btn approvals-action-btn--rework"
+                onClick={onSendToRework}
+                disabled={isRejecting}
+              >
+                <RotateCcw size={16} /> На доработку
+              </button>
+            </>
+          )}
+          {row.status === 'approved' && (
+            <button
+              type="button"
+              className="approvals-action-btn approvals-action-btn--rework"
+              onClick={onReturnApproved}
+              disabled={isReturning}
+            >
+              <RotateCcw size={16} /> Вернуть на доработку
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const TimesheetsTab: FC = () => {
   const { hasPermission } = useAuth();
   const canReview = hasPermission('timesheet.workflow.review');
@@ -245,8 +405,8 @@ const TimesheetsTab: FC = () => {
 
   const rejectMutation = useMutation({
     mutationFn: ({ id, comment }: { id: number; comment: string }) => timesheetApprovalService.reject(id, comment),
-    onSuccess: async () => { await invalidate(); toast.success?.('Табель отклонён'); },
-    onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка отклонения'),
+    onSuccess: async () => { await invalidate(); toast.success?.('Табель отправлен на доработку'); },
+    onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка отправки на доработку'),
   });
 
   const returnMutation = useMutation({
@@ -257,8 +417,8 @@ const TimesheetsTab: FC = () => {
 
   const rows: IApprovalReviewItem[] = useMemo(() => query.data ?? [], [query.data]);
 
-  const handleReject = (row: IApprovalReviewItem) => {
-    const comment = window.prompt('Комментарий (причина отклонения):', '') ?? '';
+  const handleSendToRework = (row: IApprovalReviewItem) => {
+    const comment = window.prompt('Комментарий (что нужно доработать):', '') ?? '';
     if (!comment.trim()) return;
     rejectMutation.mutate({ id: row.id, comment });
   };
@@ -321,81 +481,16 @@ const TimesheetsTab: FC = () => {
                 </button>
 
                 {expanded && (
-                  <div className="approvals-card-body">
-                    <div className="approvals-flags">
-                      {row.problem_flags.weekend_work_without_attachment && (
-                        <span className="approvals-flag approvals-flag--red">
-                          <AlertTriangle size={12} /> Работа в выходной без вложений
-                        </span>
-                      )}
-                      {row.problem_flags.correction_exceeds_skud && (
-                        <span className="approvals-flag approvals-flag--red">
-                          <AlertTriangle size={12} /> Корректировка &gt; факта СКУД
-                        </span>
-                      )}
-                      {row.problem_flags.any_correction && (
-                        <span className="approvals-flag approvals-flag--yellow">
-                          Корректировки руководителя
-                        </span>
-                      )}
-                      {row.problem_flags.absent_days && (
-                        <span className="approvals-flag approvals-flag--yellow">
-                          Есть отсутствия
-                        </span>
-                      )}
-                      {row.weekend_work_dates.length > 0 && (
-                        <span className="approvals-flag approvals-flag--info">
-                          Выходные с работой: {row.weekend_work_dates.join(', ')}
-                        </span>
-                      )}
-                    </div>
-
-                    {row.attachments_count > 0 && (
-                      <div className="approvals-attachments">
-                        <FileText size={14} />
-                        Вложений: {row.attachments_count}
-                      </div>
-                    )}
-
-                    {row.review_comment && (
-                      <div className="approvals-comment">Комментарий: {row.review_comment}</div>
-                    )}
-
-                    {canReview && (
-                      <div className="approvals-actions">
-                        {row.status === 'submitted' && (
-                          <>
-                            <button
-                              type="button"
-                              className="ts-btn ts-btn--success"
-                              onClick={() => approveMutation.mutate(row.id)}
-                              disabled={approveMutation.isPending}
-                            >
-                              <Check size={14} /> Утвердить
-                            </button>
-                            <button
-                              type="button"
-                              className="ts-btn ts-btn--danger"
-                              onClick={() => handleReject(row)}
-                              disabled={rejectMutation.isPending}
-                            >
-                              <X size={14} /> Отклонить
-                            </button>
-                          </>
-                        )}
-                        {row.status === 'approved' && (
-                          <button
-                            type="button"
-                            className="ts-btn"
-                            onClick={() => handleReturn(row)}
-                            disabled={returnMutation.isPending}
-                          >
-                            <RotateCcw size={14} /> Вернуть на доработку
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                  <ApprovalCardBody
+                    row={row}
+                    canReview={canReview}
+                    isApproving={approveMutation.isPending}
+                    isRejecting={rejectMutation.isPending}
+                    isReturning={returnMutation.isPending}
+                    onApprove={() => approveMutation.mutate(row.id)}
+                    onSendToRework={() => handleSendToRework(row)}
+                    onReturnApproved={() => handleReturn(row)}
+                  />
                 )}
               </li>
             );

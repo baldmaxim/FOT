@@ -2439,6 +2439,14 @@
   background: var(--bg-elevated, #f3f4f6) !important;
 }
 
+.ts-day--problem-red {
+  box-shadow: inset 0 0 0 2px var(--error, #ef4444);
+}
+
+.ts-day--problem-yellow {
+  box-shadow: inset 0 0 0 2px #f59e0b;
+}
+
 .ts-employee-badge {
   display: inline-flex;
   align-items: center;

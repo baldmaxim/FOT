@@ -155,8 +155,69 @@
 }
 .approvals-actions {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
+}
+.approvals-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+  letter-spacing: 0.01em;
+  transition: background var(--transition, 0.15s ease),
+              transform var(--transition, 0.15s ease),
+              box-shadow var(--transition, 0.15s ease),
+              opacity var(--transition, 0.15s ease);
+}
+.approvals-action-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px -10px rgba(0, 0, 0, 0.45);
+}
+.approvals-action-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+.approvals-action-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.approvals-action-btn--approve {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+}
+.approvals-action-btn--approve:hover:not(:disabled) {
+  background: linear-gradient(135deg, #0ea371 0%, #047857 100%);
+}
+.approvals-action-btn--rework {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+}
+.approvals-action-btn--rework:hover:not(:disabled) {
+  background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+}
+.approvals-timesheet-frame {
+  margin: 0 -16px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-color, #f1f5f9);
+  border-bottom: 1px solid var(--border-color, #f1f5f9);
+  background: var(--surface, #fff);
+  overflow-x: auto;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.approvals-timesheet-loading,
+.approvals-timesheet-error {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+.approvals-timesheet-error {
+  color: var(--error, #ef4444);
 }
 
 /* === Корректировки (новый интерфейс) === */
