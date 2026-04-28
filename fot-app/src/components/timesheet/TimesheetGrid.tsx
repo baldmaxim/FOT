@@ -167,12 +167,12 @@ const formatCellHM = (decimal: number): string => {
 const STATUS_CELL_TEXT: Record<TimesheetStatus, string> = {
   work: '',
   sick: 'Б',
-  vacation: 'О',
+  vacation: 'От',
   absent: 'Н',
-  business_trip: 'К',
   dayoff: 'В',
-  remote: 'У',
-  unpaid: 'НО',
+  remote: 'УУ',
+  unpaid: 'С',
+  educational_leave: 'У',
   manual: '',
 };
 
@@ -226,8 +226,11 @@ const getDayCellClass = (
         classes.push('ts-day--absent');
       }
       break;
-    case 'business_trip':
-      classes.push('ts-day--trip');
+    case 'unpaid':
+      classes.push('ts-day--unpaid');
+      break;
+    case 'educational_leave':
+      classes.push('ts-day--educational');
       break;
   }
   if (entry.is_correction) classes.push('ts-day--corrected');

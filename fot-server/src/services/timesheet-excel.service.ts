@@ -6,8 +6,8 @@ import { getFullDayThresholdHoursForDate, isWorkingDay } from './schedule.servic
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 
 const STATUS_LABELS: Record<string, string> = {
-  work: '', sick: 'Б', vacation: 'ОТ', absent: 'Н',
-  business_trip: 'К', dayoff: 'В', remote: 'УУ', unpaid: 'НО', manual: '',
+  work: '', sick: 'Б', vacation: 'От', absent: 'Н',
+  dayoff: 'В', remote: 'УУ', unpaid: 'С', educational_leave: 'У', manual: '',
 };
 
 const thinBorder: Partial<ExcelJS.Borders> = {
@@ -50,13 +50,13 @@ const docRowFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: {
 const correctedFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB3E5FC' } };
 const underworkFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF59D' } };
 const statusFills: Record<string, ExcelJS.Fill> = {
-  sick:          { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFCDD2' } },
-  vacation:      { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBBDEFB' } },
-  business_trip: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE1BEE7' } },
-  dayoff:        { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } },
-  unpaid:        { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF9C4' } },
-  absent:        { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF8A80' } },
-  remote:        { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC8E6C9' } },
+  sick:              { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFCDD2' } },
+  vacation:          { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBBDEFB' } },
+  educational_leave: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFCE93D8' } },
+  dayoff:            { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } },
+  unpaid:            { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF9C4' } },
+  absent:            { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF8A80' } },
+  remote:            { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC8E6C9' } },
 };
 
 const formatHHMM = (decimalHours: number): string => {

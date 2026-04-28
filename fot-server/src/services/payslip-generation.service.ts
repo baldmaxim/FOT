@@ -5,7 +5,7 @@ import { supabase } from '../config/database.js';
 import { buildAttendanceEntries } from './attendance.service.js';
 import { resolveSchedulesBulk, resolveSchedulesForPeriod, countWorkingDaysForSchedule, loadCalendarMonth } from './schedule.service.js';
 
-const WORKED_STATUSES = new Set(['work', 'manual', 'remote', 'business_trip']);
+const WORKED_STATUSES = new Set(['work', 'manual', 'remote']);
 const NDFL_RATE = 0.13;
 
 interface IGeneratedPayslip {

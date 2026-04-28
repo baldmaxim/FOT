@@ -76,3 +76,42 @@ export const listDatesInRange = (startDate: string, endDate: string): string[] =
 
 export const rangesOverlap = (a: ITimesheetDateRange, b: ITimesheetDateRange): boolean =>
   a.startDate <= b.endDate && b.startDate <= a.endDate;
+
+export type TimesheetHalf = 'H1' | 'H2';
+
+const pad2 = (value: number): string => String(value).padStart(2, '0');
+
+export const getLastDayOfMonth = (year: number, month: number): number =>
+  new Date(year, month, 0).getDate();
+
+export const getHalfRange = (year: number, month: number, half: TimesheetHalf): ITimesheetDateRange => {
+  const monthPart = `${year}-${pad2(month)}`;
+  if (half === 'H1') {
+    return { startDate: `${monthPart}-01`, endDate: `${monthPart}-15` };
+  }
+  return { startDate: `${monthPart}-16`, endDate: `${monthPart}-${pad2(getLastDayOfMonth(year, month))}` };
+};
+
+export const formatHalfLabel = (year: number, month: number, half: TimesheetHalf): string =>
+  half === 'H1' ? '1–15' : `16–${getLastDayOfMonth(year, month)}`;
+
+export const getHalfFromDate = (iso: string): TimesheetHalf => {
+  const day = Number.parseInt(iso.slice(8, 10), 10);
+  return Number.isFinite(day) && day >= 16 ? 'H2' : 'H1';
+};
+
+export const getCurrentHalf = (now: Date = new Date()): { year: number; month: number; half: TimesheetHalf } => ({
+  year: now.getFullYear(),
+  month: now.getMonth() + 1,
+  half: now.getDate() <= 15 ? 'H1' : 'H2',
+});
+
+export const isHalfRange = (
+  range: ITimesheetDateRange,
+  year: number,
+  month: number,
+  half: TimesheetHalf,
+): boolean => {
+  const expected = getHalfRange(year, month, half);
+  return range.startDate === expected.startDate && range.endDate === expected.endDate;
+};

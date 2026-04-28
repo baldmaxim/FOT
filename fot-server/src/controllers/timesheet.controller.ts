@@ -64,7 +64,7 @@ import {
 } from '../services/presence-polling.service.js';
 import { syncEventsLogic } from '../services/sigur-sync-events.service.js';
 
-const validStatuses = ['work', 'vacation', 'dayoff', 'remote', 'unpaid', 'absent', 'sick', 'business_trip', 'manual'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
+const validStatuses = ['work', 'vacation', 'dayoff', 'remote', 'unpaid', 'absent', 'sick', 'manual', 'educational_leave'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
 
 const createEntrySchema = z.object({
   employee_id: z.number().int().positive(),

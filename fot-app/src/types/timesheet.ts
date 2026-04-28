@@ -1,7 +1,7 @@
 import type { IResolvedSchedule } from './schedule';
 
 // Timesheet types
-export type TimesheetStatus = 'work' | 'absent' | 'vacation' | 'sick' | 'business_trip' | 'dayoff' | 'remote' | 'unpaid' | 'manual';
+export type TimesheetStatus = 'work' | 'absent' | 'vacation' | 'sick' | 'dayoff' | 'remote' | 'unpaid' | 'manual' | 'educational_leave';
 
 export interface TimesheetEntry {
   id: number | null;

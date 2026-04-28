@@ -26,10 +26,13 @@ import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprov
 import { getScheduleForTimesheetDay, getWorkHoursForDay } from '../../utils/scheduleUtils';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import {
-  clampRangeToMonth,
-  getDefaultRangeForMonth,
+  getHalfRange,
+  formatHalfLabel,
+  getHalfFromDate,
+  getCurrentHalf,
+  type TimesheetHalf,
 } from '../../utils/timesheetApprovalPeriod';
-import { getTimesheetMonthAccess, parseMonthFromIso } from '../../utils/timesheetMonthAccess';
+import { getTimesheetMonthAccess } from '../../utils/timesheetMonthAccess';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
 import { type IFlatDepartmentOption, getTreeFlatDepartments, filterDepartmentTreeByIds } from '../../utils/departmentUtils';
 import './TimesheetPage.css';
@@ -160,6 +163,7 @@ export const TimesheetPage: FC = () => {
   const queryMonth = searchParams.get('month');
   const queryFrom = searchParams.get('from');
   const queryTo = searchParams.get('to');
+  const queryHalf = searchParams.get('half');
   const queryView = searchParams.get('view');
   const queryMode = searchParams.get('mode');
   const queryAssignee = searchParams.get('assignee');
@@ -282,21 +286,15 @@ export const TimesheetPage: FC = () => {
 
   const monthStr = useMemo(() => `${year}-${String(month).padStart(2, '0')}`, [year, month]);
   const daysInMonth = useMemo(() => getDaysInMonth(year, month), [year, month]);
-  const activeRange = useMemo(() => {
-    const defaultRange = getDefaultRangeForMonth(monthStr) || {
-      startDate: `${monthStr}-01`,
-      endDate: `${monthStr}-${String(daysInMonth).padStart(2, '0')}`,
-    };
-    if (!queryFrom || !queryTo) return defaultRange;
-    const clamped = clampRangeToMonth({ startDate: queryFrom, endDate: queryTo }, monthStr);
-    return clamped ?? defaultRange;
-  }, [monthStr, daysInMonth, queryFrom, queryTo]);
+  const selectedHalf = useMemo<TimesheetHalf>(() => {
+    if (queryHalf === 'H1' || queryHalf === 'H2') return queryHalf;
+    if (queryFrom) return getHalfFromDate(queryFrom);
+    const current = getCurrentHalf(now);
+    return (current.year === year && current.month === month) ? current.half : 'H1';
+  }, [queryHalf, queryFrom, now, year, month]);
+  const activeRange = useMemo(() => getHalfRange(year, month, selectedHalf), [year, month, selectedHalf]);
   const rangeStart = activeRange.startDate;
   const rangeEnd = activeRange.endDate;
-  const [draftRangeStart, setDraftRangeStart] = useState(rangeStart);
-  const [draftRangeEnd, setDraftRangeEnd] = useState(rangeEnd);
-  useEffect(() => { setDraftRangeStart(rangeStart); }, [rangeStart]);
-  useEffect(() => { setDraftRangeEnd(rangeEnd); }, [rangeEnd]);
   const activeGridDeptId = timesheetMode === 'assigned' ? assignedExpandedDeptId : effectiveSelectedDeptId;
   const timesheetQuery = useQuery({
     queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'],
@@ -411,7 +409,6 @@ export const TimesheetPage: FC = () => {
     setSearchParams(current => {
       const next = new URLSearchParams(current);
       next.set('month', `${nextYear}-${String(nextMonth).padStart(2, '0')}`);
-      next.delete('half');
       next.delete('from');
       next.delete('to');
       return next;
@@ -1187,43 +1184,17 @@ export const TimesheetPage: FC = () => {
     bulkTargets.length,
   ]);
 
-  const handleRangeChange = useCallback((startDate: string, endDate: string) => {
+  const handleHalfChange = useCallback((nextHalf: TimesheetHalf) => {
+    if (nextHalf === selectedHalf) return;
     clearBulkState();
-    const startMonth = parseMonthFromIso(startDate);
-    const endMonth = parseMonthFromIso(endDate);
-    const targetSource = startMonth ?? endMonth;
-    let targetYear = year;
-    let targetMonthNum = month;
-    if (targetSource && monthAccess.isMonthAllowed(targetSource.year, targetSource.month)) {
-      targetYear = targetSource.year;
-      targetMonthNum = targetSource.month;
-    }
-    const targetMonthStr = `${targetYear}-${String(targetMonthNum).padStart(2, '0')}`;
-    const targetDaysInMonth = new Date(targetYear, targetMonthNum, 0).getDate();
-    const clamped = clampRangeToMonth({ startDate, endDate }, targetMonthStr)
-      ?? { startDate: `${targetMonthStr}-01`, endDate: `${targetMonthStr}-${String(targetDaysInMonth).padStart(2, '0')}` };
     setSearchParams(current => {
       const next = new URLSearchParams(current);
-      next.set('month', targetMonthStr);
-      next.set('from', clamped.startDate);
-      next.set('to', clamped.endDate);
-      next.delete('half');
+      next.set('half', nextHalf);
+      next.delete('from');
+      next.delete('to');
       return next;
     });
-  }, [clearBulkState, year, month, monthAccess, setSearchParams]);
-
-  const commitRangeStart = useCallback((value: string) => {
-    if (!value) { setDraftRangeStart(rangeStart); return; }
-    if (value === rangeStart) return;
-    const nextEnd = value > rangeEnd ? value : rangeEnd;
-    handleRangeChange(value, nextEnd);
-  }, [rangeStart, rangeEnd, handleRangeChange]);
-
-  const commitRangeEnd = useCallback((value: string) => {
-    if (!value) { setDraftRangeEnd(rangeEnd); return; }
-    if (value === rangeEnd) return;
-    handleRangeChange(rangeStart, value);
-  }, [rangeStart, rangeEnd, handleRangeChange]);
+  }, [selectedHalf, clearBulkState, setSearchParams]);
 
   const handleViewModeChange = useCallback((nextViewMode: TimesheetViewMode) => {
     clearBulkState();
@@ -1525,49 +1496,22 @@ export const TimesheetPage: FC = () => {
   const selectorControl = timesheetMode === 'assigned' ? assigneeControl : departmentControl;
   const isAssignedMode = timesheetMode === 'assigned';
 
-  const rangeInputMin = monthAccess.minDate;
-  const rangeInputMax = monthAccess.maxDate;
-
   const segmentControl = (isAssignedMode ? selectedAssigneeId : effectiveSelectedDeptId) ? (
-    <section className="ts-range-control">
-      <div className="ts-range-inputs">
-        <label className="ts-range-label">
-          <span>С</span>
-          <input
-            type="date"
-            className="ts-range-input"
-            value={draftRangeStart}
-            min={rangeInputMin}
-            max={rangeInputMax}
-            onChange={e => setDraftRangeStart(e.target.value)}
-            onBlur={e => commitRangeStart(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                commitRangeStart(e.currentTarget.value);
-              }
-            }}
-          />
-        </label>
-        <label className="ts-range-label">
-          <span>по</span>
-          <input
-            type="date"
-            className="ts-range-input"
-            value={draftRangeEnd}
-            min={rangeStart}
-            max={rangeInputMax}
-            onChange={e => setDraftRangeEnd(e.target.value)}
-            onBlur={e => commitRangeEnd(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                commitRangeEnd(e.currentTarget.value);
-              }
-            }}
-          />
-        </label>
-      </div>
+    <section className="ts-half-toggle" aria-label="Период табеля">
+      <button
+        type="button"
+        className={`ts-half-chip ${selectedHalf === 'H1' ? 'ts-half-chip--active' : ''}`}
+        onClick={() => handleHalfChange('H1')}
+      >
+        {formatHalfLabel(year, month, 'H1')}
+      </button>
+      <button
+        type="button"
+        className={`ts-half-chip ${selectedHalf === 'H2' ? 'ts-half-chip--active' : ''}`}
+        onClick={() => handleHalfChange('H2')}
+      >
+        {formatHalfLabel(year, month, 'H2')}
+      </button>
     </section>
   ) : null;
   const viewControl = (isAssignedMode ? selectedAssigneeId : effectiveSelectedDeptId) ? (

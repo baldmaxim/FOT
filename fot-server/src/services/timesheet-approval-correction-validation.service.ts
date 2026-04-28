@@ -21,13 +21,13 @@ export type ICorrectionValidationResult =
 
 const STATUS_LABELS_RU: Record<string, string> = {
   work: 'Присутствие',
-  absent: 'Прогул',
+  absent: 'Неявка',
   vacation: 'Отпуск',
   sick: 'Больничный',
-  business_trip: 'Командировка',
   dayoff: 'Отгул',
   remote: 'Удалёнка',
-  unpaid: 'Без оплаты',
+  unpaid: 'Без сохранения ЗП',
+  educational_leave: 'Учебный отпуск',
   manual: 'Ручная корр.',
 };
 

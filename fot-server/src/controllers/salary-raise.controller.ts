@@ -36,7 +36,7 @@ const VALID_TRANSITIONS: Record<string, { action: string; next: SalaryRaiseStatu
   ],
 };
 
-const WORKED_STATUSES = new Set(['work', 'manual', 'remote', 'business_trip']);
+const WORKED_STATUSES = new Set(['work', 'manual', 'remote']);
 const TIMESHEET_STATUS_LABELS: Record<string, string> = {
   work: 'Работа',
   manual: 'Работа',
@@ -45,8 +45,8 @@ const TIMESHEET_STATUS_LABELS: Record<string, string> = {
   vacation: 'Отпуск',
   dayoff: 'Выходной',
   absent: 'Неявка',
-  business_trip: 'Командировка',
-  unpaid: 'Без содержания',
+  unpaid: 'Без сохранения ЗП',
+  educational_leave: 'Учебный отпуск',
 };
 
 const createOrUpdateRequestSchema = z.object({
@@ -792,7 +792,6 @@ const buildReviewContext = async (request: Record<string, unknown>) => {
     { key: 'sick', label: 'Больничные', status: 'sick' },
     { key: 'absent', label: 'Неявки', status: 'absent' },
     { key: 'remote', label: 'Удалёнка', status: 'remote' },
-    { key: 'business_trip', label: 'Командировки', status: 'business_trip' },
   ];
 
   for (const group of statusGroups) {
