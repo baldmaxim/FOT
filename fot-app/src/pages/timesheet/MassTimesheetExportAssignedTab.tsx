@@ -311,7 +311,7 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
         <button
           className={`mte-export-btn ${presentation === 'hr' ? 'mte-export-btn--active' : ''}`}
           onClick={() => handleExport('hr')}
-          disabled={exporting || emailing || checkedIds.size === 0}
+          disabled={exporting || exportingApproved || emailing || checkedIds.size === 0}
         >
           <Download size={16} />
           {exporting && presentation === 'hr' ? 'Выгрузить Факт...' : `Выгрузить Факт (${checkedIds.size})`}
@@ -319,7 +319,7 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
         <button
           className={`mte-export-btn mte-export-btn--secondary ${presentation === 'manager' ? 'mte-export-btn--active' : ''}`}
           onClick={() => handleExport('manager')}
-          disabled={exporting || emailing || checkedIds.size === 0}
+          disabled={exporting || exportingApproved || emailing || checkedIds.size === 0}
         >
           <Download size={16} />
           {exporting && presentation === 'manager'
@@ -327,9 +327,20 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
             : `Выгрузить урезанный (${checkedIds.size})`}
         </button>
         <button
+          className="mte-export-btn mte-export-btn--approved"
+          onClick={handleExportApproved}
+          disabled={exporting || exportingApproved || emailing || approvedSelectedIds.length === 0}
+          title={approvedSelectedIds.length === 0 ? 'Среди выбранных нет участков с полностью утверждёнными табелями за этот период' : undefined}
+        >
+          <CheckCircle size={16} />
+          {exportingApproved
+            ? 'Экспорт утверждённых...'
+            : `Экспорт утверждённых (${approvedSelectedIds.length})`}
+        </button>
+        <button
           className="mte-export-btn mte-export-btn--email"
           onClick={handleEmail}
-          disabled={exporting || emailing || checkedIds.size === 0}
+          disabled={exporting || exportingApproved || emailing || checkedIds.size === 0}
         >
           <Mail size={16} />
           {emailing ? 'Отправка...' : `Отправить на почту (${checkedIds.size})`}
