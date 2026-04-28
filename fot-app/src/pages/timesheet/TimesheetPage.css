@@ -1115,7 +1115,6 @@
 }
 
 .ts-mobile-card-name-row,
-.ts-employee-name-row,
 .ts-employee-select-label {
   display: flex;
   align-items: flex-start;
@@ -2041,7 +2040,7 @@
   width: 184px;
   min-width: 184px;
   max-width: 184px;
-  padding: 10px 10px;
+  padding: 4px 10px;
   cursor: pointer;
   transition: background var(--transition);
 }
@@ -2094,7 +2093,7 @@
   width: 184px;
   min-width: 184px;
   max-width: 184px;
-  padding: 9px 12px 9px 18px;
+  padding: 4px 12px 4px 18px;
   text-align: left;
   cursor: pointer;
 }
@@ -2112,7 +2111,7 @@
   width: 184px;
   min-width: 184px;
   max-width: 184px;
-  padding: 8px 10px 8px 22px;
+  padding: 4px 10px 4px 22px;
   background: rgba(14, 165, 233, 0.05);
 }
 
@@ -2130,6 +2129,7 @@
 }
 
 .ts-employee-name {
+  flex: 1 1 auto;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
@@ -2141,27 +2141,15 @@
 
 .ts-employee-cell-content {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 4px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
   min-width: 0;
 }
 
-.ts-employee-meta-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding-left: 22px;
-}
-
-.ts-employee-meta-row .ts-employee-inline-btn {
+.ts-employee-cell-content .ts-employee-inline-btn {
   margin-left: auto;
-}
-
-.ts-employee-cell .ts-employee-name-row {
-  flex: 1 1 auto;
-  align-items: center;
 }
 
 .ts-employee-inline-btn {
@@ -2260,7 +2248,7 @@
 
 .ts-day {
   width: 42px;
-  height: 44px;
+  height: 32px;
   padding: 4px;
   font-family: 'Space Mono', 'SF Mono', monospace;
   font-size: 12px;
