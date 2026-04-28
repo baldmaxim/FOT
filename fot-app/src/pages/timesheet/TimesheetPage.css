@@ -2225,16 +2225,22 @@
 
 .ts-employee-cell-content {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
   min-width: 0;
 }
 
-.ts-employee-cell-actions {
+.ts-employee-meta-row {
   display: flex;
-  justify-content: flex-end;
-  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-left: 22px;
+}
+
+.ts-employee-meta-row .ts-employee-inline-btn {
+  margin-left: auto;
 }
 
 .ts-employee-cell .ts-employee-name-row {
@@ -2437,7 +2443,6 @@
   display: inline-flex;
   align-items: center;
   padding: 1px 6px;
-  margin-left: 6px;
   font-size: 10px;
   font-weight: 600;
   line-height: 1.4;

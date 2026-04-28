@@ -1195,33 +1195,37 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           <div className="ts-employee-name" title={row.employee.full_name}>
                             {displayName}
                           </div>
-                          {row.employee.transferred_out_date && (
-                            <span className="ts-employee-badge ts-employee-badge--transfer" title={`Переведён ${formatBadgeDate(row.employee.transferred_out_date)}`}>
-                              Пер. {formatBadgeDate(row.employee.transferred_out_date)}
-                            </span>
-                          )}
-                          {row.employee.excluded_from_timesheet_date && !row.employee.transferred_out_date && (
-                            <span className="ts-employee-badge ts-employee-badge--excluded" title={`Исключён с ${formatBadgeDate(row.employee.excluded_from_timesheet_date)}`}>
-                              Искл. {formatBadgeDate(row.employee.excluded_from_timesheet_date)}
-                            </span>
-                          )}
                         </div>
-                        {canManageTeam && onExcludeEmployee && (
+                        {(row.employee.transferred_out_date
+                          || row.employee.excluded_from_timesheet_date
+                          || (canManageTeam && onExcludeEmployee)) && (
                           <div
-                            className="ts-employee-cell-actions"
+                            className="ts-employee-meta-row"
                             onClick={event => event.stopPropagation()}
                           >
-                            <button
-                              type="button"
-                              className="ts-employee-inline-btn"
-                              title="Исключить сотрудника"
-                              aria-label="Исключить сотрудника"
-                              onClick={() => onExcludeEmployee(row.employee)}
-                              disabled={pendingEmployeeId === row.employee.id}
-                            >
-                              <UserMinus size={12} />
-                              {pendingEmployeeId === row.employee.id ? '...' : 'Искл.'}
-                            </button>
+                            {row.employee.transferred_out_date && (
+                              <span className="ts-employee-badge ts-employee-badge--transfer" title={`Переведён ${formatBadgeDate(row.employee.transferred_out_date)}`}>
+                                Пер. {formatBadgeDate(row.employee.transferred_out_date)}
+                              </span>
+                            )}
+                            {row.employee.excluded_from_timesheet_date && !row.employee.transferred_out_date && (
+                              <span className="ts-employee-badge ts-employee-badge--excluded" title={`Исключён с ${formatBadgeDate(row.employee.excluded_from_timesheet_date)}`}>
+                                Искл. {formatBadgeDate(row.employee.excluded_from_timesheet_date)}
+                              </span>
+                            )}
+                            {canManageTeam && onExcludeEmployee && (
+                              <button
+                                type="button"
+                                className="ts-employee-inline-btn"
+                                title="Исключить сотрудника"
+                                aria-label="Исключить сотрудника"
+                                onClick={() => onExcludeEmployee(row.employee)}
+                                disabled={pendingEmployeeId === row.employee.id}
+                              >
+                                <UserMinus size={12} />
+                                {pendingEmployeeId === row.employee.id ? '...' : 'Искл.'}
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
