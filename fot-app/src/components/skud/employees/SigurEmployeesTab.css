@@ -130,6 +130,10 @@
   color: var(--text-primary);
 }
 
+.sigur-live-page .ep-table-shell {
+  overflow: auto;
+}
+
 .ep-sigur-action.danger {
   color: #b91c1c;
   background: rgba(254, 242, 242, 0.95);
