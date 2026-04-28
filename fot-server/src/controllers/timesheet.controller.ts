@@ -147,14 +147,20 @@ const exclusionUpdateSchema = z.object({
 const uuidParamSchema = z.string().uuid();
 
 /**
- * Корректировка считается автоматически согласованной (`auto_approved`), если день
- * рабочий по графику сотрудника. Иначе (Сб/Вс/праздник либо нерабочий по графику)
- * требуется отдельное согласование админом — `pending`.
+ * Согласование требуется, только когда руководитель пытается засчитать «рабочий день»
+ * (work/remote/manual) в нерабочий по графику. Бытовые статусы (vacation/sick/dayoff/
+ * unpaid/educational_leave/absent) в выходной не имеют практического смысла и сразу
+ * `auto_approved`.
  */
+const WORKED_STATUSES_FOR_APPROVAL = new Set<TimeStatus>(['work', 'remote', 'manual']);
+
 async function resolveAdjustmentApprovalStatus(
   employeeId: number,
   workDate: string,
+  status: TimeStatus,
 ): Promise<'auto_approved' | 'pending'> {
+  if (!WORKED_STATUSES_FOR_APPROVAL.has(status)) return 'auto_approved';
+
   const { data: employee, error } = await supabase
     .from('employees')
     .select('id, work_category')
@@ -1006,7 +1012,7 @@ export const timesheetController = {
         ? (plannedHours ?? 8)
         : (clampInputHoursForScope(scope, parsed.hours_worked ?? null, plannedHours) ?? null);
 
-      const approvalStatus = await resolveAdjustmentApprovalStatus(parsed.employee_id, parsed.work_date);
+      const approvalStatus = await resolveAdjustmentApprovalStatus(parsed.employee_id, parsed.work_date, parsed.status);
 
 	      const raw = await upsertAttendanceAdjustment({
 	        employee_id: parsed.employee_id,
@@ -1109,6 +1115,7 @@ export const timesheetController = {
         const approvalStatus = await resolveAdjustmentApprovalStatus(
           Number(existing.employee_id),
           String(existing.work_date),
+          nextStatus,
         );
 
 	      const updated = await updateAttendanceAdjustmentById(id, {
