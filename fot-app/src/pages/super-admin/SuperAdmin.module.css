@@ -985,6 +985,11 @@
   color: var(--warning);
 }
 
+.userSearchRow {
+  margin: 12px 0;
+  max-width: 480px;
+}
+
 /* Compact User List */
 .userListCompact {
   display: flex;

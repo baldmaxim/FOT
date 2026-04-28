@@ -6,6 +6,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
 import type { ChatInboundMode, EmployeePositionType, TwoFactorData } from '../../types';
 import { getTreeFlatDepartments } from '../../utils/departmentUtils';
+import { SearchInput } from '../ui/SearchInput';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
 
 export interface IUserFromApi {
@@ -61,6 +62,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
   const { roles, getRoleLabel, profile, refreshProfile } = useAuth();
   const structureQuery = useStructureTree();
   const [roleFilter, setRoleFilter] = useState<EmployeePositionType | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<{ userId: string; value: string } | null>(null);
   const [empSearch, setEmpSearch] = useState<IEmpSearch | null>(null);
@@ -296,10 +298,17 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
     setTwoFactorModal({ visible: false, userId: '', userName: '', data: null, loading: false });
   };
 
-  const filteredUsers = allUsers.filter(u => {
-    if (!effectiveRoleFilter) return true;
-    return u.position_type === effectiveRoleFilter;
-  });
+  const filteredUsers = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return allUsers.filter(u => {
+      if (effectiveRoleFilter && u.position_type !== effectiveRoleFilter) return false;
+      if (!q) return true;
+      return (
+        (u.full_name || '').toLowerCase().includes(q) ||
+        (u.email || '').toLowerCase().includes(q)
+      );
+    });
+  }, [allUsers, effectiveRoleFilter, searchQuery]);
 
   return (
     <>
@@ -314,6 +323,14 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
             {!option.role?.is_active ? ' (неакт.)' : ''} ({option.count})
           </button>
         ))}
+      </div>
+
+      <div className={styles.userSearchRow}>
+        <SearchInput
+          value={searchQuery}
+          onValueChange={setSearchQuery}
+          placeholder="Найти пользователя по ФИО или email..."
+        />
       </div>
 
       <div className={styles.userListCompact}>
