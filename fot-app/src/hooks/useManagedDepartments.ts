@@ -39,8 +39,11 @@ export const useManagedDepartments = (options?: UseManagedDepartmentsOptions) =>
   // Safe-pick: если `profile.department_id` (рабочий отдел по должности) не входит
   // в managed (отделы, которыми руководитель управляет) — берём первый managed.
   // Иначе страницы шлют в API department_id, который бэк отвергает как «не в scope».
+  // Для руководителя без назначений (isDepartmentScope && managed пуст) — null,
+  // чтобы UI не показывал «свой» отдел сотрудника как будто он им управляет.
   const primaryDepartmentId = (() => {
     const own = profile?.department_id || null;
+    if (isDepartmentScope && managedDepartmentIds.length === 0) return null;
     if (managedDepartmentIds.length === 0) return own;
     if (own && managedDepartmentIds.includes(own)) return own;
     return managedDepartmentIds[0];

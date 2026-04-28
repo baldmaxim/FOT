@@ -33,12 +33,20 @@ function uniqueDepartmentIds(values: Array<string | null | undefined>): string[]
   return [...new Set(values.filter((v): v is string => typeof v === 'string' && v.trim().length > 0))];
 }
 
-async function listEmployeeAccessDepartmentIds(employeeId: number): Promise<string[]> {
-  const { data, error } = await supabase
+async function listEmployeeAccessDepartmentIds(
+  employeeId: number,
+  options: { excludeSource?: string } = {},
+): Promise<string[]> {
+  let query = supabase
     .from('employee_department_access')
     .select('department_id')
     .eq('employee_id', employeeId)
     .eq('is_active', true);
+  if (options.excludeSource) {
+    query = query.neq('source', options.excludeSource);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     if (isMissingTableError(error, 'employee_department_access')) {
@@ -178,12 +186,19 @@ export async function listUserIdsAssignedToDepartment(departmentId: string): Pro
   )];
 }
 
+/**
+ * Возвращает руководительские назначения сотрудника. Membership-строки
+ * (`source='sigur_sync'` — личный отдел из Sigur) исключаются: они означают
+ * «человек работает в этом отделе», а не «человек им управляет». Если у
+ * руководителя нет ручных назначений (manual_admin_ui / excel_admin_ui /
+ * manager_excel_admin_ui) — функция вернёт пустой массив, и scope будет пуст.
+ */
 export async function listExplicitDepartmentIdsForUser(
   _userId: string,
   employeeId?: number | null,
 ): Promise<string[]> {
   if (employeeId == null) return [];
-  return listEmployeeAccessDepartmentIds(employeeId);
+  return listEmployeeAccessDepartmentIds(employeeId, { excludeSource: 'sigur_sync' });
 }
 
 export async function listManagedDepartmentIdsForUser(
@@ -208,7 +223,10 @@ export async function loadManagedDepartmentMap(
     ]),
   );
 
-  const explicitMap = await loadExplicitDepartmentMap(seeds);
+  // Membership-строки (sigur_sync) исключаем: «руководитель управляет
+  // отделом» ≠ «сотрудник числится в отделе». Иначе любой работник
+  // получил бы свой собственный отдел в списке управляемых.
+  const explicitMap = await loadExplicitDepartmentMap(seeds, { excludeSource: 'sigur_sync' });
   for (const seed of seeds) {
     const current = result.get(seed.user_id);
     if (!current) continue;

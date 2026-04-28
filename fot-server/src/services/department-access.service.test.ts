@@ -15,6 +15,7 @@ const mockedState = vi.hoisted(() => ({
     employee_id: number;
     department_id: string;
     is_active: boolean;
+    source: string;
   }>,
 }));
 
@@ -23,6 +24,11 @@ function matchesQueryRecord<T extends Record<string, unknown>>(row: T, query: Qu
     if (operation.method === 'eq') {
       const [field, value] = operation.args;
       return row[String(field)] === value;
+    }
+
+    if (operation.method === 'neq') {
+      const [field, value] = operation.args;
+      return row[String(field)] !== value;
     }
 
     if (operation.method === 'in') {
@@ -57,6 +63,10 @@ function createBuilder(table: string) {
       query.operations.push({ method: 'eq', args });
       return builder;
     },
+    neq: (...args: unknown[]) => {
+      query.operations.push({ method: 'neq', args });
+      return builder;
+    },
     in: (...args: unknown[]) => {
       query.operations.push({ method: 'in', args });
       return builder;
@@ -81,11 +91,11 @@ describe('department-access.service', () => {
     mockedState.employeeDepartmentAccess = [];
   });
 
-  it('возвращает только активные назначения сотрудника (понятия "основной отдел" нет)', async () => {
+  it('возвращает только активные руководительские назначения сотрудника', async () => {
     mockedState.employeeDepartmentAccess = [
-      { employee_id: 10, department_id: 'dept-a', is_active: true },
-      { employee_id: 10, department_id: 'dept-b', is_active: true },
-      { employee_id: 10, department_id: 'dept-c', is_active: false },
+      { employee_id: 10, department_id: 'dept-a', is_active: true, source: 'manual_admin_ui' },
+      { employee_id: 10, department_id: 'dept-b', is_active: true, source: 'manual_admin_ui' },
+      { employee_id: 10, department_id: 'dept-c', is_active: false, source: 'manual_admin_ui' },
     ];
 
     const result = await listManagedDepartmentIdsForUser('user-1', null, 10);
@@ -95,7 +105,7 @@ describe('department-access.service', () => {
 
   it('без employee_id возвращает пустой список', async () => {
     mockedState.employeeDepartmentAccess = [
-      { employee_id: 10, department_id: 'dept-a', is_active: true },
+      { employee_id: 10, department_id: 'dept-a', is_active: true, source: 'manual_admin_ui' },
     ];
 
     const result = await listManagedDepartmentIdsForUser('user-1', null, null);
@@ -103,11 +113,33 @@ describe('department-access.service', () => {
     expect(result).toEqual([]);
   });
 
-  it('строит карту назначений для нескольких сотрудников', async () => {
+  it('исключает sigur_sync (членство) из руководительских назначений', async () => {
     mockedState.employeeDepartmentAccess = [
-      { employee_id: 11, department_id: 'dept-a', is_active: true },
-      { employee_id: 22, department_id: 'dept-b', is_active: true },
-      { employee_id: 22, department_id: 'dept-c', is_active: true },
+      { employee_id: 10, department_id: 'dept-x', is_active: true, source: 'manual_admin_ui' },
+      { employee_id: 10, department_id: 'dept-y', is_active: true, source: 'sigur_sync' },
+    ];
+
+    const result = await listManagedDepartmentIdsForUser('user-1', null, 10);
+
+    expect(result).toEqual(['dept-x']);
+  });
+
+  it('возвращает [] если у сотрудника только membership-строка', async () => {
+    mockedState.employeeDepartmentAccess = [
+      { employee_id: 10, department_id: 'dept-y', is_active: true, source: 'sigur_sync' },
+    ];
+
+    const result = await listManagedDepartmentIdsForUser('user-1', null, 10);
+
+    expect(result).toEqual([]);
+  });
+
+  it('строит карту назначений для нескольких сотрудников и исключает sigur_sync', async () => {
+    mockedState.employeeDepartmentAccess = [
+      { employee_id: 11, department_id: 'dept-a', is_active: true, source: 'manual_admin_ui' },
+      { employee_id: 22, department_id: 'dept-b', is_active: true, source: 'manual_admin_ui' },
+      { employee_id: 22, department_id: 'dept-c', is_active: true, source: 'manual_admin_ui' },
+      { employee_id: 22, department_id: 'dept-self', is_active: true, source: 'sigur_sync' },
     ];
 
     const result = await loadManagedDepartmentMap([
