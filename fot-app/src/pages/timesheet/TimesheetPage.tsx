@@ -144,7 +144,7 @@ export const TimesheetPage: FC = () => {
   const toast = useToast();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const isSuperAdmin = profile?.position_type === 'super_admin';
+  const isSuperAdmin = profile?.is_admin === true;
   const canEditTimesheet = canEditPage('/timesheet') || canEditPage('/timesheet-hr');
   const canViewManagedTimesheet = canEditTimesheet || canViewPage('/timesheet') || canViewPage('/timesheet-hr');
   const canEditTeamManagement = isSuperAdmin

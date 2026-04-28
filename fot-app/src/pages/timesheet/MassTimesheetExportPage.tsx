@@ -42,7 +42,7 @@ export const MassTimesheetExportPage: FC = () => {
   const now = useMemo(() => new Date(), []);
   const { hasPermission, profile } = useAuth();
   const { isDepartmentScope } = useManagedDepartments();
-  const isSuperAdmin = profile?.position_type === 'super_admin';
+  const isSuperAdmin = profile?.is_admin === true;
   const canManageAllDepartments = isSuperAdmin || hasPermission('data.scope.all');
   const isRestrictedManagerView = !canManageAllDepartments && isDepartmentScope;
 
