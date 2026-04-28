@@ -152,12 +152,12 @@ const exclusionUpdateSchema = z.object({
 const uuidParamSchema = z.string().uuid();
 
 /**
- * Согласование требуется, только когда руководитель пытается засчитать «рабочий день»
- * (work/remote/manual) в нерабочий по графику. Бытовые статусы (vacation/sick/dayoff/
- * unpaid/educational_leave/absent) в выходной не имеют практического смысла и сразу
- * `auto_approved`.
+ * Согласование требуется, только если руководитель отмечает фактическую работу
+ * в нерабочий день: `work` (присутствие/часы) или `remote` (удалёнка). Остальные
+ * статусы (vacation/sick/dayoff/unpaid/educational_leave/manual/absent) в выходной
+ * не имеют практического смысла и сразу `auto_approved`.
  */
-const WORKED_STATUSES_FOR_APPROVAL = new Set<TimeStatus>(['work', 'remote', 'manual']);
+const WORKED_STATUSES_FOR_APPROVAL = new Set<TimeStatus>(['work', 'remote']);
 
 async function resolveAdjustmentApprovalStatus(
   employeeId: number,
