@@ -1246,14 +1246,14 @@ export const getAccessPointMapView = async (accessPointName: string): Promise<IA
     .from('skud_object_map_points')
     .select('object_id, access_point_name, x_ratio, y_ratio')
     .eq('access_point_name', normalizedAccessPointName)
-    .single();
+    .maybeSingle();
 
   if (error) {
-    const message = error.message.toLowerCase();
-    if (message.includes('0 rows') || message.includes('no rows')) {
-      return null;
-    }
     throw formatTravelFeatureError(error);
+  }
+
+  if (!data) {
+    return null;
   }
 
   const point = data as Pick<ITravelObjectMapPointRow, 'object_id' | 'access_point_name' | 'x_ratio' | 'y_ratio'>;

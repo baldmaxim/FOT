@@ -2,7 +2,7 @@ import * as Sentry from '@sentry/react';
 
 const dsn = import.meta.env.VITE_SENTRY_DSN as string | undefined;
 
-if (dsn) {
+if (dsn && import.meta.env.PROD) {
   Sentry.init({
     dsn,
     environment: import.meta.env.MODE,
