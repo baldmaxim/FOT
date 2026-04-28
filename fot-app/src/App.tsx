@@ -11,7 +11,6 @@ import { useTheme } from './hooks/useTheme';
 import { PageLoader } from './components/ui/PageLoader';
 import { ChatPanelMount } from './components/chat/ChatPanelMount';
 import { ErrorFallback } from './components/ErrorFallback';
-import { SentryTestButton } from './components/SentryTestButton';
 import './App.css';
 
 const queryClient = new QueryClient({
@@ -534,7 +533,6 @@ const App = () => {
               <ChatProvider>
                 <AppRoutes />
                 <ChatPanelMount />
-                <SentryTestButton />
               </ChatProvider>
             </ToastProvider>
           </AuthProvider>
