@@ -1,3 +1,5 @@
+import './instrument.js';
+import * as Sentry from '@sentry/node';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import app from './app.js';
@@ -36,4 +38,15 @@ httpServer.listen(PORT, () => {
   void startSigurEventsDailyScheduler();
   startTimesheetReminderScheduler();
   startPatentExpiryReminderScheduler();
+});
+
+// Глобальные ловушки — без них необработанные rejection/exception теряются.
+// Не выходим из процесса: PM2 решит, перезапускать ли.
+process.on('unhandledRejection', (reason) => {
+  Sentry.captureException(reason);
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  Sentry.captureException(err);
+  console.error('[uncaughtException]', err);
 });

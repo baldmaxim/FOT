@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/node';
 import { sigurService } from './sigur.service.js';
 import { supabase } from '../config/database.js';
 import { env } from '../config/env.js';
@@ -555,6 +556,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     });
   } catch (error) {
     console.error('[presence-polling] error:', (error as Error).message);
+    Sentry.captureException(error, { tags: { service: 'presence-polling', stage: 'pollEvents' } });
     const monitorCheckedAt = new Date();
     const cycleFinishedAt = new Date();
     await mergeSigurRuntimeState({
@@ -664,6 +666,7 @@ async function runPollCycle(): Promise<void> {
       await backfillUnmatchedEvents();
     } catch (err) {
       console.error('[presence-polling] cycle error:', (err as Error).message);
+      Sentry.captureException(err, { tags: { service: 'presence-polling', stage: 'cycle' } });
     } finally {
       if (stopHeartbeat) {
         stopHeartbeat();

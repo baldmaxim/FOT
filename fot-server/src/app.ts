@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import * as Sentry from '@sentry/node';
 import { corsAllowedOrigins } from './config/env.js';
 import { apiLimiter } from './middleware/rateLimit.js';
 
@@ -92,6 +93,10 @@ app.use('/api/notifications', notificationRoutes);
 app.use((_req, res) => {
   res.status(404).json({ success: false, error: 'Not found' });
 });
+
+// Sentry error handler — должен быть ПОСЛЕ всех роутов и ДО собственных error-middleware.
+// Перехватывает исключение, отправляет в Sentry и передаёт дальше.
+Sentry.setupExpressErrorHandler(app);
 
 // Error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

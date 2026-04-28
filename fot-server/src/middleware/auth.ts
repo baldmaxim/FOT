@@ -1,5 +1,6 @@
 import { Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import * as Sentry from '@sentry/node';
 import { env } from '../config/env.js';
 import { CRITICAL_2FA_ENABLED } from '../config/features.js';
 import type { AccessAction } from '../config/access-control.js';
@@ -43,6 +44,12 @@ export const authenticate = async (
       two_factor_enabled: decoded.two_factor_enabled,
       two_factor_verified: decoded.two_factor_verified,
     };
+
+    Sentry.getCurrentScope().setUser({
+      id: req.user.id,
+      email: req.user.email,
+      username: req.user.role_code,
+    });
 
     next();
   } catch (error) {

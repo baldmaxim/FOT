@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/node';
 import { sigurService } from './sigur.service.js';
 import { IS_PRODUCTION } from '../config/features.js';
 import {
@@ -50,6 +51,7 @@ async function runStructureSyncCycle(): Promise<void> {
         console.log('[structure-scheduler] skipped: manual or concurrent sync in progress');
       } else {
         console.error('[structure-scheduler] error:', (err as Error).message);
+        Sentry.captureException(err, { tags: { service: 'structure-scheduler' } });
       }
     } finally {
       if (lockAcquired) await releaseStructureSyncSchedulerLock();

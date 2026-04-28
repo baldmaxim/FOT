@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useSearchParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import * as Sentry from '@sentry/react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { ChatProvider } from './contexts/ChatContext';
@@ -9,6 +10,7 @@ import { SigurHeaderBadges } from './components/skud/SigurHeaderBadges';
 import { useTheme } from './hooks/useTheme';
 import { PageLoader } from './components/ui/PageLoader';
 import { ChatPanelMount } from './components/chat/ChatPanelMount';
+import { ErrorFallback } from './components/ErrorFallback';
 import './App.css';
 
 const queryClient = new QueryClient({
@@ -523,18 +525,20 @@ const AppRoutes = () => {
 
 const App = () => {
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <AuthProvider>
-          <ToastProvider>
-            <ChatProvider>
-              <AppRoutes />
-              <ChatPanelMount />
-            </ChatProvider>
-          </ToastProvider>
-        </AuthProvider>
-      </BrowserRouter>
-    </QueryClientProvider>
+    <Sentry.ErrorBoundary fallback={ErrorFallback} showDialog={false}>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <AuthProvider>
+            <ToastProvider>
+              <ChatProvider>
+                <AppRoutes />
+                <ChatPanelMount />
+              </ChatProvider>
+            </ToastProvider>
+          </AuthProvider>
+        </BrowserRouter>
+      </QueryClientProvider>
+    </Sentry.ErrorBoundary>
   );
 };
 

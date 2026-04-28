@@ -7,12 +7,15 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
+    "sentry:sourcemaps": "sentry-cli sourcemaps inject ./dist && sentry-cli sourcemaps upload --release=$SENTRY_RELEASE ./dist",
     "test": "vitest run",
     "start": "node dist/index.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1017.0",
     "@aws-sdk/s3-request-presigner": "^3.1017.0",
+    "@sentry/node": "^10.50.0",
+    "@sentry/profiling-node": "^10.50.0",
     "@supabase/supabase-js": "^2.47.0",
     "@types/archiver": "^7.0.0",
     "@types/web-push": "^3.6.4",
@@ -37,6 +40,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@sentry/cli": "^3.4.0",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.7",

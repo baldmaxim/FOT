@@ -34,6 +34,7 @@ Host vds
 ```bash
 ssh vds
 cd /var/www/fot && git pull
+export VITE_SENTRY_RELEASE=$(git rev-parse --short HEAD)
 cd fot-app && NODE_OPTIONS='--max-old-space-size=1024' npm run build
 ```
 
@@ -41,17 +42,26 @@ cd fot-app && NODE_OPTIONS='--max-old-space-size=1024' npm run build
 ```bash
 ssh vds
 cd /var/www/fot && git pull
-cd fot-server && npm run build
-pm2 restart fot-server
+export SENTRY_RELEASE=$(git rev-parse --short HEAD)
+cd fot-server && npm run build && npm run sentry:sourcemaps
+pm2 restart fot-server --update-env
 ```
 
 ## Полный деплой (оба)
 ```bash
 ssh vds
 cd /var/www/fot && git pull
-cd fot-server && npm ci && npm run build && pm2 restart fot-server
+export SENTRY_RELEASE=$(git rev-parse --short HEAD)
+export VITE_SENTRY_RELEASE=$SENTRY_RELEASE
+cd fot-server && npm ci && npm run build && npm run sentry:sourcemaps && pm2 restart fot-server --update-env
 cd ../fot-app && npm ci && NODE_OPTIONS='--max-old-space-size=1024' npm run build
 ```
+
+> `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` подгружаются из `.env` соответствующего проекта
+> (см. [docs/sentry.md](docs/sentry.md)). Если они не заданы, sourcemaps не загружаются — сборка не падает,
+> но в Sentry стек-трейсы будут поверх минифицированного кода.
+>
+> `pm2 restart … --update-env` нужен, чтобы PM2 подхватил новый `SENTRY_RELEASE` из shell.
 
 ## Изменения: чат (боковая панель, реалтайм, шифрование)
 

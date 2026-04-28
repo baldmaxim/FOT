@@ -40,6 +40,14 @@ const envSchema = z.object({
   VAPID_PUBLIC_KEY: optionalString,
   VAPID_PRIVATE_KEY: optionalString,
   VAPID_SUBJECT: optionalString,
+
+  // Sentry (sentry.io). Все опциональны: без DSN SDK молчит,
+  // без AUTH_TOKEN/ORG sourcemaps не загружаются.
+  SENTRY_DSN: optionalUrl,
+  SENTRY_RELEASE: optionalString,
+  SENTRY_AUTH_TOKEN: optionalString,
+  SENTRY_ORG: optionalString,
+  SENTRY_PROJECT: optionalString,
 });
 
 const parsed = envSchema.safeParse(process.env);

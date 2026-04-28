@@ -1,5 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import * as Sentry from '@sentry/react';
 import { apiClient, ApiError, getSessionToken, setSessionToken, subscribeSessionToken } from '../api/client';
 import { wsService } from '../services/websocket';
 import type {
@@ -197,6 +198,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
   }, [logout]);
+
+  // Sentry user context: ставим, как только знаем кто залогинен; чистим при логауте.
+  useEffect(() => {
+    if (state.user && state.profile) {
+      Sentry.setUser({
+        id: state.user.id,
+        email: state.user.email,
+        username: state.profile.role_code,
+        segment: state.profile.is_admin ? 'admin' : (state.profile.employee_variant ?? 'user'),
+      });
+    } else {
+      Sentry.setUser(null);
+    }
+  }, [state.user, state.profile]);
 
   // Держим актуальную ссылку, чтобы socket-подписка не пересоздавалась на каждый рефреш.
   const refreshProfileRef = useRef(refreshProfile);

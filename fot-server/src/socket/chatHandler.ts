@@ -1,5 +1,6 @@
 import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
+import * as Sentry from '@sentry/node';
 import { env } from '../config/env.js';
 import { chatService } from '../services/chat.service.js';
 import { isChatError } from '../services/chat.errors.js';
@@ -44,6 +45,12 @@ export const setupChatSocket = (io: Server) => {
         socket.join(`conv:${conversationId}`);
         if (callback) callback({ success: true });
       } catch (error) {
+        if (!isChatError(error)) {
+          Sentry.captureException(error, {
+            tags: { socket_event: 'join_conversation' },
+            user: { id: userId },
+          });
+        }
         if (callback) {
           callback({
             success: false,
@@ -101,6 +108,12 @@ export const setupChatSocket = (io: Server) => {
 
         if (callback) callback({ success: true, data: message });
       } catch (error) {
+        if (!isChatError(error)) {
+          Sentry.captureException(error, {
+            tags: { socket_event: 'send_message' },
+            user: { id: userId },
+          });
+        }
         if (callback) {
           callback({
             success: false,

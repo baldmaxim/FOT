@@ -1,3 +1,5 @@
+import * as Sentry from '@sentry/react';
+
 const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
 const isLocalHostname = (hostname: string): boolean =>
   hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
@@ -168,12 +170,24 @@ export const apiClient = {
     // Handle other errors
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Ошибка сервера' }));
-      throw new ApiError(
+      const apiError = new ApiError(
         error.error || error.message || 'Произошла ошибка',
         response.status,
         error.code,
         error,
       );
+      // 5xx и сетевые сбои — серверная сторона; в Sentry с тегами для фильтрации.
+      // 4xx (валидация, права) — ожидаемое поведение, не шумим.
+      if (response.status >= 500) {
+        Sentry.captureException(apiError, {
+          tags: {
+            endpoint,
+            method: (fetchOptions.method ?? 'GET').toUpperCase(),
+            status: String(response.status),
+          },
+        });
+      }
+      throw apiError;
     }
 
     // Handle empty response
