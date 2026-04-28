@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, type FC } from 'react';
 import { skudService } from '../services/skudService';
-import { useAuth } from '../contexts/AuthContext';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useManagedDepartments } from '../hooks/useManagedDepartments';
 import { DisciplineTable } from '../components/discipline/DisciplineTable';
 import { DisciplineDetailPanel } from '../components/discipline/DisciplineDetailPanel';
 import { triggerBlobDownload } from '../utils/download';
@@ -108,8 +108,7 @@ const getSummary = (v: IViolationRaw): string => {
 };
 
 export const DisciplineAnalyticsPage: FC = () => {
-  const { hasPermission, profile } = useAuth();
-  const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
+  const { isDepartmentScope, managedDepartmentIds, managedDepartments, primaryDepartmentId, mode } = useManagedDepartments();
   const isMobile = useIsMobile(430);
 
   const now = new Date();
@@ -148,10 +147,15 @@ export const DisciplineAnalyticsPage: FC = () => {
   const buildMonthValue = useCallback((year: number, month: number) => `${year}-${String(month).padStart(2, '0')}`, []);
 
   useEffect(() => {
-    if (isDepartmentScope && profile?.department_id) {
-      setSelectedDept(profile.department_id);
+    if (!isDepartmentScope) return;
+    if (mode === 'single' && primaryDepartmentId) {
+      setSelectedDept(primaryDepartmentId);
+      return;
     }
-  }, [isDepartmentScope, profile?.department_id]);
+    if (selectedDept && !managedDepartmentIds.includes(selectedDept)) {
+      setSelectedDept('');
+    }
+  }, [isDepartmentScope, mode, primaryDepartmentId, managedDepartmentIds, selectedDept]);
 
   const fetchData = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -185,16 +189,11 @@ export const DisciplineAnalyticsPage: FC = () => {
   }, [fetchData]);
 
   const departmentOptions = useMemo(() => {
-    const depts = new Map<string, string>();
-    for (const emp of Object.values(empData)) {
-      if (emp.department_id && deptData[emp.department_id]) {
-        depts.set(emp.department_id, deptData[emp.department_id]);
-      }
-    }
-    return sortDepartmentOptions(
-      [...depts.entries()].map(([id, name]) => ({ id, name })),
-    ).map(({ id, name }) => [id, name] as const);
-  }, [empData, deptData]);
+    const entries: Array<{ id: string; name: string }> = isDepartmentScope
+      ? managedDepartments.map(d => ({ id: d.id, name: deptData[d.id] || d.name }))
+      : Object.entries(deptData).map(([id, name]) => ({ id, name }));
+    return sortDepartmentOptions(entries).map(({ id, name }) => [id, name] as const);
+  }, [isDepartmentScope, managedDepartments, deptData]);
 
   const employees = useMemo<IEmployeeSummary[]>(() => {
     const map: Record<number, IEmployeeSummary> = {};
@@ -413,22 +412,19 @@ export const DisciplineAnalyticsPage: FC = () => {
                   <button className="da-search-clear" onClick={() => setSearchQuery('')}>&times;</button>
                 )}
               </div>
-              {isDepartmentScope ? (
-                <div className="da-dept-label">
-                  {deptData[selectedDept] ?? 'Мой отдел'}
-                </div>
-              ) : (
-                <select
-                  className="da-dept-select"
-                  value={selectedDept}
-                  onChange={e => setSelectedDept(e.target.value)}
-                >
-                  <option value="">Все отделы</option>
-                  {departmentOptions.map(([id, name]) => (
-                    <option key={id} value={id}>{name}</option>
-                  ))}
-                </select>
-              )}
+              <select
+                className="da-dept-select"
+                value={selectedDept}
+                onChange={e => setSelectedDept(e.target.value)}
+                disabled={isDepartmentScope && mode === 'single'}
+              >
+                {!(isDepartmentScope && mode === 'single') && (
+                  <option value="">{isDepartmentScope ? 'Все мои отделы' : 'Все отделы'}</option>
+                )}
+                {departmentOptions.map(([id, name]) => (
+                  <option key={id} value={id}>{name}</option>
+                ))}
+              </select>
               {hasFilters && (
                 <button className="da-btn da-btn-reset" onClick={clearFilters}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
