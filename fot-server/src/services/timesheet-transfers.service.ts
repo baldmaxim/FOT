@@ -238,6 +238,7 @@ export interface IUpdateTransferInput {
   effective_from?: string;
   to_department_id?: string;
   from_department_id?: string;
+  assignment_old_id?: string;
 }
 
 async function ensureDepartmentExists(deptId: string): Promise<void> {
@@ -268,8 +269,21 @@ export async function updateTransfer(
   if (!newA) throw new Error('Назначение не найдено');
   if (newA.effective_to != null) throw new Error('Назначение уже закрыто, корректировка невозможна');
 
-  const oldA = await findPreviousClosedAssignment(newA);
+  const oldA = input.assignment_old_id
+    ? await loadAssignmentById(input.assignment_old_id)
+    : await findPreviousClosedAssignment(newA);
   if (!oldA) throw new Error('Парное предыдущее назначение не найдено — возможно, перевод создан вручную');
+
+  if (oldA.id === newA.id) {
+    throw new Error('Старое и новое назначения не должны совпадать');
+  }
+  if (oldA.employee_id !== newA.employee_id) {
+    throw new Error('Старое и новое назначения принадлежат разным сотрудникам');
+  }
+  const expectedOldClose = formatDateShift(newA.effective_from, -1);
+  if (oldA.effective_to !== expectedOldClose) {
+    throw new Error('Парное закрытое назначение не соответствует текущему открытому');
+  }
 
   const nextDate = input.effective_from ?? newA.effective_from;
   const nextToDept = input.to_department_id ?? newA.org_department_id;

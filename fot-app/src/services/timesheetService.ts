@@ -254,12 +254,18 @@ export const timesheetService = {
 
   async updateTransfer(
     assignmentId: string,
-    patch: { effective_from?: string; to_department_id?: string; from_department_id?: string },
+    patch: {
+      effective_from?: string;
+      to_department_id?: string;
+      from_department_id?: string;
+      assignment_old_id?: string;
+    },
   ): Promise<void> {
     const body: Record<string, string> = {};
     if (patch.effective_from) body.effective_from = patch.effective_from;
     if (patch.to_department_id) body.to_department_id = patch.to_department_id;
     if (patch.from_department_id) body.from_department_id = patch.from_department_id;
+    if (patch.assignment_old_id) body.assignment_old_id = patch.assignment_old_id;
     const res = await apiClient.patch<ApiResponse<null>>(
       `/timesheet/team-management/transfers/${assignmentId}`,
       body,

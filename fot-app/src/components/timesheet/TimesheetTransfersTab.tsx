@@ -54,7 +54,12 @@ export const TimesheetTransfersTab: FC<ITimesheetTransfersTabProps> = ({
   const updateTransferMutation = useMutation({
     mutationFn: (vars: {
       assignmentId: string;
-      patch: { effective_from?: string; to_department_id?: string; from_department_id?: string };
+      patch: {
+        effective_from?: string;
+        to_department_id?: string;
+        from_department_id?: string;
+        assignment_old_id?: string;
+      };
     }) => timesheetService.updateTransfer(vars.assignmentId, vars.patch),
     onSuccess: () => {
       setEditingTransferId(null);
@@ -137,11 +142,19 @@ export const TimesheetTransfersTab: FC<ITimesheetTransfersTabProps> = ({
   };
 
   const submitTransferEdit = (row: IDepartmentTransferRow) => {
-    const patch: { effective_from?: string; to_department_id?: string; from_department_id?: string } = {};
+    const patch: {
+      effective_from?: string;
+      to_department_id?: string;
+      from_department_id?: string;
+      assignment_old_id?: string;
+    } = {
+      assignment_old_id: row.assignment_old_id,
+    };
     if (draftDate && draftDate !== row.transfer_date) patch.effective_from = draftDate;
     if (draftToDeptId && draftToDeptId !== row.to_department_id) patch.to_department_id = draftToDeptId;
     if (draftFromDeptId && draftFromDeptId !== departmentId) patch.from_department_id = draftFromDeptId;
-    if (Object.keys(patch).length === 0) {
+    const hasChanges = patch.effective_from || patch.to_department_id || patch.from_department_id;
+    if (!hasChanges) {
       cancelEdit();
       return;
     }

@@ -140,6 +140,7 @@ const transferUpdateSchema = z.object({
   effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to_department_id: z.string().uuid().optional(),
   from_department_id: z.string().uuid().optional(),
+  assignment_old_id: z.string().uuid().optional(),
 }).refine(
   data => data.effective_from !== undefined || data.to_department_id !== undefined || data.from_department_id !== undefined,
   { message: 'Должно быть указано хотя бы одно поле для изменения' },
@@ -2004,6 +2005,7 @@ export const timesheetController = {
         effective_from: parsed.effective_from,
         to_department_id: parsed.to_department_id,
         from_department_id: parsed.from_department_id,
+        assignment_old_id: parsed.assignment_old_id,
       });
       employeeCache.invalidate(result.employee_id);
 
