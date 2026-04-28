@@ -524,14 +524,14 @@ export const TimesheetPage: FC = () => {
       }
       closeModal();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
       ]);
     } catch (err) {
       console.error('Save correction error:', err);
       toast.error?.(err instanceof Error ? err.message : 'Не удалось сохранить корректировку');
     }
-  }, [modalEmployee, year, month, modalDay, modalEntry, closeModal, queryClient, monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId, toast]);
+  }, [modalEmployee, year, month, modalDay, modalEntry, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
 
   const handleSaveObjectCorrection = useCallback(async (_status: TimesheetStatus, hours: number | null, notes: string) => {
     if (!modalEmployee || !modalObjectTarget || hours == null) return;
@@ -548,14 +548,14 @@ export const TimesheetPage: FC = () => {
       });
       closeModal();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
       ]);
     } catch (error) {
       console.error('Save object correction error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось сохранить корректировку по объекту');
     }
-  }, [modalEmployee, modalObjectTarget, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId, toast]);
+  }, [modalEmployee, modalObjectTarget, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
 
   const handleSaveModalCorrection = useCallback(
     (status: TimesheetStatus, hours: number | null, notes: string) => {
@@ -573,14 +573,14 @@ export const TimesheetPage: FC = () => {
       await timesheetService.delete(modalEntry.id);
       closeModal();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
       ]);
     } catch (error) {
       console.error('Delete day correction error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку');
     }
-  }, [modalEntry?.id, closeModal, queryClient, monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId, toast]);
+  }, [modalEntry?.id, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
 
   const handleDeleteObjectCorrection = useCallback(async () => {
     if (!modalEmployee || !modalObjectTarget || !modalObjectEntry?.adjustment_id) return;
@@ -593,14 +593,14 @@ export const TimesheetPage: FC = () => {
       });
       closeModal();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
       ]);
     } catch (error) {
       console.error('Delete object correction error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку по объекту');
     }
-  }, [modalEmployee, modalObjectTarget, modalObjectEntry?.adjustment_id, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId, toast]);
+  }, [modalEmployee, modalObjectTarget, modalObjectEntry?.adjustment_id, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
 
   // Export
   const canExport = timesheetMode === 'assigned'
@@ -1262,7 +1262,7 @@ export const TimesheetPage: FC = () => {
       const result = await timesheetService.refresh({ start_date: rangeStart, end_date: rangeEnd });
       setRefreshState({ phase: 'invalidating', message: 'Обновление данных табеля…' });
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, effectiveSelectedDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
       ]);
       const parts: string[] = [];
@@ -1280,7 +1280,7 @@ export const TimesheetPage: FC = () => {
       setRefreshState({ phase: 'error', message: 'Ошибка обновления' });
       setTimeout(() => setRefreshState({ phase: 'idle', message: '' }), 3000);
     }
-  }, [rangeStart, rangeEnd, refreshInFlight, queryClient, monthStr, effectiveSelectedDeptId, toast]);
+  }, [rangeStart, rangeEnd, refreshInFlight, queryClient, monthStr, activeGridDeptId, toast]);
 
   const handleSelectBrigade = useCallback((departmentId: string) => {
     clearBulkState();

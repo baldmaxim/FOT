@@ -1227,22 +1227,30 @@ export const timesheetController = {
       const employeeIds = [...new Set(uniqueItems.map(item => item.employee_id))];
       const plannedHoursByItem = await resolvePlannedHoursByItems(uniqueItems);
 
-      await Promise.all(uniqueItems.map(item => upsertAttendanceAdjustment({
-        employee_id: item.employee_id,
-        work_date: item.work_date,
-        status: parsed.status,
-        hours_override: parsed.status === 'remote'
-          ? (plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) ?? 8)
-          : (clampInputHoursForScope(
-            scope,
-            parsed.hours_worked ?? null,
-            plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) ?? null,
-          ) ?? null),
-        source_type: 'manual',
-        source_id: 'manual',
-        reason: parsed.notes ?? null,
-        created_by: req.user.id,
-      })));
+      await Promise.all(uniqueItems.map(async item => {
+        const approvalStatus = await resolveAdjustmentApprovalStatus(
+          item.employee_id,
+          item.work_date,
+          parsed.status,
+        );
+        return upsertAttendanceAdjustment({
+          employee_id: item.employee_id,
+          work_date: item.work_date,
+          status: parsed.status,
+          hours_override: parsed.status === 'remote'
+            ? (plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) ?? 8)
+            : (clampInputHoursForScope(
+              scope,
+              parsed.hours_worked ?? null,
+              plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) ?? null,
+            ) ?? null),
+          source_type: 'manual',
+          source_id: 'manual',
+          reason: parsed.notes ?? null,
+          created_by: req.user.id,
+          approval_status: approvalStatus,
+        });
+      }));
 
       const auditNamesMap = await loadEmployeeFullNamesMap(employeeIds);
       const auditEmployeeNames = employeeIds
