@@ -14,6 +14,7 @@ import {
 } from '../../services/correctionApprovalService';
 import { timesheetService } from '../../services/timesheetService';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
+import { ApprovalCommentModal } from './ApprovalCommentModal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import './ApprovalsPage.css';
@@ -31,11 +32,11 @@ const STATUS_LABELS: Record<string, string> = {
   remote: 'Удалёнка',
   sick: 'Больничный',
   vacation: 'Отпуск',
-  business_trip: 'Командировка',
-  absent: 'Прогул',
+  absent: 'Неявка',
   manual: 'Ручная корр.',
   dayoff: 'Отгул',
-  unpaid: 'Без оплаты',
+  unpaid: 'Без сохранения ЗП',
+  educational_leave: 'Учебный отпуск',
 };
 
 const STATUS_ICONS: Record<string, string> = {
@@ -43,11 +44,11 @@ const STATUS_ICONS: Record<string, string> = {
   remote: '🏠',
   sick: '🏥',
   vacation: '🏖',
-  business_trip: '✈️',
   absent: '❌',
   manual: '✏️',
-  dayoff: '⛱',
-  unpaid: '∅',
+  dayoff: '📅',
+  unpaid: '💸',
+  educational_leave: '🎓',
 };
 
 const formatDate = (iso: string): string => {
@@ -386,6 +387,7 @@ const TimesheetsTab: FC = () => {
 
   const [status, setStatus] = useState<TimesheetApprovalStatus>('submitted');
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [commentModal, setCommentModal] = useState<{ row: IApprovalReviewItem; mode: 'rework' | 'return' } | null>(null);
 
   const query = useQuery({
     queryKey: ['approvals-review-list', status],
@@ -405,28 +407,33 @@ const TimesheetsTab: FC = () => {
 
   const rejectMutation = useMutation({
     mutationFn: ({ id, comment }: { id: number; comment: string }) => timesheetApprovalService.reject(id, comment),
-    onSuccess: async () => { await invalidate(); toast.success?.('Табель отправлен на доработку'); },
+    onSuccess: async () => {
+      await invalidate();
+      toast.success?.('Табель отправлен на доработку');
+      setCommentModal(null);
+    },
     onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка отправки на доработку'),
   });
 
   const returnMutation = useMutation({
     mutationFn: ({ id, comment }: { id: number; comment: string }) => timesheetApprovalService.returnToRework(id, comment),
-    onSuccess: async () => { await invalidate(); toast.success?.('Возвращено на доработку'); },
+    onSuccess: async () => {
+      await invalidate();
+      toast.success?.('Возвращено на доработку');
+      setCommentModal(null);
+    },
     onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка возврата'),
   });
 
   const rows: IApprovalReviewItem[] = useMemo(() => query.data ?? [], [query.data]);
 
-  const handleSendToRework = (row: IApprovalReviewItem) => {
-    const comment = window.prompt('Комментарий (что нужно доработать):', '') ?? '';
-    if (!comment.trim()) return;
-    rejectMutation.mutate({ id: row.id, comment });
-  };
-
-  const handleReturn = (row: IApprovalReviewItem) => {
-    const comment = window.prompt('Комментарий (причина возврата):', '') ?? '';
-    if (!comment.trim()) return;
-    returnMutation.mutate({ id: row.id, comment });
+  const handleConfirmComment = (comment: string) => {
+    if (!commentModal) return;
+    if (commentModal.mode === 'rework') {
+      rejectMutation.mutate({ id: commentModal.row.id, comment });
+    } else {
+      returnMutation.mutate({ id: commentModal.row.id, comment });
+    }
   };
 
   const severity = (row: IApprovalReviewItem): 'red' | 'yellow' | 'green' => {
@@ -488,8 +495,8 @@ const TimesheetsTab: FC = () => {
                     isRejecting={rejectMutation.isPending}
                     isReturning={returnMutation.isPending}
                     onApprove={() => approveMutation.mutate(row.id)}
-                    onSendToRework={() => handleSendToRework(row)}
-                    onReturnApproved={() => handleReturn(row)}
+                    onSendToRework={() => setCommentModal({ row, mode: 'rework' })}
+                    onReturnApproved={() => setCommentModal({ row, mode: 'return' })}
                   />
                 )}
               </li>
@@ -497,6 +504,15 @@ const TimesheetsTab: FC = () => {
           })}
         </ul>
       )}
+
+      <ApprovalCommentModal
+        open={commentModal !== null}
+        title={commentModal?.mode === 'return' ? 'Вернуть на доработку' : 'Отправить на доработку'}
+        label={commentModal?.mode === 'return' ? 'Комментарий (причина возврата):' : 'Комментарий (что нужно доработать):'}
+        pending={rejectMutation.isPending || returnMutation.isPending}
+        onClose={() => setCommentModal(null)}
+        onConfirm={handleConfirmComment}
+      />
     </>
   );
 };
