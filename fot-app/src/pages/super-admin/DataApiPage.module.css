@@ -67,7 +67,7 @@
 .table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--bg-card);
+  background: var(--surface);
   font-size: 13px;
 }
 
@@ -145,7 +145,8 @@
 .modalBackdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -154,14 +155,15 @@
 }
 
 .modal {
-  background: var(--bg-card);
-  border-radius: 10px;
+  background: var(--surface);
+  border-radius: 12px;
   border: 1px solid var(--border);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
   max-width: 760px;
   width: 100%;
   max-height: 88vh;
   overflow: auto;
-  padding: 20px;
+  padding: 22px;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -186,14 +188,20 @@
 
 .input,
 .textarea {
-  padding: 7px 10px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg-primary);
+  background: var(--surface-elevated);
   color: var(--text-primary);
   font-size: 13px;
   width: 100%;
   box-sizing: border-box;
+}
+
+.input:focus,
+.textarea:focus {
+  outline: none;
+  border-color: var(--accent, #1a56db);
 }
 
 .textarea {
@@ -245,7 +253,7 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
-  background: var(--bg-card);
+  background: var(--surface);
 }
 
 .tableHeader {
