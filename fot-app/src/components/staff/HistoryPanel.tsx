@@ -13,12 +13,13 @@ interface IHistoryPanelProps {
   employee: Employee;
   history: EmployeeHistoryEvent[];
   loading: boolean;
+  canEdit: boolean;
   onClose: () => void;
   onRefresh: () => void;
   onDataChanged: () => void;
 }
 
-export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, loading, onClose, onRefresh, onDataChanged }) => {
+export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, loading, canEdit, onClose, onRefresh, onDataChanged }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editSalary, setEditSalary] = useState('');
   const [editDate, setEditDate] = useState('');
@@ -189,10 +190,12 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
                             )}
                             {isFirst && !delta && <span className="sc-panel-delta-sm neutral">старт</span>}
                             {reason && !isHire ? <span className="sc-panel-reason-sm">{reason}</span> : null}
-                            <span className="sc-panel-item-btns">
-                              <button className="sc-panel-act-btn" onClick={() => startEdit(ev)}><Pencil size={11} /></button>
-                              <button className="sc-panel-act-btn danger" onClick={() => handleDelete(ev)}><Trash2 size={11} /></button>
-                            </span>
+                            {canEdit && (
+                              <span className="sc-panel-item-btns">
+                                <button className="sc-panel-act-btn" onClick={() => startEdit(ev)}><Pencil size={11} /></button>
+                                <button className="sc-panel-act-btn danger" onClick={() => handleDelete(ev)}><Trash2 size={11} /></button>
+                              </span>
+                            )}
                           </div>
                         )}
                       </div>
@@ -234,10 +237,12 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
                           <span className="sc-panel-assign-sm">{title}</span>
                           {data.position ? <span className="sc-panel-pos-sm">{String(data.position)}</span> : null}
                           {data.department ? <span className="sc-panel-reason-sm">{String(data.department)}</span> : null}
-                          <span className="sc-panel-item-btns">
-                            <button className="sc-panel-act-btn" onClick={() => startEdit(ev)}><Pencil size={11} /></button>
-                            <button className="sc-panel-act-btn danger" onClick={() => handleDelete(ev)}><Trash2 size={11} /></button>
-                          </span>
+                          {canEdit && (
+                            <span className="sc-panel-item-btns">
+                              <button className="sc-panel-act-btn" onClick={() => startEdit(ev)}><Pencil size={11} /></button>
+                              <button className="sc-panel-act-btn danger" onClick={() => handleDelete(ev)}><Trash2 size={11} /></button>
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>

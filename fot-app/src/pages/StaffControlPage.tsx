@@ -2079,6 +2079,7 @@ export const StaffControlPage: FC = () => {
             employee={panelEmp}
             history={panelHistory}
             loading={panelLoading}
+            canEdit={isAdmin}
             onClose={closeHistory}
             onRefresh={() => openHistory(panelEmp)}
             onDataChanged={handleHistoryDataChanged}
