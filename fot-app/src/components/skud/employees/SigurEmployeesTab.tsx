@@ -61,6 +61,8 @@ type DeleteDepartmentsDialogState = {
 } | null;
 
 type EmployeeDialogState = {
+  mode: 'create' | 'edit';
+  sigurEmployeeId: number | null;
   name: string;
   departmentId: string;
   positionId: string;
@@ -431,6 +433,8 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
   const [employeeDialog, setEmployeeDialog] = useState<EmployeeDialogState>(null);
   const [employeeMoveDialog, setEmployeeMoveDialog] = useState<EmployeeMoveDialogState>(null);
   const [newEmployeePositionName, setNewEmployeePositionName] = useState('');
+  const [employeeNameSuggestionsQuery, setEmployeeNameSuggestionsQuery] = useState('');
+  const [loadingSelectedSuggestion, setLoadingSelectedSuggestion] = useState(false);
   const [savingDepartment, setSavingDepartment] = useState(false);
   const [savingEmployee, setSavingEmployee] = useState(false);
   const [savingEmployeeMove, setSavingEmployeeMove] = useState(false);
@@ -443,6 +447,16 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
     return () => window.clearTimeout(timer);
   }, [employeeSearch]);
 
+  useEffect(() => {
+    if (!employeeDialog || employeeDialog.mode !== 'create') {
+      setEmployeeNameSuggestionsQuery('');
+      return;
+    }
+    const trimmed = employeeDialog.name.trim();
+    const timer = window.setTimeout(() => setEmployeeNameSuggestionsQuery(trimmed), 300);
+    return () => window.clearTimeout(timer);
+  }, [employeeDialog]);
+
   const departmentsQuery = useQuery({
     queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'departments-tree'],
     queryFn: () => sigurAdminService.getDepartmentsTree(),
@@ -453,6 +467,19 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
     queryFn: () => sigurAdminService.getPositions(),
     enabled: canEdit && (employeeDialog !== null || selectedEmployeeId !== null),
   });
+
+  const employeeNameSuggestionsEnabled =
+    employeeDialog?.mode === 'create' && employeeNameSuggestionsQuery.length >= 2;
+  const employeeNameSuggestionsResult = useQuery({
+    queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'employee-suggestions', employeeNameSuggestionsQuery],
+    queryFn: () => sigurAdminService.getEmployees({
+      search: employeeNameSuggestionsQuery,
+      pageSize: 8,
+    }),
+    enabled: employeeNameSuggestionsEnabled,
+    staleTime: 30 * 1000,
+  });
+  const employeeNameSuggestions = employeeNameSuggestionsResult.data?.items || [];
 
   const blockedFilter = employeeStatusFilter === 'all'
     ? undefined
@@ -821,6 +848,8 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
 
   const openCreateEmployeeDialog = () => {
     setEmployeeDialog({
+      mode: 'create',
+      sigurEmployeeId: null,
       name: '',
       departmentId: selectedDeptId != null ? String(selectedDeptId) : '',
       positionId: '',
@@ -829,6 +858,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
       blocked: false,
     });
     setNewEmployeePositionName('');
+    setEmployeeNameSuggestionsQuery('');
   };
 
   const handleCreateEmployeePosition = async () => {
@@ -852,6 +882,29 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
     }
   };
 
+  const handleSelectEmployeeSuggestion = async (suggestion: SigurEmployeeSummary) => {
+    try {
+      setLoadingSelectedSuggestion(true);
+      setError('');
+      const profile = await sigurAdminService.getEmployeeProfile(suggestion.id);
+      setEmployeeDialog({
+        mode: 'edit',
+        sigurEmployeeId: profile.sigurEmployeeId,
+        name: profile.profile.fullName ?? suggestion.name,
+        departmentId: profile.profile.departmentId != null ? String(profile.profile.departmentId) : '',
+        positionId: profile.profile.positionId != null ? String(profile.profile.positionId) : '',
+        tabId: profile.profile.tabNumber ?? '',
+        description: profile.profile.description ?? '',
+        blocked: profile.profile.blocked === true,
+      });
+      setEmployeeNameSuggestionsQuery('');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Не удалось загрузить профиль сотрудника Sigur');
+    } finally {
+      setLoadingSelectedSuggestion(false);
+    }
+  };
+
   const handleSaveEmployee = async () => {
     if (!employeeDialog) return;
     if (!employeeDialog.name.trim() || !employeeDialog.departmentId) {
@@ -862,14 +915,23 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
     try {
       setSavingEmployee(true);
       setError('');
-      const profile = await sigurAdminService.createEmployee({
-        name: employeeDialog.name.trim(),
-        departmentId: Number(employeeDialog.departmentId),
-        positionId: employeeDialog.positionId ? Number(employeeDialog.positionId) : null,
-        tabId: employeeDialog.tabId.trim() || null,
-        description: employeeDialog.description.trim() || null,
-        blocked: employeeDialog.blocked,
-      });
+      const profile = employeeDialog.mode === 'edit' && employeeDialog.sigurEmployeeId != null
+        ? await sigurAdminService.updateEmployee(employeeDialog.sigurEmployeeId, {
+            name: employeeDialog.name.trim(),
+            departmentId: Number(employeeDialog.departmentId),
+            positionId: employeeDialog.positionId ? Number(employeeDialog.positionId) : null,
+            tabId: employeeDialog.tabId.trim() || null,
+            description: employeeDialog.description.trim() || null,
+            blocked: employeeDialog.blocked,
+          })
+        : await sigurAdminService.createEmployee({
+            name: employeeDialog.name.trim(),
+            departmentId: Number(employeeDialog.departmentId),
+            positionId: employeeDialog.positionId ? Number(employeeDialog.positionId) : null,
+            tabId: employeeDialog.tabId.trim() || null,
+            description: employeeDialog.description.trim() || null,
+            blocked: employeeDialog.blocked,
+          });
       setEmployeeDialog(null);
       setSelectedDeptId(profile.profile.departmentId ?? Number(employeeDialog.departmentId));
       setSelectedEmployeeId(profile.sigurEmployeeId);
@@ -882,7 +944,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
       });
       await refreshData();
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'Не удалось создать сотрудника Sigur');
+      setError(error instanceof Error ? error.message : 'Не удалось сохранить сотрудника Sigur');
     } finally {
       setSavingEmployee(false);
     }
@@ -1724,7 +1786,9 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
           <div className="ep-modal ep-modal-wide" onClick={event => event.stopPropagation()}>
             <div className="ep-modal-header">
               <div className="ep-modal-heading">
-                <div className="ep-modal-title">Новый сотрудник Sigur</div>
+                <div className="ep-modal-title">
+                  {employeeDialog.mode === 'edit' ? 'Редактирование сотрудника Sigur' : 'Новый сотрудник Sigur'}
+                </div>
               </div>
             </div>
             <div className="ep-modal-body">
@@ -1735,8 +1799,34 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
                     className="ep-modal-input"
                     value={employeeDialog.name}
                     onChange={event => setEmployeeDialog(prev => prev ? { ...prev, name: event.target.value } : prev)}
+                    disabled={loadingSelectedSuggestion}
                   />
                 </label>
+                {employeeDialog.mode === 'create' && employeeNameSuggestionsEnabled && (employeeNameSuggestionsResult.isFetching || employeeNameSuggestions.length > 0) && (
+                  <div className="sigur-emp-suggestions">
+                    <div className="sigur-emp-suggestions-hint">
+                      {employeeNameSuggestionsResult.isFetching
+                        ? 'Поиск в Sigur...'
+                        : `Найдены похожие в Sigur (${employeeNameSuggestions.length}). Кликните, чтобы редактировать.`}
+                    </div>
+                    {employeeNameSuggestions.map(suggestion => (
+                      <button
+                        key={suggestion.id}
+                        type="button"
+                        className="sigur-emp-suggestion-row"
+                        onClick={() => void handleSelectEmployeeSuggestion(suggestion)}
+                        disabled={loadingSelectedSuggestion}
+                      >
+                        <span className="sigur-emp-suggestion-name">{suggestion.name}</span>
+                        <span className="sigur-emp-suggestion-meta">
+                          {[suggestion.departmentName, suggestion.positionName, suggestion.tabId ? `Таб. ${suggestion.tabId}` : null]
+                            .filter(Boolean)
+                            .join(' · ') || '—'}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <label>
                   Отдел
                   <select
@@ -1815,8 +1905,10 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
               <button className="ep-modal-btn secondary" onClick={() => setEmployeeDialog(null)}>
                 Отмена
               </button>
-              <button className="ep-modal-btn primary" onClick={() => void handleSaveEmployee()} disabled={savingEmployee}>
-                {savingEmployee ? 'Создание...' : 'Создать'}
+              <button className="ep-modal-btn primary" onClick={() => void handleSaveEmployee()} disabled={savingEmployee || loadingSelectedSuggestion}>
+                {employeeDialog.mode === 'edit'
+                  ? (savingEmployee ? 'Сохранение...' : 'Сохранить')
+                  : (savingEmployee ? 'Создание...' : 'Создать')}
               </button>
             </div>
           </div>
