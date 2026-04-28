@@ -1,6 +1,7 @@
 import { type FC, useState, useMemo, useEffect } from 'react';
 import { Download, Search, CheckSquare, Square, Mail, CheckCircle, XCircle } from 'lucide-react';
 import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
+import { useTimesheetApprovalReviewList } from '../../hooks/useTimesheetApprovalData';
 import { timesheetService } from '../../services/timesheetService';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { useToast } from '../../contexts/ToastContext';
@@ -54,12 +55,38 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
   const [searchQuery, setSearchQuery] = useState('');
   const [checkedIds, setCheckedIds] = useState<Set<number>>(() => loadStoredAssignedIds());
   const [exporting, setExporting] = useState(false);
+  const [exportingApproved, setExportingApproved] = useState(false);
   const [emailing, setEmailing] = useState(false);
   const [presentation, setPresentation] = useState<TimesheetExportPresentation>('hr');
   const [error, setError] = useState<string | null>(null);
 
   const { data, isLoading, isError } = useAssignedEmployees();
   const employees = useMemo(() => data ?? [], [data]);
+  const { data: approvedList } = useTimesheetApprovalReviewList('approved');
+  const approvedDeptIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const item of approvedList ?? []) {
+      if (item.start_date === rangeStart && item.end_date === rangeEnd) {
+        ids.add(item.department_id);
+      }
+    }
+    return ids;
+  }, [approvedList, rangeStart, rangeEnd]);
+  const isAssigneeApproved = (employee: { departments?: { id: string }[] }): boolean => {
+    const ids = employee.departments ?? [];
+    if (ids.length === 0) return false;
+    return ids.every(d => approvedDeptIds.has(d.id));
+  };
+  const approvedSelectedIds = useMemo(() => {
+    const result: number[] = [];
+    for (const employee of employees) {
+      if (checkedIds.has(employee.id) && isAssigneeApproved(employee)) {
+        result.push(employee.id);
+      }
+    }
+    return result;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employees, checkedIds, approvedDeptIds]);
 
   const filteredEmployees = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -173,6 +200,39 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
     }
   };
 
+  const handleExportApproved = async () => {
+    if (approvedSelectedIds.length === 0) return;
+    setExportingApproved(true);
+    setError(null);
+    try {
+      const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+      const blob = await timesheetService.exportAssigned({
+        month: monthStr,
+        from: rangeStart,
+        to: rangeEnd,
+        group_by: groupBy,
+        presentation: 'hr',
+        export_as_1c: exportAs1C,
+        employee_ids: approvedSelectedIds,
+      });
+      const startDay = Number.parseInt(rangeStart.slice(-2), 10);
+      const endDay = Number.parseInt(rangeEnd.slice(-2), 10);
+      const templateSuffix = exportAs1C ? '_1С' : '';
+      const filename = `Назначенные_утверждённые${templateSuffix}_${MONTH_NAMES[month]}_${year}_${startDay}-${endDay}.zip`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Assigned export approved error:', err);
+      setError('Ошибка экспорта утверждённых. Попробуйте ещё раз.');
+    } finally {
+      setExportingApproved(false);
+    }
+  };
+
   return (
     <>
       <div className="mte-controls">
@@ -205,6 +265,7 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
           filteredEmployees.map(employee => {
             const isChecked = checkedIds.has(employee.id);
             const CheckIcon = isChecked ? CheckSquare : Square;
+            const approved = isAssigneeApproved(employee);
             return (
               <div
                 key={employee.id}
@@ -216,6 +277,11 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
                 </button>
                 <span className="mte-tree-name" onClick={() => toggleEmployee(employee.id)}>
                   {formatTimesheetEmployeeName(employee.full_name)}
+                  {approved && (
+                    <span className="mte-approved-icon" title="Все табели участка утверждены">
+                      <CheckCircle size={14} />
+                    </span>
+                  )}
                 </span>
                 <span className="mte-assigned-badge">{employee.department_count} бр.</span>
                 <span

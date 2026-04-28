@@ -1,5 +1,6 @@
 import { type FC, useState, useMemo, useCallback, useEffect } from 'react';
 import {
+  CheckCircle,
   ChevronDown,
   ChevronRight as ChevronR,
   Download,
@@ -9,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useStructureTree } from '../../hooks/useStructure';
+import { useTimesheetApprovalReviewList } from '../../hooks/useTimesheetApprovalData';
 import { timesheetService } from '../../services/timesheetService';
 import type { OrgDepartmentNode } from '../../types';
 import { filterDepartmentTree, filterDepartmentTreeByIds, sortDepartmentTree } from '../../utils/departmentUtils';
@@ -70,13 +72,15 @@ interface IDeptTreeNodeProps {
   onToggle: (ids: string[], checked: boolean) => void;
   expandedIds: Set<string>;
   onToggleExpand: (id: string) => void;
+  approvedDeptIds: Set<string>;
 }
 
-const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expandedIds, onToggleExpand }) => {
+const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expandedIds, onToggleExpand, approvedDeptIds }) => {
   const isChecked = checkedIds.has(node.id);
   const hasChildren = node.children && node.children.length > 0;
   const isExpanded = expandedIds.has(node.id);
   const isBrigade = node.kind === 'brigade';
+  const isApproved = approvedDeptIds.has(node.id);
 
   const handleCheck = () => {
     onToggle([node.id], !isChecked);
@@ -100,6 +104,11 @@ const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expa
         <span className="mte-tree-name" onClick={handleCheck}>
           {node.name}
           {isBrigade && <span className="mte-badge-brigade">бр.</span>}
+          {isApproved && (
+            <span className="mte-approved-icon" title="Табель утверждён">
+              <CheckCircle size={14} />
+            </span>
+          )}
         </span>
       </div>
       {hasChildren && isExpanded && (
@@ -112,6 +121,7 @@ const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expa
               onToggle={onToggle}
               expandedIds={expandedIds}
               onToggleExpand={onToggleExpand}
+              approvedDeptIds={approvedDeptIds}
             />
           ))}
         </div>
@@ -142,11 +152,22 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [presentation, setPresentation] = useState<TimesheetExportPresentation>('hr');
   const [exporting, setExporting] = useState(false);
+  const [exportingApproved, setExportingApproved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const { profile } = useAuth();
   const { data: structure, isLoading } = useStructureTree();
   const departments = structure?.departments ?? EMPTY_DEPARTMENTS;
+  const { data: approvedList } = useTimesheetApprovalReviewList('approved');
+  const approvedDeptIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const item of approvedList ?? []) {
+      if (item.start_date === rangeStart && item.end_date === rangeEnd) {
+        ids.add(item.department_id);
+      }
+    }
+    return ids;
+  }, [approvedList, rangeStart, rangeEnd]);
 
   const managedDepartmentIds = useMemo(() => {
     if (profile?.is_admin) return null;
@@ -227,6 +248,10 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
   });
 
   const selectedDeptIds = useMemo(() => [...checkedIds], [checkedIds]);
+  const approvedSelectedIds = useMemo(
+    () => selectedDeptIds.filter(id => approvedDeptIds.has(id)),
+    [selectedDeptIds, approvedDeptIds],
+  );
 
   const handleExport = async (presentationOverride: TimesheetExportPresentation) => {
     if (selectedDeptIds.length === 0) return;
@@ -267,6 +292,40 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
     }
   };
 
+  const handleExportApproved = async () => {
+    if (approvedSelectedIds.length === 0) return;
+    setExportingApproved(true);
+    setError(null);
+    try {
+      const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+      const blob = await timesheetService.exportMass({
+        month: monthStr,
+        department_ids: approvedSelectedIds,
+        from: rangeStart,
+        to: rangeEnd,
+        group_by: groupBy,
+        presentation: 'hr',
+        export_as_1c: exportAs1C,
+      });
+      const startDay = Number.parseInt(rangeStart.slice(-2), 10);
+      const endDay = Number.parseInt(rangeEnd.slice(-2), 10);
+      const groupingSuffix = groupBy === 'objects' ? '_по_объектам' : '';
+      const templateSuffix = exportAs1C ? '_1С' : '';
+      const filename = `Табели_утверждённые${groupingSuffix}${templateSuffix}_${MONTH_NAMES[month]}_${year}_${startDay}-${endDay}.zip`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Mass export approved error:', err);
+      setError('Ошибка экспорта утверждённых. Попробуйте ещё раз.');
+    } finally {
+      setExportingApproved(false);
+    }
+  };
+
   return (
     <>
       <div className="mte-controls">
@@ -301,6 +360,7 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
               onToggle={handleToggle}
               expandedIds={expandedIds}
               onToggleExpand={handleToggleExpand}
+              approvedDeptIds={approvedDeptIds}
             />
           ))
         )}
@@ -319,7 +379,7 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
         <button
           className={`mte-export-btn ${presentation === 'hr' ? 'mte-export-btn--active' : ''}`}
           onClick={() => handleExport('hr')}
-          disabled={exporting || checkedIds.size === 0}
+          disabled={exporting || exportingApproved || checkedIds.size === 0}
         >
           <Download size={16} />
           {exporting && presentation === 'hr' ? 'Выгрузить Факт...' : `Выгрузить Факт (${checkedIds.size})`}
@@ -327,12 +387,23 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
         <button
           className={`mte-export-btn mte-export-btn--secondary ${presentation === 'manager' ? 'mte-export-btn--active' : ''}`}
           onClick={() => handleExport('manager')}
-          disabled={exporting || checkedIds.size === 0}
+          disabled={exporting || exportingApproved || checkedIds.size === 0}
         >
           <Download size={16} />
           {exporting && presentation === 'manager'
             ? 'Выгрузить урезанный...'
             : `Выгрузить урезанный (${checkedIds.size})`}
+        </button>
+        <button
+          className="mte-export-btn mte-export-btn--approved"
+          onClick={handleExportApproved}
+          disabled={exporting || exportingApproved || approvedSelectedIds.length === 0}
+          title={approvedSelectedIds.length === 0 ? 'Среди выбранных нет утверждённых табелей за этот период' : undefined}
+        >
+          <CheckCircle size={16} />
+          {exportingApproved
+            ? 'Экспорт утверждённых...'
+            : `Экспорт утверждённых (${approvedSelectedIds.length})`}
         </button>
       </div>
     </>

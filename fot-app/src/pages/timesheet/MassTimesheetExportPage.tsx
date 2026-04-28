@@ -3,7 +3,12 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { getMonthLabel } from '../../utils/calendarUtils';
 import { useAuth } from '../../contexts/AuthContext';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
-import { getTimesheetMonthAccess } from '../../utils/timesheetMonthAccess';
+import {
+  formatHalfLabel,
+  getCurrentHalf,
+  getHalfRange,
+  type TimesheetHalf,
+} from '../../utils/timesheetApprovalPeriod';
 import { MassTimesheetExportDepartmentsTab } from './MassTimesheetExportDepartmentsTab';
 import { MassTimesheetExportAssignedTab } from './MassTimesheetExportAssignedTab';
 import './MassTimesheetExportPage.css';
@@ -12,17 +17,6 @@ type TimesheetGroupingMode = 'employees' | 'objects';
 type ExportTab = 'departments' | 'assigned';
 
 const ACTIVE_TAB_STORAGE_KEY = 'timesheet_export_active_tab_v1';
-
-const pad2 = (value: number): string => String(value).padStart(2, '0');
-
-const getMonthRange = (year: number, month: number): { first: string; last: string; daysInMonth: number } => {
-  const daysInMonth = new Date(year, month, 0).getDate();
-  return {
-    first: `${year}-${pad2(month)}-01`,
-    last: `${year}-${pad2(month)}-${pad2(daysInMonth)}`,
-    daysInMonth,
-  };
-};
 
 const loadStoredActiveTab = (): ExportTab => {
   try {
@@ -44,15 +38,6 @@ const saveStoredActiveTab = (tab: ExportTab): void => {
 
 const toMonthIndex = (year: number, month: number): number => year * 12 + month - 1;
 
-const parseMonth = (iso: string): { year: number; month: number } | null => {
-  const match = /^(\d{4})-(\d{2})/.exec(iso);
-  if (!match) return null;
-  const y = Number.parseInt(match[1], 10);
-  const m = Number.parseInt(match[2], 10);
-  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) return null;
-  return { year: y, month: m };
-};
-
 export const MassTimesheetExportPage: FC = () => {
   const now = useMemo(() => new Date(), []);
   const { hasPermission, profile } = useAuth();
@@ -60,16 +45,16 @@ export const MassTimesheetExportPage: FC = () => {
   const isSuperAdmin = profile?.position_type === 'super_admin';
   const canManageAllDepartments = isSuperAdmin || hasPermission('data.scope.all');
   const isRestrictedManagerView = !canManageAllDepartments && isDepartmentScope;
-  const monthAccess = useMemo(
-    () => getTimesheetMonthAccess(isRestrictedManagerView, now),
-    [isRestrictedManagerView, now],
-  );
 
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
-  const monthRange = useMemo(() => getMonthRange(year, month), [year, month]);
-  const [rangeStart, setRangeStart] = useState<string>(monthRange.first);
-  const [rangeEnd, setRangeEnd] = useState<string>(monthRange.last);
+  const [half, setHalf] = useState<TimesheetHalf>(() => {
+    const current = getCurrentHalf(now);
+    return (current.year === now.getFullYear() && current.month === now.getMonth() + 1) ? current.half : 'H1';
+  });
+  const halfRange = useMemo(() => getHalfRange(year, month, half), [year, month, half]);
+  const rangeStart = halfRange.startDate;
+  const rangeEnd = halfRange.endDate;
   const [groupBy, setGroupBy] = useState<TimesheetGroupingMode>('employees');
   const [exportAs1C, setExportAs1C] = useState(false);
   const [activeTab, setActiveTab] = useState<ExportTab>(() => loadStoredActiveTab());
@@ -94,12 +79,6 @@ export const MassTimesheetExportPage: FC = () => {
   }, [isRestrictedManagerView, selectedMonthIndex, currentMonthIndex, previousMonthIndex, currentYear, currentMonth]);
 
   useEffect(() => {
-    // При смене месяца сбрасываем диапазон на полный месяц.
-    setRangeStart(monthRange.first);
-    setRangeEnd(monthRange.last);
-  }, [monthRange.first, monthRange.last]);
-
-  useEffect(() => {
     saveStoredActiveTab(activeTab);
   }, [activeTab]);
 
@@ -114,44 +93,6 @@ export const MassTimesheetExportPage: FC = () => {
     if (month === 12) { setMonth(1); setYear(y => y + 1); }
     else setMonth(m => m + 1);
   }, [canGoNext, month]);
-
-  const applyDate = useCallback((value: string, kind: 'start' | 'end') => {
-    const parsed = parseMonth(value);
-    if (!parsed) return;
-    const jumpsMonth = parsed.year !== year || parsed.month !== month;
-    const jumpAllowed = jumpsMonth && monthAccess.isMonthAllowed(parsed.year, parsed.month);
-    if (jumpAllowed) {
-      const nextRange = getMonthRange(parsed.year, parsed.month);
-      setYear(parsed.year);
-      setMonth(parsed.month);
-      if (kind === 'start') {
-        setRangeStart(value);
-        setRangeEnd(nextRange.last);
-      } else {
-        setRangeStart(nextRange.first);
-        setRangeEnd(value);
-      }
-      return;
-    }
-    const bounds = getMonthRange(year, month);
-    const clamped = value < bounds.first ? bounds.first : (value > bounds.last ? bounds.last : value);
-    if (kind === 'start') {
-      setRangeStart(clamped);
-      if (rangeEnd < clamped) setRangeEnd(clamped);
-    } else {
-      setRangeEnd(clamped < rangeStart ? rangeStart : clamped);
-    }
-  }, [year, month, monthAccess, rangeStart, rangeEnd]);
-
-  const handleRangeStart = useCallback((value: string) => {
-    if (!value) return;
-    applyDate(value, 'start');
-  }, [applyDate]);
-
-  const handleRangeEnd = useCallback((value: string) => {
-    if (!value) return;
-    applyDate(value, 'end');
-  }, [applyDate]);
 
   return (
     <div className="mte-page">
@@ -168,29 +109,21 @@ export const MassTimesheetExportPage: FC = () => {
         </div>
       </div>
 
-      <section className="mte-range" aria-label="Период выгрузки табелей">
-        <label className="mte-range-label">
-          <span>С</span>
-          <input
-            type="date"
-            className="mte-range-input"
-            value={rangeStart}
-            min={monthAccess.minDate}
-            max={monthAccess.maxDate}
-            onChange={e => handleRangeStart(e.target.value)}
-          />
-        </label>
-        <label className="mte-range-label">
-          <span>по</span>
-          <input
-            type="date"
-            className="mte-range-input"
-            value={rangeEnd}
-            min={rangeStart}
-            max={monthAccess.maxDate}
-            onChange={e => handleRangeEnd(e.target.value)}
-          />
-        </label>
+      <section className="mte-half-toggle" aria-label="Период выгрузки табелей">
+        <button
+          type="button"
+          className={`mte-half-chip ${half === 'H1' ? 'mte-half-chip--active' : ''}`}
+          onClick={() => setHalf('H1')}
+        >
+          {formatHalfLabel(year, month, 'H1')}
+        </button>
+        <button
+          type="button"
+          className={`mte-half-chip ${half === 'H2' ? 'mte-half-chip--active' : ''}`}
+          onClick={() => setHalf('H2')}
+        >
+          {formatHalfLabel(year, month, 'H2')}
+        </button>
       </section>
 
       <section className="mte-mode-switch" aria-label="Формат выгрузки">
