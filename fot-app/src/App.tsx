@@ -494,7 +494,7 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage={['/admin/users', '/admin/roles', '/admin/audit', '/admin/action-history', '/admin/settings']} />}>
+        <Route element={<ProtectedRoute requiredPage={['/admin/users', '/admin/roles', '/admin/audit', '/admin/action-history', '/admin/settings', '/admin/data-api']} />}>
           <Route
             path="/admin/system"
             element={

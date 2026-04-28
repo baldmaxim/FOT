@@ -30,6 +30,7 @@ import rolesRoutes from './routes/roles.routes.js';
 import salaryRaiseRoutes from './routes/salary-raise.routes.js';
 import settingsRoutes from './routes/settings.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
+import adminDataApiRoutes from './routes/admin-data-api.routes.js';
 
 const app = express();
 
@@ -88,6 +89,7 @@ app.use('/api/roles', rolesRoutes);
 app.use('/api/salary-raise', salaryRaiseRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/admin/data-api', adminDataApiRoutes);
 
 // 404 handler
 app.use((_req, res) => {
