@@ -30,4 +30,16 @@ router.post(
   correctionApprovalController.bulkApprove,
 );
 
+router.post(
+  '/bulk-approve-by-ids',
+  requirePageAccess('/timesheet-hr', 'edit'),
+  correctionApprovalController.bulkApproveByIds,
+);
+
+router.post(
+  '/bulk-reject-by-ids',
+  requirePageAccess('/timesheet-hr', 'edit'),
+  correctionApprovalController.bulkRejectByIds,
+);
+
 export default router;

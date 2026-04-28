@@ -21,6 +21,12 @@ export interface ICorrectionDepartmentGroup {
   items: ICorrectionPendingItem[];
 }
 
+export interface IBulkResult {
+  processed_count: number;
+  skipped_not_pending: number;
+  skipped_no_access: number;
+}
+
 interface ApiResponse<T> {
   data: T;
   message?: string;
@@ -49,5 +55,21 @@ export const correctionApprovalService = {
       { department_id: departmentId, start_date: startDate, end_date: endDate },
     );
     return res.data ?? { approved_count: 0 };
+  },
+
+  async bulkApproveByIds(ids: number[]): Promise<IBulkResult> {
+    const res = await apiClient.post<ApiResponse<IBulkResult>>(
+      '/correction-approvals/bulk-approve-by-ids',
+      { ids },
+    );
+    return res.data ?? { processed_count: 0, skipped_not_pending: 0, skipped_no_access: 0 };
+  },
+
+  async bulkRejectByIds(ids: number[], comment?: string): Promise<IBulkResult> {
+    const res = await apiClient.post<ApiResponse<IBulkResult>>(
+      '/correction-approvals/bulk-reject-by-ids',
+      comment ? { ids, comment } : { ids },
+    );
+    return res.data ?? { processed_count: 0, skipped_not_pending: 0, skipped_no_access: 0 };
   },
 };

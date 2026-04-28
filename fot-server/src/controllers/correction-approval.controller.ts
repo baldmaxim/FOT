@@ -269,6 +269,139 @@ const rejectOne = async (req: AuthenticatedRequest, res: Response): Promise<void
   }
 };
 
+async function bulkChangeByIds(
+  req: AuthenticatedRequest,
+  res: Response,
+  rawIds: unknown,
+  nextStatus: 'approved' | 'rejected',
+  comment: string | null,
+): Promise<void> {
+  if (!Array.isArray(rawIds) || rawIds.length === 0 || rawIds.length > 500) {
+    res.status(400).json({ success: false, error: 'ids: непустой массив (до 500 значений)' });
+    return;
+  }
+  const ids: number[] = [];
+  for (const v of rawIds) {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n <= 0) {
+      res.status(400).json({ success: false, error: 'Некорректный id в списке' });
+      return;
+    }
+    ids.push(n);
+  }
+  const uniqueIds = [...new Set(ids)];
+
+  const { data: rows, error: loadErr } = await supabase
+    .from('attendance_adjustments')
+    .select('id, employee_id, approval_status')
+    .in('id', uniqueIds);
+  if (loadErr) throw loadErr;
+  const adjustments = rows || [];
+
+  const pending = adjustments.filter(a => String(a.approval_status) === 'pending');
+  const skippedNotPending = uniqueIds.length - pending.length;
+
+  if (pending.length === 0) {
+    res.json({
+      success: true,
+      data: { processed_count: 0, skipped_not_pending: skippedNotPending, skipped_no_access: 0 },
+    });
+    return;
+  }
+
+  const accessible = await resolveAccessibleDepartmentIds(req);
+  let allowedIds: number[] = pending.map(a => Number(a.id));
+  let skippedNoAccess = 0;
+
+  if (accessible !== 'all') {
+    const allowedDeptSet = new Set(accessible);
+    const employeeIds = [...new Set(pending.map(a => Number(a.employee_id)))];
+    const { data: empRows, error: empErr } = await supabase
+      .from('employees')
+      .select('id, org_department_id')
+      .in('id', employeeIds);
+    if (empErr) throw empErr;
+    const allowedEmpSet = new Set<number>();
+    for (const row of empRows || []) {
+      const deptId = row.org_department_id ? String(row.org_department_id) : null;
+      if (deptId && allowedDeptSet.has(deptId)) allowedEmpSet.add(Number(row.id));
+    }
+    const filteredIds: number[] = [];
+    for (const a of pending) {
+      if (allowedEmpSet.has(Number(a.employee_id))) filteredIds.push(Number(a.id));
+    }
+    skippedNoAccess = pending.length - filteredIds.length;
+    allowedIds = filteredIds;
+  }
+
+  if (allowedIds.length === 0) {
+    res.json({
+      success: true,
+      data: {
+        processed_count: 0,
+        skipped_not_pending: skippedNotPending,
+        skipped_no_access: skippedNoAccess,
+      },
+    });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const { data: updated, error: updErr } = await supabase
+    .from('attendance_adjustments')
+    .update({
+      approval_status: nextStatus,
+      approved_by: req.user.id,
+      approved_at: now,
+      approval_comment: comment,
+    })
+    .in('id', allowedIds)
+    .eq('approval_status', 'pending')
+    .select('id');
+  if (updErr) throw updErr;
+
+  const processedCount = (updated || []).length;
+
+  await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.UPDATE_TIMESHEET_ENTRY, {
+    entityType: 'attendance_adjustment',
+    entityId: 'bulk',
+    details: {
+      bulk_by_ids: true,
+      ids: allowedIds,
+      status: nextStatus,
+      processed_count: processedCount,
+    },
+  });
+
+  res.json({
+    success: true,
+    data: {
+      processed_count: processedCount,
+      skipped_not_pending: skippedNotPending,
+      skipped_no_access: skippedNoAccess,
+    },
+  });
+}
+
+const bulkApproveByIds = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    await bulkChangeByIds(req, res, req.body?.ids, 'approved', null);
+  } catch (err) {
+    console.error('correction-approval.bulkApproveByIds error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка массового согласования' });
+  }
+};
+
+const bulkRejectByIds = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const comment = typeof req.body?.comment === 'string' ? req.body.comment.trim() || null : null;
+    await bulkChangeByIds(req, res, req.body?.ids, 'rejected', comment);
+  } catch (err) {
+    console.error('correction-approval.bulkRejectByIds error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка массового отклонения' });
+  }
+};
+
 const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const requestedDeptId = typeof req.body?.department_id === 'string' ? req.body.department_id : null;
@@ -337,4 +470,6 @@ export const correctionApprovalController = {
   approveOne,
   rejectOne,
   bulkApprove,
+  bulkApproveByIds,
+  bulkRejectByIds,
 };

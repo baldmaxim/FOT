@@ -1,4 +1,4 @@
-import { type FC, useState, useMemo } from 'react';
+import { type FC, useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, X, RotateCcw, ChevronDown, ChevronUp, FileText, AlertTriangle } from 'lucide-react';
 import {
@@ -11,6 +11,7 @@ import {
   correctionApprovalService,
   type ICorrectionDepartmentGroup,
   type ICorrectionPendingItem,
+  type IBulkResult,
 } from '../../services/correctionApprovalService';
 import { timesheetService } from '../../services/timesheetService';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
@@ -81,6 +82,35 @@ function defaultPeriod(): { startDate: string; endDate: string } {
   return { startDate: fmt(start), endDate: fmt(end) };
 }
 
+interface IGroupCheckboxProps {
+  state: 'none' | 'partial' | 'all';
+  onChange: (checked: boolean) => void;
+  ariaLabel: string;
+}
+
+const GroupCheckbox: FC<IGroupCheckboxProps> = ({ state, onChange, ariaLabel }) => {
+  const ref = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = state === 'partial';
+  }, [state]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      className="cor-dept-check"
+      checked={state === 'all'}
+      onChange={(e) => onChange(e.target.checked)}
+      aria-label={ariaLabel}
+    />
+  );
+};
+
+const formatBulkToast = (verb: 'Утверждено' | 'Отклонено', data: IBulkResult): string => {
+  const skipped = data.skipped_not_pending + data.skipped_no_access;
+  if (skipped > 0) return `${verb}: ${data.processed_count} (пропущено: ${skipped})`;
+  return `${verb}: ${data.processed_count}`;
+};
+
 const CorrectionsTab: FC = () => {
   const { hasPermission } = useAuth();
   const canReview = hasPermission('timesheet.workflow.review');
@@ -89,6 +119,11 @@ const CorrectionsTab: FC = () => {
 
   const [period, setPeriod] = useState(defaultPeriod());
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [period.startDate, period.endDate]);
 
   const query = useQuery({
     queryKey: ['correction-approvals', period.startDate, period.endDate],
@@ -115,7 +150,60 @@ const CorrectionsTab: FC = () => {
     onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка массового согласования'),
   });
 
+  const bulkApproveSelectedMutation = useMutation({
+    mutationFn: (ids: number[]) => correctionApprovalService.bulkApproveByIds(ids),
+    onSuccess: async (data) => {
+      await invalidate();
+      toast.success?.(formatBulkToast('Утверждено', data));
+      setSelectedIds(new Set());
+    },
+    onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка массового согласования'),
+  });
+
+  const bulkRejectSelectedMutation = useMutation({
+    mutationFn: (ids: number[]) => correctionApprovalService.bulkRejectByIds(ids),
+    onSuccess: async (data) => {
+      await invalidate();
+      toast.success?.(formatBulkToast('Отклонено', data));
+      setSelectedIds(new Set());
+    },
+    onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка массового отклонения'),
+  });
+
   const groups: ICorrectionDepartmentGroup[] = useMemo(() => query.data ?? [], [query.data]);
+
+  const toggleId = (id: number) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleGroup = (group: ICorrectionDepartmentGroup, checked: boolean) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      for (const item of group.items) {
+        if (checked) next.add(item.id);
+        else next.delete(item.id);
+      }
+      return next;
+    });
+  };
+
+  const groupSelectionState = (group: ICorrectionDepartmentGroup): 'none' | 'partial' | 'all' => {
+    if (group.items.length === 0) return 'none';
+    let count = 0;
+    for (const item of group.items) {
+      if (selectedIds.has(item.id)) count++;
+    }
+    if (count === 0) return 'none';
+    if (count === group.items.length) return 'all';
+    return 'partial';
+  };
+
+  const bulkPending = bulkApproveSelectedMutation.isPending || bulkRejectSelectedMutation.isPending;
 
   return (
     <>
@@ -151,6 +239,13 @@ const CorrectionsTab: FC = () => {
             return (
               <li key={group.department_id} className="cor-dept-card">
                 <div className={`cor-dept-header${isOpen ? ' cor-dept-header--expanded' : ''}`}>
+                  {canReview && (
+                    <GroupCheckbox
+                      state={groupSelectionState(group)}
+                      onChange={(checked) => toggleGroup(group, checked)}
+                      ariaLabel={`Выбрать все в отделе ${group.department_name}`}
+                    />
+                  )}
                   <button
                     type="button"
                     className="cor-dept-toggle"
@@ -182,6 +277,15 @@ const CorrectionsTab: FC = () => {
                       const noNotes = trimmed.length === 0;
                       return (
                         <li key={item.id} className="cor-item">
+                          {canReview && (
+                            <input
+                              type="checkbox"
+                              className="cor-item-check"
+                              checked={selectedIds.has(item.id)}
+                              onChange={() => toggleId(item.id)}
+                              aria-label={`Выбрать корректировку ${item.employee_name ?? item.employee_id} ${item.work_date}`}
+                            />
+                          )}
                           <span className="cor-item-date">{formatDateWithWeekday(item.work_date)}</span>
                           <span className="cor-item-employee">{item.employee_name ?? `#${item.employee_id}`}</span>
                           <span className="cor-item-status">
@@ -223,6 +327,36 @@ const CorrectionsTab: FC = () => {
             );
           })}
         </ul>
+      )}
+
+      {canReview && selectedIds.size > 0 && (
+        <div className="cor-bulk-bar">
+          <span className="cor-bulk-count">Выбрано: <b>{selectedIds.size}</b></span>
+          <button
+            type="button"
+            className="cor-bulk-btn cor-bulk-btn--approve"
+            onClick={() => bulkApproveSelectedMutation.mutate([...selectedIds])}
+            disabled={bulkPending}
+          >
+            <Check size={14} /> Утвердить выбранные
+          </button>
+          <button
+            type="button"
+            className="cor-bulk-btn cor-bulk-btn--reject"
+            onClick={() => bulkRejectSelectedMutation.mutate([...selectedIds])}
+            disabled={bulkPending}
+          >
+            <X size={14} /> Отклонить выбранные
+          </button>
+          <button
+            type="button"
+            className="cor-bulk-btn cor-bulk-btn--reset"
+            onClick={() => setSelectedIds(new Set())}
+            disabled={bulkPending}
+          >
+            Сбросить
+          </button>
+        </div>
       )}
     </>
   );
