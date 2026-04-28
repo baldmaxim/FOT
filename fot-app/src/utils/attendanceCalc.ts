@@ -26,7 +26,17 @@ const isScheduleWeekend = (year: number, month: number, day: number, schedule?: 
 
 export interface IDayAttendance {
   day: number;
-  status: 'present' | 'underwork' | 'absent' | 'weekend' | 'future';
+  status:
+    | 'present'
+    | 'underwork'
+    | 'absent'
+    | 'weekend'
+    | 'future'
+    | 'sick'
+    | 'vacation'
+    | 'business_trip'
+    | 'remote'
+    | 'incomplete_skud';
   arrivalTime?: string;
   totalSeconds: number;
   isLate?: boolean;
@@ -488,17 +498,50 @@ export const calculateAttendanceFromTimesheet = (params: {
     }
 
     const fullDayThresholdHours = getFullDayThresholdHoursForDay(schedule, calendar ?? null, year, month + 1, day);
+
+    // Зеркалим логику TimesheetGrid.getDayCellClass, чтобы цвет в карточке совпадал с табелем.
+    const visibleHours = entry?.display_hours_worked ?? entry?.hours_worked ?? null;
+    const hasSkudEvents = Boolean(entry?.first_entry || entry?.last_exit)
+      || (shouldUseLiveTodayEvents && liveTodayExternalEvents.length > 0);
+    const zeroHours = visibleHours == null || visibleHours <= 0;
+    const incompleteSkud = hasSkudEvents && zeroHours;
+
     let status: IDayAttendance['status'];
-    if (!shouldUseLiveTodayEvents && (entry?.status === 'absent' || entry?.status === 'unpaid')) {
-      status = 'absent';
-    } else if (hasActualPresence) {
-      status = plannedHours <= 0 || totalSeconds >= Math.round(fullDayThresholdHours * 3600)
-        ? 'present'
-        : 'underwork';
-    } else if (isScheduledDayOff && entry?.status === 'dayoff') {
-      status = 'weekend';
-    } else {
-      status = 'present';
+    switch (entry?.status) {
+      case 'sick':
+        status = 'sick';
+        break;
+      case 'vacation':
+      case 'dayoff':
+        status = 'vacation';
+        break;
+      case 'business_trip':
+        status = 'business_trip';
+        break;
+      case 'remote':
+        status = 'remote';
+        break;
+      case 'absent':
+        status = hasSkudEvents ? 'incomplete_skud' : 'absent';
+        break;
+      case 'unpaid':
+        status = 'absent';
+        break;
+      case 'work':
+      case 'manual':
+      default: {
+        if (incompleteSkud) {
+          status = 'incomplete_skud';
+        } else if (hasActualPresence) {
+          const hoursOk = plannedHours <= 0 || totalSeconds >= Math.round(fullDayThresholdHours * 3600);
+          const spanOk = entry?.presence_covers_shift !== false;
+          status = (hoursOk && spanOk) ? 'present' : 'underwork';
+        } else if (isScheduledDayOff) {
+          status = 'weekend';
+        } else {
+          status = 'absent';
+        }
+      }
     }
 
     if (!isScheduledDayOff && status !== 'absent') {
