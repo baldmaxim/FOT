@@ -28,6 +28,7 @@ Host vds
 | Домен | Назначение |
 |-------|-----------|
 | `http://fotsu10.fvds.ru` | FOT приложение |
+| `https://fotsu10.fvds.ru:4443` | FOT приложение (HTTPS, текущий рабочий endpoint) |
 | `http://odintsov1.live.fvds.ru` | Odintsov Live |
 
 ## Быстрый деплой фронта (локально, при подготовленном окружении) ⚡
@@ -199,9 +200,34 @@ pm2 stop fot-server     # остановка
 /etc/nginx/sites-enabled/fotsu10
 /etc/nginx/sites-enabled/odintsov1live
 
-# проверка и перезагрузка
-nginx -t && systemctl reload nginx
+# проверка
+nginx -t
 ```
+
+### Предупреждения nginx
+
+Если снова появится предупреждение о конфликтующем `server_name fotsu10.fvds.ru`, сначала проверь,
+не лежит ли backup-конфиг FOT внутри `sites-enabled` (например, `fotsu10.bak.*`). Такой backup с теми
+же server-block'ами не ломает текущий апстрим, но засоряет проверку конфига и путает следующие правки.
+
+Правильное состояние:
+- активный конфиг: `/etc/nginx/sites-enabled/fotsu10`
+- backup хранить вне `sites-enabled` (например, `/etc/nginx/sites-disabled/` или `/root/`)
+
+### Reload на этом сервере
+
+На этом хосте `nginx.service` сейчас находится в `failed/inactive`, поэтому обычный
+`systemctl reload nginx` не является рабочим путём. Кроме того, на сервере одновременно запущено
+несколько `nginx/openresty` master-процессов, так что "вслепую" слать reload всем подряд нельзя.
+
+Перед любым reload:
+```bash
+systemctl status nginx --no-pager
+ps -C nginx -o pid,ppid,cmd
+```
+
+Если менялся именно FOT nginx-конфиг, это отдельная ops-задача: сначала определить, какой master
+обслуживает `/etc/nginx/sites-enabled/fotsu10`, и только потом делать точечный reload.
 
 ### Статика и SPA-fallback (важно)
 
@@ -241,11 +267,36 @@ location / {
 - `/var/www/fot/fot-app/.env` — VITE_API_URL, Supabase ключи
 
 ## SSL
-Сертификат для `fotsu10.fvds.ru` не получен (rate limit Let's Encrypt). HTTPS-заглушка редиректит на HTTP. Для получения:
+Для `fotsu10.fvds.ru` сертификат уже существует и подключён в отдельном HTTPS server-block на порту `4443`.
+
+Текущие файлы сертификата:
+```bash
+/etc/letsencrypt/live/fotsu10.fvds.ru/fullchain.pem
+/etc/letsencrypt/live/fotsu10.fvds.ru/privkey.pem
+```
+
+Текущий HTTPS endpoint:
+```bash
+https://fotsu10.fvds.ru:4443
+```
+
+Важно: сейчас `80` и `4443` живут параллельно, автоматического редиректа с HTTP на HTTPS нет.
+
+Проверка:
+```bash
+curl -kI https://fotsu10.fvds.ru:4443
+curl -I http://fotsu10.fvds.ru
+```
+
+Продление сертификата:
+```bash
+certbot renew --dry-run
+```
+
+Если сертификат нужно перевыпустить вручную:
 ```bash
 certbot certonly --webroot -w /var/www/certbot -d fotsu10.fvds.ru
 ```
-После получения — обновить nginx конфиг на полноценный HTTPS.
 
 ## Swap (для сборки Vite)
 Добавлен 2GB swap-файл. Для сохранения после перезагрузки:
