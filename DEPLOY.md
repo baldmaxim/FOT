@@ -34,16 +34,18 @@ Host vds
 ```bash
 ssh vds
 cd /var/www/fot && git pull
-export VITE_SENTRY_RELEASE=$(git rev-parse --short HEAD)
-cd fot-app && NODE_OPTIONS='--max-old-space-size=1024' npm run build
+cd fot-app && set -a; source .env; set +a
+export VITE_SENTRY_RELEASE=$(cd /var/www/fot && git rev-parse --short HEAD)
+NODE_OPTIONS='--max-old-space-size=1024' npm run build
 ```
 
 ## Быстрый деплой (бэкенд)
 ```bash
 ssh vds
 cd /var/www/fot && git pull
-export SENTRY_RELEASE=$(git rev-parse --short HEAD)
-cd fot-server && npm run build && npm run sentry:sourcemaps
+cd fot-server && set -a; source .env; set +a
+export SENTRY_RELEASE=$(cd /var/www/fot && git rev-parse --short HEAD)
+npm run build && npm run sentry:sourcemaps
 pm2 restart fot-server --update-env
 ```
 
@@ -51,17 +53,29 @@ pm2 restart fot-server --update-env
 ```bash
 ssh vds
 cd /var/www/fot && git pull
-export SENTRY_RELEASE=$(git rev-parse --short HEAD)
-export VITE_SENTRY_RELEASE=$SENTRY_RELEASE
-cd fot-server && npm ci && npm run build && npm run sentry:sourcemaps && pm2 restart fot-server --update-env
-cd ../fot-app && npm ci && NODE_OPTIONS='--max-old-space-size=1024' npm run build
+export RELEASE=$(git rev-parse --short HEAD)
+
+cd fot-server && set -a; source .env; set +a
+export SENTRY_RELEASE=$RELEASE
+npm ci && npm run build && npm run sentry:sourcemaps && pm2 restart fot-server --update-env
+
+cd ../fot-app && set -a; source .env; set +a
+export VITE_SENTRY_RELEASE=$RELEASE
+npm ci && NODE_OPTIONS='--max-old-space-size=1024' npm run build
 ```
 
-> `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` подгружаются из `.env` соответствующего проекта
-> (см. [docs/sentry.md](docs/sentry.md)). Если они не заданы, sourcemaps не загружаются — сборка не падает,
-> но в Sentry стек-трейсы будут поверх минифицированного кода.
+> **`set -a; source .env; set +a` обязателен** перед билдом и `pm2 restart` — экспортирует все
+> переменные из `.env` в shell. Это нужно потому, что:
+> - `@sentry/vite-plugin` и `sentry-cli sourcemaps upload` читают `SENTRY_AUTH_TOKEN` / `SENTRY_ORG` /
+>   `SENTRY_PROJECT` только из `process.env`, не из `.env`. Без них sourcemaps не загружаются и
+>   release в Sentry не создаётся.
+> - `fot-server/src/instrument.ts` импортируется первым (раньше `dotenv.config()` в `config/env.ts`),
+>   поэтому `SENTRY_DSN` должен быть в shell к моменту старта процесса. PM2 `--update-env` подхватит
+>   только то, что лежит в shell, не в `.env`.
 >
-> `pm2 restart … --update-env` нужен, чтобы PM2 подхватил новый `SENTRY_RELEASE` из shell.
+> **`.env` через `git pull` не синхронизируется** (он в `.gitignore`). При добавлении новых ключей в
+> локальный `.env` — нужно вручную добавить их и в `/var/www/fot/{fot-server,fot-app}/.env` через
+> `nano` или `cat >> ... <<EOF`.
 
 ## Изменения: чат (боковая панель, реалтайм, шифрование)
 
