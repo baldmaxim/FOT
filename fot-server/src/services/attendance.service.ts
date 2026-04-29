@@ -578,6 +578,11 @@ export async function buildAttendanceEntries(params: {
 
   if (displayMode === 'capped_to_schedule') {
     for (const entry of entries) {
+      // Корректировка с явным hours_override авторитетна — не режем под смену,
+      // иначе у руководителя в модалке отображается урезанное значение, отличное от того,
+      // что он сам сохранил (и что админ видит в «Согласованиях»).
+      if (entry.is_correction && entry.id != null) continue;
+
       const dayObjectEntries = objectAttendanceData.objectEntriesByEmployeeDate
         .get(entry.employee_id)
         ?.get(entry.work_date) || [];
