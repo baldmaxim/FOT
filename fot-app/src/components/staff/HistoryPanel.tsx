@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, memo, type FC } from 'react';
 import { Pencil, X, TrendingUp, Briefcase, Trash2, Check } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
+import { useToast } from '../../contexts/ToastContext';
 import type { Employee, EmployeeHistoryEvent } from '../../types';
 
 const fmt = (n: number | null | undefined) =>
@@ -20,6 +21,7 @@ interface IHistoryPanelProps {
 }
 
 export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, loading, canEdit, onClose, onRefresh, onDataChanged }) => {
+  const toast = useToast();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editSalary, setEditSalary] = useState('');
   const [editDate, setEditDate] = useState('');
@@ -62,38 +64,52 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
 
   const saveEdit = useCallback(async (ev: EmployeeHistoryEvent) => {
     setSaving(true);
-    const body: Record<string, unknown> = { effective_date: editDate, change_reason: editReason };
-    if (ev.event_type === 'salary') body.salary = Number(editSalary);
-    await employeeService.updateHistoryEvent(employee.id, ev.event_id, ev.event_type, body);
-    setEditingId(null);
-    setSaving(false);
-    onRefresh();
-    onDataChanged();
-  }, [employee.id, editDate, editReason, editSalary, onRefresh, onDataChanged]);
+    try {
+      const body: Record<string, unknown> = { effective_date: editDate, change_reason: editReason };
+      if (ev.event_type === 'salary') body.salary = Number(editSalary);
+      await employeeService.updateHistoryEvent(employee.id, ev.event_id, ev.event_type, body);
+      setEditingId(null);
+      onRefresh();
+      onDataChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Ошибка сохранения');
+    } finally {
+      setSaving(false);
+    }
+  }, [employee.id, editDate, editReason, editSalary, onRefresh, onDataChanged, toast]);
 
   const handleDelete = useCallback(async (ev: EmployeeHistoryEvent) => {
     if (!confirm('Удалить запись?')) return;
-    await employeeService.deleteHistoryEvent(employee.id, ev.event_id, ev.event_type);
-    onRefresh();
-    onDataChanged();
-  }, [employee.id, onRefresh, onDataChanged]);
+    try {
+      await employeeService.deleteHistoryEvent(employee.id, ev.event_id, ev.event_type);
+      onRefresh();
+      onDataChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Ошибка удаления');
+    }
+  }, [employee.id, onRefresh, onDataChanged, toast]);
 
   const handleAdd = useCallback(async () => {
     if (!addVal) return;
     setSaving(true);
-    if (addMode === 'salary') {
-      await employeeService.changeSalary(employee.id, Number(addVal), addReason || undefined, addDate || undefined);
-    } else {
-      await employeeService.changePosition(employee.id, addVal, addReason || undefined, addDate || undefined);
+    try {
+      if (addMode === 'salary') {
+        await employeeService.changeSalary(employee.id, Number(addVal), addReason || undefined, addDate || undefined);
+      } else {
+        await employeeService.changePosition(employee.id, addVal, addReason || undefined, addDate || undefined);
+      }
+      setAddMode(null);
+      setAddVal('');
+      setAddReason('');
+      setAddDate(new Date().toISOString().slice(0, 10));
+      onRefresh();
+      onDataChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Ошибка добавления');
+    } finally {
+      setSaving(false);
     }
-    setAddMode(null);
-    setAddVal('');
-    setAddReason('');
-    setAddDate(new Date().toISOString().slice(0, 10));
-    setSaving(false);
-    onRefresh();
-    onDataChanged();
-  }, [employee.id, addMode, addVal, addReason, addDate, onRefresh, onDataChanged]);
+  }, [employee.id, addMode, addVal, addReason, addDate, onRefresh, onDataChanged, toast]);
 
   const openAdd = useCallback((mode: 'salary' | 'position') => {
     setAddMode(mode);
