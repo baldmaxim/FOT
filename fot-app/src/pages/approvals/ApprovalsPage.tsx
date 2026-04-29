@@ -263,8 +263,8 @@ const CorrectionsTab: FC = () => {
                     <button
                       type="button"
                       className="cor-dept-bulk"
-                      onClick={() => bulkMutation.mutate(group.department_id)}
-                      disabled={bulkMutation.isPending}
+                      onClick={() => bulkApproveSelectedMutation.mutate(group.items.map(item => item.id))}
+                      disabled={bulkPending || group.items.length === 0}
                     >
                       <Check size={14} /> Утвердить все ({group.pending_count})
                     </button>
