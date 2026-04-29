@@ -222,9 +222,21 @@ vi.mock('./skud-shared.service.js', () => ({
 
 vi.mock('./schedule.service.js', () => ({
   resolveSchedulesBulk: vi.fn(async () => new Map()),
+  resolveSchedulesForPeriod: vi.fn(async () => new Map()),
+  loadCalendarMonth: vi.fn(async () => null),
   getEffectiveLateThreshold: vi.fn(() => '09:00:00'),
   getScheduleForDate: vi.fn(() => ({ work_start: '09:00:00', work_hours: 8 })),
   needsSkudCheck: vi.fn(() => true),
+}));
+
+vi.mock('./attendance.service.js', () => ({
+  buildAttendanceEntries: vi.fn(async () => ({
+    entries: [],
+    objectEntries: [],
+    byEmployeeDate: new Map(),
+    objectEntriesByEmployeeDate: new Map(),
+    skudMap: new Map(),
+  })),
 }));
 
 import { getDashboardStats, invalidateDashboardCache } from './skud-dashboard.service.js';

@@ -4,7 +4,8 @@
 import { supabase } from '../config/database.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import { collectDeptIds, DAY_NAMES, countWorkingDays, getInternalAccessPoints } from './skud-shared.service.js';
-import { resolveSchedulesBulk, getEffectiveLateThreshold, getScheduleForDate, needsSkudCheck } from './schedule.service.js';
+import { resolveSchedulesBulk, resolveSchedulesForPeriod, loadCalendarMonth, getEffectiveLateThreshold, getScheduleForDate, needsSkudCheck } from './schedule.service.js';
+import { buildAttendanceEntries, type IAttendanceEmployee } from './attendance.service.js';
 import type {
   IDashboardStatsParams,
   IDashboardStatsResult,
@@ -46,6 +47,65 @@ const DASHBOARD_TTL_MS = 60_000;
 
 export function invalidateDashboardCache(): void {
   dashboardCache.clear();
+}
+
+// Считает часы по той же логике, что и табель руководителя (displayMode='capped_to_schedule'):
+// учитывает attendance_adjustments.hours_override, замыкает open entry по now() для «сегодня»
+// и ограничивает часы длительностью смены. buildAttendanceEntries работает по одному
+// календарному месяцу, поэтому диапазон режется помесячно.
+async function loadAttendanceHoursMap(params: {
+  employees: IAttendanceEmployee[];
+  startDate: string;
+  endDate: string;
+  todayStr: string;
+}): Promise<Map<number, Map<string, number>>> {
+  const { employees, startDate, endDate, todayStr } = params;
+  const result = new Map<number, Map<string, number>>();
+  if (employees.length === 0 || startDate > endDate) return result;
+
+  const dailySchedulesMap = await resolveSchedulesForPeriod(
+    employees.map(e => ({ id: e.id, work_category: e.work_category ?? null })),
+    startDate,
+    endDate,
+  );
+
+  const months: Array<{ year: number; month: number; rangeStart: string; rangeEnd: string }> = [];
+  const [sy, sm] = startDate.split('-').map(Number);
+  const [ey, em] = endDate.split('-').map(Number);
+  let curY = sy;
+  let curM = sm;
+  while (curY < ey || (curY === ey && curM <= em)) {
+    const monthStart = `${curY}-${String(curM).padStart(2, '0')}-01`;
+    const lastDay = new Date(curY, curM, 0).getDate();
+    const monthEnd = `${curY}-${String(curM).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    const rangeStart = startDate > monthStart ? startDate : monthStart;
+    const rangeEnd = endDate < monthEnd ? endDate : monthEnd;
+    months.push({ year: curY, month: curM, rangeStart, rangeEnd });
+    curM++;
+    if (curM > 12) { curM = 1; curY++; }
+  }
+
+  await Promise.all(months.map(async (m) => {
+    const calendarMonth = await loadCalendarMonth(m.year, m.month);
+    const { entries } = await buildAttendanceEntries({
+      employees,
+      startDate: m.rangeStart,
+      endDate: m.rangeEnd,
+      dailySchedulesMap,
+      calendarMonth,
+      todayStr,
+      displayMode: 'capped_to_schedule',
+    });
+    for (const entry of entries) {
+      const hours = entry.display_hours_worked ?? entry.hours_worked ?? 0;
+      if (!result.has(entry.employee_id)) {
+        result.set(entry.employee_id, new Map());
+      }
+      result.get(entry.employee_id)!.set(entry.work_date, hours);
+    }
+  }));
+
+  return result;
 }
 
 async function fetchSummaryPages(
@@ -300,8 +360,14 @@ export async function getDashboardStats(
     ? periodEventsPromise
     : fetchEntryEventPages(empIds, arrivalRangeStart, arrivalRangeEnd);
 
-  // Параллельные запросы: daily_summary + 3 типа событий
-  const [summaries, todayEvents, todayExitEvents, recentEventsRes, periodEvents, arrivalEvents] = await Promise.all([
+  const attendanceEmployees: IAttendanceEmployee[] = employees.map(e => ({
+    id: e.id as number,
+    full_name: (e.full_name as string | null) || null,
+    work_category: (e.work_category as string | null) || null,
+  }));
+
+  // Параллельные запросы: daily_summary + 3 типа событий + часы по логике табеля
+  const [summaries, todayEvents, todayExitEvents, recentEventsRes, periodEvents, arrivalEvents, attendanceHoursMap] = await Promise.all([
     fetchSummaryPages(empIds, summaryStartDate, summaryEndDate),
     fetchTodayEventPages(empIds, todayStr, 'entry'),
     fetchTodayEventPages(empIds, todayStr, 'exit'),
@@ -314,6 +380,12 @@ export async function getDashboardStats(
       .limit(50),
     periodEventsPromise,
     arrivalEventsPromise,
+    loadAttendanceHoursMap({
+      employees: attendanceEmployees,
+      startDate: summaryStartDate,
+      endDate: summaryEndDate,
+      todayStr,
+    }),
   ]);
 
   const recentEventsRaw = recentEventsRes.data;
@@ -468,12 +540,6 @@ export async function getDashboardStats(
   const hourlyActivity = [...hourlyMap.entries()].map(([hour, count]) => ({ hour, count }));
 
   // Period comparison
-  const calcHoursFromEntryExit = (entry: string, exit: string): number => {
-    const [eh, em] = entry.split(':').map(Number);
-    const [xh, xm] = exit.split(':').map(Number);
-    return Math.max(0, (xh * 60 + xm - eh * 60 - em) / 60);
-  };
-
   const calcWeekMetrics = (weekData: typeof periodSummaries, expectedRecords: number): IDashboardWeekMetrics => {
     const withEntry = weekData.filter(s => s.first_entry && !remoteEmpIds.has(s.employee_id));
     const total = expectedRecords > 0 ? expectedRecords : 1;
@@ -491,12 +557,11 @@ export async function getDashboardStats(
       ? `${String(Math.floor(avgArrivalMin / 60)).padStart(2, '0')}:${String(avgArrivalMin % 60).padStart(2, '0')}`
       : '--:--';
 
+    // Часы берём из карты, посчитанной по логике табеля (capped_to_schedule):
+    // attendance_adjustments.hours_override → skud_daily_summary → пересчёт по объектам
+    // с лимитом длительности смены и замыканием open entry на now() для «сегодня».
     const hoursArr = weekData
-      .map(s => {
-        if (s.total_hours != null && s.total_hours > 0) return s.total_hours;
-        if (s.first_entry && s.last_exit) return calcHoursFromEntryExit(s.first_entry, s.last_exit);
-        return 0;
-      })
+      .map(s => attendanceHoursMap.get(s.employee_id)?.get(s.date) ?? 0)
       .filter(h => h > 0);
     const avgHours = hoursArr.length > 0
       ? Math.round((hoursArr.reduce((a, b) => a + b, 0) / hoursArr.length) * 10) / 10
