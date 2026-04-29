@@ -65,7 +65,12 @@ Host vds
 bash scripts/deploy-frontend.sh
 ```
 
-Скрипт сам: подгружает `.env.production.local` → билдит фронт (Vite) → заливает `dist/` на vds атомарным swap'ом (`dist.new` → `dist`, без даунтайма) → загружает sourcemaps в Sentry.
+Если после `git pull` обновился `fot-app/package-lock.json`, первый прогон лучше сделать так:
+```bash
+FRONTEND_NPM_CI=1 bash scripts/deploy-frontend.sh
+```
+
+Скрипт сам: делает `git fetch origin main` → проверяет, что локальный `HEAD` совпадает с `origin/main` → отказывается деплоить, если внутри `fot-app/` есть незакоммиченные изменения → подгружает `.env.production.local` → при необходимости делает локальный `npm ci` → билдит фронт (Vite) → заливает `dist/` на vds атомарным swap'ом (`dist.new` → `dist`, без даунтайма) → загружает sourcemaps в Sentry.
 
 > Выигрыш даёт именно сценарий "локальный build + upload готового `dist/`". Первый прогон после обновления зависимостей будет заметно дольше обычного.
 
@@ -81,23 +86,23 @@ NODE_OPTIONS='--max-old-space-size=1024' npm run build
 
 ## Рекомендуемый деплой бэкенда (на vds)
 
-Бэкенд по умолчанию собираем на сервере. Локальная сборка `fot-server` пока не оформлена в отдельный скрипт, поэтому в обычном сценарии не считается быстрым путём.
+Бэкенд по умолчанию собираем на сервере. Для этого есть отдельный скрипт:
 
 ```bash
-ssh vds
-cd /var/www/fot && git pull
-cd fot-server && set -a; source .env; set +a
-export SENTRY_RELEASE=$(cd /var/www/fot && git rev-parse --short HEAD)
-npm run build && npm run sentry:sourcemaps
-pm2 restart fot-server --update-env
+bash scripts/deploy-backend.sh
 ```
 
-**Если менялся `fot-server/package-lock.json` или `node_modules` на сервере устарели:**
+Если нужно принудительно обновить зависимости на сервере:
 ```bash
-cd /var/www/fot/fot-server
-npm ci
+BACKEND_NPM_CI=1 bash scripts/deploy-backend.sh
 ```
-и только потом `npm run build && npm run sentry:sourcemaps`.
+
+Если нужно пропустить backend sourcemaps:
+```bash
+BACKEND_SOURCEMAPS=0 bash scripts/deploy-backend.sh
+```
+
+Скрипт сам: делает `git fetch origin main` → проверяет, что локальный `HEAD` не опережает `origin/main` → на сервере делает `git pull --ff-only origin main` → автоматически запускает `npm ci`, если изменился `fot-server/package-lock.json` в деплоимом диапазоне или если на сервере отсутствует `node_modules/` → подгружает env из `fot-server/.env` → билдит бэкенд → загружает sourcemaps → делает `pm2 restart fot-server --update-env`.
 
 ## Рекомендуемый полный деплой (оба)
 
@@ -107,22 +112,15 @@ npm ci
 2. Фронтенд: локальный `bash scripts/deploy-frontend.sh`
 
 ```bash
-# 1. Бэкенд на vds
-ssh vds
-cd /var/www/fot && git pull
-export RELEASE=$(git rev-parse --short HEAD)
-
-cd fot-server && set -a; source .env; set +a
-export SENTRY_RELEASE=$RELEASE
-npm run build && npm run sentry:sourcemaps && pm2 restart fot-server --update-env
-
-# Если менялись зависимости бэка:
-# cd /var/www/fot/fot-server && npm ci
-
-# 2. Фронтенд локально
-cd /path/to/FOT
-bash scripts/deploy-frontend.sh
+bash scripts/deploy-both.sh
 ```
+
+Если менялись зависимости на обеих сторонах, можно сразу запустить:
+```bash
+FRONTEND_NPM_CI=1 BACKEND_NPM_CI=1 bash scripts/deploy-both.sh
+```
+
+Скрипт `deploy-both.sh` сначала делает preflight (`deploy-frontend.sh --check` и `deploy-backend.sh --check`), и только потом запускает backend- и frontend-деплой по очереди. Это защищает от ситуации, когда бэкенд уже обновили, а фронт потом внезапно упёрся в `origin/main` mismatch или локальные грязные изменения.
 
 > Если в этом релизе менялись зависимости фронта или бэка, первый прогон всё равно будет дольше из-за `npm ci`. После этого локальный деплой фронта снова становится быстрым, а бэкенд пока остаётся серверным по умолчанию.
 
