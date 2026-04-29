@@ -12,7 +12,7 @@ router = APIRouter(prefix="/external/v1", tags=["external"])
 
 
 @router.get("/tables", response_model=TablesResponse, summary="Список доступных ключу таблиц")
-async def list_tables(api_key: ApiKey = Depends(authenticate)) -> TablesResponse:
+async def list_tables(request: Request, api_key: ApiKey = Depends(authenticate)) -> TablesResponse:
     rows = list_accessible_tables(api_key.id)
     return TablesResponse(
         data=[TableAccess(table_name=r["table_name"], allowed_fields=list(r["allowed_fields"] or [])) for r in rows]
@@ -20,7 +20,11 @@ async def list_tables(api_key: ApiKey = Depends(authenticate)) -> TablesResponse
 
 
 @router.get("/tables/{table_name}/schema", response_model=TableSchemaResponse, summary="Схема таблицы (видимая ключу)")
-async def table_schema(table_name: str, api_key: ApiKey = Depends(authenticate)) -> TableSchemaResponse:
+async def table_schema(
+    table_name: str,
+    request: Request,
+    api_key: ApiKey = Depends(authenticate),
+) -> TableSchemaResponse:
     allowed_fields = get_table_access(api_key.id, table_name)
     if not allowed_fields:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Table is not accessible")
