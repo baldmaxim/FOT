@@ -694,17 +694,17 @@ const skudReadController = {
    */
   async getAccessPointSettings(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const departmentId = await resolveScopedDepartmentId(
-        req,
-        typeof req.query.department_id === 'string' ? req.query.department_id : null,
-      );
+      // Признак «внутренняя точка» — физическое свойство точки, а не привилегия отдела:
+      // если точка помечена internal хотя бы в одном отделе, она internal везде.
+      // Без явного department_id всегда отдаём агрегированный список (BOOL_OR по имени),
+      // иначе руководитель, не управляющий отделом-владельцем точки, получал бы пустые
+      // internalPoints — и события с «Коридора» учитывались бы как внешние, формируя
+      // ложные перерывы между парами вход/выход.
+      const requestedDepartmentId = typeof req.query.department_id === 'string'
+        ? req.query.department_id
+        : null;
 
-      if (!departmentId) {
-        // Признак «внутренняя точка» — это физическое свойство точки, а не привилегия
-        // отдела: если точка помечена internal хотя бы в одном отделе, она internal везде.
-        // Поэтому без department_id отдаём объединённый список (BOOL_OR по имени),
-        // иначе события с точки «Коридор» у руководителя, не управляющего отделом,
-        // где она настроена, попадали бы в подсчёт перерывов как external.
+      if (!requestedDepartmentId) {
         const { data, error } = await supabase
           .from('skud_access_point_settings')
           .select('access_point_name, is_internal');
@@ -729,6 +729,14 @@ const skudReadController = {
             is_internal,
           })),
         });
+        return;
+      }
+
+      // Явный ?department_id=xxx — для админской страницы /skud-settings,
+      // где редактируются настройки конкретного отдела. Проверяем scope.
+      const departmentId = await resolveScopedDepartmentId(req, requestedDepartmentId);
+      if (!departmentId) {
+        res.json({ success: true, data: [] });
         return;
       }
 

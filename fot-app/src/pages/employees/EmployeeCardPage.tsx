@@ -259,13 +259,14 @@ export const EmployeeCardPage: FC = () => {
     monthKey,
     !!empIdNum && !Number.isNaN(empIdNum),
   );
-  const shouldLoadMonthlySkudFallback = canonicalTimesheetQuery.isError;
 
+  // Месячные СКУД-события грузим всегда: помимо fallback-режима без табеля,
+  // они нужны для подсветки дней с проходами без записи в табеле (статус 'incomplete_skud').
   const skudEventsQuery = useQuery({
     queryKey: ['skud-employee-events', empIdNum, monthRange.startDate, monthRange.endDate],
     queryFn: () => skudService.getEmployeeEvents(empIdNum, monthRange.startDate, monthRange.endDate).catch(() => [] as SkudEvent[]),
-    enabled: !!empIdNum && !Number.isNaN(empIdNum) && shouldLoadMonthlySkudFallback,
-    staleTime: 30_000,
+    enabled: !!empIdNum && !Number.isNaN(empIdNum),
+    staleTime: 60_000,
   });
   const skudEvents = useMemo<SkudEvent[]>(() => skudEventsQuery.data ?? [], [skudEventsQuery.data]);
 
@@ -318,6 +319,7 @@ export const EmployeeCardPage: FC = () => {
         dailySchedules: timesheetData.daily_schedules,
         calendar: timesheetData.calendar || null,
         liveDayEvents: todayEvents,
+        monthSkudEvents: skudEvents,
         internalPoints,
         capToSchedule,
       });

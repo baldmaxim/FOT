@@ -377,6 +377,7 @@ export const calculateAttendanceFromTimesheet = (params: {
   dailySchedules?: Record<number, Record<string, IResolvedSchedule>>;
   calendar?: IProductionCalendarMonth | null;
   liveDayEvents?: SkudEvent[];
+  monthSkudEvents?: SkudEvent[];
   internalPoints?: Set<string>;
   capToSchedule?: boolean;
 }) => {
@@ -389,6 +390,7 @@ export const calculateAttendanceFromTimesheet = (params: {
     dailySchedules,
     calendar,
     liveDayEvents,
+    monthSkudEvents,
     internalPoints,
     capToSchedule,
   } = params;
@@ -410,6 +412,18 @@ export const calculateAttendanceFromTimesheet = (params: {
     : [];
   const liveTodayAttendanceEvents = liveTodayEvents
     .filter(event => !event.access_point || !liveInternalPoints.has(event.access_point));
+
+  // Карта внешних СКУД-событий по дням месяца — нужна, чтобы дни без записи в табеле,
+  // но с реальными проходами, не сваливались в 'absent', а получали индикатор 'incomplete_skud'.
+  const externalEventsByDay = new Map<number, SkudEvent[]>();
+  for (const ev of monthSkudEvents ?? []) {
+    if (ev.access_point && liveInternalPoints.has(ev.access_point)) continue;
+    const evDate = new Date(`${ev.event_date}T00:00:00`);
+    if (evDate.getFullYear() !== year || evDate.getMonth() !== month) continue;
+    const dayNum = evDate.getDate();
+    if (!externalEventsByDay.has(dayNum)) externalEventsByDay.set(dayNum, []);
+    externalEventsByDay.get(dayNum)!.push(ev);
+  }
 
   const entryByDay = new Map<number, TimesheetEntry>();
   for (const entry of entries) {
@@ -456,7 +470,11 @@ export const calculateAttendanceFromTimesheet = (params: {
     }
 
     if (!entry && !shouldUseLiveTodayEvents) {
-      days.push({ day, status: 'absent', totalSeconds: 0, plannedHours, scheduledStartMinutes });
+      const hasExternalSkud = (externalEventsByDay.get(day) ?? []).length > 0;
+      const fallbackStatus: IDayAttendance['status'] = hasExternalSkud && !isScheduledDayOff
+        ? 'incomplete_skud'
+        : 'absent';
+      days.push({ day, status: fallbackStatus, totalSeconds: 0, plannedHours, scheduledStartMinutes });
       continue;
     }
     const liveTodayExternalEvents = shouldUseLiveTodayEvents
