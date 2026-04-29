@@ -14,6 +14,7 @@ import {
 } from './sigur-sync.service.js';
 import { invalidateStructureCache } from './employee-mapper.service.js';
 import type { ISyncContext } from './sigur-sync-shared.js';
+import { isSigurRuntimeAllowed, logSigurRuntimeGuardSkip } from './sigur-runtime-guard.service.js';
 
 const STRUCTURE_SYNC_INTERVAL = 60 * 60_000; // 1 час
 const STARTUP_DELAY = 30_000; // 30 секунд после старта
@@ -66,6 +67,10 @@ export async function startStructureSyncScheduler(): Promise<void> {
   if (schedulerTimer || startupTimeout) return;
   if (!(await sigurService.isConfigured())) {
     console.log('[structure-scheduler] Sigur not configured, skipping');
+    return;
+  }
+  if (!isSigurRuntimeAllowed()) {
+    logSigurRuntimeGuardSkip('structure-scheduler');
     return;
   }
   console.log('[structure-scheduler] started (interval: 1h)');

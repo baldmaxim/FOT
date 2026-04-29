@@ -11,6 +11,7 @@ import {
   startSigurRuntimeLeaseHeartbeat,
   tryAcquireSigurRuntimeLease,
 } from './sigur-runtime-state.service.js';
+import { isSigurRuntimeAllowed, logSigurRuntimeGuardSkip } from './sigur-runtime-guard.service.js';
 
 type SigurConnectionType = 'internal' | 'external' | null;
 export type SigurMonitorSource = 'presence_polling' | 'monitor_probe' | 'silence_detector';
@@ -1029,6 +1030,10 @@ export async function startSigurMonitor(): Promise<void> {
   if (monitorTimer || startupTimeout) return;
   if (!(await sigurService.isConfigured())) {
     console.log('[sigur-monitor] Sigur not configured, skipping');
+    return;
+  }
+  if (!isSigurRuntimeAllowed()) {
+    logSigurRuntimeGuardSkip('sigur-monitor');
     return;
   }
 

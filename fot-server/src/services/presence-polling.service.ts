@@ -30,6 +30,10 @@ import {
   startSigurRuntimeLeaseHeartbeat,
   tryAcquireSigurRuntimeLease,
 } from './sigur-runtime-state.service.js';
+import {
+  assertSigurRuntimeAllowed,
+  logSigurRuntimeGuardSkip,
+} from './sigur-runtime-guard.service.js';
 import type { ConnectionType } from './sigur.service.js';
 import { getIo } from '../socket/io-instance.js';
 
@@ -713,6 +717,10 @@ export async function startPresencePolling(): Promise<void> {
     console.log('[presence-polling] Sigur not configured, skipping');
     return;
   }
+  if (!isSigurPresenceRuntimeAllowed()) {
+    logSigurRuntimeGuardSkip('presence-polling');
+    return;
+  }
   if (manualSyncLocks > 0) {
     console.log(`[presence-polling] start skipped, locked by manual sync (${manualSyncLocks})`);
     return;
@@ -743,6 +751,7 @@ export function stopPresencePolling(): void {
 export async function acquirePresencePollingLock(
   options: IAcquirePresencePollingLockOptions = {},
 ): Promise<void> {
+  assertSigurRuntimeAllowed('manual Sigur sync');
   if (manualSyncLocks > 0) {
     throw new ManualSyncInProgressError();
   }
@@ -863,6 +872,7 @@ export async function acquirePresencePollingLock(
 }
 
 export async function acquireStructureSyncSchedulerLock(): Promise<void> {
+  assertSigurRuntimeAllowed('Sigur structure scheduler');
   if (manualSyncLocks > 0 || (await hasExclusiveSyncLease())) {
     throw new ManualSyncInProgressError();
   }
@@ -972,5 +982,14 @@ export async function releasePresencePollingLock(): Promise<void> {
   manualSyncLocks = 0;
   if (manualSyncLocks === 0) {
     restartPresencePollingInBackground('manual sync release');
+  }
+}
+
+function isSigurPresenceRuntimeAllowed(): boolean {
+  try {
+    assertSigurRuntimeAllowed('presence-polling');
+    return true;
+  } catch {
+    return false;
   }
 }

@@ -10,6 +10,7 @@ import {
   getSigurRuntimeState,
   mergeSigurRuntimeState,
 } from './sigur-runtime-state.service.js';
+import { isSigurRuntimeAllowed, logSigurRuntimeGuardSkip } from './sigur-runtime-guard.service.js';
 
 const CHECK_INTERVAL_MS = 60_000;
 const TARGET_HOUR_MSK = 5;
@@ -144,6 +145,10 @@ export async function startSigurEventsDailyScheduler(): Promise<void> {
   if (schedulerTimer) return;
   if (!(await sigurService.isConfigured())) {
     console.log('[events-daily-scheduler] Sigur not configured, skipping');
+    return;
+  }
+  if (!isSigurRuntimeAllowed()) {
+    logSigurRuntimeGuardSkip('events-daily-scheduler');
     return;
   }
   await loadLastRunFromRuntimeState();

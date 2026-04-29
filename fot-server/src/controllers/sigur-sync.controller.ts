@@ -20,6 +20,10 @@ import {
   type SyncAllStepName,
 } from '../services/sigur-sync.service.js';
 import { invalidateStructureCache } from '../services/employee-mapper.service.js';
+import {
+  isSigurRuntimeNotAllowedError,
+  type SigurRuntimeNotAllowedError,
+} from '../services/sigur-runtime-guard.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 type ConnectionType = 'external' | 'internal';
@@ -56,6 +60,14 @@ function sendManualSyncConflict(res: Response, error: ManualSyncInProgressError)
     success: false,
     error: error.message,
     code: 'SYNC_IN_PROGRESS',
+  });
+}
+
+function sendSigurRuntimeNotAllowed(res: Response, error: SigurRuntimeNotAllowedError): void {
+  res.status(error.status).json({
+    success: false,
+    error: error.message,
+    code: error.code,
   });
 }
 
@@ -156,6 +168,23 @@ export const sigurSyncController = {
         }
         return;
       }
+      if (isSigurRuntimeNotAllowedError(error)) {
+        if (res.headersSent && sendProgress) {
+          try {
+            sendProgress({
+              type: 'error',
+              code: error.code,
+              message: error.message,
+            });
+            res.end();
+          } catch {
+            // Ignore SSE write failures after disconnect
+          }
+        } else {
+          sendSigurRuntimeNotAllowed(res, error);
+        }
+        return;
+      }
 
       console.error('Sigur sync error:', error);
       if (res.headersSent) {
@@ -196,6 +225,10 @@ export const sigurSyncController = {
         sendManualSyncConflict(res, error);
         return;
       }
+      if (isSigurRuntimeNotAllowedError(error)) {
+        sendSigurRuntimeNotAllowed(res, error);
+        return;
+      }
 
       console.error('Sigur syncEmployees error:', error);
       res.status(500).json({ success: false, error: 'Ошибка импорта сотрудников из Sigur' });
@@ -224,6 +257,10 @@ export const sigurSyncController = {
         sendManualSyncConflict(res, error);
         return;
       }
+      if (isSigurRuntimeNotAllowedError(error)) {
+        sendSigurRuntimeNotAllowed(res, error);
+        return;
+      }
 
       console.error('Sigur syncDepartments error:', error);
       res.status(500).json({ success: false, error: 'Ошибка импорта отделов из Sigur' });
@@ -250,6 +287,10 @@ export const sigurSyncController = {
     } catch (error) {
       if (isManualSyncConflict(error)) {
         sendManualSyncConflict(res, error);
+        return;
+      }
+      if (isSigurRuntimeNotAllowedError(error)) {
+        sendSigurRuntimeNotAllowed(res, error);
         return;
       }
 
@@ -306,6 +347,10 @@ export const sigurSyncController = {
     } catch (error) {
       if (isManualSyncConflict(error)) {
         sendManualSyncConflict(res, error);
+        return;
+      }
+      if (isSigurRuntimeNotAllowedError(error)) {
+        sendSigurRuntimeNotAllowed(res, error);
         return;
       }
 
@@ -476,6 +521,23 @@ export const sigurSyncController = {
           }
         } else {
           sendManualSyncConflict(res, error);
+        }
+        return;
+      }
+      if (isSigurRuntimeNotAllowedError(error)) {
+        if (res.headersSent && sendProgress) {
+          try {
+            sendProgress({
+              type: 'error',
+              code: error.code,
+              message: error.message,
+            });
+            res.end();
+          } catch {
+            // Ignore SSE write failures after disconnect
+          }
+        } else {
+          sendSigurRuntimeNotAllowed(res, error);
         }
         return;
       }

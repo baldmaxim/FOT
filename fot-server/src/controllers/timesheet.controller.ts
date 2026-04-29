@@ -71,6 +71,7 @@ import {
   ManualSyncInProgressError,
 } from '../services/presence-polling.service.js';
 import { syncEventsLogic } from '../services/sigur-sync-events.service.js';
+import { isSigurRuntimeNotAllowedError } from '../services/sigur-runtime-guard.service.js';
 
 const validStatuses = ['work', 'vacation', 'remote', 'unpaid', 'absent', 'sick', 'educational_leave'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
 
@@ -1950,6 +1951,9 @@ export const timesheetController = {
         } catch (err) {
           if (err instanceof ManualSyncInProgressError) {
             return res.status(409).json({ success: false, error: 'Синхронизация уже выполняется', code: 'SYNC_IN_PROGRESS' });
+          }
+          if (isSigurRuntimeNotAllowedError(err)) {
+            return res.status(err.status).json({ success: false, error: err.message, code: err.code });
           }
           throw err;
         }

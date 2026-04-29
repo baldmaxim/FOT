@@ -138,6 +138,157 @@ FRONTEND_NPM_CI=1 BACKEND_NPM_CI=1 bash scripts/deploy-both.sh
 > локальный `.env` — нужно вручную добавить их и в `/var/www/fot/{fot-server,fot-app}/.env` через
 > `nano` или `cat >> ... <<EOF`.
 
+## Sigur: post-fix и проверки backend deploy
+
+Фоновые Sigur-процессы и ручные Sigur sync теперь должны запускаться только на
+разрешённых хостах. По умолчанию allowlist жёстко привязан к прод-хосту
+`odintsov1.live.fvds.ru`. При необходимости override:
+
+```bash
+SIGUR_RUNTIME_ALLOWED_HOSTS=odintsov1.live.fvds.ru
+```
+
+На локальных/dev-машинах вне allowlist backend может стартовать, но:
+- не поднимает `presence-polling`
+- не поднимает `sigur-monitor`
+- не поднимает `structure-scheduler`
+- не поднимает `events-daily-scheduler`
+- ручные Sigur sync возвращают `403 SIGUR_RUNTIME_NOT_ALLOWED`
+
+### Однократно после фикса clock skew / future checkpoint
+
+Если в `pm2 logs fot-server` есть предупреждения вида
+`[presence-polling] runtime_state checkpoint ... is in the future, falling back`,
+нужно выполнить разовый post-fix:
+
+1. Поправить часы на Windows-машине, которая могла писать в prod-БД, или убедиться,
+   что локальный dev-сервер больше не подключён к prod Supabase.
+2. Сбросить "будущий" checkpoint в `sigur_runtime_state`:
+
+```sql
+UPDATE sigur_runtime_state
+SET checkpoint_at = NOW() - INTERVAL '10 min',
+    meta = meta - 'lastEventFlowAt'
+WHERE key = 'sigur_presence_polling';
+```
+
+3. Перезапустить prod-бэкенд:
+
+```bash
+ssh vds
+cd /var/www/fot
+pm2 restart fot-server --update-env
+```
+
+### После каждого deploy бэкенда: 5 обязательных проверок
+
+#### 1. PM2 здоров
+
+```bash
+ssh vds
+pm2 status fot-server
+```
+
+Ожидаем: `fot-server` в статусе `online`, без restart-loop.
+
+#### 2. Lease у прод-процесса, не у Windows/dev
+
+Проверка через SQL Editor Supabase:
+
+```sql
+SELECT
+  checkpoint_at,
+  lease_owner,
+  lease_expires_at,
+  meta->'lastCycle'->>'leaseOwner' AS last_cycle_owner,
+  meta->>'leaderOwner' AS leader_owner
+FROM sigur_runtime_state
+WHERE key = 'sigur_presence_polling';
+```
+
+Ожидаем:
+- `leader_owner` и `last_cycle_owner` принадлежат prod-хосту (`sigur_presence_polling:odintsov1.live.fvds.ru:...`)
+- `lease_owner` во время запроса может быть `NULL` между циклами polling — это нормально
+- нет владельца вида `WIN:` / `PC-...`
+
+#### 3. Sentry чист по clock skew
+
+```bash
+ssh vds
+cd /var/www/fot/fot-server
+set -a; source .env; set +a
+./node_modules/@sentry/cli/bin/sentry-cli issues list \
+  --org "$SENTRY_ORG" \
+  --project "$SENTRY_PROJECT" \
+  --query "clock_skew_lease_refused is:unresolved" \
+  --max-rows 20
+```
+
+Ожидаем: пустой результат или отсутствие новых unresolved issues по
+`clock_skew_lease_refused`.
+
+Если `sentry-cli` отвечает `403`, значит токен из `.env` не имеет прав на чтение
+Issues. В этом случае проверку нужно делать либо в Sentry UI, либо токеном с
+доступом на чтение Issues/Project.
+
+#### 4. События реально идут
+
+Проверка через SQL Editor Supabase:
+
+```sql
+SELECT MAX(created_at) AS last_created_at
+FROM skud_events;
+```
+
+Ожидаем: `MAX(created_at)` близок к `NOW()` в часы реальной активности сотрудников.
+
+#### 5. Daily sync отработал после 05:00 MSK и без ошибок
+
+Проверка через SQL Editor Supabase:
+
+```sql
+SELECT
+  meta->>'lastRunYmdMsk' AS last_run_ymd_msk,
+  meta->>'lastSuccessAt' AS last_success_at,
+  meta->'lastResult'->>'errors' AS errors,
+  meta->'lastResult'->>'imported' AS imported,
+  meta->>'lastError' AS last_error
+FROM sigur_runtime_state
+WHERE key = 'sigur_events_daily';
+```
+
+Ожидаем:
+- если уже после `05:00 MSK`, `lastRunYmdMsk` = текущая дата по Москве
+- если ещё до `05:00 MSK`, достаточно видеть предыдущий успешный запуск без ошибок
+- `errors = 0`
+- `lastError` пустой
+
+### Rollback: снять залипший lease у мёртвого процесса
+
+Если lease завис на мёртвом процессе и новый polling не может его захватить:
+
+1. Сначала посмотреть текущего владельца:
+
+```sql
+SELECT key, lease_owner, lease_expires_at, heartbeat_at
+FROM sigur_runtime_state
+WHERE key IN ('sigur_presence_polling', 'sigur_exclusive_sync');
+```
+
+2. Если `lease_owner` точно относится к мёртвому процессу, снять lease через RPC:
+
+```sql
+SELECT release_sigur_runtime_lease('sigur_presence_polling', '<lease_owner>');
+```
+
+Для stuck manual/exclusive sync аналогично:
+
+```sql
+SELECT release_sigur_runtime_lease('sigur_exclusive_sync', '<lease_owner>');
+```
+
+После release — перезапустить `fot-server` и снова пройти 5 проверок выше.
+
 ## Изменения: чат (боковая панель, реалтайм, шифрование)
 
 **Деплой: полный (оба)** — изменения и на фронте, и на бэкенде, + новая зависимость `socket.io-client` на фронте.
