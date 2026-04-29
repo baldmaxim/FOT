@@ -17,6 +17,7 @@ import {
   useTimesheetReminderSettings,
   useTimesheetTeamManagementSettings,
 } from '../../hooks/useSettingsData';
+import { OpenRouterSettingsSection } from '../../components/super-admin/OpenRouterSettingsSection';
 import styles from './SystemSettingsPage.module.css';
 
 export const SystemSettingsPage: FC = () => {
@@ -575,6 +576,8 @@ export const SystemSettingsPage: FC = () => {
           </div>
         )}
       </div>
+
+      <OpenRouterSettingsSection />
 
     </div>
   );

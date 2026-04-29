@@ -37,6 +37,47 @@ export interface ITimesheetTeamManagementSettings {
   enabled: boolean;
 }
 
+export interface IOpenRouterModelInfo {
+  id: string;
+  label: string;
+  costPer1kReceiptsRub: number;
+}
+
+export interface IOpenRouterPublicSettings {
+  enabled: boolean;
+  hasApiKey: boolean;
+  model: string;
+  baseUrl: string;
+  source: 'system_settings' | 'env' | 'unset';
+  allowedModels: IOpenRouterModelInfo[];
+}
+
+export interface IOpenRouterResolvedConfig {
+  apiKey: string;
+  model: string;
+  baseUrl: string;
+  source: 'system_settings' | 'env';
+}
+
+export const ALLOWED_OPENROUTER_MODELS: IOpenRouterModelInfo[] = [
+  { id: 'google/gemini-2.5-flash',          label: 'Gemini 2.5 Flash (рекомендуется)', costPer1kReceiptsRub: 170 },
+  { id: 'google/gemini-2.5-pro',            label: 'Gemini 2.5 Pro (макс. качество)',  costPer1kReceiptsRub: 1700 },
+  { id: 'google/gemini-2.0-flash-001',      label: 'Gemini 2.0 Flash (дёшево)',        costPer1kReceiptsRub: 60 },
+  { id: 'google/gemini-2.0-flash-lite-001', label: 'Gemini 2.0 Flash Lite',            costPer1kReceiptsRub: 40 },
+  { id: 'anthropic/claude-3.5-sonnet',      label: 'Claude 3.5 Sonnet',                costPer1kReceiptsRub: 600 },
+  { id: 'openai/gpt-4o',                    label: 'GPT-4o',                           costPer1kReceiptsRub: 1200 },
+  { id: 'openai/gpt-4o-mini',               label: 'GPT-4o mini',                      costPer1kReceiptsRub: 120 },
+];
+
+export const DEFAULT_OPENROUTER_SETTINGS = {
+  enabled: false,
+  model: 'google/gemini-2.5-flash',
+  baseUrl: 'https://openrouter.ai/api/v1',
+};
+
+export const isAllowedOpenRouterModel = (modelId: string): boolean =>
+  ALLOWED_OPENROUTER_MODELS.some(m => m.id === modelId);
+
 export type SigurConnectionSettingsSource = 'system_settings' | 'env' | 'unset';
 
 export interface ISigurConnectionPublicConfig {
@@ -594,6 +635,120 @@ export const settingsService = {
 
     this.invalidateCache();
     return this.getTimesheetTeamManagementConfig();
+  },
+
+  async getOpenRouterConfig(): Promise<IOpenRouterPublicSettings> {
+    await loadCache();
+
+    const settingsApiKey = cache.get('openrouter_api_key') || '';
+    const settingsModel = cache.get('openrouter_model') || '';
+    const settingsBaseUrl = cache.get('openrouter_base_url') || '';
+    const settingsEnabled = cache.get('openrouter_enabled');
+
+    const envApiKey = process.env.OPENROUTER_API_KEY || '';
+    const envBaseUrl = process.env.OPENROUTER_BASE_URL || '';
+
+    const hasSettingsKey = Boolean(settingsApiKey);
+    const hasEnvKey = Boolean(envApiKey);
+
+    const source: IOpenRouterPublicSettings['source'] = hasSettingsKey
+      ? 'system_settings'
+      : hasEnvKey
+        ? 'env'
+        : 'unset';
+
+    const model = isAllowedOpenRouterModel(settingsModel)
+      ? settingsModel
+      : DEFAULT_OPENROUTER_SETTINGS.model;
+
+    return {
+      enabled: parseBoolean(settingsEnabled, DEFAULT_OPENROUTER_SETTINGS.enabled),
+      hasApiKey: hasSettingsKey || hasEnvKey,
+      model,
+      baseUrl: settingsBaseUrl || envBaseUrl || DEFAULT_OPENROUTER_SETTINGS.baseUrl,
+      source,
+      allowedModels: ALLOWED_OPENROUTER_MODELS,
+    };
+  },
+
+  async getResolvedOpenRouterConfig(): Promise<IOpenRouterResolvedConfig | null> {
+    await loadCache();
+
+    const enabled = parseBoolean(cache.get('openrouter_enabled'), DEFAULT_OPENROUTER_SETTINGS.enabled);
+    if (!enabled) return null;
+
+    const settingsApiKey = cache.get('openrouter_api_key') || '';
+    const envApiKey = process.env.OPENROUTER_API_KEY || '';
+
+    const apiKey = settingsApiKey || envApiKey;
+    if (!apiKey) return null;
+
+    const settingsModel = cache.get('openrouter_model') || '';
+    const model = isAllowedOpenRouterModel(settingsModel)
+      ? settingsModel
+      : DEFAULT_OPENROUTER_SETTINGS.model;
+
+    const baseUrl =
+      cache.get('openrouter_base_url')
+      || process.env.OPENROUTER_BASE_URL
+      || DEFAULT_OPENROUTER_SETTINGS.baseUrl;
+
+    return {
+      apiKey,
+      model,
+      baseUrl,
+      source: settingsApiKey ? 'system_settings' : 'env',
+    };
+  },
+
+  async setOpenRouterConfig(
+    config: { enabled?: boolean; apiKey?: string | null; model?: string; baseUrl?: string | null },
+    userId: string,
+  ): Promise<IOpenRouterPublicSettings> {
+    if (config.model !== undefined && !isAllowedOpenRouterModel(config.model)) {
+      throw new Error(`Модель "${config.model}" не входит в список разрешённых`);
+    }
+
+    const entries: { key: string; value: string | null; description?: string }[] = [];
+
+    if (config.enabled !== undefined) {
+      entries.push({
+        key: 'openrouter_enabled',
+        value: String(config.enabled),
+        description: 'Включить распознавание чеков через OpenRouter',
+      });
+    }
+
+    if (config.apiKey !== undefined) {
+      entries.push({
+        key: 'openrouter_api_key',
+        value: config.apiKey?.trim() || null,
+        description: 'API-ключ OpenRouter',
+      });
+    }
+
+    if (config.model !== undefined) {
+      entries.push({
+        key: 'openrouter_model',
+        value: config.model,
+        description: 'ID модели OpenRouter для распознавания чеков',
+      });
+    }
+
+    if (config.baseUrl !== undefined) {
+      entries.push({
+        key: 'openrouter_base_url',
+        value: config.baseUrl?.trim() || null,
+        description: 'Base URL OpenRouter API',
+      });
+    }
+
+    if (entries.length > 0) {
+      await this.setMultiple(entries, userId);
+      this.invalidateCache();
+    }
+
+    return this.getOpenRouterConfig();
   },
 
   invalidateCache() {

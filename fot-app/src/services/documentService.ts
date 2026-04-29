@@ -2,6 +2,8 @@ import { apiClient } from '../api/client';
 
 export type DocumentCategory = 'certificate' | 'scan' | 'approval' | 'payslip' | 'patent_check' | 'other' | 'leave_request_attachment';
 
+export type RecognitionStatus = 'pending' | 'processing' | 'done' | 'failed' | 'needs_review';
+
 export interface IDocument {
   id: number;
   employee_id: number;
@@ -13,6 +15,9 @@ export interface IDocument {
   r2_key: string;
   uploaded_by: string;
   created_at: string;
+  recognition_status?: RecognitionStatus | null;
+  recognition_attempts?: number | null;
+  recognized_at?: string | null;
 }
 
 export const CATEGORY_LABELS: Record<DocumentCategory, string> = {

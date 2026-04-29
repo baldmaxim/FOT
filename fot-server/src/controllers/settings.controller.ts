@@ -8,6 +8,7 @@ import {
   buildS3Endpoint,
   createS3Client,
 } from '../services/r2.service.js';
+import { openRouterService } from '../services/openrouter.service.js';
 
 /** Получить все настройки (секретные маскируются) */
 const getAll = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -252,6 +253,52 @@ const saveTimesheetTeamManagementSettings = async (req: AuthenticatedRequest, re
   }
 };
 
+/** Получить настройки OpenRouter (API key маскируется) */
+const getOpenRouterSettings = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const config = await settingsService.getOpenRouterConfig();
+    res.json({ success: true, data: config });
+  } catch (err) {
+    console.error('settings.getOpenRouterSettings error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения настроек OpenRouter' });
+  }
+};
+
+/** Сохранить настройки OpenRouter */
+const saveOpenRouterSettings = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { enabled, apiKey, model, baseUrl } = req.body as Record<string, unknown>;
+
+    const patch: Parameters<typeof settingsService.setOpenRouterConfig>[0] = {};
+
+    if (typeof enabled === 'boolean') patch.enabled = enabled;
+    if (typeof apiKey === 'string' && apiKey !== '••••••••') patch.apiKey = apiKey;
+    if (typeof model === 'string') patch.model = model;
+    if (typeof baseUrl === 'string') patch.baseUrl = baseUrl;
+
+    const config = await settingsService.setOpenRouterConfig(patch, req.user.id);
+    res.json({ success: true, data: config });
+  } catch (err) {
+    console.error('settings.saveOpenRouterSettings error:', err);
+    const msg = err instanceof Error ? err.message : 'Ошибка сохранения настроек OpenRouter';
+    res.status(400).json({ success: false, error: msg });
+  }
+};
+
+/** Тест подключения OpenRouter */
+const testOpenRouter = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const result = await openRouterService.healthCheck();
+    res.json({ success: true, data: result });
+  } catch (err) {
+    console.error('settings.testOpenRouter error:', err);
+    res.json({
+      success: true,
+      data: { ok: false, error: err instanceof Error ? err.message : 'unknown error' },
+    });
+  }
+};
+
 export const settingsController = {
   getAll,
   getR2Status,
@@ -263,4 +310,7 @@ export const settingsController = {
   saveTimesheetReminderSettings,
   getTimesheetTeamManagementSettings,
   saveTimesheetTeamManagementSettings,
+  getOpenRouterSettings,
+  saveOpenRouterSettings,
+  testOpenRouter,
 };

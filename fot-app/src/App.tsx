@@ -45,6 +45,7 @@ const RoleManagementPage = lazy(() => import('./pages/super-admin/RoleManagement
 const SystemSettingsPage = lazy(() => import('./pages/super-admin/SystemSettingsPage').then(m => ({ default: m.SystemSettingsPage })));
 const PayslipManagePage = lazy(() => import('./pages/super-admin/PayslipManagePage').then(m => ({ default: m.PayslipManagePage })));
 const SchedulesPage = lazy(() => import('./pages/admin/SchedulesPage').then(m => ({ default: m.SchedulesPage })));
+const PatentReceiptsPage = lazy(() => import('./pages/admin/PatentReceiptsPage').then(m => ({ default: m.PatentReceiptsPage })));
 
 // Employees & SKUD
 const EmployeeCardPage = lazy(() => import('./pages/employees/EmployeeCardPage').then(m => ({ default: m.EmployeeCardPage })));
@@ -466,6 +467,17 @@ const AppRoutes = () => {
             element={
               <Layout title="Расчётные листки" theme={theme} onToggleTheme={toggleTheme}>
                 <PayslipManagePage />
+              </Layout>
+            }
+          />
+        </Route>
+
+        <Route element={<ProtectedRoute requiredPage="/admin/patent-receipts" />}>
+          <Route
+            path="/admin/patent-receipts"
+            element={
+              <Layout title="Чеки за патент" theme={theme} onToggleTheme={toggleTheme}>
+                <PatentReceiptsPage />
               </Layout>
             }
           />

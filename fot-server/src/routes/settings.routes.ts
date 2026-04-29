@@ -34,4 +34,13 @@ router.put('/timesheet-team-management', requirePageAccess('/admin/settings', 'e
 // POST /api/settings/r2/test — тест подключения R2
 router.post('/r2/test', requirePageAccess('/admin/settings', 'edit'), settingsController.testR2);
 
+// GET /api/settings/openrouter — настройки распознавания чеков
+router.get('/openrouter', requirePageAccess('/admin/settings', 'view'), settingsController.getOpenRouterSettings);
+
+// PUT /api/settings/openrouter — сохранить настройки OpenRouter
+router.put('/openrouter', requirePageAccess('/admin/settings', 'edit'), settingsController.saveOpenRouterSettings);
+
+// POST /api/settings/openrouter/test — тест подключения OpenRouter
+router.post('/openrouter/test', requirePageAccess('/admin/settings', 'edit'), settingsController.testOpenRouter);
+
 export default router;

@@ -10,6 +10,7 @@ import { startStructureSyncScheduler } from './services/sigur-structure-schedule
 import { startSigurEventsDailyScheduler } from './services/sigur-events-daily-scheduler.service.js';
 import { startTimesheetReminderScheduler } from './services/timesheet-reminder.service.js';
 import { startPatentExpiryReminderScheduler } from './services/patent-expiry-reminder.service.js';
+import { aiReceiptRecognitionService } from './services/ai-receipt-recognition.service.js';
 import { setupChatSocket } from './socket/chatHandler.js';
 import { setIo } from './socket/io-instance.js';
 
@@ -38,6 +39,9 @@ httpServer.listen(PORT, () => {
   void startSigurEventsDailyScheduler();
   startTimesheetReminderScheduler();
   startPatentExpiryReminderScheduler();
+  void aiReceiptRecognitionService.resumePendingRecognitions().then(count => {
+    if (count > 0) console.log(`[ai-receipt-recognition] возобновлено задач: ${count}`);
+  });
 });
 
 // Глобальные ловушки — без них необработанные rejection/exception теряются.

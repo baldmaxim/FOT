@@ -4,8 +4,9 @@ import { r2Service } from '../services/r2.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { canAccessEmployeeInScope, resolveScopedDepartmentId } from '../services/data-scope.service.js';
 import { hasPageView } from '../services/access-control.service.js';
+import { aiReceiptRecognitionService } from '../services/ai-receipt-recognition.service.js';
 
-const DOCUMENT_SELECT_COLUMNS = 'id, employee_id, leave_request_id, category, file_name, file_size, mime_type, r2_key, uploaded_by, created_at';
+const DOCUMENT_SELECT_COLUMNS = 'id, employee_id, leave_request_id, category, file_name, file_size, mime_type, r2_key, uploaded_by, created_at, recognition_status, recognition_attempts, recognized_at';
 const CATEGORY_CACHE_TTL_MS = 60_000;
 let categoryCache: { codes: Set<string>; expiresAt: number } | null = null;
 
@@ -195,6 +196,10 @@ const confirmUpload = async (req: AuthenticatedRequest, res: Response): Promise<
     if (error) throw error;
     await ensureDocumentLinks(Number(data.id), Number(employee_id), String(category), leave_request_id || null);
     res.json({ success: true, data });
+
+    if (String(category) === 'patent_check') {
+      void aiReceiptRecognitionService.enqueueRecognition(Number(data.id));
+    }
   } catch (err) {
     console.error('documents.confirmUpload error:', err);
     res.status(500).json({ success: false, error: 'Ошибка сохранения документа' });

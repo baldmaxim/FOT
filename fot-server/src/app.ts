@@ -31,6 +31,7 @@ import salaryRaiseRoutes from './routes/salary-raise.routes.js';
 import settingsRoutes from './routes/settings.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
 import adminDataApiRoutes from './routes/admin-data-api.routes.js';
+import patentReceiptsRoutes from './routes/patent-receipts.routes.js';
 
 const app = express();
 
@@ -90,6 +91,7 @@ app.use('/api/salary-raise', salaryRaiseRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin/data-api', adminDataApiRoutes);
+app.use('/api/patent-receipts', patentReceiptsRoutes);
 
 // 404 handler
 app.use((_req, res) => {

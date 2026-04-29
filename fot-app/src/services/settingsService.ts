@@ -45,6 +45,27 @@ export interface ITimesheetTeamManagementSettings {
   enabled: boolean;
 }
 
+export interface IOpenRouterModelInfo {
+  id: string;
+  label: string;
+  costPer1kReceiptsRub: number;
+}
+
+export interface IOpenRouterSettings {
+  enabled: boolean;
+  hasApiKey: boolean;
+  model: string;
+  baseUrl: string;
+  source: 'system_settings' | 'env' | 'unset';
+  allowedModels: IOpenRouterModelInfo[];
+}
+
+export interface IOpenRouterTestResult {
+  ok: boolean;
+  model?: string;
+  error?: string;
+}
+
 interface ApiResponse<T> {
   data: T;
 }
@@ -103,6 +124,26 @@ export const settingsService = {
     data: ITimesheetTeamManagementSettings,
   ): Promise<ITimesheetTeamManagementSettings> => {
     const res = await apiClient.put<ApiResponse<ITimesheetTeamManagementSettings>>('/settings/timesheet-team-management', data);
+    return res.data;
+  },
+
+  getOpenRouterSettings: async (): Promise<IOpenRouterSettings> => {
+    const res = await apiClient.get<ApiResponse<IOpenRouterSettings>>('/settings/openrouter');
+    return res.data;
+  },
+
+  saveOpenRouterSettings: async (data: {
+    enabled?: boolean;
+    apiKey?: string;
+    model?: string;
+    baseUrl?: string;
+  }): Promise<IOpenRouterSettings> => {
+    const res = await apiClient.put<ApiResponse<IOpenRouterSettings>>('/settings/openrouter', data);
+    return res.data;
+  },
+
+  testOpenRouter: async (): Promise<IOpenRouterTestResult> => {
+    const res = await apiClient.post<ApiResponse<IOpenRouterTestResult>>('/settings/openrouter/test', {});
     return res.data;
   },
 };
