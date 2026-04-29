@@ -118,6 +118,38 @@ pm2 stop fot-server     # остановка
 nginx -t && systemctl reload nginx
 ```
 
+### Статика и SPA-fallback (важно)
+
+Чанки фронта именуются по content-hash (`StaffControlPage-<hash>.js`). После деплоя
+старые имена с диска пропадают. Если общий `try_files $uri /index.html;` ловит и
+`/assets/*.js`, браузер получит HTML с MIME `text/html`, отвалится строгий module
+script check, и в консоли посыпется «Failed to load module script». Чтобы вместо
+этого отдавался честный `404`, в server-block должен быть отдельный location до
+SPA-fallback'а:
+
+```nginx
+# отдельный location для статики Vite — должен идти ДО общего try_files
+location ~* ^/assets/ {
+    root /var/www/fot/fot-app/dist;
+    try_files $uri =404;
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+}
+
+# SPA-fallback (как сейчас)
+location / {
+    root /var/www/fot/fot-app/dist;
+    try_files $uri /index.html;
+}
+```
+
+Фронт сам ловит ошибку загрузки чанка (`utils/staleChunkReload.ts`) и однократно
+перезагружает страницу — после правки nginx это будет срабатывать чище (без
+страшных MIME-warning'ов в консоли и Sentry).
+
+После правки: `nginx -t && systemctl reload nginx` и `curl -I https://fotsu10.fvds.ru/assets/non-existent.js`
+→ ожидаем `404`, не `200 + text/html`.
+
 ## .env файлы
 Расположены на сервере, не в git:
 - `/var/www/fot/fot-server/.env` — порт 4000, production, CORS, Supabase, JWT, Sigur

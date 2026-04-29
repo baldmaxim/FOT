@@ -144,28 +144,30 @@ const CorrectionsTab: FC = () => {
     onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка отклонения'),
   });
 
-  const bulkMutation = useMutation({
-    mutationFn: (departmentId: string) => correctionApprovalService.bulkApprove(departmentId, period.startDate, period.endDate),
-    onSuccess: async (data) => { await invalidate(); toast.success?.(`Утверждено: ${data.approved_count}`); },
-    onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка массового согласования'),
-  });
+  const clearProcessedIds = (ids: number[]) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      for (const id of ids) next.delete(id);
+      return next;
+    });
+  };
 
   const bulkApproveSelectedMutation = useMutation({
     mutationFn: (ids: number[]) => correctionApprovalService.bulkApproveByIds(ids),
-    onSuccess: async (data) => {
+    onSuccess: async (data, variables) => {
       await invalidate();
       toast.success?.(formatBulkToast('Утверждено', data));
-      setSelectedIds(new Set());
+      clearProcessedIds(variables);
     },
     onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка массового согласования'),
   });
 
   const bulkRejectSelectedMutation = useMutation({
     mutationFn: (ids: number[]) => correctionApprovalService.bulkRejectByIds(ids),
-    onSuccess: async (data) => {
+    onSuccess: async (data, variables) => {
       await invalidate();
       toast.success?.(formatBulkToast('Отклонено', data));
-      setSelectedIds(new Set());
+      clearProcessedIds(variables);
     },
     onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка массового отклонения'),
   });

@@ -14,6 +14,10 @@ export const useAccessPointMapViewer = (canOpen: boolean) => {
 
     try {
       const data = await travelTimeService.getAccessPointMap(accessPointName.trim());
+      if (!data) {
+        toast.info('Карта для точки доступа не настроена');
+        return;
+      }
       setMapData(data);
     } catch (error) {
       if (error instanceof ApiError && error.status === 403) {

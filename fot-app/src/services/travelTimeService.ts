@@ -136,11 +136,10 @@ export const travelTimeService = {
     await apiClient.delete<ApiResponse<null>>(`/skud/travel-objects/${id}/map`);
   },
 
-  async getAccessPointMap(accessPointName: string): Promise<IAccessPointMapView> {
+  async getAccessPointMap(accessPointName: string): Promise<IAccessPointMapView | null> {
     const params = new URLSearchParams({ access_point_name: accessPointName });
-    const res = await apiClient.get<ApiResponse<IAccessPointMapView>>(`/skud/access-point-map?${params.toString()}`);
-    if (!res.data) throw new Error(res.error || 'Карта для точки доступа не настроена');
-    return res.data;
+    const res = await apiClient.get<ApiResponse<IAccessPointMapView | null>>(`/skud/access-point-map?${params.toString()}`);
+    return res.data ?? null;
   },
 
   async getRoutes(): Promise<ITravelRoute[]> {

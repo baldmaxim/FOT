@@ -275,11 +275,9 @@ export const skudTravelController = {
         access_point_name: req.query.access_point_name,
       });
       const data = await getAccessPointMapViewService(parsed.access_point_name);
-      if (!data) {
-        res.status(404).json({ success: false, error: 'Для выбранной точки доступа карта не настроена' });
-        return;
-      }
-      res.json({ success: true, data });
+      // Возвращаем 200 + data: null, если карта не настроена — иначе фронт спамит 404 в консоль
+      // на каждое наведение на бейдж точки доступа без карты.
+      res.json({ success: true, data: data ?? null });
     } catch (error) {
       if (error instanceof z.ZodError) {
         res.status(400).json({ success: false, error: 'Некорректное название точки доступа', details: error.errors });

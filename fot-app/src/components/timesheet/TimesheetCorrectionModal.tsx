@@ -310,7 +310,7 @@ const CorrectionTab: FC<{
   }
 
   return (
-    <>
+    <form onSubmit={e => { e.preventDefault(); handleSave(); }}>
       <div className="ts-modal-body">
         {showStatusPicker && (
           <div className="ts-form-group">
@@ -399,8 +399,7 @@ const CorrectionTab: FC<{
         </button>
         <button
           className="ts-btn ts-btn--primary"
-          onClick={handleSave}
-          type="button"
+          type="submit"
           disabled={!canSave}
           title={
             exceedsMax && maxHours != null
@@ -411,7 +410,7 @@ const CorrectionTab: FC<{
           {confirmLabel || 'Сохранить'}
         </button>
       </div>
-    </>
+    </form>
   );
 };
 

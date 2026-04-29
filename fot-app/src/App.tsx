@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useSearchParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as Sentry from '@sentry/react';
@@ -11,6 +11,7 @@ import { useTheme } from './hooks/useTheme';
 import { PageLoader } from './components/ui/PageLoader';
 import { ChatPanelMount } from './components/chat/ChatPanelMount';
 import { ErrorFallback } from './components/ErrorFallback';
+import { clearStaleChunkReloadFlag, tryAutoReloadOnStaleChunk } from './utils/staleChunkReload';
 import './App.css';
 
 const queryClient = new QueryClient({
@@ -536,8 +537,24 @@ const AppRoutes = () => {
 };
 
 const App = () => {
+  useEffect(() => {
+    clearStaleChunkReloadFlag();
+    const onError = (event: ErrorEvent) => { tryAutoReloadOnStaleChunk(event.error ?? event.message); };
+    const onRejection = (event: PromiseRejectionEvent) => { tryAutoReloadOnStaleChunk(event.reason); };
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onRejection);
+    return () => {
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onRejection);
+    };
+  }, []);
+
   return (
-    <Sentry.ErrorBoundary fallback={ErrorFallback} showDialog={false}>
+    <Sentry.ErrorBoundary
+      fallback={ErrorFallback}
+      showDialog={false}
+      onError={error => { tryAutoReloadOnStaleChunk(error); }}
+    >
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <AuthProvider>
