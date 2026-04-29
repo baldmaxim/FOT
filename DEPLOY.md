@@ -30,7 +30,7 @@ Host vds
 | `http://fotsu10.fvds.ru` | FOT приложение |
 | `http://odintsov1.live.fvds.ru` | Odintsov Live |
 
-## Быстрый деплой фронта (локально, ~30–60 сек) ⚡
+## Быстрый деплой фронта (локально, при подготовленном окружении) ⚡
 
 Билдим у себя на ноуте (быстрый CPU), на vds через tar-pipe заливаем уже готовый `dist/`. На vds ничего компилировать не нужно.
 
@@ -48,12 +48,26 @@ Host vds
 
 2. Убедиться, что в `~/.ssh/config` есть alias `vds` (см. в начале файла).
 
+3. Один раз установить зависимости фронта локально:
+   ```bash
+   cd fot-app
+   npm ci
+   ```
+
+**Когда это реально быстро:**
+
+- `fot-app/.env.production.local` уже создан.
+- Локальные `fot-app/node_modules` уже соответствуют текущему `fot-app/package-lock.json`.
+- После `git pull`, затронувшего `fot-app/package-lock.json`, нужно один раз заново выполнить `cd fot-app && npm ci`. Именно этот шаг обычно съедает выигрыш по времени на первом прогоне.
+
 **Деплой:**
 ```bash
 bash scripts/deploy-frontend.sh
 ```
 
 Скрипт сам: подгружает `.env.production.local` → билдит фронт (Vite) → заливает `dist/` на vds атомарным swap'ом (`dist.new` → `dist`, без даунтайма) → загружает sourcemaps в Sentry.
+
+> Выигрыш даёт именно сценарий "локальный build + upload готового `dist/`". Первый прогон после обновления зависимостей будет заметно дольше обычного.
 
 ## Быстрый деплой фронта (на vds, fallback)
 Если локальный билд недоступен — старый путь, медленный (4–5 мин на vds CPU):
@@ -65,7 +79,10 @@ export VITE_SENTRY_RELEASE=$(cd /var/www/fot && git rev-parse --short HEAD)
 NODE_OPTIONS='--max-old-space-size=1024' npm run build
 ```
 
-## Быстрый деплой (бэкенд)
+## Рекомендуемый деплой бэкенда (на vds)
+
+Бэкенд по умолчанию собираем на сервере. Локальная сборка `fot-server` пока не оформлена в отдельный скрипт, поэтому в обычном сценарии не считается быстрым путём.
+
 ```bash
 ssh vds
 cd /var/www/fot && git pull
@@ -75,20 +92,39 @@ npm run build && npm run sentry:sourcemaps
 pm2 restart fot-server --update-env
 ```
 
-## Полный деплой (оба)
+**Если менялся `fot-server/package-lock.json` или `node_modules` на сервере устарели:**
 ```bash
+cd /var/www/fot/fot-server
+npm ci
+```
+и только потом `npm run build && npm run sentry:sourcemaps`.
+
+## Рекомендуемый полный деплой (оба)
+
+На практике сейчас самый предсказуемый и обычно самый быстрый путь такой:
+
+1. Бэкенд: `git pull` + build/restart на `vds`
+2. Фронтенд: локальный `bash scripts/deploy-frontend.sh`
+
+```bash
+# 1. Бэкенд на vds
 ssh vds
 cd /var/www/fot && git pull
 export RELEASE=$(git rev-parse --short HEAD)
 
 cd fot-server && set -a; source .env; set +a
 export SENTRY_RELEASE=$RELEASE
-npm ci && npm run build && npm run sentry:sourcemaps && pm2 restart fot-server --update-env
+npm run build && npm run sentry:sourcemaps && pm2 restart fot-server --update-env
 
-cd ../fot-app && set -a; source .env; set +a
-export VITE_SENTRY_RELEASE=$RELEASE
-npm ci && NODE_OPTIONS='--max-old-space-size=1024' npm run build
+# Если менялись зависимости бэка:
+# cd /var/www/fot/fot-server && npm ci
+
+# 2. Фронтенд локально
+cd /path/to/FOT
+bash scripts/deploy-frontend.sh
 ```
+
+> Если в этом релизе менялись зависимости фронта или бэка, первый прогон всё равно будет дольше из-за `npm ci`. После этого локальный деплой фронта снова становится быстрым, а бэкенд пока остаётся серверным по умолчанию.
 
 > **`set -a; source .env; set +a` обязателен** перед билдом и `pm2 restart` — экспортирует все
 > переменные из `.env` в shell. Это нужно потому, что:
