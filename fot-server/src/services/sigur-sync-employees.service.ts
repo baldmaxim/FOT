@@ -51,6 +51,55 @@ export interface ISyncEmployeesResult {
   auto_fired: number;
 }
 
+// ─── Защита авто-fire от ложных срабатываний ───
+
+export interface IAutoFireSafetyOptions {
+  /** Минимальный порог по абсолютному количеству, переопределяется env SIGUR_AUTOFIRE_MAX. По умолчанию 20. */
+  absoluteLimit?: number;
+  /** Доля активных, выше которой массовый авто-fire считается аномалией. По умолчанию 0.05 (5%). */
+  relativeLimitRatio?: number;
+  /** Пороговая доля «выгрузка / активные»: ниже неё считаем выгрузку усечённой. По умолчанию 0.5 (50%). */
+  truncationRatio?: number;
+}
+
+export interface IAutoFireDecision {
+  shouldSkip: boolean;
+  reason: string | null;
+  limit: number;
+}
+
+/**
+ * Решает, безопасно ли применить авто-fire к найденным «отсутствующим» сотрудникам.
+ * Чистая функция — тестируется без моков supabase/sigur.
+ */
+export function evaluateAutoFireSafety(
+  activeWithSigur: number,
+  sigurCount: number,
+  toFireCount: number,
+  opts: IAutoFireSafetyOptions = {},
+): IAutoFireDecision {
+  const absLimit = Math.max(1, opts.absoluteLimit ?? 20);
+  const relRatio = opts.relativeLimitRatio ?? 0.05;
+  const truncRatio = opts.truncationRatio ?? 0.5;
+  const limit = Math.max(absLimit, Math.ceil(activeWithSigur * relRatio));
+
+  if (activeWithSigur > 0 && sigurCount < activeWithSigur * truncRatio) {
+    return {
+      shouldSkip: true,
+      reason: `auto-fire skipped: sigur returned ${sigurCount} but db has ${activeWithSigur} active — looks truncated`,
+      limit,
+    };
+  }
+  if (toFireCount > limit) {
+    return {
+      shouldSkip: true,
+      reason: `auto-fire skipped: would fire ${toFireCount} employees, exceeds limit ${limit}`,
+      limit,
+    };
+  }
+  return { shouldSkip: false, reason: null, limit };
+}
+
 // ─── Чистые функции синхронизации ───
 
 export async function syncPositionsFromSigurLogic(
@@ -201,6 +250,13 @@ export async function syncEmployeesLogic(
   const sigurEmployees = sigurEmployeesRaw.map(normalizeEmployee);
   const skippedByWhitelist = 0;
   console.log(`[syncEmployees] employees to process: ${sigurEmployees.length}`);
+
+  // Архивная папка Sigur — единый источник «уволен в Sigur».
+  // Имена отделов больше не используются: regex /уволен/i ловил ложные совпадения.
+  const archiveDepartmentId = (await settingsService.getSigurConnectionSettings()).archiveDepartmentId;
+  if (!archiveDepartmentId) {
+    console.warn('[syncEmployees] sigur_archive_department_id не задан — fire по архивной папке отключён');
+  }
 
   // Глобальный поиск по sigur_employee_id
   const existingEmps: {
@@ -397,8 +453,12 @@ export async function syncEmployeesLogic(
     const sigurEmpId = emp.id;
     const sigurDeptId = emp.departmentId;
     const sigurDeptName = sigurDeptId ? (sigurDeptToName.get(sigurDeptId) ?? null) : null;
-    // Папка «Уволенные» в Sigur — признак уволенного сотрудника
-    const isDismissalDept = sigurDeptName != null && /уволен/i.test(sigurDeptName);
+    // Признак «уволен в Sigur» — точное совпадение с архивной папкой по id (settings.sigur_archive_department_id).
+    // Раньше тут была regex /уволен/i по имени отдела, которая ловила ложные совпадения
+    // (например, любой отдел с подстрокой «уволен» в названии).
+    const isDismissalDept = archiveDepartmentId != null
+      && sigurDeptId != null
+      && sigurDeptId === archiveDepartmentId;
     const orgDepartmentId = sigurDeptId ? sigurDeptToDbId.get(sigurDeptId) || null : null;
     const sigurPosId = emp.positionId;
     const positionText = emp.position;
@@ -701,43 +761,55 @@ export async function syncEmployeesLogic(
     }
   }
 
-  // Авто-увольнение сотрудников, которых больше нет в SIGUR
+  // Авто-увольнение сотрудников, которых больше нет в SIGUR.
+  // Защита от инцидентов: при подозрительно тонкой выгрузке Sigur и при попытке зафаерить
+  // слишком многих за один проход — авто-fire отменяется целиком (см. инцидент 17.04.2026).
   const sigurIdSet = new Set<number>();
   for (const emp of sigurEmployees) {
     if (emp.id != null) sigurIdSet.add(emp.id);
   }
 
+  const activeWithSigur = existingEmps.filter(e => e.employment_status === 'active').length;
   const toAutoFire = existingEmps.filter(
     e => e.employment_status === 'active' && !sigurIdSet.has(e.sigur_employee_id),
   );
+
+  const safety = evaluateAutoFireSafety(activeWithSigur, sigurEmployees.length, toAutoFire.length, {
+    absoluteLimit: Number(process.env.SIGUR_AUTOFIRE_MAX) || undefined,
+  });
 
   let autoFired = 0;
   const today = new Date().toISOString().slice(0, 10);
   const autoFiredIds: number[] = [];
 
-  for (const emp of toAutoFire) {
-    const { error: fireErr } = await supabase
-      .from('employees')
-      .update({ employment_status: 'fired', updated_at: new Date().toISOString() })
-      .eq('id', emp.id);
-    if (fireErr) {
-      errors.push(`auto-fire ${emp.id}: ${fireErr.message}`);
-      continue;
+  if (safety.shouldSkip) {
+    console.error(`[syncEmployees] ${safety.reason}`);
+    errors.push(safety.reason!);
+  } else {
+    for (const emp of toAutoFire) {
+      const { error: fireErr } = await supabase
+        .from('employees')
+        .update({ employment_status: 'fired', updated_at: new Date().toISOString() })
+        .eq('id', emp.id);
+      if (fireErr) {
+        errors.push(`auto-fire ${emp.id}: ${fireErr.message}`);
+        continue;
+      }
+      autoFired++;
+      autoFiredIds.push(emp.id);
     }
-    autoFired++;
-    autoFiredIds.push(emp.id);
-  }
 
-  if (autoFiredIds.length > 0) {
-    try {
-      await assignEmployeesToArchiveDepartment(autoFiredIds, null, { connection, effectiveDate: today });
-    } catch (archiveError) {
-      errors.push(`auto-fire archive move: ${(archiveError as Error).message}`);
+    if (autoFiredIds.length > 0) {
+      try {
+        await assignEmployeesToArchiveDepartment(autoFiredIds, null, { connection, effectiveDate: today });
+      } catch (archiveError) {
+        errors.push(`auto-fire archive move: ${(archiveError as Error).message}`);
+      }
     }
-  }
 
-  if (autoFired > 0) {
-    console.log(`[syncEmployees] auto-fired ${autoFired} employees not found in Sigur`);
+    if (autoFired > 0) {
+      console.log(`[syncEmployees] auto-fired ${autoFired} employees not found in Sigur`);
+    }
   }
 
   // Перенос всех fired сотрудников в архивную папку Sigur (идемпотентно).
