@@ -1,14 +1,11 @@
 import { Suspense, lazy, type FC, useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { scheduleService } from '../../services/scheduleService';
-import { workCategoryService } from '../../services/workCategoryService';
 import { travelTimeService } from '../../services/travelTimeService';
 import type {
   IDayOverride,
   IWorkSchedule,
-  ICategorySchedule,
   IObjectScheduleAssignment,
-  IWorkCategory,
   ScheduleType,
   PatternType,
 } from '../../types/schedule';
@@ -25,7 +22,7 @@ const ProductionCalendarPage = lazy(() => import('../super-admin/ProductionCalen
   default: module.ProductionCalendarPage,
 })));
 
-type TabKey = 'templates' | 'object-assignments' | 'category-assignments' | 'category-manage' | 'production-calendar';
+type TabKey = 'templates' | 'object-assignments' | 'production-calendar';
 
 interface IFormState {
   id: string | null;
@@ -130,9 +127,7 @@ const PATTERN_PRESETS: Record<PatternType, Partial<IFormState>> = {
   'custom': {},
 };
 const EMPTY_TEMPLATES: IWorkSchedule[] = [];
-const EMPTY_ASSIGNMENTS: ICategorySchedule[] = [];
 const EMPTY_OBJECT_ASSIGNMENTS: IObjectScheduleAssignment[] = [];
-const EMPTY_WORK_CATEGORIES: IWorkCategory[] = [];
 const EMPTY_TRAVEL_OBJECTS: ITravelObject[] = [];
 
 export const SchedulesPage: FC = () => {
@@ -144,28 +139,14 @@ export const SchedulesPage: FC = () => {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<IFormState>(createEmptyForm());
 
-  // Форма категории
-  const [showCategoryForm, setShowCategoryForm] = useState(false);
-  const [editingCategoryCode, setEditingCategoryCode] = useState<string | null>(null);
-  const [categoryForm, setCategoryForm] = useState({ code: '', name: '', description: '', sort_order: 0 });
-
-  const needsTemplates = tab === 'templates' || tab === 'category-assignments' || tab === 'object-assignments';
-  const needsAssignments = tab === 'category-assignments';
+  const needsTemplates = tab === 'templates' || tab === 'object-assignments';
   const needsObjectAssignments = tab === 'object-assignments';
   const needsObjects = tab === 'object-assignments';
-  const needsWorkCategories = tab === 'category-assignments' || tab === 'category-manage';
 
   const templatesQuery = useQuery({
     queryKey: ['schedules', 'templates'],
     queryFn: () => scheduleService.list(),
     enabled: needsTemplates,
-    staleTime: 5 * 60_000,
-    placeholderData: previousData => previousData,
-  });
-  const assignmentsQuery = useQuery({
-    queryKey: ['schedules', 'category-assignments'],
-    queryFn: () => scheduleService.listCategories(),
-    enabled: needsAssignments,
     staleTime: 5 * 60_000,
     placeholderData: previousData => previousData,
   });
@@ -183,40 +164,25 @@ export const SchedulesPage: FC = () => {
     staleTime: 5 * 60_000,
     placeholderData: previousData => previousData,
   });
-  const workCategoriesQuery = useQuery({
-    queryKey: ['work-categories'],
-    queryFn: () => workCategoryService.list(),
-    enabled: needsWorkCategories,
-    staleTime: 5 * 60_000,
-    placeholderData: previousData => previousData,
-  });
   const templates = templatesQuery.data ?? EMPTY_TEMPLATES;
-  const assignments = assignmentsQuery.data ?? EMPTY_ASSIGNMENTS;
   const objectAssignments = objectAssignmentsQuery.data ?? EMPTY_OBJECT_ASSIGNMENTS;
   const travelObjects = objectsQuery.data ?? EMPTY_TRAVEL_OBJECTS;
-  const workCategories = workCategoriesQuery.data ?? EMPTY_WORK_CATEGORIES;
   const loading = (
     (needsTemplates && templatesQuery.isPending)
-    || (needsAssignments && assignmentsQuery.isPending)
     || (needsObjectAssignments && objectAssignmentsQuery.isPending)
     || (needsObjects && objectsQuery.isPending)
-    || (needsWorkCategories && workCategoriesQuery.isPending)
   );
   const queryError = (
     (needsTemplates ? templatesQuery.error : null)
-    || (needsAssignments ? assignmentsQuery.error : null)
     || (needsObjectAssignments ? objectAssignmentsQuery.error : null)
     || (needsObjects ? objectsQuery.error : null)
-    || (needsWorkCategories ? workCategoriesQuery.error : null)
   );
   const visibleError = error || (queryError instanceof Error ? queryError.message : '');
 
   const reloadScheduleData = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['schedules', 'templates'] }),
-      queryClient.invalidateQueries({ queryKey: ['schedules', 'category-assignments'] }),
       queryClient.invalidateQueries({ queryKey: ['schedules', 'object-assignments'] }),
-      queryClient.invalidateQueries({ queryKey: ['work-categories'] }),
     ]);
   };
 
@@ -393,16 +359,6 @@ export const SchedulesPage: FC = () => {
     }
   };
 
-  // Для каждой активной категории — текущее назначение на сегодня
-  const activeAssignments = useMemo(() => {
-    const map = new Map<string, ICategorySchedule | null>();
-    for (const cat of workCategories.filter(c => c.is_active)) {
-      const active = assignments.find(a => a.category === cat.code && isActiveScheduleAssignment(a.effective_from, a.effective_to, today)) || null;
-      map.set(cat.code, active);
-    }
-    return map;
-  }, [workCategories, assignments, today]);
-
   const activeObjectAssignments = useMemo(() => {
     const map = new Map<string, IObjectScheduleAssignment | null>();
     for (const objectItem of travelObjects) {
@@ -414,23 +370,6 @@ export const SchedulesPage: FC = () => {
     }
     return map;
   }, [travelObjects, objectAssignments, today]);
-
-  const handleAssignCategory = async (category: string, scheduleId: string) => {
-    setError('');
-    try {
-      if (!scheduleId) {
-        await scheduleService.removeCategoryAssignment(category);
-      } else {
-        await scheduleService.assignCategory(category, {
-          schedule_id: scheduleId,
-          effective_from: today,
-        });
-      }
-      await reloadScheduleData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка назначения');
-    }
-  };
 
   const handleAssignObject = async (objectId: string, scheduleId: string) => {
     setError('');
@@ -449,73 +388,6 @@ export const SchedulesPage: FC = () => {
     }
   };
 
-  /* ─── CRUD категорий ─── */
-
-  const handleStartCreateCategory = () => {
-    setEditingCategoryCode(null);
-    setCategoryForm({ code: '', name: '', description: '', sort_order: workCategories.length * 10 + 10 });
-    setShowCategoryForm(true);
-  };
-
-  const handleStartEditCategory = (cat: IWorkCategory) => {
-    setEditingCategoryCode(cat.code);
-    setCategoryForm({
-      code: cat.code,
-      name: cat.name,
-      description: cat.description || '',
-      sort_order: cat.sort_order,
-    });
-    setShowCategoryForm(true);
-  };
-
-  const handleSaveCategory = async () => {
-    setError('');
-    try {
-      const code = categoryForm.code.trim().toLowerCase();
-      const name = categoryForm.name.trim();
-      if (!name) {
-        setError('Название обязательно');
-        return;
-      }
-      if (!/^[a-z0-9_]+$/.test(code)) {
-        setError('Код: только a-z, 0-9, _');
-        return;
-      }
-      if (editingCategoryCode) {
-        const payload: { code?: string; name: string; description: string | null; sort_order: number } = {
-          name,
-          description: categoryForm.description || null,
-          sort_order: categoryForm.sort_order,
-        };
-        if (code !== editingCategoryCode) payload.code = code;
-        await workCategoryService.update(editingCategoryCode, payload);
-      } else {
-        await workCategoryService.create({
-          code,
-          name,
-          description: categoryForm.description || null,
-          sort_order: categoryForm.sort_order,
-        });
-      }
-      setShowCategoryForm(false);
-      setEditingCategoryCode(null);
-      await reloadScheduleData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка сохранения');
-    }
-  };
-
-  const handleDeleteCategory = async (code: string) => {
-    if (!confirm('Удалить категорию?')) return;
-    setError('');
-    try {
-      await workCategoryService.remove(code);
-      await reloadScheduleData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка удаления');
-    }
-  };
-
   return (
     <div className={styles.page}>
       <div className={styles.header}>
@@ -530,22 +402,10 @@ export const SchedulesPage: FC = () => {
           Шаблоны графиков
         </button>
         <button
-          className={`${styles.tab} ${tab === 'category-manage' ? styles.tabActive : ''}`}
-          onClick={() => setTab('category-manage')}
-        >
-          Категории труда
-        </button>
-        <button
           className={`${styles.tab} ${tab === 'object-assignments' ? styles.tabActive : ''}`}
           onClick={() => setTab('object-assignments')}
         >
           Графики объектов
-        </button>
-        <button
-          className={`${styles.tab} ${tab === 'category-assignments' ? styles.tabActive : ''}`}
-          onClick={() => setTab('category-assignments')}
-        >
-          Привязка графиков к категориям
         </button>
         <button
           className={`${styles.tab} ${tab === 'production-calendar' ? styles.tabActive : ''}`}
@@ -902,172 +762,6 @@ export const SchedulesPage: FC = () => {
               </tbody>
             </table>
           )}
-        </>
-      )}
-
-      {tab === 'category-assignments' && (
-        <>
-          <div style={{ marginBottom: 12, color: 'var(--text-secondary)', fontSize: 13 }}>
-            Сотруднику без индивидуального графика и без графика отдела автоматически назначается
-            график его категории труда. Категорию ставит администратор на странице «Управление
-            кадрами», а сами категории создаются на вкладке «Категории труда».
-          </div>
-          {workCategories.filter(c => c.is_active).length === 0 ? (
-            <div style={{ padding: 16, color: 'var(--text-secondary)' }}>
-              Нет активных категорий труда. Создайте их на вкладке «Категории труда».
-            </div>
-          ) : (
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th>Категория</th>
-                  <th>Текущий график</th>
-                  <th>Действует с</th>
-                  <th>Изменить</th>
-                </tr>
-              </thead>
-              <tbody>
-                {workCategories
-                  .filter(c => c.is_active)
-                  .map(cat => {
-                    const assigned = activeAssignments.get(cat.code) || null;
-                    const assignedSchedId = assigned?.schedule_id || '';
-                    return (
-                      <tr key={cat.code}>
-                        <td>{cat.name}</td>
-                        <td>
-                          {assigned?.work_schedules?.name || (
-                            <span style={{ color: 'var(--text-secondary)' }}>— не назначен —</span>
-                          )}
-                        </td>
-                        <td>{assigned?.effective_from || '—'}</td>
-                        <td>
-                          <select
-                            value={assignedSchedId}
-                            onChange={e => handleAssignCategory(cat.code, e.target.value)}
-                          >
-                            <option value="">— снять —</option>
-                            {templates.map(t => (
-                              <option key={t.id} value={t.id}>
-                                {t.name}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                      </tr>
-                    );
-                  })}
-              </tbody>
-            </table>
-          )}
-        </>
-      )}
-
-      {tab === 'category-manage' && (
-        <>
-          <div className={styles.toolbar}>
-            <button className={styles.btn} onClick={handleStartCreateCategory}>
-              + Новая категория
-            </button>
-          </div>
-
-          {showCategoryForm && (
-            <div className={styles.form}>
-              <label>
-                Код (латиница, без пробелов)
-                <input
-                  type="text"
-                  value={categoryForm.code}
-                  onChange={e => setCategoryForm({ ...categoryForm, code: e.target.value.toLowerCase() })}
-                  placeholder="office_manager"
-                />
-              </label>
-              <label>
-                Название
-                <input
-                  type="text"
-                  value={categoryForm.name}
-                  onChange={e => setCategoryForm({ ...categoryForm, name: e.target.value })}
-                  placeholder="Руководитель (офис)"
-                />
-              </label>
-              <label style={{ gridColumn: '1 / -1' }}>
-                Описание
-                <input
-                  type="text"
-                  value={categoryForm.description}
-                  onChange={e => setCategoryForm({ ...categoryForm, description: e.target.value })}
-                  placeholder="Необязательно"
-                />
-              </label>
-              <label>
-                Сортировка
-                <input
-                  type="number"
-                  value={categoryForm.sort_order}
-                  onChange={e =>
-                    setCategoryForm({ ...categoryForm, sort_order: parseInt(e.target.value) || 0 })
-                  }
-                />
-              </label>
-              <div className={styles.actions}>
-                <button
-                  className={`${styles.btn} ${styles.btnSecondary}`}
-                  onClick={() => {
-                    setShowCategoryForm(false);
-                    setEditingCategoryCode(null);
-                  }}
-                >
-                  Отмена
-                </button>
-                <button className={styles.btn} onClick={handleSaveCategory}>
-                  Сохранить
-                </button>
-              </div>
-            </div>
-          )}
-
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Код</th>
-                <th>Название</th>
-                <th>Описание</th>
-                <th>Сортировка</th>
-                <th>Активна</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {workCategories.map(cat => (
-                <tr key={cat.code}>
-                  <td>
-                    <code>{cat.code}</code>
-                  </td>
-                  <td>{cat.name}</td>
-                  <td style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
-                    {cat.description || '—'}
-                  </td>
-                  <td>{cat.sort_order}</td>
-                  <td>{cat.is_active ? 'да' : 'нет'}</td>
-                  <td>
-                    <button
-                      className={`${styles.btn} ${styles.btnSecondary}`}
-                      onClick={() => handleStartEditCategory(cat)}
-                    >
-                      Ред.
-                    </button>{' '}
-                    <button
-                      className={`${styles.btn} ${styles.btnDanger}`}
-                      onClick={() => handleDeleteCategory(cat.code)}
-                    >
-                      Удалить
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </>
       )}
 

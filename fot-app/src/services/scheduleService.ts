@@ -2,10 +2,8 @@ import { apiClient } from '../api/client';
 import type {
   IWorkSchedule,
   IResolvedSchedule,
-  ICategorySchedule,
   IEmployeeScheduleAssignment,
   IObjectScheduleAssignment,
-  WorkCategory,
 } from '../types/schedule';
 
 interface ApiResponse<T> {
@@ -63,13 +61,6 @@ export const scheduleService = {
     return res.data;
   },
 
-  /** Все привязки графиков к категориям труда */
-  async listCategories(): Promise<ICategorySchedule[]> {
-    const res = await apiClient.get<ApiResponse<ICategorySchedule[]>>('/schedules/categories');
-    if (!res.data) throw new Error(res.error || 'Ошибка загрузки категорий');
-    return res.data;
-  },
-
   /** Активные персональные графики сотрудников */
   async listEmployeeAssignments(employeeIds: number[]): Promise<IEmployeeScheduleAssignment[]> {
     if (employeeIds.length === 0) return [];
@@ -85,22 +76,6 @@ export const scheduleService = {
     const res = await apiClient.get<ApiResponse<IObjectScheduleAssignment[]>>('/schedules/objects');
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки графиков объектов');
     return res.data;
-  },
-
-  /** Назначить график категории труда */
-  async assignCategory(
-    category: WorkCategory,
-    data: { schedule_id: string; effective_from: string; effective_to?: string | null },
-  ): Promise<ICategorySchedule> {
-    const res = await apiClient.put<ApiResponse<ICategorySchedule>>(`/schedules/category/${category}`, data);
-    if (!res.data) throw new Error(res.error || 'Ошибка назначения графика категории');
-    return res.data;
-  },
-
-  /** Снять привязку категории */
-  async removeCategoryAssignment(category: WorkCategory): Promise<void> {
-    const res = await apiClient.delete<ApiResponse<null>>(`/schedules/category/${category}`);
-    if (res.error) throw new Error(res.error);
   },
 
   /** Назначить персональный график сотруднику */

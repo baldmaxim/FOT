@@ -10,11 +10,8 @@ import type { SigurEmployeeSummary, SigurDepartmentNode } from '../types';
 import { timesheetService } from '../services/timesheetService';
 import { ApiError } from '../api/client';
 import { scheduleService } from '../services/scheduleService';
-import { workCategoryService } from '../services/workCategoryService';
 import type {
-  IWorkCategory,
   IWorkSchedule,
-  ICategorySchedule,
   IEmployeeScheduleAssignment,
 } from '../types/schedule';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -46,10 +43,10 @@ const getLocalISODate = (): string => {
 const isActiveScheduleAssignment = (effectiveFrom: string, effectiveTo: string | null, date: string): boolean =>
   effectiveFrom <= date && (effectiveTo === null || effectiveTo >= date);
 
-type ModalType = 'salary' | 'salary_actual' | 'position' | 'department' | 'category' | 'schedule';
+type ModalType = 'salary' | 'salary_actual' | 'position' | 'department' | 'schedule';
 type StaffStatusFilter = 'active' | 'fired' | 'excluded';
 
-type ScheduleSource = 'employee' | 'category' | 'default';
+type ScheduleSource = 'employee' | 'default';
 
 interface IEmployeeScheduleView {
   scheduleId: string | null;
@@ -72,12 +69,9 @@ interface IAddEmployeeForm {
 
 const SCHEDULE_SOURCE_LABELS: Record<ScheduleSource, string> = {
   employee: 'инд.',
-  category: 'кат.',
   default: 'деф.',
 };
-const EMPTY_WORK_CATEGORIES: IWorkCategory[] = [];
 const EMPTY_SCHEDULE_TEMPLATES: IWorkSchedule[] = [];
-const EMPTY_CATEGORY_ASSIGNMENTS: ICategorySchedule[] = [];
 const EMPTY_EMPLOYEE_SCHEDULE_ASSIGNMENTS: IEmployeeScheduleAssignment[] = [];
 
 /* ───────── Memoized table row ───────── */
@@ -85,7 +79,6 @@ const EMPTY_EMPLOYEE_SCHEDULE_ASSIGNMENTS: IEmployeeScheduleAssignment[] = [];
 interface IStaffRowProps {
   emp: Employee;
   index: number;
-  categoryLabels: Map<string, string>;
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
   onNavigate: (emp: Employee) => void;
@@ -106,7 +99,7 @@ const handleMiddleClickMouseDown = (e: ReactMouseEvent) => {
   if (e.button === 1) e.preventDefault();
 };
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
 
@@ -156,14 +149,6 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, categoryLabels, schedul
             <Pencil size={12} />
           </button>
           {emp.position_name || '—'}
-        </span>
-      </td>
-      <td>
-        <span className="sc-cell-with-btn">
-          <button className="sc-inline-btn" title="Изменить категорию труда" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'category'); }}>
-            <Pencil size={12} />
-          </button>
-          {emp.work_category ? categoryLabels.get(emp.work_category) || emp.work_category : '—'}
         </span>
       </td>
       <td>
@@ -230,7 +215,6 @@ interface IStaffModalsProps {
   modalType: ModalType | null;
   modalEmp: Employee | null;
   allDepts: IFlatDepartmentOption[];
-  categories: IWorkCategory[];
   templates: IWorkSchedule[];
   scheduleViews: Map<number, IEmployeeScheduleView>;
   baseScheduleViews: Map<number, IEmployeeScheduleView>;
@@ -238,7 +222,6 @@ interface IStaffModalsProps {
   onSaveSalary: (empId: number, val: number, type: ModalType, reason?: string, date?: string) => Promise<void>;
   onSavePosition: (empId: number, val: string, reason?: string, date?: string) => Promise<void>;
   onSaveDepartment: (empId: number, deptId: string) => Promise<void>;
-  onSaveCategory: (empId: number, category: string | null) => Promise<void>;
   onSaveSchedule: (empId: number, scheduleId: string | null, effectiveFrom: string) => Promise<void>;
 }
 
@@ -246,7 +229,6 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   modalType,
   modalEmp,
   allDepts,
-  categories,
   templates,
   scheduleViews,
   baseScheduleViews,
@@ -254,7 +236,6 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   onSaveSalary,
   onSavePosition,
   onSaveDepartment,
-  onSaveCategory,
   onSaveSchedule,
 }) => {
   const currentSchedule = modalEmp ? scheduleViews.get(modalEmp.id) : undefined;
@@ -265,7 +246,6 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   const [positionDate, setPositionDate] = useState(() => getLocalISODate());
   const [positionReason, setPositionReason] = useState('');
   const [deptVal, setDeptVal] = useState(() => modalEmp?.org_department_id || '');
-  const [categoryVal, setCategoryVal] = useState<string>(() => modalEmp?.work_category || '');
   const [scheduleVal, setScheduleVal] = useState(() => currentSchedule?.source === 'employee' ? currentSchedule.scheduleId || '' : '');
   const [scheduleDate, setScheduleDate] = useState(() => currentSchedule?.source === 'employee' ? currentSchedule.effectiveFrom || getLocalISODate() : getLocalISODate());
   const [saving, setSaving] = useState(false);
@@ -296,13 +276,6 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
     } finally {
       setSaving(false);
     }
-  };
-
-  const handleCategory = async () => {
-    setSaving(true);
-    const value = categoryVal === '' ? null : categoryVal;
-    await onSaveCategory(modalEmp.id, value);
-    setSaving(false);
   };
 
   const handleSchedule = async () => {
@@ -380,44 +353,6 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
     );
   }
 
-  if (modalType === 'category') {
-    return (
-      <div className="sc-overlay" onClick={onClose}>
-        <div className="sc-modal" onClick={e => e.stopPropagation()}>
-          <div className="sc-modal-header">
-            <h3>Категория труда — {modalEmp.full_name}</h3>
-            <button className="sc-modal-close" onClick={onClose}>&times;</button>
-          </div>
-          <div className="sc-modal-body">
-            <div className="sc-field">
-              <label>Категория</label>
-              <select value={categoryVal} onChange={e => setCategoryVal(e.target.value)} autoFocus>
-                <option value="">— не назначена —</option>
-                {categories.filter(c => c.is_active).map(c => (
-                  <option key={c.code} value={c.code}>{c.name}</option>
-                ))}
-              </select>
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-              График работы подтянется автоматически по привязке категории. Индивидуальный график
-              сотрудника, если задан, имеет приоритет.
-            </div>
-          </div>
-          <div className="sc-modal-footer">
-            <button className="sc-btn cancel" onClick={onClose}>Отмена</button>
-            <button
-              className="sc-btn apply"
-              onClick={handleCategory}
-              disabled={saving || (categoryVal || '') === (modalEmp.work_category || '')}
-            >
-              {saving ? 'Сохранение...' : 'Применить'}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   if (modalType === 'schedule') {
     const effectiveSchedule = scheduleViews.get(modalEmp.id);
     const baseSchedule = baseScheduleViews.get(modalEmp.id);
@@ -435,7 +370,7 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
             <div className="sc-field">
               <label>Персональный график</label>
               <select value={scheduleVal} onChange={e => setScheduleVal(e.target.value)} autoFocus>
-                <option value="">— по категории труда —</option>
+                <option value="">— дефолтный график —</option>
                 {templates.map(tpl => (
                   <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
                 ))}
@@ -448,7 +383,7 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
             <div className="sc-schedule-help">
               <div><strong>Сейчас действует:</strong> {effectiveSchedule?.scheduleName || '—'}{effectiveSchedule ? ` (${SCHEDULE_SOURCE_LABELS[effectiveSchedule.source]})` : ''}</div>
               <div><strong>Базовый график:</strong> {baseSchedule?.scheduleName || 'дефолтный график'}</div>
-              <div>Если оставить пусто, с выбранной даты сотрудник вернётся к графику своей категории труда.</div>
+              <div>Если оставить пусто, с выбранной даты сотрудник вернётся к дефолтному графику.</div>
             </div>
           </div>
           <div className="sc-modal-footer">
@@ -499,7 +434,6 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
 
 interface IVirtualTableProps {
   filtered: Employee[];
-  categoryLabels: Map<string, string>;
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
   onNavigate: (emp: Employee) => void;
@@ -517,7 +451,6 @@ const ROW_HEIGHT = 36;
 
 const VirtualTable: FC<IVirtualTableProps> = memo(({
   filtered,
-  categoryLabels,
   scheduleViews,
   selectedIds,
   onNavigate,
@@ -556,7 +489,6 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
             <th>ФИО</th>
             <th>Отдел</th>
             <th>Должность</th>
-            <th>Категория</th>
             <th>График</th>
             <th>Оклад (договор)</th>
             <th>Реальный оклад</th>
@@ -565,12 +497,12 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
         </thead>
         <tbody>
           {filtered.length === 0 ? (
-            <tr><td colSpan={10} className="sc-empty">Нет сотрудников</td></tr>
+            <tr><td colSpan={9} className="sc-empty">Нет сотрудников</td></tr>
           ) : (
             <>
               {/* spacer top */}
               {virtualizer.getVirtualItems()[0]?.start > 0 && (
-                <tr><td colSpan={10} style={{ height: virtualizer.getVirtualItems()[0].start, padding: 0, border: 'none' }} /></tr>
+                <tr><td colSpan={9} style={{ height: virtualizer.getVirtualItems()[0].start, padding: 0, border: 'none' }} /></tr>
               )}
               {virtualizer.getVirtualItems().map(vRow => {
                 const emp = filtered[vRow.index];
@@ -579,7 +511,6 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     key={emp.id}
                     emp={emp}
                     index={vRow.index}
-                    categoryLabels={categoryLabels}
                     scheduleViews={scheduleViews}
                     selectedIds={selectedIds}
                     onNavigate={onNavigate}
@@ -597,7 +528,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                 const items = virtualizer.getVirtualItems();
                 const lastItem = items[items.length - 1];
                 const remaining = lastItem ? virtualizer.getTotalSize() - lastItem.end : 0;
-                return remaining > 0 ? <tr><td colSpan={10} style={{ height: remaining, padding: 0, border: 'none' }} /></tr> : null;
+                return remaining > 0 ? <tr><td colSpan={9} style={{ height: remaining, padding: 0, border: 'none' }} /></tr> : null;
               })()}
             </>
           )}
@@ -611,7 +542,6 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
 
 interface IVirtualCardsProps {
   filtered: Employee[];
-  categoryLabels: Map<string, string>;
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
   onNavigate: (emp: Employee) => void;
@@ -627,7 +557,6 @@ const CARD_HEIGHT = 270;
 
 const MobileCard: FC<{
   emp: Employee;
-  categoryLabels: Map<string, string>;
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
   onNavigate: (emp: Employee) => void;
@@ -637,7 +566,7 @@ const MobileCard: FC<{
   onRehire?: (emp: Employee) => void;
   onFire?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
-}> = memo(({ emp, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
+}> = memo(({ emp, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
   const handleAuxClick = (e: ReactMouseEvent) => {
@@ -681,10 +610,6 @@ const MobileCard: FC<{
         <span>{emp.position_name || '—'}</span>
       </div>
       <div className="sc-card-row">
-        <span className="sc-card-label">Категория</span>
-        <span>{emp.work_category ? categoryLabels.get(emp.work_category) || emp.work_category : '—'}</span>
-      </div>
-      <div className="sc-card-row">
         <span className="sc-card-label">График</span>
         <span className="sc-schedule-cell">
           <span className="sc-schedule-name">{scheduleView?.scheduleName || '—'}</span>
@@ -726,9 +651,6 @@ const MobileCard: FC<{
             <button className="sc-btn-icon" title="Сменить должность" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'position'); }}>
               <Pencil size={14} />
             </button>
-            <button className="sc-btn-icon" title="Категория труда" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'category'); }}>
-              <Pencil size={14} />
-            </button>
             <button className="sc-btn-icon" title="Назначить график" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'schedule'); }}>
               <Calendar size={14} />
             </button>
@@ -745,7 +667,7 @@ const MobileCard: FC<{
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, categoryLabels, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -763,7 +685,6 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, categoryLabels, s
             <div key={emp.id} style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vRow.start}px)` }}>
               <MobileCard
                 emp={emp}
-                categoryLabels={categoryLabels}
                 scheduleViews={scheduleViews}
                 selectedIds={selectedIds}
                 onNavigate={onNavigate}
@@ -831,7 +752,7 @@ const BulkScheduleModal: FC<IBulkScheduleModalProps> = memo(({ open, targetCount
             <label>Действие</label>
             <select value={mode} onChange={e => setMode(e.target.value as 'assign' | 'reset')} autoFocus>
               <option value="assign">Назначить персональный график</option>
-              <option value="reset">Вернуть к графику категории</option>
+              <option value="reset">Вернуть к дефолтному графику</option>
             </select>
           </div>
           {mode === 'assign' && (
@@ -855,75 +776,13 @@ const BulkScheduleModal: FC<IBulkScheduleModalProps> = memo(({ open, targetCount
             <div>
               {mode === 'assign'
                 ? 'С выбранной даты персональный график будет назначен всем сотрудникам из выбранной области.'
-                : 'С выбранной даты персональный график будет снят, и сотрудники вернутся к графику своей категории труда.'}
+                : 'С выбранной даты персональный график будет снят, и сотрудники вернутся к дефолтному графику.'}
             </div>
           </div>
         </div>
         <div className="sc-modal-footer">
           <button className="sc-btn cancel" onClick={onClose}>Отмена</button>
           <button className="sc-btn apply" onClick={handleApply} disabled={saving || !effectiveFrom || (mode === 'assign' && !scheduleId)}>
-            {saving ? 'Сохранение...' : 'Применить'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-});
-
-interface IBulkCategoryModalProps {
-  open: boolean;
-  targetCount: number;
-  categories: IWorkCategory[];
-  onClose: () => void;
-  onApply: (categoryCode: string | null) => Promise<void>;
-}
-
-const BulkCategoryModal: FC<IBulkCategoryModalProps> = memo(({ open, targetCount, categories, onClose, onApply }) => {
-  const [categoryCode, setCategoryCode] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setCategoryCode('');
-    setSaving(false);
-  }, [open, targetCount]);
-
-  if (!open) return null;
-
-  const handleApply = async () => {
-    setSaving(true);
-    try {
-      await onApply(categoryCode || null);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="sc-overlay" onClick={onClose}>
-      <div className="sc-modal" onClick={e => e.stopPropagation()}>
-        <div className="sc-modal-header">
-          <h3>Массовое назначение категории</h3>
-          <button className="sc-modal-close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="sc-modal-body">
-          <div className="sc-field">
-            <label>Категория труда</label>
-            <select value={categoryCode} onChange={e => setCategoryCode(e.target.value)} autoFocus>
-              <option value="">— не назначена —</option>
-              {categories.filter(c => c.is_active).map(c => (
-                <option key={c.code} value={c.code}>{c.name}</option>
-              ))}
-            </select>
-          </div>
-          <div className="sc-schedule-help">
-            <div><strong>Выбрано сотрудников:</strong> {targetCount}</div>
-            <div>Категория будет назначена всем выбранным сотрудникам.</div>
-          </div>
-        </div>
-        <div className="sc-modal-footer">
-          <button className="sc-btn cancel" onClick={onClose}>Отмена</button>
-          <button className="sc-btn apply" onClick={handleApply} disabled={saving}>
             {saving ? 'Сохранение...' : 'Применить'}
           </button>
         </div>
@@ -1090,7 +949,7 @@ const BulkBrigadeScheduleModal: FC<IBulkBrigadeScheduleModalProps> = memo(({
               <label>Действие</label>
               <select value={mode} onChange={e => setMode(e.target.value as 'assign' | 'reset')}>
                 <option value="assign">Назначить персональный график</option>
-                <option value="reset">Вернуть к графику категории</option>
+                <option value="reset">Вернуть к дефолтному графику</option>
               </select>
             </div>
             {mode === 'assign' && (
@@ -1115,7 +974,7 @@ const BulkBrigadeScheduleModal: FC<IBulkBrigadeScheduleModalProps> = memo(({
               <div>
                 {mode === 'assign'
                   ? 'С выбранной даты персональный график будет назначен всем текущим активным сотрудникам выбранных бригад.'
-                  : 'С выбранной даты персональный график будет снят, и сотрудники вернутся к графику своей категории труда.'}
+                  : 'С выбранной даты персональный график будет снят, и сотрудники вернутся к дефолтному графику.'}
               </div>
             </div>
           </div>
@@ -1168,21 +1027,10 @@ export const StaffControlPage: FC = () => {
   const [bulkScheduleOpen, setBulkScheduleOpen] = useState(false);
   const [bulkFilterScheduleOpen, setBulkFilterScheduleOpen] = useState(false);
   const [bulkBrigadeScheduleOpen, setBulkBrigadeScheduleOpen] = useState(false);
-  const [bulkCategoryOpen, setBulkCategoryOpen] = useState(false);
   const visibleEmployeeIds = useMemo(() => employees.map(emp => emp.id), [employees]);
-  const workCategoriesQuery = useQuery({
-    queryKey: ['work-categories'],
-    queryFn: () => workCategoryService.list(),
-    staleTime: 5 * 60_000,
-  });
   const scheduleTemplatesQuery = useQuery({
     queryKey: ['schedules', 'templates'],
     queryFn: () => scheduleService.list(),
-    staleTime: 5 * 60_000,
-  });
-  const categoryAssignmentsQuery = useQuery({
-    queryKey: ['schedules', 'category-assignments'],
-    queryFn: () => scheduleService.listCategories(),
     staleTime: 5 * 60_000,
   });
   const employeeScheduleAssignmentsQuery = useQuery({
@@ -1192,16 +1040,8 @@ export const StaffControlPage: FC = () => {
     placeholderData: previousData => previousData,
     staleTime: 60_000,
   });
-  const workCategories = workCategoriesQuery.data ?? EMPTY_WORK_CATEGORIES;
   const scheduleTemplates = scheduleTemplatesQuery.data ?? EMPTY_SCHEDULE_TEMPLATES;
-  const categoryAssignments = categoryAssignmentsQuery.data ?? EMPTY_CATEGORY_ASSIGNMENTS;
   const employeeScheduleAssignments = employeeScheduleAssignmentsQuery.data ?? EMPTY_EMPLOYEE_SCHEDULE_ASSIGNMENTS;
-
-  const categoryLabels = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const c of workCategories) m.set(c.code, c.name);
-    return m;
-  }, [workCategories]);
 
   const selectedEmployeeIdsVisible = useMemo(
     () => selectedEmployeeIds.filter(id => employees.some(emp => emp.id === id)),
@@ -1226,15 +1066,6 @@ export const StaffControlPage: FC = () => {
     [employees, selectedEmployeeIdSet],
   );
 
-  const activeCategoryAssignments = useMemo(() => {
-    const map = new Map<string, ICategorySchedule>();
-    for (const assignment of categoryAssignments) {
-      if (!isActiveScheduleAssignment(assignment.effective_from, assignment.effective_to, today)) continue;
-      if (!map.has(assignment.category)) map.set(assignment.category, assignment);
-    }
-    return map;
-  }, [categoryAssignments, today]);
-
   const activeEmployeeScheduleAssignments = useMemo(() => {
     const map = new Map<number, IEmployeeScheduleAssignment>();
     for (const assignment of employeeScheduleAssignments) {
@@ -1251,27 +1082,17 @@ export const StaffControlPage: FC = () => {
 
   const baseScheduleViews = useMemo(() => {
     const map = new Map<number, IEmployeeScheduleView>();
+    if (!defaultSchedule) return map;
     for (const emp of employees) {
-      const categoryAssignment = emp.work_category ? activeCategoryAssignments.get(emp.work_category) : undefined;
-      const categorySchedule = categoryAssignment?.work_schedules;
-      if (categorySchedule) {
-        map.set(emp.id, {
-          scheduleId: categorySchedule.id,
-          scheduleName: categorySchedule.name,
-          source: 'category',
-          effectiveFrom: categoryAssignment?.effective_from || null,
-        });
-      } else if (defaultSchedule) {
-        map.set(emp.id, {
-          scheduleId: defaultSchedule.id,
-          scheduleName: defaultSchedule.name,
-          source: 'default',
-          effectiveFrom: null,
-        });
-      }
+      map.set(emp.id, {
+        scheduleId: defaultSchedule.id,
+        scheduleName: defaultSchedule.name,
+        source: 'default',
+        effectiveFrom: null,
+      });
     }
     return map;
-  }, [employees, activeCategoryAssignments, defaultSchedule]);
+  }, [employees, defaultSchedule]);
 
   const scheduleViews = useMemo(() => {
     const map = new Map<number, IEmployeeScheduleView>();
@@ -1547,12 +1368,6 @@ export const StaffControlPage: FC = () => {
     openModal(emp, 'department');
   }, [openModal]);
 
-  const handleSaveCategory = useCallback(async (empId: number, category: string | null) => {
-    await employeeService.changeCategory(empId, category);
-    closeModal();
-    patchEmployee(empId, { work_category: category });
-  }, [closeModal, patchEmployee]);
-
   const handleSaveSchedule = useCallback(async (empId: number, scheduleId: string | null, effectiveFrom: string) => {
     if (scheduleId) {
       await scheduleService.assignEmployee(empId, {
@@ -1595,17 +1410,6 @@ export const StaffControlPage: FC = () => {
     setBulkScheduleOpen(false);
     setSelectedEmployeeIds([]);
   }, [applyScheduleToEmployees, employeeScheduleAssignmentsQuery, queryClient, selectedEmployees]);
-
-  const handleBulkSaveCategory = useCallback(async (categoryCode: string | null) => {
-    const CHUNK_SIZE = 20;
-    const ids = selectedEmployees.map(e => e.id);
-    for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
-      await Promise.all(ids.slice(i, i + CHUNK_SIZE).map(id => employeeService.changeCategory(id, categoryCode)));
-    }
-    ids.forEach(id => patchEmployee(id, { work_category: categoryCode || undefined }));
-    setBulkCategoryOpen(false);
-    setSelectedEmployeeIds([]);
-  }, [selectedEmployees, patchEmployee]);
 
   const [rehireEmp, setRehireEmp] = useState<Employee | null>(null);
   const [rehireDeptId, setRehireDeptId] = useState('');
@@ -2016,9 +1820,6 @@ export const StaffControlPage: FC = () => {
             Выбрано сотрудников: <strong>{selectedEmployeeIds.length}</strong>
           </div>
           <div className="sc-bulk-actions">
-            <button className="sc-btn secondary" onClick={() => setBulkCategoryOpen(true)}>
-              Категория
-            </button>
             <button className="sc-btn secondary" onClick={() => setBulkScheduleOpen(true)}>
               <Calendar size={14} /> График
             </button>
@@ -2034,7 +1835,6 @@ export const StaffControlPage: FC = () => {
       ) : isMobile ? (
         <VirtualCards
           filtered={employees}
-          categoryLabels={categoryLabels}
           scheduleViews={scheduleViews}
           selectedIds={selectedEmployeeIdSet}
           onNavigate={handleNavigate}
@@ -2048,7 +1848,6 @@ export const StaffControlPage: FC = () => {
       ) : (
         <VirtualTable
           filtered={employees}
-          categoryLabels={categoryLabels}
           scheduleViews={scheduleViews}
           selectedIds={selectedEmployeeIdSet}
           onNavigate={handleNavigate}
@@ -2093,7 +1892,6 @@ export const StaffControlPage: FC = () => {
         modalType={modalType}
         modalEmp={modalEmp}
         allDepts={allDepts}
-        categories={workCategories}
         templates={scheduleTemplates}
         scheduleViews={scheduleViews}
         baseScheduleViews={baseScheduleViews}
@@ -2101,15 +1899,7 @@ export const StaffControlPage: FC = () => {
         onSaveSalary={handleSaveSalary}
         onSavePosition={handleSavePosition}
         onSaveDepartment={handleSaveDepartment}
-        onSaveCategory={handleSaveCategory}
         onSaveSchedule={handleSaveSchedule}
-      />
-      <BulkCategoryModal
-        open={bulkCategoryOpen}
-        targetCount={selectedEmployees.length}
-        categories={workCategories}
-        onClose={() => setBulkCategoryOpen(false)}
-        onApply={handleBulkSaveCategory}
       />
       <BulkScheduleModal
         open={bulkScheduleOpen}

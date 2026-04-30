@@ -1,17 +1,5 @@
 export type ScheduleType = 'office' | 'remote' | 'hybrid' | 'shift';
 export type PatternType = '5+0' | '5+2' | '6+0' | 'custom';
-/** Код категории труда — динамический, из таблицы work_categories */
-export type WorkCategory = string;
-
-export interface IWorkCategory {
-  code: string;
-  name: string;
-  description: string | null;
-  sort_order: number;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
 
 export interface IDayOverride {
   work_start: string;
@@ -39,17 +27,6 @@ export interface IWorkSchedule {
   weekend_full_day_threshold_minutes: number | null;
   created_at: string;
   updated_at: string;
-}
-
-export interface ICategorySchedule {
-  id: string;
-  category: WorkCategory;
-  schedule_id: string;
-  work_schedules?: IWorkSchedule;
-  effective_from: string;
-  effective_to: string | null;
-  created_by: number | null;
-  created_at: string;
 }
 
 export interface IEmployeeScheduleAssignment {
@@ -92,7 +69,7 @@ export interface IResolvedSchedule {
   expected_saturdays_per_month: number;
   full_day_threshold_minutes: number | null;
   weekend_full_day_threshold_minutes: number | null;
-  source: 'object' | 'employee' | 'category' | 'default';
+  source: 'object' | 'employee' | 'default';
 }
 
 export const SCHEDULE_TYPE_LABELS: Record<ScheduleType, string> = {

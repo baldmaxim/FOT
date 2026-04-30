@@ -211,7 +211,7 @@ describe('attendance.service', () => {
     const calendarMonth = { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth;
 
     const result = await buildAttendanceEntries({
-      employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
       startDate: '2026-04-01',
       endDate: '2026-04-01',
       dailySchedulesMap,
@@ -273,7 +273,7 @@ describe('attendance.service', () => {
     };
 
     const result = await buildAttendanceEntries({
-      employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
       startDate: '2026-04-01',
       endDate: '2026-04-01',
       dailySchedulesMap: new Map(),
@@ -324,7 +324,7 @@ describe('attendance.service', () => {
     ]);
 
     const result = await buildAttendanceEntries({
-      employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
       startDate: '2026-04-01',
       endDate: '2026-04-01',
       dailySchedulesMap: new Map([
@@ -366,7 +366,7 @@ describe('attendance.service', () => {
     };
 
     const result = await buildAttendanceEntries({
-      employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
       startDate: '2026-04-01',
       endDate: '2026-04-01',
       dailySchedulesMap: new Map([
@@ -461,7 +461,7 @@ describe('attendance.service', () => {
     };
 
     const result = await buildAttendanceEntries({
-      employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
       startDate: '2026-04-01',
       endDate: '2026-04-01',
       dailySchedulesMap: new Map([
@@ -568,7 +568,7 @@ describe('attendance.service', () => {
     };
 
     const result = await buildAttendanceEntries({
-      employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
       startDate: '2026-04-02',
       endDate: '2026-04-02',
       dailySchedulesMap: new Map([
@@ -650,7 +650,7 @@ describe('attendance.service', () => {
     };
 
     const result = await buildAttendanceEntries({
-      employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
       startDate: '2026-04-01',
       endDate: '2026-04-01',
       dailySchedulesMap: new Map([
@@ -743,7 +743,7 @@ describe('attendance.service', () => {
     };
 
     const result = await buildAttendanceEntries({
-      employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
       startDate: '2026-04-01',
       endDate: '2026-04-01',
       dailySchedulesMap: new Map([
@@ -794,7 +794,7 @@ describe('attendance.service', () => {
     };
 
     const result = await buildAttendanceEntries({
-      employees: [{ id: 1, full_name: 'Иван Иванов', work_category: 'office' }],
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
       startDate: '2026-04-01',
       endDate: '2026-04-01',
       dailySchedulesMap: new Map([
@@ -839,7 +839,7 @@ describe('attendance.service', () => {
 
       const schedule = { work_hours: 9, lunch_minutes: 60 } as unknown as IResolvedSchedule;
       const result = await buildAttendanceEntries({
-        employees: [{ id: 1, full_name: 'A', work_category: 'office' }],
+        employees: [{ id: 1, full_name: 'A' }],
         startDate: '2026-04-01',
         endDate: '2026-04-01',
         dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
@@ -862,7 +862,7 @@ describe('attendance.service', () => {
 
       const schedule = { work_hours: 9, lunch_minutes: 60 } as unknown as IResolvedSchedule;
       const result = await buildAttendanceEntries({
-        employees: [{ id: 1, full_name: 'A', work_category: 'office' }],
+        employees: [{ id: 1, full_name: 'A' }],
         startDate: '2026-04-01',
         endDate: '2026-04-01',
         dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
@@ -885,7 +885,7 @@ describe('attendance.service', () => {
 
       const schedule = { work_hours: 9, lunch_minutes: 60 } as unknown as IResolvedSchedule;
       const result = await buildAttendanceEntries({
-        employees: [{ id: 1, full_name: 'A', work_category: 'office' }],
+        employees: [{ id: 1, full_name: 'A' }],
         startDate: '2026-04-01',
         endDate: '2026-04-01',
         dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
@@ -912,7 +912,7 @@ describe('attendance.service', () => {
 
       const schedule = { work_hours: 9, lunch_minutes: 60 } as unknown as IResolvedSchedule;
       const result = await buildAttendanceEntries({
-        employees: [{ id: 1, full_name: 'A', work_category: 'office' }],
+        employees: [{ id: 1, full_name: 'A' }],
         startDate: '2026-04-01',
         endDate: '2026-04-01',
         dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
@@ -929,7 +929,7 @@ describe('attendance.service', () => {
 
       const schedule = { work_hours: 8, lunch_minutes: 0 } as unknown as IResolvedSchedule;
       const result = await buildAttendanceEntries({
-        employees: [{ id: 1, full_name: 'A', work_category: 'office' }],
+        employees: [{ id: 1, full_name: 'A' }],
         startDate: '2026-04-01',
         endDate: '2026-04-01',
         dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
@@ -955,7 +955,7 @@ describe('attendance.service', () => {
 
       const schedule = { work_hours: 9, lunch_minutes: 60 } as unknown as IResolvedSchedule;
       const result = await buildAttendanceEntries({
-        employees: [{ id: 1, full_name: 'A', work_category: 'office' }],
+        employees: [{ id: 1, full_name: 'A' }],
         startDate: '2026-04-01',
         endDate: '2026-04-01',
         dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),

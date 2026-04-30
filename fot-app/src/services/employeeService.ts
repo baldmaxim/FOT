@@ -209,12 +209,6 @@ export const employeeService = {
     return response.data;
   },
 
-  async changeCategory(id: number, workCategory: string | null): Promise<void> {
-    await apiClient.post(`/employees/${id}/change-category`, {
-      work_category: workCategory,
-    });
-  },
-
   async enrichPreview(file: File): Promise<EnrichPreview> {
     const formData = new FormData();
     formData.append('file', file);

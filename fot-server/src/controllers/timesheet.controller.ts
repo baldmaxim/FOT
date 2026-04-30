@@ -7,7 +7,6 @@ import type {
   IResolvedSchedule,
   TimeStatus,
   TimesheetApprovalStatus,
-  WorkCategory,
 } from '../types/index.js';
 import type { DataScope } from '../config/access-control.js';
 import { exportTimesheet } from './timesheet-export.controller.js';
@@ -177,16 +176,13 @@ async function resolveAdjustmentApprovalStatus(
 
   const { data: employee, error } = await supabase
     .from('employees')
-    .select('id, work_category')
+    .select('id')
     .eq('id', employeeId)
     .maybeSingle();
   if (error || !employee) return 'auto_approved';
 
   const schedules = await resolveSchedulesForPeriod(
-    [{
-      id: Number(employee.id),
-      work_category: (employee.work_category as WorkCategory | null) ?? null,
-    }],
+    [{ id: Number(employee.id) }],
     workDate,
     workDate,
   );
@@ -327,13 +323,12 @@ async function resolvePlannedHoursByItems(items: Array<{ employee_id: number; wo
   const employeeIds = [...new Set(uniqueItems.map(item => item.employee_id))];
   const { data: employees, error } = await supabase
     .from('employees')
-    .select('id, work_category')
+    .select('id')
     .in('id', employeeIds);
   if (error) throw error;
 
   const employeeRows = (employees || []).map(employee => ({
     id: Number(employee.id),
-    work_category: (employee.work_category as WorkCategory | null) ?? null,
   }));
 
   const startDate = uniqueItems.reduce((min, item) => (item.work_date < min ? item.work_date : min), uniqueItems[0].work_date);
@@ -361,13 +356,12 @@ async function resolveShiftDurationByItems(
   const employeeIds = [...new Set(uniqueItems.map(item => item.employee_id))];
   const { data: employees, error } = await supabase
     .from('employees')
-    .select('id, work_category')
+    .select('id')
     .in('id', employeeIds);
   if (error) throw error;
 
   const employeeRows = (employees || []).map(employee => ({
     id: Number(employee.id),
-    work_category: (employee.work_category as WorkCategory | null) ?? null,
   }));
 
   const startDate = uniqueItems.reduce((min, item) => (item.work_date < min ? item.work_date : min), uniqueItems[0].work_date);
@@ -391,7 +385,7 @@ async function resolvePlannedHoursForObjectItem(params: {
 }): Promise<number | null> {
   const { data: employee, error } = await supabase
     .from('employees')
-    .select('id, work_category')
+    .select('id')
     .eq('id', params.employee_id)
     .maybeSingle();
 
@@ -399,10 +393,7 @@ async function resolvePlannedHoursForObjectItem(params: {
   if (!employee) return null;
 
   const employeeSchedule = await resolveSchedulesForPeriod(
-    [{
-      id: Number(employee.id),
-      work_category: (employee.work_category as WorkCategory | null) ?? null,
-    }],
+    [{ id: Number(employee.id) }],
     params.work_date,
     params.work_date,
   );
@@ -836,7 +827,7 @@ export const timesheetController = {
 
       let empQuery = supabase
         .from('employees')
-        .select('id, full_name, position_id, org_department_id, employment_status, work_category, excluded_from_timesheet, excluded_from_timesheet_date')
+        .select('id, full_name, position_id, org_department_id, employment_status, excluded_from_timesheet, excluded_from_timesheet_date')
         .eq('employment_status', 'active')
         .eq('is_archived', false)
         .order('full_name');
@@ -858,10 +849,7 @@ export const timesheetController = {
 
       const employeeIds = (employees || []).map(e => Number(e.id)).filter(Number.isFinite);
 
-      const empList = (employees || []).map(e => ({
-        id: Number(e.id),
-        work_category: (e.work_category as string | null) || null,
-      }));
+      const empList = (employees || []).map(e => ({ id: Number(e.id) }));
       const [dailySchedulesMap, calendarMonth] = await Promise.all([
         resolveSchedulesForPeriod(empList, startDate, endDate),
         loadCalendarMonth(year, mon),
@@ -888,7 +876,6 @@ export const timesheetController = {
         employees: (employees || []).map(employee => ({
           id: Number(employee.id),
           full_name: (employee.full_name as string | null) || null,
-          work_category: (employee.work_category as string | null) || null,
         })),
         startDate,
         endDate,

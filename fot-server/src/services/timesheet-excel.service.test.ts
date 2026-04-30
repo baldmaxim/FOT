@@ -42,7 +42,6 @@ const makeBaseData = (): IDepartmentTimesheetData => {
         position_id: null,
         org_department_id: 'dept-1',
         sigur_employee_id: 101,
-        work_category: 'office',
       },
       {
         id: 2,
@@ -50,7 +49,6 @@ const makeBaseData = (): IDepartmentTimesheetData => {
         position_id: null,
         org_department_id: 'dept-1',
         sigur_employee_id: 102,
-        work_category: 'office',
       },
     ],
     schedulesMap: new Map([

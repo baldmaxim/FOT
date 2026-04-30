@@ -33,7 +33,7 @@ export const generatePayslipsForMonth = async (
   // 1. Получаем активных сотрудников с окладом
   let query = supabase
     .from('employees')
-    .select('id, full_name, current_salary, org_department_id, work_category')
+    .select('id, full_name, current_salary, org_department_id')
     .eq('employment_status', 'active');
 
   if (departmentId) {
@@ -47,10 +47,7 @@ export const generatePayslipsForMonth = async (
 
   // 2. Resolve расписания
   const scheduleMap = await resolveSchedulesBulk(
-    employees.map(e => ({
-      id: e.id as number,
-      work_category: (e.work_category as string | null) || null,
-    })),
+    employees.map(e => ({ id: e.id as number })),
     midMonth,
   );
 
@@ -58,10 +55,7 @@ export const generatePayslipsForMonth = async (
   const [calendarMonth, dailySchedulesMap] = await Promise.all([
     loadCalendarMonth(year, month),
     resolveSchedulesForPeriod(
-      employees.map(e => ({
-        id: e.id as number,
-        work_category: (e.work_category as string | null) || null,
-      })),
+      employees.map(e => ({ id: e.id as number })),
       startDate,
       endDate,
     ),
@@ -71,7 +65,6 @@ export const generatePayslipsForMonth = async (
     employees: employees.map(e => ({
       id: e.id as number,
       full_name: (e.full_name as string | null) || null,
-      work_category: (e.work_category as string | null) || null,
     })),
     startDate,
     endDate,

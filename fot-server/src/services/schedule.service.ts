@@ -1,6 +1,6 @@
 /**
- * Сервис графиков работы: resolve (каскад employee → department → category → default),
- * bulk, хелперы с учётом производственного календаря и категорий труда.
+ * Сервис графиков работы: resolve (каскад employee → default),
+ * bulk, хелперы с учётом производственного календаря.
  */
 import { supabase } from '../config/database.js';
 import type {
@@ -8,7 +8,6 @@ import type {
   IDayOverride,
   ScheduleType,
   PatternType,
-  WorkCategory,
   IProductionCalendarMonth,
 } from '../types/index.js';
 
@@ -384,12 +383,11 @@ export const resolveObjectSchedulesForPeriod = async (
   return result;
 };
 
-/** Resolve для одного сотрудника на дату. Каскад: employee → category → default */
+/** Resolve для одного сотрудника на дату. Каскад: employee → default */
 export const resolveSchedule = async (
   employeeId: number,
   _departmentId: string | null,
   date: string,
-  workCategory: WorkCategory | null = null,
 ): Promise<IResolvedSchedule> => {
   // 1. Проверить персональный график сотрудника
   const { data: empSched } = await supabase
@@ -407,25 +405,7 @@ export const resolveSchedule = async (
     return mapToResolved(employeeSchedule, 'employee');
   }
 
-  // 2. Проверить category_schedules
-  if (workCategory) {
-    const { data: catSched } = await supabase
-      .from('category_schedules')
-      .select('schedule_id, work_schedules(*)')
-      .eq('category', workCategory)
-      .lte('effective_from', date)
-      .or(`effective_to.is.null,effective_to.gte.${date}`)
-      .order('effective_from', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    const categorySchedule = extractWorkSchedule(catSched?.work_schedules);
-    if (categorySchedule) {
-      return mapToResolved(categorySchedule, 'category');
-    }
-  }
-
-  // 3. Дефолт
+  // 2. Дефолт
   const { data: defaultSched } = await supabase
     .from('work_schedules')
     .select('*')
@@ -440,18 +420,17 @@ export const resolveSchedule = async (
   return { ...DEFAULT_SCHEDULE };
 };
 
-/** Bulk resolve: employee → category → default, 3 параллельных запроса */
+/** Bulk resolve: employee → default, 2 параллельных запроса */
 export const resolveSchedulesBulk = async (
-  employees: { id: number; org_department_id?: string | null; work_category?: WorkCategory | null }[],
+  employees: { id: number; org_department_id?: string | null }[],
   date: string,
 ): Promise<Map<number, IResolvedSchedule>> => {
   const result = new Map<number, IResolvedSchedule>();
   if (employees.length === 0) return result;
 
   const employeeIds = employees.map(e => e.id);
-  const categories = [...new Set(employees.map(e => e.work_category).filter(Boolean))] as WorkCategory[];
 
-  const [empSchedsRes, catSchedsRes, defaultRes] = await Promise.all([
+  const [empSchedsRes, defaultRes] = await Promise.all([
     supabase
       .from('employee_schedule_assignments')
       .select('employee_id, effective_from, work_schedules(*)')
@@ -459,16 +438,6 @@ export const resolveSchedulesBulk = async (
       .lte('effective_from', date)
       .or(`effective_to.is.null,effective_to.gte.${date}`)
       .order('effective_from', { ascending: false }),
-
-    categories.length > 0
-      ? supabase
-          .from('category_schedules')
-          .select('category, effective_from, work_schedules(*)')
-          .in('category', categories)
-          .lte('effective_from', date)
-          .or(`effective_to.is.null,effective_to.gte.${date}`)
-          .order('effective_from', { ascending: false })
-      : Promise.resolve({ data: [] as Record<string, unknown>[] }),
 
     supabase
       .from('work_schedules')
@@ -487,22 +456,11 @@ export const resolveSchedulesBulk = async (
     }
   }
 
-  const catMap = new Map<string, Record<string, unknown>>();
-  for (const row of (catSchedsRes.data || []) as Record<string, unknown>[]) {
-    const cat = row.category as string;
-    if (!catMap.has(cat)) {
-      const schedule = extractWorkSchedule(row.work_schedules);
-      if (schedule) catMap.set(cat, schedule);
-    }
-  }
-
   const defaultSched = defaultRes.data as Record<string, unknown> | null;
 
   for (const emp of employees) {
     if (employeeMap.has(emp.id)) {
       result.set(emp.id, mapToResolved(employeeMap.get(emp.id)!, 'employee'));
-    } else if (emp.work_category && catMap.has(emp.work_category)) {
-      result.set(emp.id, mapToResolved(catMap.get(emp.work_category)!, 'category'));
     } else if (defaultSched) {
       result.set(emp.id, mapToResolved(defaultSched, 'default'));
     } else {
@@ -513,9 +471,9 @@ export const resolveSchedulesBulk = async (
   return result;
 };
 
-/** Resolve графиков по каждому дню периода: employee -> category -> default */
+/** Resolve графиков по каждому дню периода: employee → default */
 export const resolveSchedulesForPeriod = async (
-  employees: { id: number; org_department_id?: string | null; work_category?: WorkCategory | null }[],
+  employees: { id: number; org_department_id?: string | null }[],
   startDate: string,
   endDate: string,
 ): Promise<Map<number, Map<string, IResolvedSchedule>>> => {
@@ -523,9 +481,8 @@ export const resolveSchedulesForPeriod = async (
   if (employees.length === 0) return result;
 
   const employeeIds = employees.map(e => e.id);
-  const categories = [...new Set(employees.map(e => e.work_category).filter(Boolean))] as WorkCategory[];
 
-  const [empSchedsRes, catSchedsRes, defaultRes] = await Promise.all([
+  const [empSchedsRes, defaultRes] = await Promise.all([
     supabase
       .from('employee_schedule_assignments')
       .select('employee_id, effective_from, effective_to, work_schedules(*)')
@@ -533,16 +490,6 @@ export const resolveSchedulesForPeriod = async (
       .lte('effective_from', endDate)
       .or(`effective_to.is.null,effective_to.gte.${startDate}`)
       .order('effective_from', { ascending: false }),
-
-    categories.length > 0
-      ? supabase
-          .from('category_schedules')
-          .select('category, effective_from, effective_to, work_schedules(*)')
-          .in('category', categories)
-          .lte('effective_from', endDate)
-          .or(`effective_to.is.null,effective_to.gte.${startDate}`)
-          .order('effective_from', { ascending: false })
-      : Promise.resolve({ data: [] as Record<string, unknown>[] }),
 
     supabase
       .from('work_schedules')
@@ -560,14 +507,6 @@ export const resolveSchedulesForPeriod = async (
     employeeRows.set(employeeId, rows);
   }
 
-  const categoryRows = new Map<string, Record<string, unknown>[]>();
-  for (const row of (catSchedsRes.data || []) as Record<string, unknown>[]) {
-    const category = row.category as string;
-    const rows = categoryRows.get(category) || [];
-    rows.push(row);
-    categoryRows.set(category, rows);
-  }
-
   const defaultSchedule = defaultRes.data
     ? mapToResolved(defaultRes.data as Record<string, unknown>, 'default')
     : { ...DEFAULT_SCHEDULE };
@@ -575,7 +514,6 @@ export const resolveSchedulesForPeriod = async (
   for (const employee of employees) {
     const dailyMap = new Map<string, IResolvedSchedule>();
     const employeeAssignments = employeeRows.get(employee.id) || [];
-    const categoryAssignments = employee.work_category ? (categoryRows.get(employee.work_category) || []) : [];
 
     iterateDates(startDate, endDate, (date) => {
       const employeeSchedule = pickScheduleForDate(employeeAssignments, date);
@@ -583,13 +521,6 @@ export const resolveSchedulesForPeriod = async (
         dailyMap.set(date, mapToResolved(employeeSchedule, 'employee'));
         return;
       }
-
-      const categorySchedule = pickScheduleForDate(categoryAssignments, date);
-      if (categorySchedule) {
-        dailyMap.set(date, mapToResolved(categorySchedule, 'category'));
-        return;
-      }
-
       dailyMap.set(date, defaultSchedule);
     });
 
@@ -601,7 +532,7 @@ export const resolveSchedulesForPeriod = async (
 
 function mapToResolved(
   ws: Record<string, unknown>,
-  source: 'object' | 'employee' | 'category' | 'default',
+  source: 'object' | 'employee' | 'default',
 ): IResolvedSchedule {
   return {
     schedule_id: ws.id as string,

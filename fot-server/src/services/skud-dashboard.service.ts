@@ -64,7 +64,7 @@ async function loadAttendanceHoursMap(params: {
   if (employees.length === 0 || startDate > endDate) return result;
 
   const dailySchedulesMap = await resolveSchedulesForPeriod(
-    employees.map(e => ({ id: e.id, work_category: e.work_category ?? null })),
+    employees.map(e => ({ id: e.id })),
     startDate,
     endDate,
   );
@@ -229,7 +229,7 @@ export async function getDashboardStats(
   const [empResult, internalPoints] = await Promise.all([
     supabase
       .from('employees')
-      .select('id, full_name, org_department_id, work_category')
+      .select('id, full_name, org_department_id')
       .eq('is_archived', false)
       .eq('employment_status', 'active')
       .in('org_department_id', deptIds),
@@ -257,10 +257,7 @@ export async function getDashboardStats(
   }
 
   // Resolve графики — нужны для пороговых значений и исключения remote
-  const empListForSched = employees.map(e => ({
-    id: e.id as number,
-    work_category: (e.work_category as string | null) || null,
-  }));
+  const empListForSched = employees.map(e => ({ id: e.id as number }));
   const schedulesMap = await resolveSchedulesBulk(empListForSched, formatDateToISO(new Date()));
 
   // Множество сотрудников, которым не нужен СКУД-контроль сегодня
@@ -363,7 +360,6 @@ export async function getDashboardStats(
   const attendanceEmployees: IAttendanceEmployee[] = employees.map(e => ({
     id: e.id as number,
     full_name: (e.full_name as string | null) || null,
-    work_category: (e.work_category as string | null) || null,
   }));
 
   // Параллельные запросы: daily_summary + 3 типа событий + часы по логике табеля

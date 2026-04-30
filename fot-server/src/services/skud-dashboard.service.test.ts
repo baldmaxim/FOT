@@ -14,7 +14,6 @@ type EmployeeRow = {
   id: number;
   full_name: string;
   org_department_id: string;
-  work_category: string;
   is_archived: boolean;
   employment_status: string;
 };
@@ -246,7 +245,6 @@ function buildEmployees(count: number): EmployeeRow[] {
     id: index + 1,
     full_name: `Сотрудник ${index + 1}`,
     org_department_id: 'dept-1',
-    work_category: 'office',
     is_archived: false,
     employment_status: 'active',
   }));

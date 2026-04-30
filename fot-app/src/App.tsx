@@ -355,13 +355,6 @@ const AppRoutes = () => {
 
         <Route element={<ProtectedRoute requiredPage="/skud-settings" />}>
           <Route
-            path="/employees"
-            element={<Navigate to="/sigur" replace />}
-          />
-        </Route>
-
-        <Route element={<ProtectedRoute requiredPage="/skud-settings" />}>
-          <Route
             path="/sigur"
             element={
               <Layout

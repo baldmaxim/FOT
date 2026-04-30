@@ -451,7 +451,7 @@ const canManageSalaryRaiseEmployee = async (req: AuthenticatedRequest, employeeI
 const buildEmployeeSnapshot = async (employeeId: number) => {
   const { data: employee, error } = await supabase
     .from('employees')
-    .select('id, full_name, current_salary, hire_date, work_object, position_id, org_department_id, employment_status, is_archived, work_category')
+    .select('id, full_name, current_salary, hire_date, work_object, position_id, org_department_id, employment_status, is_archived')
     .eq('id', employeeId)
     .maybeSingle();
 
@@ -504,7 +504,6 @@ const buildEmployeeSnapshot = async (employeeId: number) => {
     hire_date: employee.hire_date,
     supervisor_name: supervisorName,
     last_raise_date: lastRaise.data?.effective_date || null,
-    work_category: employee.work_category || null,
   };
 };
 
@@ -647,9 +646,9 @@ const ensureSalaryRaiseRequestVisible = async (req: AuthenticatedRequest, reques
   return null;
 };
 
-const buildMonthlyAttendance = async (employeeId: number, workCategory: string | null, startDate: string, endDate: string) => {
+const buildMonthlyAttendance = async (employeeId: number, startDate: string, endDate: string) => {
   const monthRanges = getMonthRanges(startDate, endDate);
-  const employees = [{ id: employeeId, work_category: workCategory }];
+  const employees = [{ id: employeeId }];
   const entries: IAttendanceEntry[] = [];
   const schedulesByDate = new Map<string, IResolvedSchedule>();
 
@@ -703,15 +702,12 @@ const buildReviewContext = async (request: Record<string, unknown>) => {
   const startDate = addDays(createdAt, -89);
   const endDate = createdAt;
 
-  const employeeSnapshot = (request.employee_snapshot || {}) as Record<string, unknown>;
-  const workCategory = typeof employeeSnapshot.work_category === 'string' ? employeeSnapshot.work_category : null;
-
   const [discipline, attendance] = await Promise.all([
     getDisciplineViolations({
       startMonth: startDate.slice(0, 7),
       endMonth: endDate.slice(0, 7),
     }),
-    buildMonthlyAttendance(employeeId, workCategory, startDate, endDate),
+    buildMonthlyAttendance(employeeId, startDate, endDate),
   ]);
 
   const disciplineDetails = discipline.violations

@@ -12,7 +12,6 @@ export interface ISalaryRaiseEmployeeSnapshot {
   hire_date: string | null;
   supervisor_name: string | null;
   last_raise_date: string | null;
-  work_category?: string | null;
 }
 
 export interface ISalaryRaiseManagerSnapshot {

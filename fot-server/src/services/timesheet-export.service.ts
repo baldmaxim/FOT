@@ -26,7 +26,6 @@ export interface IExportEmployee {
   position_id: string | null;
   org_department_id: string | null;
   sigur_employee_id: number | null;
-  work_category: string | null;
 }
 
 export interface IDepartmentTimesheetData {
@@ -103,7 +102,7 @@ export async function fetchTimesheetDataForDepartment(
   if (!departmentId || assignedEmployeeIds.length > 0) {
     let empQuery = supabase
       .from('employees')
-      .select('id, full_name, position_id, org_department_id, sigur_employee_id, work_category')
+      .select('id, full_name, position_id, org_department_id, sigur_employee_id')
       .eq('employment_status', 'active')
       .eq('is_archived', false)
       .eq('excluded_from_timesheet', false)
@@ -122,10 +121,9 @@ export async function fetchTimesheetDataForDepartment(
     position_id: (e.position_id as string | null),
     org_department_id: (e.org_department_id as string | null),
     sigur_employee_id: (e.sigur_employee_id as number | null),
-    work_category: (e.work_category as string | null) || null,
   }));
   // Графики
-  const empList = empArr.map(e => ({ id: e.id, work_category: e.work_category }));
+  const empList = empArr.map(e => ({ id: e.id }));
   const [dailySchedulesMap, calendarMonth] = await Promise.all([
     resolveSchedulesForPeriod(empList, startDate, endDate),
     loadCalendarMonth(year, mon),
@@ -141,7 +139,6 @@ export async function fetchTimesheetDataForDepartment(
     employees: empArr.map(employee => ({
       id: employee.id,
       full_name: employee.full_name,
-      work_category: employee.work_category,
     })),
     startDate,
     endDate,

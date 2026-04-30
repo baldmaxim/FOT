@@ -19,11 +19,6 @@ router.post('/', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'e
 router.put('/:id', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.update);
 router.delete('/:id', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.remove);
 
-// Графики категорий труда
-router.get('/categories', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'view'), scheduleController.listCategories);
-router.put('/category/:category', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.assignCategory);
-router.delete('/category/:category', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.removeCategoryAssignment);
-
 // Resolve
 router.get('/resolve/:empId', requireAnyPageAccess(['/employee', '/timesheet', '/timesheet-hr', '/staff-control'], 'view'), scheduleController.resolve);
 router.get('/resolve-bulk', requireAnyPageAccess(['/timesheet', '/timesheet-hr', '/staff-control'], 'view'), scheduleController.resolveBulk);

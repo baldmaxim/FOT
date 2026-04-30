@@ -10,7 +10,6 @@ import type { AuthenticatedRequest } from '../types/index.js';
 
 const scheduleTypeEnum = z.enum(['office', 'remote', 'hybrid', 'shift']);
 const patternTypeEnum = z.enum(['5+0', '5+2', '6+0', 'custom']);
-const workCategoryCodeSchema = z.string().min(1).max(50).regex(/^[a-z0-9_]+$/);
 const weekDayArray = z.array(z.number().int().min(1).max(7)).min(1).max(7);
 
 const dayOverrideSchema = z.object({
@@ -42,15 +41,15 @@ const createScheduleSchema = baseScheduleSchema.refine((data) => {
   return Object.keys(data.day_overrides).every(k => data.work_days.includes(Number(k)));
 }, { message: 'day_overrides keys must be in work_days' });
 
-const assignCategorySchema = z.object({
+const assignmentBodySchema = z.object({
   schedule_id: z.string().uuid(),
   effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   effective_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
 });
 const employeeIdParamSchema = z.coerce.number().int().positive();
 const objectIdParamSchema = z.string().uuid();
-const assignEmployeeSchema = assignCategorySchema;
-const assignObjectSchema = assignCategorySchema;
+const assignEmployeeSchema = assignmentBodySchema;
+const assignObjectSchema = assignmentBodySchema;
 const effectiveDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const bulkBrigadeScheduleSchema = z.object({
   department_ids: z.array(z.string().uuid()).min(1),
@@ -418,11 +417,7 @@ export const scheduleController = {
     try {
       const { id } = req.params;
 
-      const [{ count: catCount }, { count: empCount }, { count: objectCount }] = await Promise.all([
-        supabase
-          .from('category_schedules')
-          .select('id', { count: 'exact', head: true })
-          .eq('schedule_id', id),
+      const [{ count: empCount }, { count: objectCount }] = await Promise.all([
         supabase
           .from('employee_schedule_assignments')
           .select('id', { count: 'exact', head: true })
@@ -433,9 +428,6 @@ export const scheduleController = {
           .eq('schedule_id', id),
       ]);
 
-      if ((catCount || 0) > 0) {
-        return res.status(409).json({ success: false, error: 'График привязан к категории труда, удалить нельзя' });
-      }
       if ((empCount || 0) > 0) {
         return res.status(409).json({ success: false, error: 'График назначен сотрудникам, удалить нельзя' });
       }
@@ -463,18 +455,7 @@ export const scheduleController = {
       const empId = parseInt(req.params.empId);
       const date = (req.query.date as string) || new Date().toISOString().slice(0, 10);
 
-      const { data: emp } = await supabase
-        .from('employees')
-        .select('work_category')
-        .eq('id', empId)
-        .maybeSingle();
-
-      const schedule = await resolveSchedule(
-        empId,
-        null,
-        date,
-        (emp?.work_category as string | null) || null,
-      );
+      const schedule = await resolveSchedule(empId, null, date);
       res.json({ success: true, data: schedule });
     } catch (err) {
       console.error('[schedules] resolve error:', err);
@@ -491,15 +472,7 @@ export const scheduleController = {
       const employeeIds = idsParam.split(',').map(Number).filter(n => !isNaN(n));
       const date = (req.query.date as string) || new Date().toISOString().slice(0, 10);
 
-      const { data: emps } = await supabase
-        .from('employees')
-        .select('id, work_category')
-        .in('id', employeeIds);
-
-      const employees = (emps || []).map(e => ({
-        id: e.id as number,
-        work_category: (e.work_category as string | null) || null,
-      }));
+      const employees = employeeIds.map(id => ({ id }));
       const schedules = await resolveSchedulesBulk(employees, date);
 
       const result: Record<number, unknown> = {};
@@ -511,23 +484,6 @@ export const scheduleController = {
     } catch (err) {
       console.error('[schedules] resolveBulk error:', err);
       res.status(500).json({ success: false, error: 'Ошибка массового определения графиков' });
-    }
-  },
-
-  /** GET /api/schedules/categories — список привязок category → schedule */
-  async listCategories(_req: AuthenticatedRequest, res: Response) {
-    try {
-      const { data, error } = await supabase
-        .from('category_schedules')
-        .select('*, work_schedules(*)')
-        .order('category')
-        .order('effective_from', { ascending: false });
-
-      if (error) throw error;
-      res.json({ success: true, data: data || [] });
-    } catch (err) {
-      console.error('[schedules] listCategories error:', err);
-      res.status(500).json({ success: false, error: 'Ошибка загрузки привязок категорий' });
     }
   },
 
@@ -581,61 +537,6 @@ export const scheduleController = {
     }
   },
 
-  /** PUT /api/schedules/category/:category — назначить график категории */
-  async assignCategory(req: AuthenticatedRequest, res: Response) {
-    try {
-      const parsedCat = workCategoryCodeSchema.safeParse(req.params.category);
-      if (!parsedCat.success) return res.status(400).json({ success: false, error: 'Неверная категория' });
-
-      const parsed = assignCategorySchema.safeParse(req.body);
-      if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.issues });
-
-      await supabase
-        .from('category_schedules')
-        .update({ effective_to: previousIsoDate(parsed.data.effective_from) })
-        .eq('category', parsedCat.data)
-        .is('effective_to', null);
-
-      const { data, error } = await supabase
-        .from('category_schedules')
-        .insert({
-          category: parsedCat.data,
-          schedule_id: parsed.data.schedule_id,
-          effective_from: parsed.data.effective_from,
-          effective_to: parsed.data.effective_to || null,
-          created_by: req.user.employee_id,
-        })
-        .select('*, work_schedules(*)')
-        .single();
-
-      if (error) throw error;
-      res.json({ success: true, data });
-    } catch (err) {
-      console.error('[schedules] assignCategory error:', err);
-      res.status(500).json({ success: false, error: 'Ошибка назначения графика категории' });
-    }
-  },
-
-  /** DELETE /api/schedules/category/:category — закрыть все активные привязки */
-  async removeCategoryAssignment(req: AuthenticatedRequest, res: Response) {
-    try {
-      const parsedCat = workCategoryCodeSchema.safeParse(req.params.category);
-      if (!parsedCat.success) return res.status(400).json({ success: false, error: 'Неверная категория' });
-
-      const today = new Date().toISOString().slice(0, 10);
-      const { error } = await supabase
-        .from('category_schedules')
-        .update({ effective_to: previousIsoDate(today) })
-        .eq('category', parsedCat.data)
-        .is('effective_to', null);
-
-      if (error) throw error;
-      res.json({ success: true });
-    } catch (err) {
-      console.error('[schedules] removeCategoryAssignment error:', err);
-      res.status(500).json({ success: false, error: 'Ошибка снятия привязки категории' });
-    }
-  },
 
   /** PUT /api/schedules/employee/:employeeId — назначить персональный график сотруднику */
   async assignEmployee(req: AuthenticatedRequest, res: Response) {

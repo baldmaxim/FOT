@@ -37,7 +37,6 @@ export interface Employee {
   archived_at: string | null;
   created_at: string;
   updated_at: string;
-  work_category: string | null;
   excluded_from_timesheet?: boolean;
   excluded_from_timesheet_at?: string | null;
   schedule_override_id?: string | null;

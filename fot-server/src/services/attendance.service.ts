@@ -24,7 +24,6 @@ const BATCH_SIZE = 500;
 export interface IAttendanceEmployee {
   id: number;
   full_name?: string | null;
-  work_category?: string | null;
 }
 
 export interface IAttendanceAdjustment {

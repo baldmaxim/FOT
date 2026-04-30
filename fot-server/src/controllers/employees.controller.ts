@@ -24,7 +24,7 @@ import {
 import { collectDeptIds } from '../services/skud-shared.service.js';
 
 // Полный список колонок employees для getById / lifecycle-хэндлеров
-const EMPLOYEE_FULL_COLUMNS = 'id, full_name, last_name, first_name, middle_name, current_salary, salary_actual, salary_calculated, staff_units, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, created_at, updated_at, work_category';
+const EMPLOYEE_FULL_COLUMNS = 'id, full_name, last_name, first_name, middle_name, current_salary, salary_actual, salary_calculated, staff_units, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, created_at, updated_at';
 
 // Кэш счётчиков /api/employees/counts (TTL 60с)
 interface ICountsPayload { byDepartment: Record<string, number>; byStatus: { active: number; fired: number } }
@@ -105,7 +105,7 @@ export const employeesController = {
         ? await resolveDepartmentFilterIds(departmentId)
         : (managedDepartmentIds.length > 0 ? managedDepartmentIds : await resolveDepartmentFilterIds(departmentId));
       const isListView = req.query.view === 'list';
-      const listColumns = 'id, full_name, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at, work_category, excluded_from_timesheet, excluded_from_timesheet_at';
+      const listColumns = 'id, full_name, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at, excluded_from_timesheet, excluded_from_timesheet_at';
       const staffColumns = listColumns + ', salary_actual, salary_calculated, current_salary';
 
       // --- Paginated mode ---
@@ -992,58 +992,6 @@ export const employeesController = {
     } catch (error) {
       console.error('Change position error:', error);
       res.status(500).json({ success: false, error: 'Failed to change position' });
-    }
-  },
-
-  // POST /api/employees/:id/change-category — установить категорию труда
-  async changeCategory(req: AuthenticatedRequest, res: Response): Promise<void> {
-    try {
-      const { id } = req.params;
-      if (!(await canAccessEmployeeInScope(req, Number(id)))) {
-        res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
-        return;
-      }
-      const { work_category } = req.body as { work_category: string | null };
-
-      // Валидация: если задано — должна существовать и быть активной
-      if (work_category) {
-        if (!/^[a-z0-9_]+$/.test(work_category)) {
-          res.status(400).json({ success: false, error: 'Invalid category code format' });
-          return;
-        }
-        const { data: cat } = await supabase
-          .from('work_categories')
-          .select('code, is_active')
-          .eq('code', work_category)
-          .maybeSingle();
-        if (!cat || !cat.is_active) {
-          res.status(400).json({ success: false, error: 'Unknown or inactive work_category' });
-          return;
-        }
-      }
-
-      const { error } = await supabase
-        .from('employees')
-        .update({ work_category })
-        .eq('id', Number(id));
-
-      if (error) {
-        res.status(500).json({ success: false, error: error.message });
-        return;
-      }
-
-      employeeCache.invalidate(id);
-
-      await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
-        entityType: 'employee',
-        entityId: id,
-        details: { work_category },
-      });
-
-      res.json({ success: true });
-    } catch (error) {
-      console.error('Change category error:', error);
-      res.status(500).json({ success: false, error: 'Failed to change category' });
     }
   },
 
