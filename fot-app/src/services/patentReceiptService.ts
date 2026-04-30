@@ -152,4 +152,11 @@ export const patentReceiptService = {
     const res = await apiClient.get<ApiResponse<IMyPatentReceipt[]>>('/patent-receipts/my');
     return res.data;
   },
+
+  uploadMy: async (file: File): Promise<{ id: number }> => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await apiClient.post<ApiResponse<{ id: number }>>('/patent-receipts/my/upload', form);
+    return res.data;
+  },
 };

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type FC } fro
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
-import { documentService } from '../../services/documentService';
 import { employeeService } from '../../services/employeeService';
 import { patentReceiptService, type IMyPatentReceipt, type RecognitionStatus } from '../../services/patentReceiptService';
 import type { Employee } from '../../types/employee';
@@ -206,7 +205,7 @@ export const ObjectWorkerDashboardPage: FC = () => {
 
     setUploading(true);
     try {
-      await documentService.uploadFile(file, employeeId, 'patent_check');
+      await patentReceiptService.uploadMy(file);
       toast.success('Чек от патента загружен');
       reloadReceipts();
     } catch (err) {

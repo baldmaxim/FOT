@@ -3,6 +3,7 @@ import { supabase } from '../config/database.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { r2Service } from '../services/r2.service.js';
 import { aiReceiptRecognitionService } from '../services/ai-receipt-recognition.service.js';
+import { trimWhiteBorders } from '../services/image-trim.service.js';
 import type { PatentPaymentReceiptPatch } from '../types/patent-receipt.types.js';
 import { isAllowedOpenRouterModel } from '../services/settings.service.js';
 import {
@@ -10,6 +11,10 @@ import {
   decryptRawResponse,
   encryptReceiptFields,
 } from '../services/patent-receipt-encryption.helper.js';
+
+interface MulterRequest extends AuthenticatedRequest {
+  file?: Express.Multer.File;
+}
 
 const RECEIPT_COLUMNS = `
   id, document_id, employee_id,
@@ -249,6 +254,74 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
   }
 };
 
+const uploadMy = async (req: MulterRequest, res: Response): Promise<void> => {
+  try {
+    const employeeId = req.user.employee_id;
+    if (!employeeId) {
+      res.status(403).json({ success: false, error: 'Аккаунт не привязан к сотруднику' });
+      return;
+    }
+    if (!(await r2Service.isEnabledAsync())) {
+      res.status(503).json({ success: false, error: 'R2 хранилище не настроено' });
+      return;
+    }
+    if (!req.file) {
+      res.status(400).json({ success: false, error: 'Файл обязателен' });
+      return;
+    }
+
+    const file = req.file;
+    let buffer = file.buffer;
+    let mimeType = file.mimetype || 'application/octet-stream';
+    let fileSize = file.size;
+
+    const trimmed = await trimWhiteBorders(buffer, mimeType);
+    buffer = trimmed.buffer;
+    mimeType = trimmed.mimeType;
+    fileSize = trimmed.size;
+
+    const r2Key = r2Service.generateKey(employeeId, file.originalname);
+    await r2Service.uploadObject(r2Key, buffer, mimeType);
+
+    const { data, error } = await supabase
+      .from('documents')
+      .insert({
+        employee_id: employeeId,
+        category: 'patent_check',
+        file_name: file.originalname,
+        file_size: fileSize,
+        mime_type: mimeType,
+        r2_key: r2Key,
+        uploaded_by: req.user.id,
+      })
+      .select()
+      .single();
+
+    if (error || !data) {
+      try { await r2Service.deleteObject(r2Key); } catch { /* best-effort */ }
+      throw error || new Error('Insert failed');
+    }
+
+    const documentId = Number(data.id);
+    const { error: linkError } = await supabase
+      .from('document_links')
+      .upsert(
+        [{ document_id: documentId, entity_type: 'employee', entity_id: String(employeeId), purpose: 'patent_check' }],
+        { onConflict: 'document_id,entity_type,entity_id,purpose' },
+      );
+    if (linkError) {
+      console.warn('patent-receipts.uploadMy document_links upsert failed:', linkError);
+    }
+
+    res.json({ success: true, data });
+
+    void aiReceiptRecognitionService.enqueueRecognition(documentId);
+  } catch (err) {
+    console.error('patent-receipts.uploadMy error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка загрузки чека' });
+  }
+};
+
 const recognize = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const documentId = Number(req.params.documentId);
@@ -278,6 +351,7 @@ export const patentReceiptsController = {
   list,
   getOne,
   getMy,
+  uploadMy,
   update,
   recognize,
 };
