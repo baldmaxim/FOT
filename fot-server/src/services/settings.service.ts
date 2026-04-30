@@ -65,20 +65,12 @@ export interface IOpenRouterResolvedConfig {
 }
 
 export const ALLOWED_OPENROUTER_MODELS: IOpenRouterModelInfo[] = [
-  { id: 'google/gemini-2.5-flash',          label: 'Gemini 2.5 Flash (рекомендуется)', costPer1kReceiptsRub: 170,  supportsVision: true },
-  { id: 'google/gemini-2.5-pro',            label: 'Gemini 2.5 Pro (макс. качество)',  costPer1kReceiptsRub: 1700, supportsVision: true },
-  { id: 'google/gemini-2.0-flash-001',      label: 'Gemini 2.0 Flash (дёшево)',        costPer1kReceiptsRub: 60,   supportsVision: true },
-  { id: 'google/gemini-2.0-flash-lite-001', label: 'Gemini 2.0 Flash Lite',            costPer1kReceiptsRub: 40,   supportsVision: true },
-  { id: 'anthropic/claude-3.5-sonnet',      label: 'Claude 3.5 Sonnet',                costPer1kReceiptsRub: 600,  supportsVision: true },
-  { id: 'openai/gpt-4o',                    label: 'GPT-4o',                           costPer1kReceiptsRub: 1200, supportsVision: true },
-  { id: 'openai/gpt-4o-mini',               label: 'GPT-4o mini',                      costPer1kReceiptsRub: 120,  supportsVision: true },
-  { id: 'baidu/qianfan-ocr-fast:free',      label: 'Qianfan OCR Fast (бесплатно)',     costPer1kReceiptsRub: 0,    supportsVision: true },
-  { id: 'google/gemma-4-26b-a4b-it:free',   label: 'Gemma 4 26B (только текст)',       costPer1kReceiptsRub: 0,    supportsVision: false },
+  { id: 'google/gemma-4-26b-a4b-it:free', label: 'Gemma 4 26B (бесплатно)', costPer1kReceiptsRub: 0, supportsVision: true },
 ];
 
 export const DEFAULT_OPENROUTER_SETTINGS = {
   enabled: false,
-  model: 'google/gemini-2.5-flash',
+  model: 'google/gemma-4-26b-a4b-it:free',
   baseUrl: 'https://openrouter.ai/api/v1',
 };
 
