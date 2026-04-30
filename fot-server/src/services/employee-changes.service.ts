@@ -308,9 +308,44 @@ export const employeeChangesService = {
   },
 
   /**
-   * Удалить запись employee_assignments
+   * Удалить запись employee_assignments.
+   * Нельзя удалять последнее открытое назначение у активного сотрудника — иначе он
+   * остаётся «без отдела», табель ломается, а Sigur sync через час создаёт запись
+   * задним числом today() и образуется gap в днях.
    */
   async deleteAssignment(assignmentId: string, employeeId: number): Promise<void> {
+    const { data: target, error: loadErr } = await supabase
+      .from('employee_assignments')
+      .select('id, effective_to')
+      .eq('id', assignmentId)
+      .eq('employee_id', employeeId)
+      .maybeSingle();
+    if (loadErr) throw loadErr;
+    if (!target) throw new Error('Assignment record not found');
+
+    if (target.effective_to == null) {
+      const { data: emp } = await supabase
+        .from('employees')
+        .select('employment_status, is_archived')
+        .eq('id', employeeId)
+        .maybeSingle();
+      const isActive = emp && emp.employment_status === 'active' && !emp.is_archived;
+      if (isActive) {
+        const { count, error: cntErr } = await supabase
+          .from('employee_assignments')
+          .select('id', { count: 'exact', head: true })
+          .eq('employee_id', employeeId)
+          .is('effective_to', null);
+        if (cntErr) throw cntErr;
+        if ((count ?? 0) <= 1) {
+          throw new Error(
+            'Нельзя удалить единственное открытое назначение у активного сотрудника. '
+            + 'Сначала создайте новое назначение или уволите/архивируйте сотрудника.',
+          );
+        }
+      }
+    }
+
     const { data: deleted, error } = await supabase
       .from('employee_assignments')
       .delete()

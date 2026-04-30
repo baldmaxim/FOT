@@ -138,10 +138,11 @@ export async function listEmployeeIdsAssignedToDepartmentPeriod(
 
 /**
  * Возвращает сотрудников, чьё назначение в отдел (или поддерево) пересекалось с периодом
- * [startDate, endDate]. Для каждого вычисляет дату выхода (transferred_out_date) — это
- * effective_to ПОСЛЕДНЕГО закрытого назначения в этом отделе, ПРИ УСЛОВИИ что у сотрудника
- * больше нет открытого назначения сюда. Если сотрудник всё ещё числится в отделе —
- * transferred_out_date = null.
+ * [startDate, endDate]. Для каждого вычисляет дату перевода (transferred_out_date) — это
+ * дата, С КОТОРОЙ сотрудника больше нет в отделе. По инварианту парности это
+ * effective_to ПОСЛЕДНЕГО закрытого назначения + 1 день (то есть effective_from нового
+ * назначения), ПРИ УСЛОВИИ что у сотрудника больше нет открытого назначения сюда.
+ * Если сотрудник всё ещё числится в отделе — transferred_out_date = null.
  *
  * Также фильтрует по excluded_from_timesheet_date: если сотрудник исключён ДО начала
  * периода — отбрасываем; если позже — оставляем (фронт зачеркнёт оставшиеся дни).
@@ -168,15 +169,21 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
   for (const row of assignments || []) {
     const empId = Number(row.employee_id);
     if (!Number.isFinite(empId)) continue;
-    const eff_to = (row.effective_to as string | null) ?? null;
+    const effTo = (row.effective_to as string | null) ?? null;
+    // Дата перевода = первый день, когда сотрудника уже нет в отделе.
+    const transferDate = effTo ? formatDateShift(effTo, 1) : null;
     const existing = map.get(empId);
     if (!existing) {
-      map.set(empId, { employee_id: empId, transferred_out_date: eff_to });
-    } else if (eff_to == null) {
+      map.set(empId, { employee_id: empId, transferred_out_date: transferDate });
+    } else if (effTo == null) {
       // Открытое назначение всегда побеждает — сотрудник в отделе.
       existing.transferred_out_date = null;
-    } else if (existing.transferred_out_date != null && eff_to > existing.transferred_out_date) {
-      existing.transferred_out_date = eff_to;
+    } else if (
+      existing.transferred_out_date != null
+      && transferDate != null
+      && transferDate > existing.transferred_out_date
+    ) {
+      existing.transferred_out_date = transferDate;
     }
   }
 

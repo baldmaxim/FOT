@@ -576,10 +576,59 @@ export async function syncEmployeesLogic(
           // Отдел изменился → пишем историю и синхронизируем назначения
           if (u.fields.org_department_id && prev && u.fields.org_department_id !== prev.org_department_id) {
             const nextDeptId = u.fields.org_department_id as string;
-            await employeeChangesService.changeDepartment(u.id, nextDeptId, {
-              reason: 'Синхронизация Sigur',
-              lockDepartment: false,
-            });
+
+            // Защита от gap'а: если у сотрудника нет открытого назначения вообще,
+            // но есть свежее закрытое в нужном Sigur-отделе — переоткрываем его
+            // (effective_to=NULL), а не создаём новую запись задним числом today().
+            // Иначе после случайного обрыва пары (например, удалённого нового
+            // назначения через UI «История») каждый цикл sync порождал бы gap.
+            const { count: openCount } = await supabase
+              .from('employee_assignments')
+              .select('id', { count: 'exact', head: true })
+              .eq('employee_id', u.id)
+              .is('effective_to', null);
+
+            let reopened = false;
+            if ((openCount ?? 0) === 0) {
+              const { data: lastClosed } = await supabase
+                .from('employee_assignments')
+                .select('id, position_id, effective_to')
+                .eq('employee_id', u.id)
+                .eq('org_department_id', nextDeptId)
+                .not('effective_to', 'is', null)
+                .order('effective_to', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+              if (lastClosed) {
+                const nowIso = new Date().toISOString();
+                const { error: reopenErr } = await supabase
+                  .from('employee_assignments')
+                  .update({ effective_to: null, updated_at: nowIso })
+                  .eq('id', lastClosed.id);
+                if (!reopenErr) {
+                  await supabase
+                    .from('employees')
+                    .update({
+                      org_department_id: nextDeptId,
+                      position_id: lastClosed.position_id || null,
+                      updated_at: nowIso,
+                    })
+                    .eq('id', u.id);
+                  console.log('[syncEmployees] reopened orphaned assignment', {
+                    employeeId: u.id, assignmentId: lastClosed.id, deptId: nextDeptId,
+                    previousEffectiveTo: lastClosed.effective_to,
+                  });
+                  reopened = true;
+                }
+              }
+            }
+
+            if (!reopened) {
+              await employeeChangesService.changeDepartment(u.id, nextDeptId, {
+                reason: 'Синхронизация Sigur',
+                lockDepartment: false,
+              });
+            }
             await upsertTechnicalDepartmentAccess(u.id, nextDeptId, prev.org_department_id || null, 'sigur_sync');
             delete u.fields.org_department_id;
           }
