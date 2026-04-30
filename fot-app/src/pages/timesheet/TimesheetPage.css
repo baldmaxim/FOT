@@ -1878,52 +1878,36 @@
   color: var(--text-tertiary);
 }
 
-/* ===== Модалка дня: view-карточка текущей корректировки ===== */
-.ts-correction-view-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
+/* ===== Модалка дня: view-строка текущей корректировки ===== */
+.ts-correction-view-row {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.ts-correction-view-item {
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 12px 14px;
   background: var(--bg-secondary);
+  font-size: 14px;
+  min-height: 36px;
 }
-.ts-correction-view-main {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-.ts-correction-view-icon {
-  font-size: 20px;
+.ts-correction-view-row__icon {
+  font-size: 16px;
   line-height: 1;
   flex-shrink: 0;
 }
-.ts-correction-view-text {
+.ts-correction-view-row__text {
   flex: 1;
   min-width: 0;
-}
-.ts-correction-view-status {
-  font-size: 14px;
-  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-primary);
-  margin-bottom: 4px;
 }
-.ts-correction-view-meta {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-.ts-correction-view-notes {
-  color: var(--text-tertiary);
-}
-.ts-correction-view-author {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  margin-top: 6px;
+.ts-correction-view-row__actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 /* Пустой placeholder для pair-duration (резервирует колонку) */

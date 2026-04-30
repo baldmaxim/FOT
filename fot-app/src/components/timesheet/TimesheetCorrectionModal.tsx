@@ -1,5 +1,5 @@
 import { type FC, type ReactNode, useState, useEffect, useCallback, useRef } from 'react';
-import { X, LogIn, LogOut, Timer } from 'lucide-react';
+import { X, LogIn, LogOut, Timer, Pencil, Trash2 } from 'lucide-react';
 import type { TimesheetEntry, TimesheetStatus, SkudEvent } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
@@ -271,39 +271,45 @@ const CorrectionTab: FC<{
       correctionInfo?.corrected_by_name ?? null,
       correctionInfo?.corrected_at ? formatCorrectionDate(correctionInfo.corrected_at) : null,
     ].filter(Boolean).join(' • ');
+    const tooltip = [
+      `${statusLabel} · ${hoursLabel}`,
+      initialNotes || null,
+      authorLine || null,
+    ].filter(Boolean).join('\n');
     return (
       <>
         <div className="ts-modal-body">
-          <ul className="ts-correction-view-list">
-            <li className="ts-correction-view-item">
-              <div className="ts-correction-view-main">
-                <span className="ts-correction-view-icon">{statusIcon}</span>
-                <div className="ts-correction-view-text">
-                  <div className="ts-correction-view-status">{statusLabel}</div>
-                  <div className="ts-correction-view-meta">
-                    Часы: <b>{hoursLabel}</b>
-                    {initialNotes ? <span className="ts-correction-view-notes"> • {initialNotes}</span> : null}
-                  </div>
-                  {authorLine && <div className="ts-correction-view-author">{authorLine}</div>}
-                </div>
-              </div>
-            </li>
-          </ul>
+          <div className="ts-correction-view-row" title={tooltip}>
+            <span className="ts-correction-view-row__icon">{statusIcon}</span>
+            <span className="ts-correction-view-row__text">
+              {statusLabel} · <b>{hoursLabel}</b>
+            </span>
+            <span className="ts-correction-view-row__actions">
+              <button
+                type="button"
+                className="ts-corrections-btn"
+                onClick={() => setMode('edit')}
+                aria-label="Изменить корректировку"
+                title="Изменить"
+              >
+                <Pencil size={14} />
+              </button>
+              {onDelete && (
+                <button
+                  type="button"
+                  className="ts-corrections-btn ts-corrections-btn--danger"
+                  onClick={onDelete}
+                  aria-label="Удалить корректировку"
+                  title={deleteLabel || 'Удалить'}
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </span>
+          </div>
         </div>
         <div className="ts-modal-footer">
           <button className="ts-btn" onClick={onClose} type="button">Закрыть</button>
-          {onDelete && (
-            <button className="ts-btn ts-btn--danger" onClick={onDelete} type="button">
-              {deleteLabel || 'Удалить'}
-            </button>
-          )}
-          <button
-            className="ts-btn ts-btn--primary"
-            onClick={() => setMode('edit')}
-            type="button"
-          >
-            Изменить
-          </button>
         </div>
       </>
     );
