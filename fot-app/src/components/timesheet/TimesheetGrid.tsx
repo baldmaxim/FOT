@@ -141,10 +141,14 @@ const formatHM = (decimal: number): string => {
 };
 
 const formatDeviationHours = (value: number): string => {
-  const abs = Math.abs(value);
-  const rounded = Math.round(abs * 10) / 10;
-  const sign = value > 0.05 ? '+' : value < -0.05 ? '−' : '';
-  return `${sign}${rounded.toFixed(1)} ч`;
+  const totalMinutes = Math.round(Math.abs(value) * 60);
+  if (totalMinutes === 0) return '0м';
+  const sign = value > 0 ? '+' : '−';
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (h === 0) return `${sign}${m}м`;
+  if (m === 0) return `${sign}${h}ч`;
+  return `${sign}${h}ч ${m}м`;
 };
 
 const formatBadgeDate = (iso: string): string => {
@@ -950,7 +954,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     {stat && (
                       <span
                         className={`ts-mobile-deviation ${getDeviationCellClass(stat.deviation_hours)}`}
-                        title={`План ${stat.norm_hours.toFixed(1)} ч, факт ${stat.fact_hours.toFixed(1)} ч`}
+                        title={`План ${formatHM(stat.norm_hours)}, факт ${formatHM(stat.fact_hours)}`}
                       >
                         {formatDeviationHours(stat.deviation_hours)}
                       </span>
@@ -1360,7 +1364,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       }
                       const dev = stat.deviation_hours;
                       const cls = getDeviationCellClass(dev);
-                      const tip = `План ${stat.norm_hours.toFixed(1)} ч, факт ${stat.fact_hours.toFixed(1)} ч`;
+                      const tip = `План ${formatHM(stat.norm_hours)}, факт ${formatHM(stat.fact_hours)}`;
                       return (
                         <td className={`ts-col-deviation-sticky ${cls}`} title={tip}>
                           {formatDeviationHours(dev)}

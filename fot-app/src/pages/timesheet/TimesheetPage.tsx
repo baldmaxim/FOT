@@ -46,6 +46,16 @@ const TimesheetCorrectionModal = lazy(() => import('../../components/timesheet/T
 })));
 
 
+const formatHoursHM = (decimal: number): string => {
+  if (!decimal || decimal <= 0) return '0м';
+  const totalMinutes = Math.round(decimal * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (h === 0) return `${m}м`;
+  if (m === 0) return `${h}ч`;
+  return `${h}ч ${m}м`;
+};
+
 const DEFAULT_STATS: ITimesheetStats = {
   employeeCount: 0,
   workingDays: 0,
@@ -1612,7 +1622,7 @@ export const TimesheetPage: FC = () => {
             >
               <span className="ts-split-day-item-name">{objectEntry.object_name}</span>
               <span className="ts-split-day-item-hours">
-                {(objectEntry.display_hours_worked ?? objectEntry.hours_worked).toFixed(2)} ч
+                {formatHoursHM(objectEntry.display_hours_worked ?? objectEntry.hours_worked)}
               </span>
             </button>
           ))}
