@@ -12,6 +12,7 @@ import { useEmployeeTimesheetMonths } from '../../hooks/useEmployeeTimesheet';
 import styles from './EmployeeDashboard.module.css';
 
 const EmployeeInfoCards = lazy(() => import('../../components/dashboard/EmployeeInfoCards').then(m => ({ default: m.EmployeeInfoCards })));
+const DailyTasksCard = lazy(() => import('../../components/dashboard/DailyTasksCard').then(m => ({ default: m.DailyTasksCard })));
 const UnifiedRequestModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.UnifiedRequestModal })));
 const TwoFAModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.TwoFAModal })));
 const MyMonthTimesheet = lazy(() => import('../../components/dashboard/MyMonthTimesheet').then(m => ({ default: m.MyMonthTimesheet })));
@@ -316,6 +317,9 @@ export const EmployeeDashboardPage: React.FC = () => {
 
         {/* Right column: Employee Info */}
         <div className={styles.rightColumn}>
+          <Suspense fallback={DashboardCardFallback}>
+            <DailyTasksCard />
+          </Suspense>
           <Suspense fallback={DashboardCardFallback}>
             <EmployeeInfoCards
               loading={loading}

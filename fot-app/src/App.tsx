@@ -72,6 +72,7 @@ const ObjectWorkerDashboardPage = lazy(() => import('./pages/employee/ObjectWork
 const LeaveRequestsPage = lazy(() => import('./pages/employee/LeaveRequestsPage').then(m => ({ default: m.LeaveRequestsPage })));
 const LeaveRequestDetailPage = lazy(() => import('./pages/employee/LeaveRequestDetailPage').then(m => ({ default: m.LeaveRequestDetailPage })));
 const DocumentsPage = lazy(() => import('./pages/employee/DocumentsPage').then(m => ({ default: m.DocumentsPage })));
+const DailyTasksPage = lazy(() => import('./pages/employee/DailyTasksPage').then(m => ({ default: m.DailyTasksPage })));
 const SalaryRaisePage = lazy(() => import('./pages/employee/SalaryRaisePage').then(m => ({ default: m.SalaryRaisePage })));
 const SalaryRaiseFormPage = lazy(() => import('./pages/employee/SalaryRaiseFormPage').then(m => ({ default: m.SalaryRaiseFormPage })));
 const SalaryRaiseViewPage = lazy(() => import('./pages/employee/SalaryRaiseViewPage').then(m => ({ default: m.SalaryRaiseViewPage })));
@@ -207,6 +208,17 @@ const AppRoutes = () => {
             element={
               <EmployeeLayout title="Мои документы">
                 <DocumentsPage />
+              </EmployeeLayout>
+            }
+          />
+        </Route>
+
+        <Route element={<ProtectedRoute requiredPage="/employee/tasks" />}>
+          <Route
+            path="/employee/tasks"
+            element={
+              <EmployeeLayout title="Мои задачи">
+                <DailyTasksPage />
               </EmployeeLayout>
             }
           />

@@ -4,6 +4,7 @@ import { leaveRequestService, type LeaveRequestStatus } from '../services/leaveR
 import { paymentService } from '../services/paymentService';
 import { payslipService } from '../services/payslipService';
 import { employeeService } from '../services/employeeService';
+import { dailyTaskService } from '../services/dailyTaskService';
 
 export const getMyPayslipsQueryKey = () => ['my-payslips'] as const;
 export const getMyPaymentsQueryKey = () => ['my-payments'] as const;
@@ -11,6 +12,8 @@ export const getMyDocumentsQueryKey = () => ['my-documents'] as const;
 export const getMyLeaveRequestsQueryKey = () => ['my-leave-requests'] as const;
 export const getLeaveRequestsManageQueryKey = (scope: 'department' | 'all', filter: 'pending' | 'all') => ['leave-requests-manage', scope, filter] as const;
 export const getEmployeeHistoryQueryKey = (employeeId: number | null) => ['employee-history', employeeId] as const;
+export const getMyDailyTasksQueryKey = () => ['my-daily-tasks'] as const;
+export const getTodayDailyTaskQueryKey = () => ['today-daily-task'] as const;
 
 export const useMyPayslips = () => useQuery({
   queryKey: getMyPayslipsQueryKey(),
@@ -48,6 +51,18 @@ export const useLeaveRequestsManage = (
   ),
   staleTime: 30_000,
   placeholderData: previousData => previousData,
+});
+
+export const useMyDailyTasks = () => useQuery({
+  queryKey: getMyDailyTasksQueryKey(),
+  queryFn: () => dailyTaskService.getMy(),
+  staleTime: 30_000,
+});
+
+export const useTodayDailyTask = () => useQuery({
+  queryKey: getTodayDailyTaskQueryKey(),
+  queryFn: () => dailyTaskService.getToday(),
+  staleTime: 30_000,
 });
 
 export const useEmployeeHistory = (employeeId: number | null, enabled = true) => useQuery({
