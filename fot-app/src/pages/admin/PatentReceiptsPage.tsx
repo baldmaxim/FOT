@@ -1,6 +1,6 @@
 import { type FC, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Eye, RefreshCw, AlertTriangle, CheckCircle2, Clock, XCircle } from 'lucide-react';
+import { Eye, RefreshCw, AlertTriangle, CheckCircle2, Clock, XCircle, UserX, ShieldCheck } from 'lucide-react';
 import {
   patentReceiptService,
   type IPatentReceiptListRow,
@@ -36,6 +36,21 @@ const formatAmount = (value: string | null): string => {
   return new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(num);
 };
 
+const normalizeFio = (s: string | null | undefined): string[] =>
+  (s || '')
+    .toUpperCase()
+    .replace(/Ё/g, 'Е')
+    .split(/\s+/)
+    .map(part => part.trim())
+    .filter(Boolean);
+
+const fioMismatches = (payerFio: string | null | undefined, employeeFio: string | null | undefined): boolean => {
+  const payerWords = normalizeFio(payerFio);
+  const employeeWords = normalizeFio(employeeFio);
+  if (payerWords.length === 0 || employeeWords.length === 0) return false;
+  return !employeeWords.every(word => payerWords.includes(word));
+};
+
 export const PatentReceiptsPage: FC = () => {
   const [filterFrom, setFilterFrom] = useState('');
   const [filterTo, setFilterTo] = useState('');
@@ -58,6 +73,12 @@ export const PatentReceiptsPage: FC = () => {
     <div className={styles.page}>
       <div className={styles.header}>
         <h1 className={styles.title}>Чеки за патент</h1>
+        <span
+          className={styles.encryptionBadge}
+          title="ПДн (ФИО, паспорт, ИНН, банковские реквизиты) зашифрованы AES-256-GCM в БД и при передаче"
+        >
+          <ShieldCheck size={14} /> Данные зашифрованы
+        </span>
       </div>
 
       <div className={styles.filters}>
@@ -107,11 +128,22 @@ export const PatentReceiptsPage: FC = () => {
               {rows.map((r: IPatentReceiptListRow) => {
                 const status = r.documents?.recognition_status as RecognitionStatus | null;
                 const badge = status ? STATUS_BADGE[status] : null;
+                const fioMismatch = fioMismatches(r.payer_full_name, r.employees?.full_name);
                 return (
                   <tr key={r.id} className={r.needs_review ? styles.rowNeedsReview : undefined}>
                     <td>{formatDate(r.payment_date)}</td>
                     <td>{r.employees?.full_name || '—'}</td>
-                    <td>{r.payer_full_name || '—'}</td>
+                    <td>
+                      {r.payer_full_name || '—'}
+                      {fioMismatch && (
+                        <span
+                          className={styles.fioMismatch}
+                          title="ФИО плательщика не совпадает с ФИО сотрудника"
+                        >
+                          <UserX size={12} /> ≠ ФИО сотрудника
+                        </span>
+                      )}
+                    </td>
                     <td>{r.payer_passport || '—'}</td>
                     <td>{r.payer_inn || '—'}</td>
                     <td>{r.patent_number || '—'}</td>

@@ -5,6 +5,11 @@ import { r2Service } from '../services/r2.service.js';
 import { aiReceiptRecognitionService } from '../services/ai-receipt-recognition.service.js';
 import type { PatentPaymentReceiptPatch } from '../types/patent-receipt.types.js';
 import { isAllowedOpenRouterModel } from '../services/settings.service.js';
+import {
+  decryptReceiptRow,
+  decryptRawResponse,
+  encryptReceiptFields,
+} from '../services/patent-receipt-encryption.helper.js';
 
 const RECEIPT_COLUMNS = `
   id, document_id, employee_id,
@@ -104,7 +109,9 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       rows = rows.filter(r => r.documents?.recognition_status === status);
     }
 
-    res.json({ success: true, data: rows });
+    const decrypted = rows.map(row => decryptReceiptRow(row as unknown as Record<string, unknown>));
+
+    res.json({ success: true, data: decrypted });
   } catch (err) {
     console.error('patent-receipts.list error:', err);
     res.status(500).json({ success: false, error: 'Ошибка загрузки списка чеков' });
@@ -130,7 +137,7 @@ const getOne = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const row = data as unknown as { documents?: { r2_key?: string | null } };
+    const row = data as unknown as { documents?: { r2_key?: string | null }; raw_response?: unknown };
     let download_url: string | null = null;
     if (row.documents?.r2_key) {
       try {
@@ -140,7 +147,10 @@ const getOne = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       }
     }
 
-    res.json({ success: true, data: { ...data, download_url } });
+    const decrypted = decryptReceiptRow(data as Record<string, unknown>);
+    decrypted.raw_response = decryptRawResponse(row.raw_response);
+
+    res.json({ success: true, data: { ...decrypted, download_url } });
   } catch (err) {
     console.error('patent-receipts.getOne error:', err);
     res.status(500).json({ success: false, error: 'Ошибка загрузки чека' });
@@ -171,7 +181,7 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     const { data, error } = await supabase
       .from('patent_payment_receipts')
-      .update(patch)
+      .update(encryptReceiptFields(patch))
       .eq('id', id)
       .select(RECEIPT_COLUMNS)
       .single();
@@ -181,7 +191,7 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    res.json({ success: true, data });
+    res.json({ success: true, data: decryptReceiptRow(data as Record<string, unknown>) });
   } catch (err) {
     console.error('patent-receipts.update error:', err);
     res.status(500).json({ success: false, error: 'Ошибка обновления чека' });

@@ -2,6 +2,7 @@ import axios from 'axios';
 import { supabase } from '../config/database.js';
 import { r2Service } from './r2.service.js';
 import { openRouterService, type IChatMessage } from './openrouter.service.js';
+import { encryptReceiptFields, encryptRawResponse } from './patent-receipt-encryption.helper.js';
 import {
   IRecognitionRunResult,
   IRecognizedReceiptPayload,
@@ -295,7 +296,7 @@ export const aiReceiptRecognitionService = {
         payer_account: payload.payer_account,
         payment_method: payload.payment_method,
         source_type: payload.source_type,
-        raw_response: parsed,
+        raw_response: encryptRawResponse(parsed),
         confidence: payload.confidence,
         recognition_model: completion.resolvedModel,
         prompt_tokens: promptTokens,
@@ -308,7 +309,7 @@ export const aiReceiptRecognitionService = {
 
       const { data: upserted, error: upsertErr } = await supabase
         .from('patent_payment_receipts')
-        .upsert(upsertRow, { onConflict: 'document_id' })
+        .upsert(encryptReceiptFields(upsertRow), { onConflict: 'document_id' })
         .select('id')
         .single();
 

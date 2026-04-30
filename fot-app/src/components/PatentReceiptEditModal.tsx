@@ -1,6 +1,6 @@
 import { type FC, useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, Save, RefreshCw } from 'lucide-react';
+import { X, Save, RefreshCw, Pencil, ShieldCheck } from 'lucide-react';
 import {
   patentReceiptService,
   type IPatentReceiptDetail,
@@ -88,6 +88,18 @@ const toPatch = (form: IFormState): IPatentReceiptPatch => ({
   needs_review: form.needs_review,
 });
 
+const formatAmount = (value: string): string => {
+  if (!value) return '';
+  const num = Number(value);
+  if (!Number.isFinite(num)) return value;
+  return new Intl.NumberFormat('ru-RU', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(num);
+};
+
+const parseAmount = (value: string): string => value.replace(/\s+/g, '').replace(',', '.');
+
 export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved }) => {
   const queryClient = useQueryClient();
   const { data, isLoading } = useQuery({
@@ -102,6 +114,7 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
 
   const [form, setForm] = useState<IFormState | null>(null);
   const [overrideModel, setOverrideModel] = useState<string>('');
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     if (data) setForm(toForm(data));
@@ -112,6 +125,7 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['patent-receipts'] });
       void queryClient.invalidateQueries({ queryKey: ['patent-receipt', receiptId] });
+      setEditing(false);
       onSaved?.();
     },
   });
@@ -133,11 +147,26 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
     saveMutation.mutate(toPatch(form));
   };
 
+  const handleCancelEdit = () => {
+    if (data) setForm(toForm(data));
+    setEditing(false);
+  };
+
+  const readOnly = !editing;
+
   return (
     <div className={styles.overlay} onClick={onClose}>
       <div className={styles.modal} onClick={e => e.stopPropagation()}>
         <div className={styles.header}>
-          <h3>Чек НДФЛ за патент</h3>
+          <h3>
+            Чек НДФЛ за патент
+            <span
+              className={styles.encryptionBadge}
+              title="ПДн (ФИО, паспорт, ИНН, банковские реквизиты) зашифрованы AES-256-GCM в БД"
+            >
+              <ShieldCheck size={12} /> зашифровано
+            </span>
+          </h3>
           <button className={styles.closeBtn} onClick={onClose}>
             <X size={18} />
           </button>
@@ -189,35 +218,36 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
 
             <div className={styles.right}>
               <div className={styles.formGrid}>
-                <Field label="Дата платежа" type="date" value={form.payment_date} onChange={v => update('payment_date', v)} />
-                <Field label="Сумма ₽" type="number" value={form.payment_amount} onChange={v => update('payment_amount', v)} />
-                <Field label="Комиссия ₽" type="number" value={form.commission} onChange={v => update('commission', v)} />
-                <Field label="Итого ₽" type="number" value={form.total_amount} onChange={v => update('total_amount', v)} />
+                <Field label="Дата платежа" type="date" value={form.payment_date} onChange={v => update('payment_date', v)} readOnly={readOnly} />
+                <AmountField label="Сумма ₽" value={form.payment_amount} onChange={v => update('payment_amount', v)} readOnly={readOnly} />
+                <AmountField label="Комиссия ₽" value={form.commission} onChange={v => update('commission', v)} readOnly={readOnly} />
+                <AmountField label="Итого ₽" value={form.total_amount} onChange={v => update('total_amount', v)} readOnly={readOnly} />
 
-                <Field label="Плательщик (ФИО)" value={form.payer_full_name} onChange={v => update('payer_full_name', v)} fullWidth />
-                <Field label="Паспорт" value={form.payer_passport} onChange={v => update('payer_passport', v)} />
-                <Field label="ИНН плательщика" value={form.payer_inn} onChange={v => update('payer_inn', v)} />
-                <Field label="№ операции" value={form.document_number} onChange={v => update('document_number', v)} />
-                <Field label="УИН" value={form.uin} onChange={v => update('uin', v)} />
+                <Field label="Плательщик (ФИО)" value={form.payer_full_name} onChange={v => update('payer_full_name', v)} fullWidth readOnly={readOnly} />
+                <Field label="Паспорт" value={form.payer_passport} onChange={v => update('payer_passport', v)} readOnly={readOnly} />
+                <Field label="ИНН плательщика" value={form.payer_inn} onChange={v => update('payer_inn', v)} readOnly={readOnly} />
+                <Field label="№ операции" value={form.document_number} onChange={v => update('document_number', v)} readOnly={readOnly} />
+                <Field label="УИН" value={form.uin} onChange={v => update('uin', v)} readOnly={readOnly} />
 
-                <Field label="№ патента" value={form.patent_number} onChange={v => update('patent_number', v)} />
-                <Field label="Дата выдачи патента" type="date" value={form.patent_issue_date} onChange={v => update('patent_issue_date', v)} />
-                <Field label="КБК" value={form.kbk} onChange={v => update('kbk', v)} />
-                <Field label="ОКТМО" value={form.oktmo} onChange={v => update('oktmo', v)} />
+                <Field label="№ патента" value={form.patent_number} onChange={v => update('patent_number', v)} readOnly={readOnly} />
+                <Field label="Дата выдачи патента" type="date" value={form.patent_issue_date} onChange={v => update('patent_issue_date', v)} readOnly={readOnly} />
+                <Field label="КБК" value={form.kbk} onChange={v => update('kbk', v)} readOnly={readOnly} />
+                <Field label="ОКТМО" value={form.oktmo} onChange={v => update('oktmo', v)} readOnly={readOnly} />
 
-                <Field label="Получатель" value={form.recipient_name} onChange={v => update('recipient_name', v)} fullWidth />
-                <Field label="ИНН получателя" value={form.recipient_inn} onChange={v => update('recipient_inn', v)} />
-                <Field label="КПП получателя" value={form.recipient_kpp} onChange={v => update('recipient_kpp', v)} />
-                <Field label="БИК получателя" value={form.recipient_bank_bic} onChange={v => update('recipient_bank_bic', v)} />
-                <Field label="Счёт получателя" value={form.recipient_account} onChange={v => update('recipient_account', v)} />
+                <Field label="Получатель" value={form.recipient_name} onChange={v => update('recipient_name', v)} fullWidth readOnly={readOnly} />
+                <Field label="ИНН получателя" value={form.recipient_inn} onChange={v => update('recipient_inn', v)} readOnly={readOnly} />
+                <Field label="КПП получателя" value={form.recipient_kpp} onChange={v => update('recipient_kpp', v)} readOnly={readOnly} />
+                <Field label="БИК получателя" value={form.recipient_bank_bic} onChange={v => update('recipient_bank_bic', v)} readOnly={readOnly} />
+                <Field label="Счёт получателя" value={form.recipient_account} onChange={v => update('recipient_account', v)} readOnly={readOnly} />
 
-                <Field label="Банк плательщика" value={form.payer_bank_name} onChange={v => update('payer_bank_name', v)} fullWidth />
+                <Field label="Банк плательщика" value={form.payer_bank_name} onChange={v => update('payer_bank_name', v)} fullWidth readOnly={readOnly} />
 
                 <label className={styles.field}>
                   <span>Способ оплаты</span>
                   <select
                     value={form.payment_method ?? ''}
                     onChange={e => update('payment_method', (e.target.value || null) as PaymentMethod)}
+                    disabled={readOnly}
                   >
                     <option value="">—</option>
                     <option value="cash">Наличные</option>
@@ -231,6 +261,7 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
                     type="checkbox"
                     checked={form.needs_review}
                     onChange={e => update('needs_review', e.target.checked)}
+                    disabled={readOnly}
                   />
                   <span>Требует проверки</span>
                 </label>
@@ -240,14 +271,31 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
         )}
 
         <div className={styles.footer}>
-          <button className={styles.btnSecondary} onClick={onClose}>Закрыть</button>
-          <button
-            className={styles.btnPrimary}
-            onClick={handleSave}
-            disabled={saveMutation.isPending || !form}
-          >
-            <Save size={14} /> {saveMutation.isPending ? 'Сохранение…' : 'Сохранить'}
-          </button>
+          {editing ? (
+            <>
+              <button className={styles.btnSecondary} onClick={handleCancelEdit} disabled={saveMutation.isPending}>
+                Отмена
+              </button>
+              <button
+                className={styles.btnPrimary}
+                onClick={handleSave}
+                disabled={saveMutation.isPending || !form}
+              >
+                <Save size={14} /> {saveMutation.isPending ? 'Сохранение…' : 'Сохранить'}
+              </button>
+            </>
+          ) : (
+            <>
+              <button className={styles.btnSecondary} onClick={onClose}>Закрыть</button>
+              <button
+                className={styles.btnPrimary}
+                onClick={() => setEditing(true)}
+                disabled={!form}
+              >
+                <Pencil size={14} /> Редактировать
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -260,11 +308,45 @@ interface IFieldProps {
   onChange: (v: string) => void;
   type?: string;
   fullWidth?: boolean;
+  readOnly?: boolean;
 }
 
-const Field: FC<IFieldProps> = ({ label, value, onChange, type = 'text', fullWidth }) => (
+const Field: FC<IFieldProps> = ({ label, value, onChange, type = 'text', fullWidth, readOnly }) => (
   <label className={`${styles.field} ${fullWidth ? styles.fieldFull : ''}`}>
     <span>{label}</span>
-    <input type={type} value={value} onChange={e => onChange(e.target.value)} />
+    <input
+      type={type}
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      readOnly={readOnly}
+      disabled={readOnly}
+    />
   </label>
 );
+
+interface IAmountFieldProps {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  readOnly?: boolean;
+}
+
+const AmountField: FC<IAmountFieldProps> = ({ label, value, onChange, readOnly }) => {
+  const [focused, setFocused] = useState(false);
+  const displayValue = readOnly || !focused ? formatAmount(value) : value;
+  return (
+    <label className={styles.field}>
+      <span>{label}</span>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={displayValue}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        onChange={e => onChange(parseAmount(e.target.value))}
+        readOnly={readOnly}
+        disabled={readOnly}
+      />
+    </label>
+  );
+};
