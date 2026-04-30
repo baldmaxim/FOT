@@ -77,7 +77,7 @@ router.get(
 router.get(
   '/employee-events/:employeeId',
   requireAnyPageAccess(
-    ['/employee', '/employees', '/staff-control'],
+    ['/employee', '/staff-control'],
     'view',
   ),
   skudController.getEmployeeEvents
@@ -86,7 +86,7 @@ router.get(
 router.get(
   '/employee-events/:employeeId/export',
   requireAnyPageAccess(
-    ['/employee', '/employees', '/staff-control'],
+    ['/employee', '/staff-control'],
     'view',
   ),
   skudController.exportEmployeeEvents
@@ -109,7 +109,7 @@ router.get(
 // GET /api/skud/access-point-settings - настройки точек доступа для отдела (worker+)
 router.get(
   '/access-point-settings',
-  requireAnyPageAccess(['/employee', '/employees', '/staff-control', '/skud-settings'], 'view'),
+  requireAnyPageAccess(['/employee', '/staff-control', '/skud-settings'], 'view'),
   skudController.getAccessPointSettings
 );
 
@@ -256,7 +256,7 @@ router.post(
 // GET /api/skud/presence - статус присутствия сотрудников (header+, кэш 30с)
 router.get(
   '/presence',
-  requireAnyPageAccess(['/dashboard', '/employees', '/staff-control'], 'view'),
+  requireAnyPageAccess(['/dashboard', '/staff-control'], 'view'),
   presenceCache,
   skudController.getPresence
 );
@@ -274,7 +274,7 @@ router.post(
 // POST /api/skud/sync-employee - синхронизация событий одного сотрудника из Sigur (admin+)
 router.post(
   '/sync-employee',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   skudController.syncEmployee
 );
 

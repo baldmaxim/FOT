@@ -30,7 +30,7 @@ router.get(
 // GET /api/documents/employee/:empId — документы сотрудника
 router.get(
   '/employee/:empId',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'view'),
+  requirePageAccess('/staff-control', 'view'),
   documentsController.getByEmployee
 );
 
@@ -44,14 +44,14 @@ router.get(
 // GET /api/documents/:id/download — скачать
 router.get(
   '/:id/download',
-  requireAnyPageAccess(['/employee/documents', '/employees', '/staff-control'], 'view'),
+  requireAnyPageAccess(['/employee/documents', '/staff-control'], 'view'),
   documentsController.getDownloadUrl
 );
 
 // DELETE /api/documents/:id — удалить
 router.delete(
   '/:id',
-  requireAnyPageAccess(['/employee/documents', '/employees', '/staff-control'], 'edit'),
+  requireAnyPageAccess(['/employee/documents', '/staff-control'], 'edit'),
   documentsController.remove
 );
 

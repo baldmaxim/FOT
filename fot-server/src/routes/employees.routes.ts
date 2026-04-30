@@ -5,7 +5,7 @@ import { employeeEnrichController } from '../controllers/employee-enrich.control
 import { employeeSalaryEnrichController } from '../controllers/employee-enrich-salary.controller.js';
 import { employeeSalaryHistoryController } from '../controllers/employee-enrich-salary-history.controller.js';
 import { employeeEnrichContactsController } from '../controllers/employee-enrich-contacts.controller.js';
-import { authenticate, requireAnyPageAccess, requireCritical2FA, requireAdmin } from '../middleware/auth.js';
+import { authenticate, requireAnyPageAccess, requirePageAccess, requireCritical2FA, requireAdmin } from '../middleware/auth.js';
 import { importLimiter } from '../middleware/rateLimit.js';
 
 const router = Router();
@@ -35,14 +35,14 @@ router.use(authenticate);
 // GET /api/employees - получение списка (worker+)
 router.get(
   '/',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'view'),
+  requirePageAccess('/staff-control', 'view'),
   employeesController.getAll
 );
 
 // POST /api/employees/enrich - обогащение данных из Excel (header+, требуется 2FA)
 router.post(
   '/enrich',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   requireCritical2FA,
   importLimiter,
   upload.single('file'),
@@ -52,7 +52,7 @@ router.post(
 // POST /api/employees/enrich-salary - импорт окладов и ставок из Excel (header+, требуется 2FA)
 router.post(
   '/enrich-salary',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   requireCritical2FA,
   importLimiter,
   upload.single('file'),
@@ -62,7 +62,7 @@ router.post(
 // POST /api/employees/enrich-salary-history - импорт истории окладов из Excel (header+, требуется 2FA)
 router.post(
   '/enrich-salary-history',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   requireCritical2FA,
   importLimiter,
   upload.single('file'),
@@ -72,7 +72,7 @@ router.post(
 // POST /api/employees/enrich-contacts - импорт email из Excel (header+, требуется 2FA)
 router.post(
   '/enrich-contacts',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   requireCritical2FA,
   importLimiter,
   upload.single('file'),
@@ -82,7 +82,7 @@ router.post(
 // DELETE /api/employees/all - удаление ВСЕХ (super_admin, только для разработки)
 router.delete(
   '/all',
-  requireAnyPageAccess(['/employees'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   requireCritical2FA,
   employeesController.deleteAll
 );
@@ -90,14 +90,14 @@ router.delete(
 // GET /api/employees/counts - счётчики по отделам + статусам (worker+, кэш 60с)
 router.get(
   '/counts',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'view'),
+  requirePageAccess('/staff-control', 'view'),
   employeesController.getCounts
 );
 
 // GET /api/employees/:id/history - история событий сотрудника (worker+)
 router.get(
   '/:id/history',
-  requireAnyPageAccess(['/employee', '/employees', '/staff-control'], 'view'),
+  requireAnyPageAccess(['/employee', '/staff-control'], 'view'),
   employeesController.getHistory
 );
 
@@ -120,14 +120,14 @@ router.delete(
 // GET /api/employees/:id - получение одного (worker+)
 router.get(
   '/:id',
-  requireAnyPageAccess(['/employee', '/employees', '/staff-control'], 'view'),
+  requireAnyPageAccess(['/employee', '/staff-control'], 'view'),
   employeesController.getById
 );
 
 // POST /api/employees - создание (header+, требуется 2FA)
 router.post(
   '/',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   requireCritical2FA,
   employeesController.create
 );
@@ -135,7 +135,7 @@ router.post(
 // POST /api/employees/batch-move - массовый перевод в отдел (header+, требуется 2FA)
 router.post(
   '/batch-move',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   requireCritical2FA,
   employeesController.batchMoveEmployees
 );
@@ -143,7 +143,7 @@ router.post(
 // PUT /api/employees/:id - обновление (header+, требуется 2FA)
 router.put(
   '/:id',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   requireCritical2FA,
   employeesController.update
 );
@@ -151,7 +151,7 @@ router.put(
 // DELETE /api/employees/:id - удаление (admin+, требуется 2FA)
 router.delete(
   '/:id',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   requireCritical2FA,
   employeesController.delete
 );
@@ -159,21 +159,21 @@ router.delete(
 // POST /api/employees/:id/archive - архивация (header+)
 router.post(
   '/:id/archive',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   employeesController.archive
 );
 
 // POST /api/employees/:id/restore - восстановление (header+)
 router.post(
   '/:id/restore',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   employeesController.restore
 );
 
 // POST /api/employees/:id/fire - уволить (header+)
 router.post(
   '/:id/fire',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   requireCritical2FA,
   employeesController.fire
 );
@@ -181,14 +181,14 @@ router.post(
 // POST /api/employees/:id/rehire - восстановить на работу (header+)
 router.post(
   '/:id/rehire',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   employeesController.rehire
 );
 
 // POST /api/employees/:id/move-department - переместить в отдел (header+)
 router.post(
   '/:id/move-department',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   requireCritical2FA,
   employeesController.moveDepartment
 );
@@ -196,7 +196,7 @@ router.post(
 // POST /api/employees/:id/change-salary - изменить оклад (admin+, требуется 2FA)
 router.post(
   '/:id/change-salary',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   requireCritical2FA,
   employeesController.changeSalary
 );
@@ -204,16 +204,9 @@ router.post(
 // POST /api/employees/:id/change-position - сменить должность (admin+, требуется 2FA)
 router.post(
   '/:id/change-position',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
+  requirePageAccess('/staff-control', 'edit'),
   requireCritical2FA,
   employeesController.changePosition
-);
-
-// POST /api/employees/:id/change-category - изменить категорию труда (header+)
-router.post(
-  '/:id/change-category',
-  requireAnyPageAccess(['/employees', '/staff-control'], 'edit'),
-  employeesController.changeCategory
 );
 
 export default router;

@@ -189,14 +189,14 @@ router.get('/preview', requirePageAccess('/skud-settings', 'view'), sigurControl
 // GET /api/sigur/employees/:id/access-points — прямые точки доступа сотрудника
 router.get(
   '/employees/:id/profile',
-  requireAnyPageAccess(['/employee', '/employees', '/staff-control', '/skud-settings'], 'view'),
+  requireAnyPageAccess(['/employee', '/staff-control', '/skud-settings'], 'view'),
   sigurController.getEmployeeProfile,
 );
 
 // GET /api/sigur/employees/:id/access-points — прямые точки доступа сотрудника
 router.get(
   '/employees/:id/access-points',
-  requireAnyPageAccess(['/employee', '/employees', '/staff-control', '/skud-settings'], 'view'),
+  requireAnyPageAccess(['/employee', '/staff-control', '/skud-settings'], 'view'),
   sigurController.getEmployeeAccessPoints,
 );
 
@@ -242,13 +242,13 @@ router.post(
 // PUT /api/sigur/employees/:id/access-points — сохранить прямые точки доступа сотрудника
 router.put(
   '/employees/:id/cards/:cardId/expiration',
-  requireAnyPageAccess(['/employees', '/staff-control', '/skud-settings'], 'edit'),
+  requireAnyPageAccess(['/staff-control', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurController.updateEmployeeCardExpiration,
 );
 router.patch(
   '/employees/:id/cards/:cardId/binding',
-  requireAnyPageAccess(['/employees', '/staff-control', '/skud-settings'], 'edit'),
+  requireAnyPageAccess(['/staff-control', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurController.updateEmployeeCardBinding,
 );
@@ -256,7 +256,7 @@ router.patch(
 // PUT /api/sigur/employees/:id/access-points — сохранить прямые точки доступа сотрудника
 router.put(
   '/employees/:id/access-points',
-  requireAnyPageAccess(['/employees', '/staff-control', '/skud-settings'], 'edit'),
+  requireAnyPageAccess(['/staff-control', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurController.saveEmployeeAccessPoints,
 );

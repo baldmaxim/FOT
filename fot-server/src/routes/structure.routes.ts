@@ -13,7 +13,7 @@ router.use(authenticate);
 // GET /api/structure - получение дерева (worker+, кэш 5мин)
 router.get(
   '/',
-  requireAnyPageAccess(['/employee', '/dashboard', '/employees', '/staff-control', '/admin/users', '/admin/payslips', '/skud-settings'], 'view'),
+  requireAnyPageAccess(['/employee', '/dashboard', '/staff-control', '/admin/users', '/admin/payslips', '/skud-settings'], 'view'),
   structureTreeCache,
   structureController.getTree
 );
@@ -21,7 +21,7 @@ router.get(
 // GET /api/structure/positions - список должностей (worker+)
 router.get(
   '/positions',
-  requireAnyPageAccess(['/employee', '/dashboard', '/employees', '/staff-control', '/admin/users', '/admin/payslips', '/skud-settings'], 'view'),
+  requireAnyPageAccess(['/employee', '/dashboard', '/staff-control', '/admin/users', '/admin/payslips', '/skud-settings'], 'view'),
   structureController.getPositions
 );
 
