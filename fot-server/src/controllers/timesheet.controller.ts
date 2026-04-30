@@ -45,6 +45,7 @@ import {
 import {
   deleteExclusion,
   deleteTransfer,
+  listAllTransfersAndExclusions,
   listDepartmentTransfers,
   loadAssignmentEmployeeId,
   updateExclusionDate,
@@ -129,11 +130,18 @@ const teamManagementAddEmployeeSchema = teamManagementMutationSchema.extend({
 });
 
 const teamManagementExcludeSchema = teamManagementMutationSchema.extend({
-  effective_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  effective_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
 
 const transfersListQuerySchema = z.object({
   department_id: z.string().uuid(),
+});
+
+const adminTransfersListQuerySchema = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  department_id: z.string().uuid().optional(),
+  employee_query: z.string().trim().max(100).optional(),
 });
 
 const transferUpdateSchema = z.object({
@@ -1662,8 +1670,7 @@ export const timesheetController = {
       }
 
       const excludedAt = new Date().toISOString();
-      const todayIso = excludedAt.slice(0, 10);
-      const effectiveDate = parsed.effective_date ?? todayIso;
+      const effectiveDate = parsed.effective_date;
       const previousDay = formatDateShift(effectiveDate, -1);
 
       const { error: updateError } = await supabase
@@ -2029,6 +2036,24 @@ export const timesheetController = {
     } catch (err) {
       console.error('timesheet.refresh error:', err);
       res.status(500).json({ success: false, error: 'Ошибка обновления табеля' });
+    }
+  },
+
+  /** GET /api/timesheet/admin/transfers?from=&to=&department_id=&employee_query= */
+  async listAdminTransfers(req: AuthenticatedRequest, res: Response) {
+    try {
+      if (!req.user.is_admin) {
+        return res.status(403).json({ success: false, error: 'Доступно только администраторам' });
+      }
+      const parsed = adminTransfersListQuerySchema.parse(req.query);
+      const data = await listAllTransfersAndExclusions(parsed);
+      res.json({ success: true, data });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+      }
+      console.error('timesheet.listAdminTransfers error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка загрузки списка переводов и исключений' });
     }
   },
 

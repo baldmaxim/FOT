@@ -80,6 +80,30 @@ export interface IDepartmentTransfersListing {
   exclusions: IDepartmentExclusionRow[];
 }
 
+export interface IAdminTransferRow extends IDepartmentTransferRow {
+  from_department_id: string;
+  from_department_name: string;
+  employee_position: string | null;
+}
+
+export interface IAdminExclusionRow extends IDepartmentExclusionRow {
+  department_id: string | null;
+  department_name: string;
+  employee_position: string | null;
+}
+
+export interface IAdminTransfersListing {
+  transfers: IAdminTransferRow[];
+  exclusions: IAdminExclusionRow[];
+}
+
+export interface IAdminTransfersFilters {
+  from?: string;
+  to?: string;
+  department_id?: string;
+  employee_query?: string;
+}
+
 export interface ITimesheetRefreshResult {
   sync: {
     sigurTotal?: number;
@@ -239,7 +263,7 @@ export const timesheetService = {
   async excludeEmployeeFromDepartment(data: {
     employee_id: number;
     department_id: string;
-    effective_date?: string;
+    effective_date: string;
   }): Promise<void> {
     const res = await apiClient.post<ApiResponse<null>>('/timesheet/team-management/exclude-employee', data);
     if (res.error) throw new Error(res.error || 'Ошибка исключения сотрудника');
@@ -248,6 +272,19 @@ export const timesheetService = {
   async listDepartmentTransfers(departmentId: string): Promise<IDepartmentTransfersListing> {
     const params = new URLSearchParams({ department_id: departmentId });
     const res = await apiClient.get<ApiResponse<IDepartmentTransfersListing>>(`/timesheet/team-management/transfers?${params.toString()}`);
+    if (!res.data) throw new Error(res.error || 'Ошибка загрузки списка переводов');
+    return res.data;
+  },
+
+  async listAllTransfersAndExclusions(filters: IAdminTransfersFilters): Promise<IAdminTransfersListing> {
+    const params = new URLSearchParams();
+    if (filters.from) params.append('from', filters.from);
+    if (filters.to) params.append('to', filters.to);
+    if (filters.department_id) params.append('department_id', filters.department_id);
+    if (filters.employee_query) params.append('employee_query', filters.employee_query);
+    const qs = params.toString();
+    const url = qs ? `/timesheet/admin/transfers?${qs}` : '/timesheet/admin/transfers';
+    const res = await apiClient.get<ApiResponse<IAdminTransfersListing>>(url);
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки списка переводов');
     return res.data;
   },

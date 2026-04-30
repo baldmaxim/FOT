@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { timesheetController } from '../controllers/timesheet.controller.js';
-import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
+import { authenticate, requireAdmin, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -41,6 +41,12 @@ router.post(
   '/team-management/exclude-employee',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr', '/timesheet/team-management'], 'edit'),
   timesheetController.excludeEmployeeFromDepartment
+);
+
+router.get(
+  '/admin/transfers',
+  requireAdmin,
+  timesheetController.listAdminTransfers
 );
 
 router.get(

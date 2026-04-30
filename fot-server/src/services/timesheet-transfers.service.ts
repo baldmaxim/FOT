@@ -537,3 +537,260 @@ export async function loadAssignmentEmployeeId(assignmentId: string): Promise<nu
 }
 
 export { loadAssignmentsByIds };
+
+export interface ITransferAdminRow extends ITransferRow {
+  from_department_id: string;
+  from_department_name: string;
+  employee_position: string | null;
+}
+
+export interface IExclusionAdminRow extends IExclusionRow {
+  department_id: string | null;
+  department_name: string;
+  employee_position: string | null;
+}
+
+export interface IAdminTransfersFilters {
+  from?: string;
+  to?: string;
+  department_id?: string;
+  employee_query?: string;
+}
+
+export interface IAdminTransfersListing {
+  transfers: ITransferAdminRow[];
+  exclusions: IExclusionAdminRow[];
+}
+
+/**
+ * Глобальный список переводов и исключений по всем отделам — для админ-страницы.
+ *
+ * Перевод определяется как пара (последнее закрытое, текущее открытое) у одного сотрудника
+ * в разных отделах. Дата перевода — open.effective_from.
+ *
+ * Фильтры применяются после построения базового списка:
+ * - from/to: по transfer_date (для переводов) или exclusion_date (для исключений)
+ * - department_id: для переводов — связан с from или to; для исключений — текущий отдел сотрудника
+ * - employee_query: ilike по full_name
+ */
+export async function listAllTransfersAndExclusions(
+  filters: IAdminTransfersFilters,
+): Promise<IAdminTransfersListing> {
+  const trimmedQuery = (filters.employee_query || '').trim();
+  const dateFrom = filters.from || null;
+  const dateTo = filters.to || null;
+  const deptFilter = filters.department_id || null;
+
+  const transfers = await buildAllTransfers({ dateFrom, dateTo, deptFilter, query: trimmedQuery });
+  const exclusions = await buildAllExclusions({ dateFrom, dateTo, deptFilter, query: trimmedQuery });
+
+  return { transfers, exclusions };
+}
+
+interface IBuildArgs {
+  dateFrom: string | null;
+  dateTo: string | null;
+  deptFilter: string | null;
+  query: string;
+}
+
+async function buildAllTransfers(args: IBuildArgs): Promise<ITransferAdminRow[]> {
+  // 1) Все открытые назначения активных сотрудников.
+  let openQuery = supabase
+    .from('employee_assignments')
+    .select('id, employee_id, org_department_id, effective_from, effective_to')
+    .is('effective_to', null);
+  if (args.dateFrom) openQuery = openQuery.gte('effective_from', args.dateFrom);
+  if (args.dateTo) openQuery = openQuery.lte('effective_from', args.dateTo);
+  const { data: openRows, error: openErr } = await openQuery;
+  if (openErr) throw openErr;
+
+  if (!openRows || openRows.length === 0) return [];
+
+  // Группируем по сотруднику, оставляем последнее открытое.
+  const openByEmployee = new Map<number, IAssignmentRow>();
+  for (const row of openRows) {
+    const empId = Number(row.employee_id);
+    if (!Number.isFinite(empId)) continue;
+    const cur: IAssignmentRow = {
+      id: String(row.id),
+      employee_id: empId,
+      org_department_id: String(row.org_department_id),
+      effective_from: String(row.effective_from),
+      effective_to: null,
+    };
+    const existing = openByEmployee.get(empId);
+    if (!existing || cur.effective_from > existing.effective_from) {
+      openByEmployee.set(empId, cur);
+    }
+  }
+
+  const candidateEmployeeIds = [...openByEmployee.keys()];
+  if (candidateEmployeeIds.length === 0) return [];
+
+  // 2) Закрытые назначения этих сотрудников.
+  const { data: closedRows, error: closedErr } = await supabase
+    .from('employee_assignments')
+    .select('id, employee_id, org_department_id, effective_from, effective_to')
+    .in('employee_id', candidateEmployeeIds)
+    .not('effective_to', 'is', null);
+  if (closedErr) throw closedErr;
+
+  // Для каждого сотрудника берём последнее закрытое (по effective_to desc).
+  const lastClosedByEmployee = new Map<number, IAssignmentRow>();
+  for (const row of closedRows || []) {
+    const empId = Number(row.employee_id);
+    if (!Number.isFinite(empId)) continue;
+    const cur: IAssignmentRow = {
+      id: String(row.id),
+      employee_id: empId,
+      org_department_id: String(row.org_department_id),
+      effective_from: String(row.effective_from),
+      effective_to: (row.effective_to as string | null) ?? null,
+    };
+    const existing = lastClosedByEmployee.get(empId);
+    if (!existing || (cur.effective_to ?? '') > (existing.effective_to ?? '')) {
+      lastClosedByEmployee.set(empId, cur);
+    }
+  }
+
+  // 3) Подгружаем сотрудников и отделы.
+  const employeeIds = candidateEmployeeIds;
+  const deptIds = new Set<string>();
+  for (const a of openByEmployee.values()) deptIds.add(a.org_department_id);
+  for (const a of lastClosedByEmployee.values()) deptIds.add(a.org_department_id);
+
+  const [{ data: employeesRows, error: empErr }, { data: deptRows, error: deptErr }] = await Promise.all([
+    supabase
+      .from('employees')
+      .select('id, full_name, position_id, is_archived, employment_status')
+      .in('id', employeeIds),
+    deptIds.size > 0
+      ? supabase.from('org_departments').select('id, name').in('id', [...deptIds])
+      : Promise.resolve({ data: [] as Array<{ id: string; name: string }>, error: null }),
+  ]);
+  if (empErr) throw empErr;
+  if (deptErr) throw deptErr;
+
+  const nameByEmployee = new Map<number, string>();
+  const archivedSet = new Set<number>();
+  const positionIdByEmployee = new Map<number, string | null>();
+  for (const row of employeesRows || []) {
+    const empId = Number(row.id);
+    nameByEmployee.set(empId, String(row.full_name || ''));
+    if (row.is_archived || row.employment_status !== 'active') archivedSet.add(empId);
+    positionIdByEmployee.set(empId, (row.position_id as string | null) ?? null);
+  }
+  const deptNameById = new Map<string, string>();
+  for (const row of deptRows || []) {
+    deptNameById.set(String(row.id), String(row.name || ''));
+  }
+
+  const positionIds = [...new Set([...positionIdByEmployee.values()].filter((v): v is string => !!v))];
+  const positionNameById = new Map<string, string>();
+  if (positionIds.length > 0) {
+    const { data: posRows, error: posErr } = await supabase
+      .from('positions')
+      .select('id, name')
+      .in('id', positionIds);
+    if (posErr) throw posErr;
+    for (const row of posRows || []) {
+      positionNameById.set(String(row.id), String(row.name || ''));
+    }
+  }
+
+  // 4) Собираем строки переводов.
+  const queryLower = args.query.toLowerCase();
+  const result: ITransferAdminRow[] = [];
+  for (const empId of candidateEmployeeIds) {
+    if (archivedSet.has(empId)) continue;
+    const newA = openByEmployee.get(empId);
+    const oldA = lastClosedByEmployee.get(empId);
+    if (!newA || !oldA) continue;
+    if (newA.org_department_id === oldA.org_department_id) continue;
+
+    const fullName = nameByEmployee.get(empId) || '';
+    if (queryLower && !fullName.toLowerCase().includes(queryLower)) continue;
+    if (
+      args.deptFilter
+      && newA.org_department_id !== args.deptFilter
+      && oldA.org_department_id !== args.deptFilter
+    ) continue;
+
+    const positionId = positionIdByEmployee.get(empId);
+    result.push({
+      assignment_new_id: newA.id,
+      assignment_old_id: oldA.id,
+      employee_id: empId,
+      employee_full_name: fullName,
+      to_department_id: newA.org_department_id,
+      to_department_name: deptNameById.get(newA.org_department_id) || '',
+      transfer_date: newA.effective_from,
+      from_department_id: oldA.org_department_id,
+      from_department_name: deptNameById.get(oldA.org_department_id) || '',
+      employee_position: positionId ? positionNameById.get(positionId) || null : null,
+    });
+  }
+
+  result.sort((a, b) => (a.transfer_date > b.transfer_date ? -1 : a.transfer_date < b.transfer_date ? 1 : 0));
+  return result;
+}
+
+async function buildAllExclusions(args: IBuildArgs): Promise<IExclusionAdminRow[]> {
+  let q = supabase
+    .from('employees')
+    .select('id, full_name, position_id, org_department_id, excluded_from_timesheet_date, excluded_from_timesheet_at')
+    .eq('excluded_from_timesheet', true)
+    .eq('is_archived', false);
+  if (args.dateFrom) q = q.gte('excluded_from_timesheet_date', args.dateFrom);
+  if (args.dateTo) q = q.lte('excluded_from_timesheet_date', args.dateTo);
+  if (args.deptFilter) q = q.eq('org_department_id', args.deptFilter);
+  if (args.query) q = q.ilike('full_name', `%${args.query}%`);
+
+  const { data, error } = await q;
+  if (error) throw error;
+
+  const rows = data || [];
+  if (rows.length === 0) return [];
+
+  const deptIds = [...new Set(rows.map(r => r.org_department_id).filter((v): v is string => !!v))];
+  const positionIds = [...new Set(rows.map(r => r.position_id).filter((v): v is string => !!v))];
+
+  const [{ data: deptRows, error: deptErr }, { data: posRows, error: posErr }] = await Promise.all([
+    deptIds.length > 0
+      ? supabase.from('org_departments').select('id, name').in('id', deptIds)
+      : Promise.resolve({ data: [] as Array<{ id: string; name: string }>, error: null }),
+    positionIds.length > 0
+      ? supabase.from('positions').select('id, name').in('id', positionIds)
+      : Promise.resolve({ data: [] as Array<{ id: string; name: string }>, error: null }),
+  ]);
+  if (deptErr) throw deptErr;
+  if (posErr) throw posErr;
+
+  const deptNameById = new Map<string, string>();
+  for (const row of deptRows || []) deptNameById.set(String(row.id), String(row.name || ''));
+  const positionNameById = new Map<string, string>();
+  for (const row of posRows || []) positionNameById.set(String(row.id), String(row.name || ''));
+
+  const result: IExclusionAdminRow[] = rows.map(row => {
+    const deptId = (row.org_department_id as string | null) ?? null;
+    const posId = (row.position_id as string | null) ?? null;
+    return {
+      employee_id: Number(row.id),
+      employee_full_name: String(row.full_name || ''),
+      exclusion_date: (row.excluded_from_timesheet_date as string | null) ?? null,
+      excluded_at: (row.excluded_from_timesheet_at as string | null) ?? null,
+      department_id: deptId,
+      department_name: deptId ? deptNameById.get(deptId) || '' : '',
+      employee_position: posId ? positionNameById.get(posId) || null : null,
+    };
+  });
+
+  result.sort((a, b) => {
+    const ad = a.exclusion_date || '';
+    const bd = b.exclusion_date || '';
+    return ad > bd ? -1 : ad < bd ? 1 : 0;
+  });
+
+  return result;
+}

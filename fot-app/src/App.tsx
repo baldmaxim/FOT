@@ -47,6 +47,7 @@ const SystemSettingsPage = lazy(() => import('./pages/super-admin/SystemSettings
 const PayslipManagePage = lazy(() => import('./pages/super-admin/PayslipManagePage').then(m => ({ default: m.PayslipManagePage })));
 const SchedulesPage = lazy(() => import('./pages/admin/SchedulesPage').then(m => ({ default: m.SchedulesPage })));
 const PatentReceiptsPage = lazy(() => import('./pages/admin/PatentReceiptsPage').then(m => ({ default: m.PatentReceiptsPage })));
+const TimesheetTransfersAdminPage = lazy(() => import('./pages/admin/TimesheetTransfersAdminPage').then(m => ({ default: m.TimesheetTransfersAdminPage })));
 
 // Employees & SKUD
 const EmployeeCardPage = lazy(() => import('./pages/employees/EmployeeCardPage').then(m => ({ default: m.EmployeeCardPage })));
@@ -491,6 +492,17 @@ const AppRoutes = () => {
             element={
               <Layout title="Чеки за патент" theme={theme} onToggleTheme={toggleTheme}>
                 <PatentReceiptsPage />
+              </Layout>
+            }
+          />
+        </Route>
+
+        <Route element={<ProtectedRoute requiredPage="/admin/timesheet-transfers" />}>
+          <Route
+            path="/admin/timesheet-transfers"
+            element={
+              <Layout title="Переводы и исключения табеля" theme={theme} onToggleTheme={toggleTheme}>
+                <TimesheetTransfersAdminPage />
               </Layout>
             }
           />

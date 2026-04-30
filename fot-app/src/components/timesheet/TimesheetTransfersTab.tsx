@@ -1,39 +1,23 @@
-import { type FC, useMemo, useState } from 'react';
+import { type FC, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRightLeft, Check, Loader2, Pencil, Trash2, UserMinus } from 'lucide-react';
+import { ArrowRightLeft, Loader2, UserMinus } from 'lucide-react';
 import {
   timesheetService,
-  type IDepartmentExclusionRow,
-  type IDepartmentTransferRow,
+  type IAdminExclusionRow,
+  type IAdminTransferRow,
 } from '../../services/timesheetService';
-import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
+import { TransfersList, type ITransferEditPatch } from './TransfersList';
+import { ExclusionsList } from './ExclusionsList';
 
-interface ITimesheetTransfersTabProps {
+interface IProps {
   departmentId: string | null;
   departmentName: string;
 }
 
-const formatDateLabel = (iso: string | null): string => {
-  if (!iso) return '—';
-  const [y, m, d] = iso.split('-');
-  if (!y || !m || !d) return iso;
-  return `${d}.${m}.${y}`;
-};
-
-export const TimesheetTransfersTab: FC<ITimesheetTransfersTabProps> = ({
-  departmentId,
-  departmentName,
-}) => {
+export const TimesheetTransfersTab: FC<IProps> = ({ departmentId, departmentName }) => {
   const queryClient = useQueryClient();
   const { managedDepartments } = useManagedDepartments();
-
-  const [editingTransferId, setEditingTransferId] = useState<string | null>(null);
-  const [editingExclusionEmployeeId, setEditingExclusionEmployeeId] = useState<number | null>(null);
-  const [draftDate, setDraftDate] = useState<string>('');
-  const [draftToDeptId, setDraftToDeptId] = useState<string>('');
-  const [draftFromDeptId, setDraftFromDeptId] = useState<string>('');
-  const [error, setError] = useState<string | null>(null);
 
   const listingQuery = useQuery({
     queryKey: ['timesheet-transfers', departmentId],
@@ -44,6 +28,7 @@ export const TimesheetTransfersTab: FC<ITimesheetTransfersTabProps> = ({
 
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ['timesheet-transfers'] });
+    queryClient.invalidateQueries({ queryKey: ['admin-timesheet-transfers'] });
     queryClient.invalidateQueries({ queryKey: ['timesheet'] });
     queryClient.invalidateQueries({ queryKey: ['timesheet-grid'] });
     queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] });
@@ -52,122 +37,27 @@ export const TimesheetTransfersTab: FC<ITimesheetTransfersTabProps> = ({
   };
 
   const updateTransferMutation = useMutation({
-    mutationFn: (vars: {
-      assignmentId: string;
-      patch: {
-        effective_from?: string;
-        to_department_id?: string;
-        from_department_id?: string;
-        assignment_old_id?: string;
-      };
-    }) => timesheetService.updateTransfer(vars.assignmentId, vars.patch),
-    onSuccess: () => {
-      setEditingTransferId(null);
-      setDraftDate('');
-      setDraftToDeptId('');
-      setDraftFromDeptId('');
-      setError(null);
-      invalidateAll();
-    },
-    onError: (err: Error) => setError(err.message),
+    mutationFn: (vars: { assignmentId: string; patch: ITransferEditPatch & { assignment_old_id: string } }) =>
+      timesheetService.updateTransfer(vars.assignmentId, vars.patch),
+    onSuccess: invalidateAll,
   });
 
   const deleteTransferMutation = useMutation({
     mutationFn: (assignmentId: string) => timesheetService.deleteTransfer(assignmentId),
-    onSuccess: () => {
-      setError(null);
-      invalidateAll();
-    },
-    onError: (err: Error) => setError(err.message),
+    onSuccess: invalidateAll,
   });
 
   const updateExclusionMutation = useMutation({
     mutationFn: (vars: { employeeId: number; effectiveDate: string }) =>
       timesheetService.updateExclusion(vars.employeeId, vars.effectiveDate),
-    onSuccess: () => {
-      setEditingExclusionEmployeeId(null);
-      setDraftDate('');
-      setError(null);
-      invalidateAll();
-    },
-    onError: (err: Error) => setError(err.message),
+    onSuccess: invalidateAll,
   });
 
   const deleteExclusionMutation = useMutation({
     mutationFn: (employeeId: number) => timesheetService.deleteExclusion(employeeId),
-    onSuccess: () => {
-      setError(null);
-      invalidateAll();
-    },
-    onError: (err: Error) => setError(err.message),
+    onSuccess: invalidateAll,
   });
 
-  const startEditTransfer = (row: IDepartmentTransferRow) => {
-    setEditingTransferId(row.assignment_new_id);
-    setEditingExclusionEmployeeId(null);
-    setDraftDate(row.transfer_date);
-    setDraftToDeptId(row.to_department_id);
-    setDraftFromDeptId(departmentId || '');
-    setError(null);
-  };
-  const startEditExclusion = (row: IDepartmentExclusionRow) => {
-    setEditingExclusionEmployeeId(row.employee_id);
-    setEditingTransferId(null);
-    setDraftDate(row.exclusion_date || new Date().toISOString().slice(0, 10));
-    setError(null);
-  };
-  const cancelEdit = () => {
-    setEditingTransferId(null);
-    setEditingExclusionEmployeeId(null);
-    setDraftDate('');
-    setDraftToDeptId('');
-    setDraftFromDeptId('');
-    setError(null);
-  };
-
-  const handleDeleteTransfer = (row: IDepartmentTransferRow) => {
-    const ok = window.confirm(
-      `Полностью отменить перевод сотрудника «${row.employee_full_name}» в отдел «${row.to_department_name}»? Сотрудник вернётся в исходный отдел.`,
-    );
-    if (!ok) return;
-    deleteTransferMutation.mutate(row.assignment_new_id);
-  };
-
-  const handleDeleteExclusion = (row: IDepartmentExclusionRow) => {
-    const ok = window.confirm(
-      `Отменить исключение сотрудника «${row.employee_full_name}» из табеля? Он снова появится в табеле.`,
-    );
-    if (!ok) return;
-    deleteExclusionMutation.mutate(row.employee_id);
-  };
-
-  const submitTransferEdit = (row: IDepartmentTransferRow) => {
-    const patch: {
-      effective_from?: string;
-      to_department_id?: string;
-      from_department_id?: string;
-      assignment_old_id?: string;
-    } = {
-      assignment_old_id: row.assignment_old_id,
-    };
-    if (draftDate && draftDate !== row.transfer_date) patch.effective_from = draftDate;
-    if (draftToDeptId && draftToDeptId !== row.to_department_id) patch.to_department_id = draftToDeptId;
-    if (draftFromDeptId && draftFromDeptId !== departmentId) patch.from_department_id = draftFromDeptId;
-    const hasChanges = patch.effective_from || patch.to_department_id || patch.from_department_id;
-    if (!hasChanges) {
-      cancelEdit();
-      return;
-    }
-    if (patch.to_department_id && patch.from_department_id && patch.to_department_id === patch.from_department_id) {
-      setError('Отдел назначения не может совпадать с исходным отделом');
-      return;
-    }
-    updateTransferMutation.mutate({ assignmentId: row.assignment_new_id, patch });
-  };
-
-  const data = listingQuery.data;
-  const transfers = data?.transfers ?? [];
-  const exclusions = data?.exclusions ?? [];
   const isPending =
     updateTransferMutation.isPending
     || deleteTransferMutation.isPending
@@ -179,6 +69,34 @@ export const TimesheetTransfersTab: FC<ITimesheetTransfersTabProps> = ({
     [managedDepartments],
   );
 
+  // Адаптер: на странице руководителя в исходном эндпоинте нет поля from_department_id —
+  // оно подставляется из текущего отдела (departmentId).
+  const adaptedTransfers: IAdminTransferRow[] = useMemo(() => {
+    const list = listingQuery.data?.transfers ?? [];
+    return list.map(t => ({
+      ...t,
+      from_department_id: departmentId || '',
+      from_department_name: departmentName || '',
+      employee_position: null,
+    }));
+  }, [listingQuery.data?.transfers, departmentId, departmentName]);
+
+  const adaptedExclusions: IAdminExclusionRow[] = useMemo(() => {
+    const list = listingQuery.data?.exclusions ?? [];
+    return list.map(e => ({
+      ...e,
+      department_id: departmentId,
+      department_name: departmentName || '',
+      employee_position: null,
+    }));
+  }, [listingQuery.data?.exclusions, departmentId, departmentName]);
+
+  const totalError =
+    updateTransferMutation.error
+    || deleteTransferMutation.error
+    || updateExclusionMutation.error
+    || deleteExclusionMutation.error;
+
   if (!departmentId) {
     return (
       <div className="ts-transfers-tab">
@@ -186,6 +104,22 @@ export const TimesheetTransfersTab: FC<ITimesheetTransfersTabProps> = ({
       </div>
     );
   }
+
+  const handleConfirmDeleteTransfer = (row: IAdminTransferRow) => {
+    const ok = window.confirm(
+      `Полностью отменить перевод сотрудника «${row.employee_full_name}» в отдел «${row.to_department_name}»? Сотрудник вернётся в исходный отдел.`,
+    );
+    if (!ok) return;
+    deleteTransferMutation.mutate(row.assignment_new_id);
+  };
+
+  const handleConfirmDeleteExclusion = (row: IAdminExclusionRow) => {
+    const ok = window.confirm(
+      `Отменить исключение сотрудника «${row.employee_full_name}» из табеля? Он снова появится в табеле.`,
+    );
+    if (!ok) return;
+    deleteExclusionMutation.mutate(row.employee_id);
+  };
 
   return (
     <div className="ts-transfers-tab">
@@ -195,7 +129,7 @@ export const TimesheetTransfersTab: FC<ITimesheetTransfersTabProps> = ({
       </div>
 
       <div className="ts-transfers-body ts-transfers-body--inline">
-        {error && <div className="ts-transfers-error">{error}</div>}
+        {totalError && <div className="ts-transfers-error">{(totalError as Error).message}</div>}
 
         {listingQuery.isLoading ? (
           <div className="ts-transfers-empty">
@@ -207,196 +141,34 @@ export const TimesheetTransfersTab: FC<ITimesheetTransfersTabProps> = ({
           <>
             <section className="ts-transfers-section">
               <div className="ts-transfers-section-title">
-                <ArrowRightLeft size={14} /> Переведены ({transfers.length})
+                <ArrowRightLeft size={14} /> Переведены ({adaptedTransfers.length})
               </div>
-              {transfers.length === 0 ? (
-                <div className="ts-transfers-empty">Нет переведённых сотрудников</div>
-              ) : (
-                <ul className="ts-transfers-list">
-                  {transfers.map(row => {
-                    const isEditing = editingTransferId === row.assignment_new_id;
-                    return (
-                      <li
-                        key={row.assignment_new_id}
-                        className={`ts-transfers-row${isEditing ? ' ts-transfers-row--editing' : ''}${isEditing ? ' ts-transfers-row--expanded' : ''}`}
-                      >
-                        <div className="ts-transfers-row-main">
-                          <div className="ts-transfers-row-name">{formatTimesheetEmployeeName(row.employee_full_name)}</div>
-                          <div className="ts-transfers-row-meta">
-                            → {row.to_department_name || '—'}
-                          </div>
-                        </div>
-                        <div className="ts-transfers-row-date">
-                          <span>{formatDateLabel(row.transfer_date)}</span>
-                        </div>
-                        <div className="ts-transfers-row-actions">
-                          {isEditing ? null : (
-                            <>
-                              <button
-                                type="button"
-                                className="ts-btn ts-btn--icon"
-                                title="Изменить дату или отдел"
-                                disabled={isPending}
-                                onClick={() => startEditTransfer(row)}
-                              >
-                                <Pencil size={14} />
-                              </button>
-                              <button
-                                type="button"
-                                className="ts-btn ts-btn--icon ts-btn--danger"
-                                title="Полностью отменить перевод"
-                                disabled={isPending}
-                                onClick={() => handleDeleteTransfer(row)}
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </>
-                          )}
-                        </div>
-                        {isEditing && (
-                          <div className="ts-transfers-edit">
-                            <div className="ts-transfers-edit-fields">
-                              <label className="ts-transfers-edit-field">
-                                <span className="ts-transfers-edit-label">Дата перевода</span>
-                                <input
-                                  type="date"
-                                  className="ts-transfers-date-input"
-                                  value={draftDate}
-                                  onChange={e => setDraftDate(e.target.value)}
-                                  disabled={isPending}
-                                />
-                              </label>
-                              <label className="ts-transfers-edit-field">
-                                <span className="ts-transfers-edit-label">Исходный отдел</span>
-                                <select
-                                  className="ts-transfers-dept-select"
-                                  value={draftFromDeptId}
-                                  onChange={e => setDraftFromDeptId(e.target.value)}
-                                  disabled={isPending}
-                                >
-                                  {deptOptions.map(d => (
-                                    <option key={d.id} value={d.id}>{d.name}</option>
-                                  ))}
-                                </select>
-                              </label>
-                              <label className="ts-transfers-edit-field">
-                                <span className="ts-transfers-edit-label">Отдел назначения</span>
-                                <select
-                                  className="ts-transfers-dept-select"
-                                  value={draftToDeptId}
-                                  onChange={e => setDraftToDeptId(e.target.value)}
-                                  disabled={isPending}
-                                >
-                                  {deptOptions.map(d => (
-                                    <option key={d.id} value={d.id}>{d.name}</option>
-                                  ))}
-                                </select>
-                              </label>
-                            </div>
-                            <div className="ts-transfers-edit-actions">
-                              <button
-                                type="button"
-                                className="ts-btn ts-btn--primary"
-                                disabled={isPending || !draftDate}
-                                onClick={() => submitTransferEdit(row)}
-                              >
-                                <Check size={14} /> Сохранить
-                              </button>
-                              <button
-                                type="button"
-                                className="ts-btn"
-                                disabled={isPending}
-                                onClick={cancelEdit}
-                              >
-                                Отмена
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
+              <TransfersList
+                rows={adaptedTransfers}
+                deptOptions={deptOptions}
+                isPending={isPending}
+                onEdit={(assignmentId, assignmentOldId, patch) => {
+                  updateTransferMutation.mutate({
+                    assignmentId,
+                    patch: { ...patch, assignment_old_id: assignmentOldId },
+                  });
+                }}
+                onDelete={handleConfirmDeleteTransfer}
+              />
             </section>
 
             <section className="ts-transfers-section">
               <div className="ts-transfers-section-title">
-                <UserMinus size={14} /> Исключены ({exclusions.length})
+                <UserMinus size={14} /> Исключены ({adaptedExclusions.length})
               </div>
-              {exclusions.length === 0 ? (
-                <div className="ts-transfers-empty">Нет исключённых сотрудников</div>
-              ) : (
-                <ul className="ts-transfers-list">
-                  {exclusions.map(row => {
-                    const isEditing = editingExclusionEmployeeId === row.employee_id;
-                    return (
-                      <li key={row.employee_id} className={`ts-transfers-row${isEditing ? ' ts-transfers-row--editing' : ''}`}>
-                        <div className="ts-transfers-row-main">
-                          <div className="ts-transfers-row-name">{formatTimesheetEmployeeName(row.employee_full_name)}</div>
-                          <div className="ts-transfers-row-meta">Исключён из табеля</div>
-                        </div>
-                        <div className="ts-transfers-row-date">
-                          {isEditing ? (
-                            <input
-                              type="date"
-                              className="ts-transfers-date-input"
-                              value={draftDate}
-                              onChange={e => setDraftDate(e.target.value)}
-                              disabled={isPending}
-                            />
-                          ) : (
-                            <span>{formatDateLabel(row.exclusion_date)}</span>
-                          )}
-                        </div>
-                        <div className="ts-transfers-row-actions">
-                          {isEditing ? (
-                            <>
-                              <button
-                                type="button"
-                                className="ts-btn ts-btn--primary"
-                                disabled={isPending || !draftDate || draftDate === row.exclusion_date}
-                                onClick={() => updateExclusionMutation.mutate({ employeeId: row.employee_id, effectiveDate: draftDate })}
-                              >
-                                <Check size={14} /> Сохранить
-                              </button>
-                              <button
-                                type="button"
-                                className="ts-btn"
-                                disabled={isPending}
-                                onClick={cancelEdit}
-                              >
-                                Отмена
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button
-                                type="button"
-                                className="ts-btn ts-btn--icon"
-                                title="Изменить дату исключения"
-                                disabled={isPending}
-                                onClick={() => startEditExclusion(row)}
-                              >
-                                <Pencil size={14} />
-                              </button>
-                              <button
-                                type="button"
-                                className="ts-btn ts-btn--icon ts-btn--danger"
-                                title="Отменить исключение (вернуть в табель)"
-                                disabled={isPending}
-                                onClick={() => handleDeleteExclusion(row)}
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
+              <ExclusionsList
+                rows={adaptedExclusions}
+                isPending={isPending}
+                onEdit={(employeeId, effectiveDate) =>
+                  updateExclusionMutation.mutate({ employeeId, effectiveDate })
+                }
+                onDelete={handleConfirmDeleteExclusion}
+              />
             </section>
           </>
         )}
