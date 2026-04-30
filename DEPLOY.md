@@ -126,6 +126,31 @@ npm ci && NODE_OPTIONS='--max-old-space-size=1024' npm run build
 ### Файлы (бэкенд)
 - `fot-server/src/services/chat.service.ts` — шифрование, searchUsers
 
+## Изменения: загрузка документов через бэкенд (фикс CORS Cloud.ru S3)
+
+**Деплой: полный (оба)** — изменения и на фронте, и на бэкенде.
+
+### Что изменилось
+- Фронт больше не делает `PUT` напрямую в S3 по presigned URL. Файл уходит `multipart/form-data` на новый роут `POST /api/documents/upload`, бэкенд сам кладёт объект в S3 через AWS SDK.
+- SSE-KMS шифрование сохранено: `r2.uploadObject` навешивает `ServerSideEncryption: 'aws:kms'` + `SSEKMSKeyId` если KMS Key ID задан в "Системе".
+- Старые роуты `POST /api/documents/upload-url` и `POST /api/documents/confirm` удалены (нигде больше не использовались).
+- Лимит размера: 20 МБ (multer.memoryStorage).
+
+### Файлы (бэкенд)
+- `fot-server/src/services/r2.service.ts` — `+ uploadObject(key, body, contentType)`
+- `fot-server/src/controllers/documents.controller.ts` — `+ uploadFile`, `- getUploadUrl`, `- confirmUpload`
+- `fot-server/src/routes/documents.routes.ts` — `+ POST /upload` с multer, `- /upload-url`, `- /confirm`
+
+### Файлы (фронтенд)
+- `fot-app/src/services/documentService.ts` — `uploadFile` шлёт FormData на `/documents/upload`, удалены `getUploadUrl` и `confirmUpload`
+
+### Опционально: CORS на бакете (страховка)
+Скрипт `fot-server/scripts/setup-s3-cors.ts` ставит `PutBucketCors` на бакет — нужен только если в будущем снова понадобится прямая загрузка из браузера. На текущий фикс не влияет.
+```bash
+cd /var/www/fot/fot-server
+npx tsx scripts/setup-s3-cors.ts
+```
+
 ## PM2 команды
 ```bash
 pm2 status              # статус процессов

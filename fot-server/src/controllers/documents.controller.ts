@@ -6,6 +6,10 @@ import { canAccessEmployeeInScope, resolveScopedDepartmentId } from '../services
 import { hasPageView } from '../services/access-control.service.js';
 import { aiReceiptRecognitionService } from '../services/ai-receipt-recognition.service.js';
 
+interface MulterRequest extends AuthenticatedRequest {
+  file?: Express.Multer.File;
+}
+
 const DOCUMENT_SELECT_COLUMNS = 'id, employee_id, leave_request_id, category, file_name, file_size, mime_type, r2_key, uploaded_by, created_at, recognition_status, recognition_attempts, recognized_at';
 const CATEGORY_CACHE_TTL_MS = 60_000;
 let categoryCache: { codes: Set<string>; expiresAt: number } | null = null;
@@ -117,92 +121,70 @@ const loadDocumentsByEmployeeId = async (employeeId: number): Promise<Record<str
   );
 };
 
-/** Получить presigned URL для загрузки */
-const getUploadUrl = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+/** Загрузка файла через бэкенд (multipart) — кладёт в S3 и создаёт запись */
+const uploadFile = async (req: MulterRequest, res: Response): Promise<void> => {
   try {
     if (!(await r2Service.isEnabledAsync())) {
       res.status(503).json({ success: false, error: 'R2 хранилище не настроено' });
       return;
     }
-
-    const { employee_id, file_name, content_type, category, leave_request_id } = req.body;
-    if (!employee_id || !file_name || !content_type || !category) {
-      res.status(400).json({ success: false, error: 'employee_id, file_name, content_type, category обязательны' });
+    if (!req.file) {
+      res.status(400).json({ success: false, error: 'Файл обязателен' });
       return;
     }
-    if (!(await isValidCategory(String(category)))) {
+
+    const employeeId = Number(req.body.employee_id);
+    const category = String(req.body.category || '');
+    const leaveRequestId = req.body.leave_request_id ? Number(req.body.leave_request_id) : null;
+
+    if (!employeeId || Number.isNaN(employeeId) || !category) {
+      res.status(400).json({ success: false, error: 'employee_id, category обязательны' });
+      return;
+    }
+    if (!(await isValidCategory(category))) {
       res.status(400).json({ success: false, error: 'Недопустимая категория документа' });
       return;
     }
-    if (!(await canAccessEmployeeInScope(req, Number(employee_id)))) {
+    if (!(await canAccessEmployeeInScope(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
 
-    const r2Key = r2Service.generateKey(employee_id, file_name);
-    const { url: uploadUrl, headers: uploadHeaders } = await r2Service.generateUploadUrl(r2Key, content_type);
+    const file = req.file;
+    const mimeType = file.mimetype || 'application/octet-stream';
+    const r2Key = r2Service.generateKey(employeeId, file.originalname);
 
-    res.json({
-      success: true,
-      data: {
-        upload_url: uploadUrl,
-        upload_headers: uploadHeaders,
-        r2_key: r2Key,
-        employee_id,
-        file_name,
-        content_type,
-        category,
-        leave_request_id: leave_request_id || null,
-      },
-    });
-  } catch (err) {
-    console.error('documents.getUploadUrl error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка генерации URL' });
-  }
-};
-
-/** Подтвердить загрузку — создать запись в БД */
-const confirmUpload = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    const { r2_key, employee_id, file_name, file_size, mime_type, category, leave_request_id } = req.body;
-    if (!r2_key || !employee_id || !file_name || !file_size || !mime_type || !category) {
-      res.status(400).json({ success: false, error: 'Все поля обязательны' });
-      return;
-    }
-    if (!(await isValidCategory(String(category)))) {
-      res.status(400).json({ success: false, error: 'Недопустимая категория документа' });
-      return;
-    }
-    if (!(await canAccessEmployeeInScope(req, Number(employee_id)))) {
-      res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
-      return;
-    }
+    await r2Service.uploadObject(r2Key, file.buffer, mimeType);
 
     const { data, error } = await supabase
       .from('documents')
       .insert({
-        employee_id,
-        leave_request_id: leave_request_id || null,
+        employee_id: employeeId,
+        leave_request_id: leaveRequestId,
         category,
-        file_name,
-        file_size,
-        mime_type,
-        r2_key,
+        file_name: file.originalname,
+        file_size: file.size,
+        mime_type: mimeType,
+        r2_key: r2Key,
         uploaded_by: req.user.id,
       })
       .select()
       .single();
 
-    if (error) throw error;
-    await ensureDocumentLinks(Number(data.id), Number(employee_id), String(category), leave_request_id || null);
+    if (error) {
+      try { await r2Service.deleteObject(r2Key); } catch { /* best-effort */ }
+      throw error;
+    }
+
+    await ensureDocumentLinks(Number(data.id), employeeId, category, leaveRequestId);
     res.json({ success: true, data });
 
-    if (String(category) === 'patent_check') {
+    if (category === 'patent_check') {
       void aiReceiptRecognitionService.enqueueRecognition(Number(data.id));
     }
   } catch (err) {
-    console.error('documents.confirmUpload error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка сохранения документа' });
+    console.error('documents.uploadFile error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка загрузки документа' });
   }
 };
 
@@ -405,8 +387,7 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 };
 
 export const documentsController = {
-  getUploadUrl,
-  confirmUpload,
+  uploadFile,
   getDownloadUrl,
   getMy,
   getByEmployee,

@@ -1,23 +1,23 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { documentsController } from '../controllers/documents.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 
 const router = Router();
 
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
+
 router.use(authenticate);
 
-// POST /api/documents/upload-url — получить presigned URL
+// POST /api/documents/upload — multipart-загрузка файла через бэкенд в S3
 router.post(
-  '/upload-url',
+  '/upload',
   requireAnyPageAccess(['/employee/documents', '/employee/requests'], 'edit'),
-  documentsController.getUploadUrl
-);
-
-// POST /api/documents/confirm — подтвердить загрузку
-router.post(
-  '/confirm',
-  requireAnyPageAccess(['/employee/documents', '/employee/requests'], 'edit'),
-  documentsController.confirmUpload
+  upload.single('file'),
+  documentsController.uploadFile
 );
 
 // GET /api/documents/my — мои документы

@@ -107,6 +107,17 @@ export const r2Service = {
     return { url, headers };
   },
 
+  uploadObject: async (key: string, body: Buffer, contentType: string): Promise<void> => {
+    const { client, bucket, kmsKeyId } = await getR2();
+    if (!client) throw new Error('R2 не настроен');
+    const input: PutObjectCommandInput = { Bucket: bucket, Key: key, Body: body, ContentType: contentType };
+    if (kmsKeyId) {
+      input.ServerSideEncryption = 'aws:kms';
+      input.SSEKMSKeyId = kmsKeyId;
+    }
+    await client.send(new PutObjectCommand(input));
+  },
+
   generateDownloadUrl: async (key: string): Promise<string> => {
     const { client, bucket } = await getR2();
     if (!client) throw new Error('R2 не настроен');

@@ -36,39 +36,6 @@ interface ApiResponse<T> {
 }
 
 export const documentService = {
-  getUploadUrl: async (data: {
-    employee_id: number;
-    file_name: string;
-    content_type: string;
-    category: DocumentCategory;
-    leave_request_id?: number;
-  }) => {
-    const res = await apiClient.post<ApiResponse<{
-      upload_url: string;
-      upload_headers: Record<string, string>;
-      r2_key: string;
-      employee_id: number;
-      file_name: string;
-      content_type: string;
-      category: DocumentCategory;
-      leave_request_id: number | null;
-    }>>('/documents/upload-url', data);
-    return res.data;
-  },
-
-  confirmUpload: async (data: {
-    r2_key: string;
-    employee_id: number;
-    file_name: string;
-    file_size: number;
-    mime_type: string;
-    category: DocumentCategory;
-    leave_request_id?: number;
-  }) => {
-    const res = await apiClient.post<ApiResponse<IDocument>>('/documents/confirm', data);
-    return res.data;
-  },
-
   getMy: async () => {
     const res = await apiClient.get<ApiResponse<IDocument[]>>('/documents/my');
     return res.data;
@@ -93,36 +60,14 @@ export const documentService = {
     await apiClient.delete(`/documents/${id}`);
   },
 
-  /** Загрузить файл через presigned URL */
+  /** Загрузка файла через бэкенд (multipart) */
   uploadFile: async (file: File, employeeId: number, category: DocumentCategory, leaveRequestId?: number) => {
-    // 1. Получаем presigned URL
-    const { upload_url, upload_headers, r2_key } = await documentService.getUploadUrl({
-      employee_id: employeeId,
-      file_name: file.name,
-      content_type: file.type || 'application/octet-stream',
-      category,
-      leave_request_id: leaveRequestId,
-    });
-
-    // 2. Загружаем файл напрямую в R2
-    await fetch(upload_url, {
-      method: 'PUT',
-      body: file,
-      headers: {
-        'Content-Type': file.type || 'application/octet-stream',
-        ...(upload_headers || {}),
-      },
-    });
-
-    // 3. Подтверждаем загрузку
-    return documentService.confirmUpload({
-      r2_key,
-      employee_id: employeeId,
-      file_name: file.name,
-      file_size: file.size,
-      mime_type: file.type || 'application/octet-stream',
-      category,
-      leave_request_id: leaveRequestId,
-    });
+    const form = new FormData();
+    form.append('file', file);
+    form.append('employee_id', String(employeeId));
+    form.append('category', category);
+    if (leaveRequestId) form.append('leave_request_id', String(leaveRequestId));
+    const res = await apiClient.post<ApiResponse<IDocument>>('/documents/upload', form);
+    return res.data;
   },
 };
