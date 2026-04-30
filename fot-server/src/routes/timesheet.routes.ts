@@ -23,7 +23,16 @@ router.use((req, res, next) => {
 const timesheetCache = registerCache(
   'timesheet',
   (req) =>
-    `ts:${req.query.month ?? ''}:${req.query.department_id ?? 'all'}:${req.query.employee_id ?? ''}:${req.user.id}`,
+    [
+      'ts',
+      req.query.month ?? '',
+      req.query.department_id ?? 'all',
+      req.query.employee_id ?? '',
+      req.query.from ?? '',
+      req.query.to ?? '',
+      req.query.half ?? '',
+      req.user.id,
+    ].join(':'),
   5 * 60_000,
   500,
 );
@@ -31,7 +40,15 @@ const timesheetCache = registerCache(
 const timesheetOverviewCache = registerCache(
   'timesheet:overview',
   (req) =>
-    `tso:${req.query.month ?? ''}:${req.query.department_id ?? 'all'}:${req.user.id}`,
+    [
+      'tso',
+      req.query.month ?? '',
+      req.query.department_id ?? 'all',
+      req.query.from ?? '',
+      req.query.to ?? '',
+      req.query.half ?? '',
+      req.user.id,
+    ].join(':'),
   5 * 60_000,
 );
 
