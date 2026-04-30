@@ -67,7 +67,7 @@ interface IDocumentListRow {
   recognized_at: string | null;
   created_at: string;
   employees: { full_name: string | null } | null;
-  patent_payment_receipts: Array<Record<string, unknown>> | null;
+  patent_payment_receipts: Record<string, unknown> | Array<Record<string, unknown>> | null;
 }
 
 const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -119,7 +119,9 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     const result = docs
       .map(doc => {
         const receiptsRaw = doc.patent_payment_receipts;
-        const rawReceipt = receiptsRaw && receiptsRaw.length > 0 ? receiptsRaw[0] : null;
+        const rawReceipt = Array.isArray(receiptsRaw)
+          ? (receiptsRaw.length > 0 ? receiptsRaw[0] : null)
+          : (receiptsRaw ?? null);
         const receipt = rawReceipt
           ? (decryptReceiptRow(rawReceipt as Record<string, unknown>) as Record<string, unknown>)
           : null;
