@@ -178,9 +178,29 @@
   justify-content: center;
 }
 
-.iconBtn:hover {
+.iconBtn:hover:not(:disabled) {
   color: var(--accent);
   border-color: var(--accent);
+}
+
+.iconBtn:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.rowActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .fioMismatch {

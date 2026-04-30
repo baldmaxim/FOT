@@ -103,8 +103,9 @@ export const OpenRouterSettingsSection: FC = () => {
             onChange={e => setModel(e.target.value)}
           >
             {(config?.allowedModels || []).map(m => (
-              <option key={m.id} value={m.id}>
+              <option key={m.id} value={m.id} disabled={!m.supportsVision}>
                 {m.label} (~{m.costPer1kReceiptsRub.toFixed(0)}₽ на 1000 чеков)
+                {!m.supportsVision ? ' — не для чеков' : ''}
               </option>
             ))}
           </select>

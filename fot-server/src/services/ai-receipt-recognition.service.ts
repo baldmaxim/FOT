@@ -1,4 +1,5 @@
 import axios from 'axios';
+import * as Sentry from '@sentry/node';
 import { supabase } from '../config/database.js';
 import { r2Service } from './r2.service.js';
 import { openRouterService, type IChatMessage } from './openrouter.service.js';
@@ -332,6 +333,10 @@ export const aiReceiptRecognitionService = {
       };
     } catch (err) {
       console.error('[ai-receipt-recognition]', err);
+      Sentry.captureException(err, {
+        tags: { service: 'ai-receipt-recognition', stage: 'recognize' },
+        extra: { documentId },
+      });
       await updateDocumentStatus(documentId, 'failed', false);
       return {
         ok: false,
@@ -367,6 +372,10 @@ export const aiReceiptRecognitionService = {
       });
     } catch (err) {
       console.error('[ai-receipt-recognition.enqueue]', err);
+      Sentry.captureException(err, {
+        tags: { service: 'ai-receipt-recognition', stage: 'enqueue' },
+        extra: { documentId },
+      });
     }
   },
 

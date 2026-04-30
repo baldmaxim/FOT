@@ -5,7 +5,7 @@ export type RecognitionStatus = 'pending' | 'processing' | 'done' | 'failed' | '
 export type PaymentMethod = 'cash' | 'card' | 'transfer' | null;
 
 export interface IPatentReceiptListRow {
-  id: number;
+  id: number | null;
   document_id: number;
   employee_id: number | null;
   payment_date: string | null;

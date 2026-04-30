@@ -57,25 +57,17 @@ const PATCH_ALLOWED_FIELDS = new Set<keyof PatentPaymentReceiptPatch>([
   'needs_review',
 ]);
 
-interface IListRow {
+interface IDocumentListRow {
   id: number;
-  document_id: number;
   employee_id: number | null;
-  payment_date: string | null;
-  payment_amount: string | null;
-  payer_full_name: string | null;
-  payer_inn: string | null;
-  payer_passport: string | null;
-  patent_number: string | null;
-  kbk: string | null;
-  oktmo: string | null;
-  source_type: string | null;
-  confidence: string | null;
-  needs_review: boolean;
-  manually_edited: boolean;
-  recognition_model: string | null;
-  cost_usd: string | null;
+  file_name: string | null;
+  mime_type: string | null;
+  recognition_status: string | null;
+  recognition_attempts: number | null;
+  recognized_at: string | null;
   created_at: string;
+  employees: { full_name: string | null } | null;
+  patent_payment_receipts: Array<Record<string, unknown>> | null;
 }
 
 const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -89,34 +81,85 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     } = req.query as Record<string, string | undefined>;
 
     let query = supabase
-      .from('patent_payment_receipts')
-      .select(`${RECEIPT_COLUMNS}, documents:document_id ( file_name, mime_type, recognition_status ), employees:employee_id ( full_name )`)
-      .order('payment_date', { ascending: false, nullsFirst: false })
-      .order('created_at', { ascending: false });
+      .from('documents')
+      .select(`
+        id,
+        employee_id,
+        file_name,
+        mime_type,
+        recognition_status,
+        recognition_attempts,
+        recognized_at,
+        created_at,
+        employees:employee_id ( full_name ),
+        patent_payment_receipts:patent_payment_receipts!document_id_fkey (
+          id, document_id, employee_id,
+          payment_date, payment_amount, payer_full_name, payer_inn, payer_passport,
+          patent_number, kbk, oktmo, source_type, confidence,
+          needs_review, manually_edited, recognition_model, cost_usd,
+          created_at
+        )
+      `)
+      .eq('category', 'patent_check')
+      .order('created_at', { ascending: false })
+      .limit(500);
 
     if (employee_id && /^\d+$/.test(employee_id)) {
       query = query.eq('employee_id', Number(employee_id));
     }
-    if (from) query = query.gte('payment_date', from);
-    if (to) query = query.lte('payment_date', to);
-    if (needs_review === 'true') query = query.eq('needs_review', true);
-    if (needs_review === 'false') query = query.eq('needs_review', false);
-
-    const { data, error } = await query.limit(500);
-    if (error) throw error;
-
-    let rows = (data || []) as unknown as Array<IListRow & {
-      documents: { file_name: string | null; mime_type: string | null; recognition_status: string | null } | null;
-      employees: { full_name: string | null } | null;
-    }>;
-
     if (status) {
-      rows = rows.filter(r => r.documents?.recognition_status === status);
+      query = query.eq('recognition_status', status);
     }
 
-    const decrypted = rows.map(row => decryptReceiptRow(row as unknown as Record<string, unknown>));
+    const { data, error } = await query;
+    if (error) throw error;
 
-    res.json({ success: true, data: decrypted });
+    const docs = (data || []) as unknown as IDocumentListRow[];
+
+    const result = docs
+      .map(doc => {
+        const receiptsRaw = doc.patent_payment_receipts;
+        const rawReceipt = receiptsRaw && receiptsRaw.length > 0 ? receiptsRaw[0] : null;
+        const receipt = rawReceipt
+          ? (decryptReceiptRow(rawReceipt as Record<string, unknown>) as Record<string, unknown>)
+          : null;
+
+        return {
+          id: (receipt?.id as number | null | undefined) ?? null,
+          document_id: doc.id,
+          employee_id: doc.employee_id,
+          payment_date: (receipt?.payment_date as string | null | undefined) ?? null,
+          payment_amount: (receipt?.payment_amount as string | null | undefined) ?? null,
+          payer_full_name: (receipt?.payer_full_name as string | null | undefined) ?? null,
+          payer_inn: (receipt?.payer_inn as string | null | undefined) ?? null,
+          payer_passport: (receipt?.payer_passport as string | null | undefined) ?? null,
+          patent_number: (receipt?.patent_number as string | null | undefined) ?? null,
+          kbk: (receipt?.kbk as string | null | undefined) ?? null,
+          oktmo: (receipt?.oktmo as string | null | undefined) ?? null,
+          source_type: (receipt?.source_type as string | null | undefined) ?? null,
+          confidence: (receipt?.confidence as string | null | undefined) ?? null,
+          needs_review: Boolean(receipt?.needs_review),
+          manually_edited: Boolean(receipt?.manually_edited),
+          recognition_model: (receipt?.recognition_model as string | null | undefined) ?? null,
+          cost_usd: (receipt?.cost_usd as string | null | undefined) ?? null,
+          created_at: (receipt?.created_at as string | undefined) ?? doc.created_at,
+          documents: {
+            file_name: doc.file_name,
+            mime_type: doc.mime_type,
+            recognition_status: doc.recognition_status,
+          },
+          employees: doc.employees ? { full_name: doc.employees.full_name } : null,
+        };
+      })
+      .filter(row => {
+        if (from && (!row.payment_date || row.payment_date < from)) return false;
+        if (to && (!row.payment_date || row.payment_date > to)) return false;
+        if (needs_review === 'true' && !row.needs_review) return false;
+        if (needs_review === 'false' && (!row.id || row.needs_review)) return false;
+        return true;
+      });
+
+    res.json({ success: true, data: result });
   } catch (err) {
     console.error('patent-receipts.list error:', err);
     res.status(500).json({ success: false, error: 'Ошибка загрузки списка чеков' });

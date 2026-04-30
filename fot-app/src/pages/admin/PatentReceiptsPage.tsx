@@ -7,6 +7,8 @@ import {
   type RecognitionStatus,
 } from '../../services/patentReceiptService';
 import { PatentReceiptEditModal } from '../../components/PatentReceiptEditModal';
+import { useToast } from '../../contexts/ToastContext';
+import { ApiError } from '../../api/client';
 import styles from './PatentReceiptsPage.module.css';
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -52,10 +54,12 @@ const fioMismatches = (payerFio: string | null | undefined, employeeFio: string 
 };
 
 export const PatentReceiptsPage: FC = () => {
+  const toast = useToast();
   const [filterFrom, setFilterFrom] = useState('');
   const [filterTo, setFilterTo] = useState('');
   const [filterNeedsReview, setFilterNeedsReview] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [recognizingDocId, setRecognizingDocId] = useState<number | null>(null);
 
   const queryKey = useMemo(() => ['patent-receipts', filterFrom, filterTo, filterNeedsReview], [filterFrom, filterTo, filterNeedsReview]);
   const { data, isLoading, refetch } = useQuery({
@@ -68,6 +72,24 @@ export const PatentReceiptsPage: FC = () => {
   });
 
   const rows = data ?? [];
+
+  const handleRecognize = async (documentId: number) => {
+    setRecognizingDocId(documentId);
+    try {
+      const res = await patentReceiptService.recognize(documentId);
+      if (res.ok) {
+        toast.success(res.status === 'done' ? 'Чек распознан' : 'Чек распознан, требует проверки');
+      } else {
+        toast.error(res.error || 'Не удалось распознать чек');
+      }
+      void refetch();
+    } catch (err) {
+      const detail = err instanceof ApiError ? err.message : null;
+      toast.error(detail ? `Ошибка распознавания: ${detail}` : 'Ошибка распознавания');
+    } finally {
+      setRecognizingDocId(null);
+    }
+  };
 
   return (
     <div className={styles.page}>
@@ -129,8 +151,10 @@ export const PatentReceiptsPage: FC = () => {
                 const status = r.documents?.recognition_status as RecognitionStatus | null;
                 const badge = status ? STATUS_BADGE[status] : null;
                 const fioMismatch = fioMismatches(r.payer_full_name, r.employees?.full_name);
+                const canRecognize = status === 'failed' || status === null;
+                const isRecognizing = recognizingDocId === r.document_id;
                 return (
-                  <tr key={r.id} className={r.needs_review ? styles.rowNeedsReview : undefined}>
+                  <tr key={r.document_id} className={r.needs_review ? styles.rowNeedsReview : undefined}>
                     <td>{formatDate(r.payment_date)}</td>
                     <td>{r.employees?.full_name || '—'}</td>
                     <td>
@@ -158,9 +182,23 @@ export const PatentReceiptsPage: FC = () => {
                       {r.manually_edited && <span className={styles.editedTag}>правлено</span>}
                     </td>
                     <td>
-                      <button className={styles.iconBtn} onClick={() => setEditingId(r.id)} title="Открыть">
-                        <Eye size={14} />
-                      </button>
+                      <div className={styles.rowActions}>
+                        {r.id !== null && (
+                          <button className={styles.iconBtn} onClick={() => setEditingId(r.id!)} title="Открыть">
+                            <Eye size={14} />
+                          </button>
+                        )}
+                        {canRecognize && (
+                          <button
+                            className={styles.iconBtn}
+                            onClick={() => handleRecognize(r.document_id)}
+                            disabled={isRecognizing}
+                            title="Перепрогнать распознавание"
+                          >
+                            <RefreshCw size={14} className={isRecognizing ? styles.spin : undefined} />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
