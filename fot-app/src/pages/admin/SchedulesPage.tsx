@@ -1,5 +1,6 @@
-import { Suspense, lazy, type FC, useState, useMemo } from 'react';
+import { Suspense, lazy, type FC, useState, useMemo, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useAuth } from '../../contexts/AuthContext';
 import { scheduleService } from '../../services/scheduleService';
 import { travelTimeService } from '../../services/travelTimeService';
 import type {
@@ -133,7 +134,14 @@ const EMPTY_TRAVEL_OBJECTS: ITravelObject[] = [];
 export const SchedulesPage: FC = () => {
   const today = getLocalISODate();
   const queryClient = useQueryClient();
+  const { isAdmin, canViewPage } = useAuth();
+  // Менеджеру открыта только вкладка "Шаблоны графиков" — через виртуальную страницу
+  // /admin/schedules/templates (миграция 070). Остальные вкладки админские.
+  const templatesOnly = !isAdmin && !canViewPage('/admin/schedules') && canViewPage('/admin/schedules/templates');
   const [tab, setTab] = useState<TabKey>('templates');
+  useEffect(() => {
+    if (templatesOnly && tab !== 'templates') setTab('templates');
+  }, [templatesOnly, tab]);
   const [error, setError] = useState('');
 
   const [showForm, setShowForm] = useState(false);
@@ -401,18 +409,22 @@ export const SchedulesPage: FC = () => {
         >
           Шаблоны графиков
         </button>
-        <button
-          className={`${styles.tab} ${tab === 'object-assignments' ? styles.tabActive : ''}`}
-          onClick={() => setTab('object-assignments')}
-        >
-          Графики объектов
-        </button>
-        <button
-          className={`${styles.tab} ${tab === 'production-calendar' ? styles.tabActive : ''}`}
-          onClick={() => setTab('production-calendar')}
-        >
-          Производственный календарь
-        </button>
+        {!templatesOnly && (
+          <button
+            className={`${styles.tab} ${tab === 'object-assignments' ? styles.tabActive : ''}`}
+            onClick={() => setTab('object-assignments')}
+          >
+            Графики объектов
+          </button>
+        )}
+        {!templatesOnly && (
+          <button
+            className={`${styles.tab} ${tab === 'production-calendar' ? styles.tabActive : ''}`}
+            onClick={() => setTab('production-calendar')}
+          >
+            Производственный календарь
+          </button>
+        )}
       </div>
 
       {visibleError && <div className={styles.error}>{visibleError}</div>}

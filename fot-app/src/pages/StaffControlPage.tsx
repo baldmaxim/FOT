@@ -82,6 +82,7 @@ interface IStaffRowProps {
   index: number;
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
+  canManage: boolean;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
   onOpenModal: (emp: Employee, type: ModalType) => void;
@@ -100,7 +101,7 @@ const handleMiddleClickMouseDown = (e: ReactMouseEvent) => {
   if (e.button === 1) e.preventDefault();
 };
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selectedIds, canManage, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
 
@@ -163,22 +164,26 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selected
           </span>
         </span>
       </td>
-      <td className="sc-td-salary">
-        <span className="sc-cell-with-btn">
-          <button className="sc-inline-btn" title="Изменить оклад (договор)" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'salary_actual'); }}>
-            <Pencil size={12} />
-          </button>
-          {fmt(emp.salary_actual)}
-        </span>
-      </td>
-      <td className="sc-td-salary">
-        <span className="sc-cell-with-btn">
-          <button className="sc-inline-btn" title="Изменить реальный оклад" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'salary'); }}>
-            <Pencil size={12} />
-          </button>
-          {fmt(emp.salary_calculated)}
-        </span>
-      </td>
+      {canManage && (
+        <td className="sc-td-salary">
+          <span className="sc-cell-with-btn">
+            <button className="sc-inline-btn" title="Изменить оклад (договор)" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'salary_actual'); }}>
+              <Pencil size={12} />
+            </button>
+            {fmt(emp.salary_actual)}
+          </span>
+        </td>
+      )}
+      {canManage && (
+        <td className="sc-td-salary">
+          <span className="sc-cell-with-btn">
+            <button className="sc-inline-btn" title="Изменить реальный оклад" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'salary'); }}>
+              <Pencil size={12} />
+            </button>
+            {fmt(emp.salary_calculated)}
+          </span>
+        </td>
+      )}
       <td className="sc-td-hist" onClick={e => e.stopPropagation()}>
         {onReturn && emp.excluded_from_timesheet ? (
           <button className="sc-btn apply" style={{ fontSize: 11, padding: '2px 8px' }} title="Вернуть сотрудника в табель" onClick={() => onReturn(emp)}>
@@ -200,9 +205,11 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selected
                 <UserRoundX size={14} />
               </button>
             )}
-            <button className="sc-btn-icon" title="История" onClick={() => onOpenHistory(emp)}>
-              <History size={14} />
-            </button>
+            {canManage && (
+              <button className="sc-btn-icon" title="История" onClick={() => onOpenHistory(emp)}>
+                <History size={14} />
+              </button>
+            )}
           </span>
         )}
       </td>
@@ -437,6 +444,7 @@ interface IVirtualTableProps {
   filtered: Employee[];
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
+  canManage: boolean;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
   onToggleSelectAll: () => void;
@@ -454,6 +462,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   filtered,
   scheduleViews,
   selectedIds,
+  canManage,
   onNavigate,
   onToggleSelect,
   onToggleSelectAll,
@@ -464,6 +473,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   onFire,
   onReturn,
 }) => {
+  const totalCols = canManage ? 9 : 7;
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -491,19 +501,19 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
             <th>Отдел</th>
             <th>Должность</th>
             <th>График</th>
-            <th>Оклад (договор)</th>
-            <th>Реальный оклад</th>
+            {canManage && <th>Оклад (договор)</th>}
+            {canManage && <th>Реальный оклад</th>}
             <th className="sc-th-hist"></th>
           </tr>
         </thead>
         <tbody>
           {filtered.length === 0 ? (
-            <tr><td colSpan={9} className="sc-empty">Нет сотрудников</td></tr>
+            <tr><td colSpan={totalCols} className="sc-empty">Нет сотрудников</td></tr>
           ) : (
             <>
               {/* spacer top */}
               {virtualizer.getVirtualItems()[0]?.start > 0 && (
-                <tr><td colSpan={9} style={{ height: virtualizer.getVirtualItems()[0].start, padding: 0, border: 'none' }} /></tr>
+                <tr><td colSpan={totalCols} style={{ height: virtualizer.getVirtualItems()[0].start, padding: 0, border: 'none' }} /></tr>
               )}
               {virtualizer.getVirtualItems().map(vRow => {
                 const emp = filtered[vRow.index];
@@ -514,6 +524,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     index={vRow.index}
                     scheduleViews={scheduleViews}
                     selectedIds={selectedIds}
+                    canManage={canManage}
                     onNavigate={onNavigate}
                     onToggleSelect={onToggleSelect}
                     onOpenModal={onOpenModal}
@@ -529,7 +540,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                 const items = virtualizer.getVirtualItems();
                 const lastItem = items[items.length - 1];
                 const remaining = lastItem ? virtualizer.getTotalSize() - lastItem.end : 0;
-                return remaining > 0 ? <tr><td colSpan={9} style={{ height: remaining, padding: 0, border: 'none' }} /></tr> : null;
+                return remaining > 0 ? <tr><td colSpan={totalCols} style={{ height: remaining, padding: 0, border: 'none' }} /></tr> : null;
               })()}
             </>
           )}
@@ -545,6 +556,7 @@ interface IVirtualCardsProps {
   filtered: Employee[];
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
+  canManage: boolean;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
   onOpenModal: (emp: Employee, type: ModalType) => void;
@@ -560,6 +572,7 @@ const MobileCard: FC<{
   emp: Employee;
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
+  canManage: boolean;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
   onOpenModal: (emp: Employee, type: ModalType) => void;
@@ -567,7 +580,7 @@ const MobileCard: FC<{
   onRehire?: (emp: Employee) => void;
   onFire?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
-}> = memo(({ emp, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
+}> = memo(({ emp, scheduleViews, selectedIds, canManage, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
   const handleAuxClick = (e: ReactMouseEvent) => {
@@ -617,14 +630,18 @@ const MobileCard: FC<{
           {scheduleView && <span className={`sc-schedule-badge ${scheduleView.source}`}>{SCHEDULE_SOURCE_LABELS[scheduleView.source]}</span>}
         </span>
       </div>
-      <div className="sc-card-row">
-        <span className="sc-card-label">Оклад (дог.)</span>
-        <span>{fmt(emp.salary_actual)}</span>
-      </div>
-      <div className="sc-card-row">
-        <span className="sc-card-label">Оклад (прог.)</span>
-        <span>{fmt(emp.salary_calculated)}</span>
-      </div>
+      {canManage && (
+        <div className="sc-card-row">
+          <span className="sc-card-label">Оклад (дог.)</span>
+          <span>{fmt(emp.salary_actual)}</span>
+        </div>
+      )}
+      {canManage && (
+        <div className="sc-card-row">
+          <span className="sc-card-label">Оклад (прог.)</span>
+          <span>{fmt(emp.salary_calculated)}</span>
+        </div>
+      )}
       <div className="sc-card-actions">
         {onReturn && emp.excluded_from_timesheet ? (
           <button className="sc-btn apply" style={{ fontSize: 12, padding: '4px 10px' }} onClick={e => { e.stopPropagation(); onReturn(emp); }}>
@@ -646,18 +663,22 @@ const MobileCard: FC<{
                 <UserRoundX size={14} />
               </button>
             )}
-            <button className="sc-btn-icon" title="История" onClick={e => { e.stopPropagation(); onOpenHistory(emp); }}>
-              <History size={14} />
-            </button>
+            {canManage && (
+              <button className="sc-btn-icon" title="История" onClick={e => { e.stopPropagation(); onOpenHistory(emp); }}>
+                <History size={14} />
+              </button>
+            )}
             <button className="sc-btn-icon" title="Сменить должность" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'position'); }}>
               <Pencil size={14} />
             </button>
             <button className="sc-btn-icon" title="Назначить график" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'schedule'); }}>
               <Calendar size={14} />
             </button>
-            <button className="sc-btn-icon" title="Изменить оклад" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'salary'); }}>
-              <TrendingUp size={14} />
-            </button>
+            {canManage && (
+              <button className="sc-btn-icon" title="Изменить оклад" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'salary'); }}>
+                <TrendingUp size={14} />
+              </button>
+            )}
             <button className="sc-btn-icon" title="Сменить отдел" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'department'); }}>
               <ArrowRightLeft size={14} />
             </button>
@@ -668,7 +689,7 @@ const MobileCard: FC<{
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, canManage, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -688,6 +709,7 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, se
                 emp={emp}
                 scheduleViews={scheduleViews}
                 selectedIds={selectedIds}
+                canManage={canManage}
                 onNavigate={onNavigate}
                 onToggleSelect={onToggleSelect}
                 onOpenModal={onOpenModal}
@@ -1840,12 +1862,13 @@ export const StaffControlPage: FC = () => {
           filtered={employees}
           scheduleViews={scheduleViews}
           selectedIds={selectedEmployeeIdSet}
+          canManage={isAdmin}
           onNavigate={handleNavigate}
           onToggleSelect={toggleSelectEmployee}
           onOpenModal={openModal}
           onOpenHistory={openHistory}
-          onRehire={statusFilter === 'fired' ? handleRehire : undefined}
-          onFire={statusFilter === 'active' ? handleFire : undefined}
+          onRehire={statusFilter === 'fired' && isAdmin ? handleRehire : undefined}
+          onFire={statusFilter === 'active' && isAdmin ? handleFire : undefined}
           onReturn={statusFilter === 'excluded' ? handleReturnToTimesheet : undefined}
         />
       ) : (
@@ -1853,14 +1876,15 @@ export const StaffControlPage: FC = () => {
           filtered={employees}
           scheduleViews={scheduleViews}
           selectedIds={selectedEmployeeIdSet}
+          canManage={isAdmin}
           onNavigate={handleNavigate}
           onToggleSelect={toggleSelectEmployee}
           onToggleSelectAll={toggleSelectAllVisible}
           allSelected={allVisibleSelected}
           onOpenModal={openModal}
           onOpenHistory={openHistory}
-          onRehire={statusFilter === 'fired' ? handleRehire : undefined}
-          onFire={statusFilter === 'active' ? handleFire : undefined}
+          onRehire={statusFilter === 'fired' && isAdmin ? handleRehire : undefined}
+          onFire={statusFilter === 'active' && isAdmin ? handleFire : undefined}
           onReturn={statusFilter === 'excluded' ? handleReturnToTimesheet : undefined}
         />
       )}

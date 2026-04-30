@@ -402,7 +402,7 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage="/admin/schedules" />}>
+        <Route element={<ProtectedRoute requiredPage={['/admin/schedules', '/admin/schedules/templates']} />}>
           <Route
             path="/admin/schedules"
             element={
@@ -513,7 +513,7 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage={['/admin/schedules']} />}>
+        <Route element={<ProtectedRoute requiredPage={['/admin/schedules', '/admin/schedules/templates']} />}>
           <Route
             path="/admin/payroll"
             element={
