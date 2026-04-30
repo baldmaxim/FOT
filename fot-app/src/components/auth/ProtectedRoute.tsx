@@ -18,6 +18,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     isTwoFactorVerified,
     canViewPage,
     loading,
+    employeeVariant,
+    isAdmin,
   } = useAuth();
   const location = useLocation();
 
@@ -40,6 +42,18 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
 
   if (isTwoFactorEnabled && !isTwoFactorVerified) {
     return <Navigate to="/verify-2fa" state={{ from: location }} replace />;
+  }
+
+  // Object-worker (рабочий на объекте) работает только через минималистичный
+  // ObjectWorkerDashboardPage (/employee). Любые nested /employee/* страницы
+  // ему недоступны — даже если в role_page_access случайно дали view.
+  if (
+    employeeVariant === 'object'
+    && !isAdmin
+    && location.pathname !== '/employee'
+    && location.pathname.startsWith('/employee/')
+  ) {
+    return <Navigate to="/employee" replace />;
   }
 
   if (requiredPage) {

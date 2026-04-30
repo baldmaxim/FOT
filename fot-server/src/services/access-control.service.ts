@@ -130,15 +130,17 @@ async function hasManagerAutoAccess(req: AuthenticatedRequest, pagePath: string)
 }
 
 /**
- * Эффективная проверка доступа к странице: role-based + авто-доступ
- * «руководителя» (не-админ с назначенными отделами) к страницам из
- * MANAGER_AUTO_ACCESS_PAGES.
+ * Эффективная проверка доступа к странице: bypass для is_admin (симметрично
+ * фронту, где canViewPage возвращает true для админа), role-based по
+ * role_page_access + авто-доступ «руководителя» (не-админ с назначенными
+ * отделами) к страницам из MANAGER_AUTO_ACCESS_PAGES.
  */
 export async function resolveEffectivePageAccess(
   req: AuthenticatedRequest,
   pagePath: string,
   action: 'view' | 'edit',
 ): Promise<boolean> {
+  if (req.user.is_admin) return true;
   const byRole = action === 'edit'
     ? await hasPageEdit(req.user.role_code, pagePath)
     : await hasPageView(req.user.role_code, pagePath);
