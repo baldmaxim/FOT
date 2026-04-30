@@ -151,6 +151,24 @@ export const rolesController = {
     res.json({ success: true, data });
   },
 
+  // Минимальный список ролей для UI: только code/name/is_admin активных ролей.
+  // Используется AuthContext.loadRoles() для подписей в чате/админке без раскрытия
+  // структуры прав. Доступ — любой authenticated (см. roles.routes.ts).
+  async getLabels(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    const { data, error } = await supabase
+      .from('system_roles')
+      .select('code, name, is_admin')
+      .eq('is_active', true)
+      .order('is_admin', { ascending: false })
+      .order('name', { ascending: true });
+
+    if (error) {
+      res.status(500).json({ success: false, error: error.message });
+      return;
+    }
+    res.json({ success: true, data });
+  },
+
   async getCatalog(_req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const data = await loadAccessCatalog();

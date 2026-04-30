@@ -1,10 +1,14 @@
 import { Router } from 'express';
 import { chatController } from '../controllers/chat.controller.js';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, requireAnyPageAccess } from '../middleware/auth.js';
 
 const router = Router();
 
 router.use(authenticate);
+// Чат доступен любому пользователю, у которого есть «осмысленная» страница
+// (личный кабинет работника или дашборд). Это отсекает «висящие» роли без
+// активного UI и блокирует прямой доступ к API в обход фронта.
+router.use(requireAnyPageAccess(['/employee', '/dashboard'], 'view'));
 
 router.get('/conversations', chatController.getConversations);
 router.post('/conversations', chatController.createConversation);

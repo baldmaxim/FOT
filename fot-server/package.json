@@ -9,6 +9,7 @@
     "build": "tsc",
     "sentry:sourcemaps": "sentry-cli sourcemaps inject ./dist && sentry-cli sourcemaps upload --release=$SENTRY_RELEASE ./dist",
     "test": "vitest run",
+    "audit:routes": "tsx scripts/audit-route-protection.ts",
     "start": "node dist/index.js"
   },
   "dependencies": {

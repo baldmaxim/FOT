@@ -29,6 +29,14 @@ export interface RoleAccessProfile {
   page_access: Record<string, AccessMode>;
 }
 
+// Минимальная подпись роли для UI (чат, фильтры списков пользователей).
+// Бэк отдаёт это всем authenticated; полный SystemRole — только админам.
+export interface RoleLabel {
+  code: string;
+  name: string;
+  is_admin: boolean;
+}
+
 export interface CreateRoleData {
   code: string;
   name: string;
@@ -61,6 +69,11 @@ export interface UpdateAccessProfileData {
 export const rolesService = {
   async getAll(): Promise<SystemRole[]> {
     const res = await apiClient.get<ApiResponse<SystemRole[]>>('/roles');
+    return res.data ?? [];
+  },
+
+  async getLabels(): Promise<RoleLabel[]> {
+    const res = await apiClient.get<ApiResponse<RoleLabel[]>>('/roles/labels');
     return res.data ?? [];
   },
 

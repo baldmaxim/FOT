@@ -3,6 +3,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import * as Sentry from '@sentry/react';
 import { apiClient, ApiError, getSessionToken, setSessionToken, subscribeSessionToken } from '../api/client';
 import { wsService } from '../services/websocket';
+import type { RoleLabel } from '../services/rolesService';
 import type {
   User,
   UserProfile,
@@ -11,7 +12,6 @@ import type {
   RegisterData,
   EmployeePositionType,
   EmployeeVariant,
-  SystemRole,
 } from '../types';
 
 interface AuthResponse {
@@ -30,7 +30,7 @@ interface RegisterResponse {
 
 interface AuthContextType extends AuthState {
   token: string | null;
-  roles: SystemRole[];
+  roles: RoleLabel[];
   isAdmin: boolean;
   employeeVariant: EmployeeVariant | null;
   login: (credentials: LoginCredentials) => Promise<{ requires2FA: boolean }>;
@@ -63,14 +63,17 @@ const initialState: AuthState = {
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<AuthState>(initialState);
-  const [roles, setRoles] = useState<SystemRole[]>([]);
+  const [roles, setRoles] = useState<RoleLabel[]>([]);
   const [token, setToken] = useState<string | null>(getSessionToken());
 
   useEffect(() => subscribeSessionToken(setToken), []);
 
+  // Грузим подписи ролей через /roles/labels — endpoint доступен любому
+  // authenticated, в отличие от полного /roles, который теперь под
+  // requirePageAccess('/admin/roles', 'view').
   const loadRoles = useCallback(async () => {
     try {
-      const response = await apiClient.get<{ data: SystemRole[] }>('/roles');
+      const response = await apiClient.get<{ data: RoleLabel[] }>('/roles/labels');
       setRoles(response.data ?? []);
     } catch {
       // Не критично.
@@ -243,7 +246,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const canViewPage = useCallback((pagePath: string): boolean => {
     if (!ready) return false;
     if (state.profile?.is_admin) return true;
-    return state.profile?.page_access?.[pagePath]?.can_view === true;
+    // Defense in depth: edit без view невозможен по семантике, но если
+    // в page_access вдруг просочится {can_view:false, can_edit:true} —
+    // считаем доступ есть. Сервер нормализует это в access-control.service.ts.
+    const perm = state.profile?.page_access?.[pagePath];
+    return perm?.can_view === true || perm?.can_edit === true;
   }, [ready, state.profile]);
 
   const canEditPage = useCallback((pagePath: string): boolean => {

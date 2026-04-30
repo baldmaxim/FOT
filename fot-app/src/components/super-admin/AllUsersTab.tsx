@@ -1,6 +1,8 @@
 import { useState, useMemo } from 'react';
 import type { FC } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { adminService } from '../../services/adminService';
+import { rolesService } from '../../services/rolesService';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -59,7 +61,15 @@ const areDepartmentSelectionsEqual = (left: string[], right: string[]): boolean 
 
 export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
   const toast = useToast();
-  const { roles, getRoleLabel, profile, refreshProfile } = useAuth();
+  const { getRoleLabel, profile, refreshProfile } = useAuth();
+  // Полный список ролей нужен админу для approval-формы (employee_variant,
+  // is_active и т.п.). Endpoint /roles защищён requireAnyPageAccess(/admin/users,
+  // /admin/roles), поэтому страница его получит.
+  const rolesQuery = useQuery({
+    queryKey: ['admin-roles-full'],
+    queryFn: () => rolesService.getAll(),
+  });
+  const roles = rolesQuery.data ?? [];
   const structureQuery = useStructureTree();
   const [roleFilter, setRoleFilter] = useState<EmployeePositionType | null>(null);
   const [searchQuery, setSearchQuery] = useState('');

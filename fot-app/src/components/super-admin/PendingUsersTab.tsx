@@ -37,8 +37,8 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onRel
   const { roles } = useAuth();
   const [approvalModal, setApprovalModal] = useState<IApprovalModal | null>(null);
 
-  const availableRoles = roles
-    .filter(role => role.is_active)
+  // /roles/labels уже отдаёт только активные роли — дополнительный фильтр не нужен.
+  const availableRoles = [...roles]
     .sort((a, b) => Number(b.is_admin) - Number(a.is_admin) || a.name.localeCompare(b.name, 'ru'));
 
   const openApprovalModal = (user: IPendingUser) => {
