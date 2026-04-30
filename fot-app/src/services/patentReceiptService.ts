@@ -143,6 +143,10 @@ export const patentReceiptService = {
     return res.data;
   },
 
+  remove: async (id: number): Promise<void> => {
+    await apiClient.delete<{ success: boolean }>(`/patent-receipts/${id}`);
+  },
+
   recognize: async (documentId: number, model?: string): Promise<IRecognizeResult> => {
     const res = await apiClient.post<ApiResponse<IRecognizeResult>>(`/patent-receipts/${documentId}/recognize`, model ? { model } : {});
     return res.data;

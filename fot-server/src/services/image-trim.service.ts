@@ -2,7 +2,7 @@ import sharp from 'sharp';
 
 const MIN_BYTES = 5 * 1024;
 const MIN_DIMENSION = 100;
-const TRIM_THRESHOLD = 25;
+const TRIM_THRESHOLD = 50;
 
 interface ITrimResult {
   buffer: Buffer;

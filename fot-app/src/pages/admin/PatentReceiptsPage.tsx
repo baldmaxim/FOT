@@ -1,11 +1,12 @@
 import { type FC, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Eye, RefreshCw, AlertTriangle, CheckCircle2, Clock, XCircle, UserX, ShieldCheck } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Eye, RefreshCw, AlertTriangle, CheckCircle2, Clock, XCircle, UserX, ShieldCheck, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 import {
   patentReceiptService,
   type IPatentReceiptListRow,
   type RecognitionStatus,
 } from '../../services/patentReceiptService';
+import { employeeService } from '../../services/employeeService';
 import { PatentReceiptEditModal } from '../../components/PatentReceiptEditModal';
 import { useToast } from '../../contexts/ToastContext';
 import { ApiError } from '../../api/client';
@@ -55,23 +56,57 @@ const fioMismatches = (payerFio: string | null | undefined, employeeFio: string 
 
 export const PatentReceiptsPage: FC = () => {
   const toast = useToast();
+  const queryClient = useQueryClient();
+  const [filterEmployeeId, setFilterEmployeeId] = useState<number | null>(null);
   const [filterFrom, setFilterFrom] = useState('');
   const [filterTo, setFilterTo] = useState('');
   const [filterNeedsReview, setFilterNeedsReview] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [recognizingDocId, setRecognizingDocId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
-  const queryKey = useMemo(() => ['patent-receipts', filterFrom, filterTo, filterNeedsReview], [filterFrom, filterTo, filterNeedsReview]);
+  const employeesQuery = useQuery({
+    queryKey: ['employees-list-for-filter'],
+    queryFn: () => employeeService.getAll(),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const queryKey = useMemo(
+    () => ['patent-receipts', filterEmployeeId, filterFrom, filterTo, filterNeedsReview],
+    [filterEmployeeId, filterFrom, filterTo, filterNeedsReview],
+  );
   const { data, isLoading, refetch } = useQuery({
     queryKey,
     queryFn: () => patentReceiptService.list({
+      employee_id: filterEmployeeId ?? undefined,
       from: filterFrom || undefined,
       to: filterTo || undefined,
       needs_review: filterNeedsReview ? true : undefined,
     }),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => patentReceiptService.remove(id),
+    onSuccess: () => {
+      toast.success('Чек удалён');
+      void queryClient.invalidateQueries({ queryKey: ['patent-receipts'] });
+    },
+    onError: err => {
+      const detail = err instanceof ApiError ? err.message : null;
+      toast.error(detail ? `Ошибка удаления: ${detail}` : 'Ошибка удаления');
+    },
+    onSettled: () => setDeletingId(null),
+  });
+
+  const handleDelete = (id: number) => {
+    if (!window.confirm('Удалить чек безвозвратно? Файл будет удалён из хранилища.')) return;
+    setDeletingId(id);
+    deleteMutation.mutate(id);
+  };
+
   const rows = data ?? [];
+  const employees = employeesQuery.data ?? [];
 
   const handleRecognize = async (documentId: number) => {
     setRecognizingDocId(documentId);
@@ -105,12 +140,18 @@ export const PatentReceiptsPage: FC = () => {
 
       <div className={styles.filters}>
         <label className={styles.field}>
-          <span>С</span>
-          <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} />
-        </label>
-        <label className={styles.field}>
-          <span>По</span>
-          <input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)} />
+          <span>Сотрудник</span>
+          <select
+            value={filterEmployeeId ?? ''}
+            onChange={e => setFilterEmployeeId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">Все сотрудники</option>
+            {[...employees]
+              .sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '', 'ru'))
+              .map(emp => (
+                <option key={emp.id} value={emp.id}>{emp.full_name}</option>
+              ))}
+          </select>
         </label>
         <label className={styles.checkbox}>
           <input
@@ -120,9 +161,24 @@ export const PatentReceiptsPage: FC = () => {
           />
           <span>Только требующие проверки</span>
         </label>
+        <button className={styles.btnSecondary} onClick={() => setShowAdvanced(v => !v)}>
+          {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />} Доп. фильтры
+        </button>
         <button className={styles.btnSecondary} onClick={() => refetch()}>
           <RefreshCw size={14} /> Обновить
         </button>
+        {showAdvanced && (
+          <div className={styles.advancedRow}>
+            <label className={styles.field}>
+              <span>С</span>
+              <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} />
+            </label>
+            <label className={styles.field}>
+              <span>По</span>
+              <input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)} />
+            </label>
+          </div>
+        )}
       </div>
 
       {isLoading ? (
@@ -196,6 +252,16 @@ export const PatentReceiptsPage: FC = () => {
                             title="Перепрогнать распознавание"
                           >
                             <RefreshCw size={14} className={isRecognizing ? styles.spin : undefined} />
+                          </button>
+                        )}
+                        {r.id !== null && (
+                          <button
+                            className={styles.iconBtnDanger}
+                            onClick={() => handleDelete(r.id!)}
+                            disabled={deletingId === r.id}
+                            title="Удалить чек"
+                          >
+                            <Trash2 size={14} className={deletingId === r.id ? styles.spin : undefined} />
                           </button>
                         )}
                       </div>

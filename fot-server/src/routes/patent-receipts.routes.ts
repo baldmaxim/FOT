@@ -17,6 +17,7 @@ router.post('/my/upload', upload.single('file'), patentReceiptsController.upload
 router.get('/', requirePageAccess('/admin/patent-receipts', 'view'), patentReceiptsController.list);
 router.get('/:id', requirePageAccess('/admin/patent-receipts', 'view'), patentReceiptsController.getOne);
 router.patch('/:id', requirePageAccess('/admin/patent-receipts', 'edit'), patentReceiptsController.update);
+router.delete('/:id', requirePageAccess('/admin/patent-receipts', 'edit'), patentReceiptsController.remove);
 router.post('/:documentId/recognize', requirePageAccess('/admin/patent-receipts', 'edit'), patentReceiptsController.recognize);
 
 export default router;

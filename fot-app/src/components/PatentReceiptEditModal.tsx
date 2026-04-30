@@ -190,7 +190,7 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
                 </a>
               )}
               <div className={styles.metaBox}>
-                <div><span>Модель:</span> {data.recognition_model || '—'}</div>
+                <div><span>Распознан моделью:</span> {data.recognition_model || '—'}</div>
                 <div><span>Уверенность:</span> {data.confidence ? Number(data.confidence).toFixed(2) : '—'}</div>
                 <div><span>Цена распознавания:</span> {data.cost_usd ? `$${Number(data.cost_usd).toFixed(5)}` : '—'}</div>
                 <div><span>Источник:</span> {data.source_type || '—'}</div>
@@ -198,7 +198,7 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
               </div>
               <div className={styles.recognizeBox}>
                 <select value={overrideModel} onChange={e => setOverrideModel(e.target.value)}>
-                  <option value="">Текущая ({orSettingsQuery.data?.model || '—'})</option>
+                  <option value="">По умолчанию ({orSettingsQuery.data?.model || '—'})</option>
                   {(orSettingsQuery.data?.allowedModels || []).map((m: IOpenRouterModelInfo) => (
                     <option key={m.id} value={m.id}>{m.label}</option>
                   ))}
@@ -244,27 +244,42 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
 
                 <label className={styles.field}>
                   <span>Способ оплаты</span>
-                  <select
-                    value={form.payment_method ?? ''}
-                    onChange={e => update('payment_method', (e.target.value || null) as PaymentMethod)}
-                    disabled={readOnly}
-                  >
-                    <option value="">—</option>
-                    <option value="cash">Наличные</option>
-                    <option value="card">Карта</option>
-                    <option value="transfer">Перевод</option>
-                  </select>
+                  {readOnly ? (
+                    <div className={styles.fieldValue}>
+                      {form.payment_method === 'cash' ? 'Наличные'
+                        : form.payment_method === 'card' ? 'Карта'
+                          : form.payment_method === 'transfer' ? 'Перевод'
+                            : '—'}
+                    </div>
+                  ) : (
+                    <select
+                      value={form.payment_method ?? ''}
+                      onChange={e => update('payment_method', (e.target.value || null) as PaymentMethod)}
+                    >
+                      <option value="">—</option>
+                      <option value="cash">Наличные</option>
+                      <option value="card">Карта</option>
+                      <option value="transfer">Перевод</option>
+                    </select>
+                  )}
                 </label>
 
-                <label className={styles.checkbox}>
-                  <input
-                    type="checkbox"
-                    checked={form.needs_review}
-                    onChange={e => update('needs_review', e.target.checked)}
-                    disabled={readOnly}
-                  />
-                  <span>Требует проверки</span>
-                </label>
+                {readOnly ? (
+                  form.needs_review && (
+                    <div className={styles.checkbox}>
+                      <span className={styles.statusBadge}>Требует проверки</span>
+                    </div>
+                  )
+                ) : (
+                  <label className={styles.checkbox}>
+                    <input
+                      type="checkbox"
+                      checked={form.needs_review}
+                      onChange={e => update('needs_review', e.target.checked)}
+                    />
+                    <span>Требует проверки</span>
+                  </label>
+                )}
               </div>
             </div>
           </div>
@@ -311,16 +326,27 @@ interface IFieldProps {
   readOnly?: boolean;
 }
 
+const formatDateRu = (value: string): string => {
+  if (!value) return '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!m) return value;
+  return `${m[3]}.${m[2]}.${m[1]}`;
+};
+
 const Field: FC<IFieldProps> = ({ label, value, onChange, type = 'text', fullWidth, readOnly }) => (
   <label className={`${styles.field} ${fullWidth ? styles.fieldFull : ''}`}>
     <span>{label}</span>
-    <input
-      type={type}
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      readOnly={readOnly}
-      disabled={readOnly}
-    />
+    {readOnly ? (
+      <div className={styles.fieldValue}>
+        {type === 'date' ? (formatDateRu(value) || '—') : (value || '—')}
+      </div>
+    ) : (
+      <input
+        type={type}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+      />
+    )}
   </label>
 );
 
@@ -333,7 +359,15 @@ interface IAmountFieldProps {
 
 const AmountField: FC<IAmountFieldProps> = ({ label, value, onChange, readOnly }) => {
   const [focused, setFocused] = useState(false);
-  const displayValue = readOnly || !focused ? formatAmount(value) : value;
+  if (readOnly) {
+    return (
+      <label className={styles.field}>
+        <span>{label}</span>
+        <div className={styles.fieldValue}>{formatAmount(value) || '—'}</div>
+      </label>
+    );
+  }
+  const displayValue = !focused ? formatAmount(value) : value;
   return (
     <label className={styles.field}>
       <span>{label}</span>
@@ -344,8 +378,6 @@ const AmountField: FC<IAmountFieldProps> = ({ label, value, onChange, readOnly }
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         onChange={e => onChange(parseAmount(e.target.value))}
-        readOnly={readOnly}
-        disabled={readOnly}
       />
     </label>
   );
