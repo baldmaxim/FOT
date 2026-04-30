@@ -302,7 +302,8 @@ export const TimesheetPage: FC = () => {
       to: rangeEnd,
     }),
     enabled: Boolean(activeGridDeptId),
-    staleTime: 30_000,
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000,
     placeholderData: previousData => previousData,
   });
   const employees = useMemo<TimesheetEmployee[]>(
@@ -331,7 +332,7 @@ export const TimesheetPage: FC = () => {
       q: deferredTeamSearch,
     }),
     enabled: teamManagementOpen && Boolean(activeGridDeptId) && deferredTeamSearch.length >= 2,
-    staleTime: 30_000,
+    staleTime: 2 * 60_000,
     placeholderData: previousData => previousData,
   });
   const visibleDays = useMemo(() => {

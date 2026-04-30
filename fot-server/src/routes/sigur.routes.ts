@@ -5,11 +5,67 @@ import { sigurSyncController } from '../controllers/sigur-sync.controller.js';
 import { sigurAdminController } from '../controllers/sigur-admin.controller.js';
 import { sigurFilterController } from '../controllers/sigur-filter.controller.js';
 import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
+import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 
 const router = Router();
 
 // Все роуты требуют аутентификации и page access на настройки СКУД
 router.use(authenticate);
+
+// Кэши для тяжёлых GET'ов Sigur (внешний API — самый медленный путь).
+const sigurAdminDeptsCache = registerCache(
+  'sigur:admin:departments',
+  () => 'sigur:admin:departments',
+  2 * 60_000,
+);
+const sigurAdminDeptsTreeCache = registerCache(
+  'sigur:admin:departments-tree',
+  () => 'sigur:admin:departments-tree',
+  2 * 60_000,
+);
+const sigurAdminDeptsCountsCache = registerCache(
+  'sigur:admin:departments-counts',
+  () => 'sigur:admin:departments-counts',
+  2 * 60_000,
+);
+const sigurAdminPositionsCache = registerCache(
+  'sigur:admin:positions',
+  () => 'sigur:admin:positions',
+  5 * 60_000,
+);
+const sigurAdminEmployeesCache = registerCache(
+  'sigur:admin:employees',
+  (req) =>
+    `sae:${req.query.departmentId ?? ''}:${req.query.search ?? ''}:${req.query.page ?? 1}:${req.query.pageSize ?? ''}`,
+  60_000,
+  500,
+);
+const sigurAdminCardStatusesCache = registerCache(
+  'sigur:admin:card-statuses',
+  () => 'sigur:admin:card-statuses',
+  5 * 60_000,
+);
+
+const SIGUR_ADMIN_CACHES = [
+  'sigur:admin:departments',
+  'sigur:admin:departments-tree',
+  'sigur:admin:departments-counts',
+  'sigur:admin:positions',
+  'sigur:admin:employees',
+  'sigur:admin:card-statuses',
+];
+
+// Write-through invalidation: любой POST/PUT/DELETE/PATCH на /admin/* и /sync* сбрасывает кэши.
+router.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.on('finish', () => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        invalidateCaches(...SIGUR_ADMIN_CACHES);
+      }
+    });
+  }
+  next();
+});
 
 // === Read-only эндпоинты ===
 
@@ -19,12 +75,12 @@ router.get('/connection-status', requirePageAccess('/skud-settings', 'view'), si
 
 // === Live admin эндпоинты ===
 
-router.get('/admin/departments', requirePageAccess('/skud-settings', 'view'), sigurAdminController.listDepartments);
-router.get('/admin/departments/tree', requirePageAccess('/skud-settings', 'view'), sigurAdminController.listDepartmentsTree);
-router.get('/admin/departments/counts', requirePageAccess('/skud-settings', 'view'), sigurAdminController.listDepartmentCounts);
-router.get('/admin/positions', requirePageAccess('/skud-settings', 'view'), sigurAdminController.listPositions);
-router.get('/admin/employees', requirePageAccess('/skud-settings', 'view'), sigurAdminController.listEmployees);
-router.get('/admin/employees/card-statuses', requirePageAccess('/skud-settings', 'view'), sigurAdminController.getEmployeeCardStatuses);
+router.get('/admin/departments', requirePageAccess('/skud-settings', 'view'), sigurAdminDeptsCache, sigurAdminController.listDepartments);
+router.get('/admin/departments/tree', requirePageAccess('/skud-settings', 'view'), sigurAdminDeptsTreeCache, sigurAdminController.listDepartmentsTree);
+router.get('/admin/departments/counts', requirePageAccess('/skud-settings', 'view'), sigurAdminDeptsCountsCache, sigurAdminController.listDepartmentCounts);
+router.get('/admin/positions', requirePageAccess('/skud-settings', 'view'), sigurAdminPositionsCache, sigurAdminController.listPositions);
+router.get('/admin/employees', requirePageAccess('/skud-settings', 'view'), sigurAdminEmployeesCache, sigurAdminController.listEmployees);
+router.get('/admin/employees/card-statuses', requirePageAccess('/skud-settings', 'view'), sigurAdminCardStatusesCache, sigurAdminController.getEmployeeCardStatuses);
 router.get('/admin/employees/:sigurEmployeeId/profile', requirePageAccess('/skud-settings', 'view'), sigurAdminController.getEmployeeProfile);
 
 router.post(

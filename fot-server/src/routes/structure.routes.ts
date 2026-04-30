@@ -1,14 +1,30 @@
 import { Router } from 'express';
 import { structureController } from '../controllers/structure.controller.js';
 import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
-import { cacheResponse } from '../middleware/cacheResponse.js';
+import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
+import { invalidateStructureCache } from '../services/employee-mapper.service.js';
 
 const router = Router();
 
-const structureTreeCache = cacheResponse(() => 'structure:tree', 5 * 60_000);
+const structureTreeCache = registerCache('structure:tree', () => 'structure:tree', 5 * 60_000);
+const structurePositionsCache = registerCache('structure:positions', () => 'structure:positions', 15 * 60_000);
 
 // Все роуты требуют аутентификации
 router.use(authenticate);
+
+// Write-through invalidation: после любой правки структуры сбрасываем кэши
+// (HTTP-ответы + in-memory кэш в employee-mapper.service).
+router.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.on('finish', () => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        invalidateCaches('structure:tree', 'structure:positions');
+        invalidateStructureCache();
+      }
+    });
+  }
+  next();
+});
 
 // GET /api/structure - получение дерева (worker+, кэш 5мин)
 router.get(
@@ -18,10 +34,11 @@ router.get(
   structureController.getTree
 );
 
-// GET /api/structure/positions - список должностей (worker+)
+// GET /api/structure/positions - список должностей (worker+, кэш 15мин)
 router.get(
   '/positions',
   requireAnyPageAccess(['/employee', '/dashboard', '/staff-control', '/admin/users', '/admin/payslips', '/skud-settings'], 'view'),
+  structurePositionsCache,
   structureController.getPositions
 );
 

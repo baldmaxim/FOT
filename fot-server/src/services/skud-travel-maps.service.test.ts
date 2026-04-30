@@ -60,6 +60,10 @@ function createBuilder(table: string) {
       query.operations.push({ method: 'single', args });
       return builder;
     },
+    maybeSingle: (...args: unknown[]) => {
+      query.operations.push({ method: 'maybeSingle', args });
+      return builder;
+    },
     then: (onFulfilled: (value: QueryResponse) => unknown, onRejected?: (reason: unknown) => unknown) =>
       Promise.resolve(mockedState.resolver(query)).then(onFulfilled, onRejected),
   };

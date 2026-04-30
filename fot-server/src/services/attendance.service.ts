@@ -19,7 +19,37 @@ const NON_WORK_ADJUSTMENT_STATUSES = new Set<TimeStatus>([
   'absent', 'sick', 'vacation', 'dayoff', 'unpaid', 'educational_leave', 'remote',
 ]);
 
-const BATCH_SIZE = 500;
+const BATCH_SIZE = 2000;
+
+// In-memory кэш ФИО авторов корректировок: один админ обычно создаёт сотни
+// корректировок, повторно тянуть его имя в каждом GET /timesheet — лишняя работа.
+const NAME_CACHE_TTL = 5 * 60_000;
+const userNameCache = new Map<string, { name: string; expiresAt: number }>();
+const legacyEmployeeNameCache = new Map<number, { name: string; expiresAt: number }>();
+
+function readUserNameCache(ids: string[]): { hits: Map<string, string>; misses: string[] } {
+  const hits = new Map<string, string>();
+  const misses: string[] = [];
+  const now = Date.now();
+  for (const id of ids) {
+    const cached = userNameCache.get(id);
+    if (cached && cached.expiresAt > now) hits.set(id, cached.name);
+    else misses.push(id);
+  }
+  return { hits, misses };
+}
+
+function readLegacyEmployeeNameCache(ids: number[]): { hits: Map<number, string>; misses: number[] } {
+  const hits = new Map<number, string>();
+  const misses: number[] = [];
+  const now = Date.now();
+  for (const id of ids) {
+    const cached = legacyEmployeeNameCache.get(id);
+    if (cached && cached.expiresAt > now) hits.set(id, cached.name);
+    else misses.push(id);
+  }
+  return { hits, misses };
+}
 
 export interface IAttendanceEmployee {
   id: number;
@@ -222,22 +252,39 @@ async function loadAdjustmentNames(adjustments: IAttendanceAdjustment[]): Promis
   const userIds = [...new Set(adjustments.map((item) => item.created_by).filter((id): id is string => Boolean(id)))];
   const legacyEmployeeIds = [...new Set(adjustments.map((item) => extractLegacyCorrectorId(item.metadata)).filter((id): id is number => id != null))];
 
+  // Сначала смотрим в in-memory кэш — большая часть авторов повторяется между вызовами.
+  const { hits: userHits, misses: userMisses } = readUserNameCache(userIds);
+  const { hits: legacyHits, misses: legacyMisses } = readLegacyEmployeeNameCache(legacyEmployeeIds);
+
   const [usersRes, employeesRes] = await Promise.all([
-    userIds.length > 0
-      ? supabase.from('user_profiles').select('id, full_name').in('id', userIds)
+    userMisses.length > 0
+      ? supabase.from('user_profiles').select('id, full_name').in('id', userMisses)
       : Promise.resolve({ data: [], error: null }),
-    legacyEmployeeIds.length > 0
-      ? supabase.from('employees').select('id, full_name').in('id', legacyEmployeeIds)
+    legacyMisses.length > 0
+      ? supabase.from('employees').select('id, full_name').in('id', legacyMisses)
       : Promise.resolve({ data: [], error: null }),
   ]);
 
   if (usersRes.error) throw usersRes.error;
   if (employeesRes.error) throw employeesRes.error;
 
-  return {
-    userNames: new Map((usersRes.data || []).map((row) => [String(row.id), String(row.full_name || '')])),
-    legacyEmployeeNames: new Map((employeesRes.data || []).map((row) => [Number(row.id), String(row.full_name || '')])),
-  };
+  const expiresAt = Date.now() + NAME_CACHE_TTL;
+  const userNames = new Map(userHits);
+  for (const row of usersRes.data || []) {
+    const id = String(row.id);
+    const name = String(row.full_name || '');
+    userNames.set(id, name);
+    userNameCache.set(id, { name, expiresAt });
+  }
+  const legacyEmployeeNames = new Map(legacyHits);
+  for (const row of employeesRes.data || []) {
+    const id = Number(row.id);
+    const name = String(row.full_name || '');
+    legacyEmployeeNames.set(id, name);
+    legacyEmployeeNameCache.set(id, { name, expiresAt });
+  }
+
+  return { userNames, legacyEmployeeNames };
 }
 
 async function loadDailySummaries(

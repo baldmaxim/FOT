@@ -1,4 +1,4 @@
-import type { FC } from 'react';
+import { memo, type FC } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Clock, BarChart3, AlertTriangle } from 'lucide-react';
 import type { IDashboardStats, DashboardPeriod } from '../../types';
@@ -35,7 +35,7 @@ const getBarClass = (time: string): string => {
 
 const CIRCUMFERENCE = 2 * Math.PI * 42; // r=42
 
-export const PunctualityCard: FC<{ punctuality: IDashboardStats['punctuality']; period: DashboardPeriod }> = ({ punctuality, period }) => {
+const PunctualityCardImpl: FC<{ punctuality: IDashboardStats['punctuality']; period: DashboardPeriod }> = ({ punctuality, period }) => {
   const offset = CIRCUMFERENCE - (punctuality.onTime / 100) * CIRCUMFERENCE;
 
   return (
@@ -95,7 +95,7 @@ export const PunctualityCard: FC<{ punctuality: IDashboardStats['punctuality']; 
   );
 };
 
-export const AvgArrivalCard: FC<{ data: IDashboardStats['avgArrivalByDay']; period: DashboardPeriod }> = ({ data, period }) => (
+const AvgArrivalCardImpl: FC<{ data: IDashboardStats['avgArrivalByDay']; period: DashboardPeriod }> = ({ data, period }) => (
   <div className={styles.card}>
     <div className={styles.title}>
       <BarChart3 size={16} />
@@ -123,7 +123,7 @@ export const AvgArrivalCard: FC<{ data: IDashboardStats['avgArrivalByDay']; peri
   </div>
 );
 
-export const RisksCard: FC<{ risks: IDashboardStats['risks']; period: DashboardPeriod }> = ({ risks, period }) => {
+const RisksCardImpl: FC<{ risks: IDashboardStats['risks']; period: DashboardPeriod }> = ({ risks, period }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const employeeCardBackState = {
@@ -162,6 +162,10 @@ export const RisksCard: FC<{ risks: IDashboardStats['risks']; period: DashboardP
     </div>
   );
 };
+
+export const PunctualityCard = memo(PunctualityCardImpl);
+export const AvgArrivalCard = memo(AvgArrivalCardImpl);
+export const RisksCard = memo(RisksCardImpl);
 
 export const AnalyticsRow: FC<IAnalyticsRowProps> = ({ stats, period }) => (
   <div className={styles.row}>

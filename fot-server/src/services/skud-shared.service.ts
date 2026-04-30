@@ -25,43 +25,59 @@ export function invalidateDeptTreeCache(): void {
 
 // ─── Сбор ID отделов (включая дочерние) ───
 
-/** Собирает ID отдела + все дочерние */
+/** Строит индекс parent_id → child_ids[] из плоского списка отделов. */
+function buildChildrenIndex(
+  allDepts: { id: string; parent_id: string | null }[],
+): Map<string, string[]> {
+  const index = new Map<string, string[]>();
+  for (const d of allDepts) {
+    if (d.parent_id) {
+      const arr = index.get(d.parent_id);
+      if (arr) arr.push(d.id);
+      else index.set(d.parent_id, [d.id]);
+    }
+  }
+  return index;
+}
+
+/** Собирает ID отдела + все дочерние (BFS по индексу, O(N)). */
 export async function collectDeptIds(
   departmentId: string,
 ): Promise<string[]> {
   const allDepts = await getAllDepartmentsTree();
+  const childrenByParent = buildChildrenIndex(allDepts);
 
-  const ids = [departmentId];
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const d of allDepts) {
-      if (d.parent_id && ids.includes(d.parent_id) && !ids.includes(d.id)) {
-        ids.push(d.id);
-        changed = true;
+  const ids: string[] = [departmentId];
+  const seen = new Set<string>([departmentId]);
+  // BFS: на каждом шаге берём очередной id и добавляем всех его детей.
+  for (let i = 0; i < ids.length; i++) {
+    const children = childrenByParent.get(ids[i]);
+    if (!children) continue;
+    for (const childId of children) {
+      if (!seen.has(childId)) {
+        seen.add(childId);
+        ids.push(childId);
       }
     }
   }
   return ids;
 }
 
-/** Получает ID всех предков отдела (от родителя до корня) */
+/** Получает ID всех предков отдела (от родителя до корня), O(N) с lookup-индексом. */
 export function getAncestorDeptIds(
   deptId: string,
   allDepts: { id: string; parent_id: string | null }[],
 ): string[] {
+  const byId = new Map<string, string | null>();
+  for (const d of allDepts) byId.set(d.id, d.parent_id);
+
   const ancestors: string[] = [];
-  let currentId: string | null = deptId;
   const visited = new Set<string>([deptId]);
-  while (currentId) {
-    const dept = allDepts.find(d => d.id === currentId);
-    if (dept?.parent_id && !visited.has(dept.parent_id)) {
-      ancestors.push(dept.parent_id);
-      visited.add(dept.parent_id);
-      currentId = dept.parent_id;
-    } else {
-      break;
-    }
+  let currentId: string | null = byId.get(deptId) ?? null;
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId);
+    ancestors.push(currentId);
+    currentId = byId.get(currentId) ?? null;
   }
   return ancestors;
 }
@@ -112,17 +128,19 @@ export async function getSyncFilteredEmployees(): Promise<{ empIds: Set<number>;
 
   if (!depts || depts.length === 0) return { empIds: new Set(), empNames: new Set() };
 
-  // 3. Собираем дочерние отделы
+  // 3. Собираем дочерние отделы (BFS по индексу parent_id → children, O(N)).
   const allDepts = await getAllDepartmentsTree();
-
-  const deptIds = new Set(depts.map(d => d.id));
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const d of allDepts || []) {
-      if (d.parent_id && deptIds.has(d.parent_id) && !deptIds.has(d.id)) {
-        deptIds.add(d.id);
-        changed = true;
+  const childrenByParent = buildChildrenIndex(allDepts);
+  const deptIds = new Set<string>(depts.map(d => d.id));
+  const queue: string[] = [...deptIds];
+  while (queue.length > 0) {
+    const parentId = queue.shift()!;
+    const children = childrenByParent.get(parentId);
+    if (!children) continue;
+    for (const childId of children) {
+      if (!deptIds.has(childId)) {
+        deptIds.add(childId);
+        queue.push(childId);
       }
     }
   }

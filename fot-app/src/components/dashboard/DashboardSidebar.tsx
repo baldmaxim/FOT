@@ -1,4 +1,4 @@
-import type { FC } from 'react';
+import { memo, type FC } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { TrendingUp, TrendingDown } from 'lucide-react';
 import type { IDashboardStats, DashboardPeriod } from '../../types';
@@ -18,7 +18,7 @@ const getInitials = (name: string): string => {
 const getPeriodLabel = (period: DashboardPeriod): string =>
   period === 'today' ? 'сегодня' : period === 'week' ? 'неделю' : 'месяц';
 
-export const HourlyActivityCard: FC<{ data: IDashboardStats['hourlyActivity']; period: DashboardPeriod }> = ({ data, period }) => {
+const HourlyActivityCardImpl: FC<{ data: IDashboardStats['hourlyActivity']; period: DashboardPeriod }> = ({ data, period }) => {
   const maxCount = Math.max(...data.map(d => d.count), 1);
 
   return (
@@ -57,7 +57,7 @@ interface IComparisonItem {
   formatDelta?: boolean;
 }
 
-export const ComparisonCard: FC<{ comparison: IDashboardStats['weekComparison']; period: DashboardPeriod }> = ({ comparison, period }) => {
+const ComparisonCardImpl: FC<{ comparison: IDashboardStats['weekComparison']; period: DashboardPeriod }> = ({ comparison, period }) => {
   if (!comparison) return null;
 
   const { thisWeek, lastWeek } = comparison;
@@ -118,7 +118,7 @@ export const ComparisonCard: FC<{ comparison: IDashboardStats['weekComparison'];
   );
 };
 
-export const TopLateCard: FC<{ data: IDashboardStats['topLate']; period: DashboardPeriod }> = ({ data, period }) => {
+const TopLateCardImpl: FC<{ data: IDashboardStats['topLate']; period: DashboardPeriod }> = ({ data, period }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const employeeCardBackState = {
@@ -174,6 +174,10 @@ function formatMinutesDelta(minutes: number): string {
   const sign = minutes > 0 ? '+' : '−';
   return m > 0 ? `${sign}${h}ч ${m}м` : `${sign}${h}ч`;
 }
+
+export const HourlyActivityCard = memo(HourlyActivityCardImpl);
+export const ComparisonCard = memo(ComparisonCardImpl);
+export const TopLateCard = memo(TopLateCardImpl);
 
 export const DashboardSidebar: FC<IDashboardSidebarProps> = ({ stats, period }) => (
   <div className={styles.sidebar}>

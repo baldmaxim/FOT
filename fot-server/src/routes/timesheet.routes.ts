@@ -1,21 +1,59 @@
 import { Router } from 'express';
 import { timesheetController } from '../controllers/timesheet.controller.js';
 import { authenticate, requireAdmin, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
+import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 
 const router = Router();
 
 router.use(authenticate);
 
+// Write-through invalidation: любой успешный POST/PUT/PATCH/DELETE на /api/timesheet/*
+// сбрасывает серверные LRU-кэши табеля, чтобы корректировки появлялись сразу.
+router.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.on('finish', () => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        invalidateCaches('timesheet', 'timesheet:overview', 'timesheet:search');
+      }
+    });
+  }
+  next();
+});
+
+const timesheetCache = registerCache(
+  'timesheet',
+  (req) =>
+    `ts:${req.query.month ?? ''}:${req.query.department_id ?? 'all'}:${req.query.employee_id ?? ''}:${req.user.id}`,
+  5 * 60_000,
+  500,
+);
+
+const timesheetOverviewCache = registerCache(
+  'timesheet:overview',
+  (req) =>
+    `tso:${req.query.month ?? ''}:${req.query.department_id ?? 'all'}:${req.user.id}`,
+  5 * 60_000,
+);
+
+const timesheetSearchCache = registerCache(
+  'timesheet:search',
+  (req) =>
+    `tss:${req.query.q ?? ''}:${req.query.department_id ?? 'all'}:${req.user.id}`,
+  2 * 60_000,
+);
+
 // GET /api/timesheet?month=YYYY-MM&department_id=...
 router.get(
   '/overview',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'view'),
+  timesheetOverviewCache,
   timesheetController.getOverview
 );
 
 router.get(
   '/',
   requireAnyPageAccess(['/employee', '/timesheet', '/timesheet-hr'], 'view'),
+  timesheetCache,
   timesheetController.getAll
 );
 
@@ -28,6 +66,7 @@ router.get(
 router.get(
   '/team-management/search-employees',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr', '/timesheet/team-management'], 'edit'),
+  timesheetSearchCache,
   timesheetController.searchTeamEmployees
 );
 

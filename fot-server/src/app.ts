@@ -60,6 +60,18 @@ app.use(express.urlencoded({ extended: true }));
 // Rate limiting
 app.use('/api', apiLimiter);
 
+// Default Cache-Control: GET-ответы могут быть переиспользованы браузером 30 секунд
+// (back/forward cache, повторное открытие вкладки), write-операции и stream'ы — никогда.
+// Контроллеры могут перетереть заголовок (см. employees.controller, production-calendar).
+app.use('/api', (req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    res.setHeader('Cache-Control', 'private, max-age=30, must-revalidate');
+  } else {
+    res.setHeader('Cache-Control', 'no-store');
+  }
+  next();
+});
+
 // Health check
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

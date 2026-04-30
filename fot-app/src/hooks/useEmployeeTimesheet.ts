@@ -18,7 +18,8 @@ export const useEmployeeTimesheetMonth = (
     : ['employee-timesheet-summary', 'disabled'],
   queryFn: () => timesheetService.getAll({ month: monthKey!, employee_id: employeeId! }),
   enabled: Boolean(employeeId && monthKey && enabled),
-  staleTime: 30_000,
+  staleTime: 5 * 60_000,
+  gcTime: 15 * 60_000,
   placeholderData: previousData => previousData,
 });
 
@@ -32,7 +33,8 @@ export const useEmployeeTimesheetMonths = (
       queryKey: getEmployeeTimesheetMonthQueryKey(employeeId!, monthKey),
       queryFn: () => timesheetService.getAll({ month: monthKey, employee_id: employeeId! }),
       enabled: Boolean(employeeId && enabled),
-      staleTime: 30_000,
+      staleTime: 5 * 60_000,
+  gcTime: 15 * 60_000,
       placeholderData: (previousData: TimesheetResponse | undefined) => previousData,
     })),
   });

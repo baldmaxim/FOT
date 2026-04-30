@@ -460,12 +460,16 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
   const departmentsQuery = useQuery({
     queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'departments-tree'],
     queryFn: () => sigurAdminService.getDepartmentsTree(),
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000,
   });
 
   const positionsQuery = useQuery({
     queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'positions'],
     queryFn: () => sigurAdminService.getPositions(),
     enabled: canEdit && (employeeDialog !== null || selectedEmployeeId !== null),
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000,
   });
 
   const employeeNameSuggestionsEnabled =
@@ -494,6 +498,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
       page: employeePage,
       pageSize: EMPLOYEES_PAGE_SIZE,
     }),
+    staleTime: 60_000,
     placeholderData: previousData => previousData,
   });
 
