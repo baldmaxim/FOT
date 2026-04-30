@@ -6,16 +6,19 @@ import {
   type ISigurMonitorSettings,
   type ITimesheetReminderSettings,
   type ITimesheetTeamManagementSettings,
+  type IEmployeeTransferSettings,
 } from '../../services/settingsService';
 import {
   getR2StatusQueryKey,
   getSigurMonitorSettingsQueryKey,
   getTimesheetReminderSettingsQueryKey,
   getTimesheetTeamManagementSettingsQueryKey,
+  getEmployeeTransferSettingsQueryKey,
   useR2Status,
   useSigurMonitorSettings,
   useTimesheetReminderSettings,
   useTimesheetTeamManagementSettings,
+  useEmployeeTransferSettings,
 } from '../../hooks/useSettingsData';
 import { OpenRouterSettingsSection } from '../../components/super-admin/OpenRouterSettingsSection';
 import styles from './SystemSettingsPage.module.css';
@@ -29,6 +32,7 @@ export const SystemSettingsPage: FC = () => {
   const monitorSettingsQuery = useSigurMonitorSettings();
   const reminderSettingsQuery = useTimesheetReminderSettings();
   const teamManagementSettingsQuery = useTimesheetTeamManagementSettings();
+  const employeeTransferSettingsQuery = useEmployeeTransferSettings();
   const status: IR2Status | null = r2StatusQuery.data ?? null;
 
   // Form
@@ -68,10 +72,16 @@ export const SystemSettingsPage: FC = () => {
   });
   const [teamManagementSaving, setTeamManagementSaving] = useState(false);
   const [teamManagementResult, setTeamManagementResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [employeeTransferSettings, setEmployeeTransferSettings] = useState<IEmployeeTransferSettings>({
+    freezeHistory: false,
+  });
+  const [employeeTransferSaving, setEmployeeTransferSaving] = useState(false);
+  const [employeeTransferResult, setEmployeeTransferResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const loading = r2StatusQuery.isLoading
     || monitorSettingsQuery.isLoading
     || reminderSettingsQuery.isLoading
-    || teamManagementSettingsQuery.isLoading;
+    || teamManagementSettingsQuery.isLoading
+    || employeeTransferSettingsQuery.isLoading;
 
   useEffect(() => {
     if (status?.bucket_name) {
@@ -106,6 +116,12 @@ export const SystemSettingsPage: FC = () => {
       setTeamManagementSettings(teamManagementSettingsQuery.data);
     }
   }, [teamManagementSettingsQuery.data]);
+
+  useEffect(() => {
+    if (employeeTransferSettingsQuery.data) {
+      setEmployeeTransferSettings(employeeTransferSettingsQuery.data);
+    }
+  }, [employeeTransferSettingsQuery.data]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -208,6 +224,21 @@ export const SystemSettingsPage: FC = () => {
       setTeamManagementResult({ ok: false, msg: 'Ошибка сохранения настроек управления составом табеля' });
     } finally {
       setTeamManagementSaving(false);
+    }
+  };
+
+  const handleSaveEmployeeTransferSettings = async () => {
+    setEmployeeTransferSaving(true);
+    setEmployeeTransferResult(null);
+    try {
+      const next = await settingsService.saveEmployeeTransferSettings(employeeTransferSettings);
+      setEmployeeTransferSettings(next);
+      queryClient.setQueryData(getEmployeeTransferSettingsQueryKey(), next);
+      setEmployeeTransferResult({ ok: true, msg: 'Настройки заморозки истории переводов сохранены' });
+    } catch {
+      setEmployeeTransferResult({ ok: false, msg: 'Ошибка сохранения настроек заморозки истории переводов' });
+    } finally {
+      setEmployeeTransferSaving(false);
     }
   };
 
@@ -573,6 +604,45 @@ export const SystemSettingsPage: FC = () => {
         {teamManagementResult && (
           <div className={`${styles.testResult} ${teamManagementResult.ok ? styles.testSuccess : styles.testError}`}>
             {teamManagementResult.msg}
+          </div>
+        )}
+      </div>
+
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <h2 className={styles.sectionTitle}>Заморозка истории переводов</h2>
+          <span className={`${styles.statusBadge} ${employeeTransferSettings.freezeHistory ? styles.statusConnected : styles.statusDisconnected}`}>
+            {employeeTransferSettings.freezeHistory ? 'Включена' : 'Выключена'}
+          </span>
+        </div>
+
+        <p className={styles.description}>
+          На время финальной сборки списков сотрудников. При включении переводы (и через
+          «Управление кадрами», и через Sigur sync) только обновляют текущее открытое назначение
+          в employee_assignments — без закрытия старого и создания нового от текущей даты. После
+          того как списки финализированы — обязательно выключить, чтобы дальше копить историю штатно.
+        </p>
+
+        <div className={styles.checkboxRow}>
+          <label className={styles.checkboxLabel}>
+            <input
+              type="checkbox"
+              checked={employeeTransferSettings.freezeHistory}
+              onChange={e => setEmployeeTransferSettings({ freezeHistory: e.target.checked })}
+            />
+            <span>Не писать историю при изменении отдела/должности</span>
+          </label>
+        </div>
+
+        <div className={styles.actions}>
+          <button className={styles.btnPrimary} onClick={handleSaveEmployeeTransferSettings} disabled={employeeTransferSaving}>
+            {employeeTransferSaving ? 'Сохранение...' : 'Сохранить настройку'}
+          </button>
+        </div>
+
+        {employeeTransferResult && (
+          <div className={`${styles.testResult} ${employeeTransferResult.ok ? styles.testSuccess : styles.testError}`}>
+            {employeeTransferResult.msg}
           </div>
         )}
       </div>

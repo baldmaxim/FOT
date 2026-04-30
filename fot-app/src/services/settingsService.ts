@@ -45,10 +45,15 @@ export interface ITimesheetTeamManagementSettings {
   enabled: boolean;
 }
 
+export interface IEmployeeTransferSettings {
+  freezeHistory: boolean;
+}
+
 export interface IOpenRouterModelInfo {
   id: string;
   label: string;
   costPer1kReceiptsRub: number;
+  supportsVision: boolean;
 }
 
 export interface IOpenRouterSettings {
@@ -124,6 +129,18 @@ export const settingsService = {
     data: ITimesheetTeamManagementSettings,
   ): Promise<ITimesheetTeamManagementSettings> => {
     const res = await apiClient.put<ApiResponse<ITimesheetTeamManagementSettings>>('/settings/timesheet-team-management', data);
+    return res.data;
+  },
+
+  getEmployeeTransferSettings: async (): Promise<IEmployeeTransferSettings> => {
+    const res = await apiClient.get<ApiResponse<IEmployeeTransferSettings>>('/settings/employee-transfer');
+    return res.data;
+  },
+
+  saveEmployeeTransferSettings: async (
+    data: IEmployeeTransferSettings,
+  ): Promise<IEmployeeTransferSettings> => {
+    const res = await apiClient.put<ApiResponse<IEmployeeTransferSettings>>('/settings/employee-transfer', data);
     return res.data;
   },
 

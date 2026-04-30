@@ -1,5 +1,6 @@
 import { supabase } from '../config/database.js';
 import { employeeCache } from './employee-cache.service.js';
+import { settingsService } from './settings.service.js';
 import {
   formatDateShift,
   getEmployeeAssignments,
@@ -25,6 +26,81 @@ const syncEmployeeSalarySnapshot = async (employeeId: number, salary: number | n
       updated_at: new Date().toISOString(),
     })
     .eq('id', employeeId);
+};
+
+/**
+ * Режим заморозки истории переводов: вместо «закрыть старое + создать новое» обновляем
+ * единственное открытое назначение сотрудника. Если открытого нет — создаём одно с
+ * effective_from = hire_date (или 2020-01-01). Применяется во время чистки списков; после
+ * финализации настройка выключается, и переводы снова пишут полноценную историю.
+ */
+const applyFrozenAssignment = async (
+  employeeId: number,
+  patch: { org_department_id?: string | null; position_id?: string | null },
+  reason: string,
+): Promise<void> => {
+  const { data: emp } = await supabase
+    .from('employees')
+    .select('org_department_id, position_id, hire_date')
+    .eq('id', employeeId)
+    .single();
+
+  const nextDeptId = patch.org_department_id !== undefined
+    ? patch.org_department_id
+    : emp?.org_department_id ?? null;
+  const nextPositionId = patch.position_id !== undefined
+    ? patch.position_id
+    : emp?.position_id ?? null;
+
+  const { data: openRows } = await supabase
+    .from('employee_assignments')
+    .select('id, effective_from')
+    .eq('employee_id', employeeId)
+    .is('effective_to', null)
+    .order('effective_from', { ascending: true });
+
+  const open = (openRows || [])[0] || null;
+  const nowIso = new Date().toISOString();
+
+  if (open) {
+    const { error: updateError } = await supabase
+      .from('employee_assignments')
+      .update({
+        org_department_id: nextDeptId,
+        position_id: nextPositionId,
+        is_primary: true,
+        assignment_type: 'main',
+        change_reason: reason,
+        updated_at: nowIso,
+      })
+      .eq('id', open.id)
+      .eq('employee_id', employeeId);
+    if (updateError) throw updateError;
+
+    if ((openRows || []).length > 1) {
+      const extraIds = (openRows || []).slice(1).map(r => r.id);
+      const { error: closeExtraError } = await supabase
+        .from('employee_assignments')
+        .update({ effective_to: open.effective_from, updated_at: nowIso })
+        .in('id', extraIds)
+        .eq('employee_id', employeeId);
+      if (closeExtraError) throw closeExtraError;
+    }
+  } else {
+    const effectiveFrom = (emp?.hire_date as string | null) || '2020-01-01';
+    const { error: insertError } = await supabase
+      .from('employee_assignments')
+      .insert({
+        employee_id: employeeId,
+        org_department_id: nextDeptId,
+        position_id: nextPositionId,
+        effective_from: effectiveFrom,
+        is_primary: true,
+        assignment_type: 'main',
+        change_reason: reason,
+      });
+    if (insertError) throw insertError;
+  }
 };
 
 const syncEmployeeAssignmentSnapshot = async (employeeId: number, referenceDate = today()): Promise<void> => {
@@ -90,6 +166,18 @@ export const employeeChangesService = {
    * Изменение должности → закрыть текущий assignment + новый assignment + employees.position_id
    */
   async changePosition(employeeId: number, positionId: string, opts: ChangeOpts = {}): Promise<void> {
+    const { freezeHistory } = await settingsService.getEmployeeTransferConfig();
+
+    if (freezeHistory) {
+      await applyFrozenAssignment(employeeId, { position_id: positionId }, opts.reason || 'Заморозка истории переводов');
+      await supabase
+        .from('employees')
+        .update({ position_id: positionId, updated_at: new Date().toISOString() })
+        .eq('id', employeeId);
+      employeeCache.invalidate(employeeId);
+      return;
+    }
+
     const date = opts.effectiveDate || today();
 
     const { data: emp } = await supabase
@@ -121,6 +209,29 @@ export const employeeChangesService = {
    * Изменение отдела → закрыть текущий assignment + новый assignment + employees.org_department_id
    */
   async changeDepartment(employeeId: number, departmentId: string, opts: ChangeOpts & { lockDepartment?: boolean } = {}): Promise<void> {
+    const { freezeHistory } = await settingsService.getEmployeeTransferConfig();
+
+    if (freezeHistory) {
+      await applyFrozenAssignment(employeeId, { org_department_id: departmentId }, opts.reason || 'Заморозка истории переводов');
+
+      const updateData: Record<string, unknown> = {
+        org_department_id: departmentId,
+        updated_at: new Date().toISOString(),
+      };
+      if (opts.lockDepartment !== undefined) {
+        updateData.department_locked = opts.lockDepartment;
+      }
+
+      const { error: employeeError } = await supabase
+        .from('employees')
+        .update(updateData)
+        .eq('id', employeeId);
+      if (employeeError) throw employeeError;
+
+      employeeCache.invalidate(employeeId);
+      return;
+    }
+
     const date = opts.effectiveDate || today();
 
     const { data: emp } = await supabase

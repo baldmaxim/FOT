@@ -11,6 +11,7 @@ const settingsAllCache = registerCache('settings:all', () => 'settings:all', 15 
 const sigurMonitorCache = registerCache('settings:sigur-monitor', () => 'settings:sigur-monitor', 15 * 60_000);
 const tsRemindersCache = registerCache('settings:ts-reminders', () => 'settings:ts-reminders', 15 * 60_000);
 const tsTeamMgmtCache = registerCache('settings:ts-team-mgmt', () => 'settings:ts-team-mgmt', 15 * 60_000);
+const employeeTransferCache = registerCache('settings:employee-transfer', () => 'settings:employee-transfer', 15 * 60_000);
 const openRouterCache = registerCache('settings:openrouter', () => 'settings:openrouter', 15 * 60_000);
 
 // Write-through invalidation: после любого PUT/POST сбрасываем все settings-кэши.
@@ -23,6 +24,7 @@ router.use((req, res, next) => {
           'settings:sigur-monitor',
           'settings:ts-reminders',
           'settings:ts-team-mgmt',
+          'settings:employee-transfer',
           'settings:openrouter',
         );
       }
@@ -44,6 +46,8 @@ router.get('/sigur-monitor', requirePageAccess('/admin/settings', 'view'), sigur
 router.get('/timesheet-reminders', requirePageAccess('/admin/settings', 'view'), tsRemindersCache, settingsController.getTimesheetReminderSettings);
 // GET /api/settings/timesheet-team-management — настройки управления составом табеля
 router.get('/timesheet-team-management', requirePageAccess('/admin/settings', 'view'), tsTeamMgmtCache, settingsController.getTimesheetTeamManagementSettings);
+// GET /api/settings/employee-transfer — настройки заморозки истории переводов
+router.get('/employee-transfer', requirePageAccess('/admin/settings', 'view'), employeeTransferCache, settingsController.getEmployeeTransferSettings);
 
 // PUT /api/settings/r2 — сохранить R2 настройки
 router.put('/r2', requirePageAccess('/admin/settings', 'edit'), settingsController.saveR2);
@@ -55,6 +59,8 @@ router.put('/sigur-monitor', requirePageAccess('/admin/settings', 'edit'), setti
 router.put('/timesheet-reminders', requirePageAccess('/admin/settings', 'edit'), settingsController.saveTimesheetReminderSettings);
 // PUT /api/settings/timesheet-team-management — сохранить настройки управления составом табеля
 router.put('/timesheet-team-management', requirePageAccess('/admin/settings', 'edit'), settingsController.saveTimesheetTeamManagementSettings);
+// PUT /api/settings/employee-transfer — сохранить настройки заморозки истории переводов
+router.put('/employee-transfer', requirePageAccess('/admin/settings', 'edit'), settingsController.saveEmployeeTransferSettings);
 
 // POST /api/settings/r2/test — тест подключения R2
 router.post('/r2/test', requirePageAccess('/admin/settings', 'edit'), settingsController.testR2);

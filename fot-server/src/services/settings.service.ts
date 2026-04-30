@@ -37,10 +37,15 @@ export interface ITimesheetTeamManagementSettings {
   enabled: boolean;
 }
 
+export interface IEmployeeTransferSettings {
+  freezeHistory: boolean;
+}
+
 export interface IOpenRouterModelInfo {
   id: string;
   label: string;
   costPer1kReceiptsRub: number;
+  supportsVision: boolean;
 }
 
 export interface IOpenRouterPublicSettings {
@@ -60,15 +65,15 @@ export interface IOpenRouterResolvedConfig {
 }
 
 export const ALLOWED_OPENROUTER_MODELS: IOpenRouterModelInfo[] = [
-  { id: 'google/gemini-2.5-flash',          label: 'Gemini 2.5 Flash (рекомендуется)', costPer1kReceiptsRub: 170 },
-  { id: 'google/gemini-2.5-pro',            label: 'Gemini 2.5 Pro (макс. качество)',  costPer1kReceiptsRub: 1700 },
-  { id: 'google/gemini-2.0-flash-001',      label: 'Gemini 2.0 Flash (дёшево)',        costPer1kReceiptsRub: 60 },
-  { id: 'google/gemini-2.0-flash-lite-001', label: 'Gemini 2.0 Flash Lite',            costPer1kReceiptsRub: 40 },
-  { id: 'anthropic/claude-3.5-sonnet',      label: 'Claude 3.5 Sonnet',                costPer1kReceiptsRub: 600 },
-  { id: 'openai/gpt-4o',                    label: 'GPT-4o',                           costPer1kReceiptsRub: 1200 },
-  { id: 'openai/gpt-4o-mini',               label: 'GPT-4o mini',                      costPer1kReceiptsRub: 120 },
-  { id: 'baidu/qianfan-ocr-fast:free',      label: 'Qianfan OCR Fast (бесплатно)',     costPer1kReceiptsRub: 0 },
-  { id: 'google/gemma-4-26b-a4b-it:free',   label: 'Gemma 4 26B (бесплатно)',          costPer1kReceiptsRub: 0 },
+  { id: 'google/gemini-2.5-flash',          label: 'Gemini 2.5 Flash (рекомендуется)', costPer1kReceiptsRub: 170,  supportsVision: true },
+  { id: 'google/gemini-2.5-pro',            label: 'Gemini 2.5 Pro (макс. качество)',  costPer1kReceiptsRub: 1700, supportsVision: true },
+  { id: 'google/gemini-2.0-flash-001',      label: 'Gemini 2.0 Flash (дёшево)',        costPer1kReceiptsRub: 60,   supportsVision: true },
+  { id: 'google/gemini-2.0-flash-lite-001', label: 'Gemini 2.0 Flash Lite',            costPer1kReceiptsRub: 40,   supportsVision: true },
+  { id: 'anthropic/claude-3.5-sonnet',      label: 'Claude 3.5 Sonnet',                costPer1kReceiptsRub: 600,  supportsVision: true },
+  { id: 'openai/gpt-4o',                    label: 'GPT-4o',                           costPer1kReceiptsRub: 1200, supportsVision: true },
+  { id: 'openai/gpt-4o-mini',               label: 'GPT-4o mini',                      costPer1kReceiptsRub: 120,  supportsVision: true },
+  { id: 'baidu/qianfan-ocr-fast:free',      label: 'Qianfan OCR Fast (бесплатно)',     costPer1kReceiptsRub: 0,    supportsVision: true },
+  { id: 'google/gemma-4-26b-a4b-it:free',   label: 'Gemma 4 26B (только текст)',       costPer1kReceiptsRub: 0,    supportsVision: false },
 ];
 
 export const DEFAULT_OPENROUTER_SETTINGS = {
@@ -77,8 +82,10 @@ export const DEFAULT_OPENROUTER_SETTINGS = {
   baseUrl: 'https://openrouter.ai/api/v1',
 };
 
-export const isAllowedOpenRouterModel = (modelId: string): boolean =>
-  ALLOWED_OPENROUTER_MODELS.some(m => m.id === modelId);
+export const isAllowedOpenRouterModel = (modelId: string): boolean => {
+  const m = ALLOWED_OPENROUTER_MODELS.find(x => x.id === modelId);
+  return Boolean(m && m.supportsVision);
+};
 
 export type SigurConnectionSettingsSource = 'system_settings' | 'env' | 'unset';
 
@@ -126,6 +133,10 @@ export const DEFAULT_TIMESHEET_REMINDER_SETTINGS: ITimesheetReminderSettings = {
 
 export const DEFAULT_TIMESHEET_TEAM_MANAGEMENT_SETTINGS: ITimesheetTeamManagementSettings = {
   enabled: false,
+};
+
+export const DEFAULT_EMPLOYEE_TRANSFER_SETTINGS: IEmployeeTransferSettings = {
+  freezeHistory: false,
 };
 
 let cache: Map<string, string | null> = new Map();
@@ -639,6 +650,37 @@ export const settingsService = {
     return this.getTimesheetTeamManagementConfig();
   },
 
+  async getEmployeeTransferConfig(): Promise<IEmployeeTransferSettings> {
+    const values = await this.getMultiple(['employee_transfer_freeze_history']);
+    return {
+      freezeHistory: parseBoolean(
+        values.employee_transfer_freeze_history,
+        DEFAULT_EMPLOYEE_TRANSFER_SETTINGS.freezeHistory,
+      ),
+    };
+  },
+
+  async setEmployeeTransferConfig(
+    config: Partial<IEmployeeTransferSettings>,
+    userId: string,
+  ): Promise<IEmployeeTransferSettings> {
+    const current = await this.getEmployeeTransferConfig();
+    const next: IEmployeeTransferSettings = {
+      freezeHistory: config.freezeHistory ?? current.freezeHistory,
+    };
+
+    await this.setMultiple([
+      {
+        key: 'employee_transfer_freeze_history',
+        value: String(next.freezeHistory),
+        description: 'Заморозить историю переводов: при изменении отдела/должности обновлять открытое назначение вместо закрытия и создания нового',
+      },
+    ], userId);
+
+    this.invalidateCache();
+    return this.getEmployeeTransferConfig();
+  },
+
   async getOpenRouterConfig(): Promise<IOpenRouterPublicSettings> {
     await loadCache();
 
@@ -708,7 +750,11 @@ export const settingsService = {
     userId: string,
   ): Promise<IOpenRouterPublicSettings> {
     if (config.model !== undefined && !isAllowedOpenRouterModel(config.model)) {
-      throw new Error(`Модель "${config.model}" не входит в список разрешённых`);
+      const known = ALLOWED_OPENROUTER_MODELS.find(m => m.id === config.model);
+      const reason = known && !known.supportsVision
+        ? `Модель "${config.model}" не поддерживает изображения и не подходит для распознавания чеков`
+        : `Модель "${config.model}" не входит в список разрешённых`;
+      throw new Error(reason);
     }
 
     const entries: { key: string; value: string | null; description?: string }[] = [];

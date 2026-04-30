@@ -253,6 +253,31 @@ const saveTimesheetTeamManagementSettings = async (req: AuthenticatedRequest, re
   }
 };
 
+const getEmployeeTransferSettings = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const config = await settingsService.getEmployeeTransferConfig();
+    res.json({ success: true, data: config });
+  } catch (err) {
+    console.error('settings.getEmployeeTransferSettings error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения настроек заморозки переводов' });
+  }
+};
+
+const saveEmployeeTransferSettings = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { freezeHistory } = req.body as Record<string, unknown>;
+
+    const config = await settingsService.setEmployeeTransferConfig({
+      freezeHistory: typeof freezeHistory === 'boolean' ? freezeHistory : undefined,
+    }, req.user.id);
+
+    res.json({ success: true, data: config });
+  } catch (err) {
+    console.error('settings.saveEmployeeTransferSettings error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка сохранения настроек заморозки переводов' });
+  }
+};
+
 /** Получить настройки OpenRouter (API key маскируется) */
 const getOpenRouterSettings = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -310,6 +335,8 @@ export const settingsController = {
   saveTimesheetReminderSettings,
   getTimesheetTeamManagementSettings,
   saveTimesheetTeamManagementSettings,
+  getEmployeeTransferSettings,
+  saveEmployeeTransferSettings,
   getOpenRouterSettings,
   saveOpenRouterSettings,
   testOpenRouter,
