@@ -30,7 +30,33 @@ Host vds
 | `http://fotsu10.fvds.ru` | FOT приложение |
 | `http://odintsov1.live.fvds.ru` | Odintsov Live |
 
-## Быстрый деплой (фронтенд)
+## Быстрый деплой фронта (локально, ~30–60 сек) ⚡
+
+Билдим у себя на ноуте (быстрый CPU), на vds через tar-pipe заливаем уже готовый `dist/`. На vds ничего компилировать не нужно.
+
+**Подготовка (один раз на машине):**
+
+1. Скопировать прод-значения из `/var/www/fot/fot-app/.env` (на vds) в `fot-app/.env.production.local` локально. Минимум:
+   ```
+   VITE_API_URL=https://fotsu10.fvds.ru/api
+   VITE_SENTRY_DSN=...
+   SENTRY_AUTH_TOKEN=...
+   SENTRY_ORG=odintsovorg
+   SENTRY_PROJECT=fot-app
+   ```
+   Файл уже в `.gitignore` (паттерн `*.local`).
+
+2. Убедиться, что в `~/.ssh/config` есть alias `vds` (см. в начале файла).
+
+**Деплой:**
+```bash
+bash scripts/deploy-frontend.sh
+```
+
+Скрипт сам: подгружает `.env.production.local` → билдит фронт (Vite) → заливает `dist/` на vds атомарным swap'ом (`dist.new` → `dist`, без даунтайма) → загружает sourcemaps в Sentry.
+
+## Быстрый деплой фронта (на vds, fallback)
+Если локальный билд недоступен — старый путь, медленный (4–5 мин на vds CPU):
 ```bash
 ssh vds
 cd /var/www/fot && git pull
