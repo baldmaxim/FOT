@@ -273,9 +273,9 @@ const CorrectionTab: FC<{
     ].filter(Boolean).join(' • ');
     const tooltip = [
       `${statusLabel} · ${hoursLabel}`,
-      initialNotes || null,
       authorLine || null,
     ].filter(Boolean).join('\n');
+    const trimmedInitialNotes = initialNotes?.trim();
     return (
       <>
         <div className="ts-modal-body">
@@ -307,6 +307,9 @@ const CorrectionTab: FC<{
               )}
             </span>
           </div>
+          {trimmedInitialNotes && (
+            <div className="ts-correction-view-comment">{trimmedInitialNotes}</div>
+          )}
         </div>
         <div className="ts-modal-footer">
           <button className="ts-btn" onClick={onClose} type="button">Закрыть</button>
@@ -499,12 +502,12 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
         </button>
       </div>
 
-      {correctionInfo?.is_correction && (
+      {correctionInfo?.is_correction && (correctionInfo.corrected_by_name || correctionInfo.corrected_at) && (
         <div className="ts-correction-info">
           <span className="ts-correction-info-icon">✎</span>
-          Корректировка
-          {correctionInfo.corrected_by_name && `: ${correctionInfo.corrected_by_name}`}
-          {correctionInfo.corrected_at && `${correctionInfo.corrected_by_name ? ', ' : ': '}${formatCorrectionDate(correctionInfo.corrected_at)}`}
+          {correctionInfo.corrected_by_name}
+          {correctionInfo.corrected_by_name && correctionInfo.corrected_at && ', '}
+          {correctionInfo.corrected_at && formatCorrectionDate(correctionInfo.corrected_at)}
         </div>
       )}
 
