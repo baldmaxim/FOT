@@ -67,6 +67,8 @@ export const ALLOWED_OPENROUTER_MODELS: IOpenRouterModelInfo[] = [
   { id: 'anthropic/claude-3.5-sonnet',      label: 'Claude 3.5 Sonnet',                costPer1kReceiptsRub: 600 },
   { id: 'openai/gpt-4o',                    label: 'GPT-4o',                           costPer1kReceiptsRub: 1200 },
   { id: 'openai/gpt-4o-mini',               label: 'GPT-4o mini',                      costPer1kReceiptsRub: 120 },
+  { id: 'baidu/qianfan-ocr-fast:free',      label: 'Qianfan OCR Fast (бесплатно)',     costPer1kReceiptsRub: 0 },
+  { id: 'google/gemma-4-26b-a4b-it:free',   label: 'Gemma 4 26B (бесплатно)',          costPer1kReceiptsRub: 0 },
 ];
 
 export const DEFAULT_OPENROUTER_SETTINGS = {

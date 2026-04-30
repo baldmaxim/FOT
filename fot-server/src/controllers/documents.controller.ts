@@ -5,6 +5,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { canAccessEmployeeInScope, resolveScopedDepartmentId } from '../services/data-scope.service.js';
 import { hasPageView } from '../services/access-control.service.js';
 import { aiReceiptRecognitionService } from '../services/ai-receipt-recognition.service.js';
+import { trimWhiteBorders } from '../services/image-trim.service.js';
 
 interface MulterRequest extends AuthenticatedRequest {
   file?: Express.Multer.File;
@@ -151,10 +152,20 @@ const uploadFile = async (req: MulterRequest, res: Response): Promise<void> => {
     }
 
     const file = req.file;
-    const mimeType = file.mimetype || 'application/octet-stream';
+    let buffer = file.buffer;
+    let mimeType = file.mimetype || 'application/octet-stream';
+    let fileSize = file.size;
+
+    if (category === 'patent_check') {
+      const trimmed = await trimWhiteBorders(buffer, mimeType);
+      buffer = trimmed.buffer;
+      mimeType = trimmed.mimeType;
+      fileSize = trimmed.size;
+    }
+
     const r2Key = r2Service.generateKey(employeeId, file.originalname);
 
-    await r2Service.uploadObject(r2Key, file.buffer, mimeType);
+    await r2Service.uploadObject(r2Key, buffer, mimeType);
 
     const { data, error } = await supabase
       .from('documents')
@@ -163,7 +174,7 @@ const uploadFile = async (req: MulterRequest, res: Response): Promise<void> => {
         leave_request_id: leaveRequestId,
         category,
         file_name: file.originalname,
-        file_size: file.size,
+        file_size: fileSize,
         mime_type: mimeType,
         r2_key: r2Key,
         uploaded_by: req.user.id,
