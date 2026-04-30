@@ -22,6 +22,8 @@ if (dsn && import.meta.env.PROD) {
       /Failed to load module script/,
       /ChunkLoadError/,
       /Unable to preload CSS/,
+      // Шум из webview-инжектов (Telegram WebApp и т.п.) — не наш код.
+      /Error invoking postEvent/i,
     ],
   });
 }
