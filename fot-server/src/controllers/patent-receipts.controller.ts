@@ -198,6 +198,57 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
+const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const employeeId = req.user.employee_id;
+    if (!employeeId) {
+      res.json({ success: true, data: [] });
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('patent_payment_receipts')
+      .select('id, employee_id, payment_date, payment_amount, created_at, documents:document_id ( file_name, mime_type, r2_key, recognition_status )')
+      .eq('employee_id', employeeId)
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (error) throw error;
+
+    const rows = (data || []) as unknown as Array<{
+      id: number;
+      employee_id: number | null;
+      payment_date: string | null;
+      payment_amount: string | null;
+      created_at: string;
+      documents: { file_name: string | null; mime_type: string | null; r2_key: string | null; recognition_status: string | null } | null;
+    }>;
+
+    const result = await Promise.all(rows.map(async row => {
+      const decrypted = decryptReceiptRow(row as unknown as Record<string, unknown>) as typeof row;
+      let download_url: string | null = null;
+      const r2Key = row.documents?.r2_key ?? null;
+      if (r2Key) {
+        try {
+          download_url = await r2Service.generateDownloadUrl(r2Key);
+        } catch (err) {
+          console.warn('patent-receipts.getMy download_url failed:', err);
+        }
+      }
+      const { documents, ...rest } = decrypted;
+      const docPublic = documents
+        ? { file_name: documents.file_name, mime_type: documents.mime_type, recognition_status: documents.recognition_status }
+        : null;
+      return { ...rest, documents: docPublic, download_url };
+    }));
+
+    res.json({ success: true, data: result });
+  } catch (err) {
+    console.error('patent-receipts.getMy error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка загрузки чеков' });
+  }
+};
+
 const recognize = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const documentId = Number(req.params.documentId);
@@ -226,6 +277,7 @@ const recognize = async (req: AuthenticatedRequest, res: Response): Promise<void
 export const patentReceiptsController = {
   list,
   getOne,
+  getMy,
   update,
   recognize,
 };

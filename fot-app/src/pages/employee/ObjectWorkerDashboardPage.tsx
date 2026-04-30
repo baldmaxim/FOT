@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FC, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FC } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { documentService } from '../../services/documentService';
 import { employeeService } from '../../services/employeeService';
-import { officialMemoService, MEMO_STATUS_LABELS, type IOfficialMemo } from '../../services/officialMemoService';
+import { patentReceiptService, type IMyPatentReceipt, type RecognitionStatus } from '../../services/patentReceiptService';
 import type { Employee } from '../../types/employee';
 import { ApiError } from '../../api/client';
 import { formatFioShort } from '../../utils/formatFio';
@@ -47,13 +47,6 @@ const primaryButton: CSSProperties = {
   cursor: 'pointer',
 };
 
-const secondaryButton: CSSProperties = {
-  ...primaryButton,
-  background: 'transparent',
-  color: 'var(--text-primary)',
-  border: '1px solid var(--border-primary)',
-};
-
 const logoutButtonStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -70,30 +63,52 @@ const logoutButtonStyle: CSSProperties = {
   cursor: 'pointer',
 };
 
-const statusBadgeStyle = (status: IOfficialMemo['status']): CSSProperties => {
-  const palette: Record<IOfficialMemo['status'], string> = {
-    pending: '#b78103',
-    approved: '#1e7e34',
-    rejected: '#b23a48',
-    cancelled: 'var(--text-secondary)',
-  };
-  return {
-    display: 'inline-block',
-    padding: '2px 8px',
-    borderRadius: 8,
-    fontSize: 12,
-    fontWeight: 600,
-    background: 'var(--bg-primary)',
-    color: palette[status],
-    border: `1px solid ${palette[status]}33`,
-  };
+interface IRecognitionBadge {
+  label: string;
+  color: string;
+}
+
+const recognitionBadge = (status: RecognitionStatus | null | undefined): IRecognitionBadge => {
+  switch (status) {
+    case 'pending':
+      return { label: 'В очереди', color: '#7a7a7a' };
+    case 'processing':
+      return { label: 'Распознаётся…', color: '#b78103' };
+    case 'done':
+      return { label: 'Распознан', color: '#1e7e34' };
+    case 'needs_review':
+      return { label: 'Требует проверки', color: '#b78103' };
+    case 'failed':
+      return { label: 'Ошибка распознавания', color: '#b23a48' };
+    default:
+      return { label: '—', color: 'var(--text-secondary)' };
+  }
 };
+
+const recognitionBadgeStyle = (color: string): CSSProperties => ({
+  display: 'inline-block',
+  padding: '2px 8px',
+  borderRadius: 8,
+  fontSize: 12,
+  fontWeight: 600,
+  background: 'var(--bg-primary)',
+  color,
+  border: `1px solid ${color}33`,
+});
 
 const formatDate = (iso: string | null | undefined): string => {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
   return d.toLocaleDateString('ru-RU');
+};
+
+const amountFormatter = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const formatAmount = (raw: string | null): string => {
+  if (raw === null || raw === undefined || raw === '') return '—';
+  const num = Number(raw);
+  if (!Number.isFinite(num)) return String(raw);
+  return `${amountFormatter.format(num)} ₽`;
 };
 
 const daysUntil = (iso: string | null | undefined): number | null => {
@@ -117,13 +132,9 @@ export const ObjectWorkerDashboardPage: FC = () => {
 
   const [employee, setEmployee] = useState<Employee | null>(null);
   const [employeeLoading, setEmployeeLoading] = useState<boolean>(true);
-  const [memos, setMemos] = useState<IOfficialMemo[]>([]);
-  const [memosLoading, setMemosLoading] = useState<boolean>(true);
+  const [receipts, setReceipts] = useState<IMyPatentReceipt[]>([]);
+  const [receiptsLoading, setReceiptsLoading] = useState<boolean>(true);
   const [uploading, setUploading] = useState<boolean>(false);
-  const [memoDialogOpen, setMemoDialogOpen] = useState<boolean>(false);
-  const [memoTitle, setMemoTitle] = useState<string>('');
-  const [memoBody, setMemoBody] = useState<string>('');
-  const [memoSubmitting, setMemoSubmitting] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -144,24 +155,24 @@ export const ObjectWorkerDashboardPage: FC = () => {
     return () => { cancelled = true; };
   }, [employeeId, toast]);
 
-  const reloadMemos = () => {
+  const reloadReceipts = () => {
     if (!employeeId) {
-      setMemos([]);
-      setMemosLoading(false);
+      setReceipts([]);
+      setReceiptsLoading(false);
       return;
     }
-    setMemosLoading(true);
-    officialMemoService.listMy()
-      .then(data => setMemos(data || []))
+    setReceiptsLoading(true);
+    patentReceiptService.listMy()
+      .then(data => setReceipts(data || []))
       .catch(err => {
-        console.error('memos load error:', err);
-        toast.error('Не удалось загрузить служебные записки');
+        console.error('receipts load error:', err);
+        toast.error('Не удалось загрузить чеки');
       })
-      .finally(() => setMemosLoading(false));
+      .finally(() => setReceiptsLoading(false));
   };
 
   useEffect(() => {
-    reloadMemos();
+    reloadReceipts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employeeId]);
 
@@ -197,45 +208,13 @@ export const ObjectWorkerDashboardPage: FC = () => {
     try {
       await documentService.uploadFile(file, employeeId, 'patent_check');
       toast.success('Чек от патента загружен');
+      reloadReceipts();
     } catch (err) {
       console.error('patent check upload error:', err);
       const detail = err instanceof ApiError ? err.message : null;
       toast.error(detail ? `Не удалось загрузить чек: ${detail}` : 'Не удалось загрузить чек');
     } finally {
       setUploading(false);
-    }
-  };
-
-  const handleOpenMemoDialog = () => {
-    if (!employeeId) {
-      toast.warning('Нет привязки к сотруднику');
-      return;
-    }
-    setMemoTitle('');
-    setMemoBody('');
-    setMemoDialogOpen(true);
-  };
-
-  const handleSubmitMemo = async (e: FormEvent) => {
-    e.preventDefault();
-    const title = memoTitle.trim();
-    const body = memoBody.trim();
-    if (!title || !body) {
-      toast.warning('Заполните тему и текст записки');
-      return;
-    }
-    setMemoSubmitting(true);
-    try {
-      await officialMemoService.create({ title, body });
-      toast.success('Служебная записка отправлена');
-      setMemoDialogOpen(false);
-      reloadMemos();
-    } catch (err) {
-      console.error('memo create error:', err);
-      const detail = err instanceof ApiError ? err.message : null;
-      toast.error(detail ? `Не удалось отправить записку: ${detail}` : 'Не удалось отправить записку');
-    } finally {
-      setMemoSubmitting(false);
     }
   };
 
@@ -272,7 +251,7 @@ export const ObjectWorkerDashboardPage: FC = () => {
           <div style={{ ...cardStyle, borderColor: '#b23a48', background: '#b23a481a' }}>
             <div style={{ fontWeight: 600 }}>Аккаунт не привязан к сотруднику</div>
             <div style={labelStyle}>
-              Обратитесь к администратору — загрузка чека и подача служебной записки пока недоступны.
+              Обратитесь к администратору — загрузка чека от патента пока недоступна.
             </div>
           </div>
         )}
@@ -325,35 +304,43 @@ export const ObjectWorkerDashboardPage: FC = () => {
         </section>
 
         <section style={cardStyle}>
-          <div style={{ fontSize: 16, fontWeight: 700 }}>Служебные записки</div>
-          <button
-            type="button"
-            style={{ ...primaryButton, opacity: disableActions ? 0.6 : 1 }}
-            onClick={handleOpenMemoDialog}
-            disabled={disableActions}
-          >
-            Подать служебную записку
-          </button>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>Мои чеки от патента</div>
 
           <div style={{ display: 'grid', gap: 8 }}>
-            {memosLoading && <div style={labelStyle}>Загрузка…</div>}
-            {!memosLoading && memos.length === 0 && (
-              <div style={labelStyle}>Записок пока нет.</div>
+            {receiptsLoading && <div style={labelStyle}>Загрузка…</div>}
+            {!receiptsLoading && receipts.length === 0 && (
+              <div style={labelStyle}>Пока нет загруженных чеков.</div>
             )}
-            {!memosLoading && memos.map(memo => (
-              <div key={memo.id} style={{ ...cardStyle, padding: 14, gap: 6 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                  <div style={{ fontWeight: 600 }}>{memo.title}</div>
-                  <span style={statusBadgeStyle(memo.status)}>{MEMO_STATUS_LABELS[memo.status]}</span>
-                </div>
-                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{formatDate(memo.created_at)}</div>
-                {memo.review_comment && (
-                  <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                    Комментарий: {memo.review_comment}
+            {!receiptsLoading && receipts.map(receipt => {
+              const badge = recognitionBadge(receipt.documents?.recognition_status ?? null);
+              const dateLabel = receipt.payment_date
+                ? `Дата платежа: ${formatDate(receipt.payment_date)}`
+                : `Загружено: ${formatDate(receipt.created_at)}`;
+              return (
+                <div key={receipt.id} style={{ ...cardStyle, padding: 14, gap: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ fontWeight: 600 }}>{formatAmount(receipt.payment_amount)}</div>
+                    <span style={recognitionBadgeStyle(badge.color)}>{badge.label}</span>
                   </div>
-                )}
-              </div>
-            ))}
+                  <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{dateLabel}</div>
+                  {receipt.documents?.file_name && (
+                    <div style={{ fontSize: 13, color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
+                      {receipt.documents.file_name}
+                    </div>
+                  )}
+                  {receipt.download_url && (
+                    <a
+                      href={receipt.download_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ fontSize: 14, fontWeight: 600, color: 'var(--accent-primary, #4b6cff)' }}
+                    >
+                      Открыть оригинал
+                    </a>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </section>
 
@@ -374,86 +361,6 @@ export const ObjectWorkerDashboardPage: FC = () => {
           </button>
         </section>
       </div>
-
-      {memoDialogOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 16,
-            zIndex: 50,
-          }}
-          onClick={(e) => { if (e.target === e.currentTarget) setMemoDialogOpen(false); }}
-        >
-          <form
-            onSubmit={handleSubmitMemo}
-            style={{
-              ...cardStyle,
-              width: '100%',
-              maxWidth: 480,
-              background: 'var(--bg-primary)',
-            }}
-          >
-            <div style={{ fontSize: 18, fontWeight: 700 }}>Новая служебная записка</div>
-            <label style={{ display: 'grid', gap: 6 }}>
-              <span style={labelStyle}>Тема</span>
-              <input
-                type="text"
-                value={memoTitle}
-                onChange={(e) => setMemoTitle(e.target.value)}
-                maxLength={200}
-                required
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: 10,
-                  border: '1px solid var(--border-primary)',
-                  background: 'var(--bg-secondary)',
-                  color: 'var(--text-primary)',
-                }}
-              />
-            </label>
-            <label style={{ display: 'grid', gap: 6 }}>
-              <span style={labelStyle}>Текст</span>
-              <textarea
-                value={memoBody}
-                onChange={(e) => setMemoBody(e.target.value)}
-                maxLength={5000}
-                rows={6}
-                required
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: 10,
-                  border: '1px solid var(--border-primary)',
-                  background: 'var(--bg-secondary)',
-                  color: 'var(--text-primary)',
-                  resize: 'vertical',
-                }}
-              />
-            </label>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                style={secondaryButton}
-                onClick={() => setMemoDialogOpen(false)}
-                disabled={memoSubmitting}
-              >
-                Отмена
-              </button>
-              <button
-                type="submit"
-                style={{ ...primaryButton, opacity: memoSubmitting ? 0.6 : 1 }}
-                disabled={memoSubmitting}
-              >
-                {memoSubmitting ? 'Отправка…' : 'Отправить'}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
     </div>
   );
 };

@@ -106,6 +106,16 @@ export interface IListFilters {
   status?: RecognitionStatus;
 }
 
+export interface IMyPatentReceipt {
+  id: number;
+  employee_id: number | null;
+  payment_date: string | null;
+  payment_amount: string | null;
+  created_at: string;
+  download_url: string | null;
+  documents: { file_name: string | null; mime_type: string | null; recognition_status: RecognitionStatus | null } | null;
+}
+
 interface ApiResponse<T> {
   data: T;
 }
@@ -135,6 +145,11 @@ export const patentReceiptService = {
 
   recognize: async (documentId: number, model?: string): Promise<IRecognizeResult> => {
     const res = await apiClient.post<ApiResponse<IRecognizeResult>>(`/patent-receipts/${documentId}/recognize`, model ? { model } : {});
+    return res.data;
+  },
+
+  listMy: async (): Promise<IMyPatentReceipt[]> => {
+    const res = await apiClient.get<ApiResponse<IMyPatentReceipt[]>>('/patent-receipts/my');
     return res.data;
   },
 };
