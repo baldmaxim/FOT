@@ -1927,7 +1927,7 @@ export const timesheetController = {
     }
   },
 
-  /** POST /api/timesheet/refresh { start_date, end_date } */
+  /** POST /api/timesheet/refresh { start_date, end_date, sync_mode? } */
   async refresh(req: AuthenticatedRequest, res: Response) {
     try {
       const scope = await resolveTimesheetScope(req);
@@ -1944,8 +1944,12 @@ export const timesheetController = {
         return res.status(400).json({ success: false, error: 'Диапазон не должен превышать 62 дня' });
       }
 
+      const syncModeRaw = String(req.body?.sync_mode ?? 'quick');
+      const syncMode: 'quick' | 'full' = syncModeRaw === 'full' ? 'full' : 'quick';
+
       let syncResult: { sigurTotal?: number; imported?: number; skipped?: number; errors_count?: number; matched?: number } | null = null;
-      if (await sigurService.isConfigured()) {
+      let timedOut = false;
+      if (syncMode === 'full' && await sigurService.isConfigured()) {
         try {
           await acquirePresencePollingLock();
         } catch (err) {
@@ -1958,14 +1962,25 @@ export const timesheetController = {
           throw err;
         }
         try {
-          const result = await syncEventsLogic(startDate, endDate);
-          syncResult = {
-            sigurTotal: result?.sigurTotal,
-            imported: result?.imported,
-            skipped: result?.skipped,
-            errors_count: Array.isArray(result?.errors) ? result.errors.length : 0,
-            matched: result?.matched,
-          };
+          const SYNC_TIMEOUT_MS = 60_000;
+          const TIMEOUT_SENTINEL = Symbol('sync_timeout');
+          const timeoutPromise = new Promise<typeof TIMEOUT_SENTINEL>((resolve) => {
+            setTimeout(() => resolve(TIMEOUT_SENTINEL), SYNC_TIMEOUT_MS);
+          });
+          const raced = await Promise.race([syncEventsLogic(startDate, endDate), timeoutPromise]);
+          if (raced === TIMEOUT_SENTINEL) {
+            timedOut = true;
+            console.warn('[timesheet.refresh] syncEventsLogic timed out after', SYNC_TIMEOUT_MS, 'ms');
+          } else {
+            const result = raced;
+            syncResult = {
+              sigurTotal: result?.sigurTotal,
+              imported: result?.imported,
+              skipped: result?.skipped,
+              errors_count: Array.isArray(result?.errors) ? result.errors.length : 0,
+              matched: result?.matched,
+            };
+          }
         } finally {
           await releasePresencePollingLock();
         }
@@ -2023,7 +2038,7 @@ export const timesheetController = {
         details: { start_date: startDate, end_date: endDate, sync: syncResult, conflicts_count: conflicts.length },
       });
 
-      res.json({ success: true, data: { sync: syncResult, conflicts } });
+      res.json({ success: true, data: { sync: syncResult, conflicts, ...(timedOut ? { timed_out: true } : {}) } });
     } catch (err) {
       console.error('timesheet.refresh error:', err);
       res.status(500).json({ success: false, error: 'Ошибка обновления табеля' });

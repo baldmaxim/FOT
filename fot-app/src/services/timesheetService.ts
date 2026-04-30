@@ -113,6 +113,14 @@ export interface ITimesheetRefreshResult {
     matched?: number;
   } | null;
   conflicts: Array<{ employee_id: number; work_date: string; skud_minutes: number }>;
+  timed_out?: boolean;
+}
+
+export type ITimesheetRefreshMode = 'quick' | 'full';
+
+export interface ITimesheetRefreshOptions {
+  signal?: AbortSignal;
+  sync_mode?: ITimesheetRefreshMode;
 }
 
 export const timesheetService = {
@@ -187,8 +195,16 @@ export const timesheetService = {
     return res.data;
   },
 
-  async refresh(payload: { start_date: string; end_date: string }): Promise<ITimesheetRefreshResult> {
-    const res = await apiClient.post<ApiResponse<ITimesheetRefreshResult>>('/timesheet/refresh', payload);
+  async refresh(
+    payload: { start_date: string; end_date: string },
+    options?: ITimesheetRefreshOptions,
+  ): Promise<ITimesheetRefreshResult> {
+    const body = { ...payload, sync_mode: options?.sync_mode ?? 'quick' };
+    const res = await apiClient.post<ApiResponse<ITimesheetRefreshResult>>(
+      '/timesheet/refresh',
+      body,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
     if (!res.data) throw new Error(res.error || 'Ошибка обновления табеля');
     return res.data;
   },

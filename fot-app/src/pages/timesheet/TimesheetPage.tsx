@@ -9,6 +9,7 @@ import { TimesheetTeamManagementModal } from '../../components/timesheet/Timeshe
 import { TimesheetTransfersTab } from '../../components/timesheet/TimesheetTransfersTab';
 import { TimesheetExcludeEmployeeModal } from '../../components/timesheet/TimesheetExcludeEmployeeModal';
 import { timesheetService } from '../../services/timesheetService';
+import { ApiError } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
@@ -1259,8 +1260,16 @@ export const TimesheetPage: FC = () => {
   const handleRefreshTimesheet = useCallback(async () => {
     if (!rangeStart || !rangeEnd || refreshInFlight) return;
     setRefreshState({ phase: 'syncing', message: 'Синхронизация СКУД…' });
+
+    const controller = new AbortController();
+    const timeoutMs = 90_000;
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
     try {
-      const result = await timesheetService.refresh({ start_date: rangeStart, end_date: rangeEnd });
+      const result = await timesheetService.refresh(
+        { start_date: rangeStart, end_date: rangeEnd },
+        { signal: controller.signal, sync_mode: 'quick' },
+      );
       setRefreshState({ phase: 'invalidating', message: 'Обновление данных табеля…' });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
@@ -1273,13 +1282,30 @@ export const TimesheetPage: FC = () => {
       if (result.conflicts.length > 0) {
         parts.push(`коллизий: ${result.conflicts.length}`);
       }
-      toast.success?.(parts.length > 0 ? `Обновлено (${parts.join(', ')})` : 'Табель обновлён');
+      if (result.timed_out) {
+        toast.error?.('Синхронизация СКУД не успела завершиться, фоновая выгрузка продолжается');
+      } else {
+        toast.success?.(parts.length > 0 ? `Обновлено (${parts.join(', ')})` : 'Табель обновлён');
+      }
       setRefreshState({ phase: 'idle', message: '' });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Ошибка обновления табеля';
-      toast.error?.(message);
-      setRefreshState({ phase: 'error', message: 'Ошибка обновления' });
-      setTimeout(() => setRefreshState({ phase: 'idle', message: '' }), 3000);
+      const aborted = (err as { name?: string } | null)?.name === 'AbortError' || controller.signal.aborted;
+      const apiError = err instanceof ApiError ? err : null;
+      if (apiError?.code === 'SYNC_IN_PROGRESS') {
+        toast.error?.('Синхронизация уже идёт фоном, попробуйте через минуту');
+        setRefreshState({ phase: 'idle', message: '' });
+      } else if (aborted) {
+        toast.error?.('Сервер не ответил за 90 секунд, повторите попытку');
+        setRefreshState({ phase: 'error', message: 'Таймаут' });
+        setTimeout(() => setRefreshState({ phase: 'idle', message: '' }), 3000);
+      } else {
+        const message = err instanceof Error ? err.message : 'Ошибка обновления табеля';
+        toast.error?.(message);
+        setRefreshState({ phase: 'error', message: 'Ошибка обновления' });
+        setTimeout(() => setRefreshState({ phase: 'idle', message: '' }), 3000);
+      }
+    } finally {
+      window.clearTimeout(timeoutId);
     }
   }, [rangeStart, rangeEnd, refreshInFlight, queryClient, monthStr, activeGridDeptId, toast]);
 
