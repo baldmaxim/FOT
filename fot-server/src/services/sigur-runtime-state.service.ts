@@ -1,4 +1,5 @@
 import { hostname } from 'node:os';
+import * as Sentry from '@sentry/node';
 import { supabase } from '../config/database.js';
 
 export const SIGUR_POLLING_STATE_KEY = 'sigur_presence_polling';
@@ -8,6 +9,12 @@ const PROCESS_INSTANCE_ID = `${hostname()}:${process.pid}:${Date.now().toString(
 
 export const SIGUR_POLLING_LEASE_TTL_SECONDS = 180;
 export const SIGUR_MONITOR_LEASE_TTL_SECONDS = 180;
+
+// Если локальные часы расходятся с часами Postgres более чем на это значение —
+// процесс отказывается держать lease. Иначе цикл polling будет писать checkpoint
+// и запрашивать события Sigur из «будущего», в результате чего теряется поток.
+const MAX_CLOCK_SKEW_MS = 60_000;
+let lastClockSkewLogAt = 0;
 
 export interface ISigurRuntimeStateRow {
   key: string;
@@ -108,13 +115,44 @@ export async function getSigurRuntimeState(key: string): Promise<ISigurRuntimeSt
   });
 }
 
+/**
+ * Извлекает часы Postgres из ответа RPC try_acquire/heartbeat: lease_expires_at
+ * выставляется как `NOW() + ttl_seconds`, поэтому `dbNow ≈ lease_expires_at - ttl`.
+ */
+function extractDbNowFromLeaseRow(
+  row: ISigurRuntimeLeaseRow | null,
+  ttlSeconds: number,
+): number | null {
+  const expiresIso = row?.state_lease_expires_at ?? row?.lease_expires_at;
+  if (!expiresIso) return null;
+  const expiresMs = Date.parse(expiresIso);
+  if (!Number.isFinite(expiresMs)) return null;
+  return expiresMs - ttlSeconds * 1000;
+}
+
+function logClockSkew(skewMs: number, key: string, owner: string): void {
+  // Не спамим Sentry — отчитываемся не чаще раза в 5 минут на процесс.
+  const now = Date.now();
+  console.error(
+    `[runtime-state] CLOCK SKEW ${Math.round(skewMs / 1000)}s for "${key}" (owner=${owner}). ` +
+    `Refusing lease — process clock is out of sync with Postgres.`,
+  );
+  if (now - lastClockSkewLogAt > 5 * 60_000) {
+    lastClockSkewLogAt = now;
+    Sentry.captureMessage('clock_skew_lease_refused', {
+      level: 'error',
+      extra: { skewMs, key, owner, localNow: now },
+    });
+  }
+}
+
 export async function tryAcquireSigurRuntimeLease(params: {
   key: string;
   owner: string;
   ttlSeconds: number;
   meta?: Record<string, unknown>;
 }): Promise<{ acquired: boolean; row: ISigurRuntimeStateRow | null }> {
-  return withSupabaseRetry(`tryAcquireSigurRuntimeLease(${params.key})`, async () => {
+  const result = await withSupabaseRetry(`tryAcquireSigurRuntimeLease(${params.key})`, async () => {
     const { data, error } = await supabase.rpc('try_acquire_sigur_runtime_lease', {
       p_key: params.key,
       p_owner: params.owner,
@@ -129,9 +167,28 @@ export async function tryAcquireSigurRuntimeLease(params: {
     const row = normalizeRpcRow(data as ISigurRuntimeLeaseRow[] | ISigurRuntimeLeaseRow | null);
     return {
       acquired: !!row?.acquired,
+      rawRow: row,
       row: row ? mapLeaseRowToState(row) : null,
     };
   });
+
+  // Защита от рассинхрона часов: если у нас есть lease, проверяем расхождение
+  // между локальным временем и часами Postgres. При большом skew релизим lease
+  // и не возвращаем его наверх — иначе polling будет писать «будущий» checkpoint.
+  if (result.acquired && result.rawRow) {
+    const dbNowMs = extractDbNowFromLeaseRow(result.rawRow, params.ttlSeconds);
+    if (dbNowMs != null) {
+      const skewMs = Math.abs(Date.now() - dbNowMs);
+      if (skewMs > MAX_CLOCK_SKEW_MS) {
+        logClockSkew(skewMs, params.key, params.owner);
+        await releaseSigurRuntimeLease({ key: params.key, owner: params.owner })
+          .catch(err => console.error('[runtime-state] release after skew failed:', (err as Error).message));
+        return { acquired: false, row: null };
+      }
+    }
+  }
+
+  return { acquired: result.acquired, row: result.row };
 }
 
 export async function heartbeatSigurRuntimeLease(params: {
@@ -163,10 +220,21 @@ export async function mergeSigurRuntimeState(params: {
   meta?: Record<string, unknown>;
   owner?: string | null;
 }): Promise<ISigurRuntimeStateRow | null> {
+  // Никогда не пишем checkpoint больше «локального сейчас + 60 сек».
+  // Если процесс с рассинхроном часов всё-таки оказался здесь, страхуемся:
+  // checkpoint в будущем заморозит окно polling и поток событий замолчит.
+  let checkpointAt = params.checkpointAt;
+  if (checkpointAt && checkpointAt.getTime() > Date.now() + MAX_CLOCK_SKEW_MS) {
+    console.warn(
+      `[runtime-state] capped future checkpoint ${checkpointAt.toISOString()} for "${params.key}" to local now`,
+    );
+    checkpointAt = new Date();
+  }
+
   return withSupabaseRetry(`mergeSigurRuntimeState(${params.key})`, async () => {
     const { data, error } = await supabase.rpc('merge_sigur_runtime_state', {
       p_key: params.key,
-      p_checkpoint_at: params.checkpointAt?.toISOString() || null,
+      p_checkpoint_at: checkpointAt?.toISOString() || null,
       p_meta: params.meta || {},
       p_owner: params.owner || null,
     });

@@ -188,6 +188,16 @@ export async function resolvePollingWindow(now = new Date()): Promise<PollingWin
     }
   }
 
+  // Защита: если в БД оказался checkpoint в будущем (например, после процесса
+  // с рассинхроном часов до фикса), игнорируем его и опираемся на stored_events.
+  if (checkpoint && checkpoint.getTime() > now.getTime() + 60_000) {
+    console.warn(
+      `[presence-polling] runtime_state checkpoint ${checkpoint.toISOString()} is in the future, falling back`,
+    );
+    checkpoint = null;
+    checkpointSource = 'fallback';
+  }
+
   if (!checkpoint) {
     checkpoint = await getLatestStoredEventTimestamp();
     if (checkpoint) {
@@ -195,15 +205,15 @@ export async function resolvePollingWindow(now = new Date()): Promise<PollingWin
     }
   }
 
-  // Если checkpoint старше 72 часов — ограничиваем catch-up последними 72ч.
-  // Раньше было 12ч с ресетом на startOfLocalDay, что теряло события ночной смены
-  // после длительного простоя Sigur. Backfill дотянет всё, что окажется unmatched.
+  // Если checkpoint старше 7 суток — ограничиваем catch-up последними 7 днями.
+  // Раньше было 72ч, но после длительных простоев теряли события «ночной»/выходных.
+  // Daily-scheduler параллельно покрывает текущий месяц, а backfill дотянет unmatched.
   const todayStart = startOfLocalDay(now);
-  const MAX_CATCHUP_MS = 72 * 60 * 60 * 1000;
+  const MAX_CATCHUP_MS = 7 * 24 * 60 * 60 * 1000;
   if (checkpoint && (now.getTime() - checkpoint.getTime()) > MAX_CATCHUP_MS) {
     const gapMinutes = Math.round((now.getTime() - checkpoint.getTime()) / 60_000);
     const floor = new Date(now.getTime() - MAX_CATCHUP_MS);
-    console.log(`[presence-polling] catch-up: gap ${gapMinutes}m (>72h), clamping start to ${formatLocalDateTime(floor)}`);
+    console.log(`[presence-polling] catch-up: gap ${gapMinutes}m (>7d), clamping start to ${formatLocalDateTime(floor)}`);
     checkpoint = floor;
     checkpointSource = 'fallback';
   }
