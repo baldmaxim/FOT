@@ -14,6 +14,7 @@ import {
   getScheduleForTimesheetDay,
   getFullDayThresholdHoursForDay,
   isScheduleDayOff,
+  isPreHolidayForSchedule,
 } from '../../utils/scheduleUtils';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import '../../pages/timesheet/TimesheetPage.css';
@@ -1019,6 +1020,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       {days.map(day => {
                         const sched = getScheduleForTimesheetDay(schedules, dailySchedules, row.employee.id, year, month, day);
                         const dayOff = isScheduleDayOff(sched, calendar, year, month, day);
+                        const preHoliday = isPreHolidayForSchedule(sched, calendar, year, month, day);
                         const today = isToday(year, month, day);
                         const future = isFutureDay(year, month, day);
                         const entry = row.days.get(day) || null;
@@ -1026,8 +1028,12 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const inactive = isDayInactiveForEmployee(row.employee, year, month, day);
                         const baseCls = getDayCellClass(entry, dayOff, today, future, thresholdHours);
                         const text = getDayCellTextMobile(entry, dayOff);
-                        const title = getDayCellTitle(entry, dayOff);
+                        const baseTitle = getDayCellTitle(entry, dayOff);
+                        const title = preHoliday
+                          ? [baseTitle, 'Предпраздничный день (−1ч)'].filter(Boolean).join(' • ')
+                          : baseTitle;
                         const inactiveCls = inactive ? ' ts-day--inactive' : '';
+                        const preHolidayCls = preHoliday ? ' ts-day--pre-holiday' : '';
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const problemCls = problemDates?.red?.has(isoDate)
                           ? ' ts-day--problem-red'
@@ -1040,7 +1046,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           <button
                             key={day}
                             type="button"
-                            className={`${baseCls}${inactiveCls}${problemCls}${outCls} ts-mobile-day-btn`}
+                            className={`${baseCls}${inactiveCls}${preHolidayCls}${problemCls}${outCls} ts-mobile-day-btn`}
                             title={title}
                             disabled={inactive}
                             onClick={() => !inactive && onDayClick(row.employee, day, entry)}
@@ -1313,6 +1319,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     {days.map(day => {
                       const sched = getScheduleForTimesheetDay(schedules, dailySchedules, row.employee.id, year, month, day);
                       const dayOff = isScheduleDayOff(sched, calendar, year, month, day);
+                      const preHoliday = isPreHolidayForSchedule(sched, calendar, year, month, day);
                       const today = isToday(year, month, day);
                       const future = isFutureDay(year, month, day);
                       const entry = row.days.get(day) || null;
@@ -1320,6 +1327,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       const targeted = bulkEditMode && activeSelectedCellKeys.has(getEmployeeBulkCellKey(row.employee.id, day));
                       const inactive = isDayInactiveForEmployee(row.employee, year, month, day);
                       const inactiveCls = inactive ? ' ts-day--inactive' : '';
+                      const preHolidayCls = preHoliday ? ' ts-day--pre-holiday' : '';
                       const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                       const problemCls = problemDates?.red?.has(isoDate)
                         ? ' ts-day--problem-red'
@@ -1327,9 +1335,12 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           ? ' ts-day--problem-yellow'
                           : '';
                       const outCls = outOfPeriodDates?.has(isoDate) ? ' ts-day--out-of-period' : '';
-                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours)}${inactiveCls}${problemCls}${outCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive ? ' ts-day--bulk-selectable' : ''}`;
+                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours)}${inactiveCls}${preHolidayCls}${problemCls}${outCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive ? ' ts-day--bulk-selectable' : ''}`;
                       const text = inactive ? '' : getDayCellText(entry, dayOff);
-                      const title = getDayCellTitle(entry, dayOff);
+                      const baseTitle = getDayCellTitle(entry, dayOff);
+                      const title = preHoliday
+                        ? [baseTitle, 'Предпраздничный день (−1ч)'].filter(Boolean).join(' • ')
+                        : baseTitle;
                       const bulkTitle = bulkEditMode && !inactive
                         ? [title, 'Зажмите левую кнопку мыши и протяните диапазон для массовой корректировки']
                           .filter(Boolean)

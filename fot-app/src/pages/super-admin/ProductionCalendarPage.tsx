@@ -18,6 +18,7 @@ interface IEditingRow {
   norm_hours: number;
   holidays: string[];
   mandatory_holidays: string[];
+  pre_holidays: string[];
   mode: CalendarMode;
 }
 
@@ -44,12 +45,14 @@ export const ProductionCalendarPage: FC = () => {
     const entry = entryMap.get(month);
     const holidays = entry?.holidays ?? [];
     const mandatory_holidays = entry?.mandatory_holidays ?? [];
+    const pre_holidays = entry?.pre_holidays ?? [];
     setEditing({
       month,
       norm_days: entry?.norm_days ?? 0,
       norm_hours: entry?.norm_hours ?? 0,
       holidays,
       mandatory_holidays,
+      pre_holidays,
       mode: 'holiday',
     });
   };
@@ -59,10 +62,12 @@ export const ProductionCalendarPage: FC = () => {
     const next: IEditingRow = { ...editing };
     if (editing.mode === 'holiday') {
       next.holidays = toggleInArray(editing.holidays, iso);
-    } else {
+    } else if (editing.mode === 'mandatory') {
       next.mandatory_holidays = toggleInArray(editing.mandatory_holidays, iso);
+    } else {
+      next.pre_holidays = toggleInArray(editing.pre_holidays, iso);
     }
-    const norm = computeWorkingNorm(year, editing.month, next.holidays, next.mandatory_holidays);
+    const norm = computeWorkingNorm(year, editing.month, next.holidays, next.mandatory_holidays, next.pre_holidays);
     next.norm_days = norm.norm_days;
     next.norm_hours = norm.norm_hours;
     setEditing(next);
@@ -77,6 +82,7 @@ export const ProductionCalendarPage: FC = () => {
         norm_hours: editing.norm_hours,
         holidays: editing.holidays,
         mandatory_holidays: editing.mandatory_holidays,
+        pre_holidays: editing.pre_holidays,
       });
       queryClient.setQueryData<IProductionCalendarEntry[]>(
         getProductionCalendarQueryKey(year),
@@ -127,6 +133,7 @@ export const ProductionCalendarPage: FC = () => {
                 <th>Рабочих часов</th>
                 <th>Праздники</th>
                 <th>Всегда-выходные</th>
+                <th>Предпраздники</th>
                 <th>Изменено</th>
                 <th>Действия</th>
               </tr>
@@ -180,6 +187,11 @@ export const ProductionCalendarPage: FC = () => {
                           {(isEditing ? editing.mandatory_holidays : entry?.mandatory_holidays || []).length} дат
                         </span>
                       </td>
+                      <td>
+                        <span className={styles.countBadge}>
+                          {(isEditing ? editing.pre_holidays : entry?.pre_holidays || []).length} дат
+                        </span>
+                      </td>
                       <td className={styles.customCell}>
                         {entry?.is_custom && (
                           <span className={styles.customBadge}>Изменено</span>
@@ -196,7 +208,7 @@ export const ProductionCalendarPage: FC = () => {
                     </tr>
                     {isEditing && (
                       <tr className={styles.calendarRow}>
-                        <td colSpan={7}>
+                        <td colSpan={8}>
                           <div className={styles.calendarPanel}>
                             <div className={styles.modeSwitch}>
                               <button
@@ -215,12 +227,21 @@ export const ProductionCalendarPage: FC = () => {
                                 <span className={`${styles.modeDot} ${styles.modeDotMandatory}`} />
                                 Всегда-выходной
                               </button>
+                              <button
+                                type="button"
+                                className={`${styles.modeBtn} ${editing.mode === 'pre_holiday' ? styles.modeBtnActive : ''}`}
+                                onClick={() => setEditing({ ...editing, mode: 'pre_holiday' })}
+                              >
+                                <span className={`${styles.modeDot} ${styles.modeDotPreHoliday}`} />
+                                Предпраздничный
+                              </button>
                             </div>
                             <MonthCalendar
                               year={year}
                               month={month}
                               holidays={editing.holidays}
                               mandatoryHolidays={editing.mandatory_holidays}
+                              preHolidays={editing.pre_holidays}
                               mode={editing.mode}
                               onToggleDay={handleToggleDay}
                             />
@@ -249,15 +270,15 @@ export const ProductionCalendarPage: FC = () => {
                 <td>Итого</td>
                 <td>{totalDays}</td>
                 <td>{totalHours}</td>
-                <td colSpan={4} />
+                <td colSpan={5} />
               </tr>
             </tbody>
           </table>
           <div className={styles.legend}>
-            Кликните «Изменить» для месяца — раскроется календарик. Переключайте режим «Праздник» / «Всегда-выходной»
-            и кликом помечайте дни. Поля «Рабочих дней» и «Рабочих часов» пересчитываются автоматически
-            (можно перебить руками для сокращённых предпраздничных дней). «Праздники» учитываются только
-            графиками с флагом «учитывать праздники РФ»; «Всегда-выходные» — для всех графиков.
+            Кликните «Изменить» для месяца — раскроется календарик. Переключайте режим «Праздник» / «Всегда-выходной» / «Предпраздничный»
+            и кликом помечайте дни. Поля «Рабочих дней» и «Рабочих часов» пересчитываются автоматически.
+            «Праздники» и «Предпраздничный» учитываются только графиками с флагом «учитывать праздники РФ»;
+            «Всегда-выходные» — для всех графиков. Предпраздничный день — рабочий, но норма часов на него −1ч.
           </div>
         </div>
       )}

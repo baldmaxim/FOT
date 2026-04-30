@@ -208,7 +208,7 @@ describe('attendance.service', () => {
     };
 
     const dailySchedulesMap = new Map<number, Map<string, IResolvedSchedule>>();
-    const calendarMonth = { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth;
+    const calendarMonth = { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth;
 
     const result = await buildAttendanceEntries({
       employees: [{ id: 1, full_name: 'Иван Иванов' }],
@@ -277,7 +277,7 @@ describe('attendance.service', () => {
       startDate: '2026-04-01',
       endDate: '2026-04-01',
       dailySchedulesMap: new Map(),
-      calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
       todayStr: '2026-04-01',
     });
 
@@ -330,7 +330,7 @@ describe('attendance.service', () => {
       dailySchedulesMap: new Map([
         [1, new Map([['2026-04-01', {} as IResolvedSchedule]])],
       ]),
-      calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
       todayStr: '2026-04-03',
     });
 
@@ -372,7 +372,7 @@ describe('attendance.service', () => {
       dailySchedulesMap: new Map([
         [1, new Map([['2026-04-01', {} as IResolvedSchedule]])],
       ]),
-      calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
       todayStr: '2026-04-03',
     });
 
@@ -467,7 +467,7 @@ describe('attendance.service', () => {
       dailySchedulesMap: new Map([
         [1, new Map([['2026-04-01', {} as IResolvedSchedule]])],
       ]),
-      calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
       todayStr: '2026-04-01',
     });
 
@@ -574,7 +574,7 @@ describe('attendance.service', () => {
       dailySchedulesMap: new Map([
         [1, new Map([['2026-04-02', {} as IResolvedSchedule]])],
       ]),
-      calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
       todayStr: '2026-04-02',
     });
 
@@ -656,7 +656,7 @@ describe('attendance.service', () => {
       dailySchedulesMap: new Map([
         [1, new Map([['2026-04-01', {} as IResolvedSchedule]])],
       ]),
-      calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
       todayStr: '2026-04-01',
       displayMode: 'capped_to_schedule',
     });
@@ -749,7 +749,7 @@ describe('attendance.service', () => {
       dailySchedulesMap: new Map([
         [1, new Map([['2026-04-01', {} as IResolvedSchedule]])],
       ]),
-      calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
       todayStr: '2026-04-01',
       displayMode: 'capped_to_schedule',
     });
@@ -800,7 +800,7 @@ describe('attendance.service', () => {
       dailySchedulesMap: new Map([
         [1, new Map([['2026-04-01', {} as IResolvedSchedule]])],
       ]),
-      calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
       todayStr: '2026-04-01',
       displayMode: 'capped_to_schedule',
     });
@@ -843,7 +843,7 @@ describe('attendance.service', () => {
         startDate: '2026-04-01',
         endDate: '2026-04-01',
         dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
-        calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+        calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
         todayStr: '2026-04-03',
       });
 
@@ -866,7 +866,7 @@ describe('attendance.service', () => {
         startDate: '2026-04-01',
         endDate: '2026-04-01',
         dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
-        calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+        calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
         todayStr: '2026-04-03',
       });
 
@@ -889,7 +889,7 @@ describe('attendance.service', () => {
         startDate: '2026-04-01',
         endDate: '2026-04-01',
         dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
-        calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+        calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
         todayStr: '2026-04-03',
       });
 
@@ -916,7 +916,7 @@ describe('attendance.service', () => {
         startDate: '2026-04-01',
         endDate: '2026-04-01',
         dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
-        calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+        calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
         todayStr: '2026-04-05',
       });
 
@@ -933,7 +933,7 @@ describe('attendance.service', () => {
         startDate: '2026-04-01',
         endDate: '2026-04-01',
         dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
-        calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+        calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
         todayStr: '2026-04-05',
       });
 
@@ -959,7 +959,7 @@ describe('attendance.service', () => {
         startDate: '2026-04-01',
         endDate: '2026-04-01',
         dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
-        calendarMonth: { holidays: [], shortened_days: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+        calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
         todayStr: '2026-04-03',
         displayMode: 'capped_to_schedule',
       });

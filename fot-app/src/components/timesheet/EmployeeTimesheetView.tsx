@@ -18,6 +18,7 @@ import {
   getWorkHoursForDay,
   getFullDayThresholdHoursForDay,
   isScheduleDayOff,
+  isPreHolidayForSchedule,
 } from '../../utils/scheduleUtils';
 import type {
   TimesheetEntry,
@@ -150,12 +151,14 @@ export const EmployeeTimesheetView: FC<IEmployeeTimesheetViewProps> = ({ employe
   const getDayCellCls = (day: number): string => {
     const sched = schedules[employeeId];
     const dayOff = isScheduleDayOff(sched, calendar, year, month, day);
+    const preHoliday = isPreHolidayForSchedule(sched, calendar, year, month, day);
     const today = isToday(year, month, day);
     const future = isFutureDay(year, month, day);
     const entry = entryMap.get(day);
     const classes = [s.dayCell];
 
     if (today) classes.push(s.dayCellToday);
+    if (preHoliday) classes.push(s.dayCellPreHoliday);
 
     if (dayOff && !entry) {
       classes.push(s.dayCellWeekend);
@@ -251,16 +254,22 @@ export const EmployeeTimesheetView: FC<IEmployeeTimesheetViewProps> = ({ employe
         <h3 className={s.sectionTitle}>Табель</h3>
         <div className={s.compactWrap}>
           <div className={s.compactRow}>
-            {days.map(day => (
-              <button
-                key={day}
-                className={getDayCellCls(day)}
-                onClick={() => handleDayClick(day)}
-                title={`${day} ${getWeekdayShort(year, month, day)}`}
-              >
-                {day}
-              </button>
-            ))}
+            {days.map(day => {
+              const sched = schedules[employeeId];
+              const preHoliday = isPreHolidayForSchedule(sched, calendar, year, month, day);
+              const baseTitle = `${day} ${getWeekdayShort(year, month, day)}`;
+              const title = preHoliday ? `${baseTitle} • Предпраздничный (−1ч)` : baseTitle;
+              return (
+                <button
+                  key={day}
+                  className={getDayCellCls(day)}
+                  onClick={() => handleDayClick(day)}
+                  title={title}
+                >
+                  {day}
+                </button>
+              );
+            })}
           </div>
         </div>
         <div className={s.legend}>

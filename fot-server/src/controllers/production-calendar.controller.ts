@@ -10,6 +10,7 @@ const updateSchema = z.object({
   norm_hours: z.number().min(0).max(800),
   holidays: dateArraySchema,
   mandatory_holidays: dateArraySchema,
+  pre_holidays: dateArraySchema,
 });
 
 /** GET /api/production-calendar?year=YYYY */
@@ -23,7 +24,7 @@ const getByYear = async (req: AuthenticatedRequest, res: Response): Promise<void
 
     const { data, error } = await supabase
       .from('production_calendar')
-      .select('year, month, norm_days, norm_hours, holidays, mandatory_holidays, is_custom, updated_by, updated_at')
+      .select('year, month, norm_days, norm_hours, holidays, mandatory_holidays, pre_holidays, is_custom, updated_by, updated_at')
       .eq('year', year)
       .order('month', { ascending: true });
 
@@ -63,6 +64,7 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     };
     if (parsed.data.holidays !== undefined) payload.holidays = parsed.data.holidays;
     if (parsed.data.mandatory_holidays !== undefined) payload.mandatory_holidays = parsed.data.mandatory_holidays;
+    if (parsed.data.pre_holidays !== undefined) payload.pre_holidays = parsed.data.pre_holidays;
 
     const { data, error } = await supabase
       .from('production_calendar')

@@ -63,6 +63,17 @@ const isHoliday = (
   return false;
 };
 
+/** Предпраздничный ли день для конкретного графика (рабочий, но -1ч). Уважает respects_holidays. */
+const isPreHoliday = (
+  date: Date,
+  schedule: IResolvedSchedule,
+  calendar: IProductionCalendarMonth | null,
+): boolean => {
+  if (!calendar?.pre_holidays?.length) return false;
+  if (!schedule.respects_holidays) return false;
+  return calendar.pre_holidays.includes(toISODate(date));
+};
+
 export const isWorkingDay = (
   schedule: IResolvedSchedule,
   date: Date,
@@ -135,11 +146,26 @@ export const getFullDayThresholdHoursForDate = (
     return netFallbackMinutes / 60;
   }
 
+  // Предпраздничный рабочий день: порог снижается на 1 час (но не ниже 0)
+  const preHolidayShiftMinutes = isPreHoliday(date, schedule, calendar) ? 60 : 0;
+
   if (schedule.full_day_threshold_minutes != null) {
-    return schedule.full_day_threshold_minutes / 60;
+    return Math.max(0, schedule.full_day_threshold_minutes - preHolidayShiftMinutes) / 60;
   }
 
-  return netFallbackMinutes / 60;
+  return Math.max(0, netFallbackMinutes - preHolidayShiftMinutes) / 60;
+};
+
+/** Норма часов на конкретный день: 0 для нерабочего, work_hours-1 для предпраздничного будня (если respects_holidays), иначе work_hours. */
+export const getDayNormHours = (
+  schedule: IResolvedSchedule,
+  date: Date,
+  calendar: IProductionCalendarMonth | null = null,
+): number => {
+  if (!isWorkingDay(schedule, date, calendar)) return 0;
+  const day = getScheduleForDate(schedule, date);
+  const minus = isPreHoliday(date, schedule, calendar) ? 1 : 0;
+  return Math.max(0, day.work_hours - minus);
 };
 
 /** Считает рабочие дни (будни по графику + minus праздники) */
@@ -206,9 +232,7 @@ export const countNormHoursForSchedule = (
   const daysInMonth = new Date(year, month, 0).getDate();
   let total = 0;
   for (let d = 1; d <= daysInMonth; d++) {
-    const date = new Date(year, month - 1, d);
-    if (!isWorkingDay(schedule, date, calendar)) continue;
-    total += getScheduleForDate(schedule, date).work_hours;
+    total += getDayNormHours(schedule, new Date(year, month - 1, d), calendar);
   }
   if (schedule.pattern_type === '5+2' && schedule.expected_saturdays_per_month > 0) {
     total += schedule.expected_saturdays_per_month * schedule.work_hours;
@@ -235,9 +259,7 @@ export const countNormHoursUpToToday = (
   const today = now.getDate();
   let total = 0;
   for (let d = 1; d <= today; d++) {
-    const date = new Date(year, month - 1, d);
-    if (!isWorkingDay(schedule, date, calendar)) continue;
-    total += getScheduleForDate(schedule, date).work_hours;
+    total += getDayNormHours(schedule, new Date(year, month - 1, d), calendar);
   }
   // Субботы 5+2 учитываются только на полный месяц; до сегодня — пропорционально не считаем
   return total;
@@ -262,7 +284,7 @@ export const loadCalendarMonth = async (
 ): Promise<IProductionCalendarMonth | null> => {
   const { data } = await supabase
     .from('production_calendar')
-    .select('year, month, norm_days, norm_hours, holidays, mandatory_holidays')
+    .select('year, month, norm_days, norm_hours, holidays, mandatory_holidays, pre_holidays')
     .eq('year', year)
     .eq('month', month)
     .maybeSingle();
@@ -274,6 +296,7 @@ export const loadCalendarMonth = async (
     norm_hours: Number(data.norm_hours) || 0,
     holidays: (data.holidays as string[]) || [],
     mandatory_holidays: (data.mandatory_holidays as string[]) || [],
+    pre_holidays: (data.pre_holidays as string[]) || [],
   };
 };
 

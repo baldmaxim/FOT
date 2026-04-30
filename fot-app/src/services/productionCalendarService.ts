@@ -11,6 +11,7 @@ export interface IProductionCalendarEntry {
   updated_at: string;
   holidays: string[];
   mandatory_holidays: string[];
+  pre_holidays: string[];
 }
 
 export interface IProductionCalendarUpdate {
@@ -18,6 +19,7 @@ export interface IProductionCalendarUpdate {
   norm_hours: number;
   holidays?: string[];
   mandatory_holidays?: string[];
+  pre_holidays?: string[];
 }
 
 interface ApiResponse<T> {

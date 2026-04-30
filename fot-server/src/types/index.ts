@@ -509,6 +509,7 @@ export interface IProductionCalendarMonth {
   norm_hours: number;
   holidays: string[];
   mandatory_holidays: string[];
+  pre_holidays: string[];
 }
 
 export type TimesheetApprovalStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'returned';

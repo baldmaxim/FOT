@@ -4,13 +4,14 @@ import styles from './ProductionCalendarPage.module.css';
 
 const WEEKDAY_HEADERS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
-export type CalendarMode = 'holiday' | 'mandatory';
+export type CalendarMode = 'holiday' | 'mandatory' | 'pre_holiday';
 
 interface IMonthCalendarProps {
   year: number;
   month: number;
   holidays: string[];
   mandatoryHolidays: string[];
+  preHolidays: string[];
   mode: CalendarMode;
   onToggleDay: (iso: string) => void;
 }
@@ -44,12 +45,14 @@ export const MonthCalendar: FC<IMonthCalendarProps> = ({
   month,
   holidays,
   mandatoryHolidays,
+  preHolidays,
   mode,
   onToggleDay,
 }) => {
   const cells = useMemo(() => buildGrid(year, month), [year, month]);
   const holidaySet = useMemo(() => new Set(holidays), [holidays]);
   const mandatorySet = useMemo(() => new Set(mandatoryHolidays), [mandatoryHolidays]);
+  const preSet = useMemo(() => new Set(preHolidays), [preHolidays]);
 
   return (
     <div className={styles.calendar}>
@@ -65,6 +68,7 @@ export const MonthCalendar: FC<IMonthCalendarProps> = ({
           }
           const isHoliday = holidaySet.has(cell.iso);
           const isMandatory = mandatorySet.has(cell.iso);
+          const isPreHoliday = preSet.has(cell.iso);
           const weekend = isWeekend(year, month, cell.day);
           const today = isToday(year, month, cell.day);
 
@@ -72,9 +76,15 @@ export const MonthCalendar: FC<IMonthCalendarProps> = ({
           if (weekend) classes.push(styles.dayBtnWeekend);
           if (isHoliday) classes.push(styles.dayBtnHoliday);
           if (isMandatory) classes.push(styles.dayBtnMandatory);
+          if (isPreHoliday) classes.push(styles.dayBtnPreHoliday);
           if (today) classes.push(styles.dayBtnToday);
 
-          const title = `${cell.iso}${isMandatory ? ' • всегда-выходной' : ''}${isHoliday ? ' • праздник' : ''}`;
+          const title = `${cell.iso}${isMandatory ? ' • всегда-выходной' : ''}${isHoliday ? ' • праздник' : ''}${isPreHoliday ? ' • предпраздничный (-1ч)' : ''}`;
+
+          const pressed =
+            mode === 'holiday' ? isHoliday :
+            mode === 'mandatory' ? isMandatory :
+            isPreHoliday;
 
           return (
             <button
@@ -83,7 +93,7 @@ export const MonthCalendar: FC<IMonthCalendarProps> = ({
               className={classes.join(' ')}
               onClick={() => onToggleDay(cell.iso!)}
               title={title}
-              aria-pressed={mode === 'holiday' ? isHoliday : isMandatory}
+              aria-pressed={pressed}
             >
               {cell.day}
             </button>

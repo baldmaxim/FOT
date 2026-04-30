@@ -80,16 +80,21 @@ export const computeWorkingNorm = (
   month: number,
   holidays: string[],
   mandatoryHolidays: string[],
+  preHolidays: string[] = [],
 ): { norm_days: number; norm_hours: number } => {
   const days = getDaysInMonth(year, month);
   const offDays = new Set<string>([...holidays, ...mandatoryHolidays]);
+  const preSet = new Set<string>(preHolidays);
   let normDays = 0;
+  let preWorkingCount = 0;
   for (let d = 1; d <= days; d++) {
+    const iso = toISODate(year, month, d);
     if (isWeekend(year, month, d)) continue;
-    if (offDays.has(toISODate(year, month, d))) continue;
+    if (offDays.has(iso)) continue;
     normDays++;
+    if (preSet.has(iso)) preWorkingCount++;
   }
-  return { norm_days: normDays, norm_hours: normDays * 8 };
+  return { norm_days: normDays, norm_hours: Math.max(0, normDays * 8 - preWorkingCount) };
 };
 
 export const getWorkingDaysUpToToday = (year: number, month: number): number => {

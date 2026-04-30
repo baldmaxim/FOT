@@ -269,6 +269,10 @@
   background: #ef4444;
 }
 
+.modeDotPreHoliday {
+  background: #f59e0b;
+}
+
 .calendar {
   width: 100%;
   max-width: 360px;
@@ -360,6 +364,23 @@
 .dayBtnHoliday.dayBtnMandatory {
   background: linear-gradient(135deg, #ef4444 50%, #3b82f6 50%);
   border-color: #ef4444;
+}
+
+.dayBtnPreHoliday {
+  background: #f59e0b;
+  color: #fff;
+  border-color: #f59e0b;
+}
+
+.dayBtnPreHoliday:hover:not(.dayBtnOutside) {
+  background: #d97706;
+  border-color: #d97706;
+}
+
+.dayBtnHoliday.dayBtnPreHoliday,
+.dayBtnMandatory.dayBtnPreHoliday {
+  background: linear-gradient(135deg, #f59e0b 50%, #3b82f6 50%);
+  border-color: #f59e0b;
 }
 
 .calendarActions {

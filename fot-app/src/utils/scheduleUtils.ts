@@ -83,6 +83,21 @@ export const isHolidayForSchedule = (
   return false;
 };
 
+/** Предпраздничный рабочий день для графика (рабочий, но -1ч). false для нерабочих и для графиков с respects_holidays=false. */
+export const isPreHolidayForSchedule = (
+  sched: IResolvedSchedule | undefined,
+  calendar: IProductionCalendarMonth | null,
+  year: number,
+  month: number,
+  day: number,
+): boolean => {
+  if (!calendar?.pre_holidays?.length) return false;
+  const respects = sched ? sched.respects_holidays !== false : true;
+  if (!respects) return false;
+  if (isScheduleDayOff(sched, calendar, year, month, day)) return false;
+  return calendar.pre_holidays.includes(toISODate(year, month, day));
+};
+
 export const isScheduleDayOff = (
   sched: IResolvedSchedule | undefined,
   calendar: IProductionCalendarMonth | null,

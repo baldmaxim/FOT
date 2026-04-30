@@ -113,6 +113,7 @@ export interface IProductionCalendarMonth {
   norm_hours: number;
   holidays: string[];
   mandatory_holidays: string[];
+  pre_holidays: string[];
 }
 
 export interface ITimesheetDepartmentApprovalSummary {

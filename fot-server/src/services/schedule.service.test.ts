@@ -62,7 +62,14 @@ vi.mock('../config/database.js', () => ({
   },
 }));
 
-import { resolveObjectSchedule, resolveObjectSchedulesForPeriod } from './schedule.service.js';
+import {
+  countNormHoursForSchedule,
+  getDayNormHours,
+  getFullDayThresholdHoursForDate,
+  resolveObjectSchedule,
+  resolveObjectSchedulesForPeriod,
+} from './schedule.service.js';
+import type { IProductionCalendarMonth, IResolvedSchedule } from '../types/index.js';
 
 describe('schedule.service object assignments', () => {
   beforeEach(() => {
@@ -187,5 +194,82 @@ describe('schedule.service object assignments', () => {
       ['2026-04-03', expect.objectContaining({ schedule_id: 'sched-b', source: 'object' })],
     ]));
     expect(result.has('obj-c')).toBe(false);
+  });
+});
+
+describe('schedule.service pre-holidays', () => {
+  const baseSchedule: IResolvedSchedule = {
+    schedule_id: 's-1',
+    schedule_type: 'office',
+    work_start: '09:00:00',
+    work_end: '18:00:00',
+    work_hours: 8,
+    work_days: [1, 2, 3, 4, 5],
+    office_days: null,
+    late_threshold_minutes: 0,
+    day_overrides: null,
+    lunch_minutes: 60,
+    respects_holidays: true,
+    pattern_type: 'custom',
+    expected_saturdays_per_month: 0,
+    full_day_threshold_minutes: null,
+    weekend_full_day_threshold_minutes: null,
+    source: 'default',
+  };
+
+  const calendar: IProductionCalendarMonth = {
+    year: 2026,
+    month: 12,
+    norm_days: 23,
+    norm_hours: 183,
+    holidays: [],
+    mandatory_holidays: [],
+    pre_holidays: ['2026-12-30'],
+  };
+
+  it('getDayNormHours: обычный будний день — work_hours без вычета', () => {
+    // 2026-12-29 — вторник, обычный будний день
+    expect(getDayNormHours(baseSchedule, new Date(2026, 11, 29), calendar)).toBe(8);
+  });
+
+  it('getDayNormHours: предпраздничный будень при respects_holidays=true — work_hours - 1', () => {
+    // 2026-12-30 — среда, предпразник
+    expect(getDayNormHours(baseSchedule, new Date(2026, 11, 30), calendar)).toBe(7);
+  });
+
+  it('getDayNormHours: respects_holidays=false — без вычета даже в предпразник', () => {
+    const sched = { ...baseSchedule, respects_holidays: false };
+    expect(getDayNormHours(sched, new Date(2026, 11, 30), calendar)).toBe(8);
+  });
+
+  it('getDayNormHours: предпразник, выпавший на нерабочий день по графику — 0', () => {
+    // суббота 2026-01-03 — выходной по 5-дневке
+    const sat = { ...calendar, pre_holidays: ['2026-01-03'] };
+    expect(getDayNormHours(baseSchedule, new Date(2026, 0, 3), sat)).toBe(0);
+  });
+
+  it('getDayNormHours: work_hours < 1 (короткий override) clamp до 0', () => {
+    const tiny = { ...baseSchedule, work_hours: 0.5 };
+    expect(getDayNormHours(tiny, new Date(2026, 11, 30), calendar)).toBe(0);
+  });
+
+  it('countNormHoursForSchedule: вычитает 1ч за каждый предпраздничный будний день', () => {
+    // декабрь 2026: 23 будня × 8ч = 184ч; один предпразник 30.12 (среда) → 183
+    const total = countNormHoursForSchedule(2026, 12, baseSchedule, calendar);
+    const without = countNormHoursForSchedule(2026, 12, baseSchedule, { ...calendar, pre_holidays: [] });
+    expect(without - total).toBe(1);
+  });
+
+  it('getFullDayThresholdHoursForDate: порог снижается на 1ч в предпразник (fallback от work_hours-lunch)', () => {
+    // обычный будень: (8*60 - 60)/60 = 7
+    expect(getFullDayThresholdHoursForDate(baseSchedule, new Date(2026, 11, 29), calendar)).toBe(7);
+    // предпразник: (8*60 - 60 - 60)/60 = 6
+    expect(getFullDayThresholdHoursForDate(baseSchedule, new Date(2026, 11, 30), calendar)).toBe(6);
+  });
+
+  it('getFullDayThresholdHoursForDate: явно заданный full_day_threshold_minutes тоже снижается на 60мин в предпразник', () => {
+    const sched = { ...baseSchedule, full_day_threshold_minutes: 480 };
+    expect(getFullDayThresholdHoursForDate(sched, new Date(2026, 11, 29), calendar)).toBe(8);
+    expect(getFullDayThresholdHoursForDate(sched, new Date(2026, 11, 30), calendar)).toBe(7);
   });
 });
