@@ -42,7 +42,7 @@ const sigurAdminEmployeesCache = registerCache(
 );
 const sigurAdminCardStatusesCache = registerCache(
   'sigur:admin:card-statuses',
-  () => 'sigur:admin:card-statuses',
+  (req) => `sacs:${req.query.connection ?? ''}:${req.query.employeeIds ?? ''}`,
   5 * 60_000,
 );
 
