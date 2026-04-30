@@ -241,7 +241,7 @@ export const TimesheetPage: FC = () => {
 
   const deptOptions = useMemo<IFlatDepartmentOption[]>(() => {
     const allNodes = structureQuery.data?.departments ?? [];
-    if (isDepartmentScope && managedDepartmentIds.length > 0) {
+    if (isDepartmentScope) {
       const filtered = filterDepartmentTreeByIds(allNodes, new Set(managedDepartmentIds));
       return getTreeFlatDepartments(filtered);
     }

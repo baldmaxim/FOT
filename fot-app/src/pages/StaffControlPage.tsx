@@ -18,6 +18,7 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useStaffData } from '../hooks/useStaffData';
 import { useStructureTree } from '../hooks/useStructure';
+import { useManagedDepartments } from '../hooks/useManagedDepartments';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { DeptSelect } from '../components/staff/DeptSelect';
@@ -1007,9 +1008,11 @@ export const StaffControlPage: FC = () => {
   const debouncedSearch = useDebouncedValue(search, 300);
   const queryClient = useQueryClient();
   const toast = useToast();
-  const { isAdmin, profile } = useAuth();
-  const managedDepartmentIds = useMemo(() => profile?.managed_department_ids ?? [], [profile]);
-  const restrictToManaged = !isAdmin && managedDepartmentIds.length > 0;
+  const { isAdmin } = useAuth();
+  const { isDepartmentScope, managedDepartmentIds } = useManagedDepartments({ enabled: false });
+  // Руководителям (`isDepartmentScope`) фильтруем всегда — даже при пустом списке
+  // назначений (тогда дропдаун пуст). Без этого header без отделов видел все отделы.
+  const restrictToManaged = isDepartmentScope;
 
   const { employees, departments, countsByDepartment, loading, meta, totalActive, refresh, patchEmployee } = useStaffData({
     page,

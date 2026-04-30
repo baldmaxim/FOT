@@ -76,7 +76,7 @@ export const DashboardPage: React.FC = () => {
 
   const deptOptions = useMemo(() => {
     const allNodes = structureQuery.data?.departments ?? [];
-    if (isDepartmentScope && managedDepartmentIds.length > 0) {
+    if (isDepartmentScope) {
       const filtered = filterDepartmentTreeByIds(allNodes, new Set(managedDepartmentIds));
       return getTreeFlatDepartments(filtered);
     }
