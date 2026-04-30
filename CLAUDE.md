@@ -36,6 +36,15 @@ cd fot-app && npm run lint
 
 # Тесты (бэкенд, vitest)
 cd fot-server && npm run test
+
+# Один тест-файл
+cd fot-server && npx vitest run src/path/to/file.test.ts
+
+# Превью прод-сборки фронта
+cd fot-app && npm run preview
+
+# Загрузка sourcemap бэка в Sentry (требует SENTRY_AUTH_TOKEN)
+cd fot-server && npm run sentry:sourcemaps
 ```
 
 При изменении файлов в `fot-server/src/` — перезапустить сервер. Фронтенд перезапускать не нужно.
@@ -45,22 +54,29 @@ cd fot-server && npm run test
 - **Авторизация**: JWT + 2FA (TOTP). Роли через `position_type` + `system_role_id` (таблица `system_roles`). Проверка в middleware (`auth.ts`), на фронте — `<ProtectedRoute>`. Иерархия ролей через `level` из `system_roles`.
 - **ФИО сотрудников**: хранятся plain-text (`full_name`, `last_name`, `first_name`, `middle_name`). `encryption.service.ts` используется только для TOTP и чата, не для ФИО.
 - **Supabase**: используется service role key (RLS отключён), авторизация проверяется в middleware бэкенда. Фронтенд к PostgREST напрямую не обращается.
-- **API роуты**: все под префиксом `/api/` — auth, employees, admin, skud, sigur, structure, timesheet, audit, chat, push, leave-requests, documents, payslips, payments, production-calendar, timesheet-approvals, schedules, roles, salary-raise, settings, notifications.
+- **API роуты**: все под префиксом `/api/` — auth, employees, admin, skud, sigur, structure, timesheet, audit, chat, push, leave-requests, documents, payslips, payments, production-calendar, timesheet-approvals, schedules, roles, salary-raise, settings, notifications, work-categories, official-memos, admin-data-api, correction-approval, patent-receipts.
 - **Фронтенд роуты**: по ролям — `worker` видит `/employee/*`, `header`+ видит `/dashboard`, `admin`+ видит `/employees`, `super_admin` видит `/skud-settings`, `/admin/*`.
 
 ## Структура бэкенда
 
 - **Контроллеры** (`fot-server/src/controllers/`): декомпозированы по доменам — `admin-*`, `auth-*`, `employee-*`, `sigur-*`, `skud-*`, `timesheet-*`.
 - **Сервисы** (`fot-server/src/services/`): `sigur-sync-*` (employees, events, structure, shared), `skud-*` (backfill, dashboard, discipline, import, presence, shared), `employee-mapper.service.ts` (кэш структуры + маппинг полей).
-- **Feature flags**: `fot-server/src/config/features.ts` — `LOGIN_2FA_ENABLED`, `CRITICAL_2FA_ENABLED`, `IS_PRODUCTION`.
+- **Конфиг** (`fot-server/src/config/`): `database.ts` (Supabase service-role клиент), `env.ts`, `features.ts` (`LOGIN_2FA_ENABLED`, `CRITICAL_2FA_ENABLED`, `IS_PRODUCTION`), `access-control.ts`.
 - **Типы Express**: `fot-server/src/types/express.d.ts` — расширение `req.user` с типизацией.
-- **Rate limiting** (`fot-server/src/middleware/rateLimit.ts`): разные лимитеры — `apiLimiter` (500/15мин), `authLimiter` (10/15мин), `twoFactorLimiter` (5/5мин), `importLimiter` (5/1ч). В dev-режиме лимиты выше.
+- **Middleware**: `auth.ts`, `rateLimit.ts` (`apiLimiter` 500/15мин, `authLimiter` 10/15мин, `twoFactorLimiter` 5/5мин, `importLimiter` 5/1ч; в dev лимиты выше), `cacheResponse.ts` — LRU-кеш JSON-ответов (max 200, настраиваемый TTL/key).
+- **Загрузка файлов**: multer в `memoryStorage` (используется в `admin.routes.ts`, `employees.routes.ts`).
+- **Утилитные скрипты** (`fot-server/scripts/`): миграционные/back-fill таски (backfill-dedup-hash, backfill-employee-ids и т.п.), запуск через `npx tsx`.
 
 ## Фоновые сервисы
 
-Запускаются в `src/index.ts` при старте сервера:
-- **Presence polling** (`presence-polling.service.ts`): опрос СКУД-событий каждые 60 сек, кэш сотрудников с TTL 10 мин, дедупликация, lock для синхронизации.
-- **Structure sync** (`sigur-structure-scheduler.service.ts`): синхронизация отделов/должностей/сотрудников из Sigur каждый час, задержка 30 сек при старте.
+Запускаются в `src/index.ts` при старте сервера (lines 36–44):
+- **presence-polling**: опрос СКУД-событий каждые 60 сек, кэш сотрудников с TTL 10 мин, дедупликация, lock для синхронизации.
+- **sigur-monitor**: непрерывный мониторинг изменений структуры Sigur.
+- **sigur-structure-scheduler**: синхронизация отделов/должностей/сотрудников из Sigur каждый час, задержка 30 сек при старте.
+- **sigur-events-daily-scheduler**: ежедневная подгрузка СКУД-событий.
+- **timesheet-reminder**: напоминания о незакрытых табелях.
+- **patent-expiry-reminder**: уведомления об истечении патентов.
+- **ai-receipt-recognition**: возобновление очереди распознавания чеков при старте.
 
 ## Socket.IO
 
@@ -78,6 +94,20 @@ cd fot-server && npm run test
 - **Стейт**: React Context для UI (Auth, Toast, Chat) + TanStack React Query для серверных данных (`staleTime: 30s`, `gcTime: 5min`, `retry: 1`).
 - **Стили**: CSS Modules + CSS Variables (тёмная/светлая тема через `data-theme`). Дизайн-токены в `src/index.css`.
 - **Код-сплиттинг**: `vite.config.ts` — `manualChunks` по роутам и вендорам.
+- **Провайдеры в `App.tsx`** (снаружи внутрь): `Sentry.ErrorBoundary` → `QueryClientProvider` → `BrowserRouter` → `AuthProvider` → `ToastProvider` → `ChatProvider` → роуты + `ChatPanelMount`.
+
+## Тесты
+
+- Расположение: `fot-server/src/**/*.test.ts` (контроллеры, сервисы, integration). На фронте тестов нет.
+- Ранер: vitest. Всё: `npm run test`. Один файл: `npx vitest run src/.../*.test.ts`.
+- Setup: `fot-server/src/__tests__/setup.ts` — мокает `@sentry/node`, ставит `TZ=Europe/Moscow`, заполняет env по умолчанию.
+
+## Observability
+
+- **Sentry бэк** (`fot-server/src/instrument.ts`) — импорт первой строкой `index.ts`, profiling включён, `tracesSampleRate` 0.1. Глобальные `unhandledRejection`/`uncaughtException` ловят в Sentry, процесс не падает (PM2 решит сам).
+- **Sentry фронт** — `Sentry.ErrorBoundary` оборачивает приложение, `api/client.ts` шлёт 5xx в Sentry. Ошибки stale-чанков игнорируются (`ignoreErrors`).
+- **Логирование** — `console.log` / `console.error`, без pino/winston.
+- **Sentry MCP** доступен в Claude Code: стеки и события читать через `mcp__sentry__*`, не просить пользователя копировать.
 
 ## Валидация
 
@@ -139,6 +169,8 @@ CSS media queries для всех целевых устройств.
 
 - `DEPLOY.md` — инструкции по деплою на прод (PM2, nginx, Ubuntu)
 - `docs/` — 2FA, шифрование, миграции БД, Sigur API, бэклог
+- `docs/migrations/` — SQL-миграции (нумерованы 001–...), применяются вручную через `psql` на сервере (авто-миграций нет)
+- `scripts/deploy-frontend.sh` — атомарный деплой фронта (билд локально + tar-pipe в `/var/www/fot/fot-app/dist`)
 
 ## КРАТКОСТЬ
 
