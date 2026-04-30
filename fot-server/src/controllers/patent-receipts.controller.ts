@@ -92,7 +92,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
         recognized_at,
         created_at,
         employees:employee_id ( full_name ),
-        patent_payment_receipts:patent_payment_receipts!document_id_fkey (
+        patent_payment_receipts:patent_payment_receipts!document_id (
           id, document_id, employee_id,
           payment_date, payment_amount, payer_full_name, payer_inn, payer_passport,
           patent_number, kbk, oktmo, source_type, confidence,
