@@ -548,7 +548,7 @@ export const calculateAttendanceFromTimesheet = (params: {
           status = 'incomplete_skud';
         } else if (hasActualPresence) {
           const hoursOk = plannedHours <= 0 || totalSeconds >= Math.round(fullDayThresholdHours * 3600);
-          const spanOk = entry?.presence_covers_shift !== false;
+          const spanOk = entry?.is_correction || entry?.presence_covers_shift !== false;
           status = (hoursOk && spanOk) ? 'present' : 'underwork';
         } else if (isScheduledDayOff) {
           status = 'weekend';
