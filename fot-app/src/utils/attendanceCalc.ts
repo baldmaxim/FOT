@@ -442,7 +442,10 @@ export const calculateAttendanceFromTimesheet = (params: {
   const arrivalMins: number[] = [];
   const arrivalDiffs: number[] = [];
   const arrivalByDow: number[][] = [[], [], [], [], []];
-  const workedLikeStatuses = new Set(['work', 'manual', 'remote']);
+  const workedLikeStatuses = new Set([
+    'work', 'manual', 'remote',
+    'vacation', 'sick', 'dayoff', 'educational_leave', 'business_trip', 'unpaid', 'absent',
+  ]);
 
   for (let day = 1; day <= daysInMonth; day++) {
     const schedule = getScheduleForTimesheetDay(schedules, dailySchedules, employeeId, year, month + 1, day);

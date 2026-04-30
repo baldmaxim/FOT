@@ -19,6 +19,13 @@ const NON_WORK_ADJUSTMENT_STATUSES = new Set<TimeStatus>([
   'absent', 'sick', 'vacation', 'dayoff', 'unpaid', 'educational_leave', 'remote',
 ]);
 
+// Статусы отсутствия, которые засчитываются как полный рабочий день при пустом hours_override:
+// часы берутся из планового графика. Для удалёнки исторически уже работало; теперь то же
+// для отпуска/больничного и т.п. — иначе в табеле они показывались как недоработка.
+const ABSENCE_STATUSES_AS_WORKED = new Set<TimeStatus>([
+  'vacation', 'sick', 'dayoff', 'remote', 'educational_leave', 'unpaid', 'absent',
+]);
+
 const BATCH_SIZE = 2000;
 
 // In-memory кэш ФИО авторов корректировок: один админ обычно создаёт сотни
@@ -385,14 +392,26 @@ export async function buildAttendanceEntries(params: {
       existingSkud.corrected = true;
     }
 
+    let effectiveHours: number | null = adjustment.hours_override;
+    if (effectiveHours == null && ABSENCE_STATUSES_AS_WORKED.has(adjustment.status)) {
+      const adjSchedule = dailySchedulesMap.get(adjustment.employee_id)?.get(adjustment.work_date);
+      if (adjSchedule) {
+        const [adjY, adjM, adjD] = adjustment.work_date.split('-').map(Number);
+        const adjDate = new Date(adjY, adjM - 1, adjD);
+        effectiveHours = isWorkingDay(adjSchedule, adjDate, calendarMonth)
+          ? getScheduleForDate(adjSchedule, adjDate).work_hours
+          : 0;
+      }
+    }
+
     pushEntry({
       id: adjustment.id,
       employee_id: adjustment.employee_id,
       work_date: adjustment.work_date,
       status: adjustment.status,
-      hours_worked: adjustment.hours_override,
-      display_hours_worked: adjustment.hours_override,
-      base_hours_worked: adjustment.hours_override,
+      hours_worked: effectiveHours,
+      display_hours_worked: effectiveHours,
+      base_hours_worked: effectiveHours,
       travel_minutes_credited: 0,
       travel_hours_credited: 0,
       travel_delay_minutes: travelSummary?.delayMinutes || 0,

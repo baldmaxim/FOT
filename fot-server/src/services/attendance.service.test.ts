@@ -477,8 +477,8 @@ describe('attendance.service', () => {
       employee_id: 1,
       work_date: '2026-04-01',
       status: 'absent',
-      hours_worked: null,
-      display_hours_worked: null,
+      hours_worked: 8,
+      display_hours_worked: 8,
       is_correction: true,
     });
   });
