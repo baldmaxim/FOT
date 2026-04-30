@@ -12,7 +12,6 @@ export interface IUserManagedDepartments {
 }
 
 let missingEmployeeDepartmentAccessTableWarned = false;
-let missingUserDepartmentAccessTableWarned = false;
 
 function isMissingTableError(error: unknown, tableName: string): boolean {
   if (!error || typeof error !== 'object') return false;
@@ -27,14 +26,6 @@ function warnMissingEmployeeDepartmentAccessTable(): void {
   missingEmployeeDepartmentAccessTableWarned = true;
   console.warn(
     '[department-access] table public.employee_department_access not found; employee-level explicit access is disabled.',
-  );
-}
-
-function warnMissingUserDepartmentAccessTable(): void {
-  if (missingUserDepartmentAccessTableWarned) return;
-  missingUserDepartmentAccessTableWarned = true;
-  console.warn(
-    '[department-access] table public.user_department_access not found; user-level explicit access is disabled.',
   );
 }
 
@@ -114,76 +105,6 @@ export async function loadEmployeeAccessMap(
   return result;
 }
 
-async function listUserAccessDepartmentIds(
-  userId: string,
-  options: { excludeSource?: string } = {},
-): Promise<string[]> {
-  let query = supabase
-    .from('user_department_access')
-    .select('department_id')
-    .eq('user_id', userId)
-    .eq('is_active', true);
-  if (options.excludeSource) {
-    query = query.neq('source', options.excludeSource);
-  }
-
-  const { data, error } = await query;
-
-  if (error) {
-    if (isMissingTableError(error, 'user_department_access')) {
-      warnMissingUserDepartmentAccessTable();
-      return [];
-    }
-    throw error;
-  }
-
-  return uniqueDepartmentIds((data || []).map(row => row.department_id as string | null));
-}
-
-/**
- * Карта user_department_access для пользователей без `employee_id` (не привязанных
- * к карточке сотрудника СКУД). Сохранение идёт через replaceExplicitDepartmentAccess
- * с targetTable='user_department_access', а чтение — через эту функцию.
- */
-export async function loadUserAccessMap(
-  userIds: string[],
-  options: ILoadEmployeeAccessOptions = {},
-): Promise<Map<string, string[]>> {
-  const unique = [...new Set(userIds.filter((v): v is string => typeof v === 'string' && v.length > 0))];
-  const result = new Map<string, string[]>(unique.map(id => [id, []]));
-  if (unique.length === 0) return result;
-
-  const useInFilter = unique.length <= IN_FILTER_THRESHOLD;
-  let query = supabase
-    .from('user_department_access')
-    .select('user_id, department_id')
-    .eq('is_active', true);
-  if (options.excludeSource) {
-    query = query.neq('source', options.excludeSource);
-  }
-
-  const { data, error } = useInFilter
-    ? await query.in('user_id', unique)
-    : await query;
-
-  if (error) {
-    if (isMissingTableError(error, 'user_department_access')) {
-      warnMissingUserDepartmentAccessTable();
-      return result;
-    }
-    throw error;
-  }
-
-  for (const row of data || []) {
-    const userId = row.user_id as string;
-    const departmentId = row.department_id as string | null;
-    if (!departmentId || !result.has(userId)) continue;
-    result.set(userId, uniqueDepartmentIds([...(result.get(userId) || []), departmentId]));
-  }
-
-  return result;
-}
-
 /**
  * Карта «руководительских» назначений: только ручные строки (manual_admin_ui,
  * excel_admin_ui, manager_excel_admin_ui). Membership-строки от Sigur
@@ -204,20 +125,12 @@ export async function loadExplicitDepartmentMap(
   const employeeIds = seeds
     .map(seed => seed.employee_id)
     .filter((id): id is number => Number.isInteger(id));
-  // Для seeds без employee_id (например, руководители без карточки СКУД)
-  // назначения хранятся в user_department_access по user_id.
-  const standaloneUserIds = seeds
-    .filter(seed => seed.employee_id == null)
-    .map(seed => seed.user_id);
-  const [employeeAccessMap, userAccessMap] = await Promise.all([
-    loadEmployeeAccessMap(employeeIds, options),
-    loadUserAccessMap(standaloneUserIds, options),
-  ]);
+  const employeeAccessMap = await loadEmployeeAccessMap(employeeIds, options);
 
   for (const seed of seeds) {
     const departmentIds = seed.employee_id != null
       ? (employeeAccessMap.get(seed.employee_id) || [])
-      : (userAccessMap.get(seed.user_id) || []);
+      : [];
     result.set(seed.user_id, uniqueDepartmentIds(departmentIds));
   }
 
@@ -234,64 +147,43 @@ export async function loadExplicitManagerAssignmentMap(
 export async function listUserIdsAssignedToDepartment(departmentId: string): Promise<string[]> {
   if (!departmentId) return [];
 
-  const userIds = new Set<string>();
-
-  const { data: empAccessRows, error: empAccessError } = await supabase
+  const { data: accessRows, error: accessError } = await supabase
     .from('employee_department_access')
     .select('employee_id')
     .eq('department_id', departmentId)
     .eq('is_active', true);
 
-  if (empAccessError) {
-    if (!isMissingTableError(empAccessError, 'employee_department_access')) {
-      throw empAccessError;
+  if (accessError) {
+    if (isMissingTableError(accessError, 'employee_department_access')) {
+      warnMissingEmployeeDepartmentAccessTable();
+      return [];
     }
-    warnMissingEmployeeDepartmentAccessTable();
+    throw accessError;
   }
 
   const employeeIds = [...new Set(
-    (empAccessRows || [])
+    (accessRows || [])
       .map(row => row.employee_id as number | null)
       .filter((id): id is number => Number.isInteger(id)),
   )];
 
-  if (employeeIds.length > 0) {
-    const { data: profiles, error: profileError } = await supabase
-      .from('user_profiles')
-      .select('id')
-      .in('employee_id', employeeIds)
-      .eq('is_approved', true);
+  if (employeeIds.length === 0) return [];
 
-    if (profileError) {
-      throw profileError;
-    }
+  const { data: profiles, error: profileError } = await supabase
+    .from('user_profiles')
+    .select('id')
+    .in('employee_id', employeeIds)
+    .eq('is_approved', true);
 
-    for (const row of profiles || []) {
-      const id = row.id as string | null;
-      if (typeof id === 'string' && id.length > 0) userIds.add(id);
-    }
+  if (profileError) {
+    throw profileError;
   }
 
-  // Руководители без employee_id хранятся в user_department_access по user_id.
-  const { data: userAccessRows, error: userAccessError } = await supabase
-    .from('user_department_access')
-    .select('user_id')
-    .eq('department_id', departmentId)
-    .eq('is_active', true);
-
-  if (userAccessError) {
-    if (!isMissingTableError(userAccessError, 'user_department_access')) {
-      throw userAccessError;
-    }
-    warnMissingUserDepartmentAccessTable();
-  } else {
-    for (const row of userAccessRows || []) {
-      const id = row.user_id as string | null;
-      if (typeof id === 'string' && id.length > 0) userIds.add(id);
-    }
-  }
-
-  return [...userIds];
+  return [...new Set(
+    (profiles || [])
+      .map(row => row.id as string | null)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+  )];
 }
 
 /**
@@ -302,13 +194,10 @@ export async function listUserIdsAssignedToDepartment(departmentId: string): Pro
  * manager_excel_admin_ui) — функция вернёт пустой массив, и scope будет пуст.
  */
 export async function listExplicitDepartmentIdsForUser(
-  userId: string,
+  _userId: string,
   employeeId?: number | null,
 ): Promise<string[]> {
-  if (employeeId == null) {
-    // Руководитель без карточки СКУД: назначения хранятся в user_department_access по user_id.
-    return listUserAccessDepartmentIds(userId, { excludeSource: 'sigur_sync' });
-  }
+  if (employeeId == null) return [];
   return listEmployeeAccessDepartmentIds(employeeId, { excludeSource: 'sigur_sync' });
 }
 

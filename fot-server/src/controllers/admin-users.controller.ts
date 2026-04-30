@@ -114,9 +114,7 @@ async function validateDepartmentIds(departmentIds: string[]): Promise<{ missing
 const MEMBERSHIP_SOURCE = 'sigur_sync';
 
 async function replaceExplicitDepartmentAccess(params: {
-  targetTable: 'employee_department_access' | 'user_department_access';
-  targetField: 'employee_id' | 'user_id';
-  targetValue: number | string;
+  employeeId: number;
   departmentIds: string[];
   actorUserId: string;
   source: string;
@@ -124,9 +122,9 @@ async function replaceExplicitDepartmentAccess(params: {
   const explicitDepartmentIds = uniqueStringValues(params.departmentIds);
 
   const { data: existingAccessRows, error: existingAccessError } = await supabase
-    .from(params.targetTable)
+    .from('employee_department_access')
     .select('department_id, is_active, source')
-    .eq(params.targetField, params.targetValue)
+    .eq('employee_id', params.employeeId)
     .neq('source', MEMBERSHIP_SOURCE);
 
   if (existingAccessError) {
@@ -145,7 +143,7 @@ async function replaceExplicitDepartmentAccess(params: {
 
   if (explicitDepartmentIds.length > 0) {
     const rows = explicitDepartmentIds.map(departmentId => ({
-      [params.targetField]: params.targetValue,
+      employee_id: params.employeeId,
       department_id: departmentId,
       source: params.source,
       is_active: true,
@@ -154,9 +152,9 @@ async function replaceExplicitDepartmentAccess(params: {
     }));
 
     const { error: upsertError } = await supabase
-      .from(params.targetTable)
+      .from('employee_department_access')
       .upsert(rows, {
-        onConflict: params.targetField === 'employee_id' ? 'employee_id,department_id' : 'user_id,department_id',
+        onConflict: 'employee_id,department_id',
       });
 
     if (upsertError) {
@@ -166,12 +164,12 @@ async function replaceExplicitDepartmentAccess(params: {
 
   if (departmentIdsToDeactivate.length > 0) {
     const { error: deactivateError } = await supabase
-      .from(params.targetTable)
+      .from('employee_department_access')
       .update({
         is_active: false,
         updated_at: now,
       })
-      .eq(params.targetField, params.targetValue)
+      .eq('employee_id', params.employeeId)
       .in('department_id', departmentIdsToDeactivate)
       .neq('source', MEMBERSHIP_SOURCE);
 
@@ -1119,6 +1117,14 @@ export const adminUsersController = {
         return;
       }
 
+      if (!profile.employee_id) {
+        res.status(400).json({
+          success: false,
+          error: 'Назначить отделы можно только пользователю с привязанной карточкой СКУД. Сначала выберите сотрудника на этой же странице и сохраните привязку.',
+        });
+        return;
+      }
+
       const { missingIds } = await validateDepartmentIds(normalizedDepartmentIds);
       if (missingIds.length > 0) {
         res.status(400).json({
@@ -1130,9 +1136,7 @@ export const adminUsersController = {
       }
 
       const explicitDepartmentIds = await replaceExplicitDepartmentAccess({
-        targetTable: profile.employee_id ? 'employee_department_access' : 'user_department_access',
-        targetField: profile.employee_id ? 'employee_id' : 'user_id',
-        targetValue: profile.employee_id ?? id,
+        employeeId: profile.employee_id,
         departmentIds: normalizedDepartmentIds,
         actorUserId: req.user.id,
         source: 'manual_admin_ui',
@@ -1203,9 +1207,7 @@ export const adminUsersController = {
       }
 
       const explicitDepartmentIds = await replaceExplicitDepartmentAccess({
-        targetTable: 'employee_department_access',
-        targetField: 'employee_id',
-        targetValue: employeeId,
+        employeeId,
         departmentIds: normalizedDepartmentIds,
         actorUserId: req.user.id,
         source: 'manual_admin_ui',

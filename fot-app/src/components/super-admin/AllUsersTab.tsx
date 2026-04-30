@@ -538,94 +538,102 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
                     )}
                   </div>
 
-                  <div className={styles.departmentAccessSection}>
-                    <div className={styles.departmentAccessHeader}>
-                      <div>
-                        <div className={styles.departmentAccessTitle}>Назначенные отделы и бригады</div>
-                        <div className={styles.departmentAccessHint}>
-                          Выберите все отделы и бригады, за которые отвечает пользователь. Все назначения равноправны.
-                        </div>
-                      </div>
-                      <div className={styles.departmentAccessCount}>
-                        {assignedDepartmentIds.length} выбрано
+                  {!user.employee_id ? (
+                    <div className={styles.departmentAccessSection}>
+                      <div className={styles.departmentAccessHint}>
+                        Чтобы назначить отделы, сначала выберите сотрудника СКУД и сохраните привязку.
                       </div>
                     </div>
-
-                    <input
-                      type="text"
-                      placeholder="Поиск отдела или бригады..."
-                      value={departmentAccessQuery[user.id] || ''}
-                      onChange={(e) => setDepartmentAccessQuery(prev => ({
-                        ...prev,
-                        [user.id]: e.target.value,
-                      }))}
-                      className={`${styles.nameInput} ${styles.departmentAccessSearch}`}
-                    />
-
-                    {selectedDepartments.length > 0 && (
-                      <div className={styles.departmentAccessTags}>
-                        {selectedDepartments.map(department => (
-                          <button
-                            key={department.id}
-                            type="button"
-                            className={styles.departmentAccessTag}
-                            onClick={() => handleDepartmentAccessToggle(user, department.id)}
-                          >
-                            {department.name}
-                          </button>
-                        ))}
+                  ) : (
+                    <div className={styles.departmentAccessSection}>
+                      <div className={styles.departmentAccessHeader}>
+                        <div>
+                          <div className={styles.departmentAccessTitle}>Назначенные отделы и бригады</div>
+                          <div className={styles.departmentAccessHint}>
+                            Выберите все отделы и бригады, за которые отвечает пользователь. Все назначения равноправны.
+                          </div>
+                        </div>
+                        <div className={styles.departmentAccessCount}>
+                          {assignedDepartmentIds.length} выбрано
+                        </div>
                       </div>
-                    )}
 
-                    <div className={styles.departmentAccessList}>
-                      {filteredDepartments.length > 0 ? (
-                        filteredDepartments.map(department => {
-                          const checked = assignedDepartmentIds.includes(department.id);
-                          return (
-                            <label
+                      <input
+                        type="text"
+                        placeholder="Поиск отдела или бригады..."
+                        value={departmentAccessQuery[user.id] || ''}
+                        onChange={(e) => setDepartmentAccessQuery(prev => ({
+                          ...prev,
+                          [user.id]: e.target.value,
+                        }))}
+                        className={`${styles.nameInput} ${styles.departmentAccessSearch}`}
+                      />
+
+                      {selectedDepartments.length > 0 && (
+                        <div className={styles.departmentAccessTags}>
+                          {selectedDepartments.map(department => (
+                            <button
                               key={department.id}
-                              className={`${styles.departmentAccessItem} ${checked ? styles.departmentAccessItemChecked : ''}`}
+                              type="button"
+                              className={styles.departmentAccessTag}
+                              onClick={() => handleDepartmentAccessToggle(user, department.id)}
                             >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => handleDepartmentAccessToggle(user, department.id)}
-                              />
-                              <span
-                                className={styles.departmentAccessItemLabel}
-                                style={{ paddingLeft: `${department.level * 14}px` }}
-                              >
-                                {department.name}
-                              </span>
-                            </label>
-                          );
-                        })
-                      ) : (
-                        <div className={styles.departmentAccessEmpty}>
-                          {departmentSearchQuery ? 'По запросу ничего не найдено' : 'Нет доступных подразделений'}
+                              {department.name}
+                            </button>
+                          ))}
                         </div>
                       )}
-                    </div>
 
-                    <div className={styles.departmentAccessActions}>
-                      <button
-                        type="button"
-                        className={styles.cancelBtn}
-                        onClick={() => handleDepartmentAccessReset(user)}
-                        disabled={!hasDepartmentAccessChanges || savingDepartmentAccessUserId === user.id}
-                      >
-                        Сбросить
-                      </button>
-                      <button
-                        type="button"
-                        className={styles.saveBtn}
-                        onClick={() => handleDepartmentAccessSave(user)}
-                        disabled={!hasDepartmentAccessChanges || savingDepartmentAccessUserId === user.id}
-                      >
-                        {savingDepartmentAccessUserId === user.id ? 'Сохраняю...' : 'Сохранить назначения'}
-                      </button>
+                      <div className={styles.departmentAccessList}>
+                        {filteredDepartments.length > 0 ? (
+                          filteredDepartments.map(department => {
+                            const checked = assignedDepartmentIds.includes(department.id);
+                            return (
+                              <label
+                                key={department.id}
+                                className={`${styles.departmentAccessItem} ${checked ? styles.departmentAccessItemChecked : ''}`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => handleDepartmentAccessToggle(user, department.id)}
+                                />
+                                <span
+                                  className={styles.departmentAccessItemLabel}
+                                  style={{ paddingLeft: `${department.level * 14}px` }}
+                                >
+                                  {department.name}
+                                </span>
+                              </label>
+                            );
+                          })
+                        ) : (
+                          <div className={styles.departmentAccessEmpty}>
+                            {departmentSearchQuery ? 'По запросу ничего не найдено' : 'Нет доступных подразделений'}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className={styles.departmentAccessActions}>
+                        <button
+                          type="button"
+                          className={styles.cancelBtn}
+                          onClick={() => handleDepartmentAccessReset(user)}
+                          disabled={!hasDepartmentAccessChanges || savingDepartmentAccessUserId === user.id}
+                        >
+                          Сбросить
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.saveBtn}
+                          onClick={() => handleDepartmentAccessSave(user)}
+                          disabled={!hasDepartmentAccessChanges || savingDepartmentAccessUserId === user.id}
+                        >
+                          {savingDepartmentAccessUserId === user.id ? 'Сохраняю...' : 'Сохранить назначения'}
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   <div className={styles.controlActions}>
                     {!user.email_confirmed && (

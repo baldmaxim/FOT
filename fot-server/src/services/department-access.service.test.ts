@@ -17,12 +17,6 @@ const mockedState = vi.hoisted(() => ({
     is_active: boolean;
     source: string;
   }>,
-  userDepartmentAccess: [] as Array<{
-    user_id: string;
-    department_id: string;
-    is_active: boolean;
-    source: string;
-  }>,
 }));
 
 function matchesQueryRecord<T extends Record<string, unknown>>(row: T, query: QueryRecord): boolean {
@@ -50,13 +44,6 @@ function resolveQuery(query: QueryRecord): QueryResponse {
   if (query.table === 'employee_department_access') {
     return {
       data: mockedState.employeeDepartmentAccess.filter(row => matchesQueryRecord(row, query)),
-      error: null,
-    };
-  }
-
-  if (query.table === 'user_department_access') {
-    return {
-      data: mockedState.userDepartmentAccess.filter(row => matchesQueryRecord(row, query)),
       error: null,
     };
   }
@@ -102,7 +89,6 @@ import { listManagedDepartmentIdsForUser, loadManagedDepartmentMap } from './dep
 describe('department-access.service', () => {
   beforeEach(() => {
     mockedState.employeeDepartmentAccess = [];
-    mockedState.userDepartmentAccess = [];
   });
 
   it('возвращает только активные руководительские назначения сотрудника', async () => {
@@ -117,23 +103,11 @@ describe('department-access.service', () => {
     expect(result).toEqual(['dept-a', 'dept-b']);
   });
 
-  it('без employee_id читает назначения из user_department_access', async () => {
+  it('без employee_id возвращает пустой список', async () => {
     mockedState.employeeDepartmentAccess = [
-      { employee_id: 10, department_id: 'dept-other', is_active: true, source: 'manual_admin_ui' },
-    ];
-    mockedState.userDepartmentAccess = [
-      { user_id: 'user-1', department_id: 'dept-a', is_active: true, source: 'manual_admin_ui' },
-      { user_id: 'user-1', department_id: 'dept-b', is_active: true, source: 'manual_admin_ui' },
-      { user_id: 'user-1', department_id: 'dept-old', is_active: false, source: 'manual_admin_ui' },
-      { user_id: 'user-2', department_id: 'dept-c', is_active: true, source: 'manual_admin_ui' },
+      { employee_id: 10, department_id: 'dept-a', is_active: true, source: 'manual_admin_ui' },
     ];
 
-    const result = await listManagedDepartmentIdsForUser('user-1', null, null);
-
-    expect(result.sort()).toEqual(['dept-a', 'dept-b']);
-  });
-
-  it('без employee_id и без записей в user_department_access возвращает пустой список', async () => {
     const result = await listManagedDepartmentIdsForUser('user-1', null, null);
 
     expect(result).toEqual([]);
@@ -167,22 +141,15 @@ describe('department-access.service', () => {
       { employee_id: 22, department_id: 'dept-c', is_active: true, source: 'manual_admin_ui' },
       { employee_id: 22, department_id: 'dept-self', is_active: true, source: 'sigur_sync' },
     ];
-    mockedState.userDepartmentAccess = [
-      { user_id: 'user-3', department_id: 'dept-d', is_active: true, source: 'manual_admin_ui' },
-      { user_id: 'user-3', department_id: 'dept-e', is_active: false, source: 'manual_admin_ui' },
-      { user_id: 'user-4', department_id: 'dept-x', is_active: true, source: 'manual_admin_ui' },
-    ];
 
     const result = await loadManagedDepartmentMap([
       { user_id: 'user-1', employee_id: 11 },
       { user_id: 'user-2', employee_id: 22 },
       { user_id: 'user-3', employee_id: null },
-      { user_id: 'user-5', employee_id: null },
     ]);
 
     expect(result.get('user-1')?.managed_department_ids).toEqual(['dept-a']);
     expect(result.get('user-2')?.managed_department_ids?.sort()).toEqual(['dept-b', 'dept-c']);
-    expect(result.get('user-3')?.managed_department_ids).toEqual(['dept-d']);
-    expect(result.get('user-5')?.managed_department_ids).toEqual([]);
+    expect(result.get('user-3')?.managed_department_ids).toEqual([]);
   });
 });
