@@ -284,7 +284,7 @@ export const TimesheetPage: FC = () => {
   const monthStr = useMemo(() => `${year}-${String(month).padStart(2, '0')}`, [year, month]);
   const daysInMonth = useMemo(() => getDaysInMonth(year, month), [year, month]);
   const selectedHalf = useMemo<TimesheetHalf>(() => {
-    if (queryHalf === 'H1' || queryHalf === 'H2') return queryHalf;
+    if (queryHalf === 'H1' || queryHalf === 'H2' || queryHalf === 'FULL') return queryHalf;
     if (queryFrom) return getHalfFromDate(queryFrom);
     const current = getCurrentHalf(now);
     return (current.year === year && current.month === month) ? current.half : 'H1';
@@ -1517,6 +1517,13 @@ export const TimesheetPage: FC = () => {
         onClick={() => handleHalfChange('H2')}
       >
         {formatHalfLabel(year, month, 'H2')}
+      </button>
+      <button
+        type="button"
+        className={`ts-half-chip ${selectedHalf === 'FULL' ? 'ts-half-chip--active' : ''}`}
+        onClick={() => handleHalfChange('FULL')}
+      >
+        {formatHalfLabel(year, month, 'FULL')}
       </button>
     </section>
   ) : null;

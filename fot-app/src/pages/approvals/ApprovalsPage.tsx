@@ -18,6 +18,7 @@ import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { ApprovalCommentModal } from './ApprovalCommentModal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
+import { getMonthBounds, listDatesInRange } from '../../utils/timesheetApprovalPeriod';
 import './ApprovalsPage.css';
 
 type Tab = 'corrections' | 'timesheets';
@@ -389,17 +390,27 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
   const year = startDate.getFullYear();
   const month = startDate.getMonth() + 1;
   const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+  const monthBounds = useMemo(() => getMonthBounds(monthStr), [monthStr]);
 
   const tsQuery = useQuery({
     queryKey: ['approval-timesheet', row.id],
     queryFn: () => timesheetService.getAll({
       month: monthStr,
       department_id: row.department_id,
-      from: row.start_date,
-      to: row.end_date,
+      from: monthBounds?.firstDate ?? row.start_date,
+      to: monthBounds?.lastDate ?? row.end_date,
     }),
     staleTime: 30_000,
   });
+
+  const outOfPeriodDates = useMemo(() => {
+    const set = new Set<string>();
+    if (!monthBounds) return set;
+    for (const d of listDatesInRange(monthBounds.firstDate, monthBounds.lastDate)) {
+      if (d < row.start_date || d > row.end_date) set.add(d);
+    }
+    return set;
+  }, [monthBounds, row.start_date, row.end_date]);
 
   const problemDates = useMemo(() => {
     const red = new Set<string>();
@@ -410,12 +421,13 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
       for (const d of row.weekend_work_dates) yellow.add(d);
     }
     for (const e of tsQuery.data?.entries ?? []) {
+      if (outOfPeriodDates.has(e.work_date)) continue;
       if (e.is_correction || e.status === 'absent') {
         if (!red.has(e.work_date)) yellow.add(e.work_date);
       }
     }
     return { red, yellow };
-  }, [row.problem_flags.weekend_work_without_attachment, row.weekend_work_dates, tsQuery.data?.entries]);
+  }, [row.problem_flags.weekend_work_without_attachment, row.weekend_work_dates, tsQuery.data?.entries, outOfPeriodDates]);
 
   return (
     <div className="approvals-card-body">
@@ -477,6 +489,7 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
             dailySchedules={tsQuery.data.daily_schedules}
             calendar={tsQuery.data.calendar}
             problemDates={problemDates}
+            outOfPeriodDates={outOfPeriodDates}
             onEmployeeClick={() => {}}
             onDayClick={() => {}}
             onObjectDayClick={() => {}}

@@ -77,7 +77,7 @@ export const listDatesInRange = (startDate: string, endDate: string): string[] =
 export const rangesOverlap = (a: ITimesheetDateRange, b: ITimesheetDateRange): boolean =>
   a.startDate <= b.endDate && b.startDate <= a.endDate;
 
-export type TimesheetHalf = 'H1' | 'H2';
+export type TimesheetHalf = 'H1' | 'H2' | 'FULL';
 
 const pad2 = (value: number): string => String(value).padStart(2, '0');
 
@@ -89,11 +89,17 @@ export const getHalfRange = (year: number, month: number, half: TimesheetHalf): 
   if (half === 'H1') {
     return { startDate: `${monthPart}-01`, endDate: `${monthPart}-15` };
   }
+  if (half === 'FULL') {
+    return { startDate: `${monthPart}-01`, endDate: `${monthPart}-${pad2(getLastDayOfMonth(year, month))}` };
+  }
   return { startDate: `${monthPart}-16`, endDate: `${monthPart}-${pad2(getLastDayOfMonth(year, month))}` };
 };
 
-export const formatHalfLabel = (year: number, month: number, half: TimesheetHalf): string =>
-  half === 'H1' ? '1–15' : `16–${getLastDayOfMonth(year, month)}`;
+export const formatHalfLabel = (year: number, month: number, half: TimesheetHalf): string => {
+  if (half === 'H1') return '1–15';
+  if (half === 'FULL') return 'Весь месяц';
+  return `16–${getLastDayOfMonth(year, month)}`;
+};
 
 export const getHalfFromDate = (iso: string): TimesheetHalf => {
   const day = Number.parseInt(iso.slice(8, 10), 10);

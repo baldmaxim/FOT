@@ -38,6 +38,7 @@ interface ITimesheetGridProps {
   splitDayKeys?: Set<string>;
   lockedDates?: Set<string>;
   problemDates?: { red?: Set<string>; yellow?: Set<string> };
+  outOfPeriodDates?: Set<string>;
   canManageTeam?: boolean;
   pendingEmployeeId?: number | null;
   onBulkSelectionChange?: (cellKeys: Set<string>) => void;
@@ -224,7 +225,7 @@ const getDayCellClass = (
         break;
       }
       const hoursOk = hasPositiveHours(visibleHours) && (visibleHours as number) >= thresholdHours;
-      const spanOk = entry.presence_covers_shift !== false;
+      const spanOk = entry.is_correction || entry.presence_covers_shift !== false;
       classes.push(hoursOk && spanOk ? 'ts-day--full' : 'ts-day--partial');
       break;
     }
@@ -342,6 +343,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   selectedCellKeys = EMPTY_CELL_SELECTION,
   splitDayKeys = EMPTY_CELL_SELECTION,
   problemDates,
+  outOfPeriodDates,
   canManageTeam = false,
   pendingEmployeeId = null,
   onBulkSelectionChange,
@@ -1028,12 +1030,13 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           : problemDates?.yellow?.has(isoDate)
                             ? ' ts-day--problem-yellow'
                             : '';
+                        const outCls = outOfPeriodDates?.has(isoDate) ? ' ts-day--out-of-period' : '';
 
                         return (
                           <button
                             key={day}
                             type="button"
-                            className={`${baseCls}${inactiveCls}${problemCls} ts-mobile-day-btn`}
+                            className={`${baseCls}${inactiveCls}${problemCls}${outCls} ts-mobile-day-btn`}
                             title={title}
                             disabled={inactive}
                             onClick={() => !inactive && onDayClick(row.employee, day, entry)}
@@ -1319,7 +1322,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         : problemDates?.yellow?.has(isoDate)
                           ? ' ts-day--problem-yellow'
                           : '';
-                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours)}${inactiveCls}${problemCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive ? ' ts-day--bulk-selectable' : ''}`;
+                      const outCls = outOfPeriodDates?.has(isoDate) ? ' ts-day--out-of-period' : '';
+                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours)}${inactiveCls}${problemCls}${outCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive ? ' ts-day--bulk-selectable' : ''}`;
                       const text = inactive ? '' : getDayCellText(entry, dayOff);
                       const title = getDayCellTitle(entry, dayOff);
                       const bulkTitle = bulkEditMode && !inactive
