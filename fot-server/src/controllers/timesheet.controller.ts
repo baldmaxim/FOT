@@ -168,10 +168,77 @@ const uuidParamSchema = z.string().uuid();
  */
 const WORKED_STATUSES_FOR_APPROVAL = new Set<TimeStatus>(['work', 'remote']);
 
+/**
+ * Зачёт «плановой» субботы для графика 5+2:
+ * первые expected_saturdays_per_month субботы месяца с work/remote → auto_approved.
+ * Праздничная суббота (по производственному календарю) в норму не зачитывается.
+ */
+export const isMandatorySaturdaySlotAvailable = (
+  schedule: { pattern_type: string; expected_saturdays_per_month: number; respects_holidays: boolean },
+  workDate: string,
+  dateObj: Date,
+  calendar: { holidays?: string[]; mandatory_holidays?: string[] } | null,
+  usedSaturdaysCount: number,
+): boolean => {
+  if (dateObj.getDay() !== 6) return false;
+  if (schedule.pattern_type !== '5+2') return false;
+  if (schedule.expected_saturdays_per_month <= 0) return false;
+  const isHolidayDate = !!calendar && (
+    (calendar.mandatory_holidays?.includes(workDate) ?? false)
+    || (schedule.respects_holidays && (calendar.holidays?.includes(workDate) ?? false))
+  );
+  if (isHolidayDate) return false;
+  return usedSaturdaysCount < schedule.expected_saturdays_per_month;
+};
+
+/** Возвращает [monthStartISO, monthEndISO] для произвольной даты YYYY-MM-DD. */
+const monthBoundsForDate = (workDate: string): { monthStart: string; monthEnd: string } => {
+  const dateObj = new Date(`${workDate}T00:00:00`);
+  const year = dateObj.getFullYear();
+  const month = dateObj.getMonth();
+  const monthStr = String(month + 1).padStart(2, '0');
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return {
+    monthStart: `${year}-${monthStr}-01`,
+    monthEnd: `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`,
+  };
+};
+
+/**
+ * Считает уже зачтённые плановые субботы у сотрудника за месяц workDate.
+ * Учитываем только status IN (work,remote) и approval_status IN (auto_approved,approved).
+ * pending и rejected не блокируют норму.
+ */
+async function countAcceptedMandatorySaturdays(
+  employeeId: number,
+  workDate: string,
+  excludeAdjustmentId: number | null,
+): Promise<number> {
+  const { monthStart, monthEnd } = monthBoundsForDate(workDate);
+  const { data, error } = await supabase
+    .from('attendance_adjustments')
+    .select('id, work_date')
+    .eq('employee_id', employeeId)
+    .gte('work_date', monthStart)
+    .lte('work_date', monthEnd)
+    .in('status', ['work', 'remote'])
+    .in('approval_status', ['auto_approved', 'approved']);
+  if (error) throw error;
+
+  let count = 0;
+  for (const row of (data ?? []) as Array<{ id: number | string; work_date: string }>) {
+    if (excludeAdjustmentId != null && Number(row.id) === excludeAdjustmentId) continue;
+    const d = new Date(`${String(row.work_date)}T00:00:00`);
+    if (d.getDay() === 6) count++;
+  }
+  return count;
+}
+
 async function resolveAdjustmentApprovalStatus(
   employeeId: number,
   workDate: string,
   status: TimeStatus,
+  excludeAdjustmentId: number | null = null,
 ): Promise<'auto_approved' | 'pending'> {
   if (!WORKED_STATUSES_FOR_APPROVAL.has(status)) return 'auto_approved';
 
@@ -192,7 +259,16 @@ async function resolveAdjustmentApprovalStatus(
 
   const dateObj = new Date(`${workDate}T00:00:00`);
   const monthCalendar = await loadCalendarMonth(dateObj.getFullYear(), dateObj.getMonth() + 1);
-  return isWorkingDay(schedule, dateObj, monthCalendar) ? 'auto_approved' : 'pending';
+  if (isWorkingDay(schedule, dateObj, monthCalendar)) return 'auto_approved';
+
+  if (schedule.pattern_type === '5+2' && schedule.expected_saturdays_per_month > 0 && dateObj.getDay() === 6) {
+    const used = await countAcceptedMandatorySaturdays(employeeId, workDate, excludeAdjustmentId);
+    if (isMandatorySaturdaySlotAvailable(schedule, workDate, dateObj, monthCalendar, used)) {
+      return 'auto_approved';
+    }
+  }
+
+  return 'pending';
 }
 
 const MANAGED_TIMESHEET_PAGE_KEYS = ['/timesheet', '/timesheet-hr'] as const;
@@ -1170,6 +1246,7 @@ export const timesheetController = {
           Number(existing.employee_id),
           String(existing.work_date),
           nextStatus,
+          id,
         );
 
 	      const updated = await updateAttendanceAdjustmentById(id, {
@@ -1286,7 +1363,12 @@ export const timesheetController = {
         }
       }
 
-      await Promise.all(uniqueItems.map(async item => {
+      // Для work/remote (где статус согласования зависит от уже зачтённых плановых
+      // суббот) обходим items последовательно, чтобы каждый upsert был виден
+      // последующим расчётам — иначе при бульке нескольких суббот одного месяца
+      // одного сотрудника все они увидят 0 уже зачтённых и пройдут как auto_approved.
+      const isWorkOrRemoteBulk = WORKED_STATUSES_FOR_APPROVAL.has(parsed.status);
+      const buildUpsert = async (item: typeof uniqueItems[number]) => {
         const approvalStatus = await resolveAdjustmentApprovalStatus(
           item.employee_id,
           item.work_date,
@@ -1305,7 +1387,19 @@ export const timesheetController = {
           created_by: req.user.id,
           approval_status: approvalStatus,
         });
-      }));
+      };
+
+      if (isWorkOrRemoteBulk) {
+        const sortedItems = [...uniqueItems].sort((a, b) => {
+          if (a.employee_id !== b.employee_id) return a.employee_id - b.employee_id;
+          return a.work_date.localeCompare(b.work_date);
+        });
+        for (const item of sortedItems) {
+          await buildUpsert(item);
+        }
+      } else {
+        await Promise.all(uniqueItems.map(buildUpsert));
+      }
 
       const auditNamesMap = await loadEmployeeFullNamesMap(employeeIds);
       const auditEmployeeNames = employeeIds

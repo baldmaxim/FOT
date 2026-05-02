@@ -234,7 +234,7 @@ const CorrectionsTab: FC = () => {
       ) : query.isError ? (
         <div className="approvals-empty">Ошибка загрузки</div>
       ) : groups.length === 0 ? (
-        <div className="approvals-empty">Нет корректировок на согласование за период</div>
+        <div className="approvals-empty">Нет выходных дней на согласовании за период</div>
       ) : (
         <ul className="approvals-list">
           {groups.map(group => {
@@ -257,7 +257,7 @@ const CorrectionsTab: FC = () => {
                     {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                     <span className="cor-dept-name">{group.department_name}</span>
                     <span className="cor-dept-stats">
-                      Корректировок: <b>{group.pending_count}</b> • Сотрудников: <b>{group.employees_count}</b>
+                      Выходных дней: <b>{group.pending_count}</b> • Сотрудников: <b>{group.employees_count}</b>
                     </span>
                   </button>
                   {canReview && (
@@ -689,7 +689,7 @@ export const ApprovalsPage: FC = () => {
           className={`approvals-tab${tab === 'corrections' ? ' approvals-tab--active' : ''}`}
           onClick={() => setTab('corrections')}
         >
-          Корректировки
+          Выходные дни
         </button>
         <button
           type="button"
