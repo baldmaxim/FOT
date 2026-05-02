@@ -210,4 +210,35 @@ export const travelTimeService = {
     invalidateTravelSegmentsCache();
     return res.data;
   },
+
+  async getDaySegments(employeeId: number, workDate: string): Promise<ITravelSegment[]> {
+    const params = new URLSearchParams({
+      employee_id: String(employeeId),
+      work_date: workDate,
+    });
+    const res = await apiClient.get<ApiResponse<ITravelSegment[]>>(
+      `/skud/travel-segments/day?${params.toString()}`,
+    );
+    return res.data || [];
+  },
+
+  async approveSegment(segmentId: string, comment?: string): Promise<ITravelSegment> {
+    const res = await apiClient.post<ApiResponse<ITravelSegment>>(
+      `/skud/travel-segments/${segmentId}/approve`,
+      comment ? { comment } : {},
+    );
+    if (!res.data) throw new Error(res.error || 'Ошибка подтверждения сегмента');
+    invalidateTravelSegmentsCache();
+    return res.data;
+  },
+
+  async rejectSegment(segmentId: string, comment?: string): Promise<ITravelSegment> {
+    const res = await apiClient.post<ApiResponse<ITravelSegment>>(
+      `/skud/travel-segments/${segmentId}/reject`,
+      comment ? { comment } : {},
+    );
+    if (!res.data) throw new Error(res.error || 'Ошибка отклонения сегмента');
+    invalidateTravelSegmentsCache();
+    return res.data;
+  },
 };

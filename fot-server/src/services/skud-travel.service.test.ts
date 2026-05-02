@@ -153,15 +153,17 @@ describe('skud-travel.service', () => {
       actual_minutes: 45,
       norm_minutes: 60,
       max_credit_minutes: 60,
-      credited_minutes: 0,
+      // Внутри лимита — фактическое время полностью идёт в зачёт.
+      credited_minutes: 45,
       delay_minutes: 0,
       status: 'auto_approved',
     });
     expect(result.summaryByDay.get('7_2026-04-05')).toEqual({
-      creditedMinutes: 0,
+      creditedMinutes: 45,
       delayMinutes: 0,
       segmentsCount: 1,
       problematicSegmentsCount: 0,
+      pendingSegmentsCount: 0,
       objectProblemSegmentsCount: 0,
     });
   });
@@ -209,7 +211,7 @@ describe('skud-travel.service', () => {
     ]);
   });
 
-  it('marks a segment as delayed when actual travel exceeds the configured limit', async () => {
+  it('marks a segment as pending and credits only the limit when actual travel exceeds it', async () => {
     mockedState.resolver = (query) => {
       if (query.table === 'skud_object_access_points') {
         return {
@@ -248,15 +250,17 @@ describe('skud-travel.service', () => {
     expect(result.segments[0]).toMatchObject({
       actual_minutes: 80,
       norm_minutes: 60,
-      credited_minutes: 0,
+      // Превышение лимита: лимитная часть зачитывается автоматически, превышение ждёт решения.
+      credited_minutes: 60,
       delay_minutes: 20,
-      status: 'delayed',
+      status: 'pending',
     });
     expect(result.summaryByDay.get('8_2026-04-06')).toEqual({
-      creditedMinutes: 0,
+      creditedMinutes: 60,
       delayMinutes: 20,
       segmentsCount: 1,
       problematicSegmentsCount: 1,
+      pendingSegmentsCount: 1,
       objectProblemSegmentsCount: 0,
     });
   });
@@ -308,7 +312,180 @@ describe('skud-travel.service', () => {
       delayMinutes: 0,
       segmentsCount: 1,
       problematicSegmentsCount: 1,
+      pendingSegmentsCount: 0,
       objectProblemSegmentsCount: 1,
+    });
+  });
+
+  it('preserves approved status and credited minutes across resync', async () => {
+    mockedState.resolver = (query) => {
+      if (query.table === 'skud_object_access_points') {
+        return {
+          data: [
+            { object_id: 'obj-a', access_point_name: 'КПП A' },
+            { object_id: 'obj-b', access_point_name: 'КПП B' },
+          ],
+          error: null,
+        };
+      }
+
+      if (query.table === 'skud_events') {
+        return {
+          data: [
+            { employee_id: 11, event_date: '2026-04-08', event_time: '10:00:00', access_point: 'КПП A', direction: 'exit' },
+            { employee_id: 11, event_date: '2026-04-08', event_time: '11:30:00', access_point: 'КПП B', direction: 'entry' },
+          ],
+          error: null,
+        };
+      }
+
+      if (query.table === 'skud_travel_segments') {
+        // Запрос ранее принятых решений: фильтр по status IN (approved, rejected)
+        const hasApprovedRejectedFilter = query.operations.some(op => (
+          op.method === 'in'
+          && op.args[0] === 'status'
+          && Array.isArray(op.args[1])
+          && (op.args[1] as string[]).includes('approved')
+        ));
+        if (hasApprovedRejectedFilter) {
+          return {
+            data: [{
+              id: 'seg-1',
+              employee_id: 11,
+              work_date: '2026-04-08',
+              from_object_id: 'obj-a',
+              to_object_id: 'obj-b',
+              from_access_point_name: 'КПП A',
+              to_access_point_name: 'КПП B',
+              exit_time: '10:00:00',
+              entry_time: '11:30:00',
+              actual_minutes: 90,
+              norm_minutes: 60,
+              max_credit_minutes: 60,
+              credited_minutes: 90,
+              delay_minutes: 30,
+              status: 'approved',
+              approved_by: 'user-9',
+              approved_at: '2026-04-08T11:35:00Z',
+              approval_comment: 'Пробка',
+              created_at: '2026-04-08T11:30:00Z',
+              updated_at: '2026-04-08T11:35:00Z',
+            }],
+            error: null,
+          };
+        }
+        return { data: [], error: null };
+      }
+
+      throw new Error(`Unexpected query for table ${query.table}`);
+    };
+
+    const result = await calculateAndSyncTravelSegments({
+      employeeIds: [11],
+      startDate: '2026-04-01',
+      endDate: '2026-04-30',
+    });
+
+    expect(result.segments).toHaveLength(1);
+    expect(result.segments[0]).toMatchObject({
+      employee_id: 11,
+      work_date: '2026-04-08',
+      actual_minutes: 90,
+      norm_minutes: 60,
+      delay_minutes: 30,
+      // Решение approved сохранилось через пересчёт: credited = actual_minutes
+      credited_minutes: 90,
+      status: 'approved',
+      approved_by: 'user-9',
+      approval_comment: 'Пробка',
+    });
+    expect(result.summaryByDay.get('11_2026-04-08')).toEqual({
+      creditedMinutes: 90,
+      delayMinutes: 30,
+      segmentsCount: 1,
+      // approved уже не считается проблемным.
+      problematicSegmentsCount: 0,
+      pendingSegmentsCount: 0,
+      objectProblemSegmentsCount: 0,
+    });
+  });
+
+  it('preserves rejected status and credits only the limit across resync', async () => {
+    mockedState.resolver = (query) => {
+      if (query.table === 'skud_object_access_points') {
+        return {
+          data: [
+            { object_id: 'obj-a', access_point_name: 'КПП A' },
+            { object_id: 'obj-b', access_point_name: 'КПП B' },
+          ],
+          error: null,
+        };
+      }
+
+      if (query.table === 'skud_events') {
+        return {
+          data: [
+            { employee_id: 12, event_date: '2026-04-09', event_time: '10:00:00', access_point: 'КПП A', direction: 'exit' },
+            { employee_id: 12, event_date: '2026-04-09', event_time: '12:00:00', access_point: 'КПП B', direction: 'entry' },
+          ],
+          error: null,
+        };
+      }
+
+      if (query.table === 'skud_travel_segments') {
+        const hasApprovedRejectedFilter = query.operations.some(op => (
+          op.method === 'in'
+          && op.args[0] === 'status'
+          && Array.isArray(op.args[1])
+          && (op.args[1] as string[]).includes('rejected')
+        ));
+        if (hasApprovedRejectedFilter) {
+          return {
+            data: [{
+              id: 'seg-2',
+              employee_id: 12,
+              work_date: '2026-04-09',
+              from_object_id: 'obj-a',
+              to_object_id: 'obj-b',
+              from_access_point_name: 'КПП A',
+              to_access_point_name: 'КПП B',
+              exit_time: '10:00:00',
+              entry_time: '12:00:00',
+              actual_minutes: 120,
+              norm_minutes: 60,
+              max_credit_minutes: 60,
+              credited_minutes: 60,
+              delay_minutes: 60,
+              status: 'rejected',
+              approved_by: 'user-9',
+              approved_at: '2026-04-09T12:05:00Z',
+              approval_comment: null,
+              created_at: '2026-04-09T12:00:00Z',
+              updated_at: '2026-04-09T12:05:00Z',
+            }],
+            error: null,
+          };
+        }
+        return { data: [], error: null };
+      }
+
+      throw new Error(`Unexpected query for table ${query.table}`);
+    };
+
+    const result = await calculateAndSyncTravelSegments({
+      employeeIds: [12],
+      startDate: '2026-04-01',
+      endDate: '2026-04-30',
+    });
+
+    expect(result.segments).toHaveLength(1);
+    expect(result.segments[0]).toMatchObject({
+      actual_minutes: 120,
+      norm_minutes: 60,
+      delay_minutes: 60,
+      // Reject: засчитывается только лимитная часть, превышение отбрасывается.
+      credited_minutes: 60,
+      status: 'rejected',
     });
   });
 

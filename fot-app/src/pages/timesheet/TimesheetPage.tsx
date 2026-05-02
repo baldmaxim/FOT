@@ -44,6 +44,9 @@ const TimesheetSidePanel = lazy(() => import('../../components/timesheet/Timeshe
 const TimesheetCorrectionModal = lazy(() => import('../../components/timesheet/TimesheetCorrectionModal').then(module => ({
   default: module.TimesheetCorrectionModal,
 })));
+const TravelExceptionModal = lazy(() => import('../../components/timesheet/TravelExceptionModal').then(module => ({
+  default: module.TravelExceptionModal,
+})));
 
 
 const formatHoursHM = (decimal: number): string => {
@@ -244,6 +247,11 @@ export const TimesheetPage: FC = () => {
   const [teamManagementOpen, setTeamManagementOpen] = useState(false);
   const [teamSearch, setTeamSearch] = useState('');
   const [teamPendingEmployeeId, setTeamPendingEmployeeId] = useState<number | null>(null);
+  const [travelExceptionTarget, setTravelExceptionTarget] = useState<{
+    employeeId: number;
+    employeeName: string;
+    workDate: string;
+  } | null>(null);
   const [refreshState, setRefreshState] = useState<{
     phase: 'idle' | 'syncing' | 'invalidating' | 'error';
     message: string;
@@ -462,6 +470,16 @@ export const TimesheetPage: FC = () => {
   const handleDayClick = (emp: TimesheetEmployee, day: number, entry: TimesheetEntry | null) => {
     if (bulkModeEnabled && viewMode === 'employees') return;
     const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    // Если в дне есть нерешённое превышение лимита передвижения или непривязанная точка —
+    // приоритетно открываем модалку approve/reject (а не общую корректировку дня).
+    if (entry && (entry.travel_problematic_segments || 0) > 0) {
+      setTravelExceptionTarget({
+        employeeId: emp.id,
+        employeeName: emp.full_name,
+        workDate,
+      });
+      return;
+    }
     if (isTimesheetDepartmentScope && lockedDateSet.has(workDate)) {
       toast.info?.('Период согласован — редактирование закрыто');
       return;
@@ -2051,6 +2069,18 @@ export const TimesheetPage: FC = () => {
             hideSkudTab
             maxHours={bulkMaxHours}
             allowedStatuses={isObjectBulkOperation ? ['manual'] : undefined}
+          />
+        </Suspense>
+      )}
+
+      {travelExceptionTarget && (
+        <Suspense fallback={null}>
+          <TravelExceptionModal
+            open={!!travelExceptionTarget}
+            onClose={() => setTravelExceptionTarget(null)}
+            employeeId={travelExceptionTarget.employeeId}
+            employeeName={travelExceptionTarget.employeeName}
+            workDate={travelExceptionTarget.workDate}
           />
         </Suspense>
       )}

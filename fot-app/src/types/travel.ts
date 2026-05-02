@@ -1,4 +1,10 @@
-export type TravelSegmentStatus = 'auto_approved' | 'delayed' | 'needs_object' | 'needs_route';
+export type TravelSegmentStatus =
+  | 'auto_approved'
+  | 'pending'
+  | 'approved'
+  | 'rejected'
+  | 'needs_object'
+  | 'needs_route';
 
 export interface ITravelConfig {
   limit_minutes: number | null;
@@ -76,6 +82,10 @@ export interface ITravelSegment {
   credited_minutes: number;
   delay_minutes: number;
   status: TravelSegmentStatus;
+  approved_by: string | null;
+  approved_by_name: string | null;
+  approved_at: string | null;
+  approval_comment: string | null;
   created_at: string;
   updated_at: string;
 }

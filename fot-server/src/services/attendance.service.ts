@@ -412,11 +412,13 @@ export async function buildAttendanceEntries(params: {
       hours_worked: effectiveHours,
       display_hours_worked: effectiveHours,
       base_hours_worked: effectiveHours,
+      // Корректировка от руководителя — авторитетное значение часов; travel в часы не прибавляем,
+      // но оставляем delay/problematic для отображения проблемного дня в табеле.
       travel_minutes_credited: 0,
       travel_hours_credited: 0,
       travel_delay_minutes: travelSummary?.delayMinutes || 0,
       travel_segments_count: travelSummary?.segmentsCount || 0,
-      travel_problematic_segments: travelSummary?.objectProblemSegmentsCount || 0,
+      travel_problematic_segments: travelSummary?.problematicSegmentsCount || 0,
       is_correction: true,
       reason: adjustment.reason,
       notes: adjustment.reason,
@@ -434,7 +436,9 @@ export async function buildAttendanceEntries(params: {
     const key = `${summary.employee_id}_${summary.date}`;
     const travelSummary = travelSummaries.get(key);
     const baseHours = getSummaryHours(summary);
-    const hoursWorked = roundHours(baseHours);
+    const travelCreditedMinutes = travelSummary?.creditedMinutes || 0;
+    const travelCreditedHours = roundHours(travelCreditedMinutes / 60);
+    const hoursWorked = roundHours(baseHours + travelCreditedHours);
     const isPresent = baseHours > 0 || summary.first_entry !== null;
 
     const schedule = dailySchedulesMap.get(summary.employee_id)?.get(summary.date);
@@ -467,11 +471,11 @@ export async function buildAttendanceEntries(params: {
       hours_worked: isPresent ? hoursWorked : 0,
       display_hours_worked: isPresent ? hoursWorked : 0,
       base_hours_worked: baseHours,
-      travel_minutes_credited: 0,
-      travel_hours_credited: 0,
+      travel_minutes_credited: travelCreditedMinutes,
+      travel_hours_credited: travelCreditedHours,
       travel_delay_minutes: travelSummary?.delayMinutes || 0,
       travel_segments_count: travelSummary?.segmentsCount || 0,
-      travel_problematic_segments: travelSummary?.objectProblemSegmentsCount || 0,
+      travel_problematic_segments: travelSummary?.problematicSegmentsCount || 0,
       is_correction: false,
       first_entry: summary.first_entry,
       last_exit: summary.last_exit,
@@ -502,10 +506,13 @@ export async function buildAttendanceEntries(params: {
       if (needsSkudCheck(schedule, dateObject, calendarMonth)) {
         const rawSummary = rawFallbackSummaries.get(employee.id)?.get(workDate) || null;
 
+        const travelCreditedMinutes = travelSummary?.creditedMinutes || 0;
+        const travelCreditedHours = roundHours(travelCreditedMinutes / 60);
+
         if (rawSummary) {
           const plannedHours = getScheduleForDate(schedule, dateObject).work_hours;
           const baseHours = getSummaryHours(rawSummary);
-          const hoursWorked = roundHours(Math.min(baseHours, plannedHours));
+          const hoursWorked = roundHours(Math.min(baseHours + travelCreditedHours, plannedHours));
           const isPresent = baseHours > 0 || rawSummary.first_entry !== null;
 
           if (!skudMap.has(employee.id)) {
@@ -536,11 +543,11 @@ export async function buildAttendanceEntries(params: {
             hours_worked: isPresent ? hoursWorked : 0,
             display_hours_worked: isPresent ? hoursWorked : 0,
             base_hours_worked: baseHours,
-            travel_minutes_credited: 0,
-            travel_hours_credited: 0,
+            travel_minutes_credited: travelCreditedMinutes,
+            travel_hours_credited: travelCreditedHours,
             travel_delay_minutes: travelSummary?.delayMinutes || 0,
             travel_segments_count: travelSummary?.segmentsCount || 0,
-            travel_problematic_segments: travelSummary?.objectProblemSegmentsCount || 0,
+            travel_problematic_segments: travelSummary?.problematicSegmentsCount || 0,
             is_correction: false,
             first_entry: rawSummary.first_entry,
             last_exit: rawSummary.last_exit,
@@ -555,11 +562,11 @@ export async function buildAttendanceEntries(params: {
             hours_worked: 0,
             display_hours_worked: 0,
             base_hours_worked: 0,
-            travel_minutes_credited: 0,
-            travel_hours_credited: 0,
+            travel_minutes_credited: travelCreditedMinutes,
+            travel_hours_credited: travelCreditedHours,
             travel_delay_minutes: travelSummary?.delayMinutes || 0,
             travel_segments_count: travelSummary?.segmentsCount || 0,
-            travel_problematic_segments: travelSummary?.objectProblemSegmentsCount || 0,
+            travel_problematic_segments: travelSummary?.problematicSegmentsCount || 0,
             is_correction: false,
             first_entry: null,
             last_exit: null,
@@ -570,6 +577,8 @@ export async function buildAttendanceEntries(params: {
       }
 
       const plannedHours = getScheduleForDate(schedule, dateObject).work_hours;
+      const remoteTravelCreditedMinutes = travelSummary?.creditedMinutes || 0;
+      const remoteTravelCreditedHours = roundHours(remoteTravelCreditedMinutes / 60);
       pushEntry({
         id: null,
         employee_id: employee.id,
@@ -578,11 +587,11 @@ export async function buildAttendanceEntries(params: {
         hours_worked: plannedHours,
         display_hours_worked: plannedHours,
         base_hours_worked: plannedHours,
-        travel_minutes_credited: 0,
-        travel_hours_credited: 0,
+        travel_minutes_credited: remoteTravelCreditedMinutes,
+        travel_hours_credited: remoteTravelCreditedHours,
         travel_delay_minutes: travelSummary?.delayMinutes || 0,
         travel_segments_count: travelSummary?.segmentsCount || 0,
-        travel_problematic_segments: travelSummary?.objectProblemSegmentsCount || 0,
+        travel_problematic_segments: travelSummary?.problematicSegmentsCount || 0,
         is_correction: false,
         first_entry: null,
         last_exit: null,

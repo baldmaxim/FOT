@@ -239,6 +239,28 @@ router.post(
   skudController.rebuildTravelSegments
 );
 
+// GET /api/skud/travel-segments/day - сегменты передвижений сотрудника за конкретный день
+// (для модалки в табеле). Доступ дополнительно проверяется по отделу сотрудника внутри контроллера.
+router.get(
+  '/travel-segments/day',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'view'),
+  skudController.getDayTravelSegments
+);
+
+// POST /api/skud/travel-segments/:id/approve - подтвердить превышение лимита передвижения.
+router.post(
+  '/travel-segments/:id/approve',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
+  skudController.approveTravelSegment
+);
+
+// POST /api/skud/travel-segments/:id/reject - отклонить превышение лимита передвижения.
+router.post(
+  '/travel-segments/:id/reject',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
+  skudController.rejectTravelSegment
+);
+
 // PUT /api/skud/access-point-settings - сохранение настроек точек доступа (admin+)
 router.put(
   '/access-point-settings',

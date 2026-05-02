@@ -1,11 +1,14 @@
 import { Response } from 'express';
 import { z } from 'zod';
+import { supabase } from '../config/database.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import {
+  approveTravelSegment as approveTravelSegmentService,
   confirmTravelObjectMapUpload as confirmTravelObjectMapUploadService,
   createTravelObject,
   createTravelObjectMapUploadUrl as createTravelObjectMapUploadUrlService,
   getTravelConfig as getTravelConfigService,
+  getTravelSegmentEmployeeId,
   getAccessPointMapView as getAccessPointMapViewService,
   getTravelObjectMap as getTravelObjectMapService,
   createTravelRoute,
@@ -15,13 +18,15 @@ import {
   listTravelObjects,
   listTravelRoutes,
   listTravelSegments,
+  listTravelSegmentsForEmployeeDay,
   rebuildTravelSegmentsForScope,
+  rejectTravelSegment as rejectTravelSegmentService,
   saveTravelObjectMapPoints as saveTravelObjectMapPointsService,
   saveTravelConfig as saveTravelConfigService,
   updateTravelObject,
   updateTravelRoute,
 } from '../services/skud-travel.service.js';
-import { resolveScopedDepartmentId } from '../services/data-scope.service.js';
+import { resolveAccessibleDepartmentIds, resolveScopedDepartmentId } from '../services/data-scope.service.js';
 
 const monthRegex = /^\d{4}-\d{2}$/;
 
@@ -66,8 +71,43 @@ const segmentQuerySchema = z.object({
   month: z.string().regex(monthRegex),
   department_id: z.string().uuid().optional(),
   employee_id: z.coerce.number().int().positive().optional(),
-  status: z.enum(['auto_approved', 'delayed', 'needs_object', 'needs_route', 'problem']).optional(),
+  status: z.enum([
+    'auto_approved',
+    'pending',
+    'approved',
+    'rejected',
+    'needs_object',
+    'needs_route',
+    'problem',
+  ]).optional(),
 });
+
+const isoDateRegex = /^\d{4}-\d{2}-\d{2}$/;
+
+const dailySegmentsQuerySchema = z.object({
+  employee_id: z.coerce.number().int().positive(),
+  work_date: z.string().regex(isoDateRegex),
+});
+
+const decisionBodySchema = z.object({
+  comment: z.string().trim().max(1000).optional(),
+});
+
+async function ensureSegmentDepartmentAccess(
+  req: AuthenticatedRequest,
+  employeeId: number,
+): Promise<boolean> {
+  const accessible = await resolveAccessibleDepartmentIds(req);
+  if (accessible === 'all') return true;
+  const { data, error } = await supabase
+    .from('employees')
+    .select('org_department_id')
+    .eq('id', employeeId)
+    .maybeSingle();
+  if (error || !data) return false;
+  const deptId = data.org_department_id ? String(data.org_department_id) : null;
+  return deptId !== null && accessible.includes(deptId);
+}
 
 const accessPointMapQuerySchema = z.object({
   access_point_name: z.string().trim().min(1).max(255),
@@ -385,6 +425,98 @@ export const skudTravelController = {
       }
       const message = error instanceof Error ? error.message : 'Ошибка загрузки передвижений';
       console.error('getTravelSegments error:', error);
+      res.status(500).json({ success: false, error: message });
+    }
+  },
+
+  async getDayTravelSegments(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const parsed = dailySegmentsQuerySchema.parse({
+        employee_id: req.query.employee_id,
+        work_date: req.query.work_date,
+      });
+
+      if (!(await ensureSegmentDepartmentAccess(req, parsed.employee_id))) {
+        res.status(403).json({ success: false, error: 'Нет доступа к передвижениям этого сотрудника' });
+        return;
+      }
+
+      const data = await listTravelSegmentsForEmployeeDay({
+        employeeId: parsed.employee_id,
+        workDate: parsed.work_date,
+      });
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректные параметры', details: error.errors });
+        return;
+      }
+      const message = error instanceof Error ? error.message : 'Ошибка загрузки передвижений за день';
+      console.error('getDayTravelSegments error:', error);
+      res.status(500).json({ success: false, error: message });
+    }
+  },
+
+  async approveTravelSegment(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const segmentId = z.string().uuid().parse(req.params.id);
+      const body = decisionBodySchema.parse(req.body ?? {});
+
+      const employeeId = await getTravelSegmentEmployeeId(segmentId);
+      if (employeeId == null) {
+        res.status(404).json({ success: false, error: 'Сегмент передвижения не найден' });
+        return;
+      }
+      if (!(await ensureSegmentDepartmentAccess(req, employeeId))) {
+        res.status(403).json({ success: false, error: 'Нет доступа к передвижениям этого сотрудника' });
+        return;
+      }
+
+      const data = await approveTravelSegmentService({
+        segmentId,
+        userId: req.user.id,
+        comment: body.comment ?? null,
+      });
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректные данные', details: error.errors });
+        return;
+      }
+      const message = error instanceof Error ? error.message : 'Ошибка подтверждения сегмента';
+      console.error('approveTravelSegment error:', error);
+      res.status(500).json({ success: false, error: message });
+    }
+  },
+
+  async rejectTravelSegment(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const segmentId = z.string().uuid().parse(req.params.id);
+      const body = decisionBodySchema.parse(req.body ?? {});
+
+      const employeeId = await getTravelSegmentEmployeeId(segmentId);
+      if (employeeId == null) {
+        res.status(404).json({ success: false, error: 'Сегмент передвижения не найден' });
+        return;
+      }
+      if (!(await ensureSegmentDepartmentAccess(req, employeeId))) {
+        res.status(403).json({ success: false, error: 'Нет доступа к передвижениям этого сотрудника' });
+        return;
+      }
+
+      const data = await rejectTravelSegmentService({
+        segmentId,
+        userId: req.user.id,
+        comment: body.comment ?? null,
+      });
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректные данные', details: error.errors });
+        return;
+      }
+      const message = error instanceof Error ? error.message : 'Ошибка отклонения сегмента';
+      console.error('rejectTravelSegment error:', error);
       res.status(500).json({ success: false, error: message });
     }
   },

@@ -240,7 +240,7 @@ describe('attendance.service', () => {
     expect(result.objectEntries).toEqual([]);
   });
 
-  it('does not add travel time to summary hours but keeps delay metadata', async () => {
+  it('adds credited travel minutes (within limit) to summary hours and exposes delay metadata', async () => {
     mockedState.travelSummary = new Map([
       ['1_2026-04-01', {
         creditedMinutes: 45,
@@ -286,13 +286,13 @@ describe('attendance.service', () => {
     expect(result.entries[0]).toMatchObject({
       employee_id: 1,
       work_date: '2026-04-01',
-      hours_worked: 8,
-      display_hours_worked: 8,
+      hours_worked: 8.75,
+      display_hours_worked: 8.75,
       base_hours_worked: 8,
-      travel_minutes_credited: 0,
-      travel_hours_credited: 0,
+      travel_minutes_credited: 45,
+      travel_hours_credited: 0.75,
       travel_delay_minutes: 20,
-      travel_problematic_segments: 0,
+      travel_problematic_segments: 1,
     });
     expect(result.objectEntries).toEqual([]);
   });
