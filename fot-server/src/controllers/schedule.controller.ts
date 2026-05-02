@@ -4,7 +4,7 @@
 import { Response } from 'express';
 import { z } from 'zod';
 import { supabase } from '../config/database.js';
-import { resolveSchedule, resolveSchedulesBulk } from '../services/schedule.service.js';
+import { resolveSchedule, resolveSchedulesBulk, computeNetWorkHours } from '../services/schedule.service.js';
 import { canAccessEmployeeInScope, resolveRequestDataScope, resolveScopedDepartmentIds } from '../services/data-scope.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -12,10 +12,11 @@ const scheduleTypeEnum = z.enum(['office', 'remote', 'hybrid', 'shift']);
 const patternTypeEnum = z.enum(['5+0', '5+2', '6+0', 'custom']);
 const weekDayArray = z.array(z.number().int().min(1).max(7)).min(1).max(7);
 
+// work_hours принимается опционально и игнорируется — бэк сам пересчитывает из shift − lunch.
 const dayOverrideSchema = z.object({
   work_start: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
   work_end: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
-  work_hours: z.number().min(0.5).max(24),
+  work_hours: z.number().min(0).max(24).optional(),
 });
 
 const baseScheduleSchema = z.object({
@@ -23,7 +24,7 @@ const baseScheduleSchema = z.object({
   schedule_type: scheduleTypeEnum,
   work_start: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
   work_end: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
-  work_hours: z.number().min(0.5).max(24),
+  work_hours: z.number().min(0).max(24).optional(),
   work_days: weekDayArray,
   office_days: weekDayArray.nullable().optional(),
   late_threshold_minutes: z.number().int().min(0).max(120).optional(),
@@ -99,17 +100,23 @@ const previousIsoDate = (date: string): string => shiftIsoDate(date, -1);
 /** Нормализация HH:MM → HH:MM:SS */
 const normalizeTime = (t: string): string => (t.length === 5 ? t + ':00' : t);
 
-/** Нормализация day_overrides: time → HH:MM:SS */
+/**
+ * Нормализация day_overrides: time → HH:MM:SS, work_hours пересчитывается бэком как нетто
+ * (shift − lunch_minutes/60) — что прислал клиент в work_hours, игнорируется.
+ */
 const normalizeDayOverrides = (
-  overrides: Record<string, { work_start: string; work_end: string; work_hours: number }> | null | undefined,
+  overrides: Record<string, { work_start: string; work_end: string; work_hours?: number }> | null | undefined,
+  lunchMinutes: number,
 ): Record<string, { work_start: string; work_end: string; work_hours: number }> | null => {
   if (!overrides) return null;
   const result: Record<string, { work_start: string; work_end: string; work_hours: number }> = {};
   for (const [key, val] of Object.entries(overrides)) {
+    const start = normalizeTime(val.work_start);
+    const end = normalizeTime(val.work_end);
     result[key] = {
-      work_start: normalizeTime(val.work_start),
-      work_end: normalizeTime(val.work_end),
-      work_hours: val.work_hours,
+      work_start: start,
+      work_end: end,
+      work_hours: computeNetWorkHours(start, end, lunchMinutes),
     };
   }
   return result;
@@ -363,11 +370,18 @@ export const scheduleController = {
       const parsed = createScheduleSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.issues });
 
+      const workStart = normalizeTime(parsed.data.work_start);
+      const workEnd = normalizeTime(parsed.data.work_end);
+      const lunchMinutes = parsed.data.lunch_minutes ?? 0;
+
+      // work_hours хранится как нетто. Любое значение от клиента игнорируется
+      // и пересчитывается на бэке из (shift_duration − lunch_minutes/60).
       const body = {
         ...parsed.data,
-        work_start: normalizeTime(parsed.data.work_start),
-        work_end: normalizeTime(parsed.data.work_end),
-        day_overrides: normalizeDayOverrides(parsed.data.day_overrides),
+        work_start: workStart,
+        work_end: workEnd,
+        work_hours: computeNetWorkHours(workStart, workEnd, lunchMinutes),
+        day_overrides: normalizeDayOverrides(parsed.data.day_overrides, lunchMinutes),
       };
 
       const { data, error } = await supabase
@@ -392,10 +406,40 @@ export const scheduleController = {
       const parsed = baseScheduleSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.issues });
 
+      // Если изменилось хотя бы одно из полей, влияющих на work_hours
+      // (work_start / work_end / lunch_minutes / day_overrides), пересчитываем нетто.
+      const affectsWorkHours = (
+        parsed.data.work_start !== undefined
+        || parsed.data.work_end !== undefined
+        || parsed.data.lunch_minutes !== undefined
+        || parsed.data.day_overrides !== undefined
+      );
+
       const body: Record<string, unknown> = { ...parsed.data, updated_at: new Date().toISOString() };
-      if (parsed.data.work_start) body.work_start = normalizeTime(parsed.data.work_start);
-      if (parsed.data.work_end) body.work_end = normalizeTime(parsed.data.work_end);
-      if (parsed.data.day_overrides !== undefined) body.day_overrides = normalizeDayOverrides(parsed.data.day_overrides);
+
+      if (affectsWorkHours) {
+        const { data: current, error: loadError } = await supabase
+          .from('work_schedules')
+          .select('work_start, work_end, lunch_minutes, day_overrides')
+          .eq('id', id)
+          .single();
+        if (loadError) throw loadError;
+
+        const workStart = normalizeTime(parsed.data.work_start ?? current!.work_start);
+        const workEnd = normalizeTime(parsed.data.work_end ?? current!.work_end);
+        const lunchMinutes = parsed.data.lunch_minutes ?? current!.lunch_minutes ?? 0;
+        const overridesSource = parsed.data.day_overrides !== undefined
+          ? parsed.data.day_overrides
+          : current!.day_overrides;
+
+        body.work_start = workStart;
+        body.work_end = workEnd;
+        body.work_hours = computeNetWorkHours(workStart, workEnd, lunchMinutes);
+        body.day_overrides = normalizeDayOverrides(overridesSource as never, lunchMinutes);
+      } else {
+        // Безопасное игнорирование work_hours от клиента, если ничего связанного не менялось.
+        delete body.work_hours;
+      }
 
       const { data, error } = await supabase
         .from('work_schedules')

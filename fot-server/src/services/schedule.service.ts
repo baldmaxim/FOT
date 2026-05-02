@@ -121,6 +121,24 @@ export const getShiftDurationHours = (daySchedule: IDayScheduleParams): number =
   return Math.max(0, (endMin - startMin) / 60);
 };
 
+/** Длительность смены по строкам времени (для нужд контроллера/миграции). */
+export const computeShiftDurationHours = (workStart: string, workEnd: string): number => {
+  return getShiftDurationHours({ work_start: workStart, work_end: workEnd, work_hours: 0 });
+};
+
+/**
+ * Нетто-рабочее время = длительность смены − обед.
+ * Используется бэкендом при сохранении графика: гарантирует, что в БД всегда лежит нетто,
+ * независимо от того, что прислал клиент в поле work_hours.
+ */
+export const computeNetWorkHours = (
+  workStart: string,
+  workEnd: string,
+  lunchMinutes: number,
+): number => {
+  return Math.max(0, computeShiftDurationHours(workStart, workEnd) - (lunchMinutes || 0) / 60);
+};
+
 /** Порог полного дня для конкретной даты: как в UI табеля.
  *  work_hours хранится как нетто (без обеда), отдельный вычет lunch_minutes не нужен.
  */
