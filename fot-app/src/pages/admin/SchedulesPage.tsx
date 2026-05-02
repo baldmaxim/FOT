@@ -304,6 +304,9 @@ export const SchedulesPage: FC = () => {
         setError('Порог полного дня (выходной): формат ЧЧ:ММ');
         return;
       }
+      // work_hours хранится как нетто: длительность смены минус обед
+      const lunchHours = (form.lunch_minutes || 0) / 60;
+      const netHours = Math.max(0, computedHours - lunchHours);
       const dayOverridesPayload: Record<string, IDayOverride> = {};
       for (const day of form.work_days) {
         const override = form.day_overrides[day];
@@ -316,10 +319,11 @@ export const SchedulesPage: FC = () => {
         if (override.work_start === form.work_start && override.work_end === form.work_end) {
           continue;
         }
+        const overrideNetHours = Math.max(0, overrideHours - lunchHours);
         dayOverridesPayload[String(day)] = {
           work_start: override.work_start,
           work_end: override.work_end,
-          work_hours: Number(overrideHours.toFixed(4)),
+          work_hours: Number(overrideNetHours.toFixed(4)),
         };
       }
       const payload = {
@@ -328,7 +332,7 @@ export const SchedulesPage: FC = () => {
         pattern_type: form.pattern_type,
         work_start: form.work_start,
         work_end: form.work_end,
-        work_hours: Number(computedHours.toFixed(4)),
+        work_hours: Number(netHours.toFixed(4)),
         work_days: form.work_days,
         office_days: null,
         day_overrides: Object.keys(dayOverridesPayload).length > 0 ? dayOverridesPayload : null,

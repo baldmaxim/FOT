@@ -115,17 +115,18 @@ export const isScheduleDayOff = (
 
 /**
  * Порог "полного дня" в часах для визуализации ячейки табеля.
+ * work_hours хранится как нетто (без обеда), отдельный вычет lunch_minutes не нужен.
  * - isWeekendDay=false (будний рабочий день графика): берём full_day_threshold_minutes,
- *   fallback = work_hours*60 − lunch_minutes (чистое время).
+ *   fallback = work_hours.
  * - isWeekendDay=true (сотрудник вышел в выходной): берём weekend_full_day_threshold_minutes,
- *   fallback = full_day_threshold_minutes, далее → чистое время.
+ *   fallback = full_day_threshold_minutes, далее → work_hours.
  */
 export const getFullDayThresholdHours = (
   sched: IResolvedSchedule | undefined,
   isWeekendDay: boolean,
 ): number => {
   if (!sched) return 8;
-  const netFallbackMin = Math.max(0, Math.round(sched.work_hours * 60) - (sched.lunch_minutes || 0));
+  const fallbackMin = Math.max(0, Math.round(sched.work_hours * 60));
   if (isWeekendDay) {
     if (sched.weekend_full_day_threshold_minutes != null) {
       return sched.weekend_full_day_threshold_minutes / 60;
@@ -133,14 +134,18 @@ export const getFullDayThresholdHours = (
     if (sched.full_day_threshold_minutes != null) {
       return sched.full_day_threshold_minutes / 60;
     }
-    return netFallbackMin / 60;
+    return fallbackMin / 60;
   }
   if (sched.full_day_threshold_minutes != null) {
     return sched.full_day_threshold_minutes / 60;
   }
-  return netFallbackMin / 60;
+  return fallbackMin / 60;
 };
 
+/**
+ * Порог "полного дня" с учётом конкретной даты (day_overrides + предпраздничный −1ч).
+ * Симметричен бэкендовой getFullDayThresholdHoursForDate.
+ */
 export const getFullDayThresholdHoursForDay = (
   sched: IResolvedSchedule | undefined,
   calendar: IProductionCalendarMonth | null,
@@ -151,10 +156,7 @@ export const getFullDayThresholdHoursForDay = (
   if (!sched) return 8;
 
   const isDayOff = isScheduleDayOff(sched, calendar, year, month, day);
-  const netFallbackMin = Math.max(
-    0,
-    Math.round(getWorkHoursForDay(sched, year, month, day) * 60) - (sched.lunch_minutes || 0),
-  );
+  const fallbackMin = Math.max(0, Math.round(getWorkHoursForDay(sched, year, month, day) * 60));
 
   if (isDayOff) {
     if (sched.weekend_full_day_threshold_minutes != null) {
@@ -163,14 +165,35 @@ export const getFullDayThresholdHoursForDay = (
     if (sched.full_day_threshold_minutes != null) {
       return sched.full_day_threshold_minutes / 60;
     }
-    return netFallbackMin / 60;
+    return fallbackMin / 60;
   }
+
+  // Предпраздничный рабочий день: порог снижается на 1 час (но не ниже 0)
+  const preHolidayShiftMinutes = isPreHolidayForSchedule(sched, calendar, year, month, day) ? 60 : 0;
 
   if (sched.full_day_threshold_minutes != null) {
-    return sched.full_day_threshold_minutes / 60;
+    return Math.max(0, sched.full_day_threshold_minutes - preHolidayShiftMinutes) / 60;
   }
 
-  return netFallbackMin / 60;
+  return Math.max(0, fallbackMin - preHolidayShiftMinutes) / 60;
+};
+
+/**
+ * Норма часов на конкретный день (фронтовый аналог бэкендовой getDayNormHours):
+ * 0 для нерабочего, work_hours-1 для предпраздничного будня (если respects_holidays), иначе work_hours.
+ */
+export const getDayNormHoursForDay = (
+  sched: IResolvedSchedule | undefined,
+  calendar: IProductionCalendarMonth | null,
+  year: number,
+  month: number,
+  day: number,
+): number => {
+  if (!sched) return 0;
+  if (isScheduleDayOff(sched, calendar, year, month, day)) return 0;
+  const base = getWorkHoursForDay(sched, year, month, day);
+  const minus = isPreHolidayForSchedule(sched, calendar, year, month, day) ? 1 : 0;
+  return Math.max(0, base - minus);
 };
 
 export const getEffectiveLateThresholdForDay = (

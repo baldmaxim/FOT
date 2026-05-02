@@ -109,11 +109,6 @@ export const isOfficeDay = (schedule: IResolvedSchedule, date: Date): boolean =>
   return schedule.office_days.includes(getISODow(date));
 };
 
-/** Чистое рабочее время = длина смены − обед */
-export const getNetHours = (schedule: Pick<IResolvedSchedule, 'work_hours' | 'lunch_minutes'>): number => {
-  return Math.max(0, schedule.work_hours - schedule.lunch_minutes / 60);
-};
-
 /** Длительность смены = work_end − work_start (без вычета обеда). Учитывает ночные смены. */
 export const getShiftDurationHours = (daySchedule: IDayScheduleParams): number => {
   const parse = (value: string): number => {
@@ -126,7 +121,9 @@ export const getShiftDurationHours = (daySchedule: IDayScheduleParams): number =
   return Math.max(0, (endMin - startMin) / 60);
 };
 
-/** Порог полного дня для конкретной даты: как в UI табеля */
+/** Порог полного дня для конкретной даты: как в UI табеля.
+ *  work_hours хранится как нетто (без обеда), отдельный вычет lunch_minutes не нужен.
+ */
 export const getFullDayThresholdHoursForDate = (
   schedule: IResolvedSchedule,
   date: Date,
@@ -134,7 +131,7 @@ export const getFullDayThresholdHoursForDate = (
 ): number => {
   const isDayOff = !isWorkingDay(schedule, date, calendar);
   const daySchedule = getScheduleForDate(schedule, date);
-  const netFallbackMinutes = Math.max(0, Math.round(daySchedule.work_hours * 60) - (schedule.lunch_minutes || 0));
+  const fallbackMinutes = Math.max(0, Math.round(daySchedule.work_hours * 60));
 
   if (isDayOff) {
     if (schedule.weekend_full_day_threshold_minutes != null) {
@@ -143,7 +140,7 @@ export const getFullDayThresholdHoursForDate = (
     if (schedule.full_day_threshold_minutes != null) {
       return schedule.full_day_threshold_minutes / 60;
     }
-    return netFallbackMinutes / 60;
+    return fallbackMinutes / 60;
   }
 
   // Предпраздничный рабочий день: порог снижается на 1 час (но не ниже 0)
@@ -153,7 +150,7 @@ export const getFullDayThresholdHoursForDate = (
     return Math.max(0, schedule.full_day_threshold_minutes - preHolidayShiftMinutes) / 60;
   }
 
-  return Math.max(0, netFallbackMinutes - preHolidayShiftMinutes) / 60;
+  return Math.max(0, fallbackMinutes - preHolidayShiftMinutes) / 60;
 };
 
 /** Норма часов на конкретный день: 0 для нерабочего, work_hours-1 для предпраздничного будня (если respects_holidays), иначе work_hours. */

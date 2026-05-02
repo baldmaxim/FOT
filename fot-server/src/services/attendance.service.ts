@@ -149,7 +149,7 @@ function getPlannedHoursForScheduleOnDate(
   if (!schedule) return null;
   const [yearPart, monthPart, dayPart] = workDate.split('-').map(Number);
   // Лимит для отображения руководителю = длительность смены (start–end, без вычета обеда),
-  // а не work_hours (которое уже за вычетом обеда).
+  // а не work_hours (которое хранится как нетто, без обеда).
   return getShiftDurationHours(getScheduleForDate(schedule, new Date(yearPart, monthPart - 1, dayPart)));
 }
 
@@ -178,13 +178,13 @@ function computePresenceCoversShift(params: {
   firstEntry: string | null;
   lastExit: string | null;
   totalMinutes: number;
-  plannedHours: number;
+  shiftDurationHours: number;
   lunchMinutes: number;
   workDate: string;
   todayStr: string;
   nowHMS: string;
 }): boolean {
-  const { firstEntry, lastExit, totalMinutes, plannedHours, lunchMinutes, workDate, todayStr, nowHMS } = params;
+  const { firstEntry, lastExit, totalMinutes, shiftDurationHours, lunchMinutes, workDate, todayStr, nowHMS } = params;
   if (!firstEntry) return false;
   const firstSec = parseTimeToSeconds(firstEntry);
   const lastSec = lastExit
@@ -194,7 +194,7 @@ function computePresenceCoversShift(params: {
   const spanSec = Math.max(0, lastSec - firstSec);
   const workSec = totalMinutes * 60;
   const gapsSec = Math.max(0, spanSec - workSec);
-  return spanSec >= plannedHours * 3600 && gapsSec <= lunchMinutes * 60;
+  return spanSec >= shiftDurationHours * 3600 && gapsSec <= lunchMinutes * 60;
 }
 
 function getAdjustmentPriority(sourceType: string): number {
@@ -444,12 +444,12 @@ export async function buildAttendanceEntries(params: {
     } else if (schedule) {
       const [yearPart, monthPart, dayPart] = summary.date.split('-').map(Number);
       const dateObject = new Date(yearPart, monthPart - 1, dayPart);
-      const plannedHours = getScheduleForDate(schedule, dateObject).work_hours;
+      const shiftDurationHours = getShiftDurationHours(getScheduleForDate(schedule, dateObject));
       presenceCoversShift = computePresenceCoversShift({
         firstEntry: summary.first_entry,
         lastExit: summary.last_exit,
         totalMinutes: getSummaryMinutes(summary),
-        plannedHours,
+        shiftDurationHours,
         lunchMinutes: schedule.lunch_minutes || 0,
         workDate: summary.date,
         todayStr,
@@ -511,12 +511,13 @@ export async function buildAttendanceEntries(params: {
           }
           skudMap.get(employee.id)!.set(workDate, { hours: hoursWorked, corrected: false });
 
+          const shiftDurationHours = getShiftDurationHours(getScheduleForDate(schedule, dateObject));
           const presenceCoversShift = isPresent
             ? computePresenceCoversShift({
               firstEntry: rawSummary.first_entry,
               lastExit: rawSummary.last_exit,
               totalMinutes: getSummaryMinutes(rawSummary),
-              plannedHours,
+              shiftDurationHours,
               lunchMinutes: schedule.lunch_minutes || 0,
               workDate,
               todayStr,

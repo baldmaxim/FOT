@@ -260,11 +260,12 @@ describe('schedule.service pre-holidays', () => {
     expect(without - total).toBe(1);
   });
 
-  it('getFullDayThresholdHoursForDate: порог снижается на 1ч в предпразник (fallback от work_hours-lunch)', () => {
-    // обычный будень: (8*60 - 60)/60 = 7
-    expect(getFullDayThresholdHoursForDate(baseSchedule, new Date(2026, 11, 29), calendar)).toBe(7);
-    // предпразник: (8*60 - 60 - 60)/60 = 6
-    expect(getFullDayThresholdHoursForDate(baseSchedule, new Date(2026, 11, 30), calendar)).toBe(6);
+  it('getFullDayThresholdHoursForDate: порог снижается на 1ч в предпразник (fallback от work_hours)', () => {
+    // work_hours хранится как нетто, обед в формуле не вычитается
+    // обычный будень: 8ч
+    expect(getFullDayThresholdHoursForDate(baseSchedule, new Date(2026, 11, 29), calendar)).toBe(8);
+    // предпразник: 8 - 1 = 7
+    expect(getFullDayThresholdHoursForDate(baseSchedule, new Date(2026, 11, 30), calendar)).toBe(7);
   });
 
   it('getFullDayThresholdHoursForDate: явно заданный full_day_threshold_minutes тоже снижается на 60мин в предпразник', () => {
