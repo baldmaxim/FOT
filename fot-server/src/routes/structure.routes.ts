@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { structureController } from '../controllers/structure.controller.js';
-import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
+import { authenticate, requireAdmin, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { invalidateStructureCache } from '../services/employee-mapper.service.js';
 
@@ -47,7 +47,7 @@ router.get(
 // POST /api/structure/departments - создание отдела
 router.post(
   '/departments',
-  requirePageAccess('/employees/structure-manage', 'edit'),
+  requireAdmin,
   requireCritical2FA,
   structureController.createDepartment
 );
@@ -55,7 +55,7 @@ router.post(
 // PUT /api/structure/departments/:id - переименование/смена родителя
 router.put(
   '/departments/:id',
-  requirePageAccess('/employees/structure-manage', 'edit'),
+  requireAdmin,
   requireCritical2FA,
   structureController.updateDepartment
 );
@@ -63,7 +63,7 @@ router.put(
 // POST /api/structure/departments/batch-move - массовое перемещение отделов
 router.post(
   '/departments/batch-move',
-  requirePageAccess('/employees/structure-manage', 'edit'),
+  requireAdmin,
   requireCritical2FA,
   structureController.batchMoveDepartments
 );
@@ -71,7 +71,7 @@ router.post(
 // DELETE /api/structure/departments/:id - удаление отдела
 router.delete(
   '/departments/:id',
-  requirePageAccess('/employees/structure-manage', 'edit'),
+  requireAdmin,
   requireCritical2FA,
   structureController.deleteDepartment
 );
@@ -79,7 +79,7 @@ router.delete(
 // DELETE /api/structure/departments/:id/recursive - рекурсивное удаление отдела
 router.delete(
   '/departments/:id/recursive',
-  requirePageAccess('/employees/structure-manage', 'edit'),
+  requireAdmin,
   requireCritical2FA,
   structureController.deleteDepartmentRecursive
 );

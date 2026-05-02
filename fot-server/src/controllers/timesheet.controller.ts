@@ -196,7 +196,7 @@ async function resolveAdjustmentApprovalStatus(
 }
 
 const MANAGED_TIMESHEET_PAGE_KEYS = ['/timesheet', '/timesheet-hr'] as const;
-const TIMESHEET_TEAM_MANAGEMENT_PAGE_KEY = '/timesheet/team-management';
+const TIMESHEET_TEAM_MANAGEMENT_PAGE_KEY = 'timesheet-team-management';
 
 interface IManagedDepartmentTimesheetSummary {
   department_id: string;

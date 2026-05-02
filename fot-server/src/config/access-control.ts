@@ -45,13 +45,12 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/admin/roles',                label: 'Управление ролями',              group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 240, is_active: true },
   { key: '/admin/settings',             label: 'Системные настройки',            group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 250, is_active: true },
   { key: '/admin/schedules',            label: 'Графики работы',                 group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 260, is_active: true },
+  { key: '/admin/schedules/templates',  label: 'Шаблоны графиков (только вкладка)', group_code: 'admin',  group_label: 'Администрирование',    surface: 'technical', supports_edit: true,  sort_order: 261, is_active: true },
   { key: '/admin/payslips',             label: 'Управление расчётными листками', group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 270, is_active: true },
   { key: '/admin/patent-receipts',      label: 'Чеки за патент',                 group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 275, is_active: true },
   { key: '/admin/timesheet-transfers',  label: 'Переводы и исключения табеля',   group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 276, is_active: true },
   { key: '/admin/data-api',             label: 'API-доступ к данным',            group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 290, is_active: true },
-  { key: '/admin/payments',             label: 'Управление выплатами',           group_code: 'technical', group_label: 'Технические доступы', surface: 'technical', supports_edit: true,  sort_order: 280, is_active: true },
-  { key: '/employees/structure-manage', label: 'Управление деревом отделов',     group_code: 'technical', group_label: 'Технические доступы', surface: 'technical', supports_edit: true,  sort_order: 282, is_active: true },
-  { key: '/timesheet/team-management',  label: 'Управление составом табеля',     group_code: 'technical', group_label: 'Технические доступы', surface: 'technical', supports_edit: true,  sort_order: 285, is_active: true },
+  { key: 'timesheet-team-management',   label: 'Управление составом табеля',     group_code: 'technical', group_label: 'Технические доступы', surface: 'technical', supports_edit: true,  sort_order: 285, is_active: true },
 ];
 
 export function normalizePageAccessEntry<T extends PageAccessEntry>(entry: T): T {

@@ -76,26 +76,26 @@ router.get(
 
 router.get(
   '/team-management-config',
-  requireAnyPageAccess(['/timesheet', '/timesheet-hr', '/timesheet/team-management'], 'view'),
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr', 'timesheet-team-management'], 'view'),
   timesheetController.getTeamManagementConfig
 );
 
 router.get(
   '/team-management/search-employees',
-  requireAnyPageAccess(['/timesheet', '/timesheet-hr', '/timesheet/team-management'], 'edit'),
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr', 'timesheet-team-management'], 'edit'),
   timesheetSearchCache,
   timesheetController.searchTeamEmployees
 );
 
 router.post(
   '/team-management/add-employee',
-  requireAnyPageAccess(['/timesheet', '/timesheet-hr', '/timesheet/team-management'], 'edit'),
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr', 'timesheet-team-management'], 'edit'),
   timesheetController.addEmployeeToDepartment
 );
 
 router.post(
   '/team-management/exclude-employee',
-  requireAnyPageAccess(['/timesheet', '/timesheet-hr', '/timesheet/team-management'], 'edit'),
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr', 'timesheet-team-management'], 'edit'),
   timesheetController.excludeEmployeeFromDepartment
 );
 

@@ -675,7 +675,6 @@ export const RoleManagementPage: FC = () => {
                                 <span className={styles.pageLabel}>{page.label}</span>
                                 <span className={styles.technicalBadge}>Технический ключ</span>
                               </div>
-                              <code className={styles.pagePath}>{page.key}</code>
                             </div>
                             {renderAccessControl(page)}
                           </div>
