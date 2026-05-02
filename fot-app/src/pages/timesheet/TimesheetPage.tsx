@@ -48,17 +48,6 @@ const TravelExceptionModal = lazy(() => import('../../components/timesheet/Trave
   default: module.TravelExceptionModal,
 })));
 
-
-const formatHoursHM = (decimal: number): string => {
-  if (!decimal || decimal <= 0) return '0м';
-  const totalMinutes = Math.round(decimal * 60);
-  const h = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
-  if (h === 0) return `${m}м`;
-  if (m === 0) return `${h}ч`;
-  return `${h}ч ${m}м`;
-};
-
 const DEFAULT_STATS: ITimesheetStats = {
   employeeCount: 0,
   workingDays: 0,
