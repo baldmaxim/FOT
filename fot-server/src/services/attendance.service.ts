@@ -1,7 +1,7 @@
 import { supabase } from '../config/database.js';
 import type { IProductionCalendarMonth, IResolvedSchedule, TimeStatus } from '../types/index.js';
 import { getTravelHoursSummaryForRange } from './skud-travel.service.js';
-import { getScheduleForDate, getShiftDurationHours, isWorkingDay, needsSkudCheck } from './schedule.service.js';
+import { getScheduleForDate, getShiftDurationHours, isPreHoliday, isWorkingDay, needsSkudCheck } from './schedule.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import {
   buildObjectAttendanceData,
@@ -444,7 +444,9 @@ export async function buildAttendanceEntries(params: {
     } else if (schedule) {
       const [yearPart, monthPart, dayPart] = summary.date.split('-').map(Number);
       const dateObject = new Date(yearPart, monthPart - 1, dayPart);
-      const shiftDurationHours = getShiftDurationHours(getScheduleForDate(schedule, dateObject));
+      // Предпраздничный день — смена сокращена на 1ч, span должен сравниваться с укороченной длительностью.
+      const baseShiftHours = getShiftDurationHours(getScheduleForDate(schedule, dateObject));
+      const shiftDurationHours = Math.max(0, baseShiftHours - (isPreHoliday(dateObject, schedule, calendarMonth) ? 1 : 0));
       presenceCoversShift = computePresenceCoversShift({
         firstEntry: summary.first_entry,
         lastExit: summary.last_exit,
@@ -511,7 +513,8 @@ export async function buildAttendanceEntries(params: {
           }
           skudMap.get(employee.id)!.set(workDate, { hours: hoursWorked, corrected: false });
 
-          const shiftDurationHours = getShiftDurationHours(getScheduleForDate(schedule, dateObject));
+          const baseShiftHours = getShiftDurationHours(getScheduleForDate(schedule, dateObject));
+          const shiftDurationHours = Math.max(0, baseShiftHours - (isPreHoliday(dateObject, schedule, calendarMonth) ? 1 : 0));
           const presenceCoversShift = isPresent
             ? computePresenceCoversShift({
               firstEntry: rawSummary.first_entry,

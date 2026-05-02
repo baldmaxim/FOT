@@ -64,7 +64,7 @@ const isHoliday = (
 };
 
 /** Предпраздничный ли день для конкретного графика (рабочий, но -1ч). Уважает respects_holidays. */
-const isPreHoliday = (
+export const isPreHoliday = (
   date: Date,
   schedule: IResolvedSchedule,
   calendar: IProductionCalendarMonth | null,

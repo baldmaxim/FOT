@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
-import { getFullDayThresholdHoursForDate, isWorkingDay } from './schedule.service.js';
+import { getFullDayThresholdHoursForDate, getDayNormHours, isWorkingDay } from './schedule.service.js';
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -227,9 +227,32 @@ const createOneCTemplateWorkbook = async (sheetName: string): Promise<ExcelJS.Wo
   return workbook;
 };
 
-const roundHoursForOneC = (hours: number): number => {
-  if (!hasPositiveHours(hours)) return 0;
-  return Math.max(0, Math.round(hours));
+/**
+ * Целые часы для 1С на конкретный день:
+ *  - факт ≥ нормы дня → полный день (норма дня, округлённая до целого);
+ *  - факт < нормы дня → факт, округлённый ВНИЗ до целого часа.
+ * Это соответствует правилу Т-13: «отработал смену по графику — ставим стандартную ставку
+ * (8 для пн-чт 5+0, 7 для пт, 11 для 6+0 и т.п.), даже если переработал».
+ * Допуск 0.001 ч ≈ 4 секунды — компенсирует потери точности при хранении total_hours без total_minutes.
+ */
+const compute1CDayHours = (factHours: number, dayNormHours: number): number => {
+  if (!hasPositiveHours(factHours)) return 0;
+  if (dayNormHours > 0 && factHours + 0.001 >= dayNormHours) {
+    return Math.max(0, Math.round(dayNormHours));
+  }
+  return Math.max(0, Math.floor(factHours));
+};
+
+const getDayNormForEmployeeOnDate = (
+  data: IDepartmentTimesheetData,
+  employeeId: number,
+  dateStr: string,
+  fallbackSchedule = data.schedulesMap.get(employeeId),
+): number => {
+  const schedule = data.dailySchedulesMap.get(employeeId)?.get(dateStr) || fallbackSchedule;
+  if (!schedule) return 0;
+  const [year, month, day] = dateStr.split('-').map(Number);
+  return getDayNormHours(schedule, new Date(year, month - 1, day), data.calendarMonth);
 };
 
 const ensureOneCBodyRows = (worksheet: ExcelJS.Worksheet, lastRow: number): void => {
@@ -265,7 +288,8 @@ const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCExportRo
       const dateStr = `${data.year}-${pad2(data.mon)}-${pad2(day)}`;
       const entry = employeeDays?.get(dateStr);
       if (!entry || !hasPositiveHours(entry.hours)) continue;
-      const roundedHours = roundHoursForOneC(entry.hours);
+      const dayNormHours = getDayNormForEmployeeOnDate(data, employee.id, dateStr, schedule);
+      const roundedHours = compute1CDayHours(entry.hours, dayNormHours);
       if (!roundedHours) continue;
       const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);
       dayValues.set(day, {
@@ -313,7 +337,8 @@ const buildObjectRowsForOneC = (
         const dateStr = `${data.year}-${pad2(data.mon)}-${pad2(day)}`;
         const hours = employeeDays.get(dateStr) ?? 0;
         if (!hasPositiveHours(hours)) continue;
-        const roundedHours = roundHoursForOneC(hours);
+        const dayNormHours = getDayNormForEmployeeOnDate(data, employee.id, dateStr, schedule);
+        const roundedHours = compute1CDayHours(hours, dayNormHours);
         if (!roundedHours) continue;
         const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);
         dayValues.set(day, {

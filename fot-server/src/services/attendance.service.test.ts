@@ -107,6 +107,7 @@ vi.mock('./schedule.service.js', () => ({
   getShiftDurationHours: vi.fn((dayParams?: { work_hours?: number }) => (
     dayParams?.work_hours ?? mockedState.scheduleWorkHours
   )),
+  isPreHoliday: vi.fn(() => false),
   isWorkingDay: vi.fn(() => mockedState.isWorkingDay),
   needsSkudCheck: vi.fn(() => mockedState.needsSkudCheck),
 }));

@@ -240,4 +240,57 @@ describe('timesheet-excel.service', () => {
     expect(ws!.getCell(4, 34).value).toBe(5);
     expect(ws!.getCell(5, 2).value).toBeNull();
   });
+
+  it('1C export: при факте ≥ нормы дня ставит round(work_hours), даже если переработка', async () => {
+    const data = makeBaseData();
+    // График дефолта 5+0 после миграции: смена 9–18 (брутто 9ч), обед 90 мин → нетто 7.5ч.
+    const sched: IResolvedSchedule = {
+      ...makeSchedule(),
+      work_hours: 7.5,
+      lunch_minutes: 90,
+    };
+    data.schedulesMap = new Map([[1, sched], [2, sched]]);
+    data.dailySchedulesMap = new Map([
+      [1, new Map([['2026-04-01', sched]])],
+      [2, new Map([['2026-04-01', sched]])],
+    ]);
+    // Иван: факт 8.84 (= 8:51) — выше нормы → должно стать 8 (round(7.5))
+    // Пётр: факт 9.50 (= 9:30) — переработка → всё равно 8
+    data.dataMap = new Map([
+      [1, new Map([['2026-04-01', { status: 'work', hours: 8.84, corrected: false }]])],
+      [2, new Map([['2026-04-01', { status: 'work', hours: 9.5, corrected: false }]])],
+    ]);
+
+    const wb = await build1CTimesheetWorkbook('Табель 1С', data);
+    const ws = wb.getWorksheet('Табель 1С');
+    expect(ws).toBeTruthy();
+    expect(ws!.getCell(4, 3).value).toBe(8);
+    expect(ws!.getCell(5, 3).value).toBe(8);
+  });
+
+  it('1C export: при факте < нормы дня округляет факт ВНИЗ', async () => {
+    const data = makeBaseData();
+    const sched: IResolvedSchedule = {
+      ...makeSchedule(),
+      work_hours: 7.5,
+      lunch_minutes: 90,
+    };
+    data.schedulesMap = new Map([[1, sched], [2, sched]]);
+    data.dailySchedulesMap = new Map([
+      [1, new Map([['2026-04-01', sched]])],
+      [2, new Map([['2026-04-01', sched]])],
+    ]);
+    // Иван: факт 7.4833 (= 7:29) — на минуту меньше нормы 7:30 → floor = 7
+    // Пётр: факт 6.5 — между 6 и 7 → floor = 6
+    data.dataMap = new Map([
+      [1, new Map([['2026-04-01', { status: 'work', hours: 7.4833, corrected: false }]])],
+      [2, new Map([['2026-04-01', { status: 'work', hours: 6.5, corrected: false }]])],
+    ]);
+
+    const wb = await build1CTimesheetWorkbook('Табель 1С', data);
+    const ws = wb.getWorksheet('Табель 1С');
+    expect(ws).toBeTruthy();
+    expect(ws!.getCell(4, 3).value).toBe(7);
+    expect(ws!.getCell(5, 3).value).toBe(6);
+  });
 });
