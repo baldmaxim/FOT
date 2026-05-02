@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Гибридный деплой FOT:
-#   1. Бэкенд: git pull + build + PM2 restart на vds
+# Локальный build + upload для FOT:
+#   1. Бэкенд: локальный build + upload dist/ + PM2 restart на vds
 #   2. Фронтенд: локальный build + upload dist/ на vds
 #
 # Запуск:
@@ -20,13 +20,14 @@ Usage:
 
 Pass-through environment:
   FRONTEND_NPM_CI=1      Force local `npm ci` for fot-app before build.
-  BACKEND_NPM_CI=1       Force remote `npm ci` for fot-server before build.
+  BACKEND_NPM_CI=1       Force local `npm ci` and remote production deps
+                         refresh for fot-server.
   BACKEND_SOURCEMAPS=0   Skip backend sourcemaps upload.
 
 Behavior:
   - first runs frontend/backend preflight
-  - then deploys backend on vds
-  - then deploys frontend from local machine
+  - then builds/uploads backend from local machine and restarts PM2
+  - then builds/uploads frontend from local machine
 EOF
 }
 

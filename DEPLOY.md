@@ -85,15 +85,18 @@ export VITE_SENTRY_RELEASE=$(cd /var/www/fot && git rev-parse --short HEAD)
 NODE_OPTIONS='--max-old-space-size=1024' npm run build
 ```
 
-## Рекомендуемый деплой бэкенда (на vds)
+## Рекомендуемый деплой бэкенда (локальная сборка + запуск на vds)
 
-Бэкенд по умолчанию собираем на сервере. Для этого есть отдельный скрипт:
+Бэкенд по умолчанию собираем локально, а на vds заливаем уже готовый `dist/`.
+На сервере остаются только `git pull --ff-only`, production-зависимости при
+необходимости, атомарная замена `dist/` и `pm2 restart`.
 
 ```bash
 bash scripts/deploy-backend.sh
 ```
 
-Если нужно принудительно обновить зависимости на сервере:
+Если нужно принудительно обновить зависимости локально и production-зависимости
+на сервере:
 ```bash
 BACKEND_NPM_CI=1 bash scripts/deploy-backend.sh
 ```
@@ -103,14 +106,16 @@ BACKEND_NPM_CI=1 bash scripts/deploy-backend.sh
 BACKEND_SOURCEMAPS=0 bash scripts/deploy-backend.sh
 ```
 
-Скрипт сам: делает `git fetch origin main` → проверяет, что локальный `HEAD` не опережает `origin/main` → на сервере делает `git pull --ff-only origin main` → автоматически запускает `npm ci`, если изменился `fot-server/package-lock.json` в деплоимом диапазоне или если на сервере отсутствует `node_modules/` → подгружает env из `fot-server/.env` → билдит бэкенд → загружает sourcemaps → делает `pm2 restart fot-server --update-env`.
+Скрипт сам: делает `git fetch origin main` → проверяет, что локальный `HEAD` не опережает `origin/main` → отказывается деплоить при незакоммиченных изменениях внутри `fot-server/` → локально при необходимости запускает `npm ci` → локально билдит `dist/` → локально загружает sourcemaps в Sentry → на сервере делает `git pull --ff-only origin main` → автоматически запускает `npm ci --omit=dev`, если изменился `fot-server/package-lock.json` в деплоимом диапазоне или если на сервере отсутствует `node_modules/` → заливает `dist/` в `dist.new` → атомарно меняет `dist.new` на `dist` → подгружает env из `/var/www/fot/fot-server/.env` → делает `pm2 restart fot-server --update-env`.
+
+> Для backend sourcemaps скрипт берёт переменные из `fot-server/.env.production.local`, если файл есть, иначе из локального `fot-server/.env`. Не коммить эти файлы.
 
 ## Рекомендуемый полный деплой (оба)
 
-На практике сейчас самый предсказуемый и обычно самый быстрый путь такой:
+На практике сейчас основной путь такой:
 
-1. Бэкенд: `git pull` + build/restart на `vds`
-2. Фронтенд: локальный `bash scripts/deploy-frontend.sh`
+1. Бэкенд: локальный build + upload `dist/` + restart на `vds`
+2. Фронтенд: локальный build + upload `dist/`
 
 ```bash
 bash scripts/deploy-both.sh
@@ -123,7 +128,7 @@ FRONTEND_NPM_CI=1 BACKEND_NPM_CI=1 bash scripts/deploy-both.sh
 
 Скрипт `deploy-both.sh` сначала делает preflight (`deploy-frontend.sh --check` и `deploy-backend.sh --check`), и только потом запускает backend- и frontend-деплой по очереди. Это защищает от ситуации, когда бэкенд уже обновили, а фронт потом внезапно упёрся в `origin/main` mismatch или локальные грязные изменения.
 
-> Если в этом релизе менялись зависимости фронта или бэка, первый прогон всё равно будет дольше из-за `npm ci`. После этого локальный деплой фронта снова становится быстрым, а бэкенд пока остаётся серверным по умолчанию.
+> Если в этом релизе менялись зависимости фронта или бэка, первый прогон всё равно будет дольше из-за `npm ci`. После этого обе сборки выполняются локально, а vds занимается только получением артефактов и рестартом.
 
 > **`set -a; source .env; set +a` обязателен** перед билдом и `pm2 restart` — экспортирует все
 > переменные из `.env` в shell. Это нужно потому, что:
