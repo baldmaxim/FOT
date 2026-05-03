@@ -400,12 +400,22 @@ export const skudTravelController = {
 
   async getTravelSegments(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
+      const scopedDepartmentId = await resolveScopedDepartmentId(req, requestedDepartmentId);
+      // Если пользователь явно запросил недоступный отдел, listTravelSegments(undefined)
+      // отдавал бы сегменты передвижений всех сотрудников (fetchEmployeeScope без фильтра).
+      if (requestedDepartmentId && !scopedDepartmentId) {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied to this department',
+          code: 'DEPARTMENT_ACCESS_DENIED',
+        });
+        return;
+      }
+
       const raw = segmentQuerySchema.parse({
         month: req.query.month,
-        department_id: await resolveScopedDepartmentId(
-          req,
-          typeof req.query.department_id === 'string' ? req.query.department_id : null,
-        ) || undefined,
+        department_id: scopedDepartmentId || undefined,
         employee_id: req.query.employee_id,
         status: req.query.status,
       });
@@ -523,12 +533,22 @@ export const skudTravelController = {
 
   async rebuildTravelSegments(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      const requestedDepartmentId = typeof req.body?.department_id === 'string' ? req.body.department_id : null;
+      const scopedDepartmentId = await resolveScopedDepartmentId(req, requestedDepartmentId);
+      // Без этой проверки rebuild без фильтра запускал бы пересчёт по всем сотрудникам
+      // компании при подмене department_id.
+      if (requestedDepartmentId && !scopedDepartmentId) {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied to this department',
+          code: 'DEPARTMENT_ACCESS_DENIED',
+        });
+        return;
+      }
+
       const raw = segmentQuerySchema.parse({
         month: req.body?.month,
-        department_id: await resolveScopedDepartmentId(
-          req,
-          typeof req.body?.department_id === 'string' ? req.body.department_id : null,
-        ) || undefined,
+        department_id: scopedDepartmentId || undefined,
         employee_id: req.body?.employee_id,
       });
 

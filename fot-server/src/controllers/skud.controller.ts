@@ -839,10 +839,18 @@ const skudReadController = {
    */
   async getPresence(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const departmentId = await resolveScopedDepartmentId(
-        req,
-        typeof req.query.department_id === 'string' ? req.query.department_id : null,
-      );
+      const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
+      const departmentId = await resolveScopedDepartmentId(req, requestedDepartmentId);
+      // Без этой проверки запрос с недоступным department_id «тихо» падал в
+      // getPresence({ departmentId: null }) → данные присутствия по всем отделам компании.
+      if (requestedDepartmentId && !departmentId) {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied to this department',
+          code: 'DEPARTMENT_ACCESS_DENIED',
+        });
+        return;
+      }
 
       const data = await getPresence({ departmentId });
       res.json({ success: true, data });
