@@ -1,4 +1,5 @@
 import rateLimit from 'express-rate-limit';
+import type { Request } from 'express';
 import { IS_PRODUCTION } from '../config/features.js';
 
 const skipInDev = (): boolean => !IS_PRODUCTION;
@@ -14,6 +15,19 @@ const AUTH_RATE_LIMIT_MAX = readLimit('AUTH_RATE_LIMIT_MAX', IS_PRODUCTION ? 100
 const REFRESH_RATE_LIMIT_MAX = readLimit('REFRESH_RATE_LIMIT_MAX', IS_PRODUCTION ? 1000 : 300);
 const TWO_FACTOR_RATE_LIMIT_MAX = readLimit('TWO_FACTOR_RATE_LIMIT_MAX', IS_PRODUCTION ? 30 : 20);
 const IMPORT_RATE_LIMIT_MAX = readLimit('IMPORT_RATE_LIMIT_MAX', IS_PRODUCTION ? 5 : 10);
+const LOGIN_PER_EMAIL_RATE_LIMIT_MAX = readLimit('LOGIN_PER_EMAIL_RATE_LIMIT_MAX', IS_PRODUCTION ? 5 : 20);
+const FORGOT_PASSWORD_PER_EMAIL_RATE_LIMIT_MAX = readLimit('FORGOT_PASSWORD_PER_EMAIL_RATE_LIMIT_MAX', IS_PRODUCTION ? 3 : 10);
+
+// Ключ для per-email лимитеров: нормализованный email из тела запроса +
+// IP-fallback. Без email злоумышленник просто крутит (IP, login). С email
+// ключом targeted-bruteforce одного аккаунта ловится даже из NAT.
+function emailKeyGenerator(req: Request): string {
+  const rawEmail = (req.body as { email?: unknown } | undefined)?.email;
+  const ip = req.ip ?? 'unknown';
+  if (typeof rawEmail !== 'string') return `ip:${ip}`;
+  const email = rawEmail.trim().toLowerCase();
+  return email ? `email:${email}` : `ip:${ip}`;
+}
 
 export const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -59,6 +73,30 @@ export const importLimiter = rateLimit({
   max: IMPORT_RATE_LIMIT_MAX,
   skip: skipInDev,
   message: { success: false, error: 'Слишком много импортов, попробуйте через час' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Targeted-bruteforce защита для login: 5/15min на конкретный email.
+// authLimiter (по IP) недостаточно — за NAT 50 человек делят IP-окно.
+export const loginPerEmailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: LOGIN_PER_EMAIL_RATE_LIMIT_MAX,
+  skip: skipInDev,
+  skipSuccessfulRequests: true,
+  keyGenerator: emailKeyGenerator,
+  message: { success: false, error: 'Слишком много попыток входа для этого email, попробуйте через 15 минут' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Reset-password: 3/15min на email — защита от спама писем.
+export const forgotPasswordPerEmailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: FORGOT_PASSWORD_PER_EMAIL_RATE_LIMIT_MAX,
+  skip: skipInDev,
+  keyGenerator: emailKeyGenerator,
+  message: { success: false, error: 'Слишком много запросов восстановления пароля, попробуйте через 15 минут' },
   standardHeaders: true,
   legacyHeaders: false,
 });

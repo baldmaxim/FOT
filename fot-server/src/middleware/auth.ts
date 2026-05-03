@@ -45,11 +45,10 @@ export const authenticate = async (
       two_factor_verified: decoded.two_factor_verified,
     };
 
-    Sentry.getCurrentScope().setUser({
-      id: req.user.id,
-      email: req.user.email,
-      username: req.user.role_code,
-    });
+    // PII в Sentry-scope не пишем: только id для группировки. role_code в
+    // контекст не идёт, т.к. он не нужен Sentry для группировки и может
+    // косвенно идентифицировать пользователя.
+    Sentry.getCurrentScope().setUser({ id: req.user.id });
 
     next();
   } catch (error) {

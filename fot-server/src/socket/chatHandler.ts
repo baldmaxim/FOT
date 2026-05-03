@@ -12,6 +12,13 @@ interface IAuthenticatedSocket extends Socket {
   userId?: string;
 }
 
+// Лимит одновременных сокетов на одного пользователя. Несколько вкладок и
+// устройств — норма, поэтому 10 даёт запас. При превышении новые подключения
+// отключаются — без этого фрагмент скомпрометированного фронта может открыть
+// тысячи коннектов и положить процесс по дескрипторам.
+const MAX_SOCKETS_PER_USER = Number(process.env.SOCKET_IO_MAX_PER_USER) || 10;
+const userSocketCounts = new Map<string, number>();
+
 export const setupChatSocket = (io: Server) => {
   // JWT auth middleware
   io.use((socket: IAuthenticatedSocket, next) => {
@@ -26,6 +33,10 @@ export const setupChatSocket = (io: Server) => {
         return next(new Error('Account not approved'));
       }
       socket.userId = decoded.sub;
+      const current = userSocketCounts.get(decoded.sub) ?? 0;
+      if (current >= MAX_SOCKETS_PER_USER) {
+        return next(new Error('Too many connections for this user'));
+      }
       next();
     } catch {
       next(new Error('Invalid token'));
@@ -34,6 +45,13 @@ export const setupChatSocket = (io: Server) => {
 
   io.on('connection', (socket: IAuthenticatedSocket) => {
     const userId = socket.userId!;
+
+    userSocketCounts.set(userId, (userSocketCounts.get(userId) ?? 0) + 1);
+    socket.on('disconnect', () => {
+      const next = (userSocketCounts.get(userId) ?? 1) - 1;
+      if (next <= 0) userSocketCounts.delete(userId);
+      else userSocketCounts.set(userId, next);
+    });
 
     // Присоединяем к персональной комнате для получения уведомлений
     socket.join(`user:${userId}`);

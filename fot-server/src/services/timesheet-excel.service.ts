@@ -4,6 +4,7 @@ import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { getFullDayThresholdHoursForDate, getDayNormHours, isWorkingDay } from './schedule.service.js';
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
+import { defangCsvCell } from '../utils/file-validation.utils.js';
 
 const STATUS_LABELS: Record<string, string> = {
   work: '', sick: 'Б', vacation: 'От', absent: 'Н',
@@ -369,7 +370,7 @@ const fillOneCWorksheet = (
   rows.forEach((rowData, index) => {
     const rowNumber = ONE_C_DATA_START_ROW + index;
     worksheet.getCell(rowNumber, COL_NUM).value = index + 1;
-    worksheet.getCell(rowNumber, COL_FIO).value = rowData.fullName;
+    worksheet.getCell(rowNumber, COL_FIO).value = defangCsvCell(rowData.fullName);
 
     for (const [day, dayValue] of rowData.dayValues) {
       if (day < 1 || day > ONE_C_MAX_DAY_COLUMNS) continue;
@@ -605,7 +606,7 @@ export function buildTimesheetSheet(
       if (isSummaryRow) {
         ws.getCell(rowNumber, COL_NUM).value = idx + 1;
         ws.getCell(rowNumber, COL_NUM).alignment = centerAlign;
-        ws.getCell(rowNumber, COL_FIO).value = emp.full_name;
+        ws.getCell(rowNumber, COL_FIO).value = defangCsvCell(emp.full_name);
         ws.getCell(rowNumber, COL_FIO).alignment = { vertical: 'middle', wrapText: true };
         ws.getCell(rowNumber, COL_TAB).value = emp.sigur_employee_id ?? '';
         ws.getCell(rowNumber, COL_TAB).alignment = centerAlign;
@@ -916,7 +917,7 @@ export function buildObjectTimesheetSheet(
 
     row.getCell(COL_NUM).value = index + 1;
     row.getCell(COL_NUM).alignment = centerAlign;
-    row.getCell(COL_FIO).value = employee.full_name;
+    row.getCell(COL_FIO).value = defangCsvCell(employee.full_name);
     row.getCell(COL_FIO).alignment = { vertical: 'middle', wrapText: true };
     row.getCell(COL_TAB).value = employee.sigur_employee_id ?? '';
     row.getCell(COL_TAB).alignment = centerAlign;

@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { formatDateToISO } from '../utils/date.utils.js';
+import { defangCsvCell } from '../utils/file-validation.utils.js';
 import type { IDisciplineViolation } from '../types/skud.types.js';
 
 const MONTH_NAMES = [
@@ -209,7 +210,7 @@ export function buildEmployeeSkudWorkbook(params: {
     { key: 'point', width: 30 },
   ];
 
-  const titleRow = worksheet.addRow([`${employeeName} — СКУД`]);
+  const titleRow = worksheet.addRow([`${defangCsvCell(employeeName)} — СКУД`]);
   worksheet.mergeCells(titleRow.number, 1, titleRow.number, 3);
   titleRow.getCell(1).font = { bold: true, size: 14 };
   titleRow.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
@@ -245,7 +246,7 @@ export function buildEmployeeSkudWorkbook(params: {
 
     for (const event of group.events) {
       const directionLabel = event.direction === 'entry' ? 'Вход' : event.direction === 'exit' ? 'Выход' : 'Событие';
-      const row = worksheet.addRow([event.event_time.slice(0, 5), directionLabel, event.access_point || '—']);
+      const row = worksheet.addRow([event.event_time.slice(0, 5), directionLabel, defangCsvCell(event.access_point || '—')]);
 
       row.getCell(1).alignment = { horizontal: 'center' };
       row.getCell(2).alignment = { horizontal: 'center' };
@@ -334,11 +335,11 @@ export function buildDisciplineWorkbook(params: {
 
       const row = worksheet.addRow({
         num: index + 1,
-        name: employee.name,
-        position: employee.position,
-        department: employee.department,
+        name: defangCsvCell(employee.name),
+        position: defangCsvCell(employee.position),
+        department: defangCsvCell(employee.department),
         count: employee[type],
-        details,
+        details: defangCsvCell(details),
       });
 
       row.getCell('num').alignment = { horizontal: 'center', vertical: 'middle' };

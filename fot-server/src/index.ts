@@ -4,6 +4,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import app from './app.js';
 import { corsAllowedOrigins, env } from './config/env.js';
+import { IS_PRODUCTION } from './config/features.js';
 import { startPresencePolling } from './services/presence-polling.service.js';
 import { startSigurMonitor } from './services/sigur-monitor.service.js';
 import { startStructureSyncScheduler } from './services/sigur-structure-scheduler.service.js';
@@ -32,9 +33,12 @@ setupChatSocket(io);
 
 httpServer.listen(PORT, HOST, () => {
   console.log(`FOT Server running on ${HOST}:${PORT}`);
-  console.log(`Environment: ${env.NODE_ENV}`);
+  console.log(`Environment: ${env.NODE_ENV} (IS_PRODUCTION=${IS_PRODUCTION})`);
   console.log(`CORS Origin: ${corsAllowedOrigins.join(', ')}`);
   console.log('Socket.IO enabled');
+  if (!IS_PRODUCTION && env.NODE_ENV !== 'test') {
+    console.warn('[WARN] IS_PRODUCTION=false — rate limits отключены через skipInDev. Если это прод, проверьте NODE_ENV в PM2 ecosystem.');
+  }
   void startPresencePolling();
   void startSigurMonitor();
   void startStructureSyncScheduler();
