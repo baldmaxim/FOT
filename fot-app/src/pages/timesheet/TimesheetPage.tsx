@@ -1646,15 +1646,15 @@ export const TimesheetPage: FC = () => {
           </section>
         ) : (
           <section className="ts-top-panel">
-            <div className="ts-header">
-              <div className="ts-header-left">
-                <h1 className="ts-title">Табель</h1>
-                {monthNavigation}
+            <div className="ts-header-grid">
+              <div className="ts-header-cell ts-header-cell--left">
                 {selectorControl}
                 {isAssignedMode && brigadeControl}
-                {modeControl}
               </div>
-              <div className="ts-header-right">
+              <div className="ts-header-cell ts-header-cell--center">
+                {monthNavigation}
+              </div>
+              <div className="ts-header-cell ts-header-cell--right">
                 <TimesheetApprovalBar
                   departmentId={activeGridDeptId}
                   month={`${year}-${String(month).padStart(2, '0')}`}
@@ -1664,67 +1664,66 @@ export const TimesheetPage: FC = () => {
                 />
               </div>
             </div>
-          </section>
-        )}
 
-        {!isMobile && (
-          <div className="ts-toolbar">
-            <div className="ts-toolbar-left">
-              <TimesheetStats stats={stats} />
-              <button
-                type="button"
-                className="ts-btn"
-                onClick={() => handleExport(exportPresentation)}
-                disabled={!canExport}
-                title={exportPresentation === 'manager' ? 'Табель урезан по графику работы' : undefined}
-              >
-                <Download size={16} />
-                Экспорт
-              </button>
-              <button
-                type="button"
-                className="ts-btn"
-                onClick={handleRefreshTimesheet}
-                disabled={refreshInFlight || !rangeStart || !rangeEnd}
-                title="Пересинхронизировать события СКУД и обновить табель"
-              >
-                <RefreshCw size={16} className={refreshInFlight ? 'ts-refresh-spinning' : undefined} />
-                Обновить
-              </button>
-              {refreshState.phase !== 'idle' && (
-                <span
-                  className={`ts-refresh-status${refreshState.phase === 'error' ? ' ts-refresh-status--error' : ''}`}
-                  role="status"
-                  aria-live="polite"
-                >
-                  {refreshState.message}
-                </span>
-              )}
-            </div>
-            <div className="ts-toolbar-right">
-              {canUseTeamManagement && (
+            <div className="ts-header-toolbar">
+              <div className="ts-header-toolbar-left">
+                {modeControl}
+              </div>
+              <div className="ts-header-toolbar-right">
+                <TimesheetStats stats={stats} />
                 <button
                   type="button"
-                  className="ts-btn ts-btn--primary"
-                  onClick={openTeamManagement}
-                  disabled={!activeGridDeptId}
-                  title={!activeGridDeptId ? 'Сначала выберите отдел' : undefined}
+                  className="ts-btn"
+                  onClick={() => handleExport(exportPresentation)}
+                  disabled={!canExport}
+                  title={exportPresentation === 'manager' ? 'Табель урезан по графику работы' : undefined}
                 >
-                  <UserPlus size={16} />
-                  Добавить сотрудника
+                  <Download size={16} />
+                  Экспорт
                 </button>
-              )}
-              {activeGridDeptId && (
                 <button
                   type="button"
-                  className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}
-                  onClick={handleBulkModeToggle}
+                  className="ts-btn"
+                  onClick={handleRefreshTimesheet}
+                  disabled={refreshInFlight || !rangeStart || !rangeEnd}
+                  title="Пересинхронизировать события СКУД и обновить табель"
                 >
-                  Режим корректировок
+                  <RefreshCw size={16} className={refreshInFlight ? 'ts-refresh-spinning' : undefined} />
+                  Обновить
                 </button>
-              )}
+                {refreshState.phase !== 'idle' && (
+                  <span
+                    className={`ts-refresh-status${refreshState.phase === 'error' ? ' ts-refresh-status--error' : ''}`}
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {refreshState.message}
+                  </span>
+                )}
+                {canUseTeamManagement && (
+                  <button
+                    type="button"
+                    className="ts-btn ts-btn--primary"
+                    onClick={openTeamManagement}
+                    disabled={!activeGridDeptId}
+                    title={!activeGridDeptId ? 'Сначала выберите отдел' : undefined}
+                  >
+                    <UserPlus size={16} />
+                    Добавить сотрудника
+                  </button>
+                )}
+                {activeGridDeptId && (
+                  <button
+                    type="button"
+                    className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}
+                    onClick={handleBulkModeToggle}
+                  >
+                    Режим корректировок
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
+          </section>
         )}
 
         {segmentControl}
