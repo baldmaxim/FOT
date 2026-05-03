@@ -26,7 +26,6 @@ import { checkWeekendWorkRequirement } from '../services/timesheet-approval-week
 import { validateCorrectionAttachments } from '../services/timesheet-approval-correction-validation.service.js';
 import {
   APPROVAL_ATTACHMENT_CATEGORY,
-  countApprovalAttachments,
   createAttachmentRecord,
   deleteAttachmentRecord,
   findOrCreateDraftApproval,
@@ -1117,14 +1116,11 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
     const userNames = new Map((usersRes.data || []).map((row) => [String(row.id), String(row.full_name ?? '')]));
 
     const enriched = await Promise.all(rows.map(async (row) => {
-      const [attachmentsCount, weekend] = await Promise.all([
-        countApprovalAttachments(row.id),
-        checkWeekendWorkRequirement({
-          departmentId: row.department_id,
-          startDate: row.start_date,
-          endDate: row.end_date,
-        }),
-      ]);
+      const weekend = await checkWeekendWorkRequirement({
+        departmentId: row.department_id,
+        startDate: row.start_date,
+        endDate: row.end_date,
+      });
 
       const employeeIds = await import('../services/timesheet-department-assignments.service.js')
         .then((mod) => mod.listEmployeeIdsAssignedToDepartmentPeriod(row.department_id, row.start_date, row.end_date));
@@ -1176,10 +1172,8 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         department_name: deptNames.get(row.department_id) ?? null,
         submitted_by_name: row.submitted_by ? userNames.get(row.submitted_by) ?? null : null,
         reviewed_by_name: row.reviewed_by ? userNames.get(row.reviewed_by) ?? null : null,
-        attachments_count: attachmentsCount,
         weekend_work_dates: weekend.weekendWorkDates,
         problem_flags: {
-          weekend_work_without_attachment: weekend.requires && attachmentsCount === 0,
           any_correction: anyCorrection,
           correction_exceeds_skud: correctionExceedsSkud,
           absent_days: absentDays,

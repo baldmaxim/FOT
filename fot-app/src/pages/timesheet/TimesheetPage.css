@@ -2524,8 +2524,9 @@
 .ts-day--corrected::before {
   content: '';
   position: absolute;
-  inset: 2px;
-  border: 1px solid var(--primary, #3b82f6);
+  inset: 1px;
+  border: 2px solid #f59e0b;
+  border-radius: 2px;
   pointer-events: none;
 }
 
@@ -2536,15 +2537,24 @@
   right: 0;
   width: 0;
   height: 0;
-  border-left: 9px solid transparent;
-  border-top: 9px solid var(--primary, #3b82f6);
+  border-left: 12px solid transparent;
+  border-top: 12px solid #f59e0b;
+  pointer-events: none;
 }
+
+.ts-day--corrected:hover { cursor: help; }
+
+@keyframes ts-day-flash {
+  0%, 100% { box-shadow: inset 0 0 0 0 transparent; }
+  20%, 80% { box-shadow: inset 0 0 0 3px var(--primary, #2563eb); }
+}
+.ts-day--flash { animation: ts-day-flash 1.5s ease-in-out 1; }
 
 .ts-legend-dot--corrected {
   position: relative;
   background: var(--bg-secondary);
-  border: 1px solid var(--primary, #3b82f6);
-  color: var(--primary, #3b82f6);
+  border: 2px solid #f59e0b;
+  color: #b45309;
 }
 
 .ts-legend-dot--travel-issue {

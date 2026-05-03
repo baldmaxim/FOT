@@ -40,6 +40,7 @@ interface ITimesheetGridProps {
   lockedDates?: Set<string>;
   problemDates?: { red?: Set<string>; yellow?: Set<string> };
   outOfPeriodDates?: Set<string>;
+  highlightedCell?: { employeeId: number; date: string } | null;
   canManageTeam?: boolean;
   pendingEmployeeId?: number | null;
   onBulkSelectionChange?: (cellKeys: Set<string>) => void;
@@ -349,6 +350,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   splitDayKeys = EMPTY_CELL_SELECTION,
   problemDates,
   outOfPeriodDates,
+  highlightedCell = null,
   canManageTeam = false,
   pendingEmployeeId = null,
   onBulkSelectionChange,
@@ -1335,7 +1337,12 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           ? ' ts-day--problem-yellow'
                           : '';
                       const outCls = outOfPeriodDates?.has(isoDate) ? ' ts-day--out-of-period' : '';
-                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours)}${inactiveCls}${preHolidayCls}${problemCls}${outCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive ? ' ts-day--bulk-selectable' : ''}`;
+                      const flashCls = highlightedCell
+                        && highlightedCell.employeeId === row.employee.id
+                        && highlightedCell.date === isoDate
+                        ? ' ts-day--flash'
+                        : '';
+                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours)}${inactiveCls}${preHolidayCls}${problemCls}${outCls}${flashCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive ? ' ts-day--bulk-selectable' : ''}`;
                       const text = inactive ? '' : getDayCellText(entry, dayOff);
                       const baseTitle = getDayCellTitle(entry, dayOff);
                       const title = preHoliday
@@ -1351,6 +1358,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         <td
                           key={day}
                           className={cls}
+                          data-employee={row.employee.id}
+                          data-date={isoDate}
                           title={inactive ? 'Сотрудник не в отделе на эту дату' : bulkTitle}
                           onMouseDown={bulkEditMode && !inactive ? (event) => handleBulkCellMouseDown(
                             event,

@@ -1,6 +1,7 @@
 import { type FC, useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, FileText, AlertTriangle } from 'lucide-react';
+import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertTriangle, Pencil, UserX } from 'lucide-react';
+import type { TimesheetEntry, TimesheetEmployee } from '../../types';
 import {
   timesheetApprovalService,
   APPROVAL_STATUS_LABELS,
@@ -389,6 +390,178 @@ const CorrectionsTab: FC = () => {
   );
 };
 
+type ReviewItem =
+  | {
+      kind: 'correction';
+      date: string;
+      employee: TimesheetEmployee;
+      hoursBefore: number | null;
+      hoursAfter: number | null;
+      author: string | null;
+      correctedAt: string | null;
+      notes: string | null;
+      exceedsSkud: boolean;
+    }
+  | {
+      kind: 'absent';
+      date: string;
+      employee: TimesheetEmployee;
+    };
+
+const parseTimeToHours = (value: string | null | undefined): number | null => {
+  if (!value || typeof value !== 'string') return null;
+  const m = value.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  const s = m[3] ? Number(m[3]) : 0;
+  if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
+  return h + min / 60 + s / 3600;
+};
+
+const computeSkudHours = (entry: TimesheetEntry): number | null => {
+  const start = parseTimeToHours(entry.first_entry);
+  const end = parseTimeToHours(entry.last_exit);
+  if (start == null || end == null) return null;
+  const diff = end - start;
+  return diff > 0 ? Math.round(diff * 100) / 100 : 0;
+};
+
+const formatHHMM = (decimal: number | null): string => {
+  if (decimal == null) return '—';
+  const totalMinutes = Math.round(decimal * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+};
+
+const buildReviewItems = (
+  entries: TimesheetEntry[],
+  employees: TimesheetEmployee[],
+  outOfPeriodDates: Set<string>,
+  rangeStart: string,
+  rangeEnd: string,
+): ReviewItem[] => {
+  const empMap = new Map<number, TimesheetEmployee>(employees.map(e => [e.id, e]));
+  const items: ReviewItem[] = [];
+  for (const entry of entries) {
+    if (outOfPeriodDates.has(entry.work_date)) continue;
+    if (entry.work_date < rangeStart || entry.work_date > rangeEnd) continue;
+    const employee = empMap.get(entry.employee_id);
+    if (!employee) continue;
+    if (entry.is_correction) {
+      const hoursBefore = computeSkudHours(entry);
+      const hoursAfter = entry.display_hours_worked ?? entry.hours_worked ?? null;
+      const exceedsSkud = hoursBefore != null && hoursAfter != null && hoursAfter > hoursBefore + 0.0167;
+      items.push({
+        kind: 'correction',
+        date: entry.work_date,
+        employee,
+        hoursBefore,
+        hoursAfter,
+        author: entry.corrected_by_name ?? null,
+        correctedAt: entry.corrected_at ?? null,
+        notes: entry.notes ?? null,
+        exceedsSkud,
+      });
+    } else if (entry.status === 'absent') {
+      items.push({ kind: 'absent', date: entry.work_date, employee });
+    }
+  }
+  items.sort((a, b) => {
+    const sevA = a.kind === 'correction' ? (a.exceedsSkud ? 0 : 1) : 2;
+    const sevB = b.kind === 'correction' ? (b.exceedsSkud ? 0 : 1) : 2;
+    if (sevA !== sevB) return sevA - sevB;
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    return a.employee.full_name.localeCompare(b.employee.full_name, 'ru');
+  });
+  return items;
+};
+
+const formatCorrectedAt = (iso: string | null): string => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+};
+
+interface IReviewChecklistProps {
+  items: ReviewItem[];
+  onJump: (employeeId: number, date: string) => void;
+}
+
+const ReviewChecklist: FC<IReviewChecklistProps> = ({ items, onJump }) => {
+  if (items.length === 0) {
+    return (
+      <div className="approvals-checklist approvals-checklist--empty">
+        <Check size={14} /> Без замечаний — табель чистый
+      </div>
+    );
+  }
+  return (
+    <div className="approvals-checklist">
+      <div className="approvals-checklist-head">
+        К проверке <span className="approvals-checklist-count">{items.length}</span>
+      </div>
+      <ul className="approvals-checklist-list">
+        {items.map((item, idx) => {
+          if (item.kind === 'correction') {
+            const cls = `approvals-checklist-item approvals-checklist-item--${item.exceedsSkud ? 'exceeds' : 'correction'}`;
+            return (
+              <li
+                key={`${item.kind}-${item.employee.id}-${item.date}-${idx}`}
+                className={cls}
+                onClick={() => onJump(item.employee.id, item.date)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onJump(item.employee.id, item.date); } }}
+              >
+                <span className="approvals-checklist-icon" aria-hidden>
+                  {item.exceedsSkud ? <AlertTriangle size={14} /> : <Pencil size={14} />}
+                </span>
+                <span className="approvals-checklist-date">{formatDateWithWeekday(item.date)}</span>
+                <span className="approvals-checklist-employee">{item.employee.full_name}</span>
+                <span className="approvals-checklist-diff">
+                  <span className="approvals-checklist-diff-label">СКУД</span>
+                  <span className="approvals-checklist-diff-before">{formatHHMM(item.hoursBefore)}</span>
+                  <span className="approvals-checklist-diff-arrow">→</span>
+                  <span className="approvals-checklist-diff-after">{formatHHMM(item.hoursAfter)}</span>
+                  {item.exceedsSkud && (
+                    <span className="approvals-checklist-tag">&gt; СКУД</span>
+                  )}
+                </span>
+                <span className="approvals-checklist-meta">
+                  {item.author && <span className="approvals-checklist-author">{item.author}</span>}
+                  {item.correctedAt && <span className="approvals-checklist-time">{formatCorrectedAt(item.correctedAt)}</span>}
+                  {item.notes && <span className="approvals-checklist-notes" title={item.notes}>«{item.notes}»</span>}
+                </span>
+              </li>
+            );
+          }
+          return (
+            <li
+              key={`${item.kind}-${item.employee.id}-${item.date}-${idx}`}
+              className="approvals-checklist-item approvals-checklist-item--absent"
+              onClick={() => onJump(item.employee.id, item.date)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onJump(item.employee.id, item.date); } }}
+            >
+              <span className="approvals-checklist-icon" aria-hidden>
+                <UserX size={14} />
+              </span>
+              <span className="approvals-checklist-date">{formatDateWithWeekday(item.date)}</span>
+              <span className="approvals-checklist-employee">{item.employee.full_name}</span>
+              <span className="approvals-checklist-diff approvals-checklist-diff--absent">отсутствие</span>
+              <span className="approvals-checklist-meta" />
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+};
+
 interface IApprovalCardBodyProps {
   row: IApprovalReviewItem;
   canReview: boolean;
@@ -437,56 +610,61 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
   }, [monthBounds, row.start_date, row.end_date]);
 
   const problemDates = useMemo(() => {
-    const red = new Set<string>();
     const yellow = new Set<string>();
-    if (row.problem_flags.weekend_work_without_attachment) {
-      for (const d of row.weekend_work_dates) red.add(d);
-    } else {
-      for (const d of row.weekend_work_dates) yellow.add(d);
-    }
+    for (const d of row.weekend_work_dates) yellow.add(d);
     for (const e of tsQuery.data?.entries ?? []) {
       if (outOfPeriodDates.has(e.work_date)) continue;
-      if (e.is_correction || e.status === 'absent') {
-        if (!red.has(e.work_date)) yellow.add(e.work_date);
+      if (e.is_correction || e.status === 'absent') yellow.add(e.work_date);
+    }
+    return { yellow };
+  }, [row.weekend_work_dates, tsQuery.data?.entries, outOfPeriodDates]);
+
+  const reviewItems = useMemo<ReviewItem[]>(() => {
+    if (!tsQuery.data) return [];
+    return buildReviewItems(
+      tsQuery.data.entries,
+      tsQuery.data.employees,
+      outOfPeriodDates,
+      row.start_date,
+      row.end_date,
+    );
+  }, [tsQuery.data, outOfPeriodDates, row.start_date, row.end_date]);
+
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const [highlightedCell, setHighlightedCell] = useState<{ employeeId: number; date: string } | null>(null);
+  const flashTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (flashTimerRef.current != null) window.clearTimeout(flashTimerRef.current);
+  }, []);
+
+  const handleJump = (employeeId: number, date: string) => {
+    const frame = frameRef.current;
+    if (frame) {
+      const cell = frame.querySelector<HTMLElement>(`td[data-employee="${employeeId}"][data-date="${date}"]`);
+      if (cell) {
+        cell.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
       }
     }
-    return { red, yellow };
-  }, [row.problem_flags.weekend_work_without_attachment, row.weekend_work_dates, tsQuery.data?.entries, outOfPeriodDates]);
+    setHighlightedCell({ employeeId, date });
+    if (flashTimerRef.current != null) window.clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = window.setTimeout(() => setHighlightedCell(null), 1600);
+  };
 
   return (
     <div className="approvals-card-body">
-      <div className="approvals-flags">
-        {row.problem_flags.weekend_work_without_attachment && (
-          <span className="approvals-flag approvals-flag--red">
-            <AlertTriangle size={12} /> Работа в выходной без вложений
-          </span>
-        )}
-        {row.problem_flags.correction_exceeds_skud && (
-          <span className="approvals-flag approvals-flag--red">
-            <AlertTriangle size={12} /> Корректировка &gt; факта СКУД
-          </span>
-        )}
-        {row.problem_flags.any_correction && (
-          <span className="approvals-flag approvals-flag--yellow">
-            Корректировки руководителя
-          </span>
-        )}
-        {row.problem_flags.absent_days && (
-          <span className="approvals-flag approvals-flag--yellow">
-            Есть отсутствия
-          </span>
-        )}
-        {row.weekend_work_dates.length > 0 && (
-          <span className="approvals-flag approvals-flag--info">
-            Выходные с работой: {row.weekend_work_dates.join(', ')}
-          </span>
-        )}
-      </div>
-
-      {row.attachments_count > 0 && (
-        <div className="approvals-attachments">
-          <FileText size={14} />
-          Вложений: {row.attachments_count}
+      {(row.problem_flags.correction_exceeds_skud || row.weekend_work_dates.length > 0) && (
+        <div className="approvals-flags">
+          {row.problem_flags.correction_exceeds_skud && (
+            <span className="approvals-flag approvals-flag--red">
+              <AlertTriangle size={12} /> Есть корректировки больше факта СКУД
+            </span>
+          )}
+          {row.weekend_work_dates.length > 0 && (
+            <span className="approvals-flag approvals-flag--info">
+              Выходные с работой: {row.weekend_work_dates.join(', ')}
+            </span>
+          )}
         </div>
       )}
 
@@ -494,7 +672,9 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
         <div className="approvals-comment">Комментарий: {row.review_comment}</div>
       )}
 
-      <div className="approvals-timesheet-frame">
+      {tsQuery.data && <ReviewChecklist items={reviewItems} onJump={handleJump} />}
+
+      <div className="approvals-timesheet-frame" ref={frameRef}>
         {tsQuery.isLoading ? (
           <div className="approvals-timesheet-loading">Загрузка табеля…</div>
         ) : tsQuery.isError ? (
@@ -514,6 +694,7 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
             calendar={tsQuery.data.calendar}
             problemDates={problemDates}
             outOfPeriodDates={outOfPeriodDates}
+            highlightedCell={highlightedCell}
             onEmployeeClick={() => {}}
             onDayClick={() => {}}
             onObjectDayClick={() => {}}
@@ -617,7 +798,7 @@ const TimesheetsTab: FC = () => {
   };
 
   const severity = (row: IApprovalReviewItem): 'red' | 'yellow' | 'green' => {
-    if (row.problem_flags.weekend_work_without_attachment || row.problem_flags.correction_exceeds_skud) return 'red';
+    if (row.problem_flags.correction_exceeds_skud) return 'red';
     if (row.problem_flags.any_correction || row.problem_flags.absent_days) return 'yellow';
     return 'green';
   };
