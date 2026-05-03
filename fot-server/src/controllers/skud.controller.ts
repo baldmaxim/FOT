@@ -405,11 +405,17 @@ const skudReadController = {
       }
       const { period, month } = parsed.data;
 
-      const departmentId = await resolveScopedDepartmentId(
-        req,
-        parsed.data.department_id ?? null,
-      );
+      const requestedDepartmentId = parsed.data.department_id ?? null;
+      const departmentId = await resolveScopedDepartmentId(req, requestedDepartmentId);
 
+      if (requestedDepartmentId && !departmentId) {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied to this department',
+          code: 'DEPARTMENT_ACCESS_DENIED',
+        });
+        return;
+      }
       if (!departmentId) {
         res.status(400).json({ success: false, error: 'department_id обязателен' });
         return;

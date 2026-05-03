@@ -255,9 +255,14 @@ async function persistApprovalTransition(input: {
 /** Руководитель подаёт табель отдела за произвольный диапазон дат. */
 const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const deptId = await resolveScopedDepartmentId(req, req.body.department_id || null);
+    const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id ? req.body.department_id : null;
+    const deptId = await resolveScopedDepartmentId(req, requestedDeptId);
     const range = parseRangeFromBody(req.body);
 
+    if (requestedDeptId && !deptId) {
+      res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
+      return;
+    }
     if (!deptId) {
       res.status(400).json({ success: false, error: 'department_id обязателен' });
       return;
@@ -399,12 +404,16 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 /** Статус согласования по отделу и конкретному диапазону. */
 const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const department_id = await resolveScopedDepartmentId(
-      req,
-      typeof req.query.department_id === 'string' ? req.query.department_id : null,
-    );
+    const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
+    const department_id = await resolveScopedDepartmentId(req, requestedDepartmentId);
     const range = parseRangeFromQuery(req.query as Record<string, unknown>);
 
+    // Раньше при недоступном отделе тихо возвращали data: null — клиент думал «согласования
+    // нет», хотя на деле просто нет прав смотреть. Делаем явный 403, чтобы не маскировать.
+    if (requestedDepartmentId && !department_id) {
+      res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
+      return;
+    }
     if (!department_id || !range) {
       res.json({ success: true, data: null });
       return;
@@ -433,11 +442,13 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
  */
 const listDepartmentApprovals = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const department_id = await resolveScopedDepartmentId(
-      req,
-      typeof req.query.department_id === 'string' ? req.query.department_id : null,
-    );
+    const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
+    const department_id = await resolveScopedDepartmentId(req, requestedDepartmentId);
 
+    if (requestedDepartmentId && !department_id) {
+      res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
+      return;
+    }
     if (!department_id) {
       res.status(400).json({ success: false, error: 'department_id обязателен' });
       return;
@@ -746,6 +757,10 @@ const getResponsibles = async (req: AuthenticatedRequest, res: Response): Promis
     const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
     const departmentId = await resolveScopedDepartmentId(req, requestedDepartmentId);
 
+    if (requestedDepartmentId && !departmentId) {
+      res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
+      return;
+    }
     if (!departmentId) {
       res.status(400).json({ success: false, error: 'department_id обязателен' });
       return;
@@ -764,6 +779,10 @@ const getResponsibleCandidates = async (req: AuthenticatedRequest, res: Response
     const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
     const departmentId = await resolveScopedDepartmentId(req, requestedDepartmentId);
 
+    if (requestedDepartmentId && !departmentId) {
+      res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
+      return;
+    }
     if (!departmentId) {
       res.status(400).json({ success: false, error: 'department_id обязателен' });
       return;
@@ -788,6 +807,10 @@ const saveResponsibles = async (req: AuthenticatedRequest, res: Response): Promi
       ? req.body.backup_user_id
       : null;
 
+    if (requestedDepartmentId && !departmentId) {
+      res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
+      return;
+    }
     if (!departmentId) {
       res.status(400).json({ success: false, error: 'department_id обязателен' });
       return;
@@ -811,8 +834,13 @@ const saveResponsibles = async (req: AuthenticatedRequest, res: Response): Promi
 /** Руководитель: получить presigned URL для загрузки вложения к подаче табеля. */
 const getAttachmentUploadUrl = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const deptId = await resolveScopedDepartmentId(req, req.body.department_id || null);
+    const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id ? req.body.department_id : null;
+    const deptId = await resolveScopedDepartmentId(req, requestedDeptId);
     const range = parseRangeFromBody(req.body);
+    if (requestedDeptId && !deptId) {
+      res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
+      return;
+    }
     if (!deptId) {
       res.status(400).json({ success: false, error: 'department_id обязателен' });
       return;
