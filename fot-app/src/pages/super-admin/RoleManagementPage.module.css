@@ -1,4 +1,4 @@
-.page {
+﻿.page {
   width: 100%;
   padding: 0;
   min-width: 0;
@@ -250,7 +250,7 @@
 
 .badgeSystem {
   background: rgba(234, 179, 8, 0.12);
-  color: #d97706;
+  color: var(--warning);
 }
 
 .badgeCustom {
@@ -270,7 +270,7 @@
 
 .readOnlyBadge {
   background: rgba(59, 130, 246, 0.1);
-  color: #2563eb;
+  color: var(--primary);
 }
 
 .technicalBadge {

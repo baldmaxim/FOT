@@ -1,4 +1,4 @@
-.page {
+﻿.page {
   padding: 24px;
   width: 100%;
   max-width: none;
@@ -126,7 +126,7 @@
   padding: 12px 14px;
   border-radius: 12px;
   background: rgba(16, 185, 129, 0.08);
-  color: #047857;
+  color: var(--success);
   font-weight: 700;
   border: 1px solid rgba(16, 185, 129, 0.2);
 }
@@ -225,7 +225,7 @@
   height: 40px;
   border-radius: 10px;
   background: rgba(239, 68, 68, 0.08);
-  color: #dc2626;
+  color: var(--error);
   font-size: 24px;
   line-height: 1;
 }

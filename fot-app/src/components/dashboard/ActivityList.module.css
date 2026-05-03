@@ -1,4 +1,4 @@
-.card {
+﻿.card {
   display: flex;
   flex-direction: column;
   min-height: 400px;
@@ -27,7 +27,7 @@
   align-items: center;
   gap: 6px;
   padding: 5px 10px;
-  background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+  background: var(--bg-tertiary));
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   transition: border-color 0.15s ease;
@@ -37,7 +37,7 @@
 }
 
 .headerSearch:focus-within {
-  border-color: var(--primary, #3b82f6);
+  border-color: var(--primary);
 }
 
 .searchClear {
@@ -97,7 +97,7 @@
 
 .tabActive {
   color: var(--text-primary);
-  border-bottom-color: var(--primary, #3b82f6);
+  border-bottom-color: var(--primary);
 }
 
 .tabCount {
@@ -108,7 +108,7 @@
 }
 
 .tabActive .tabCount {
-  color: var(--primary, #3b82f6);
+  color: var(--primary);
 }
 
 .searchIcon {
@@ -220,7 +220,7 @@
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  border: 2px solid var(--bg-secondary, #fff);
+  border: 2px solid var(--bg-secondary);
 }
 
 .dotOnline {
@@ -366,7 +366,7 @@
 }
 
 .status.out {
-  background: var(--error-muted, rgba(239, 68, 68, 0.1));
+  background: var(--error-muted));
   color: var(--error);
 }
 

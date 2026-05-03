@@ -1,4 +1,4 @@
-/* ===== Timesheet Page ===== */
+﻿/* ===== Timesheet Page ===== */
 .ts-page {
   display: flex;
   flex-direction: column;
@@ -20,16 +20,16 @@
 }
 
 .ts-accordion-item {
-  border: 1px solid var(--border-color, #e5e7eb);
+  border: 1px solid var(--border);
   border-radius: 0;
-  background: var(--surface, #fff);
+  background: var(--surface);
   overflow: hidden;
   box-shadow: none;
   flex: 0 0 auto;
 }
 
 .ts-accordion-item--expanded {
-  border-color: var(--border-color, #e5e7eb);
+  border-color: var(--border);
   box-shadow: none;
   flex: 1 1 0;
   min-height: 0;
@@ -104,13 +104,13 @@
 
 .ts-accordion-status--submitted,
 .ts-accordion-status--returned {
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--warning-muted);
+  color: var(--warning);
 }
 
 .ts-accordion-status--rejected {
-  background: #fee2e2;
-  color: #b91c1c;
+  background: var(--error-muted);
+  color: var(--error);
 }
 
 .ts-accordion-detail {
@@ -480,7 +480,7 @@
 }
 
 .ts-dept-btn:hover {
-  border-color: var(--text-muted, var(--text-tertiary));
+  border-color: var(--text-muted));
 }
 
 .ts-dept-dropdown {
@@ -493,7 +493,7 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.15));
+  box-shadow: var(--shadow-lg));
   z-index: 100;
   padding: 6px;
 }
@@ -529,7 +529,7 @@
 }
 
 .ts-dept-item--active {
-  background: var(--primary-light, rgba(59,130,246,0.15));
+  background: var(--primary-light));
   color: var(--primary);
 }
 
@@ -578,7 +578,7 @@
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  color: var(--primary, #3b82f6);
+  color: var(--primary);
   opacity: 0.75;
 }
 
@@ -711,7 +711,7 @@
 }
 
 .ts-btn--active {
-  background: var(--primary-light, rgba(59, 130, 246, 0.14));
+  background: var(--primary-light));
   border-color: rgba(59, 130, 246, 0.3);
   color: var(--primary);
 }
@@ -833,7 +833,7 @@
 }
 
 .ts-stat-card--clickable:hover {
-  border-color: var(--text-muted, var(--text-tertiary));
+  border-color: var(--text-muted));
 }
 
 .ts-stat-label {
@@ -1099,7 +1099,7 @@
 
 .ts-legend-dot--remote {
   background: rgba(34, 197, 94, 0.18);
-  color: #059669;
+  color: var(--success);
 }
 
 .ts-legend-dot--absent {
@@ -1113,7 +1113,7 @@
 }
 
 .ts-legend-dot--weekend {
-  background: var(--bg-tertiary, var(--bg-secondary));
+  background: var(--bg-tertiary));
   color: var(--text-tertiary);
 }
 
@@ -1560,13 +1560,13 @@
 }
 
 .ts-table thead th.ts-th--weekend {
-  background: var(--bg-tertiary, var(--bg-secondary));
+  background: var(--bg-tertiary));
   opacity: 1;
 }
 
 .ts-table thead th.ts-th--today {
   background: #dcfce7;
-  color: #15803d;
+  color: var(--success);
 }
 
 /* Sticky employee column */
@@ -1589,7 +1589,7 @@
   top: 0;
   z-index: 50;
   background: var(--bg-secondary);
-  box-shadow: 0 1px 0 var(--border-color, rgba(0, 0, 0, 0.1));
+  box-shadow: 0 1px 0 var(--border);
 }
 
 .ts-table--objects thead th.ts-col-sticky {
@@ -1614,16 +1614,16 @@
   background: var(--bg-secondary);
 }
 .ts-table tbody tr:hover td.ts-col-deviation-sticky {
-  background: var(--bg-hover, var(--surface));
+  background: var(--surface-hover));
 }
 .ts-day--deviation-undertime {
-  color: var(--error, #ef4444);
+  color: var(--error);
 }
 .ts-day--deviation-overtime {
-  color: var(--success, #16a34a);
+  color: var(--success);
 }
 .ts-day--deviation-zero {
-  color: var(--text-tertiary, var(--text-secondary));
+  color: var(--text-tertiary));
 }
 .ts-mobile-deviation {
   margin-left: auto;
@@ -1671,7 +1671,7 @@
 }
 .ts-corrections-filter select {
   padding: 4px 8px;
-  border: 1px solid var(--border-color, #e5e7eb);
+  border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface);
   color: var(--text-primary);
@@ -1688,7 +1688,7 @@
   gap: 4px;
   padding: 6px 12px;
   font-size: 13px;
-  background: var(--primary, #2563eb);
+  background: var(--primary);
   color: #fff;
   border: none;
   border-radius: 6px;
@@ -1696,7 +1696,7 @@
 }
 
 .ts-corrections-add-btn:hover {
-  background: var(--primary-hover, #1d4ed8);
+  background: var(--primary-hover);
 }
 
 .ts-corrections-add-btn:disabled {
@@ -1718,7 +1718,7 @@
 
 .ts-bulk-modal {
   width: min(480px, 100%);
-  background: var(--surface, #fff);
+  background: var(--surface);
   border-radius: 12px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
   display: flex;
@@ -1732,7 +1732,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 14px 18px;
-  border-bottom: 1px solid var(--border, #e5e7eb);
+  border-bottom: 1px solid var(--border);
 }
 
 .ts-bulk-modal-header h3 {
@@ -1756,7 +1756,7 @@
 }
 
 .ts-bulk-modal-close:hover {
-  background: var(--bg-hover, #f3f4f6);
+  background: var(--surface-hover);
 }
 
 .ts-bulk-modal-body {
@@ -1779,7 +1779,7 @@
 }
 
 .ts-bulk-modal-required {
-  color: #dc2626;
+  color: var(--error);
 }
 
 .ts-bulk-modal-row input,
@@ -1788,9 +1788,9 @@
   padding: 8px 10px;
   font-size: 13px;
   font-family: inherit;
-  border: 1px solid var(--border, #d1d5db);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg-primary, #fff);
+  background: var(--bg-primary);
   color: var(--text-primary);
 }
 
@@ -1809,13 +1809,13 @@
   padding: 8px 10px;
   font-size: 12px;
   background: rgba(59, 130, 246, 0.08);
-  color: #1e40af;
+  color: var(--primary);
   border-radius: 6px;
 }
 
 .ts-bulk-modal-info.error {
   background: rgba(239, 68, 68, 0.1);
-  color: #b91c1c;
+  color: var(--error);
 }
 
 .ts-bulk-modal-footer {
@@ -1823,8 +1823,8 @@
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 18px;
-  border-top: 1px solid var(--border, #e5e7eb);
-  background: var(--bg-elevated, #f9fafb);
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
 }
 
 .ts-bulk-modal-cancel,
@@ -1835,18 +1835,18 @@
   padding: 8px 14px;
   font-size: 13px;
   border-radius: 6px;
-  border: 1px solid var(--border, #d1d5db);
+  border: 1px solid var(--border);
   cursor: pointer;
 }
 
 .ts-bulk-modal-cancel {
-  background: var(--surface, #fff);
+  background: var(--surface);
   color: var(--text-primary);
 }
 
 .ts-bulk-modal-confirm {
-  background: var(--primary, #2563eb);
-  border-color: var(--primary, #2563eb);
+  background: var(--primary);
+  border-color: var(--primary);
   color: #fff;
 }
 
@@ -1903,7 +1903,7 @@
 }
 .ts-corrections-btn {
   padding: 4px 6px;
-  border: 1px solid var(--border-color, #e5e7eb);
+  border: 1px solid var(--border);
   border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
@@ -1914,7 +1914,7 @@
   transition: background 0.15s;
 }
 .ts-corrections-btn:hover:not(:disabled) {
-  background: var(--surface-hover, rgba(0, 0, 0, 0.04));
+  background: var(--surface-hover));
 }
 .ts-corrections-btn:disabled {
   opacity: 0.4;
@@ -1922,7 +1922,7 @@
 }
 .ts-corrections-btn--danger:hover:not(:disabled) {
   background: rgba(239, 68, 68, 0.12);
-  color: var(--error, #ef4444);
+  color: var(--error);
 }
 .ts-corrections-lock {
   color: var(--text-tertiary);
@@ -1979,7 +1979,7 @@
 
 /* Подсказка-звёздочка и ошибка для обязательного комментария */
 .ts-form-required {
-  color: var(--error, #ef4444);
+  color: var(--error);
   margin-left: 2px;
 }
 .ts-form-hint {
@@ -1989,7 +1989,7 @@
   color: var(--text-tertiary);
 }
 .ts-form-hint--error {
-  color: var(--error, #ef4444);
+  color: var(--error);
 }
 
 @keyframes ts-refresh-rotate {
@@ -2007,7 +2007,7 @@
   margin-left: 4px;
 }
 .ts-refresh-status--error {
-  color: var(--error, #ef4444);
+  color: var(--error);
 }
 @media (max-width: 600px) {
   .ts-refresh-status {
@@ -2022,7 +2022,7 @@
   background: rgba(239, 68, 68, 0.08);
   border: 1px solid rgba(239, 68, 68, 0.25);
   border-radius: 8px;
-  color: var(--error, #ef4444);
+  color: var(--error);
   font-size: 13px;
 }
 .ts-approval-submit-error-header {
@@ -2055,11 +2055,11 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  color: var(--text-primary, #111827);
+  color: var(--text-primary);
   font-weight: 400;
 }
 .ts-approval-submit-error-list strong {
-  color: var(--error, #ef4444);
+  color: var(--error);
   margin-right: 2px;
 }
 .ts-approval-submit-error-reason {
@@ -2072,11 +2072,11 @@
 
 /* Row hover */
 .ts-table tbody tr:hover {
-  background: var(--surface-hover, rgba(255, 255, 255, 0.03));
+  background: var(--surface-hover));
 }
 
 .ts-table tbody tr:hover td.ts-col-sticky {
-  background: var(--surface-hover, rgba(255, 255, 255, 0.03));
+  background: var(--surface-hover));
 }
 
 /* Employee cell */
@@ -2225,7 +2225,7 @@
 .ts-employee-inline-btn:hover:not(:disabled) {
   background: rgba(239, 68, 68, 0.10);
   border-color: rgba(239, 68, 68, 0.34);
-  color: #dc2626;
+  color: var(--error);
   box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.08);
 }
 
@@ -2255,7 +2255,7 @@
   width: 15px;
   height: 15px;
   margin: 0;
-  accent-color: var(--primary, #2563eb);
+  accent-color: var(--primary);
   cursor: pointer;
   flex-shrink: 0;
 }
@@ -2271,7 +2271,7 @@
 
 .ts-bulk-day-head--selected {
   background: rgba(59, 130, 246, 0.1) !important;
-  color: var(--primary, #2563eb) !important;
+  color: var(--primary) !important;
 }
 
 .ts-bulk-day-select {
@@ -2323,7 +2323,7 @@
 }
 
 .ts-day--bulk-target {
-  outline: 2px solid var(--primary, #2563eb);
+  outline: 2px solid var(--primary);
   outline-offset: -2px;
   z-index: 8;
 }
@@ -2336,8 +2336,8 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--primary, #2563eb);
-  box-shadow: 0 0 0 2px var(--surface, #fff);
+  background: var(--primary);
+  box-shadow: 0 0 0 2px var(--surface);
 }
 
 .ts-day--full {
@@ -2377,7 +2377,7 @@
 
 .ts-day--unpaid {
   background: rgba(234, 179, 8, 0.14);
-  color: #b45309;
+  color: var(--warning);
 }
 
 .ts-day--educational {
@@ -2390,19 +2390,19 @@
 }
 
 .ts-day--inactive {
-  background: var(--bg-elevated, #f3f4f6) !important;
-  color: var(--text-tertiary, #9ca3af) !important;
+  background: var(--bg-elevated) !important;
+  color: var(--text-tertiary) !important;
   text-decoration: line-through;
   cursor: not-allowed !important;
   opacity: 0.6;
 }
 
 .ts-day--inactive:hover {
-  background: var(--bg-elevated, #f3f4f6) !important;
+  background: var(--bg-elevated) !important;
 }
 
 .ts-day--problem-red {
-  box-shadow: inset 0 0 0 2px var(--error, #ef4444);
+  box-shadow: inset 0 0 0 2px var(--error);
 }
 
 .ts-day--problem-yellow {
@@ -2410,14 +2410,14 @@
 }
 
 .ts-day--out-of-period {
-  background: var(--bg-elevated, #f3f4f6) !important;
-  color: var(--text-tertiary, #9ca3af) !important;
+  background: var(--bg-elevated) !important;
+  color: var(--text-tertiary) !important;
   opacity: 0.6;
-  box-shadow: inset 0 0 0 1px var(--success, #10b981);
+  box-shadow: inset 0 0 0 1px var(--success);
 }
 
 .ts-day--out-of-period:hover {
-  background: var(--bg-elevated, #f3f4f6) !important;
+  background: var(--bg-elevated) !important;
 }
 
 .ts-employee-badge {
@@ -2434,7 +2434,7 @@
 
 .ts-employee-badge--transfer {
   background: rgba(59, 130, 246, 0.15);
-  color: #2563eb;
+  color: var(--primary);
 }
 
 .ts-employee-badge--excluded {
@@ -2455,7 +2455,7 @@
 
 .ts-exclude-modal {
   width: min(440px, calc(100vw - 32px));
-  background: var(--surface, #fff);
+  background: var(--surface);
   border-radius: 12px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
   overflow: hidden;
@@ -2466,7 +2466,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 14px 18px;
-  border-bottom: 1px solid var(--border, #e5e7eb);
+  border-bottom: 1px solid var(--border);
 }
 
 .ts-exclude-modal-header h3 {
@@ -2490,7 +2490,7 @@
 }
 
 .ts-exclude-modal-close:hover {
-  background: var(--bg-hover, #f3f4f6);
+  background: var(--surface-hover);
 }
 
 .ts-exclude-modal-body {
@@ -2520,9 +2520,9 @@
 .ts-exclude-modal-row input[type="date"] {
   padding: 8px 10px;
   font-size: 13px;
-  border: 1px solid var(--border, #d1d5db);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg-primary, #fff);
+  background: var(--bg-primary);
   color: var(--text-primary);
 }
 
@@ -2538,8 +2538,8 @@
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 18px;
-  border-top: 1px solid var(--border, #e5e7eb);
-  background: var(--bg-elevated, #f9fafb);
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
 }
 
 .ts-exclude-modal-cancel,
@@ -2550,12 +2550,12 @@
   padding: 8px 14px;
   font-size: 13px;
   border-radius: 6px;
-  border: 1px solid var(--border, #d1d5db);
+  border: 1px solid var(--border);
   cursor: pointer;
 }
 
 .ts-exclude-modal-cancel {
-  background: var(--surface, #fff);
+  background: var(--surface);
   color: var(--text-primary);
 }
 
@@ -2592,11 +2592,17 @@
   pointer-events: none;
 }
 
+/* Цветовая индикация статуса согласования рабочей субботы/выходного:
+   треугольник 12px в правом верхнем углу перекрашивается. */
+.ts-day--approval-pending::after  { border-top-color: var(--primary); }
+.ts-day--approval-approved::after { border-top-color: var(--success); }
+.ts-day--approval-rejected::after { border-top-color: var(--error); }
+
 .ts-day--corrected:hover { cursor: help; }
 
 @keyframes ts-day-flash {
   0%, 100% { box-shadow: inset 0 0 0 0 transparent; }
-  20%, 80% { box-shadow: inset 0 0 0 3px var(--primary, #2563eb); }
+  20%, 80% { box-shadow: inset 0 0 0 3px var(--primary); }
 }
 .ts-day--flash { animation: ts-day-flash 1.5s ease-in-out 1; }
 
@@ -2604,24 +2610,48 @@
   position: relative;
   background: var(--bg-secondary);
   border: 2px solid #f59e0b;
-  color: #b45309;
+  color: var(--warning);
 }
 
 .ts-legend-dot--travel-issue {
   background: rgba(245, 158, 11, 0.16);
-  color: #d97706;
+  color: var(--warning);
   border: 1px solid rgba(245, 158, 11, 0.35);
 }
 
+/* Точки-маркеры статуса согласования рабочей субботы (треугольник 12px в углу). */
+.ts-legend-dot--approval-pending,
+.ts-legend-dot--approval-approved,
+.ts-legend-dot--approval-rejected {
+  position: relative;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.ts-legend-dot--approval-pending::after,
+.ts-legend-dot--approval-approved::after,
+.ts-legend-dot--approval-rejected::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+}
+.ts-legend-dot--approval-pending::after  { border-top: 8px solid var(--primary); }
+.ts-legend-dot--approval-approved::after { border-top: 8px solid var(--success); }
+.ts-legend-dot--approval-rejected::after { border-top: 8px solid var(--error); }
+
 .ts-legend-dot--travel {
   background: rgba(59, 130, 246, 0.12);
-  color: var(--primary, #2563eb);
+  color: var(--primary);
   border: 1px solid rgba(59, 130, 246, 0.3);
 }
 
 .ts-day--remote {
   background: rgba(34, 197, 94, 0.18);
-  color: #059669;
+  color: var(--success);
   font-weight: 500;
 }
 
@@ -2634,7 +2664,7 @@
 }
 
 .ts-day--weekend {
-  background: var(--bg-tertiary, var(--bg-secondary));
+  background: var(--bg-tertiary));
   color: var(--text-tertiary);
   cursor: default;
 }
@@ -2642,7 +2672,7 @@
 .ts-day--weekend:hover {
   transform: none;
   outline: none;
-  background: var(--bg-tertiary, var(--bg-secondary));
+  background: var(--bg-tertiary));
 }
 
 .ts-day--today {
@@ -2940,7 +2970,7 @@
 }
 
 .ts-day-detail--clickable:hover {
-  background: var(--surface-hover, rgba(255, 255, 255, 0.04));
+  background: var(--surface-hover));
 }
 
 .ts-day-detail-chevron {
@@ -2965,12 +2995,12 @@
 
 .ts-day-detail-time-badge.entry {
   background: rgba(34, 197, 94, 0.1);
-  color: #16a34a;
+  color: var(--success);
 }
 
 .ts-day-detail-time-badge.exit {
   background: rgba(239, 68, 68, 0.1);
-  color: #dc2626;
+  color: var(--error);
 }
 
 .ts-split-day-view {
@@ -3051,11 +3081,11 @@
 }
 
 .ts-day-event-row.entry .ts-day-event-icon {
-  color: #16a34a;
+  color: var(--success);
 }
 
 .ts-day-event-row.exit .ts-day-event-icon {
-  color: #dc2626;
+  color: var(--error);
 }
 
 .ts-day-event-time {
@@ -3086,7 +3116,7 @@
   margin: 2px 0;
   border-top: 1px dashed var(--border);
   border-bottom: 1px dashed var(--border);
-  background: var(--bg-subtle, rgba(0, 0, 0, 0.02));
+  background: var(--bg-secondary));
 }
 
 .ts-day-event-break-label {
@@ -3100,7 +3130,7 @@
   padding: 2px 8px;
   border-radius: 6px;
   background: rgba(99, 102, 241, 0.12);
-  color: var(--accent, #6366f1);
+  color: var(--accent);
   font-family: 'Space Mono', monospace;
   font-size: 11px;
   font-weight: 600;
@@ -3179,7 +3209,7 @@
   border: 1px solid rgba(59, 130, 246, 0.2);
   border-radius: 6px;
   font-size: 12px;
-  color: var(--primary, #3b82f6);
+  color: var(--primary);
 }
 
 .ts-correction-info-icon {
@@ -3251,11 +3281,11 @@
 }
 
 .ts-modal-event-row.entry .ts-modal-event-icon {
-  color: #16a34a;
+  color: var(--success);
 }
 
 .ts-modal-event-row.exit .ts-modal-event-icon {
-  color: #dc2626;
+  color: var(--error);
 }
 
 .ts-modal-event-row.internal {
@@ -3274,7 +3304,7 @@
   margin: 2px 0;
   border-top: 1px dashed var(--border);
   border-bottom: 1px dashed var(--border);
-  background: var(--bg-subtle, rgba(0, 0, 0, 0.02));
+  background: var(--bg-secondary));
 }
 
 .ts-modal-event-break-label {
@@ -3354,19 +3384,19 @@
 .ts-modal-events-summary .skud-time-badge.entry,
 .ts-day-events-summary .skud-time-badge.entry {
   background: rgba(34, 197, 94, 0.12);
-  color: #16a34a;
+  color: var(--success);
 }
 
 .ts-modal-events-summary .skud-time-badge.exit,
 .ts-day-events-summary .skud-time-badge.exit {
   background: rgba(239, 68, 68, 0.12);
-  color: #dc2626;
+  color: var(--error);
 }
 
 .ts-modal-events-summary .skud-time-badge.duration,
 .ts-day-events-summary .skud-time-badge.duration {
   background: rgba(59, 130, 246, 0.12);
-  color: #2563eb;
+  color: var(--primary);
 }
 
 .ts-modal-body {
@@ -3541,7 +3571,7 @@
   padding: 12px 14px;
   border-radius: 14px;
   background: rgba(245, 158, 11, 0.12);
-  color: #b45309;
+  color: var(--warning);
   font-size: 13px;
   line-height: 1.45;
 }
@@ -3601,7 +3631,7 @@
 
 .ts-hours-separator {
   font-size: 14px;
-  color: var(--text-secondary, #8a8a8e);
+  color: var(--text-secondary);
 }
 
 /* Compact status select (used in correction modal) */
@@ -3659,7 +3689,7 @@
 }
 
 .ts-late-row:hover {
-  background: var(--surface-hover, rgba(255, 255, 255, 0.04));
+  background: var(--surface-hover));
 }
 
 .ts-late-rank {
@@ -4182,7 +4212,7 @@
 
 .ts-transfers-row--editing {
   border-color: var(--primary);
-  background: var(--surface-hover, rgba(59, 130, 246, 0.04));
+  background: var(--surface-hover));
 }
 
 .ts-transfers-row-main {
@@ -4257,7 +4287,7 @@
   padding: 8px 12px;
   background: rgba(239, 68, 68, 0.1);
   border: 1px solid rgba(239, 68, 68, 0.3);
-  color: #b91c1c;
+  color: var(--error);
   border-radius: var(--radius-md);
   font-size: 12px;
 }

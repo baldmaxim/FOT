@@ -260,6 +260,9 @@ const getDayCellClass = (
       break;
   }
   if (entry.is_correction) classes.push('ts-day--corrected');
+  if (entry.approval_status === 'pending') classes.push('ts-day--approval-pending');
+  else if (entry.approval_status === 'approved') classes.push('ts-day--approval-approved');
+  else if (entry.approval_status === 'rejected') classes.push('ts-day--approval-rejected');
   if ((entry.travel_problematic_segments || 0) > 0 || (entry.travel_delay_minutes || 0) > 0) {
     classes.push('ts-day--travel-issue');
   }
@@ -311,6 +314,13 @@ const getDayCellTitle = (entry: TimesheetEntry | null, weekend: boolean): string
   }
   if (entry.is_correction) {
     parts.push('Есть корректировка');
+  }
+  if (entry.approval_status === 'pending') {
+    parts.push('На согласовании администратора');
+  } else if (entry.approval_status === 'approved') {
+    parts.push('Согласовано администратором');
+  } else if (entry.approval_status === 'rejected') {
+    parts.push('Корректировка отклонена');
   }
 
   return parts.length > 0 ? parts.join(' • ') : undefined;
@@ -1225,6 +1235,15 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
           </div>
           <div className="ts-legend-item">
             <span className="ts-legend-dot ts-legend-dot--corrected">К</span>Корректировка
+          </div>
+          <div className="ts-legend-item">
+            <span className="ts-legend-dot ts-legend-dot--approval-pending" />На согласовании
+          </div>
+          <div className="ts-legend-item">
+            <span className="ts-legend-dot ts-legend-dot--approval-approved" />Согласовано
+          </div>
+          <div className="ts-legend-item">
+            <span className="ts-legend-dot ts-legend-dot--approval-rejected" />Отклонено
           </div>
           <div className="ts-legend-item">
             <span className="ts-legend-dot ts-legend-dot--travel-issue">!</span>Превышение лимита или проблема объекта

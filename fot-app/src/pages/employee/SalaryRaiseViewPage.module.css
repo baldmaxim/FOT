@@ -1,4 +1,4 @@
-.page {
+﻿.page {
   width: 100%;
   max-width: none;
   margin: 0;
@@ -173,7 +173,7 @@
   border-radius: 18px;
   background:
     linear-gradient(135deg, rgba(255, 179, 71, 0.12), rgba(255, 255, 255, 0)),
-    var(--bg-tertiary, rgba(148, 163, 184, 0.08));
+    var(--bg-tertiary));
   margin-bottom: 18px;
 }
 
@@ -219,7 +219,7 @@
 }
 
 .percentBadge {
-  color: #92400e;
+  color: var(--warning);
   background: rgba(245, 158, 11, 0.16);
 }
 
@@ -262,7 +262,7 @@
   justify-content: center;
   border-radius: 12px;
   background: rgba(59, 130, 246, 0.12);
-  color: #2563eb;
+  color: var(--primary);
   font-weight: 800;
 }
 

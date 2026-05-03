@@ -1,4 +1,4 @@
-.srr-page {
+﻿.srr-page {
   max-width: 1320px;
   margin: 0 auto;
   padding: 24px;
@@ -68,7 +68,7 @@
 }
 
 .srr-filter-btn.active {
-  background: #f8fafc;
+  background: var(--bg-secondary);
   color: #111827;
 }
 

@@ -18,6 +18,7 @@ export interface TimesheetEntry {
   travel_problematic_segments?: number;
   is_correction: boolean;
   notes?: string | null;
+  approval_status?: 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
   first_entry?: string | null;
   last_exit?: string | null;
   corrected_by?: number | null;

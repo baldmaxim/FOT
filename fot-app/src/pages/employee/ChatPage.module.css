@@ -1,7 +1,7 @@
-.chatLayout {
+﻿.chatLayout {
   display: flex;
   height: calc(100vh - 60px);
-  background: var(--bg-primary, #0a0a0f);
+  background: var(--bg-primary);
   overflow: hidden;
 }
 
@@ -9,10 +9,10 @@
 .sidebar {
   width: 340px;
   min-width: 340px;
-  border-right: 1px solid var(--border-color, #1e1e2e);
+  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  background: var(--bg-secondary, #12121a);
+  background: var(--bg-secondary);
 }
 
 .sidebarHeader {
@@ -20,20 +20,20 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  border-bottom: 1px solid var(--border-color, #1e1e2e);
+  border-bottom: 1px solid var(--border);
 }
 
 .sidebarHeader h2 {
   font-size: 18px;
   font-weight: 600;
-  color: var(--text-primary, #e0e0e0);
+  color: var(--text-primary);
   margin: 0;
 }
 
 .newChatBtn {
   background: none;
   border: none;
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary);
   cursor: pointer;
   padding: 6px;
   border-radius: 8px;
@@ -41,23 +41,23 @@
 }
 
 .newChatBtn:hover {
-  background: var(--bg-hover, #1e1e2e);
-  color: var(--text-primary, #e0e0e0);
+  background: var(--surface-hover);
+  color: var(--text-primary);
 }
 
 /* Search */
 .searchSection {
   padding: 12px 16px;
-  border-bottom: 1px solid var(--border-color, #1e1e2e);
+  border-bottom: 1px solid var(--border);
 }
 
 .searchInput {
   width: 100%;
   padding: 8px 12px;
-  background: var(--bg-primary, #0a0a0f);
-  border: 1px solid var(--border-color, #1e1e2e);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  color: var(--text-primary, #e0e0e0);
+  color: var(--text-primary);
   font-size: 14px;
   outline: none;
 }
@@ -80,12 +80,12 @@
   border-radius: 8px;
   cursor: pointer;
   font-size: 14px;
-  color: var(--text-primary, #e0e0e0);
+  color: var(--text-primary);
   transition: background 0.15s;
 }
 
 .searchItem:hover {
-  background: var(--bg-hover, #1e1e2e);
+  background: var(--surface-hover);
 }
 
 /* Conversation list */
@@ -97,7 +97,7 @@
 .emptyList {
   padding: 40px 20px;
   text-align: center;
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary);
   font-size: 14px;
 }
 
@@ -108,11 +108,11 @@
   padding: 12px 16px;
   cursor: pointer;
   transition: background 0.15s;
-  border-bottom: 1px solid var(--border-color, #1e1e2e);
+  border-bottom: 1px solid var(--border);
 }
 
 .conversationItem:hover {
-  background: var(--bg-hover, #1e1e2e);
+  background: var(--surface-hover);
 }
 
 .conversationItem.active {
@@ -127,7 +127,7 @@
 .convName {
   font-size: 14px;
   font-weight: 500;
-  color: var(--text-primary, #e0e0e0);
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -135,7 +135,7 @@
 
 .convPreview {
   font-size: 12px;
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -151,7 +151,7 @@
 
 .convTime {
   font-size: 11px;
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary);
 }
 
 .unreadBadge {
@@ -198,7 +198,7 @@
   align-items: center;
   justify-content: center;
   gap: 12px;
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary);
   font-size: 15px;
 }
 
@@ -207,8 +207,8 @@
   align-items: center;
   gap: 12px;
   padding: 12px 20px;
-  border-bottom: 1px solid var(--border-color, #1e1e2e);
-  background: var(--bg-secondary, #12121a);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
 }
 
 .chatHeader .avatar {
@@ -221,14 +221,14 @@
 .chatHeaderName {
   font-size: 15px;
   font-weight: 500;
-  color: var(--text-primary, #e0e0e0);
+  color: var(--text-primary);
 }
 
 .backBtn {
   display: none;
   background: none;
   border: none;
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary);
   cursor: pointer;
   padding: 4px;
 }
@@ -271,8 +271,8 @@
 }
 
 .theirs .messageBubble {
-  background: var(--bg-secondary, #1e1e2e);
-  color: var(--text-primary, #e0e0e0);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
   border-bottom-left-radius: 4px;
 }
 
@@ -294,17 +294,17 @@
   align-items: flex-end;
   gap: 8px;
   padding: 12px 16px;
-  border-top: 1px solid var(--border-color, #1e1e2e);
-  background: var(--bg-secondary, #12121a);
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
 }
 
 .messageInput {
   flex: 1;
   padding: 10px 14px;
-  background: var(--bg-primary, #0a0a0f);
-  border: 1px solid var(--border-color, #1e1e2e);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
   border-radius: 20px;
-  color: var(--text-primary, #e0e0e0);
+  color: var(--text-primary);
   font-size: 14px;
   resize: none;
   outline: none;

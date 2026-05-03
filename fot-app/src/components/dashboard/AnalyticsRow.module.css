@@ -1,4 +1,4 @@
-.row {
+﻿.row {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap: 14px;
@@ -150,12 +150,12 @@
 }
 
 .barFill.ontime {
-  background: var(--primary-light, rgba(59, 130, 246, 0.15));
+  background: var(--primary-light));
   border: 1px solid rgba(59, 130, 246, 0.3);
 }
 
 .barFill.late {
-  background: var(--error-muted, rgba(239, 68, 68, 0.1));
+  background: var(--error-muted));
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
@@ -183,7 +183,7 @@
 }
 
 .highlight .barTrack {
-  box-shadow: 0 0 0 1px var(--primary-light, rgba(59, 130, 246, 0.3));
+  box-shadow: 0 0 0 1px var(--primary-light));
 }
 
 /* Risks */
@@ -259,7 +259,7 @@
 }
 
 .riskBadge.high {
-  background: var(--error-muted, rgba(239, 68, 68, 0.1));
+  background: var(--error-muted));
   color: var(--error);
 }
 

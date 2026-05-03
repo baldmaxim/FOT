@@ -1,10 +1,10 @@
-.page {
+﻿.page {
   padding: 0;
   width: 100%;
 }
 
 .section {
-  background: var(--bg-secondary, #fff);
+  background: var(--bg-secondary);
   border-radius: 12px;
   padding: 24px;
   margin-bottom: 24px;
@@ -21,7 +21,7 @@
 .sectionTitle {
   font-size: 18px;
   font-weight: 600;
-  color: var(--text-primary, #111827);
+  color: var(--text-primary);
   margin: 0;
 }
 
@@ -37,7 +37,7 @@
 
 .statusConnected {
   background: rgba(16, 185, 129, 0.1);
-  color: #10b981;
+  color: var(--success);
 }
 
 .statusDisconnected {
@@ -47,7 +47,7 @@
 
 .description {
   font-size: 14px;
-  color: var(--text-tertiary, #6b7280);
+  color: var(--text-tertiary);
   margin-bottom: 20px;
   line-height: 1.5;
 }
@@ -72,16 +72,16 @@
 .formLabel {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-secondary, #374151);
+  color: var(--text-secondary);
 }
 
 .formInput {
   padding: 10px 12px;
-  border: 1px solid var(--border, #d1d5db);
+  border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 14px;
-  color: var(--text-primary, #111827);
-  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
+  background: var(--bg-primary);
   transition: border-color 0.2s;
   outline: none;
   font-family: monospace;
@@ -118,16 +118,16 @@
 
 .btnSecondary {
   padding: 10px 20px;
-  background: var(--bg-tertiary, #f3f4f6);
-  color: var(--text-secondary, #374151);
-  border: 1px solid var(--border, #d1d5db);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
 }
-.btnSecondary:hover { background: var(--bg-hover, #e5e7eb); }
+.btnSecondary:hover { background: var(--surface-hover); }
 .btnSecondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .testResult {
@@ -139,12 +139,12 @@
 
 .testSuccess {
   background: rgba(16, 185, 129, 0.1);
-  color: #059669;
+  color: var(--success);
 }
 
 .testError {
   background: rgba(239, 68, 68, 0.1);
-  color: #dc2626;
+  color: var(--error);
 }
 
 .loading {
@@ -152,12 +152,12 @@
   justify-content: center;
   align-items: center;
   min-height: 200px;
-  color: var(--text-tertiary, #9ca3af);
+  color: var(--text-tertiary);
 }
 
 .hint {
   font-size: 12px;
-  color: var(--text-tertiary, #9ca3af);
+  color: var(--text-tertiary);
   margin-top: 4px;
 }
 
@@ -170,7 +170,7 @@
   align-items: center;
   gap: 10px;
   font-size: 14px;
-  color: var(--text-primary, #111827);
+  color: var(--text-primary);
 }
 
 .checkboxLabel input {

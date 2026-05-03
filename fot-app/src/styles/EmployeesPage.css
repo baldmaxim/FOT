@@ -1,4 +1,4 @@
-/* EmployeesPage — Two-panel layout */
+﻿/* EmployeesPage — Two-panel layout */
 .employees-page {
   display: flex;
   margin: -24px;
@@ -1462,8 +1462,8 @@
   align-items: flex-start;
   gap: 12px;
   padding: 14px;
-  background: var(--bg-primary, #fff);
-  border: 1px solid var(--border-color, #e5e7eb);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
   border-radius: 10px;
   cursor: pointer;
   transition: border-color 0.15s, box-shadow 0.15s;
@@ -1472,7 +1472,7 @@
 }
 
 .import-option-card:hover {
-  border-color: var(--primary, #3b82f6);
+  border-color: var(--primary);
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
 }
 
@@ -1483,9 +1483,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-secondary, #f3f4f6);
+  background: var(--bg-secondary);
   border-radius: 8px;
-  color: var(--primary, #3b82f6);
+  color: var(--primary);
 }
 
 .import-option-content {
@@ -1496,36 +1496,36 @@
 .import-option-title {
   font-size: 14px;
   font-weight: 600;
-  color: var(--text-primary, #1f2937);
+  color: var(--text-primary);
   margin-bottom: 4px;
 }
 
 .import-option-desc {
   font-size: 12px;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
   line-height: 1.4;
   margin-bottom: 6px;
 }
 
 .import-option-cols {
   font-size: 11px;
-  color: var(--text-tertiary, #9ca3af);
+  color: var(--text-tertiary);
   line-height: 1.3;
 }
 
 .import-option-cols-label {
   font-weight: 600;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 .import-option-action {
   flex-shrink: 0;
-  color: var(--text-tertiary, #9ca3af);
+  color: var(--text-tertiary);
   margin-top: 2px;
 }
 
 .import-option-card:hover .import-option-action {
-  color: var(--primary, #3b82f6);
+  color: var(--primary);
 }
 
 /* ===== Enrich Modal ===== */
@@ -1543,7 +1543,7 @@
 }
 
 .enrich-section--secondary .enrich-toggle {
-  color: var(--text-tertiary, #94a3b8);
+  color: var(--text-tertiary);
   font-size: 0.8125rem;
 }
 
@@ -1553,7 +1553,7 @@
   gap: 12px;
   margin-bottom: 16px;
   padding: 12px;
-  background: var(--bg-secondary, #f8f9fa);
+  background: var(--bg-secondary);
   border-radius: 8px;
 }
 
@@ -1562,19 +1562,19 @@
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 .enrich-stat.success {
-  color: #059669;
+  color: var(--success);
 }
 
 .enrich-stat.warning {
-  color: #d97706;
+  color: var(--warning);
 }
 
 .enrich-stat strong {
-  color: var(--text-primary, #111827);
+  color: var(--text-primary);
 }
 
 .enrich-section {
@@ -1585,13 +1585,13 @@
   font-size: 13px;
   font-weight: 600;
   margin: 0 0 8px;
-  color: var(--text-primary, #111827);
+  color: var(--text-primary);
 }
 
 .enrich-table-wrap {
   max-height: 300px;
   overflow-y: auto;
-  border: 1px solid var(--border-color, #e5e7eb);
+  border: 1px solid var(--border);
   border-radius: 6px;
 }
 
@@ -1604,16 +1604,16 @@
 .enrich-table th {
   position: sticky;
   top: 0;
-  background: var(--bg-secondary, #f8f9fa);
+  background: var(--bg-secondary);
   padding: 6px 10px;
   text-align: left;
   font-weight: 600;
-  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  border-bottom: 1px solid var(--border);
 }
 
 .enrich-table td {
   padding: 6px 10px;
-  border-bottom: 1px solid var(--border-color, #f3f4f6);
+  border-bottom: 1px solid var(--border);
   vertical-align: top;
 }
 
@@ -1632,7 +1632,7 @@
   display: inline-block;
   padding: 1px 6px;
   background: #dbeafe;
-  color: #1e40af;
+  color: var(--primary);
   border-radius: 4px;
   font-size: 11px;
   white-space: nowrap;
@@ -1647,19 +1647,19 @@
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
   padding: 4px 0;
 }
 
 .enrich-toggle:hover {
-  color: var(--text-primary, #111827);
+  color: var(--text-primary);
 }
 
 .enrich-list {
   margin-top: 4px;
   max-height: 150px;
   overflow-y: auto;
-  border: 1px solid var(--border-color, #e5e7eb);
+  border: 1px solid var(--border);
   border-radius: 6px;
 }
 
@@ -1668,7 +1668,7 @@
   justify-content: space-between;
   padding: 4px 10px;
   font-size: 12px;
-  border-bottom: 1px solid var(--border-color, #f3f4f6);
+  border-bottom: 1px solid var(--border);
 }
 
 .enrich-list-item:last-child {
@@ -1676,7 +1676,7 @@
 }
 
 .enrich-dept {
-  color: var(--text-secondary, #9ca3af);
+  color: var(--text-secondary);
   font-size: 11px;
 }
 
@@ -1688,7 +1688,7 @@
 }
 
 .enrich-toggle-pending {
-  color: var(--text-tertiary, #94a3b8);
+  color: var(--text-tertiary);
   font-size: 0.75rem;
 }
 
@@ -1696,13 +1696,13 @@
   margin-top: 4px;
   max-height: 400px;
   overflow-y: auto;
-  border: 1px solid var(--border-color, #e5e7eb);
+  border: 1px solid var(--border);
   border-radius: 6px;
 }
 
 .enrich-match-row {
   padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--border-color, #f3f4f6);
+  border-bottom: 1px solid var(--border);
   transition: background 0.15s;
 }
 
@@ -1728,12 +1728,12 @@
 .enrich-match-name {
   font-size: 0.8125rem;
   font-weight: 500;
-  color: var(--text-primary, #e5e7eb);
+  color: var(--text-primary);
 }
 
 .enrich-match-dept {
   font-size: 0.6875rem;
-  color: var(--text-tertiary, #94a3b8);
+  color: var(--text-tertiary);
   flex-shrink: 0;
 }
 
@@ -1742,11 +1742,11 @@
   align-items: center;
   gap: 0.5rem;
   font-size: 0.8125rem;
-  color: var(--text-secondary, #64748b);
+  color: var(--text-secondary);
 }
 
 .enrich-match-decision--skip {
-  color: var(--text-tertiary, #94a3b8);
+  color: var(--text-tertiary);
 }
 
 .enrich-match-check {
@@ -1756,7 +1756,7 @@
 .enrich-match-undo {
   background: none;
   border: none;
-  color: var(--primary, #3b82f6);
+  color: var(--primary);
   cursor: pointer;
   font-size: 0.75rem;
   padding: 2px 6px;
@@ -1765,7 +1765,7 @@
 }
 
 .enrich-match-undo:hover {
-  background: var(--surface-hover, rgba(255,255,255,0.06));
+  background: var(--surface-hover));
 }
 
 .enrich-match-actions {
@@ -1777,10 +1777,10 @@
   align-items: center;
   gap: 6px;
   padding: 0.375rem 0.625rem;
-  background: var(--surface-hover, rgba(255,255,255,0.04));
-  border: 1px solid var(--border-color, #374151);
+  background: var(--surface-hover));
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: var(--text-tertiary, #94a3b8);
+  color: var(--text-tertiary);
   margin-bottom: 4px;
 }
 
@@ -1788,7 +1788,7 @@
   flex: 1;
   border: none;
   background: transparent;
-  color: var(--text-primary, #e5e7eb);
+  color: var(--text-primary);
   font-size: 0.8125rem;
   outline: none;
   min-width: 0;
@@ -1797,8 +1797,8 @@
 .enrich-match-spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid var(--border-color, #374151);
-  border-top-color: var(--primary, #3b82f6);
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
   border-radius: 50%;
   animation: enrich-spin 0.8s linear infinite;
 }
@@ -1808,9 +1808,9 @@
 }
 
 .enrich-match-dropdown {
-  border: 1px solid var(--border, #e5e7eb);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg-secondary, #ffffff);
+  background: var(--bg-secondary);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
   margin-bottom: 4px;
   overflow: hidden;
@@ -1821,24 +1821,24 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  color: var(--text-primary, #111827);
+  color: var(--text-primary);
   width: 100%;
   padding: 0.5rem 0.75rem;
   border: none;
   background: none;
   cursor: pointer;
   font-size: 0.8125rem;
-  color: var(--text-primary, #e5e7eb);
+  color: var(--text-primary);
   text-align: left;
   transition: background 0.1s;
 }
 
 .enrich-match-dropdown-item:hover {
-  background: var(--surface-hover, rgba(0,0,0,0.04));
+  background: var(--surface-hover));
 }
 
 .enrich-match-dropdown-item:not(:last-child) {
-  border-bottom: 1px solid var(--border, #e5e7eb);
+  border-bottom: 1px solid var(--border);
 }
 
 .enrich-match-dropdown-name {
@@ -1847,13 +1847,13 @@
 
 .enrich-match-dropdown-dept {
   font-size: 0.6875rem;
-  color: var(--text-tertiary, #94a3b8);
+  color: var(--text-tertiary);
   flex-shrink: 0;
 }
 
 .enrich-match-no-results {
   font-size: 0.75rem;
-  color: var(--text-tertiary, #94a3b8);
+  color: var(--text-tertiary);
   padding: 0.375rem 0;
 }
 
@@ -1862,10 +1862,10 @@
   align-items: center;
   gap: 4px;
   padding: 0.25rem 0.5rem;
-  border: 1px solid var(--border-color, #374151);
+  border: 1px solid var(--border);
   border-radius: 4px;
-  background: var(--surface-hover, rgba(255,255,255,0.04));
-  color: var(--text-secondary, #9ca3af);
+  background: var(--surface-hover));
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 0.75rem;
   transition: all 0.15s;
@@ -1884,7 +1884,7 @@
   justify-content: space-between;
   gap: 1rem;
   padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--border-color, #f3f4f6);
+  border-bottom: 1px solid var(--border);
 }
 
 .enrich-conflict-row:last-child {
@@ -1896,7 +1896,7 @@
   align-items: center;
   gap: 6px;
   font-size: 0.75rem;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
   margin-top: 2px;
 }
 
@@ -1906,7 +1906,7 @@
 }
 
 .enrich-conflict-new {
-  color: var(--primary, #3b82f6);
+  color: var(--primary);
 }
 
 .enrich-conflict-actions {
@@ -1917,29 +1917,29 @@
 
 .enrich-conflict-btn {
   padding: 0.25rem 0.625rem;
-  border: 1px solid var(--border-color, #374151);
+  border: 1px solid var(--border);
   border-radius: 4px;
   background: none;
   cursor: pointer;
   font-size: 0.75rem;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
   transition: all 0.15s;
 }
 
 .enrich-conflict-btn.active {
   background: rgba(107, 114, 128, 0.15);
-  color: var(--text-primary, #111827);
-  border-color: var(--text-secondary, #6b7280);
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
 }
 
 .enrich-conflict-btn--replace.active {
   background: rgba(59, 130, 246, 0.12);
-  color: var(--primary, #3b82f6);
-  border-color: var(--primary, #3b82f6);
+  color: var(--primary);
+  border-color: var(--primary);
 }
 
 .enrich-conflict-btn:hover {
-  background: var(--surface-hover, rgba(255,255,255,0.06));
+  background: var(--surface-hover));
 }
 
 @media (max-width: 768px) {
@@ -2081,7 +2081,7 @@
 }
 
 .header-emp-row:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .header-emp-avatar {
@@ -2147,7 +2147,7 @@
 /* ===== Dense Employees Layout ===== */
 .ep-dept-panel {
   width: 288px;
-  background: #fafbfc;
+  background: var(--bg-secondary);
 }
 
 .ep-dept-panel-header {
@@ -2184,7 +2184,7 @@
 .ep-dept-manage-toolbar {
   padding: 10px 12px;
   gap: 8px;
-  background: #fff;
+  background: var(--surface);
 }
 
 .ep-mini-btn {
@@ -2247,7 +2247,7 @@
 }
 
 .ep-tree-context-item:hover:not(:disabled) {
-  background: #f3f4f6;
+  background: var(--bg-secondary);
 }
 
 .ep-tree-context-item:disabled {
@@ -2265,7 +2265,7 @@
   align-items: stretch;
   gap: 10px;
   padding: 12px 16px;
-  background: #fff;
+  background: var(--surface);
 }
 
 .ep-emp-header-top {
@@ -2327,7 +2327,7 @@
   max-width: 460px;
   padding: 8px 12px;
   border-radius: 10px;
-  background: #f7f8fb;
+  background: var(--bg-secondary);
   border-color: #e5e7eb;
 }
 
@@ -2348,7 +2348,7 @@
   gap: 4px;
   padding: 3px;
   border-radius: 10px;
-  background: #f3f4f6;
+  background: var(--bg-secondary);
   border: 1px solid #e5e7eb;
 }
 
@@ -2371,7 +2371,7 @@
 }
 
 .ep-filter-chip.active {
-  background: #fff;
+  background: var(--surface);
   color: var(--text-primary);
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
 }
@@ -2381,13 +2381,13 @@
 }
 
 .ep-filter-chip.ghost {
-  background: #fff;
+  background: var(--surface);
   border-color: #e5e7eb;
 }
 
 .ep-emp-list {
   padding: 0;
-  background: #fff;
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -2412,7 +2412,7 @@
   top: 0;
   z-index: 1;
   padding: 10px 12px;
-  background: #fff;
+  background: var(--surface);
   border-bottom: 1px solid #e5e7eb;
   color: #94a3b8;
   font-size: 10px;
@@ -2428,7 +2428,7 @@
 }
 
 .ep-emp-table tbody tr:hover {
-  background: #f8fbff;
+  background: var(--bg-secondary);
 }
 
 .ep-emp-table tbody tr.selected {
@@ -2495,7 +2495,7 @@
   height: 16px;
   border-radius: 4px;
   border: 1px solid #cbd5e1;
-  background: #fff;
+  background: var(--surface);
   transition: all var(--transition);
 }
 
@@ -2530,7 +2530,7 @@
 .ep-pagination {
   padding: 10px 16px;
   border-top: 1px solid #e5e7eb;
-  background: #fff;
+  background: var(--surface);
 }
 
 @media (max-width: 1200px) {

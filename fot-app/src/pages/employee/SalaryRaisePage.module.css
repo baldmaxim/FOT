@@ -1,4 +1,4 @@
-/* Page */
+﻿/* Page */
 .page {
   padding: 24px;
   width: 100%;
@@ -147,8 +147,8 @@
 }
 
 .statusDraft {
-  background: var(--bg-tertiary, rgba(107, 114, 128, 0.1));
-  color: var(--text-tertiary, #6b7280);
+  background: var(--bg-tertiary));
+  color: var(--text-tertiary);
 }
 
 /* Card Body */
@@ -254,7 +254,7 @@
   width: 32px;
   height: 32px;
   border: 3px solid var(--border);
-  border-top-color: var(--accent, #3b82f6);
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
   margin: 0 auto 12px;

@@ -1128,11 +1128,12 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
       let anyCorrection = false;
       let correctionExceedsSkud = false;
       let absentDays = false;
+      let pendingWeekendDates: string[] = [];
 
       if (employeeIds.length > 0) {
         const adjRes = await supabase
           .from('attendance_adjustments')
-          .select('employee_id, work_date, status, hours_override, source_type, created_by')
+          .select('employee_id, work_date, status, hours_override, source_type, created_by, approval_status')
           .in('employee_id', employeeIds)
           .gte('work_date', row.start_date)
           .lte('work_date', row.end_date);
@@ -1140,6 +1141,15 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         const adjustments = adjRes.data || [];
         anyCorrection = adjustments.some((a) => String(a.source_type) === 'manual');
         absentDays = adjustments.some((a) => String(a.status) === 'absent');
+
+        if (weekend.weekendWorkDates.length > 0) {
+          const weekendSet = new Set(weekend.weekendWorkDates);
+          pendingWeekendDates = [...new Set(
+            adjustments
+              .filter((a) => String(a.approval_status ?? '') === 'pending' && weekendSet.has(String(a.work_date)))
+              .map((a) => String(a.work_date)),
+          )].sort();
+        }
 
         if (anyCorrection) {
           const workAdjustments = adjustments.filter((a) => String(a.source_type) === 'manual' && typeof a.hours_override === 'number');
@@ -1173,6 +1183,7 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         submitted_by_name: row.submitted_by ? userNames.get(row.submitted_by) ?? null : null,
         reviewed_by_name: row.reviewed_by ? userNames.get(row.reviewed_by) ?? null : null,
         weekend_work_dates: weekend.weekendWorkDates,
+        pending_weekend_dates: pendingWeekendDates,
         problem_flags: {
           any_correction: anyCorrection,
           correction_exceeds_skud: correctionExceedsSkud,

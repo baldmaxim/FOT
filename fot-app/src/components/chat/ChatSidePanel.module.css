@@ -1,4 +1,4 @@
-.overlay {
+﻿.overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.4);
@@ -106,16 +106,16 @@
   margin-left: auto;
   padding: 2px 8px;
   border-radius: 4px;
-  border: 1px solid var(--accent, #3b82f6);
+  border: 1px solid var(--accent);
   background: transparent;
-  color: var(--accent, #3b82f6);
+  color: var(--accent);
   font-size: 11px;
   cursor: pointer;
   white-space: nowrap;
 }
 
 .pushBannerBtn:hover {
-  background: var(--accent, #3b82f6);
+  background: var(--accent);
   color: #fff;
 }
 
@@ -216,7 +216,7 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: var(--bg-tertiary, #f5f5f5);
+  background: var(--bg-tertiary);
   overflow: hidden;
 }
 
@@ -377,8 +377,8 @@
 .lockBadge {
   flex-shrink: 0;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--warning, #f59e0b) 16%, transparent);
-  color: var(--warning, #b45309);
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
   font-size: 10px;
   font-weight: 600;
   padding: 2px 6px;
@@ -489,13 +489,13 @@
 }
 
 .statuspending {
-  background: color-mix(in srgb, var(--warning, #f59e0b) 16%, transparent);
-  color: var(--warning, #b45309);
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
 }
 
 .statusapproved {
-  background: color-mix(in srgb, var(--success, #16a34a) 16%, transparent);
-  color: var(--success, #15803d);
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
 }
 
 .statusrejected {
@@ -650,7 +650,7 @@
 .readOnlyNotice {
   padding: 8px 14px;
   border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--warning, #f59e0b) 8%, transparent);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
   color: var(--text-secondary);
   font-size: 12px;
 }

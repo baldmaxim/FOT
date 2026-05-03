@@ -1,4 +1,4 @@
-.sigur-header-badges {
+﻿.sigur-header-badges {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -27,13 +27,13 @@
 }
 
 .sigur-header-badge--active {
-  color: #15803d;
+  color: var(--success);
   background: rgba(34, 197, 94, 0.14);
   border-color: rgba(34, 197, 94, 0.24);
 }
 
 .sigur-header-badge--inactive {
-  color: #b91c1c;
+  color: var(--error);
   background: rgba(239, 68, 68, 0.12);
   border-color: rgba(239, 68, 68, 0.22);
 }

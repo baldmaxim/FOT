@@ -1,4 +1,4 @@
-.page {
+﻿.page {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -50,8 +50,8 @@
 
 .error {
   padding: 10px 14px;
-  background: #fdecea;
-  color: #c0392b;
+  background: var(--error-muted);
+  color: var(--error);
   border-radius: 6px;
   font-size: 13px;
 }
@@ -134,17 +134,17 @@
 
 .tagSuccess {
   background: #e6f9f0;
-  color: #1a7a4a;
+  color: var(--success);
 }
 
 .tagDanger {
-  background: #fdecea;
-  color: #c0392b;
+  background: var(--error-muted);
+  color: var(--error);
 }
 
 .tagInfo {
   background: #e8f0fe;
-  color: #1a56db;
+  color: var(--primary);
 }
 
 .loading,

@@ -104,6 +104,7 @@ export interface IAttendanceEntry {
   is_correction: boolean;
   reason?: string | null;
   notes?: string | null;
+  approval_status?: 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
   first_entry?: string | null;
   last_exit?: string | null;
   corrected_at?: string | null;
@@ -422,6 +423,7 @@ export async function buildAttendanceEntries(params: {
       is_correction: true,
       reason: adjustment.reason,
       notes: adjustment.reason,
+      approval_status: adjustment.approval_status,
       corrected_at: adjustment.updated_at ?? adjustment.created_at,
       corrected_by_name: correctedByName,
       corrected_by: legacyCorrectedBy,

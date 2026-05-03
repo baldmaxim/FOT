@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+﻿import React, { useState, useRef, useEffect } from 'react';
 import { ApiError } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -158,7 +158,7 @@ export const ChatPage: React.FC = () => {
                       type="button"
                       onClick={() => void handleStartChat(user)}
                       style={{
-                        border: '1px solid var(--border-color, #1e1e2e)',
+                        border: '1px solid var(--border)',
                         background: 'var(--bg-secondary, #12121a)',
                         color: 'var(--text-primary, #e0e0e0)',
                         borderRadius: 999,

@@ -1,4 +1,4 @@
-.card {
+﻿.card {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -47,7 +47,7 @@
 }
 
 .icon.red {
-  background: var(--error-muted, rgba(239, 68, 68, 0.1));
+  background: var(--error-muted));
   color: var(--error);
 }
 

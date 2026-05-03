@@ -1,4 +1,4 @@
-/* StaffControlPage */
+﻿/* StaffControlPage */
 
 .sc-page {
   display: flex;
@@ -328,7 +328,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.3px;
-  color: #d97706;
+  color: var(--warning);
   background: rgba(245, 158, 11, 0.15);
   border-radius: 6px;
   vertical-align: middle;
@@ -617,8 +617,8 @@
   flex-shrink: 0;
 }
 
-.sc-panel-dot.green { background: var(--success, #22c55e); }
-.sc-panel-dot.red { background: var(--error, #ef4444); }
+.sc-panel-dot.green { background: var(--success); }
+.sc-panel-dot.red { background: var(--error); }
 .sc-panel-dot.gray { background: var(--text-muted); }
 .sc-panel-dot.blue { background: var(--primary); }
 
@@ -668,8 +668,8 @@
   white-space: nowrap;
 }
 
-.sc-panel-delta-sm.up { color: var(--success, #22c55e); }
-.sc-panel-delta-sm.down { color: var(--error, #ef4444); }
+.sc-panel-delta-sm.up { color: var(--success); }
+.sc-panel-delta-sm.down { color: var(--error); }
 .sc-panel-delta-sm.neutral { color: var(--text-muted); }
 
 .sc-panel-assign-icon {
@@ -726,7 +726,7 @@
 }
 
 .sc-panel-act-btn.danger:hover {
-  background: var(--error, #ef4444);
+  background: var(--error);
 }
 
 /* ── Panel edit form ── */
@@ -1281,7 +1281,7 @@
 .sc-sigur-suggestions {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-secondary);
   max-height: 220px;
@@ -1293,7 +1293,7 @@
   padding: 8px 12px;
   font-size: 12px;
   color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border);
 }
 
 .sc-sigur-suggestion-row {
@@ -1307,7 +1307,7 @@
   text-align: left;
   cursor: pointer;
   color: var(--text-primary);
-  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 50%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
 }
 
 .sc-sigur-suggestion-row:last-child {

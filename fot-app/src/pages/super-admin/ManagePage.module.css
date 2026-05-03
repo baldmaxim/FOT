@@ -1,4 +1,4 @@
-.container {
+﻿.container {
   display: flex;
   gap: 16px;
   padding: 24px;
@@ -92,9 +92,9 @@
 }
 
 .sidebarError {
-  background: #fef2f2;
+  background: var(--error-muted);
   border: 1px solid #fecaca;
-  color: #dc2626;
+  color: var(--error);
   padding: 8px 10px;
   border-radius: 6px;
   margin-bottom: 8px;
@@ -401,13 +401,13 @@
 }
 
 .badgeFired {
-  background: #fef2f2;
-  color: #dc2626;
+  background: var(--error-muted);
+  color: var(--error);
 }
 
 .badgeLocked {
-  background: #fef3c7;
-  color: #d97706;
+  background: var(--warning-muted);
+  color: var(--warning);
   font-size: 12px;
   cursor: help;
 }
@@ -437,22 +437,22 @@
 
 .actionBtnDanger {
   border-color: #fecaca;
-  color: #dc2626;
+  color: var(--error);
 }
 
 .actionBtnDanger:hover {
-  background: #fef2f2;
-  color: #dc2626;
+  background: var(--error-muted);
+  color: var(--error);
 }
 
 .actionBtnSuccess {
   border-color: #bbf7d0;
-  color: #16a34a;
+  color: var(--success);
 }
 
 .actionBtnSuccess:hover {
-  background: #f0fdf4;
-  color: #16a34a;
+  background: var(--success-muted);
+  color: var(--success);
 }
 
 /* Empty / Loading */

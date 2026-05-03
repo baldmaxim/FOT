@@ -1,4 +1,4 @@
-.page {
+﻿.page {
   display: flex;
   flex-direction: column;
   padding: 24px;
@@ -144,17 +144,17 @@
 
 .dayCellFull {
   background: rgba(34, 197, 94, 0.15);
-  color: #16a34a;
+  color: var(--success);
 }
 
 .dayCellPartial {
   background: rgba(245, 158, 11, 0.15);
-  color: #d97706;
+  color: var(--warning);
 }
 
 .dayCellSick {
   background: rgba(59, 130, 246, 0.15);
-  color: #2563eb;
+  color: var(--primary);
 }
 
 .dayCellVacation {
@@ -164,17 +164,17 @@
 
 .dayCellAbsent {
   background: rgba(239, 68, 68, 0.15);
-  color: #dc2626;
+  color: var(--error);
 }
 
 .dayCellRemote {
   background: rgba(34, 197, 94, 0.2);
-  color: #059669;
+  color: var(--success);
 }
 
 .dayCellTrip {
   background: rgba(59, 130, 246, 0.15);
-  color: #2563eb;
+  color: var(--primary);
 }
 
 .dayCellEmpty {
@@ -221,10 +221,10 @@
 }
 
 .summaryValuePositive {
-  color: #16a34a;
+  color: var(--success);
 }
 .summaryValueNegative {
-  color: #dc2626;
+  color: var(--error);
 }
 
 .summaryLabel {
@@ -278,7 +278,7 @@
 .salaryTotalValue {
   font-size: 28px;
   font-weight: 700;
-  color: #16a34a;
+  color: var(--success);
   font-family: 'Space Mono', 'SF Mono', monospace;
 }
 
@@ -321,7 +321,7 @@
 }
 
 .pillResultValue {
-  color: #16a34a;
+  color: var(--success);
 }
 
 .operator {
@@ -393,15 +393,15 @@
 
 .statusWork {
   background: rgba(34, 197, 94, 0.12);
-  color: #16a34a;
+  color: var(--success);
 }
 .statusRemote {
   background: rgba(34, 197, 94, 0.18);
-  color: #059669;
+  color: var(--success);
 }
 .statusSick {
   background: rgba(59, 130, 246, 0.12);
-  color: #2563eb;
+  color: var(--primary);
 }
 .statusVacation {
   background: rgba(139, 92, 246, 0.12);
@@ -409,11 +409,11 @@
 }
 .statusAbsent {
   background: rgba(239, 68, 68, 0.12);
-  color: #dc2626;
+  color: var(--error);
 }
 .statusTrip {
   background: rgba(59, 130, 246, 0.12);
-  color: #2563eb;
+  color: var(--primary);
 }
 .statusDayoff {
   background: var(--bg-secondary);
@@ -421,7 +421,7 @@
 }
 .statusUnpaid {
   background: rgba(245, 158, 11, 0.12);
-  color: #d97706;
+  color: var(--warning);
 }
 
 .cellMoney {

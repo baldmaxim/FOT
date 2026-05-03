@@ -1,4 +1,4 @@
-.wrapper {
+﻿.wrapper {
   position: relative;
 }
 
@@ -109,7 +109,7 @@
 }
 
 .iconSalary svg {
-  color: #10b981;
+  color: var(--success);
 }
 
 .iconChat {

@@ -1,4 +1,4 @@
-.mte-page {
+﻿.mte-page {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -685,11 +685,11 @@
 }
 
 .mte-email-indicator--ok {
-  color: var(--success, #22c55e);
+  color: var(--success);
 }
 
 .mte-email-indicator--missing {
-  color: var(--text-tertiary, #9ca3af);
+  color: var(--text-tertiary);
 }
 
 .mte-export-btn--email {

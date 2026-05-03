@@ -1,4 +1,4 @@
-.sigur-live-page {
+﻿.sigur-live-page {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -62,12 +62,12 @@
 }
 
 .sigur-live-status.danger {
-  color: #b91c1c;
+  color: var(--error);
   background: rgba(239, 68, 68, 0.12);
 }
 
 .sigur-live-status.warn {
-  color: #b45309;
+  color: var(--warning);
   background: rgba(245, 158, 11, 0.14);
 }
 
@@ -135,7 +135,7 @@
 }
 
 .ep-sigur-action.danger {
-  color: #b91c1c;
+  color: var(--error);
   background: rgba(254, 242, 242, 0.95);
   border-color: rgba(239, 68, 68, 0.18);
 }
@@ -179,7 +179,7 @@
   min-height: 36px;
   padding: 8px 10px;
   border-radius: 10px;
-  background: #f8fafc;
+  background: var(--bg-secondary);
   border: 1px solid #e5e7eb;
   color: #1f2937;
   font-size: 12px;
@@ -209,7 +209,7 @@
   min-height: 36px;
   padding: 8px 10px;
   border-radius: 10px;
-  background: #f8fafc;
+  background: var(--bg-secondary);
   border: 1px solid #e5e7eb;
   color: #1f2937;
   font-size: 12px;
@@ -249,7 +249,7 @@
 .sigur-emp-suggestions {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-secondary);
   max-height: 220px;
@@ -261,7 +261,7 @@
   padding: 8px 12px;
   font-size: 12px;
   color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border);
 }
 
 .sigur-emp-suggestion-row {
@@ -275,7 +275,7 @@
   text-align: left;
   cursor: pointer;
   color: var(--text-primary);
-  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 50%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
 }
 
 .sigur-emp-suggestion-row:last-child {

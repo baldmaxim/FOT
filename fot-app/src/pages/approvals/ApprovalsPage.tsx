@@ -1,6 +1,6 @@
 import { type FC, useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertTriangle, Pencil, UserX } from 'lucide-react';
+import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertTriangle, Pencil, UserX, MessageSquare } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee } from '../../types';
 import {
   timesheetApprovalService,
@@ -533,8 +533,11 @@ const ReviewChecklist: FC<IReviewChecklistProps> = ({ items, onJump }) => {
                 <span className="approvals-checklist-meta">
                   {item.author && <span className="approvals-checklist-author">{item.author}</span>}
                   {item.correctedAt && <span className="approvals-checklist-time">{formatCorrectedAt(item.correctedAt)}</span>}
-                  {item.notes && <span className="approvals-checklist-notes" title={item.notes}>«{item.notes}»</span>}
                 </span>
+                <div className="approvals-checklist-notes-row">
+                  <MessageSquare size={12} />
+                  <span>{item.notes ? `«${item.notes}»` : <em>без комментария</em>}</span>
+                </div>
               </li>
             );
           }
@@ -611,13 +614,15 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
 
   const problemDates = useMemo(() => {
     const yellow = new Set<string>();
+    const red = new Set<string>();
     for (const d of row.weekend_work_dates) yellow.add(d);
+    for (const d of row.pending_weekend_dates) red.add(d);
     for (const e of tsQuery.data?.entries ?? []) {
       if (outOfPeriodDates.has(e.work_date)) continue;
       if (e.is_correction || e.status === 'absent') yellow.add(e.work_date);
     }
-    return { yellow };
-  }, [row.weekend_work_dates, tsQuery.data?.entries, outOfPeriodDates]);
+    return { yellow, red };
+  }, [row.weekend_work_dates, row.pending_weekend_dates, tsQuery.data?.entries, outOfPeriodDates]);
 
   const reviewItems = useMemo<ReviewItem[]>(() => {
     if (!tsQuery.data) return [];
@@ -651,13 +656,20 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
     flashTimerRef.current = window.setTimeout(() => setHighlightedCell(null), 1600);
   };
 
+  const hasPendingWeekend = row.pending_weekend_dates.length > 0;
+
   return (
     <div className="approvals-card-body">
-      {(row.problem_flags.correction_exceeds_skud || row.weekend_work_dates.length > 0) && (
+      {(row.problem_flags.correction_exceeds_skud || row.weekend_work_dates.length > 0 || hasPendingWeekend) && (
         <div className="approvals-flags">
           {row.problem_flags.correction_exceeds_skud && (
             <span className="approvals-flag approvals-flag--red">
               <AlertTriangle size={12} /> Есть корректировки больше факта СКУД
+            </span>
+          )}
+          {hasPendingWeekend && (
+            <span className="approvals-flag approvals-flag--red">
+              <AlertTriangle size={12} /> Несогласованные выходные: {row.pending_weekend_dates.join(', ')}
             </span>
           )}
           {row.weekend_work_dates.length > 0 && (
@@ -710,7 +722,8 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
                 type="button"
                 className="approvals-action-btn approvals-action-btn--approve"
                 onClick={onApprove}
-                disabled={isApproving}
+                disabled={isApproving || hasPendingWeekend}
+                title={hasPendingWeekend ? 'Сначала согласуйте корректировки в выходные дни на вкладке «Выходные дни»' : undefined}
               >
                 <Check size={16} /> Утвердить
               </button>
@@ -883,11 +896,6 @@ export const ApprovalsPage: FC = () => {
 
   return (
     <div className="approvals-page">
-      <header className="approvals-header">
-        <h1>Согласования</h1>
-        <p className="approvals-subtitle">Корректировки в выходные дни и подачи табелей</p>
-      </header>
-
       <div className="approvals-tabs">
         <button
           type="button"

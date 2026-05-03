@@ -1,4 +1,4 @@
-.sidebar {
+﻿.sidebar {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -34,7 +34,7 @@
 
 .hourlyBar {
   flex: 1;
-  background: var(--primary-light, rgba(59, 130, 246, 0.15));
+  background: var(--primary-light));
   border-radius: 3px 3px 0 0;
   transition: background 0.15s ease;
   cursor: default;

@@ -82,6 +82,7 @@ export interface IApprovalReviewItem extends ITimesheetApproval {
   submitted_by_name: string | null;
   reviewed_by_name: string | null;
   weekend_work_dates: string[];
+  pending_weekend_dates: string[];
   problem_flags: {
     any_correction: boolean;
     correction_exceeds_skud: boolean;
