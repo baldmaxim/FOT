@@ -96,7 +96,7 @@ export function generateRefreshToken(userId: string, email: string): string {
 
 export function verifyRefreshToken(token: string): RefreshTokenPayload {
   const refreshSecret = env.JWT_REFRESH_SECRET || env.JWT_SECRET;
-  return jwt.verify(token, refreshSecret) as unknown as RefreshTokenPayload;
+  return jwt.verify(token, refreshSecret, { algorithms: ['HS256'] }) as unknown as RefreshTokenPayload;
 }
 
 export function setSessionCookies(

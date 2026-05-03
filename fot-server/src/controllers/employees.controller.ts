@@ -6,6 +6,7 @@ import { loadStructureCache, decryptEmployee, decryptEmployeeList } from '../ser
 import { employeeCache } from '../services/employee-cache.service.js';
 import { getKnownArchiveDepartment, reconcileFiredEmployeesArchiveDepartment } from '../services/employee-archive-department.service.js';
 import { parseFIO } from '../utils/fio.utils.js';
+import { escapeLike } from '../utils/search.utils.js';
 import { employeeChangesService } from '../services/employee-changes.service.js';
 import {
   ensureSigurPosition,
@@ -160,7 +161,7 @@ export const employeesController = {
             ? q.eq('org_department_id', departmentFilterIds[0])
             : q.in('org_department_id', departmentFilterIds);
         }
-        if (search) q = q.ilike('full_name', `%${search}%`);
+        if (search) q = q.ilike('full_name', `%${escapeLike(search)}%`);
         if (status === 'fired') q = q.eq('employment_status', 'fired');
         else if (status === 'excluded') q = q.eq('excluded_from_timesheet', true).neq('employment_status', 'fired');
         else if (status === 'active' || !status) q = q.neq('employment_status', 'fired');

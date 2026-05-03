@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { z } from 'zod';
 import { supabase } from '../config/database.js';
+import { escapeLike } from '../utils/search.utils.js';
 import type { AuthenticatedRequest, IResolvedSchedule, SalaryRaiseStatus } from '../types/index.js';
 import { employeeChangesService } from '../services/employee-changes.service.js';
 import { pushService } from '../services/push.service.js';
@@ -1170,7 +1171,7 @@ const getCandidates = async (req: AuthenticatedRequest, res: Response): Promise<
       .limit(20);
 
     if (search) {
-      query = query.ilike('full_name', `%${search}%`);
+      query = query.ilike('full_name', `%${escapeLike(search)}%`);
     }
 
     const { data, error } = await query;

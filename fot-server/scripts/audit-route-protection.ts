@@ -90,11 +90,14 @@ function auditFile(filePath: string): Violation[] {
     const method = match[1];
     const path = match[3];
 
-    // Inline-маркер `// audit:public` на той же строке = намеренно публичный роут.
+    // Inline-маркеры на той же строке:
+    //   `// audit:public`       — намеренно публичный роут (без auth);
+    //   `// audit:self-scoped`  — authenticated, доступ ограничен через
+    //                             req.user.id/employee_id внутри контроллера.
     const lineStart = content.lastIndexOf('\n', offset) + 1;
     const lineEnd = content.indexOf('\n', offset);
     const fullLine = content.slice(lineStart, lineEnd === -1 ? content.length : lineEnd);
-    if (/\/\/\s*audit:public\b/.test(fullLine)) continue;
+    if (/\/\/\s*audit:(public|self-scoped)\b/.test(fullLine)) continue;
 
     // Защита на уровне router.use(...) выше по файлу?
     const protectedByUse = useEvents

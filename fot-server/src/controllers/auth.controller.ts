@@ -163,21 +163,15 @@ async function login(req: Request, res: Response): Promise<void> {
     });
 
     if (authError || !authData.user) {
+      // User enumeration защита: единый ответ для всех ветвей (несуществующий
+      // email / неверный пароль / email не подтверждён). Конкретная причина —
+      // только в audit-логе и Sentry, не в response.
       console.error('Login error for', email, ':', authError?.message);
       await auditService.logFromRequest(req, null, 'LOGIN_FAILED', {
         details: { email, reason: authError?.message },
       });
 
-      let errorMessage = 'Неверный email или пароль';
-      if (authError?.message?.includes('Email not confirmed')) {
-        errorMessage = 'Email не подтверждён. Обратитесь к администратору.';
-      } else if (authError?.message?.includes('Invalid login credentials')) {
-        errorMessage = 'Неверный email или пароль';
-      } else if (authError?.message) {
-        errorMessage = authError.message;
-      }
-
-      res.status(401).json({ success: false, error: errorMessage });
+      res.status(401).json({ success: false, error: 'Неверный email или пароль' });
       return;
     }
 

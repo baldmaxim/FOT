@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { z } from 'zod';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
+import { escapeLike } from '../utils/search.utils.js';
 import type {
   AuthenticatedRequest,
   IResolvedSchedule,
@@ -1569,7 +1570,7 @@ export const timesheetController = {
       const { data: employees, error } = await supabase
         .from('employees')
         .select('id, full_name, org_department_id, excluded_from_timesheet')
-        .ilike('full_name', `%${parsed.q}%`)
+        .ilike('full_name', `%${escapeLike(parsed.q)}%`)
         .eq('employment_status', 'active')
         .eq('is_archived', false)
         .neq('org_department_id', targetDepartmentId)

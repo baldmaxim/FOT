@@ -16,6 +16,7 @@ import { setupChatSocket } from './socket/chatHandler.js';
 import { setIo } from './socket/io-instance.js';
 
 const PORT = parseInt(env.PORT, 10);
+const HOST = env.HOST;
 
 const httpServer = createServer(app);
 
@@ -29,8 +30,8 @@ const io = new Server(httpServer, {
 setIo(io);
 setupChatSocket(io);
 
-httpServer.listen(PORT, () => {
-  console.log(`FOT Server running on port ${PORT}`);
+httpServer.listen(PORT, HOST, () => {
+  console.log(`FOT Server running on ${HOST}:${PORT}`);
   console.log(`Environment: ${env.NODE_ENV}`);
   console.log(`CORS Origin: ${corsAllowedOrigins.join(', ')}`);
   console.log('Socket.IO enabled');

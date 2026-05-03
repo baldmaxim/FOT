@@ -6,6 +6,7 @@ import { canAccessEmployeeInScope, resolveScopedDepartmentId } from '../services
 import { hasPageView } from '../services/access-control.service.js';
 import { aiReceiptRecognitionService } from '../services/ai-receipt-recognition.service.js';
 import { trimWhiteBorders } from '../services/image-trim.service.js';
+import { sanitizeFileName } from '../utils/file-validation.utils.js';
 
 interface MulterRequest extends AuthenticatedRequest {
   file?: Express.Multer.File;
@@ -155,6 +156,7 @@ const uploadFile = async (req: MulterRequest, res: Response): Promise<void> => {
     let buffer = file.buffer;
     let mimeType = file.mimetype || 'application/octet-stream';
     let fileSize = file.size;
+    const safeFileName = sanitizeFileName(file.originalname);
 
     if (category === 'patent_check') {
       const trimmed = await trimWhiteBorders(buffer, mimeType);
@@ -163,7 +165,7 @@ const uploadFile = async (req: MulterRequest, res: Response): Promise<void> => {
       fileSize = trimmed.size;
     }
 
-    const r2Key = r2Service.generateKey(employeeId, file.originalname);
+    const r2Key = r2Service.generateKey(employeeId, safeFileName);
 
     await r2Service.uploadObject(r2Key, buffer, mimeType);
 
@@ -173,7 +175,7 @@ const uploadFile = async (req: MulterRequest, res: Response): Promise<void> => {
         employee_id: employeeId,
         leave_request_id: leaveRequestId,
         category,
-        file_name: file.originalname,
+        file_name: safeFileName,
         file_size: fileSize,
         mime_type: mimeType,
         r2_key: r2Key,

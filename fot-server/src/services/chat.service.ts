@@ -1,5 +1,6 @@
 import { supabase } from '../config/database.js';
 import { encryptionService } from './encryption.service.js';
+import { escapeLike } from '../utils/search.utils.js';
 import {
   chatPolicyService,
   type ChatAvailability,
@@ -493,7 +494,7 @@ export const chatService = {
       .limit(50);
 
     if (query.trim()) {
-      request = request.ilike('full_name', `%${query.trim()}%`);
+      request = request.ilike('full_name', `%${escapeLike(query.trim())}%`);
     }
 
     const { data: users, error } = await request;

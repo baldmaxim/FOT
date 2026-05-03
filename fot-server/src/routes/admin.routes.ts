@@ -2,6 +2,7 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import multer from 'multer';
 import { adminController } from '../controllers/admin.controller.js';
 import { authenticate, requirePageAccess } from '../middleware/auth.js';
+import { isExcelBuffer, sanitizeFileName } from '../utils/file-validation.utils.js';
 
 const router = Router();
 
@@ -34,17 +35,29 @@ const upload = multer({
 /**
  * Оборачивает multer так, чтобы его ошибки (лимит размера, отклонённый
  * mime, невалидный form-data) превращались в 400 JSON, а не голый 500.
+ * После успешной загрузки — magic-bytes проверка + sanitize originalname.
  */
 function uploadSingleFile(field: string) {
   const middleware = upload.single(field);
   return (req: Request, res: Response, next: NextFunction) => {
     middleware(req, res, err => {
-      if (!err) {
-        next();
+      if (err) {
+        const message = err instanceof Error ? err.message : 'Ошибка загрузки файла';
+        res.status(400).json({ success: false, error: message });
         return;
       }
-      const message = err instanceof Error ? err.message : 'Ошибка загрузки файла';
-      res.status(400).json({ success: false, error: message });
+      const file = (req as Request & { file?: Express.Multer.File }).file;
+      if (file) {
+        if (!isExcelBuffer(file.buffer)) {
+          res.status(400).json({
+            success: false,
+            error: 'Файл не является корректным Excel-документом (.xlsx/.xls).',
+          });
+          return;
+        }
+        file.originalname = sanitizeFileName(file.originalname);
+      }
+      next();
     });
   };
 }

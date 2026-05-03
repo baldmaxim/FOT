@@ -1,5 +1,6 @@
 import { supabase } from '../config/database.js';
 import { formatDateShift } from './timesheet-department-assignments.service.js';
+import { escapeLike } from '../utils/search.utils.js';
 
 export interface ITransferRow {
   assignment_new_id: string;
@@ -745,7 +746,7 @@ async function buildAllExclusions(args: IBuildArgs): Promise<IExclusionAdminRow[
   if (args.dateFrom) q = q.gte('excluded_from_timesheet_date', args.dateFrom);
   if (args.dateTo) q = q.lte('excluded_from_timesheet_date', args.dateTo);
   if (args.deptFilter) q = q.eq('org_department_id', args.deptFilter);
-  if (args.query) q = q.ilike('full_name', `%${args.query}%`);
+  if (args.query) q = q.ilike('full_name', `%${escapeLike(args.query)}%`);
 
   const { data, error } = await q;
   if (error) throw error;

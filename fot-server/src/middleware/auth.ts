@@ -20,7 +20,7 @@ export const authenticate = async (
       return;
     }
 
-    const decoded = jwt.verify(token, env.JWT_SECRET) as JWTPayload;
+    const decoded = jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] }) as JWTPayload;
     if (decoded.token_type === 'refresh') {
       res.status(401).json({ success: false, error: 'Invalid access token' });
       return;

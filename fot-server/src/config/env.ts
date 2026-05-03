@@ -22,6 +22,11 @@ const envSchema = z.object({
   JWT_REFRESH_EXPIRES_IN: z.string().default('30d'),
   TOTP_ISSUER: z.string().default('FOT-App'),
   PORT: z.string().default('3001'),
+  // На проде nginx проксирует на loopback, поэтому Node должен слушать только
+  // 127.0.0.1 — чтобы публичный :PORT не висел голым на интернете в обход nginx
+  // и rate-limit'ов. В dev оставляем '0.0.0.0' через .env, если нужно открыть
+  // dev-сервер другим устройствам (телефон в той же Wi-Fi).
+  HOST: z.string().default('127.0.0.1'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   CORS_ORIGIN: z.string().default(DEFAULT_CORS_ORIGINS.join(',')),
 

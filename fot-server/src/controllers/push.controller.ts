@@ -3,10 +3,35 @@ import { z } from 'zod';
 import { pushService } from '../services/push.service.js';
 import { env } from '../config/env.js';
 
+// SSRF mitigation: endpoint должен принадлежать одному из легитимных push-
+// провайдеров браузеров. Без allowlist авторизованный пользователь мог бы
+// сохранить произвольный URL и заставить сервер слать туда POST'ы.
+const PUSH_ENDPOINT_HOST_SUFFIXES = [
+  '.googleapis.com',          // FCM (Chrome/Android/Edge через Chromium)
+  '.push.services.mozilla.com', // Firefox autopush
+  '.push.apple.com',          // Safari/iOS Web Push
+  '.notify.windows.com',      // Edge/Windows Notification Service
+];
+
+function isAllowedPushEndpoint(rawUrl: string): boolean {
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol !== 'https:') return false;
+    const host = u.hostname.toLowerCase();
+    return PUSH_ENDPOINT_HOST_SUFFIXES.some(suffix => host.endsWith(suffix));
+  } catch {
+    return false;
+  }
+}
+
 const subscribeSchema = z.object({
-  endpoint: z.string().url(),
-  p256dh: z.string().min(1),
-  auth: z.string().min(1),
+  endpoint: z.string().url().max(2000).refine(isAllowedPushEndpoint, {
+    message: 'Push endpoint host is not allowed',
+  }),
+  // p256dh — base64url ECDH P-256 публичный ключ (65 байт → ~88 символов).
+  // auth   — base64url 16-байтовый секрет (~22-24 символа).
+  p256dh: z.string().min(80).max(140),
+  auth: z.string().min(16).max(40),
 });
 
 export const pushController = {

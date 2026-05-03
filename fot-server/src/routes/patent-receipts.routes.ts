@@ -12,8 +12,9 @@ const upload = multer({
 
 router.use(authenticate);
 
-router.get('/my', patentReceiptsController.getMy);
-router.post('/my/upload', upload.single('file'), patentReceiptsController.uploadMy);
+// Self-scope: контроллер фильтрует patent_payment_receipts по req.user.employee_id.
+router.get('/my', patentReceiptsController.getMy); // audit:self-scoped
+router.post('/my/upload', upload.single('file'), patentReceiptsController.uploadMy); // audit:self-scoped
 router.get('/', requirePageAccess('/admin/patent-receipts', 'view'), patentReceiptsController.list);
 router.get('/:id', requirePageAccess('/admin/patent-receipts', 'view'), patentReceiptsController.getOne);
 router.patch('/:id', requirePageAccess('/admin/patent-receipts', 'edit'), patentReceiptsController.update);

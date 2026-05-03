@@ -21,7 +21,7 @@ export const setupChatSocket = (io: Server) => {
     }
 
     try {
-      const decoded = jwt.verify(token, env.JWT_SECRET) as JWTPayload;
+      const decoded = jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] }) as JWTPayload;
       if (!decoded.is_approved) {
         return next(new Error('Account not approved'));
       }

@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { employeesController } from '../controllers/employees.controller.js';
 import { employeeEnrichController } from '../controllers/employee-enrich.controller.js';
@@ -7,6 +7,7 @@ import { employeeSalaryHistoryController } from '../controllers/employee-enrich-
 import { employeeEnrichContactsController } from '../controllers/employee-enrich-contacts.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess, requireCritical2FA, requireAdmin } from '../middleware/auth.js';
 import { importLimiter } from '../middleware/rateLimit.js';
+import { isExcelBuffer, sanitizeFileName } from '../utils/file-validation.utils.js';
 
 const router = Router();
 
@@ -17,17 +18,40 @@ const upload = multer({
     fileSize: 5 * 1024 * 1024, // 5MB max
   },
   fileFilter: (_req, file, cb) => {
+    // MIME-фильтр: первичная проверка. Браузеры/curl могут отдать
+    // application/octet-stream для xlsx, поэтому проверяем и расширение.
     const allowedMimes = [
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // xlsx
       'application/vnd.ms-excel', // xls
+      'application/octet-stream',
+      '',
     ];
-    if (allowedMimes.includes(file.mimetype)) {
+    const hasExcelExt = /\.(xlsx|xls)$/i.test(file.originalname || '');
+    if (allowedMimes.includes(file.mimetype) || hasExcelExt) {
       cb(null, true);
     } else {
       cb(new Error('Недопустимый формат файла. Разрешены только .xlsx и .xls'));
     }
   },
 });
+
+// Magic-bytes проверка после multer и sanitize originalname.
+// MIME контролирует клиент, расширение можно подделать — magic-bytes отсекают
+// переименованные файлы до тяжёлого парсинга.
+function validateExcelUpload(req: Request, res: Response, next: NextFunction): void {
+  const file = (req as Request & { file?: Express.Multer.File }).file;
+  if (file) {
+    if (!isExcelBuffer(file.buffer)) {
+      res.status(400).json({
+        success: false,
+        error: 'Файл не является корректным Excel-документом (.xlsx/.xls).',
+      });
+      return;
+    }
+    file.originalname = sanitizeFileName(file.originalname);
+  }
+  next();
+}
 
 // Все роуты требуют аутентификации
 router.use(authenticate);
@@ -46,6 +70,7 @@ router.post(
   requireCritical2FA,
   importLimiter,
   upload.single('file'),
+  validateExcelUpload,
   employeeEnrichController.enrich
 );
 
@@ -56,6 +81,7 @@ router.post(
   requireCritical2FA,
   importLimiter,
   upload.single('file'),
+  validateExcelUpload,
   employeeSalaryEnrichController.enrichSalary
 );
 
@@ -66,6 +92,7 @@ router.post(
   requireCritical2FA,
   importLimiter,
   upload.single('file'),
+  validateExcelUpload,
   employeeSalaryHistoryController.enrichSalaryHistory
 );
 
@@ -76,6 +103,7 @@ router.post(
   requireCritical2FA,
   importLimiter,
   upload.single('file'),
+  validateExcelUpload,
   employeeEnrichContactsController.enrichContacts
 );
 

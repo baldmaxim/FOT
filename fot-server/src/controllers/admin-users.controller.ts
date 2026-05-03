@@ -12,6 +12,7 @@ import {
 } from '../services/department-access.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
+import { escapeLike } from '../utils/search.utils.js';
 import {
   buildManagerDepartmentImportPreviewFromBuffer,
   saveManagerDepartmentImportAliases,
@@ -400,6 +401,8 @@ export const adminUsersController = {
       const preview = await buildManagerDepartmentImportPreviewFromBuffer(uploadedFile.buffer);
       res.json({ success: true, data: preview });
     } catch (error) {
+      // Полный объект — только в логи/Sentry: details.message от Supabase может
+      // содержать имена таблиц/колонок, парсер xlsx — путь файла на сервере.
       const details = {
         name: error instanceof Error ? error.name : typeof error,
         message: error instanceof Error ? error.message : String(error),
@@ -409,7 +412,7 @@ export const adminUsersController = {
       console.error('Preview department access import error:', details);
       res.status(500).json({
         success: false,
-        error: `Не удалось обработать Excel-файл: ${details.message}`,
+        error: 'Не удалось обработать Excel-файл. Проверьте формат и повторите.',
       });
     }
   },
@@ -1275,7 +1278,7 @@ export const adminUsersController = {
       let query = supabase
         .from('employees')
         .select('id, full_name, org_department_id')
-        .ilike('full_name', `%${q}%`)
+        .ilike('full_name', `%${escapeLike(q)}%`)
         .eq('employment_status', 'active')
         .limit(20);
 
