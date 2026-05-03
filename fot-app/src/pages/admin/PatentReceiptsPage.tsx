@@ -131,7 +131,6 @@ export const PatentReceiptsPage: FC = () => {
   return (
     <div className={styles.page}>
       <div className={styles.header}>
-        <h1 className={styles.title}>Чеки за патент</h1>
         <span
           className={styles.encryptionBadge}
           title="ПДн (ФИО, паспорт, ИНН, банковские реквизиты) зашифрованы AES-256-GCM в БД и при передаче"

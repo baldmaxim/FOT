@@ -112,7 +112,6 @@ export const SkudSupabasePage: React.FC = () => {
       <div className="skud-db-header">
         <div className="skud-db-title">
           <HardDrive size={22} />
-          <h1>Просмотр СКУД (база)</h1>
           {!loading && tableData.length > 0 && (
             <span className="skud-db-count">
               {activeTab !== 'events' && searchInput

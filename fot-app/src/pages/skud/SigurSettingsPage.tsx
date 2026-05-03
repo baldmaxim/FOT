@@ -136,11 +136,6 @@ export const SigurSettingsPage = () => {
 
   return (
     <div className="sigur-page">
-      <div className="sigur-header">
-        <Settings size={24} />
-        <h1>Настройки СКУД (Sigur)</h1>
-      </div>
-
       <div className="sigur-tabs">
         <button
           className={`sigur-tab ${activeTab === 'settings' ? 'active' : ''}`}

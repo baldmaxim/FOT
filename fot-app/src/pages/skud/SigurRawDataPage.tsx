@@ -182,7 +182,6 @@ export const SigurRawDataPage: React.FC = () => {
       <div className="sigur-raw-header">
         <div className="sigur-raw-title">
           <Database size={22} />
-          <h1>Просмотр СКУД</h1>
           {!loading && data.length > 0 && (
             <span className="sigur-raw-count">
               {filteredData.length}{searchQuery ? ` / ${data.length}` : ''}

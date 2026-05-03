@@ -403,10 +403,6 @@ export const SchedulesPage: FC = () => {
 
   return (
     <div className={styles.page}>
-      <div className={styles.header}>
-        <h2 className={styles.title}>Графики работы</h2>
-      </div>
-
       <div className={styles.tabs}>
         <button
           className={`${styles.tab} ${tab === 'templates' ? styles.tabActive : ''}`}

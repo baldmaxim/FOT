@@ -122,11 +122,8 @@ export const TimesheetTransfersAdminPage: FC = () => {
   return (
     <div className={styles.page}>
       <div className={styles.header}>
-        <div>
-          <h1 className={styles.title}>Переводы и исключения из табелей</h1>
-          <div className={styles.subtitle}>
-            Общий список по всем подразделениям. Можно править дату и отменять перевод/исключение.
-          </div>
+        <div className={styles.subtitle}>
+          Общий список по всем подразделениям. Можно править дату и отменять перевод/исключение.
         </div>
       </div>
 

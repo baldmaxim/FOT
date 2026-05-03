@@ -152,17 +152,17 @@
 
 .sigur-status-badge.connected {
   background: rgba(34, 197, 94, 0.12);
-  color: #22c55e;
+  color: var(--success) ;
 }
 
 .sigur-status-badge.disconnected {
   background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
+  color: var(--error) ;
 }
 
 .sigur-status-badge.checking {
   background: rgba(59, 130, 246, 0.12);
-  color: #3b82f6;
+  color: var(--primary) ;
 }
 
 .sigur-status-dot {
@@ -245,18 +245,18 @@
 }
 
 .sigur-btn-danger {
-  background: #dc3545;
-  border-color: #dc3545;
+  background: var(--error) ;
+  border-color: var(--error) ;
   color: white;
 }
 
 .sigur-btn-danger:hover {
-  background: #c82333;
+  background: color-mix(in srgb, var(--error) 80%, black);
 }
 
 .sigur-btn-danger:disabled {
-  background: #6c757d;
-  border-color: #6c757d;
+  background: var(--text-tertiary) ;
+  border-color: var(--text-tertiary) ;
 }
 
 .sigur-conn-config-grid {
@@ -625,15 +625,15 @@
 }
 
 .sigur-sync-stat.success strong {
-  color: #22c55e;
+  color: var(--success) ;
 }
 
 .sigur-sync-stat.skipped strong {
-  color: #f59e0b;
+  color: var(--warning) ;
 }
 
 .sigur-sync-stat.error strong {
-  color: #ef4444;
+  color: var(--error) ;
 }
 
 .sigur-sync-errors {
@@ -789,7 +789,7 @@
 /* Ошибка */
 .sigur-error {
   background: rgba(239, 68, 68, 0.08);
-  color: #ef4444;
+  color: var(--error) ;
   padding: 0.75rem 1rem;
   border-radius: 6px;
   margin-bottom: 1rem;
@@ -802,7 +802,7 @@
 .sigur-error button {
   background: none;
   border: none;
-  color: #ef4444;
+  color: var(--error) ;
   cursor: pointer;
   font-size: 1.125rem;
   padding: 0 0.25rem;
@@ -853,19 +853,19 @@
 }
 
 .sigur-step--done .sigur-step-indicator {
-  background: #22c55e;
-  border-color: #22c55e;
+  background: var(--success) ;
+  border-color: var(--success) ;
   color: white;
 }
 
 .sigur-step--running .sigur-step-indicator {
-  border-color: #3b82f6;
-  color: #3b82f6;
+  border-color: var(--primary) ;
+  color: var(--primary) ;
 }
 
 .sigur-step--error .sigur-step-indicator {
-  background: #ef4444;
-  border-color: #ef4444;
+  background: var(--error) ;
+  border-color: var(--error) ;
   color: white;
 }
 
@@ -894,7 +894,7 @@
 
 .sigur-step-status {
   font-size: 0.75rem;
-  color: #3b82f6;
+  color: var(--primary) ;
   margin-top: 0.125rem;
 }
 
@@ -911,7 +911,7 @@
 }
 .sigur-step-errors-detail summary {
   cursor: pointer;
-  color: #e67e22;
+  color: var(--warning) ;
 }
 .sigur-step-errors-detail ul {
   margin: 4px 0;
@@ -922,7 +922,7 @@
 
 .sigur-step-error {
   font-size: 0.75rem;
-  color: #ef4444;
+  color: var(--error) ;
   margin-top: 0.125rem;
 }
 
@@ -1157,14 +1157,14 @@
 .sigur-progress-bar {
   width: 100%;
   height: 8px;
-  background: var(--border-primary, #e2e8f0);
+  background: var(--border);
   border-radius: 4px;
   overflow: hidden;
 }
 
 .sigur-progress-fill {
   height: 100%;
-  background: var(--accent-primary, #3b82f6);
+  background: var(--primary);
   border-radius: 4px;
   transition: width 0.3s ease;
 }
@@ -1182,14 +1182,14 @@
 
 .sigur-events-progress-bar {
   height: 6px;
-  background: var(--border-primary, #e2e8f0);
+  background: var(--border);
   border-radius: 3px;
   overflow: hidden;
 }
 
 .sigur-events-progress-fill {
   height: 100%;
-  background: var(--accent-primary, #3b82f6);
+  background: var(--primary);
   border-radius: 3px;
   transition: width 0.3s ease;
 }
@@ -1234,8 +1234,8 @@
 }
 
 .sigur-btn-saved {
-  background: #22c55e !important;
-  border-color: #22c55e !important;
+  background: var(--success) !important;
+  border-color: var(--success) !important;
 }
 
 .sigur-ap-type-btn {
@@ -1249,7 +1249,7 @@
 
 .sigur-ap-type-btn.external {
   background: rgba(34, 197, 94, 0.1);
-  color: #22c55e;
+  color: var(--success) ;
   border-color: rgba(34, 197, 94, 0.3);
 }
 
@@ -1259,7 +1259,7 @@
 
 .sigur-ap-type-btn.internal {
   background: rgba(249, 115, 22, 0.1);
-  color: #f97316;
+  color: var(--warning) ;
   border-color: rgba(249, 115, 22, 0.3);
 }
 
@@ -1273,11 +1273,11 @@
 }
 
 .sigur-ap-type-label.external {
-  color: #22c55e;
+  color: var(--success) ;
 }
 
 .sigur-ap-type-label.internal {
-  color: #f97316;
+  color: var(--warning) ;
 }
 
 /* Sync Filter */
@@ -1466,7 +1466,7 @@
 /* Фаза прогресса */
 .sigur-step-phase {
   font-size: 0.6875rem;
-  color: #3b82f6;
+  color: var(--primary) ;
   margin-bottom: 2px;
 }
 
@@ -1544,13 +1544,13 @@
 }
 
 .sigur-match-stat.pending strong {
-  color: #f59e0b;
+  color: var(--warning) ;
 }
 
 .sigur-match-error {
   padding: 0.5rem 1.25rem;
   background: rgba(239, 68, 68, 0.08);
-  color: #ef4444;
+  color: var(--error) ;
   font-size: 0.8125rem;
 }
 
@@ -1613,7 +1613,7 @@
 }
 
 .sigur-match-check {
-  color: #22c55e;
+  color: var(--success) ;
 }
 
 .sigur-match-undo {
@@ -1738,8 +1738,8 @@
 
 .sigur-match-btn-create:hover {
   background: rgba(59, 130, 246, 0.1);
-  border-color: #3b82f6;
-  color: #3b82f6;
+  border-color: var(--primary) ;
+  color: var(--primary) ;
 }
 
 .sigur-match-btn-skip:hover {

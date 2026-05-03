@@ -1,8 +1,9 @@
 ﻿.approvals-page {
-  padding: 20px;
+  padding: 0;
+  margin-top: -8px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   min-height: 100%;
 }
 .approvals-tabs {
