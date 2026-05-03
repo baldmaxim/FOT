@@ -1044,10 +1044,22 @@ export const StaffControlPage: FC = () => {
   const queryClient = useQueryClient();
   const toast = useToast();
   const { isAdmin } = useAuth();
-  const { isDepartmentScope, managedDepartmentIds } = useManagedDepartments({ enabled: false });
+  const { isDepartmentScope, managedDepartmentIds, managedDepartmentNameById, mode: managedMode } = useManagedDepartments({ enabled: false });
   // Руководителям (`isDepartmentScope`) фильтруем всегда — даже при пустом списке
   // назначений (тогда дропдаун пуст). Без этого header без отделов видел все отделы.
   const restrictToManaged = isDepartmentScope;
+  // Руководитель с одним отделом — фиксируем фильтр на этом отделе (без возможности
+  // переключения). Делаем через эффект, потому что profile/managed_department_ids
+  // приезжают асинхронно из useAuth.
+  const isSingleManagedDept = isDepartmentScope && managedMode === 'single' && managedDepartmentIds.length === 1;
+  const singleManagedDeptId = isSingleManagedDept ? managedDepartmentIds[0] : null;
+  const singleManagedDeptName = singleManagedDeptId ? managedDepartmentNameById.get(singleManagedDeptId) ?? null : null;
+  useEffect(() => {
+    if (singleManagedDeptId && deptId !== singleManagedDeptId) {
+      setDeptId(singleManagedDeptId);
+      setPage(1);
+    }
+  }, [singleManagedDeptId, deptId]);
 
   const { employees, departments, countsByDepartment, loading, meta, totalActive, refresh, patchEmployee } = useStaffData({
     page,
@@ -1151,6 +1163,15 @@ export const StaffControlPage: FC = () => {
     }
     return map;
   }, [employees, activeEmployeeScheduleAssignments, baseScheduleViews]);
+
+  // Если админ снял у руководителя один из отделов, profile:access_changed обновляет
+  // managedDepartmentIds — но в URL ещё может висеть ?dept= снятого отдела. Без сброса
+  // фронт продолжит слать его на бэк (теперь это 403). Чистим тихо.
+  useEffect(() => {
+    if (!restrictToManaged || !deptId) return;
+    if (managedDepartmentIds.includes(deptId)) return;
+    setDeptId('');
+  }, [restrictToManaged, deptId, managedDepartmentIds]);
 
   useEffect(() => {
     const p = new URLSearchParams();
@@ -1756,11 +1777,17 @@ export const StaffControlPage: FC = () => {
 
   const filtersContent = (
     <div className="sc-filters">
-      <DeptSelect
-        departments={allDepts}
-        value={deptId}
-        onChange={handleDeptChange}
-      />
+      {isSingleManagedDept ? (
+        <div className="sc-dept-fixed" title="Вам назначен один отдел">
+          {singleManagedDeptName ?? 'Мой отдел'}
+        </div>
+      ) : (
+        <DeptSelect
+          departments={allDepts}
+          value={deptId}
+          onChange={handleDeptChange}
+        />
+      )}
       <div className="sc-filter-search">
         <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
       </div>
@@ -1822,11 +1849,17 @@ export const StaffControlPage: FC = () => {
       {/* Filters */}
       {isMobile ? (
         <div className="sc-mobile-toolbar">
-          <DeptSelect
-            departments={allDepts}
-            value={deptId}
-            onChange={handleDeptChange}
-          />
+          {isSingleManagedDept ? (
+            <div className="sc-dept-fixed" title="Вам назначен один отдел">
+              {singleManagedDeptName ?? 'Мой отдел'}
+            </div>
+          ) : (
+            <DeptSelect
+              departments={allDepts}
+              value={deptId}
+              onChange={handleDeptChange}
+            />
+          )}
           <div className="sc-filter-search">
             <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
           </div>

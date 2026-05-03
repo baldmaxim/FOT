@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import * as Sentry from '@sentry/react';
+import { useQueryClient } from '@tanstack/react-query';
 import { apiClient, ApiError, getSessionToken, setSessionToken, subscribeSessionToken } from '../api/client';
 import { wsService } from '../services/websocket';
 import type { RoleLabel } from '../services/rolesService';
@@ -65,6 +66,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [state, setState] = useState<AuthState>(initialState);
   const [roles, setRoles] = useState<RoleLabel[]>([]);
   const [token, setToken] = useState<string | null>(getSessionToken());
+  const queryClient = useQueryClient();
 
   useEffect(() => subscribeSessionToken(setToken), []);
 
@@ -222,17 +224,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Когда админ меняет назначение отделов, бэк шлёт 'profile:access_changed' в user:${id} —
   // тихо тянем /auth/me, чтобы managed_department_ids обновились без релогина.
+  // Дополнительно инвалидируем server-кэши, иначе UI продолжит показывать сотрудников
+  // и структуру по уже отозванному отделу — пока пользователь сам не сменит фильтр.
   useEffect(() => {
     if (!token || !state.isAuthenticated) return;
     wsService.connect(token, 'auth-context');
     const unsubscribe = wsService.on('profile:access_changed', () => {
       void refreshProfileRef.current();
+      void queryClient.invalidateQueries({ queryKey: ['structure'] });
+      void queryClient.invalidateQueries({ queryKey: ['employees'] });
     });
     return () => {
       unsubscribe();
       wsService.disconnect('auth-context');
     };
-  }, [token, state.isAuthenticated]);
+  }, [token, state.isAuthenticated, queryClient]);
 
   const getRoleLabel = useCallback((code: string): string => {
     return roles.find(r => r.code === code)?.name ?? code;

@@ -98,6 +98,16 @@ export const employeesController = {
       const showArchived = req.query.archived === 'true';
       const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
       const departmentId = await resolveScopedDepartmentId(req, requestedDepartmentId);
+      // Если пользователь явно запросил отдел, к которому у него нет доступа — отказ.
+      // Иначе фильтр «тихо» обнулялся и возвращался полный список (утечка).
+      if (requestedDepartmentId && !departmentId) {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied to this department',
+          code: 'DEPARTMENT_ACCESS_DENIED',
+        });
+        return;
+      }
       const managedDepartmentIds = scope === 'department' && !requestedDepartmentId
         ? await resolveManagedDepartmentIds(req)
         : [];

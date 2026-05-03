@@ -56,23 +56,28 @@ export const DashboardPage: React.FC = () => {
   // Department selector
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedDeptId = searchParams.get('dept');
+  // Для руководителя с одним отделом — единственный отдел подставляется автоматически.
+  // Для руководителя с несколькими отделами и для админа — отдел выбирает пользователь
+  // (если URL пустой → null → показывается placeholder с меню выбора).
   const effectiveSelectedDeptId = selectedDeptId
-    || (isDepartmentScope ? primaryDepartmentId ?? managedDepartmentIds[0] ?? null : null);
+    || (isSingleManagedDept ? primaryDepartmentId ?? managedDepartmentIds[0] ?? null : null);
   const [deptDropdownOpen, setDeptDropdownOpen] = useState(false);
   const [deptSearchQuery, setDeptSearchQuery] = useState('');
   const deptDropdownRef = useRef<HTMLDivElement>(null);
+  const deptInputRef = useRef<HTMLInputElement>(null);
 
-  // Для руководителя: сразу ставим дефолтный отдел в URL (первый из managed)
+  // Для руководителя с одним отделом: фиксируем его в URL, чтобы остальные хуки
+  // (presence, stats) видели стабильный dept и кэш не сбрасывался.
   useEffect(() => {
-    if (!isDepartmentScope) return;
+    if (!isSingleManagedDept) return;
     const defaultId = primaryDepartmentId ?? managedDepartmentIds[0] ?? null;
     if (!defaultId) return;
-    if (searchParams.get('dept')) return;
+    if (searchParams.get('dept') === defaultId) return;
 
     const next = new URLSearchParams(searchParams);
     next.set('dept', defaultId);
     setSearchParams(next, { replace: true });
-  }, [isDepartmentScope, primaryDepartmentId, managedDepartmentIds, searchParams, setSearchParams]);
+  }, [isSingleManagedDept, primaryDepartmentId, managedDepartmentIds, searchParams, setSearchParams]);
 
   const deptOptions = useMemo(() => {
     const allNodes = structureQuery.data?.departments ?? [];
@@ -84,6 +89,7 @@ export const DashboardPage: React.FC = () => {
   }, [structureQuery.data, isDepartmentScope, managedDepartmentIds]);
 
   useEffect(() => {
+    if (!deptDropdownOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
       if (deptDropdownRef.current && !deptDropdownRef.current.contains(e.target as Node)) {
         setDeptDropdownOpen(false);
@@ -91,7 +97,7 @@ export const DashboardPage: React.FC = () => {
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [deptDropdownOpen]);
 
   const selectedDept = useMemo(
     () => effectiveSelectedDeptId ? deptOptions.find(d => d.id === effectiveSelectedDeptId) : null,
@@ -217,11 +223,15 @@ export const DashboardPage: React.FC = () => {
   const [expandedLateId, setExpandedLateId] = useState<number | null>(null);
   const navigate = useNavigate();
 
-  const deptInputRef = useRef<HTMLInputElement>(null);
-
   const handleDeptInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setDeptSearchQuery(e.target.value);
     if (!deptDropdownOpen) setDeptDropdownOpen(true);
+  };
+
+  const handleDeptTriggerClick = () => {
+    setDeptSearchQuery('');
+    setDeptDropdownOpen(prev => !prev);
+    deptInputRef.current?.focus();
   };
 
   const handleDeptInputFocus = () => {
@@ -249,7 +259,10 @@ export const DashboardPage: React.FC = () => {
     </div>
   ) : (
     <div className="dash-dept-dropdown" ref={deptDropdownRef}>
-        <div className={`dash-dept-trigger ${effectiveSelectedDeptId ? 'has-value' : ''} ${!effectiveSelectedDeptId ? 'dash-dept-trigger--large' : ''}`}>
+        <div
+          className={`dash-dept-trigger ${effectiveSelectedDeptId ? 'has-value' : ''} ${!effectiveSelectedDeptId ? 'dash-dept-trigger--large' : ''}`}
+          onClick={handleDeptTriggerClick}
+        >
         <Search size={effectiveSelectedDeptId ? 14 : 16} className="dash-dept-search-icon" />
         <input
           ref={deptInputRef}
@@ -259,6 +272,7 @@ export const DashboardPage: React.FC = () => {
           value={deptDropdownOpen ? deptSearchQuery : (selectedDept?.name ?? '')}
           onChange={handleDeptInputChange}
           onFocus={handleDeptInputFocus}
+          onClick={e => e.stopPropagation()}
         />
         <ChevronDown size={effectiveSelectedDeptId ? 14 : 18} className={`dash-dept-chevron ${deptDropdownOpen ? 'open' : ''}`} />
       </div>
