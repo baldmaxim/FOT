@@ -489,6 +489,65 @@ describe('skud-travel.service', () => {
     });
   });
 
+  it('skips a stray duplicate exit at the destination and still detects the travel from origin', async () => {
+    // Реальный кейс: сотрудник в 12:39 вышел из Офис, в 14:43 случайно приложил карту
+    // на «выход» вместо «входа» на Борисовских прудах, в 14:46 вошёл нормально.
+    // Раньше парный поиск ломался (exit→exit→entry дают пары exit/exit и same-object exit/entry).
+    mockedState.travelLimitMinutes = 90;
+    mockedState.resolver = (query) => {
+      if (query.table === 'skud_object_access_points') {
+        return {
+          data: [
+            { object_id: 'obj-office', access_point_name: 'Офис' },
+            { object_id: 'obj-bor', access_point_name: 'Борисовские пруды' },
+          ],
+          error: null,
+        };
+      }
+
+      if (query.table === 'skud_events') {
+        return {
+          data: [
+            { employee_id: 13, event_date: '2026-04-29', event_time: '08:23:00', access_point: 'Офис', direction: 'entry' },
+            { employee_id: 13, event_date: '2026-04-29', event_time: '12:39:00', access_point: 'Офис', direction: 'exit' },
+            { employee_id: 13, event_date: '2026-04-29', event_time: '14:43:00', access_point: 'Борисовские пруды', direction: 'exit' },
+            { employee_id: 13, event_date: '2026-04-29', event_time: '14:46:00', access_point: 'Борисовские пруды', direction: 'entry' },
+            { employee_id: 13, event_date: '2026-04-29', event_time: '17:35:00', access_point: 'Борисовские пруды', direction: 'exit' },
+          ],
+          error: null,
+        };
+      }
+
+      if (query.table === 'skud_travel_segments') {
+        return { data: [], error: null };
+      }
+
+      throw new Error(`Unexpected query for table ${query.table}`);
+    };
+
+    const result = await calculateAndSyncTravelSegments({
+      employeeIds: [13],
+      startDate: '2026-04-01',
+      endDate: '2026-04-30',
+    });
+
+    expect(result.segments).toHaveLength(1);
+    expect(result.segments[0]).toMatchObject({
+      employee_id: 13,
+      work_date: '2026-04-29',
+      from_access_point_name: 'Офис',
+      to_access_point_name: 'Борисовские пруды',
+      exit_time: '12:39:00',
+      entry_time: '14:46:00',
+      // 12:39 -> 14:46 = 2ч 7м = 127 мин при лимите 90 мин -> превышение 37 мин.
+      actual_minutes: 127,
+      norm_minutes: 90,
+      delay_minutes: 37,
+      credited_minutes: 90,
+      status: 'pending',
+    });
+  });
+
   it('throws a configuration error when the global travel limit is not set', async () => {
     mockedState.travelLimitMinutes = null;
 

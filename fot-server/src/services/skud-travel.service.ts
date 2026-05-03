@@ -727,22 +727,54 @@ const buildTravelSegments = ({
   for (const dayEvents of grouped.values()) {
     dayEvents.sort((left, right) => left.event_time.localeCompare(right.event_time));
 
-    for (let index = 0; index < dayEvents.length - 1; index += 1) {
-      const fromEvent = dayEvents[index];
-      const toEvent = dayEvents[index + 1];
+    // Очередь незакрытых exit'ов в порядке поступления. На каждый entry ищем
+    // ближайший по времени exit на ДРУГОМ объекте — так корректно обрабатываются
+    // ошибочные «двойные» прикладывания (например, случайный выход на турникете
+    // вместо входа), которые иначе ломают парный поиск exit→entry-пар.
+    let pendingExits: ITravelEventRow[] = [];
 
-      if (fromEvent.direction !== 'exit' || toEvent.direction !== 'entry') continue;
+    for (const event of dayEvents) {
+      if (event.direction === 'exit') {
+        const exitAccessPoint = normalizeAccessPoint(event.access_point);
+        if (!exitAccessPoint) continue;
+        if (internalPoints.has(exitAccessPoint)) continue;
+        pendingExits.push(event);
+        continue;
+      }
 
-      const fromAccessPoint = normalizeAccessPoint(fromEvent.access_point);
-      const toAccessPoint = normalizeAccessPoint(toEvent.access_point);
+      if (event.direction !== 'entry') continue;
 
-      if (!fromAccessPoint || !toAccessPoint) continue;
-      if (internalPoints.has(fromAccessPoint) || internalPoints.has(toAccessPoint)) continue;
+      const toAccessPoint = normalizeAccessPoint(event.access_point);
+      if (!toAccessPoint) continue;
+      if (internalPoints.has(toAccessPoint)) continue;
 
-      const fromObjectId = accessPointToObjectId.get(fromAccessPoint) || null;
       const toObjectId = accessPointToObjectId.get(toAccessPoint) || null;
 
-      if (fromObjectId && toObjectId && fromObjectId === toObjectId) continue;
+      // Ищем последний по времени exit, который не на том же объекте, что entry.
+      let matchedIndex = -1;
+      for (let k = pendingExits.length - 1; k >= 0; k -= 1) {
+        const candidate = pendingExits[k];
+        const candAccessPoint = normalizeAccessPoint(candidate.access_point);
+        if (!candAccessPoint) continue;
+        const candObjectId = accessPointToObjectId.get(candAccessPoint) || null;
+        if (candObjectId && toObjectId && candObjectId === toObjectId) continue;
+        matchedIndex = k;
+        break;
+      }
+
+      if (matchedIndex < 0) {
+        pendingExits = [];
+        continue;
+      }
+
+      const fromEvent = pendingExits[matchedIndex];
+      const fromAccessPoint = normalizeAccessPoint(fromEvent.access_point)!;
+      const fromObjectId = accessPointToObjectId.get(fromAccessPoint) || null;
+      const toEvent = event;
+
+      // Все накопленные exit'ы (в т.ч. стрелочные дубли между fromEvent и entry)
+      // считаем «исчерпанными» — следующий travel-сегмент строится с нуля.
+      pendingExits = [];
 
       const actualMinutes = timeToMinutes(toEvent.event_time) - timeToMinutes(fromEvent.event_time);
       if (actualMinutes <= 0) continue;
