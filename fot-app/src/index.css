@@ -46,6 +46,7 @@
 
   /* Layout */
   --sidebar-width: 240px;
+  --sidebar-width-collapsed: 64px;
   --header-height: 60px;
 
   /* Radius */

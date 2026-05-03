@@ -7,11 +7,16 @@
   position: fixed;
   height: 100vh;
   z-index: 100;
+  transition: width 0.2s ease;
 }
 
 .logo {
+  position: relative;
   padding: 20px;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .logoImage {
@@ -19,6 +24,42 @@
   width: 100%;
   height: 48px;
   max-width: none;
+}
+
+.logoMini {
+  display: none;
+  width: 32px;
+  height: 32px;
+}
+
+.collapseBtn {
+  position: absolute;
+  top: 50%;
+  right: -12px;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  z-index: 1;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.collapseBtn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.collapseBtn svg {
+  display: block;
+  transition: transform 0.2s ease;
 }
 
 /* Profile Card */
@@ -236,6 +277,98 @@
 .logoutBtn svg {
   width: 16px;
   height: 16px;
+}
+
+/* Collapsed (mini-rail) state — desktop only */
+@media (min-width: 769px) {
+  .sidebar.collapsed .logoImage {
+    display: none;
+  }
+
+  .sidebar.collapsed .logoMini {
+    display: block;
+    margin: 0 auto;
+  }
+
+  .sidebar.collapsed .logo {
+    padding: 16px 8px;
+    justify-content: center;
+  }
+
+  .sidebar.collapsed .collapseBtn svg {
+    transform: rotate(180deg);
+  }
+
+  .sidebar.collapsed .profileCard {
+    padding: 12px 8px;
+  }
+
+  .sidebar.collapsed .profileHeader {
+    flex-direction: column;
+    gap: 0;
+    margin-bottom: 0;
+  }
+
+  .sidebar.collapsed .profileAvatar {
+    width: 40px;
+    height: 40px;
+    font-size: 14px;
+  }
+
+  .sidebar.collapsed .profileInfo {
+    display: none;
+  }
+
+  .sidebar.collapsed .nav {
+    padding: 12px 8px;
+  }
+
+  .sidebar.collapsed .navLabel {
+    display: none;
+  }
+
+  .sidebar.collapsed .navGroup {
+    margin-bottom: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  .sidebar.collapsed .navGroup:first-child {
+    border-top: none;
+    padding-top: 0;
+  }
+
+  .sidebar.collapsed .navItem {
+    position: relative;
+    justify-content: center;
+    padding: 8px;
+    gap: 0;
+  }
+
+  .sidebar.collapsed .navText {
+    display: none;
+  }
+
+  .sidebar.collapsed .navBadge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    margin: 0;
+    transform: scale(0.8);
+  }
+
+  .sidebar.collapsed .sidebarFooter {
+    padding: 12px 8px;
+  }
+
+  .sidebar.collapsed .logoutBtn {
+    padding: 10px;
+    gap: 0;
+  }
+
+  .sidebar.collapsed .logoutText {
+    display: none;
+  }
 }
 
 @media (max-width: 768px) {

@@ -106,9 +106,11 @@ interface IEmployeeSidebarProps {
   isOpen?: boolean;
   onClose?: () => void;
   theme?: 'light' | 'dark';
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
-export const EmployeeSidebar: FC<IEmployeeSidebarProps> = ({ isOpen, onClose, theme = 'dark' }) => {
+export const EmployeeSidebar: FC<IEmployeeSidebarProps> = ({ isOpen, onClose, theme = 'dark', isCollapsed = false, onToggleCollapse }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { profile, logout, canViewPage } = useAuth();
@@ -167,12 +169,26 @@ export const EmployeeSidebar: FC<IEmployeeSidebarProps> = ({ isOpen, onClose, th
   };
 
   return (
-    <aside className={`${styles.sidebar} ${isOpen ? styles.open : ''}`}>
+    <aside className={`${styles.sidebar} ${isOpen ? styles.open : ''} ${isCollapsed ? styles.collapsed : ''}`}>
       <div className={styles.logo}>
         <img src={logoSrc} alt="FOT" className={styles.logoImage} />
+        <img src="/fot-favicon-32.svg" alt="FOT" className={styles.logoMini} />
+        {onToggleCollapse && (
+          <button
+            type="button"
+            className={styles.collapseBtn}
+            onClick={onToggleCollapse}
+            title={isCollapsed ? 'Развернуть меню' : 'Свернуть меню'}
+            aria-label={isCollapsed ? 'Развернуть меню' : 'Свернуть меню'}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
+        )}
       </div>
 
-      <div className={styles.profileCard}>
+      <div className={styles.profileCard} title={isCollapsed ? `${displayName} — ${positionLabel}` : undefined}>
         <div className={styles.profileHeader}>
           <div className={styles.profileAvatarWrap}>
             <div className={styles.profileAvatar}>{getInitials(profile?.full_name || null)}</div>
@@ -193,6 +209,7 @@ export const EmployeeSidebar: FC<IEmployeeSidebarProps> = ({ isOpen, onClose, th
             <div className={styles.navLabel}>Управление</div>
             <div
               className={`${styles.navItem} ${location.pathname === '/dashboard' ? styles.active : ''}`}
+              title="Панель управления"
               onClick={() => { navigate('/dashboard'); onClose?.(); }}
             >
               <div className={styles.navIcon}>
@@ -201,7 +218,7 @@ export const EmployeeSidebar: FC<IEmployeeSidebarProps> = ({ isOpen, onClose, th
                   <path d="M3 9h18M9 21V9"/>
                 </svg>
               </div>
-              Панель управления
+              <span className={styles.navText}>Панель управления</span>
             </div>
           </div>
         )}
@@ -212,10 +229,11 @@ export const EmployeeSidebar: FC<IEmployeeSidebarProps> = ({ isOpen, onClose, th
               <div
                 key={item.id}
                 className={`${styles.navItem} ${activeItem === item.id ? styles.active : ''}`}
+                title={item.label}
                 onClick={() => handleItemClick(item.path)}
               >
                 <div className={styles.navIcon}>{item.icon}</div>
-                {item.label}
+                <span className={styles.navText}>{item.label}</span>
                 {item.badge !== undefined && item.badge > 0 && (
                   <span className={`${styles.navBadge} ${styles[item.badgeType || 'new']}`}>
                     {item.badge}
@@ -228,13 +246,13 @@ export const EmployeeSidebar: FC<IEmployeeSidebarProps> = ({ isOpen, onClose, th
       </nav>
 
       <div className={styles.sidebarFooter}>
-        <button className={styles.logoutBtn} onClick={handleLogout}>
+        <button className={styles.logoutBtn} onClick={handleLogout} title="Выйти из системы" aria-label="Выйти из системы">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
             <polyline points="16 17 21 12 16 7"/>
             <line x1="21" y1="12" x2="9" y2="12"/>
           </svg>
-          Выйти из системы
+          <span className={styles.logoutText}>Выйти из системы</span>
         </button>
       </div>
     </aside>

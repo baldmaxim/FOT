@@ -9,6 +9,13 @@
   display: flex;
   flex-direction: column;
   overflow-x: hidden;
+  transition: margin-left 0.2s ease;
+}
+
+@media (min-width: 769px) {
+  .appCollapsed {
+    --sidebar-width: var(--sidebar-width-collapsed);
+  }
 }
 
 .content {

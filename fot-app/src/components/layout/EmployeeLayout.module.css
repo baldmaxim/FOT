@@ -8,6 +8,13 @@
   margin-left: var(--sidebar-width);
   display: flex;
   flex-direction: column;
+  transition: margin-left 0.2s ease;
+}
+
+@media (min-width: 769px) {
+  .appCollapsed {
+    --sidebar-width: var(--sidebar-width-collapsed);
+  }
 }
 
 .header {

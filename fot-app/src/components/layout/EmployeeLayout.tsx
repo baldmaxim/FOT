@@ -3,6 +3,7 @@ import type { FC, ReactNode } from 'react';
 import { EmployeeSidebar } from './EmployeeSidebar';
 import styles from './EmployeeLayout.module.css';
 import { useMobileMenu } from '../../hooks/useMobileMenu';
+import { useSidebarCollapse } from '../../hooks/useSidebarCollapse';
 import { useSwipe } from '../../hooks/useSwipe';
 import { useTheme } from '../../hooks/useTheme';
 import { useMyPresence } from '../../hooks/useMyPresence';
@@ -19,6 +20,7 @@ const NotificationBellContent = lazy(() => import('../ui/NotificationBellContent
 
 export const EmployeeLayout: FC<IEmployeeLayoutProps> = ({ children, title }) => {
   const { isOpen, open, close } = useMobileMenu();
+  const { isCollapsed, toggle: toggleCollapse } = useSidebarCollapse();
   const { theme, toggleTheme } = useTheme();
   const { status: presenceStatus } = useMyPresence();
   const swipeHandlers = useSwipe({ isOpen, onOpen: open, onClose: close });
@@ -36,9 +38,15 @@ export const EmployeeLayout: FC<IEmployeeLayoutProps> = ({ children, title }) =>
   };
 
   return (
-    <div className={styles.app} {...swipeHandlers}>
+    <div className={`${styles.app} ${isCollapsed ? styles.appCollapsed : ''}`} {...swipeHandlers}>
       {isOpen && <div className={styles.overlay} onClick={close} />}
-      <EmployeeSidebar isOpen={isOpen} onClose={close} theme={theme} />
+      <EmployeeSidebar
+        isOpen={isOpen}
+        onClose={close}
+        theme={theme}
+        isCollapsed={isCollapsed}
+        onToggleCollapse={toggleCollapse}
+      />
       <main className={styles.main}>
         <header className={styles.header}>
           <div className={styles.headerLeft}>

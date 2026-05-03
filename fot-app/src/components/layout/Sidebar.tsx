@@ -67,9 +67,11 @@ interface ISidebarProps {
   theme?: 'light' | 'dark';
   isOpen?: boolean;
   onClose?: () => void;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
-export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose }) => {
+export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose, isCollapsed = false, onToggleCollapse }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { profile, logout, canViewPage } = useAuth();
@@ -132,9 +134,23 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose }) 
   const displayName = formatFioShort(profile?.full_name) || 'Пользователь';
 
   return (
-    <aside className={`${styles.sidebar} ${isOpen ? styles.open : ''}`}>
+    <aside className={`${styles.sidebar} ${isOpen ? styles.open : ''} ${isCollapsed ? styles.collapsed : ''}`}>
       <div className={styles.logo}>
         <img src={logoSrc} alt="FOT" className={styles.logoImage} />
+        <img src="/fot-favicon-32.svg" alt="FOT" className={styles.logoMini} />
+        {onToggleCollapse && (
+          <button
+            type="button"
+            className={styles.collapseBtn}
+            onClick={onToggleCollapse}
+            title={isCollapsed ? 'Развернуть меню' : 'Свернуть меню'}
+            aria-label={isCollapsed ? 'Развернуть меню' : 'Свернуть меню'}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
+        )}
       </div>
 
       <nav className={styles.nav}>
@@ -156,11 +172,12 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose }) 
                   <a
                     key={item.id}
                     href={item.path}
+                    title={item.label}
                     className={`${styles.navItem} ${activeItem === item.id ? styles.active : ''}`}
                     onClick={(e) => handleItemClick(e, item.path)}
                   >
                     <Icon className={styles.navIcon} />
-                    {item.label}
+                    <span className={styles.navText}>{item.label}</span>
                     {item.badge !== undefined && item.badge > 0 && (
                       <span className={styles.navBadge}>{item.badge}</span>
                     )}
@@ -173,7 +190,7 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose }) 
       </nav>
 
       <div className={styles.footer}>
-        <div className={styles.userCard}>
+        <div className={styles.userCard} title={`${displayName} — ${positionLabel}`}>
           <div className={styles.userAvatar}>{getInitials(profile?.full_name || null)}</div>
           <div className={styles.userInfo}>
             <div className={styles.userName}>{displayName}</div>
@@ -184,8 +201,14 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose }) 
           onClick={handleLogout}
           className={styles.logoutBtn}
           title="Выйти"
+          aria-label="Выйти"
         >
-          Выйти
+          <svg className={styles.logoutIcon} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+            <polyline points="16 17 21 12 16 7" />
+            <line x1="21" y1="12" x2="9" y2="12" />
+          </svg>
+          <span className={styles.logoutText}>Выйти</span>
         </button>
       </div>
     </aside>

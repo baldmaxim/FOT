@@ -4,6 +4,7 @@ import styles from './Layout.module.css';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { useMobileMenu } from '../../hooks/useMobileMenu';
+import { useSidebarCollapse } from '../../hooks/useSidebarCollapse';
 import { useSwipe } from '../../hooks/useSwipe';
 import { structureApi } from '../../api/structure';
 import { STRUCTURE_QUERY_KEY } from '../../hooks/useStructure';
@@ -28,6 +29,7 @@ export const Layout: FC<ILayoutProps> = ({
   titleAddon,
 }) => {
   const { isOpen, open, close } = useMobileMenu();
+  const { isCollapsed, toggle: toggleCollapse } = useSidebarCollapse();
   const swipeHandlers = useSwipe({ isOpen, onOpen: open, onClose: close });
   const queryClient = useQueryClient();
 
@@ -48,9 +50,15 @@ export const Layout: FC<ILayoutProps> = ({
   }, [queryClient]);
 
   return (
-    <div className={styles.app} {...swipeHandlers}>
+    <div className={`${styles.app} ${isCollapsed ? styles.appCollapsed : ''}`} {...swipeHandlers}>
       {isOpen && <div className={styles.overlay} onClick={close} />}
-      <Sidebar theme={theme} isOpen={isOpen} onClose={close} />
+      <Sidebar
+        theme={theme}
+        isOpen={isOpen}
+        onClose={close}
+        isCollapsed={isCollapsed}
+        onToggleCollapse={toggleCollapse}
+      />
       <main className={styles.main}>
         <Header
           title={title}
