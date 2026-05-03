@@ -161,6 +161,12 @@ const validatePayload = (raw: unknown): IRecognizedReceiptPayload => {
 };
 
 const decideStatus = (payload: IRecognizedReceiptPayload): RecognitionStatus => {
+  const allKeyFieldsEmpty =
+    !payload.payment_date &&
+    payload.payment_amount == null &&
+    !payload.payer_full_name &&
+    !payload.patent_number;
+  if (allKeyFieldsEmpty) return 'failed';
   if (payload.confidence < 0.7) return 'needs_review';
   if (!payload.payment_date || payload.payment_amount == null) return 'needs_review';
   if (payload.source_type === 'unknown') return 'needs_review';
@@ -292,6 +298,10 @@ export const aiReceiptRecognitionService = {
 
       const payload = validatePayload(parsed);
       const status = decideStatus(payload);
+
+      if (status === 'failed') {
+        throw new Error('Распознавание не извлекло ни одного ключевого поля чека');
+      }
 
       const promptTokens = completion.usage?.prompt_tokens ?? 0;
       const completionTokens = completion.usage?.completion_tokens ?? 0;

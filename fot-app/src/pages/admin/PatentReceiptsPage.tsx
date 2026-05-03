@@ -87,7 +87,7 @@ export const PatentReceiptsPage: FC = () => {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => patentReceiptService.remove(id),
+    mutationFn: (documentId: number) => patentReceiptService.remove(documentId),
     onSuccess: () => {
       toast.success('Чек удалён');
       void queryClient.invalidateQueries({ queryKey: ['patent-receipts'] });
@@ -99,10 +99,10 @@ export const PatentReceiptsPage: FC = () => {
     onSettled: () => setDeletingId(null),
   });
 
-  const handleDelete = (id: number) => {
+  const handleDelete = (documentId: number) => {
     if (!window.confirm('Удалить чек безвозвратно? Файл будет удалён из хранилища.')) return;
-    setDeletingId(id);
-    deleteMutation.mutate(id);
+    setDeletingId(documentId);
+    deleteMutation.mutate(documentId);
   };
 
   const rows = data ?? [];
@@ -112,8 +112,10 @@ export const PatentReceiptsPage: FC = () => {
     setRecognizingDocId(documentId);
     try {
       const res = await patentReceiptService.recognize(documentId);
-      if (res.ok) {
-        toast.success(res.status === 'done' ? 'Чек распознан' : 'Чек распознан, требует проверки');
+      if (res.ok && res.status === 'done') {
+        toast.success('Чек распознан');
+      } else if (res.ok && res.status === 'needs_review') {
+        toast.warning('Чек распознан частично, требует проверки');
       } else {
         toast.error(res.error || 'Не удалось распознать чек');
       }
@@ -261,16 +263,14 @@ export const PatentReceiptsPage: FC = () => {
                             <RefreshCw size={14} className={isRecognizing ? styles.spin : undefined} />
                           </button>
                         )}
-                        {r.id !== null && (
-                          <button
-                            className={styles.iconBtnDanger}
-                            onClick={() => handleDelete(r.id!)}
-                            disabled={deletingId === r.id}
-                            title="Удалить чек"
-                          >
-                            <Trash2 size={14} className={deletingId === r.id ? styles.spin : undefined} />
-                          </button>
-                        )}
+                        <button
+                          className={styles.iconBtnDanger}
+                          onClick={() => handleDelete(r.document_id)}
+                          disabled={deletingId === r.document_id}
+                          title="Удалить чек"
+                        >
+                          <Trash2 size={14} className={deletingId === r.document_id ? styles.spin : undefined} />
+                        </button>
                       </div>
                     </td>
                   </tr>

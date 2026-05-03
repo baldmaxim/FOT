@@ -374,27 +374,28 @@ const uploadMy = async (req: MulterRequest, res: Response): Promise<void> => {
 
 const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const id = Number(req.params.id);
-    if (!Number.isFinite(id)) {
-      res.status(400).json({ success: false, error: 'Некорректный id' });
+    const documentId = Number(req.params.documentId);
+    if (!Number.isFinite(documentId)) {
+      res.status(400).json({ success: false, error: 'Некорректный document_id' });
       return;
     }
 
-    const { data: receipt, error: fetchError } = await supabase
-      .from('patent_payment_receipts')
-      .select('id, document_id, documents:document_id ( r2_key )')
-      .eq('id', id)
+    const { data: doc, error: fetchError } = await supabase
+      .from('documents')
+      .select('id, r2_key, category')
+      .eq('id', documentId)
       .single();
 
-    if (fetchError || !receipt) {
-      res.status(404).json({ success: false, error: 'Чек не найден' });
+    if (fetchError || !doc) {
+      res.status(404).json({ success: false, error: 'Документ не найден' });
+      return;
+    }
+    if (doc.category !== 'patent_check') {
+      res.status(400).json({ success: false, error: 'Документ не является чеком за патент' });
       return;
     }
 
-    const docRow = (receipt as unknown as { documents?: { r2_key?: string | null } | null }).documents;
-    const r2Key = docRow?.r2_key ?? null;
-    const documentId = (receipt as unknown as { document_id: number }).document_id;
-
+    const r2Key = (doc as { r2_key?: string | null }).r2_key ?? null;
     if (r2Key) {
       try {
         await r2Service.deleteObject(r2Key);
@@ -406,23 +407,26 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     const { error: receiptDelError } = await supabase
       .from('patent_payment_receipts')
       .delete()
-      .eq('id', id);
+      .eq('document_id', documentId);
     if (receiptDelError) throw receiptDelError;
 
-    if (documentId) {
-      const { error: docDelError } = await supabase
-        .from('documents')
-        .delete()
-        .eq('id', documentId);
-      if (docDelError) {
-        console.warn('patent-receipts.remove documents delete failed:', docDelError);
-      }
-    }
+    const { error: linkDelError } = await supabase
+      .from('document_links')
+      .delete()
+      .eq('document_id', documentId);
+    if (linkDelError) throw linkDelError;
+
+    const { error: docDelError } = await supabase
+      .from('documents')
+      .delete()
+      .eq('id', documentId);
+    if (docDelError) throw docDelError;
 
     res.json({ success: true });
   } catch (err) {
     console.error('patent-receipts.remove error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка удаления чека' });
+    const message = err instanceof Error ? err.message : 'Ошибка удаления чека';
+    res.status(500).json({ success: false, error: message });
   }
 };
 

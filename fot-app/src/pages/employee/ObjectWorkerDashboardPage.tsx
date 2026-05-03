@@ -120,6 +120,110 @@ const daysUntil = (iso: string | null | undefined): number | null => {
 
 const PATENT_WARN_DAYS = 30;
 
+const overlayStyle: CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(0, 0, 0, 0.55)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 20,
+  zIndex: 1000,
+};
+
+const overlayCardStyle: CSSProperties = {
+  width: '100%',
+  maxWidth: 360,
+  background: 'var(--bg-secondary)',
+  border: '1px solid var(--border-primary)',
+  borderRadius: 16,
+  padding: 24,
+  display: 'grid',
+  gap: 14,
+  textAlign: 'center',
+};
+
+const spinnerStyle: CSSProperties = {
+  width: 44,
+  height: 44,
+  margin: '0 auto',
+  border: '4px solid var(--border-primary)',
+  borderTopColor: 'var(--accent-primary, #4b6cff)',
+  borderRadius: '50%',
+  animation: 'workerUploadSpin 0.8s linear infinite',
+};
+
+interface IUploadModalProps {
+  status: { state: 'uploading' | 'uploaded' | 'error'; message?: string };
+  onClose: () => void;
+}
+
+const UploadReceiptStatusModal: FC<IUploadModalProps> = ({ status, onClose }) => {
+  const isUploading = status.state === 'uploading';
+  const title =
+    status.state === 'uploading' ? 'Загружаем чек на сервер…' :
+    status.state === 'uploaded' ? 'Чек загружен' :
+    'Не удалось загрузить';
+  const subtitle =
+    status.state === 'uploading' ? 'Пожалуйста, не закрывайте страницу.' :
+    status.state === 'uploaded' ? 'Идёт проверка. Чек появится в списке после распознавания.' :
+    (status.message || 'Попробуйте ещё раз.');
+  const iconColor =
+    status.state === 'uploaded' ? '#1e7e34' :
+    status.state === 'error' ? '#b23a48' :
+    'var(--accent-primary, #4b6cff)';
+
+  return (
+    <div style={overlayStyle} role="dialog" aria-modal="true" aria-live="polite">
+      <style>{`@keyframes workerUploadSpin { to { transform: rotate(360deg); } }`}</style>
+      <div style={overlayCardStyle}>
+        {status.state === 'uploading' ? (
+          <div style={spinnerStyle} />
+        ) : (
+          <div
+            style={{
+              width: 56,
+              height: 56,
+              margin: '0 auto',
+              borderRadius: '50%',
+              background: `${iconColor}1f`,
+              color: iconColor,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 30,
+              fontWeight: 700,
+            }}
+          >
+            {status.state === 'uploaded' ? '✓' : '!'}
+          </div>
+        )}
+        <div style={{ fontSize: 18, fontWeight: 700 }}>{title}</div>
+        <div style={{ color: 'var(--text-secondary)', fontSize: 14 }}>{subtitle}</div>
+        {!isUploading && (
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              marginTop: 4,
+              padding: '12px 20px',
+              borderRadius: 12,
+              border: 'none',
+              background: 'var(--accent-primary, #4b6cff)',
+              color: '#fff',
+              fontSize: 15,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Закрыть
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
 export const ObjectWorkerDashboardPage: FC = () => {
   const { profile, logout, isAdmin } = useAuth();
   const toast = useToast();
@@ -133,9 +237,15 @@ export const ObjectWorkerDashboardPage: FC = () => {
   const [employeeLoading, setEmployeeLoading] = useState<boolean>(true);
   const [receipts, setReceipts] = useState<IMyPatentReceipt[]>([]);
   const [receiptsLoading, setReceiptsLoading] = useState<boolean>(true);
-  const [uploading, setUploading] = useState<boolean>(false);
+  const [uploadStatus, setUploadStatus] = useState<{ state: 'uploading' | 'uploaded' | 'error'; message?: string } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (uploadStatus?.state !== 'uploaded') return;
+    const timer = window.setTimeout(() => setUploadStatus(null), 2500);
+    return () => window.clearTimeout(timer);
+  }, [uploadStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -193,6 +303,8 @@ export const ObjectWorkerDashboardPage: FC = () => {
     return `Осталось ${patentDaysLeft} дн.`;
   }, [patentExpiryDate, patentDaysLeft]);
 
+  const uploading = uploadStatus?.state === 'uploading';
+
   const handleOpenFilePicker = () => {
     if (!employeeId || uploading) return;
     fileInputRef.current?.click();
@@ -203,17 +315,15 @@ export const ObjectWorkerDashboardPage: FC = () => {
     event.target.value = '';
     if (!file || !employeeId) return;
 
-    setUploading(true);
+    setUploadStatus({ state: 'uploading' });
     try {
       await patentReceiptService.uploadMy(file);
-      toast.success('Чек от патента загружен');
+      setUploadStatus({ state: 'uploaded' });
       reloadReceipts();
     } catch (err) {
       console.error('patent check upload error:', err);
       const detail = err instanceof ApiError ? err.message : null;
-      toast.error(detail ? `Не удалось загрузить чек: ${detail}` : 'Не удалось загрузить чек');
-    } finally {
-      setUploading(false);
+      setUploadStatus({ state: 'error', message: detail || 'Не удалось загрузить чек' });
     }
   };
 
@@ -360,6 +470,12 @@ export const ObjectWorkerDashboardPage: FC = () => {
           </button>
         </section>
       </div>
+      {uploadStatus && (
+        <UploadReceiptStatusModal
+          status={uploadStatus}
+          onClose={() => setUploadStatus(null)}
+        />
+      )}
     </div>
   );
 };
