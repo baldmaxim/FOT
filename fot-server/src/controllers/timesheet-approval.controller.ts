@@ -956,6 +956,10 @@ const listAttachments = async (req: AuthenticatedRequest, res: Response): Promis
       const deptIdRaw = typeof req.query.department_id === 'string' ? req.query.department_id : null;
       const deptId = await resolveScopedDepartmentId(req, deptIdRaw);
       const range = parseRangeFromQuery(req.query as Record<string, unknown>);
+      if (deptIdRaw && !deptId) {
+        res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
+        return;
+      }
       if (!deptId || !range) {
         res.status(400).json({ success: false, error: 'approval_id или department_id+start_date+end_date обязательны' });
         return;
