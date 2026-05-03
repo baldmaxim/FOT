@@ -5,8 +5,11 @@ import { authenticate, requireAnyPageAccess, requirePageAccess, requireCritical2
 import { importLimiter } from '../middleware/rateLimit.js';
 import { cacheResponse } from '../middleware/cacheResponse.js';
 
+// req.user.id обязателен в ключах: иначе ответ, прогретый одним пользователем
+// (например, админом без department_id → данные по всем отделам), отдавался бы
+// другому пользователю с другим scope без вызова контроллера, в обход 403.
 const presenceCache = cacheResponse(
-  (req) => `presence:${req.query.department_id || 'all'}`,
+  (req) => `presence:${req.user.id}:${req.query.department_id || 'all'}`,
   30_000,
 );
 
@@ -16,7 +19,7 @@ const dashboardCache = cacheResponse(
       ? (req.query.period as string)
       : 'today';
     const month = typeof req.query.month === 'string' ? req.query.month : '';
-    return `dashboard:${req.query.department_id ?? 'all'}:${period}:${month}`;
+    return `dashboard:${req.user.id}:${req.query.department_id ?? 'all'}:${period}:${month}`;
   },
   60_000,
 );
