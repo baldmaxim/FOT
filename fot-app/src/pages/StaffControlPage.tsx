@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
 import { sigurAdminService } from '../services/sigurAdminService';
@@ -82,6 +82,7 @@ interface IStaffRowProps {
   index: number;
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
+  selectionMode: boolean;
   canManage: boolean;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
@@ -101,7 +102,7 @@ const handleMiddleClickMouseDown = (e: ReactMouseEvent) => {
   if (e.button === 1) e.preventDefault();
 };
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selectedIds, canManage, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selectedIds, selectionMode, canManage, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
 
@@ -119,15 +120,17 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selected
       onAuxClick={handleAuxClick}
       onMouseDown={handleMiddleClickMouseDown}
     >
-      <td className="sc-td-check" onClick={e => e.stopPropagation()}>
-        <input
-          className="sc-check"
-          type="checkbox"
-          checked={isSelected}
-          onChange={() => onToggleSelect(emp.id)}
-          aria-label={`Выбрать ${emp.full_name}`}
-        />
-      </td>
+      {selectionMode && (
+        <td className="sc-td-check" onClick={e => e.stopPropagation()}>
+          <input
+            className="sc-check"
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => onToggleSelect(emp.id)}
+            aria-label={`Выбрать ${emp.full_name}`}
+          />
+        </td>
+      )}
       <td className="sc-td-num">{index + 1}</td>
       <td className="sc-td-name">
         {emp.full_name}
@@ -444,6 +447,7 @@ interface IVirtualTableProps {
   filtered: Employee[];
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
+  selectionMode: boolean;
   canManage: boolean;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
@@ -462,6 +466,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   filtered,
   scheduleViews,
   selectedIds,
+  selectionMode,
   canManage,
   onNavigate,
   onToggleSelect,
@@ -473,7 +478,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   onFire,
   onReturn,
 }) => {
-  const totalCols = canManage ? 9 : 7;
+  const totalCols = (canManage ? 8 : 6) + (selectionMode ? 1 : 0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -487,15 +492,17 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
       <table className="sc-table">
         <thead>
           <tr>
-            <th className="sc-th-check">
-              <input
-                className="sc-check"
-                type="checkbox"
-                checked={allSelected}
-                onChange={onToggleSelectAll}
-                aria-label="Выбрать всех сотрудников на странице"
-              />
-            </th>
+            {selectionMode && (
+              <th className="sc-th-check">
+                <input
+                  className="sc-check"
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={onToggleSelectAll}
+                  aria-label="Выбрать всех сотрудников на странице"
+                />
+              </th>
+            )}
             <th className="sc-th-num">№</th>
             <th>ФИО</th>
             <th>Отдел</th>
@@ -524,6 +531,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     index={vRow.index}
                     scheduleViews={scheduleViews}
                     selectedIds={selectedIds}
+                    selectionMode={selectionMode}
                     canManage={canManage}
                     onNavigate={onNavigate}
                     onToggleSelect={onToggleSelect}
@@ -556,6 +564,7 @@ interface IVirtualCardsProps {
   filtered: Employee[];
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
+  selectionMode: boolean;
   canManage: boolean;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
@@ -572,6 +581,7 @@ const MobileCard: FC<{
   emp: Employee;
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
+  selectionMode: boolean;
   canManage: boolean;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
@@ -580,7 +590,7 @@ const MobileCard: FC<{
   onRehire?: (emp: Employee) => void;
   onFire?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
-}> = memo(({ emp, scheduleViews, selectedIds, canManage, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
+}> = memo(({ emp, scheduleViews, selectedIds, selectionMode, canManage, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
   const handleAuxClick = (e: ReactMouseEvent) => {
@@ -605,15 +615,17 @@ const MobileCard: FC<{
             </span>
           )}
         </div>
-        <div className="sc-card-check" onClick={e => e.stopPropagation()}>
-          <input
-            className="sc-check"
-            type="checkbox"
-            checked={isSelected}
-            onChange={() => onToggleSelect(emp.id)}
-            aria-label={`Выбрать ${emp.full_name}`}
-          />
-        </div>
+        {selectionMode && (
+          <div className="sc-card-check" onClick={e => e.stopPropagation()}>
+            <input
+              className="sc-check"
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => onToggleSelect(emp.id)}
+              aria-label={`Выбрать ${emp.full_name}`}
+            />
+          </div>
+        )}
       </div>
       <div className="sc-card-row">
         <span className="sc-card-label">Отдел</span>
@@ -689,7 +701,7 @@ const MobileCard: FC<{
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, canManage, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, selectionMode, canManage, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -709,6 +721,7 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, se
                 emp={emp}
                 scheduleViews={scheduleViews}
                 selectedIds={selectedIds}
+                selectionMode={selectionMode}
                 canManage={canManage}
                 onNavigate={onNavigate}
                 onToggleSelect={onToggleSelect}
@@ -1049,6 +1062,7 @@ export const StaffControlPage: FC = () => {
 
   const today = getLocalISODate();
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<number[]>([]);
+  const [selectionMode, setSelectionMode] = useState(false);
   const [bulkScheduleOpen, setBulkScheduleOpen] = useState(false);
   const [bulkFilterScheduleOpen, setBulkFilterScheduleOpen] = useState(false);
   const [bulkBrigadeScheduleOpen, setBulkBrigadeScheduleOpen] = useState(false);
@@ -1336,8 +1350,11 @@ export const StaffControlPage: FC = () => {
     });
   }, [employees]);
 
-  const clearSelectedEmployees = useCallback(() => {
-    setSelectedEmployeeIds([]);
+  const toggleSelectionMode = useCallback(() => {
+    setSelectionMode(prev => {
+      if (prev) setSelectedEmployeeIds([]);
+      return !prev;
+    });
   }, []);
 
   /* ─── modal save handlers ─── */
@@ -1775,6 +1792,12 @@ export const StaffControlPage: FC = () => {
       </div>
       {statusFilter === 'active' && isAdmin && (
         <div className="sc-filter-actions">
+          <button
+            className={`sc-btn ${selectionMode ? 'apply' : 'secondary'}`}
+            onClick={toggleSelectionMode}
+          >
+            <CheckSquare size={14} /> {selectionMode ? 'Готово' : 'Выбор нескольких'}
+          </button>
           <button className="sc-btn secondary" onClick={() => setBulkBrigadeScheduleOpen(true)} disabled={brigadeOptions.length === 0}>
             <Calendar size={14} /> По бригадам
           </button>
@@ -1812,6 +1835,14 @@ export const StaffControlPage: FC = () => {
               <UserPlus size={16} /> Добавить
             </button>
           )}
+          {statusFilter === 'active' && isAdmin && (
+            <button
+              className={`sc-btn ${selectionMode ? 'apply' : 'secondary'}`}
+              onClick={toggleSelectionMode}
+            >
+              <CheckSquare size={16} /> {selectionMode ? 'Готово' : 'Выбор нескольких'}
+            </button>
+          )}
           <div className="sc-status-toggle sc-status-toggle--mobile">
             <button
               className={`sc-btn${statusFilter === 'active' ? ' apply' : ' secondary'}`}
@@ -1839,17 +1870,25 @@ export const StaffControlPage: FC = () => {
         filtersContent
       )}
 
-      {selectedEmployeeIds.length > 0 && (
+      {selectionMode && (
         <div className="sc-bulk-bar">
           <div className="sc-bulk-info">
-            Выбрано сотрудников: <strong>{selectedEmployeeIds.length}</strong>
+            {selectedEmployeeIds.length > 0 ? (
+              <>Выбрано сотрудников: <strong>{selectedEmployeeIds.length}</strong></>
+            ) : (
+              <>Отметьте сотрудников галочкой</>
+            )}
           </div>
           <div className="sc-bulk-actions">
-            <button className="sc-btn secondary" onClick={() => setBulkScheduleOpen(true)}>
+            <button
+              className="sc-btn secondary"
+              onClick={() => setBulkScheduleOpen(true)}
+              disabled={selectedEmployeeIds.length === 0}
+            >
               <Calendar size={14} /> График
             </button>
-            <button className="sc-btn cancel" onClick={clearSelectedEmployees}>
-              Снять выбор
+            <button className="sc-btn cancel" onClick={toggleSelectionMode}>
+              Готово
             </button>
           </div>
         </div>
@@ -1862,6 +1901,7 @@ export const StaffControlPage: FC = () => {
           filtered={employees}
           scheduleViews={scheduleViews}
           selectedIds={selectedEmployeeIdSet}
+          selectionMode={selectionMode}
           canManage={isAdmin}
           onNavigate={handleNavigate}
           onToggleSelect={toggleSelectEmployee}
@@ -1876,6 +1916,7 @@ export const StaffControlPage: FC = () => {
           filtered={employees}
           scheduleViews={scheduleViews}
           selectedIds={selectedEmployeeIdSet}
+          selectionMode={selectionMode}
           canManage={isAdmin}
           onNavigate={handleNavigate}
           onToggleSelect={toggleSelectEmployee}
