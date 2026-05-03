@@ -135,8 +135,9 @@ export const SchedulesPage: FC = () => {
   const today = getLocalISODate();
   const queryClient = useQueryClient();
   const { isAdmin, canViewPage } = useAuth();
-  // Менеджеру открыта только вкладка "Шаблоны графиков" — через виртуальную страницу
-  // /admin/schedules/templates (миграция 070). Остальные вкладки админские.
+  // Менеджеру открыта только вкладка "Шаблоны графиков", если админ выдал
+  // доступ к виртуальной странице /admin/schedules/templates без доступа
+  // к /admin/schedules (управляется в матрице ролей → «Технические доступы»).
   const templatesOnly = !isAdmin && !canViewPage('/admin/schedules') && canViewPage('/admin/schedules/templates');
   const [tab, setTab] = useState<TabKey>('templates');
   useEffect(() => {
