@@ -1,6 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { adminController } from '../controllers/admin.controller.js';
+import { adminSystemResourcesController } from '../controllers/admin-system-resources.controller.js';
 import { authenticate, requirePageAccess } from '../middleware/auth.js';
 import { isExcelBuffer, sanitizeFileName } from '../utils/file-validation.utils.js';
 
@@ -109,5 +110,8 @@ router.get('/employees/search', requirePageAccess('/admin/users', 'view'), admin
 
 // Аудит логи
 router.get('/audit-logs', requirePageAccess('/admin/audit', 'view'), adminController.getAuditLogs);
+
+// Мини-монитор ресурсов сервера (CPU/RAM/uptime + статус фоновых сервисов)
+router.get('/system-resources', requirePageAccess('/admin/settings', 'view'), adminSystemResourcesController.getSystemResources);
 
 export default router;
