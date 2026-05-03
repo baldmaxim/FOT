@@ -1,6 +1,6 @@
 import { type FC, useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check, X, RotateCcw, ChevronDown, ChevronUp, FileText, AlertTriangle } from 'lucide-react';
+import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, FileText, AlertTriangle } from 'lucide-react';
 import {
   timesheetApprovalService,
   APPROVAL_STATUS_LABELS,
@@ -19,6 +19,7 @@ import { ApprovalCommentModal } from './ApprovalCommentModal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { getMonthBounds, listDatesInRange } from '../../utils/timesheetApprovalPeriod';
+import { getMonthLabel } from '../../utils/calendarUtils';
 import './ApprovalsPage.css';
 
 type Tab = 'corrections' | 'timesheets';
@@ -73,12 +74,9 @@ const formatHM = (decimal: number | null): string => {
   return `${h}ч ${m}м`;
 };
 
-function defaultPeriod(): { startDate: string; endDate: string } {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = now.getMonth();
-  const start = new Date(y, m, 1);
-  const end = new Date(y, m + 1, 0);
+function monthRange(year: number, month: number): { startDate: string; endDate: string } {
+  const start = new Date(year, month - 1, 1);
+  const end = new Date(year, month, 0);
   const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   return { startDate: fmt(start), endDate: fmt(end) };
 }
@@ -118,13 +116,30 @@ const CorrectionsTab: FC = () => {
   const queryClient = useQueryClient();
   const toast = useToast();
 
-  const [period, setPeriod] = useState(defaultPeriod());
+  const now = useMemo(() => new Date(), []);
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [period, setPeriod] = useState(() => monthRange(now.getFullYear(), now.getMonth() + 1));
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
+    setPeriod(monthRange(year, month));
+  }, [year, month]);
+
+  useEffect(() => {
     setSelectedIds(new Set());
   }, [period.startDate, period.endDate]);
+
+  const prevMonth = () => {
+    if (month === 1) { setMonth(12); setYear(y => y - 1); }
+    else setMonth(m => m - 1);
+  };
+
+  const nextMonth = () => {
+    if (month === 12) { setMonth(1); setYear(y => y + 1); }
+    else setMonth(m => m + 1);
+  };
 
   const query = useQuery({
     queryKey: ['correction-approvals', period.startDate, period.endDate],
@@ -211,6 +226,15 @@ const CorrectionsTab: FC = () => {
   return (
     <>
       <div className="approvals-toolbar">
+        <div className="approvals-month-nav">
+          <button type="button" className="approvals-month-btn" onClick={prevMonth} aria-label="Предыдущий месяц">
+            <ChevronLeft size={16} />
+          </button>
+          <span className="approvals-month-label">{getMonthLabel(year, month)}</span>
+          <button type="button" className="approvals-month-btn" onClick={nextMonth} aria-label="Следующий месяц">
+            <ChevronRight size={16} />
+          </button>
+        </div>
         <label>
           С
           <input

@@ -352,6 +352,35 @@
   background: var(--surface, #fff);
   font-size: 13px;
 }
+.approvals-month-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.approvals-month-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 0;
+  transition: background var(--transition, 0.15s ease);
+}
+.approvals-month-btn:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+.approvals-month-label {
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 110px;
+  text-align: center;
+  text-transform: capitalize;
+}
 .cor-dept-card {
   border: 1px solid var(--border-color, #e5e7eb);
   border-radius: 8px;
