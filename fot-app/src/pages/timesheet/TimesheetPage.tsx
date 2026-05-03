@@ -236,11 +236,9 @@ export const TimesheetPage: FC = () => {
   const [modalEmployee, setModalEmployee] = useState<TimesheetEmployee | null>(null);
   const [modalDay, setModalDay] = useState<number>(1);
   const [modalEntry, setModalEntry] = useState<TimesheetEntry | null>(null);
-  const [modalMode, setModalMode] = useState<'day' | 'object' | 'split-view'>('day');
+  const [modalMode, setModalMode] = useState<'day' | 'object'>('day');
   const [modalObjectEntry, setModalObjectEntry] = useState<TimesheetObjectEntry | null>(null);
   const [modalObjectTarget, setModalObjectTarget] = useState<IObjectModalTarget | null>(null);
-  const [modalSplitEntries, setModalSplitEntries] = useState<TimesheetObjectEntry[]>([]);
-  const [modalSplitMessage, setModalSplitMessage] = useState<string | null>(null);
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkSelectedCellKeys, setBulkSelectedCellKeys] = useState<Set<string>>(new Set());
@@ -386,11 +384,10 @@ export const TimesheetPage: FC = () => {
     }
     return map;
   }, [objectEntries]);
-  const splitDayKeys = useMemo(() => new Set(
-    entries
-      .filter(entry => entry.object_detail_mode === 'available' || entry.object_detail_mode === 'legacy_blocked')
-      .map(entry => `${entry.employee_id}_${entry.work_date}`),
-  ), [entries]);
+  // splitDayKeys раньше исключал дни с object_detail_mode='available' из обычного и bulk-клика,
+  // чтобы заставить выбрать объект через split-view. UX убран — корректировка теперь применяется
+  // к дню целиком, и bulk-edit работает по таким ячейкам как и по обычным.
+  const splitDayKeys = useMemo(() => new Set<string>(), []);
   const employeeOrder = useMemo(() => (
     new Map(employees.map((employee, index) => [employee.id, index]))
   ), [employees]);
@@ -462,8 +459,6 @@ export const TimesheetPage: FC = () => {
     setModalMode('day');
     setModalObjectEntry(null);
     setModalObjectTarget(null);
-    setModalSplitEntries([]);
-    setModalSplitMessage(null);
   }, []);
 
   // Day click -> modal
@@ -484,31 +479,14 @@ export const TimesheetPage: FC = () => {
       toast.info?.('Период согласован — редактирование закрыто');
       return;
     }
-    const dayObjectEntries = objectEntriesByEmployeeDate.get(emp.id)?.get(workDate) || [];
     setModalEmployee(emp);
     setModalDay(day);
     setModalEntry(entry);
-    if (entry?.object_detail_mode === 'available' && dayObjectEntries.length > 0) {
-      setModalMode('split-view');
-      setModalSplitEntries(dayObjectEntries);
-      setModalSplitMessage(null);
-      setModalObjectEntry(null);
-      setModalObjectTarget(null);
-      setModalOpen(true);
-      return;
-    }
-    if (entry?.object_detail_mode === 'legacy_blocked') {
-      setModalMode('split-view');
-      setModalSplitEntries([]);
-      setModalSplitMessage(entry.object_detail_message || 'Объектная детализация временно недоступна для этого дня.');
-      setModalObjectEntry(null);
-      setModalObjectTarget(null);
-      setModalOpen(true);
-      return;
-    }
+    // Раньше при object_detail_mode='available' открывалась split-view со списком объектов;
+    // выбор объекта вёл к per-object модалке, в которой всё равно показывались все события СКУД.
+    // По решению — убираем выбор объекта: всегда открываем общую дневную модалку
+    // (все события СКУД + одна корректировка на день).
     setModalMode('day');
-    setModalSplitEntries([]);
-    setModalSplitMessage(null);
     setModalObjectEntry(null);
     setModalObjectTarget(null);
     setModalOpen(true);
@@ -531,8 +509,6 @@ export const TimesheetPage: FC = () => {
     setModalMode('object');
     setModalObjectEntry(objectEntry);
     setModalObjectTarget(target);
-    setModalSplitEntries([]);
-    setModalSplitMessage(null);
     setModalOpen(true);
   }, [entryMap, year, month]);
 
@@ -1434,7 +1410,7 @@ export const TimesheetPage: FC = () => {
               {!isTimesheetDepartmentScope && (
                 <div
                   className={`ts-dept-item ${!selectedDeptId ? 'ts-dept-item--active' : ''}`}
-                  onClick={() => { clearBulkState(); closeTeamManagement(); setSelectedDeptId(null); setDeptOpen(false); }}
+                  onClick={() => { clearBulkState(); closeTeamManagement(); setSelectedDeptId(null); setDeptOpen(false); setDeptSearch(''); }}
                 >
                   Все отделы
                 </div>
@@ -1449,7 +1425,7 @@ export const TimesheetPage: FC = () => {
                     key={d.id}
                     className={`ts-dept-item ${selectedDeptId === d.id ? 'ts-dept-item--active' : ''}`}
                     style={{ paddingLeft: `${10 + d.level * 12}px` }}
-                    onClick={() => { clearBulkState(); closeTeamManagement(); setSelectedDeptId(d.id); setDeptOpen(false); }}
+                    onClick={() => { clearBulkState(); closeTeamManagement(); setSelectedDeptId(d.id); setDeptOpen(false); setDeptSearch(''); }}
                   >
                     {d.name}
                   </div>
@@ -1617,39 +1593,6 @@ export const TimesheetPage: FC = () => {
   ) : null;
 
   const modalWorkDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
-  const splitDayContent = modalMode === 'split-view' ? (
-    <div className="ts-split-day-view">
-      {modalSplitMessage && (
-        <div className="ts-split-day-message">{modalSplitMessage}</div>
-      )}
-      {modalSplitEntries.length > 0 ? (
-        <div className="ts-split-day-list">
-          {modalSplitEntries.map(objectEntry => (
-            <button
-              key={objectEntry.object_key}
-              type="button"
-              className="ts-split-day-item"
-              onClick={() => {
-                if (!modalEmployee) return;
-                handleObjectDayClick(modalEmployee, modalDay, {
-                  object_key: objectEntry.object_key,
-                  object_id: objectEntry.object_id,
-                  object_name: objectEntry.object_name,
-                }, objectEntry);
-              }}
-            >
-              <span className="ts-split-day-item-name">{objectEntry.object_name}</span>
-              <span className="ts-split-day-item-hours">
-                {formatHoursHM(objectEntry.display_hours_worked ?? objectEntry.hours_worked)}
-              </span>
-            </button>
-          ))}
-        </div>
-      ) : (
-        !modalSplitMessage && <div className="ts-split-day-message">Для этого дня нет доступной объектной детализации.</div>
-      )}
-    </div>
-  ) : null;
 
   return (
     <div className="ts-page">
@@ -2039,13 +1982,10 @@ export const TimesheetPage: FC = () => {
             employeeName={modalMode === 'object' ? undefined : modalEmployee?.full_name}
             employeeId={modalEmployee?.id}
             workDate={modalWorkDate}
-            hideSkudTab={modalMode === 'split-view'}
             allowAccessPointMap={canViewPage('/skud-settings')}
-            hideCorrectionTab={modalMode === 'split-view'}
             deleteLabel={modalMode === 'object' ? 'Снять корректировку' : undefined}
-            customContent={splitDayContent}
             timesheetEntry={modalEntry}
-            maxHours={modalMode === 'split-view' ? null : modalMaxHours}
+            maxHours={modalMaxHours}
             correctionInfo={modalEntry?.is_correction ? {
               is_correction: true,
               corrected_at: modalEntry.corrected_at,
