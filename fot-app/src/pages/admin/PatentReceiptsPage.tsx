@@ -76,7 +76,7 @@ export const PatentReceiptsPage: FC = () => {
     () => ['patent-receipts', filterEmployeeId, filterFrom, filterTo, filterNeedsReview],
     [filterEmployeeId, filterFrom, filterTo, filterNeedsReview],
   );
-  const { data, isLoading, refetch } = useQuery({
+  const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey,
     queryFn: () => patentReceiptService.list({
       employee_id: filterEmployeeId ?? undefined,
@@ -164,8 +164,12 @@ export const PatentReceiptsPage: FC = () => {
         <button className={styles.btnSecondary} onClick={() => setShowAdvanced(v => !v)}>
           {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />} Доп. фильтры
         </button>
-        <button className={styles.btnSecondary} onClick={() => refetch()}>
-          <RefreshCw size={14} /> Обновить
+        <button
+          className={styles.btnSecondary}
+          onClick={() => refetch()}
+          disabled={isFetching}
+        >
+          <RefreshCw size={14} className={isFetching ? styles.spin : undefined} /> Обновить
         </button>
         {showAdvanced && (
           <div className={styles.advancedRow}>
@@ -231,7 +235,10 @@ export const PatentReceiptsPage: FC = () => {
                     <td>{SOURCE_LABELS[r.source_type || 'unknown'] || r.source_type || '—'}</td>
                     <td>
                       {badge ? (
-                        <span className={`${styles.badge} ${badge.cls}`}>
+                        <span
+                          className={`${styles.badge} ${badge.cls}`}
+                          title={status === 'failed' ? (r.documents?.recognition_error || 'Причина ошибки не сохранена') : undefined}
+                        >
                           <badge.Icon size={12} /> {badge.label}
                         </span>
                       ) : '—'}

@@ -84,6 +84,20 @@ const RECEIPT_JSON_SCHEMA = {
 
 const MAX_INLINE_BYTES = 4 * 1024 * 1024;
 
+const stripJsonFence = (raw: string): string => {
+  let s = raw.trim();
+  const fenceMatch = s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenceMatch) {
+    s = fenceMatch[1].trim();
+  }
+  const firstBrace = s.indexOf('{');
+  const lastBrace = s.lastIndexOf('}');
+  if (firstBrace > 0 && lastBrace > firstBrace) {
+    s = s.slice(firstBrace, lastBrace + 1);
+  }
+  return s;
+};
+
 const normalizeDate = (raw: string | null): string | null => {
   if (!raw) return null;
   const trimmed = raw.trim();
@@ -184,11 +198,17 @@ const updateDocumentStatus = async (
   documentId: number,
   status: RecognitionStatus | null,
   attemptIncrement: boolean,
+  errorText?: string | null,
 ): Promise<void> => {
   const patch: Record<string, unknown> = {
     recognition_status: status,
     recognized_at: status === 'done' || status === 'needs_review' ? new Date().toISOString() : null,
   };
+  if (status === 'failed') {
+    patch.recognition_error = errorText ? errorText.slice(0, 1000) : null;
+  } else if (status === 'done' || status === 'needs_review' || status === 'processing') {
+    patch.recognition_error = null;
+  }
   if (attemptIncrement) {
     const { data: cur } = await supabase
       .from('documents')
@@ -224,6 +244,8 @@ export const aiReceiptRecognitionService = {
 
     await updateDocumentStatus(documentId, 'processing', true);
 
+    let rawLlmContent: string | null = null;
+
     try {
       const imagePart = await buildImagePart(doc as IDocumentRow);
 
@@ -252,13 +274,20 @@ export const aiReceiptRecognitionService = {
       );
 
       const content = completion.choices[0]?.message.content;
+      rawLlmContent = content ?? null;
       if (!content) throw new Error('LLM вернул пустой ответ');
 
       let parsed: unknown;
       try {
         parsed = JSON.parse(content);
       } catch {
-        throw new Error('LLM вернул не-JSON');
+        const stripped = stripJsonFence(content);
+        try {
+          parsed = JSON.parse(stripped);
+        } catch {
+          const preview = content.slice(0, 300).replace(/\s+/g, ' ');
+          throw new Error(`LLM вернул не-JSON. Начало ответа: ${preview}`);
+        }
       }
 
       const payload = validatePayload(parsed);
@@ -333,15 +362,19 @@ export const aiReceiptRecognitionService = {
       };
     } catch (err) {
       console.error('[ai-receipt-recognition]', err);
+      const errorMessage = err instanceof Error ? err.message : 'unknown error';
       Sentry.captureException(err, {
         tags: { service: 'ai-receipt-recognition', stage: 'recognize' },
-        extra: { documentId },
+        extra: {
+          documentId,
+          rawLlmContent: rawLlmContent ? rawLlmContent.slice(0, 4000) : null,
+        },
       });
-      await updateDocumentStatus(documentId, 'failed', false);
+      await updateDocumentStatus(documentId, 'failed', false, errorMessage);
       return {
         ok: false,
         status: 'failed',
-        error: err instanceof Error ? err.message : 'unknown error',
+        error: errorMessage,
       };
     }
   },

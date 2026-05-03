@@ -23,7 +23,7 @@ export interface IPatentReceiptListRow {
   recognition_model: string | null;
   cost_usd: string | null;
   created_at: string;
-  documents: { file_name: string | null; mime_type: string | null; recognition_status: RecognitionStatus | null } | null;
+  documents: { file_name: string | null; mime_type: string | null; recognition_status: RecognitionStatus | null; recognition_error: string | null } | null;
   employees: { full_name: string | null } | null;
 }
 

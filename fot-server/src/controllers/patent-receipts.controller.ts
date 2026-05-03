@@ -66,6 +66,7 @@ interface IDocumentListRow {
   recognition_status: string | null;
   recognition_attempts: number | null;
   recognized_at: string | null;
+  recognition_error: string | null;
   created_at: string;
   employees: { full_name: string | null } | null;
   patent_payment_receipts: Record<string, unknown> | Array<Record<string, unknown>> | null;
@@ -91,6 +92,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
         recognition_status,
         recognition_attempts,
         recognized_at,
+        recognition_error,
         created_at,
         employees:employee_id ( full_name ),
         patent_payment_receipts:patent_payment_receipts!document_id (
@@ -150,6 +152,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
             file_name: doc.file_name,
             mime_type: doc.mime_type,
             recognition_status: doc.recognition_status,
+            recognition_error: doc.recognition_error,
           },
           employees: doc.employees ? { full_name: doc.employees.full_name } : null,
         };
