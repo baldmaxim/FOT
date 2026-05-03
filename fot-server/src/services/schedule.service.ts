@@ -149,7 +149,9 @@ export const getFullDayThresholdHoursForDate = (
 ): number => {
   const isDayOff = !isWorkingDay(schedule, date, calendar);
   const daySchedule = getScheduleForDate(schedule, date);
-  const fallbackMinutes = Math.max(0, Math.round(daySchedule.work_hours * 60));
+  // work_hours напрямую: иначе для дробных значений (например 7.53) промежуточный
+  // round(*60)/60 = 7.5333 даёт порог чуть выше нормы, и capped факт ложно underwork.
+  const fallbackHours = Math.max(0, daySchedule.work_hours);
 
   if (isDayOff) {
     if (schedule.weekend_full_day_threshold_minutes != null) {
@@ -158,17 +160,17 @@ export const getFullDayThresholdHoursForDate = (
     if (schedule.full_day_threshold_minutes != null) {
       return schedule.full_day_threshold_minutes / 60;
     }
-    return fallbackMinutes / 60;
+    return fallbackHours;
   }
 
   // Предпраздничный рабочий день: порог снижается на 1 час (но не ниже 0)
-  const preHolidayShiftMinutes = isPreHoliday(date, schedule, calendar) ? 60 : 0;
+  const preHolidayMinusHours = isPreHoliday(date, schedule, calendar) ? 1 : 0;
 
   if (schedule.full_day_threshold_minutes != null) {
-    return Math.max(0, schedule.full_day_threshold_minutes - preHolidayShiftMinutes) / 60;
+    return Math.max(0, schedule.full_day_threshold_minutes / 60 - preHolidayMinusHours);
   }
 
-  return Math.max(0, fallbackMinutes - preHolidayShiftMinutes) / 60;
+  return Math.max(0, fallbackHours - preHolidayMinusHours);
 };
 
 /** Норма часов на конкретный день: 0 для нерабочего, work_hours-1 для предпраздничного будня (если respects_holidays), иначе work_hours. */

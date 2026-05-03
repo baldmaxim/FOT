@@ -126,7 +126,10 @@ export const getFullDayThresholdHours = (
   isWeekendDay: boolean,
 ): number => {
   if (!sched) return 8;
-  const fallbackMin = Math.max(0, Math.round(sched.work_hours * 60));
+  // work_hours напрямую: промежуточный round через минуты раньше давал значение чуть БОЛЬШЕ
+  // исходного work_hours (например 7.53 → 7.5333), и при capToSchedule capped factHours
+  // не дотягивал до threshold, давая ложный underwork.
+  const fallbackHours = Math.max(0, sched.work_hours);
   if (isWeekendDay) {
     if (sched.weekend_full_day_threshold_minutes != null) {
       return sched.weekend_full_day_threshold_minutes / 60;
@@ -134,12 +137,12 @@ export const getFullDayThresholdHours = (
     if (sched.full_day_threshold_minutes != null) {
       return sched.full_day_threshold_minutes / 60;
     }
-    return fallbackMin / 60;
+    return fallbackHours;
   }
   if (sched.full_day_threshold_minutes != null) {
     return sched.full_day_threshold_minutes / 60;
   }
-  return fallbackMin / 60;
+  return fallbackHours;
 };
 
 /**
@@ -156,7 +159,10 @@ export const getFullDayThresholdHoursForDay = (
   if (!sched) return 8;
 
   const isDayOff = isScheduleDayOff(sched, calendar, year, month, day);
-  const fallbackMin = Math.max(0, Math.round(getWorkHoursForDay(sched, year, month, day) * 60));
+  // Используем work_hours дня напрямую (а не через round в минуты) — иначе для дробных
+  // нетто-часов (например 7.53) фронтовый порог становится 7.5333 и при capToSchedule=true
+  // capped factHours (=7.53) ложно отмечается underwork.
+  const fallbackHours = Math.max(0, getWorkHoursForDay(sched, year, month, day));
 
   if (isDayOff) {
     if (sched.weekend_full_day_threshold_minutes != null) {
@@ -165,17 +171,17 @@ export const getFullDayThresholdHoursForDay = (
     if (sched.full_day_threshold_minutes != null) {
       return sched.full_day_threshold_minutes / 60;
     }
-    return fallbackMin / 60;
+    return fallbackHours;
   }
 
   // Предпраздничный рабочий день: порог снижается на 1 час (но не ниже 0)
-  const preHolidayShiftMinutes = isPreHolidayForSchedule(sched, calendar, year, month, day) ? 60 : 0;
+  const preHolidayMinusHours = isPreHolidayForSchedule(sched, calendar, year, month, day) ? 1 : 0;
 
   if (sched.full_day_threshold_minutes != null) {
-    return Math.max(0, sched.full_day_threshold_minutes - preHolidayShiftMinutes) / 60;
+    return Math.max(0, sched.full_day_threshold_minutes / 60 - preHolidayMinusHours);
   }
 
-  return Math.max(0, fallbackMin - preHolidayShiftMinutes) / 60;
+  return Math.max(0, fallbackHours - preHolidayMinusHours);
 };
 
 /**
