@@ -96,8 +96,7 @@ export const MassTimesheetExportPage: FC = () => {
 
   return (
     <div className="mte-page">
-      <div className="mte-header">
-        <h2 className="mte-title">Массовый экспорт</h2>
+      <div className="mte-toolbar">
         <div className="mte-month-nav">
           <button className="mte-month-btn" onClick={prevMonth} disabled={!canGoPrev}>
             <ChevronLeft size={16} />
@@ -107,24 +106,23 @@ export const MassTimesheetExportPage: FC = () => {
             <ChevronRight size={16} />
           </button>
         </div>
+        <section className="mte-half-toggle" aria-label="Период выгрузки табелей">
+          <button
+            type="button"
+            className={`mte-half-chip ${half === 'H1' ? 'mte-half-chip--active' : ''}`}
+            onClick={() => setHalf('H1')}
+          >
+            {formatHalfLabel(year, month, 'H1')}
+          </button>
+          <button
+            type="button"
+            className={`mte-half-chip ${half === 'H2' ? 'mte-half-chip--active' : ''}`}
+            onClick={() => setHalf('H2')}
+          >
+            {formatHalfLabel(year, month, 'H2')}
+          </button>
+        </section>
       </div>
-
-      <section className="mte-half-toggle" aria-label="Период выгрузки табелей">
-        <button
-          type="button"
-          className={`mte-half-chip ${half === 'H1' ? 'mte-half-chip--active' : ''}`}
-          onClick={() => setHalf('H1')}
-        >
-          {formatHalfLabel(year, month, 'H1')}
-        </button>
-        <button
-          type="button"
-          className={`mte-half-chip ${half === 'H2' ? 'mte-half-chip--active' : ''}`}
-          onClick={() => setHalf('H2')}
-        >
-          {formatHalfLabel(year, month, 'H2')}
-        </button>
-      </section>
 
       <section className="mte-mode-switch" aria-label="Формат выгрузки">
         <button

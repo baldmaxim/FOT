@@ -1,4 +1,4 @@
-import { type FC, useState, useMemo, useCallback, useEffect } from 'react';
+import { type FC, useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
   CheckCircle,
   ChevronDown,
@@ -169,6 +169,20 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
     return ids;
   }, [approvedList, rangeStart, rangeEnd]);
 
+  const aggregatedApprovedIds = useMemo(() => {
+    const set = new Set<string>(approvedDeptIds);
+    const walk = (node: OrgDepartmentNode): boolean => {
+      if (node.children?.length) {
+        const allKidsApproved = node.children.every(walk);
+        if (allKidsApproved) set.add(node.id);
+        return allKidsApproved;
+      }
+      return set.has(node.id);
+    };
+    for (const root of structure?.departments ?? []) walk(root);
+    return set;
+  }, [approvedDeptIds, structure?.departments]);
+
   const managedDepartmentIds = useMemo(() => {
     if (profile?.is_admin) return null;
     const ids = new Set<string>(profile?.managed_department_ids?.filter(Boolean) ?? []);
@@ -212,6 +226,23 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
       return changed ? next : prev;
     });
   }, [structure, allStructureIds]);
+
+  const didAutoExpandRef = useRef(false);
+  useEffect(() => {
+    if (didAutoExpandRef.current) return;
+    if (allStructureIds.length === 0) return;
+    setExpandedIds(new Set(allStructureIds));
+    didAutoExpandRef.current = true;
+  }, [allStructureIds]);
+
+  useEffect(() => {
+    if (!searchQuery.trim()) return;
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      for (const id of filteredIds) next.add(id);
+      return next;
+    });
+  }, [searchQuery, filteredIds]);
 
   const handleToggle = useCallback((ids: string[], checked: boolean) => {
     setCheckedIds(prev => {
@@ -360,7 +391,7 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
               onToggle={handleToggle}
               expandedIds={expandedIds}
               onToggleExpand={handleToggleExpand}
-              approvedDeptIds={approvedDeptIds}
+              approvedDeptIds={aggregatedApprovedIds}
             />
           ))
         )}
@@ -382,29 +413,35 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
           disabled={exporting || exportingApproved || checkedIds.size === 0}
         >
           <Download size={16} />
-          {exporting && presentation === 'hr' ? 'Выгрузить Факт...' : `Выгрузить Факт (${checkedIds.size})`}
+          {exporting && presentation === 'hr'
+            ? (exportAs1C ? 'Экспорт...' : 'Выгрузить Факт...')
+            : (exportAs1C ? `Экспорт (${checkedIds.size})` : `Выгрузить Факт (${checkedIds.size})`)}
         </button>
-        <button
-          className={`mte-export-btn mte-export-btn--secondary ${presentation === 'manager' ? 'mte-export-btn--active' : ''}`}
-          onClick={() => handleExport('manager')}
-          disabled={exporting || exportingApproved || checkedIds.size === 0}
-        >
-          <Download size={16} />
-          {exporting && presentation === 'manager'
-            ? 'Выгрузить урезанный...'
-            : `Выгрузить урезанный (${checkedIds.size})`}
-        </button>
-        <button
-          className="mte-export-btn mte-export-btn--approved"
-          onClick={handleExportApproved}
-          disabled={exporting || exportingApproved || approvedSelectedIds.length === 0}
-          title={approvedSelectedIds.length === 0 ? 'Среди выбранных нет утверждённых табелей за этот период' : undefined}
-        >
-          <CheckCircle size={16} />
-          {exportingApproved
-            ? 'Экспорт утверждённых...'
-            : `Экспорт утверждённых (${approvedSelectedIds.length})`}
-        </button>
+        {!exportAs1C && (
+          <>
+            <button
+              className={`mte-export-btn mte-export-btn--secondary ${presentation === 'manager' ? 'mte-export-btn--active' : ''}`}
+              onClick={() => handleExport('manager')}
+              disabled={exporting || exportingApproved || checkedIds.size === 0}
+            >
+              <Download size={16} />
+              {exporting && presentation === 'manager'
+                ? 'Выгрузить урезанный...'
+                : `Выгрузить урезанный (${checkedIds.size})`}
+            </button>
+            <button
+              className="mte-export-btn mte-export-btn--approved"
+              onClick={handleExportApproved}
+              disabled={exporting || exportingApproved || approvedSelectedIds.length === 0}
+              title={approvedSelectedIds.length === 0 ? 'Среди выбранных нет утверждённых табелей за этот период' : undefined}
+            >
+              <CheckCircle size={16} />
+              {exportingApproved
+                ? 'Экспорт утверждённых...'
+                : `Экспорт утверждённых (${approvedSelectedIds.length})`}
+            </button>
+          </>
+        )}
       </div>
     </>
   );
