@@ -8,6 +8,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ||= 'test-service-role-key';
 process.env.ENCRYPTION_KEY ||= '0'.repeat(64);
 process.env.JWT_SECRET ||= 'test-jwt-secret-must-be-long-enough-for-zod-validator';
 process.env.NODE_ENV ||= 'test';
+process.env.SIGUR_RUNTIME_ALLOWED_HOSTS ||= '*';
 // Гарантируем, что Sentry молчит в тестах (DSN не задан → init не вызывается).
 delete process.env.SENTRY_DSN;
 
