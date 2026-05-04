@@ -3,17 +3,21 @@ import multer from 'multer';
 import { skudController } from '../controllers/skud.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess, requireCritical2FA } from '../middleware/auth.js';
 import { importLimiter } from '../middleware/rateLimit.js';
-import { cacheResponse } from '../middleware/cacheResponse.js';
+import { registerCache } from '../middleware/cacheResponse.js';
 
 // req.user.id обязателен в ключах: иначе ответ, прогретый одним пользователем
 // (например, админом без department_id → данные по всем отделам), отдавался бы
 // другому пользователю с другим scope без вызова контроллера, в обход 403.
-const presenceCache = cacheResponse(
+// TTL держим коротким: основная инвалидация идёт через invalidateCaches() из
+// presence-polling при появлении новых СКУД-событий, TTL — лишь страховка.
+const presenceCache = registerCache(
+  'skud-presence',
   (req) => `presence:${req.user.id}:${req.query.department_id || 'all'}`,
-  30_000,
+  5_000,
 );
 
-const dashboardCache = cacheResponse(
+const dashboardCache = registerCache(
+  'skud-dashboard',
   (req) => {
     const period = ['today', 'week', 'month'].includes(req.query.period as string)
       ? (req.query.period as string)
@@ -21,7 +25,7 @@ const dashboardCache = cacheResponse(
     const month = typeof req.query.month === 'string' ? req.query.month : '';
     return `dashboard:${req.user.id}:${req.query.department_id ?? 'all'}:${period}:${month}`;
   },
-  60_000,
+  10_000,
 );
 
 const router = Router();

@@ -17,7 +17,7 @@ export const useDashboardStats = (
   month?: string,
 ): IUseDashboardStatsReturn => {
   const isVisible = useDocumentVisibility();
-  const refetchInterval = isVisible ? 180_000 : false;
+  const refetchInterval = isVisible ? 60_000 : false;
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['dashboard-stats', departmentId, period, month],
@@ -26,7 +26,7 @@ export const useDashboardStats = (
     placeholderData: previousData => previousData,
     refetchInterval,
     refetchIntervalInBackground: false,
-    staleTime: 90_000,
+    staleTime: 30_000,
   });
   const refresh = useCallback(() => {
     void refetch();

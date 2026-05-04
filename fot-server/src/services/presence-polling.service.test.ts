@@ -255,7 +255,7 @@ function makeEvent(params: {
 describe('presence-polling.service', () => {
   beforeEach(() => {
     mockedState.queryLog.length = 0;
-    mockedState.envMock.interval = '15000';
+    mockedState.envMock.interval = '5000';
     mockedState.ioMock.emit.mockClear();
     mockedState.queryResolver = () => ({ data: [], error: null });
     mockedState.supabaseMock.from.mockClear();
@@ -279,11 +279,12 @@ describe('presence-polling.service', () => {
     resetPresencePollingStateForTests();
   });
 
-  it('uses 15s as the default poll interval and clamps lower values', () => {
-    expect(resolvePresencePollIntervalMs()).toBe(15_000);
-
+  it('uses 5s as the default poll interval and clamps lower values', () => {
     mockedState.envMock.interval = '5000';
-    expect(resolvePresencePollIntervalMs()).toBe(15_000);
+    expect(resolvePresencePollIntervalMs()).toBe(5_000);
+
+    mockedState.envMock.interval = '1000';
+    expect(resolvePresencePollIntervalMs()).toBe(5_000);
 
     mockedState.envMock.interval = '20000';
     expect(resolvePresencePollIntervalMs()).toBe(20_000);
@@ -331,6 +332,7 @@ describe('presence-polling.service', () => {
     expect(mockedState.ioMock.emit).toHaveBeenCalledTimes(1);
     expect(mockedState.ioMock.emit).toHaveBeenCalledWith('presence_updated', {
       at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+      employeeIds: expect.any(Array),
     });
   });
 

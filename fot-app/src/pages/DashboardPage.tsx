@@ -187,22 +187,13 @@ export const DashboardPage: React.FC = () => {
     period,
     period === 'month' ? selectedMonth : undefined,
   );
-  const lastStatsRealtimeRef = useRef(0);
 
   const handlePresenceRealtime = useCallback(() => {
     refreshPresence();
-
-    const now = Date.now();
-    if ((now - lastStatsRealtimeRef.current) < 60_000) {
-      return;
-    }
-
-    lastStatsRealtimeRef.current = now;
     refreshStats();
   }, [refreshPresence, refreshStats]);
 
   const handleDashboardVisible = useCallback(() => {
-    lastStatsRealtimeRef.current = Date.now();
     refreshPresence();
     refreshStats();
   }, [refreshPresence, refreshStats]);

@@ -39,7 +39,7 @@ const envSchema = z.object({
   SIGUR_EXTERNAL_URL: optionalUrl,
   SIGUR_EXTERNAL_USERNAME: optionalString,
   SIGUR_EXTERNAL_PASSWORD: optionalString,
-  SIGUR_PRESENCE_POLL_INTERVAL_MS: z.string().regex(/^\d+$/).default('15000'),
+  SIGUR_PRESENCE_POLL_INTERVAL_MS: z.string().regex(/^\d+$/).default('5000'),
 
   // Web Push (VAPID)
   VAPID_PUBLIC_KEY: optionalString,

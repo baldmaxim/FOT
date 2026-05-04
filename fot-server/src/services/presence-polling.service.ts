@@ -9,6 +9,7 @@ import { backfillUnmatchedEvents } from './skud-backfill.service.js';
 import { normalizePersonName } from './sigur-sync-shared.js';
 import { invalidatePresenceCache } from './skud-presence.service.js';
 import { invalidateDashboardCache } from './skud-dashboard.service.js';
+import { invalidateCaches } from '../middleware/cacheResponse.js';
 import {
   getEmployeeCache,
   setEmployeeCache,
@@ -37,8 +38,8 @@ import {
 import type { ConnectionType } from './sigur.service.js';
 import { getIo } from '../socket/io-instance.js';
 
-const DEFAULT_POLL_INTERVAL_MS = 15_000;
-const MIN_POLL_INTERVAL_MS = 15_000;
+const DEFAULT_POLL_INTERVAL_MS = 5_000;
+const MIN_POLL_INTERVAL_MS = 5_000;
 const EMPLOYEE_CACHE_TTL = 10 * 60_000;
 const BATCH_SIZE = 500;
 export const POLL_OVERLAP_MS = 2 * 60_000;
@@ -516,8 +517,17 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     if (presenceChanged) {
       invalidatePresenceCache();
       invalidateDashboardCache();
+      invalidateCaches('skud-presence', 'skud-dashboard');
       try {
-        getIo()?.emit('presence_updated', { at: cycleFinishedAt.toISOString() });
+        const employeeIds = [...new Set(
+          [...summariesToUpdate]
+            .map(key => parseInt(key.split(':')[0], 10))
+            .filter(id => Number.isFinite(id)),
+        )];
+        getIo()?.emit('presence_updated', {
+          at: cycleFinishedAt.toISOString(),
+          employeeIds,
+        });
       } catch (socketError) {
         console.error('[presence-polling] socket emit error:', (socketError as Error).message);
       }
