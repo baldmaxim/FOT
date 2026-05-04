@@ -50,7 +50,7 @@ app.use(cors({
     callback(new Error(`CORS origin is not allowed: ${origin}`));
   },
   credentials: true,
-  exposedHeaders: ['Content-Disposition'],
+  exposedHeaders: ['Content-Disposition', 'Server-Timing'],
 }));
 
 // Body parsing

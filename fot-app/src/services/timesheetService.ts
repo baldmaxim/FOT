@@ -17,6 +17,8 @@ interface TimesheetFilters {
   half?: TimesheetExportHalf;
   from?: string; // YYYY-MM-DD (приоритетнее half)
   to?: string;
+  include_objects?: boolean;
+  schedule_payload?: 'full' | 'compact';
 }
 
 type TimesheetExportHalf = 'H1' | 'H2' | 'FULL';
@@ -37,6 +39,32 @@ interface ApiResponse<T> {
 interface BulkTimesheetCorrectionResult {
   processed: number;
   employees: number;
+}
+
+function hydrateCompactSchedules(data: TimesheetResponse): TimesheetResponse {
+  if (
+    data.daily_schedules
+    || !data.schedule_catalog
+    || !data.daily_schedule_ids
+  ) {
+    return data;
+  }
+
+  const dailySchedules: NonNullable<TimesheetResponse['daily_schedules']> = {};
+  for (const [employeeId, byDate] of Object.entries(data.daily_schedule_ids)) {
+    dailySchedules[Number(employeeId)] = {};
+    for (const [date, scheduleId] of Object.entries(byDate)) {
+      const schedule = data.schedule_catalog[scheduleId];
+      if (schedule) {
+        dailySchedules[Number(employeeId)][date] = schedule;
+      }
+    }
+  }
+
+  return {
+    ...data,
+    daily_schedules: dailySchedules,
+  };
 }
 
 export interface ITimesheetCorrectionRow {
@@ -135,9 +163,11 @@ export const timesheetService = {
     } else if (filters.half) {
       params.append('half', filters.half);
     }
+    params.append('include_objects', filters.include_objects ? '1' : '0');
+    params.append('schedule_payload', filters.schedule_payload ?? 'compact');
     const res = await apiClient.get<ApiResponse<TimesheetResponse>>(`/timesheet?${params.toString()}`);
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки табеля');
-    return res.data;
+    return hydrateCompactSchedules(res.data);
   },
 
   async getOverview(filters: {

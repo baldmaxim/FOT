@@ -88,6 +88,16 @@ export const buildAuthHeaders = (headers: HeadersInit = {}): HeadersInit => {
   };
 };
 
+const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
+  if (method.toUpperCase() !== 'GET') return false;
+  const path = endpoint.split('?')[0];
+  return path === '/skud/presence'
+    || path === '/skud/dashboard-stats'
+    || path === '/sigur/monitor/status'
+    || path === '/sigur/monitor/checks'
+    || path === '/sigur/monitor/incidents';
+};
+
 const refreshSession = async (): Promise<boolean> => {
   if (refreshPromise) {
     return refreshPromise;
@@ -141,8 +151,16 @@ export const apiClient = {
       (headers as Record<string, string>)['Authorization'] = `Bearer ${sessionToken}`;
     }
 
+    const method = (fetchOptions.method ?? 'GET').toUpperCase();
+    const bypassHttpCache = shouldBypassHttpCache(endpoint, method);
+    if (bypassHttpCache) {
+      (headers as Record<string, string>)['Cache-Control'] = 'no-cache';
+      (headers as Record<string, string>)['Pragma'] = 'no-cache';
+    }
+
     const response = await fetch(buildApiUrl(endpoint), {
       ...fetchOptions,
+      cache: bypassHttpCache ? 'no-store' : fetchOptions.cache,
       credentials: 'include',
       headers,
     });

@@ -15,6 +15,7 @@ import {
   setAccessPointCacheEntry,
   deleteAccessPointCacheEntry,
 } from '../services/skud-shared.service.js';
+import { notifySkudRealtimeChanged } from '../services/skud-realtime.service.js';
 
 export interface MulterRequest extends AuthenticatedRequest {
   file?: Express.Multer.File;
@@ -212,6 +213,12 @@ export const skudWriteController = {
         startDate,
         endDate,
         connection,
+      });
+      notifySkudRealtimeChanged({
+        source: 'employee_sync',
+        employeeIds: [employeeId],
+        from: startDate,
+        to: endDate,
       });
     } catch (error) {
       console.error('syncEmployee error:', error);

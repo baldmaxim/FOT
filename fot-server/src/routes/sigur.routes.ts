@@ -6,6 +6,8 @@ import { sigurAdminController } from '../controllers/sigur-admin.controller.js';
 import { sigurFilterController } from '../controllers/sigur-filter.controller.js';
 import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
+import { noStore } from '../middleware/noStore.js';
+import { serverTiming } from '../middleware/serverTiming.js';
 
 const router = Router();
 
@@ -201,10 +203,10 @@ router.patch(
 
 // === Monitor эндпоинты (admin+) ===
 
-router.get('/monitor/status', requirePageAccess('/skud-settings', 'view'), sigurMonitorController.getStatus);
-router.get('/monitor/incidents', requirePageAccess('/skud-settings', 'view'), sigurMonitorController.getIncidents);
+router.get('/monitor/status', requirePageAccess('/skud-settings', 'view'), noStore, serverTiming('sigur_monitor_status'), sigurMonitorController.getStatus);
+router.get('/monitor/incidents', requirePageAccess('/skud-settings', 'view'), noStore, serverTiming('sigur_monitor_incidents'), sigurMonitorController.getIncidents);
 router.get('/monitor/incidents/:id', requirePageAccess('/skud-settings', 'view'), sigurMonitorController.getIncidentById);
-router.get('/monitor/checks', requirePageAccess('/skud-settings', 'view'), sigurMonitorController.getChecks);
+router.get('/monitor/checks', requirePageAccess('/skud-settings', 'view'), noStore, serverTiming('sigur_monitor_checks'), sigurMonitorController.getChecks);
 
 // GET /api/sigur/stream?type=employees — SSE-стриминг с прогрессом
 router.get('/stream', requirePageAccess('/skud-settings', 'view'), sigurController.stream);

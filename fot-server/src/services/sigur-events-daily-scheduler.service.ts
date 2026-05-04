@@ -1,11 +1,12 @@
 import { sigurService } from './sigur.service.js';
 import {
-  acquirePresencePollingLock,
-  releasePresencePollingLock,
+  acquireSigurEventsSyncLock,
+  releaseSigurEventsSyncLock,
   ManualSyncInProgressError,
 } from './presence-polling.service.js';
 import { syncEventsLogic } from './sigur-sync-events.service.js';
 import type { ISyncContext } from './sigur-sync-shared.js';
+import { notifySkudRealtimeChanged } from './skud-realtime.service.js';
 import {
   getSigurRuntimeState,
   mergeSigurRuntimeState,
@@ -57,7 +58,7 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
         `[events-daily-scheduler] starting daily sync connection=${connection} range=${startDate}..${endDate}`,
       );
 
-      await acquirePresencePollingLock();
+      await acquireSigurEventsSyncLock();
       lockAcquired = true;
 
       const context: ISyncContext = {};
@@ -66,6 +67,14 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
       console.log(
         `[events-daily-scheduler] done: imported=${result.imported}, skipped=${result.skipped}, filteredByDept=${result.filteredByDept}, matched=${result.matched}, errors=${result.errors.length}`,
       );
+
+      notifySkudRealtimeChanged({
+        source: 'daily_sync',
+        from: startDate,
+        to: endDate,
+        insertedCount: result.imported,
+        recalculatedCount: result.matched,
+      });
 
       // Закрепляем успех в runtime_state, чтобы катчап после рестарта не запускал
       // тот же цикл повторно в течение MSK-суток.
@@ -106,9 +115,9 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
     } finally {
       if (lockAcquired) {
         try {
-          await releasePresencePollingLock();
+          await releaseSigurEventsSyncLock();
         } catch (releaseErr) {
-          console.error('[events-daily-scheduler] releasePresencePollingLock error:', releaseErr);
+          console.error('[events-daily-scheduler] releaseSigurEventsSyncLock error:', releaseErr);
         }
       }
       runInFlight = null;

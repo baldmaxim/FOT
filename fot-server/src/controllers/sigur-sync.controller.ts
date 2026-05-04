@@ -6,8 +6,10 @@ import { buildInclusiveDateRange } from '../utils/date.utils.js';
 import { parseFIO } from '../utils/fio.utils.js';
 import {
   acquirePresencePollingLock,
+  acquireSigurEventsSyncLock,
   ManualSyncInProgressError,
   releasePresencePollingLock,
+  releaseSigurEventsSyncLock,
 } from '../services/presence-polling.service.js';
 import {
   SYNC_ALL_STEP_ORDER,
@@ -25,6 +27,7 @@ import {
   type SigurRuntimeNotAllowedError,
 } from '../services/sigur-runtime-guard.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
+import { notifySkudRealtimeChanged } from '../services/skud-realtime.service.js';
 
 type ConnectionType = 'external' | 'internal';
 
@@ -79,6 +82,14 @@ async function safeReleasePresencePollingLock(context: string): Promise<void> {
   }
 }
 
+async function safeReleaseSigurEventsSyncLock(context: string): Promise<void> {
+  try {
+    await releaseSigurEventsSyncLock();
+  } catch (error) {
+    console.error(`[${context}] releaseSigurEventsSyncLock error:`, error);
+  }
+}
+
 export const sigurSyncController = {
   async sync(req: AuthenticatedRequest, res: Response): Promise<void> {
     let lockAcquired = false;
@@ -114,7 +125,7 @@ export const sigurSyncController = {
 
       sendProgress = createSseSender(res);
 
-      await acquirePresencePollingLock({
+      await acquireSigurEventsSyncLock({
         onWait: update => {
           sendProgress?.({
             type: 'waiting',
@@ -142,6 +153,14 @@ export const sigurSyncController = {
           dateRange: { startDate, endDate },
           ...result,
         },
+      });
+
+      notifySkudRealtimeChanged({
+        source: 'manual_sync',
+        from: startDate,
+        to: endDate,
+        insertedCount: result.imported,
+        recalculatedCount: result.matched,
       });
 
       sendProgress({ type: 'done', ...result });
@@ -202,7 +221,7 @@ export const sigurSyncController = {
         clearInterval(keepAliveTimer);
       }
       if (lockAcquired) {
-        await safeReleasePresencePollingLock('sigur.sync');
+        await safeReleaseSigurEventsSyncLock('sigur.sync');
       }
     }
   },

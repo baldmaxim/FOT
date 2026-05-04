@@ -132,6 +132,8 @@ export interface TimesheetResponse {
   employee_stats?: IEmployeeStats[];
   schedules?: Record<number, IResolvedSchedule>;
   daily_schedules?: Record<number, Record<string, IResolvedSchedule>>;
+  schedule_catalog?: Record<string, IResolvedSchedule>;
+  daily_schedule_ids?: Record<number, Record<string, string>>;
   calendar?: IProductionCalendarMonth | null;
   approvals?: ITimesheetDepartmentApprovalSummary[];
   approval_locked_dates?: string[];

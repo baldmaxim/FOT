@@ -299,13 +299,16 @@ export const TimesheetPage: FC = () => {
   const rangeStart = activeRange.startDate;
   const rangeEnd = activeRange.endDate;
   const activeGridDeptId = timesheetMode === 'assigned' ? assignedExpandedDeptId : effectiveSelectedDeptId;
+  const includeObjectDetails = viewMode === 'objects';
   const timesheetQuery = useQuery({
-    queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'],
+    queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none', includeObjectDetails ? 'objects' : 'employees'],
     queryFn: () => timesheetService.getAll({
       month: monthStr,
       department_id: activeGridDeptId || undefined,
       from: rangeStart,
       to: rangeEnd,
+      include_objects: includeObjectDetails,
+      schedule_payload: 'compact',
     }),
     enabled: Boolean(activeGridDeptId),
     staleTime: 5 * 60_000,

@@ -7,9 +7,7 @@ import { computeDedupHash } from '../utils/dedup.utils.js';
 import { buildMoscowEventTimestamp } from '../utils/date.utils.js';
 import { backfillUnmatchedEvents } from './skud-backfill.service.js';
 import { normalizePersonName } from './sigur-sync-shared.js';
-import { invalidatePresenceCache } from './skud-presence.service.js';
-import { invalidateDashboardCache } from './skud-dashboard.service.js';
-import { invalidateCaches } from '../middleware/cacheResponse.js';
+import { notifySkudRealtimeChanged } from './skud-realtime.service.js';
 import {
   getEmployeeCache,
   setEmployeeCache,
@@ -36,7 +34,6 @@ import {
   logSigurRuntimeGuardSkip,
 } from './sigur-runtime-guard.service.js';
 import type { ConnectionType } from './sigur.service.js';
-import { getIo } from '../socket/io-instance.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const MIN_POLL_INTERVAL_MS = 5_000;
@@ -45,6 +42,7 @@ const BATCH_SIZE = 500;
 export const POLL_OVERLAP_MS = 2 * 60_000;
 const POLL_MAX_WINDOW_MS = 10 * 60_000;
 const SIGUR_EXCLUSIVE_SYNC_STATE_KEY = 'sigur_exclusive_sync';
+const SIGUR_EVENTS_SYNC_STATE_KEY = 'sigur_events_sync';
 const SIGUR_STRUCTURE_SYNC_STATE_KEY = 'sigur_structure_sync';
 const EXCLUSIVE_SYNC_ACQUIRE_TIMEOUT_MS = 45_000;
 const STRUCTURE_SYNC_WAIT_TIMEOUT_MS = 10 * 60_000;
@@ -56,10 +54,13 @@ let manualSyncLocks = 0;
 let pollInFlight: Promise<void> | null = null;
 let manualSyncLeaseHeartbeatStop: (() => void) | null = null;
 let exclusiveSyncLeaseHeartbeatStop: (() => void) | null = null;
+let eventsSyncLeaseHeartbeatStop: (() => void) | null = null;
 let structureSyncLeaseHeartbeatStop: (() => void) | null = null;
+let eventsSyncLocks = 0;
 
 const POLLING_LEASE_OWNER = getSigurRuntimeOwner(SIGUR_POLLING_STATE_KEY);
 const EXCLUSIVE_SYNC_LEASE_OWNER = getSigurRuntimeOwner(SIGUR_EXCLUSIVE_SYNC_STATE_KEY);
+const EVENTS_SYNC_LEASE_OWNER = getSigurRuntimeOwner(SIGUR_EVENTS_SYNC_STATE_KEY);
 const STRUCTURE_SYNC_LEASE_OWNER = getSigurRuntimeOwner(SIGUR_STRUCTURE_SYNC_STATE_KEY);
 const MANUAL_SYNC_LEASE_OWNER = `${POLLING_LEASE_OWNER}:manual`;
 
@@ -350,6 +351,7 @@ export function resetPresencePollingStateForTests(): void {
   }
 
   manualSyncLocks = 0;
+  eventsSyncLocks = 0;
   pollInFlight = null;
   if (manualSyncLeaseHeartbeatStop) {
     manualSyncLeaseHeartbeatStop();
@@ -358,6 +360,10 @@ export function resetPresencePollingStateForTests(): void {
   if (exclusiveSyncLeaseHeartbeatStop) {
     exclusiveSyncLeaseHeartbeatStop();
     exclusiveSyncLeaseHeartbeatStop = null;
+  }
+  if (eventsSyncLeaseHeartbeatStop) {
+    eventsSyncLeaseHeartbeatStop();
+    eventsSyncLeaseHeartbeatStop = null;
   }
   if (structureSyncLeaseHeartbeatStop) {
     structureSyncLeaseHeartbeatStop();
@@ -425,7 +431,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       employee_id: number | null;
       dedup_hash: string;
     }> = [];
-    const summariesToUpdate = new Set<string>();
+    const candidateSummaryKeys = new Set<string>();
     let storedUnmatched = 0;
     let latestObservedEventAt: Date | null = null;
 
@@ -473,24 +479,33 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       });
 
       if (emp) {
-        summariesToUpdate.add(`${emp.id}:${mapped.eventDate}`);
+        candidateSummaryKeys.add(`${emp.id}:${mapped.eventDate}`);
       } else {
         storedUnmatched++;
       }
     }
 
     let totalInserted = 0;
+    const insertedSummaryKeys = new Set<string>();
+    const insertedEmployeeIds = new Set<number>();
     const persistenceErrors: string[] = [];
     for (let i = 0; i < inserts.length; i += BATCH_SIZE) {
       const batch = inserts.slice(i, i + BATCH_SIZE);
-      const { error } = await supabase
+      const { data: insertedRows, error } = await supabase
         .from('skud_events')
-        .upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true });
+        .upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true })
+        .select('employee_id,event_date');
       if (error) {
         console.error('[presence-polling] insert error:', error.message);
         persistenceErrors.push(error.message);
       } else {
-        totalInserted += batch.length;
+        const rows = Array.isArray(insertedRows) ? insertedRows : [];
+        totalInserted += rows.length;
+        for (const row of rows as Array<{ employee_id: number | null; event_date: string | null }>) {
+          if (row.employee_id == null || !row.event_date) continue;
+          insertedSummaryKeys.add(`${row.employee_id}:${row.event_date}`);
+          insertedEmployeeIds.add(Number(row.employee_id));
+        }
       }
     }
 
@@ -498,8 +513,8 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       throw new Error(`Failed to persist Sigur events: ${persistenceErrors[0]}`);
     }
 
-    if (summariesToUpdate.size > 0) {
-      const pairs = [...summariesToUpdate].map(key => {
+    if (insertedSummaryKeys.size > 0) {
+      const pairs = [...insertedSummaryKeys].map(key => {
         const [empId, date] = key.split(':');
         return { emp_id: parseInt(empId, 10), date };
       });
@@ -509,28 +524,21 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       }
     }
 
-    const presenceChanged = totalInserted > 0 || summariesToUpdate.size > 0;
+    const presenceChanged = totalInserted > 0 || insertedSummaryKeys.size > 0;
     const cycleFinishedAt = new Date();
 
     // После успешного цикла сбрасываем кэши presence/dashboard, чтобы пользователи
     // увидели актуальные входы/выходы. Без этого данные отстают до TTL.
     if (presenceChanged) {
-      invalidatePresenceCache();
-      invalidateDashboardCache();
-      invalidateCaches('skud-presence', 'skud-dashboard');
-      try {
-        const employeeIds = [...new Set(
-          [...summariesToUpdate]
-            .map(key => parseInt(key.split(':')[0], 10))
-            .filter(id => Number.isFinite(id)),
-        )];
-        getIo()?.emit('presence_updated', {
-          at: cycleFinishedAt.toISOString(),
-          employeeIds,
-        });
-      } catch (socketError) {
-        console.error('[presence-polling] socket emit error:', (socketError as Error).message);
-      }
+      notifySkudRealtimeChanged({
+        at: cycleFinishedAt.toISOString(),
+        employeeIds: [...insertedEmployeeIds],
+        from: window.startDate,
+        to: window.endDate,
+        source: 'polling',
+        insertedCount: totalInserted,
+        recalculatedCount: insertedSummaryKeys.size,
+      });
     }
 
     const monitorCheckedAt = new Date();
@@ -546,10 +554,15 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       cycleFinishedAt: cycleFinishedAt.toISOString(),
       leaseOwner: POLLING_LEASE_OWNER,
       fetched: rawEvents.length,
+      attemptedInserts: inserts.length,
       inserted: totalInserted,
+      duplicates: Math.max(0, inserts.length - totalInserted),
       unmatched: storedUnmatched,
-      summaries: summariesToUpdate.size,
+      candidateSummaries: candidateSummaryKeys.size,
+      summaries: insertedSummaryKeys.size,
       latestObservedEventAt: latestObservedEventAt?.toISOString() || null,
+      durationMs: Date.now() - cycleStartedAt,
+      checkpointLagMs: Math.max(0, now.getTime() - window.endAt.getTime()),
     };
     await mergeSigurRuntimeState({
       key: SIGUR_POLLING_STATE_KEY,
@@ -564,7 +577,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       },
     });
     console.log(
-      `[presence-polling] cycle done source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} fetched=${rawEvents.length} inserted=${totalInserted} unmatched=${storedUnmatched} summaries=${summariesToUpdate.size}`,
+      `[presence-polling] cycle done source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} fetched=${rawEvents.length} attempted=${inserts.length} inserted=${totalInserted} duplicates=${Math.max(0, inserts.length - totalInserted)} unmatched=${storedUnmatched} summaries=${insertedSummaryKeys.size} durationMs=${Date.now() - cycleStartedAt}`,
     );
     void recordSigurMonitorSuccess({
       source: 'presence_polling',
@@ -634,17 +647,38 @@ async function pollEvents(): Promise<void> {
   await pollEventsOnce(new Date());
 }
 
+function recordPollSkip(reason: string): void {
+  console.log(`[presence-polling] cycle skipped reason=${reason}`);
+  void mergeSigurRuntimeState({
+    key: SIGUR_POLLING_STATE_KEY,
+    owner: POLLING_LEASE_OWNER,
+    meta: {
+      lastSkip: {
+        reason,
+        at: new Date().toISOString(),
+        leaseOwner: POLLING_LEASE_OWNER,
+      },
+    },
+  }).catch(error => {
+    console.error('[presence-polling] runtime skip hook error:', (error as Error).message);
+  });
+}
+
 async function runPollCycle(): Promise<void> {
   if (manualSyncLocks > 0) {
+    recordPollSkip('manualSyncLocks');
     return;
   }
   if (pollInFlight) {
+    recordPollSkip('pollInFlight');
     return pollInFlight;
   }
   if (await hasExclusiveSyncLease()) {
+    recordPollSkip('exclusiveLock');
     return;
   }
   if (pollInFlight) {
+    recordPollSkip('pollInFlight');
     return pollInFlight;
   }
 
@@ -667,6 +701,7 @@ async function runPollCycle(): Promise<void> {
         },
       });
       if (!lease.acquired) {
+        recordPollSkip('pollingLeaseBusy');
         return;
       }
 
@@ -756,6 +791,104 @@ export function stopPresencePolling(): void {
     pollingTimer = null;
     console.log('[presence-polling] stopped');
   }
+}
+
+export async function acquireSigurEventsSyncLock(
+  options: IAcquirePresencePollingLockOptions = {},
+): Promise<void> {
+  assertSigurRuntimeAllowed('Sigur events sync');
+  if (eventsSyncLocks > 0) {
+    throw new ManualSyncInProgressError();
+  }
+
+  eventsSyncLocks = 1;
+
+  try {
+    await waitForStructureSyncLeaseRelease(options.onWait);
+
+    const lockedAt = new Date().toISOString();
+    const lease = await tryAcquireSigurRuntimeLease({
+      key: SIGUR_EVENTS_SYNC_STATE_KEY,
+      owner: EVENTS_SYNC_LEASE_OWNER,
+      ttlSeconds: SIGUR_POLLING_LEASE_TTL_SECONDS,
+      meta: {
+        leaseMode: 'events_sync',
+        eventsSyncLockedAt: lockedAt,
+        leaderOwner: EVENTS_SYNC_LEASE_OWNER,
+      },
+    });
+
+    if (!lease.acquired) {
+      throw new ManualSyncInProgressError();
+    }
+
+    eventsSyncLeaseHeartbeatStop = startSigurRuntimeLeaseHeartbeat({
+      key: SIGUR_EVENTS_SYNC_STATE_KEY,
+      owner: EVENTS_SYNC_LEASE_OWNER,
+      ttlSeconds: SIGUR_POLLING_LEASE_TTL_SECONDS,
+      getMeta: () => ({
+        leaseMode: 'events_sync',
+        eventsSyncLockedAt: lockedAt,
+        leaderOwner: EVENTS_SYNC_LEASE_OWNER,
+      }),
+      onError: error => {
+        console.error('[presence-polling] events sync lease heartbeat error:', error.message);
+      },
+    });
+  } catch (error) {
+    if (eventsSyncLeaseHeartbeatStop) {
+      eventsSyncLeaseHeartbeatStop();
+      eventsSyncLeaseHeartbeatStop = null;
+    }
+    await mergeSigurRuntimeState({
+      key: SIGUR_EVENTS_SYNC_STATE_KEY,
+      owner: EVENTS_SYNC_LEASE_OWNER,
+      meta: {
+        eventsSyncLockedAt: null,
+        lastEventsSyncReleasedAt: new Date().toISOString(),
+      },
+    }).catch(runtimeError => {
+      console.error('[presence-polling] events sync release hook error:', (runtimeError as Error).message);
+    });
+    await releaseSigurRuntimeLease({
+      key: SIGUR_EVENTS_SYNC_STATE_KEY,
+      owner: EVENTS_SYNC_LEASE_OWNER,
+    }).catch(releaseError => {
+      console.error('[presence-polling] events sync lease release error:', (releaseError as Error).message);
+    });
+    eventsSyncLocks = 0;
+    throw error;
+  }
+}
+
+export async function releaseSigurEventsSyncLock(): Promise<void> {
+  if (eventsSyncLocks === 0) {
+    return;
+  }
+
+  if (eventsSyncLeaseHeartbeatStop) {
+    eventsSyncLeaseHeartbeatStop();
+    eventsSyncLeaseHeartbeatStop = null;
+  }
+
+  await mergeSigurRuntimeState({
+    key: SIGUR_EVENTS_SYNC_STATE_KEY,
+    owner: EVENTS_SYNC_LEASE_OWNER,
+    meta: {
+      eventsSyncLockedAt: null,
+      lastEventsSyncReleasedAt: new Date().toISOString(),
+    },
+  }).catch(error => {
+    console.error('[presence-polling] events sync release hook error:', (error as Error).message);
+  });
+  await releaseSigurRuntimeLease({
+    key: SIGUR_EVENTS_SYNC_STATE_KEY,
+    owner: EVENTS_SYNC_LEASE_OWNER,
+  }).catch(error => {
+    console.error('[presence-polling] events sync lease release error:', (error as Error).message);
+  });
+
+  eventsSyncLocks = 0;
 }
 
 export async function acquirePresencePollingLock(

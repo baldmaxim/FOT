@@ -4,6 +4,8 @@ import { skudController } from '../controllers/skud.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess, requireCritical2FA } from '../middleware/auth.js';
 import { importLimiter } from '../middleware/rateLimit.js';
 import { registerCache } from '../middleware/cacheResponse.js';
+import { noStore } from '../middleware/noStore.js';
+import { serverTiming } from '../middleware/serverTiming.js';
 
 // req.user.id обязателен в ключах: иначе ответ, прогретый одним пользователем
 // (например, админом без department_id → данные по всем отделам), отдавался бы
@@ -56,6 +58,8 @@ router.use(authenticate);
 router.get(
   '/dashboard-stats',
   requirePageAccess('/dashboard', 'view'),
+  noStore,
+  serverTiming('skud_dashboard'),
   dashboardCache,
   skudController.getDashboardStats
 );
@@ -286,6 +290,8 @@ router.post(
 router.get(
   '/presence',
   requireAnyPageAccess(['/dashboard', '/staff-control'], 'view'),
+  noStore,
+  serverTiming('skud_presence'),
   presenceCache,
   skudController.getPresence
 );

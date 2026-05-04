@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { timesheetController } from '../controllers/timesheet.controller.js';
 import { authenticate, requireAdmin, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
-import { cacheUnlessRangeIncludesToday } from '../middleware/skipCacheForToday.js';
+import { cacheWithShortTtlForToday } from '../middleware/skipCacheForToday.js';
+import { serverTiming } from '../middleware/serverTiming.js';
 
 const router = Router();
 
@@ -14,7 +15,7 @@ router.use((req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
-        invalidateCaches('timesheet', 'timesheet:overview', 'timesheet:search');
+        invalidateCaches('timesheet', 'timesheet:today', 'timesheet:overview', 'timesheet:overview:today', 'timesheet:search');
       }
     });
   }
@@ -35,11 +36,33 @@ const timesheetCache = registerCache(
       req.query.from ?? '',
       req.query.to ?? '',
       req.query.half ?? '',
+      req.query.include_objects ?? '',
+      req.query.schedule_payload ?? '',
       req.user.id,
       req.user.show_actual_hours ? '1' : '0',
     ].join(':'),
   5 * 60_000,
   500,
+);
+
+const timesheetTodayCache = registerCache(
+  'timesheet:today',
+  (req) =>
+    [
+      'ts-today',
+      req.query.month ?? '',
+      req.query.department_id ?? 'all',
+      req.query.employee_id ?? '',
+      req.query.from ?? '',
+      req.query.to ?? '',
+      req.query.half ?? '',
+      req.query.include_objects ?? '',
+      req.query.schedule_payload ?? '',
+      req.user.id,
+      req.user.show_actual_hours ? '1' : '0',
+    ].join(':'),
+  8_000,
+  300,
 );
 
 const timesheetOverviewCache = registerCache(
@@ -58,6 +81,22 @@ const timesheetOverviewCache = registerCache(
   5 * 60_000,
 );
 
+const timesheetOverviewTodayCache = registerCache(
+  'timesheet:overview:today',
+  (req) =>
+    [
+      'tso-today',
+      req.query.month ?? '',
+      req.query.department_id ?? 'all',
+      req.query.from ?? '',
+      req.query.to ?? '',
+      req.query.half ?? '',
+      req.user.id,
+      req.user.show_actual_hours ? '1' : '0',
+    ].join(':'),
+  8_000,
+);
+
 const timesheetSearchCache = registerCache(
   'timesheet:search',
   (req) =>
@@ -69,14 +108,16 @@ const timesheetSearchCache = registerCache(
 router.get(
   '/overview',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'view'),
-  cacheUnlessRangeIncludesToday(timesheetOverviewCache),
+  serverTiming('timesheet_overview'),
+  cacheWithShortTtlForToday(timesheetOverviewCache, timesheetOverviewTodayCache),
   timesheetController.getOverview
 );
 
 router.get(
   '/',
   requireAnyPageAccess(['/employee', '/timesheet', '/timesheet-hr'], 'view'),
-  cacheUnlessRangeIncludesToday(timesheetCache),
+  serverTiming('timesheet'),
+  cacheWithShortTtlForToday(timesheetCache, timesheetTodayCache),
   timesheetController.getAll
 );
 

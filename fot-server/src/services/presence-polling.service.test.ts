@@ -155,10 +155,28 @@ function createBuilder(table: string) {
     },
     upsert: (...args: unknown[]) => {
       query.operations.push({ method: 'upsert', args });
-      return Promise.resolve(mockedState.queryResolver(query));
+      return builder;
     },
-    then: (onFulfilled: (value: QueryResponse) => unknown, onRejected?: (reason: unknown) => unknown) =>
-      Promise.resolve(mockedState.queryResolver(query)).then(onFulfilled, onRejected),
+    then: (onFulfilled: (value: QueryResponse) => unknown, onRejected?: (reason: unknown) => unknown) => {
+      const response = mockedState.queryResolver(query);
+      return Promise.resolve(response).then(value => {
+        const upsert = findOperation(query, 'upsert');
+        const selectsInsertedRows = !!upsert && !!findOperation(query, 'select', 'employee_id,event_date');
+        if (
+          selectsInsertedRows
+          && value.error == null
+          && value.data == null
+          && Array.isArray(upsert.args[0])
+        ) {
+          return {
+            ...value,
+            data: (upsert.args[0] as Array<{ employee_id: number | null; event_date: string | null }>)
+              .map(row => ({ employee_id: row.employee_id, event_date: row.event_date })),
+          };
+        }
+        return value;
+      }).then(onFulfilled, onRejected);
+    },
   };
 
   return builder;
@@ -330,10 +348,15 @@ describe('presence-polling.service', () => {
       connectionType: 'external',
     }));
     expect(mockedState.ioMock.emit).toHaveBeenCalledTimes(1);
-    expect(mockedState.ioMock.emit).toHaveBeenCalledWith('presence_updated', {
+    expect(mockedState.ioMock.emit).toHaveBeenCalledWith('presence_updated', expect.objectContaining({
       at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
       employeeIds: expect.any(Array),
-    });
+      from: '2026-03-27',
+      to: '2026-03-27',
+      source: 'polling',
+      insertedCount: 1,
+      recalculatedCount: 1,
+    }));
   });
 
   it('keeps recovering from the previous day but caps the catch-up window length', async () => {
@@ -589,6 +612,42 @@ describe('presence-polling.service', () => {
       query.table === 'skud_events' && findOperation(query, 'select', 'dedup_hash'),
     );
     expect(preCheck).toBeUndefined();
+  });
+
+  it('does not emit realtime updates when the DB ignores overlap duplicates', async () => {
+    const now = new Date(2026, 2, 27, 10, 0, 0);
+
+    mockedState.queryResolver = (query) => {
+      if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
+        return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
+      }
+      if (query.table === 'employees') {
+        return {
+          data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }],
+          error: null,
+        };
+      }
+      if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
+        return { data: [], error: null };
+      }
+      throw new Error(`Unexpected query: ${query.table}`);
+    };
+
+    mockedState.sigurServiceMock.getEvents.mockResolvedValue([
+      makeEvent({ timestamp: '2026-03-27T09:00:00+03:00' }),
+    ] as Array<Record<string, unknown>>);
+
+    await pollEventsOnce(now);
+
+    expect(mockedState.supabaseMock.rpc).not.toHaveBeenCalled();
+    expect(mockedState.ioMock.emit).not.toHaveBeenCalled();
+    expect(mockedState.sigurMonitorMock.recordSigurMonitorSuccess).toHaveBeenCalledWith(expect.objectContaining({
+      meta: expect.objectContaining({
+        inserted: 0,
+        duplicates: 1,
+        summaries: 0,
+      }),
+    }));
   });
 
   it('passes the actual background connection to the failure hook', async () => {

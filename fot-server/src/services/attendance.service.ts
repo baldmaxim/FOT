@@ -126,6 +126,14 @@ export interface IAttendanceBuildResult {
   skudMap: Map<number, Map<string, { hours: number; corrected: boolean }>>;
 }
 
+interface IObjectAttendanceData {
+  objectEntries: IAttendanceObjectEntry[];
+  objectEntriesByEmployeeDate: Map<number, Map<string, IAttendanceObjectEntry[]>>;
+  employeeDistinctObjectKeys: Map<number, Set<string>>;
+  legacyBlockedDays: Map<string, string>;
+  rawFallbackSummaries: Map<number, Map<string, ISummaryRow>>;
+}
+
 interface ISummaryRow {
   employee_id: number;
   date: string;
@@ -159,6 +167,38 @@ function getSummaryHours(summary: ISummaryRow): number {
     return roundHours(summary.total_minutes / 60);
   }
   return roundHours(summary.total_hours || 0);
+}
+
+function createEmptyObjectAttendanceData(): IObjectAttendanceData {
+  return {
+    objectEntries: [],
+    objectEntriesByEmployeeDate: new Map(),
+    employeeDistinctObjectKeys: new Map(),
+    legacyBlockedDays: new Map(),
+    rawFallbackSummaries: new Map(),
+  };
+}
+
+function buildObjectAdjustmentTotals(
+  adjustments: IAttendanceAdjustment[],
+): Map<string, { hours: number; count: number; latest: IAttendanceAdjustment }> {
+  const totals = new Map<string, { hours: number; count: number; latest: IAttendanceAdjustment }>();
+  for (const adjustment of adjustments) {
+    if (adjustment.source_type !== OBJECT_ADJUSTMENT_SOURCE_TYPE) continue;
+    const key = `${adjustment.employee_id}_${adjustment.work_date}`;
+    const current = totals.get(key);
+    const hours = Math.max(0, adjustment.hours_override || 0);
+    if (!current) {
+      totals.set(key, { hours, count: 1, latest: adjustment });
+      continue;
+    }
+    current.hours = roundHours(current.hours + hours);
+    current.count += 1;
+    if (new Date(adjustment.updated_at).getTime() > new Date(current.latest.updated_at).getTime()) {
+      current.latest = adjustment;
+    }
+  }
+  return totals;
 }
 
 function getSummaryMinutes(summary: ISummaryRow): number {
@@ -328,10 +368,12 @@ export async function buildAttendanceEntries(params: {
   calendarMonth: IProductionCalendarMonth | null;
   todayStr?: string;
   displayMode?: 'actual' | 'capped_to_schedule';
+  includeObjectDetails?: boolean;
 }): Promise<IAttendanceBuildResult> {
   const { employees, startDate, endDate, dailySchedulesMap, calendarMonth } = params;
   const todayStr = params.todayStr ?? formatDateToISO(new Date());
   const displayMode = params.displayMode ?? 'actual';
+  const includeObjectDetails = params.includeObjectDetails ?? true;
   const nowHMS = formatNowHMS(new Date());
   const employeeIds = employees.map((employee) => employee.id);
 
@@ -341,13 +383,18 @@ export async function buildAttendanceEntries(params: {
     getTravelHoursSummaryForRange({ employeeIds, startDate, endDate }),
   ]);
 
-  const objectAttendanceData = await buildObjectAttendanceData({
-    employeeIds,
-    startDate,
-    endDate,
-    todayStr,
-    adjustments,
-  });
+  const objectAttendanceData = includeObjectDetails
+    ? await buildObjectAttendanceData({
+      employeeIds,
+      startDate,
+      endDate,
+      todayStr,
+      adjustments,
+    })
+    : createEmptyObjectAttendanceData();
+  const objectAdjustmentTotals = includeObjectDetails
+    ? new Map<string, { hours: number; count: number; latest: IAttendanceAdjustment }>()
+    : buildObjectAdjustmentTotals(adjustments);
   const dailyAdjustments = adjustments.filter(adjustment => adjustment.source_type !== OBJECT_ADJUSTMENT_SOURCE_TYPE);
   const { userNames, legacyEmployeeNames } = await loadAdjustmentNames(dailyAdjustments);
   const entries: IAttendanceEntry[] = [];
@@ -660,6 +707,54 @@ export async function buildAttendanceEntries(params: {
     entry.object_detail_mode = employeesWithMultiObjects.has(entry.employee_id) ? 'available' : 'none';
     entry.object_detail_message = null;
     entry.object_detail_count = employeesWithMultiObjects.has(entry.employee_id) ? dayObjectEntries.length : 0;
+  }
+
+  if (!includeObjectDetails && objectAdjustmentTotals.size > 0) {
+    for (const [key, total] of objectAdjustmentTotals) {
+      const separatorIndex = key.indexOf('_');
+      const employeeId = Number(key.slice(0, separatorIndex));
+      const workDate = key.slice(separatorIndex + 1);
+      const existing = byEmployeeDate.get(employeeId)?.get(workDate);
+
+      if (existing?.is_correction && existing.id != null) {
+        continue;
+      }
+
+      const hours = roundHours(total.hours);
+      const patch = {
+        id: total.latest.id,
+        status: (hours > 0 ? 'work' : 'absent') as TimeStatus,
+        hours_worked: hours,
+        display_hours_worked: hours,
+        base_hours_worked: hours,
+        is_correction: true,
+        reason: total.latest.reason,
+        notes: total.latest.reason,
+        approval_status: total.latest.approval_status,
+        corrected_at: total.latest.updated_at ?? total.latest.created_at,
+        created_at: total.latest.created_at,
+        updated_at: total.latest.updated_at,
+        object_detail_mode: 'none' as const,
+        object_detail_message: null,
+        object_detail_count: 0,
+      };
+
+      if (existing) {
+        Object.assign(existing, patch);
+        continue;
+      }
+
+      pushEntry({
+        employee_id: employeeId,
+        work_date: workDate,
+        travel_minutes_credited: 0,
+        travel_hours_credited: 0,
+        travel_delay_minutes: 0,
+        travel_segments_count: 0,
+        travel_problematic_segments: 0,
+        ...patch,
+      });
+    }
   }
 
   // Безусловно заполняем display_hours_worked = clamp(hours_worked, plannedDayHours)

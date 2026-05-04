@@ -436,6 +436,8 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
       department_id: row.department_id,
       from: monthBounds?.firstDate ?? row.start_date,
       to: monthBounds?.lastDate ?? row.end_date,
+      include_objects: true,
+      schedule_payload: 'compact',
     }),
     staleTime: 30_000,
   });

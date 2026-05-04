@@ -67,18 +67,50 @@ import {
 } from '../services/audit-context.helpers.js';
 import { sigurService } from '../services/sigur.service.js';
 import {
-  acquirePresencePollingLock,
-  releasePresencePollingLock,
+  acquireSigurEventsSyncLock,
+  releaseSigurEventsSyncLock,
   ManualSyncInProgressError,
 } from '../services/presence-polling.service.js';
 import { syncEventsLogic } from '../services/sigur-sync-events.service.js';
 import { isSigurRuntimeNotAllowedError } from '../services/sigur-runtime-guard.service.js';
+import { notifySkudRealtimeChanged } from '../services/skud-realtime.service.js';
 import {
   isDepartmentMonthAllowed,
   DEPARTMENT_MONTH_FORBIDDEN_MESSAGE,
 } from '../utils/timesheet-month-access.js';
 
 const validStatuses = ['work', 'vacation', 'remote', 'unpaid', 'absent', 'sick', 'educational_leave'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
+
+function buildCompactDailySchedules(
+  dailySchedulesMap: Map<number, Map<string, IResolvedSchedule>>,
+): {
+  schedule_catalog: Record<string, IResolvedSchedule>;
+  daily_schedule_ids: Record<number, Record<string, string>>;
+} {
+  const scheduleCatalog: Record<string, IResolvedSchedule> = {};
+  const scheduleIdsByValue = new Map<string, string>();
+  const dailyScheduleIds: Record<number, Record<string, string>> = {};
+  let nextScheduleId = 1;
+
+  for (const [employeeId, dailyMap] of dailySchedulesMap) {
+    dailyScheduleIds[employeeId] = {};
+    for (const [date, schedule] of dailyMap) {
+      const signature = JSON.stringify(schedule);
+      let scheduleId = scheduleIdsByValue.get(signature);
+      if (!scheduleId) {
+        scheduleId = String(nextScheduleId++);
+        scheduleIdsByValue.set(signature, scheduleId);
+        scheduleCatalog[scheduleId] = schedule;
+      }
+      dailyScheduleIds[employeeId][date] = scheduleId;
+    }
+  }
+
+  return {
+    schedule_catalog: scheduleCatalog,
+    daily_schedule_ids: dailyScheduleIds,
+  };
+}
 
 const createEntrySchema = z.object({
   employee_id: z.number().int().positive(),
@@ -805,8 +837,19 @@ export const timesheetController = {
 
   /** GET /api/timesheet?month=YYYY-MM&department_id=...&employee_id=... */
   async getAll(req: AuthenticatedRequest, res: Response) {
+    const requestStartedAt = Date.now();
+    const timings: Record<string, number> = {};
+    let lastMarkAt = requestStartedAt;
+    const mark = (name: string): void => {
+      const now = Date.now();
+      timings[name] = now - lastMarkAt;
+      lastMarkAt = now;
+    };
+
     try {
       const month = typeof req.query.month === 'string' ? req.query.month : null;
+      const includeObjectDetails = req.query.include_objects === '1';
+      const compactSchedulePayload = req.query.schedule_payload === 'compact';
       const scope = await resolveTimesheetScope(req);
       if (!scope) {
         return res.status(403).json({ success: false, error: 'Data scope не настроен для роли' });
@@ -884,6 +927,7 @@ export const timesheetController = {
       const departmentMemberships: IDepartmentEmployeeMembership[] = shouldApplyDeptFilter
         ? await listEmployeeMembershipsForDepartmentPeriod(department_id as string, startDate, endDate)
         : [];
+      mark('scope');
       const departmentEmployeeIds = departmentMemberships.map(m => m.employee_id);
       const transferredOutByEmployeeId = new Map<number, string | null>(
         departmentMemberships.map(m => [m.employee_id, m.transferred_out_date]),
@@ -923,6 +967,7 @@ export const timesheetController = {
 
       const { data: employees, error: empError } = await empQuery;
       if (empError) throw empError;
+      mark('employees');
 
       const employeeIds = (employees || []).map(e => Number(e.id)).filter(Number.isFinite);
 
@@ -931,6 +976,7 @@ export const timesheetController = {
         resolveSchedulesForPeriod(empList, startDate, endDate),
         loadCalendarMonth(year, mon),
       ]);
+      mark('schedules');
       const referenceDate = todayStr < startDate ? startDate : (todayStr > endDate ? endDate : todayStr);
       const schedulesMap = new Map<number, IResolvedSchedule>();
       for (const [employeeId, dailyMap] of dailySchedulesMap) {
@@ -948,6 +994,7 @@ export const timesheetController = {
           .in('id', positionIds);
         (positions || []).forEach((p: { id: string; name: string }) => posMap.set(p.id, p.name));
       }
+      mark('positions');
 
       const effectiveDisplayMode: 'actual' | 'capped_to_schedule' = req.user.show_actual_hours
         ? 'actual'
@@ -963,7 +1010,9 @@ export const timesheetController = {
         calendarMonth,
         todayStr,
         displayMode: effectiveDisplayMode,
+        includeObjectDetails,
       });
+      mark(includeObjectDetails ? 'attendance_with_objects' : 'attendance');
 
       const startDay = Number.parseInt(startDate.slice(-2), 10);
       const endDay = Number.parseInt(endDate.slice(-2), 10);
@@ -1049,12 +1098,18 @@ export const timesheetController = {
         schedulesObj[id] = sched;
       }
       const dailySchedulesObj: Record<number, Record<string, IResolvedSchedule>> = {};
-      for (const [employeeId, dailyMap] of dailySchedulesMap) {
-        dailySchedulesObj[employeeId] = {};
-        for (const [date, sched] of dailyMap) {
-          dailySchedulesObj[employeeId][date] = sched;
+      let compactDailySchedules: ReturnType<typeof buildCompactDailySchedules> | null = null;
+      if (compactSchedulePayload) {
+        compactDailySchedules = buildCompactDailySchedules(dailySchedulesMap);
+      } else {
+        for (const [employeeId, dailyMap] of dailySchedulesMap) {
+          dailySchedulesObj[employeeId] = {};
+          for (const [date, sched] of dailyMap) {
+            dailySchedulesObj[employeeId][date] = sched;
+          }
         }
       }
+      mark('serialize_schedules');
 
       // Согласования, пересекающиеся с выбранным диапазоном отдела.
       // Для scope=department они дают список заблокированных дат (руководитель не может редактировать submitted/approved/returned).
@@ -1083,6 +1138,21 @@ export const timesheetController = {
           );
         }
       }
+      mark('approvals');
+
+      console.info('[timesheet.getAll] done', {
+        month,
+        startDate,
+        endDate,
+        department_id,
+        employeeCount: employeeIds.length,
+        includeObjectDetails,
+        schedulePayload: compactSchedulePayload ? 'compact' : 'full',
+        entries: entries.length,
+        objectEntries: objectEntries.length,
+        durationMs: Date.now() - requestStartedAt,
+        timings,
+      });
 
       res.json({
         success: true,
@@ -1091,7 +1161,9 @@ export const timesheetController = {
           entries,
           object_entries: objectEntries,
           schedules: schedulesObj,
-          daily_schedules: dailySchedulesObj,
+          ...(compactDailySchedules
+            ? compactDailySchedules
+            : { daily_schedules: dailySchedulesObj }),
           calendar: calendarMonth,
           stats: {
             employeeCount: employeeIds.length,
@@ -2068,7 +2140,7 @@ export const timesheetController = {
       let timedOut = false;
       if (syncMode === 'full' && await sigurService.isConfigured()) {
         try {
-          await acquirePresencePollingLock();
+          await acquireSigurEventsSyncLock();
         } catch (err) {
           if (err instanceof ManualSyncInProgressError) {
             return res.status(409).json({ success: false, error: 'Синхронизация уже выполняется', code: 'SYNC_IN_PROGRESS' });
@@ -2097,9 +2169,16 @@ export const timesheetController = {
               errors_count: Array.isArray(result?.errors) ? result.errors.length : 0,
               matched: result?.matched,
             };
+            notifySkudRealtimeChanged({
+              source: 'timesheet_refresh',
+              from: startDate,
+              to: endDate,
+              insertedCount: result?.imported ?? 0,
+              recalculatedCount: result?.matched ?? 0,
+            });
           }
         } finally {
-          await releasePresencePollingLock();
+          await releaseSigurEventsSyncLock();
         }
       }
 
