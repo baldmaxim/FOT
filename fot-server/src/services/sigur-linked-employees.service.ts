@@ -24,6 +24,7 @@ interface ILinkedEmployeeRow {
   middle_name: string | null;
   employment_status: 'active' | 'fired';
   department_locked: boolean;
+  name_locked: boolean;
 }
 
 interface IAccessPointBinding {
@@ -50,6 +51,7 @@ const LINKED_EMPLOYEE_COLUMNS = [
   'middle_name',
   'employment_status',
   'department_locked',
+  'name_locked',
 ].join(', ');
 
 const normalizeName = (value: string | null | undefined): string => (value || '').trim().toLowerCase();
@@ -213,22 +215,27 @@ export async function syncLinkedEmployeeFromSigur(
     await sigurService.getEmployeeById(employee.sigur_employee_id, connection),
   );
 
-  const fullName = (remoteEmployee.name || employee.full_name || '').trim();
+  const remoteFullName = (remoteEmployee.name || employee.full_name || '').trim();
   const tabNumber = remoteEmployee.tabId ? remoteEmployee.tabId.trim() : null;
-  const fio = parseFIO(fullName);
   const orgDepartmentId = await ensureLocalSigurDepartment(remoteEmployee.departmentId || null, connection);
   const positionId = await ensureLocalSigurPosition(remoteEmployee.positionId || null, remoteEmployee.position || '', connection);
 
   const updateData: Record<string, unknown> = {
-    full_name: fullName,
-    last_name: fio.lastName || null,
-    first_name: fio.firstName || null,
-    middle_name: fio.middleName || null,
     org_department_id: orgDepartmentId,
     position_id: positionId,
     tab_number: tabNumber,
     updated_at: new Date().toISOString(),
   };
+
+  if (!employee.name_locked) {
+    const fio = parseFIO(remoteFullName);
+    updateData.full_name = remoteFullName;
+    updateData.last_name = fio.lastName || null;
+    updateData.first_name = fio.firstName || null;
+    updateData.middle_name = fio.middleName || null;
+  }
+
+  const fullName = employee.name_locked ? (employee.full_name || remoteFullName) : remoteFullName;
 
   if (options.clearDepartmentLock !== false) {
     updateData.department_locked = false;

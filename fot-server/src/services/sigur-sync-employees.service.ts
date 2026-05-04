@@ -264,6 +264,7 @@ export async function syncEmployeesLogic(
     sigur_employee_id: number;
     employment_status: string;
     department_locked: boolean;
+    name_locked: boolean;
     org_department_id: string | null;
     position_id: string | null;
     tab_number: string | null;
@@ -277,7 +278,7 @@ export async function syncEmployeesLogic(
   while (true) {
     const { data: existingEmpsPage } = await supabase
       .from('employees')
-      .select('id, sigur_employee_id, employment_status, department_locked, org_department_id, position_id, tab_number, full_name, last_name, first_name, middle_name')
+      .select('id, sigur_employee_id, employment_status, department_locked, name_locked, org_department_id, position_id, tab_number, full_name, last_name, first_name, middle_name')
       .not('sigur_employee_id', 'is', null)
       .range(empOffset, empOffset + EMP_PAGE - 1);
     if (!existingEmpsPage || existingEmpsPage.length === 0) break;
@@ -297,6 +298,7 @@ export async function syncEmployeesLogic(
     first_name: string | null;
     middle_name: string | null;
     department_locked: boolean;
+    name_locked: boolean;
     employment_status: string;
   }>();
   for (const e of existingEmps || []) {
@@ -313,6 +315,7 @@ export async function syncEmployeesLogic(
         first_name: e.first_name,
         middle_name: e.middle_name,
         department_locked: e.department_locked,
+        name_locked: e.name_locked,
         employment_status: e.employment_status,
       });
       if (e.employment_status === 'fired') firedSigurIds.add(e.sigur_employee_id);
@@ -332,13 +335,14 @@ export async function syncEmployeesLogic(
     position_id: string | null;
     tab_number: string | null;
     department_locked: boolean;
+    name_locked: boolean;
   }
   const portalOnlyEmps: IPortalOnlyRow[] = [];
   let portalOffset = 0;
   while (true) {
     const { data: page } = await supabase
       .from('employees')
-      .select('id, full_name, last_name, first_name, middle_name, org_department_id, position_id, tab_number, department_locked')
+      .select('id, full_name, last_name, first_name, middle_name, org_department_id, position_id, tab_number, department_locked, name_locked')
       .is('sigur_employee_id', null)
       .eq('employment_status', 'active')
       .range(portalOffset, portalOffset + EMP_PAGE - 1);
@@ -497,6 +501,7 @@ export async function syncEmployeesLogic(
       const fio = parseFIO(normalizedFullName);
       if (
         prev
+        && !prev.name_locked
         && (
           (prev.full_name || '') !== normalizedFullName
           || (prev.last_name || '') !== fio.lastName
@@ -551,7 +556,7 @@ export async function syncEmployeesLogic(
         if (orgDepartmentId) linkFields.org_department_id = orgDepartmentId;
         if (positionId) linkFields.position_id = positionId;
         if (tabNumber !== (match.tab_number || null)) linkFields.tab_number = tabNumber;
-        if ((match.full_name || '') !== normalizedFullName) {
+        if (!match.name_locked && (match.full_name || '') !== normalizedFullName) {
           linkFields.full_name = normalizedFullName;
           linkFields.last_name = fio.lastName;
           linkFields.first_name = fio.firstName || null;
@@ -568,6 +573,7 @@ export async function syncEmployeesLogic(
           first_name: match.first_name,
           middle_name: match.middle_name,
           department_locked: match.department_locked,
+          name_locked: match.name_locked,
           employment_status: 'active',
         });
         sigurIdToDbId.set(sigurEmpId, match.id);

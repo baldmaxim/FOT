@@ -649,7 +649,7 @@ export const employeesController = {
 
       const { data: existing } = await supabase
         .from('employees')
-        .select('id, sigur_employee_id')
+        .select('id, sigur_employee_id, name_locked')
         .eq('id', id)
         .single();
 
@@ -659,6 +659,13 @@ export const employeesController = {
       }
 
       if (existing.sigur_employee_id) {
+        if (existing.name_locked && validated.full_name !== undefined) {
+          res.status(400).json({
+            success: false,
+            error: 'Имя сотрудника заблокировано от синхронизации (name_locked). Снимите блокировку прямым SQL, чтобы менять ФИО.',
+          });
+          return;
+        }
         const linkedSigurManagedKeys = new Set(['full_name', 'tab_number']);
         const linkedLocalAllowedKeys = new Set([
           'birth_date',
