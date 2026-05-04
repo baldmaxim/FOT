@@ -53,7 +53,9 @@
       "Bash(./node_modules/.bin/tsc --noEmit -p tsconfig.app.json)",
       "mcp__claude_ai_Supabase__list_projects",
       "Bash(grep -A6 \"SigurEmployeesTab.tsx$\")",
-      "Bash(git -C c:/Users/Usrr/VSCode/Odintsov/FOT status --short)"
+      "Bash(git -C c:/Users/Usrr/VSCode/Odintsov/FOT status --short)",
+      "Bash(echo \"EXIT_CODE=$?\")",
+      "PowerShell(Set-Location fot-app; npx tsc --noEmit -p tsconfig.app.json; \"EXIT=$LASTEXITCODE\")"
     ]
   }
 }
