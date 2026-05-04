@@ -73,6 +73,10 @@ import {
 } from '../services/presence-polling.service.js';
 import { syncEventsLogic } from '../services/sigur-sync-events.service.js';
 import { isSigurRuntimeNotAllowedError } from '../services/sigur-runtime-guard.service.js';
+import {
+  isDepartmentMonthAllowed,
+  DEPARTMENT_MONTH_FORBIDDEN_MESSAGE,
+} from '../utils/timesheet-month-access.js';
 
 const validStatuses = ['work', 'vacation', 'remote', 'unpaid', 'absent', 'sick', 'educational_leave'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
 
@@ -380,16 +384,6 @@ async function ensureNotLockedForScope(
   const departmentId = await resolveEmployeeManagedDepartment(req, employeeId, workDate);
   if (!departmentId) return null;
   return findApprovalLockForDate(departmentId, workDate);
-}
-
-function toMonthIndex(year: number, month: number): number {
-  return year * 12 + month - 1;
-}
-
-function isDepartmentMonthAllowed(year: number, month: number, referenceDate = new Date()): boolean {
-  const requestedMonthIndex = toMonthIndex(year, month);
-  const currentMonthIndex = toMonthIndex(referenceDate.getFullYear(), referenceDate.getMonth() + 1);
-  return requestedMonthIndex >= currentMonthIndex - 1 && requestedMonthIndex <= currentMonthIndex;
 }
 
 async function resolvePlannedHoursByItems(items: Array<{ employee_id: number; work_date: string }>): Promise<Map<string, number>> {
@@ -833,7 +827,7 @@ export const timesheetController = {
       const { year, month: mon, startDate, endDate } = periodRange;
       const today = new Date();
       if (scope === 'department' && !isDepartmentMonthAllowed(year, mon, today)) {
-        return res.status(403).json({ success: false, error: 'Руководителю доступен только текущий и предыдущий месяц табеля' });
+        return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
       }
       const todayStr = formatDateToISO(today);
 
@@ -1102,7 +1096,7 @@ export const timesheetController = {
       if (scope === 'department') {
         const [yearStr, monthStr] = parsed.work_date.split('-');
         if (!isDepartmentMonthAllowed(Number(yearStr), Number(monthStr))) {
-          return res.status(403).json({ success: false, error: 'Руководителю доступен только текущий и предыдущий месяц табеля' });
+          return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
         }
       }
       if (!(await canAccessEmployeeForTimesheetDate(req, parsed.employee_id, parsed.work_date))) {
@@ -1200,7 +1194,7 @@ export const timesheetController = {
 	        const workDate = String(existing.work_date ?? '');
 	        const [yearStr, monthStr] = workDate.split('-');
 	        if (!isDepartmentMonthAllowed(Number(yearStr), Number(monthStr))) {
-	          return res.status(403).json({ success: false, error: 'Руководителю доступен только текущий и предыдущий месяц табеля' });
+	          return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
 	        }
 	      }
 	      if (!(await canAccessEmployeeForTimesheetDate(req, Number(existing.employee_id), String(existing.work_date)))) {
@@ -1325,7 +1319,7 @@ export const timesheetController = {
           return !isDepartmentMonthAllowed(Number(yearStr), Number(monthStr));
         });
         if (hasForbiddenMonth) {
-          return res.status(403).json({ success: false, error: 'Руководителю доступен только текущий и предыдущий месяц табеля' });
+          return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
         }
       }
       const accessResults = await Promise.all(
@@ -1454,7 +1448,7 @@ export const timesheetController = {
       if (scope === 'department') {
         const [yearStr, monthStr] = parsed.work_date.split('-');
         if (!isDepartmentMonthAllowed(Number(yearStr), Number(monthStr))) {
-          return res.status(403).json({ success: false, error: 'Руководителю доступен только текущий и предыдущий месяц табеля' });
+          return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
         }
       }
       if (!(await canAccessEmployeeForTimesheetDate(req, parsed.employee_id, parsed.work_date))) {
@@ -1817,7 +1811,7 @@ export const timesheetController = {
       if (scope === 'department') {
         const [yearStr, monthStr] = parsed.work_date.split('-');
         if (!isDepartmentMonthAllowed(Number(yearStr), Number(monthStr))) {
-          return res.status(403).json({ success: false, error: 'Руководителю доступен только текущий и предыдущий месяц табеля' });
+          return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
         }
       }
       if (!(await canAccessEmployeeForTimesheetDate(req, parsed.employee_id, parsed.work_date))) {
@@ -1967,7 +1961,7 @@ export const timesheetController = {
         if (!isDepartmentMonthAllowed(Number(yearStr), Number(monthStr))) {
           return res.status(403).json({
             success: false,
-            error: 'Руководителю доступен только текущий и предыдущий месяц табеля',
+            error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE,
           });
         }
       }
