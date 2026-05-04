@@ -9,7 +9,21 @@ import {
   type DataApiRequestLog,
   type CreateKeyResult,
 } from '../../services/dataApiService';
+import {
+  TABLE_GROUPS,
+  OTHER_GROUP_ID,
+  OTHER_GROUP_TITLE,
+  getTableLabel,
+  getTableGroupId,
+  getTableOrder,
+} from './dataApiTableGroups';
 import styles from './DataApiPage.module.css';
+
+interface IGroupedSchema {
+  id: string;
+  title: string;
+  tables: DataApiSchemaTable[];
+}
 
 const KEYS_QUERY_KEY = ['data-api-keys'] as const;
 
@@ -274,15 +288,48 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
     onError: error => toast.error(error instanceof Error ? error.message : 'Ошибка сохранения'),
   });
 
-  const filteredSchema = useMemo<DataApiSchemaTable[]>(() => {
+  const filteredGroups = useMemo<IGroupedSchema[]>(() => {
     const all = schemaQuery.data ?? [];
     const term = search.trim().toLowerCase();
-    if (!term) return all;
-    return all.filter(t =>
-      t.name.toLowerCase().includes(term) ||
-      t.columns.some(c => c.name.toLowerCase().includes(term)),
-    );
+
+    const matches = (table: DataApiSchemaTable): boolean => {
+      if (!term) return true;
+      if (table.name.toLowerCase().includes(term)) return true;
+      const warm = getTableLabel(table.name);
+      if (warm && warm.toLowerCase().includes(term)) return true;
+      return table.columns.some(c => c.name.toLowerCase().includes(term));
+    };
+
+    const buckets = new Map<string, DataApiSchemaTable[]>();
+    for (const table of all) {
+      if (!matches(table)) continue;
+      const groupId = getTableGroupId(table.name);
+      const arr = buckets.get(groupId) ?? [];
+      arr.push(table);
+      buckets.set(groupId, arr);
+    }
+
+    const groups: IGroupedSchema[] = [];
+    for (const group of TABLE_GROUPS) {
+      const tables = buckets.get(group.id);
+      if (!tables || tables.length === 0) continue;
+      tables.sort((a, b) => getTableOrder(a.name) - getTableOrder(b.name));
+      groups.push({ id: group.id, title: group.title, tables });
+    }
+
+    const otherTables = buckets.get(OTHER_GROUP_ID);
+    if (otherTables && otherTables.length > 0) {
+      otherTables.sort((a, b) => a.name.localeCompare(b.name));
+      groups.push({ id: OTHER_GROUP_ID, title: OTHER_GROUP_TITLE, tables: otherTables });
+    }
+
+    return groups;
   }, [schemaQuery.data, search]);
+
+  const totalFiltered = useMemo(
+    () => filteredGroups.reduce((sum, g) => sum + g.tables.length, 0),
+    [filteredGroups],
+  );
 
   return (
     <div className={styles.modalBackdrop} onClick={onClose}>
@@ -324,53 +371,66 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
                   onChange={e => setSearch(e.target.value)}
                 />
                 <div className={styles.tableList}>
-                  {filteredSchema.map(table => {
-                    const selectedFields = effectiveSelection.get(table.name);
-                    const allChecked = !!selectedFields && selectedFields.size === table.columns.length;
-                    const partial = !!selectedFields && selectedFields.size > 0 && !allChecked;
-                    const isOpen = expanded.has(table.name) || partial;
-                    return (
-                      <div key={table.name} className={styles.tableItem}>
-                        <div className={styles.tableHeader}>
-                          <input
-                            type="checkbox"
-                            checked={allChecked}
-                            ref={el => {
-                              if (el) el.indeterminate = partial;
-                            }}
-                            onChange={e => toggleAllFields(table.name, table.columns.map(c => c.name), e.target.checked)}
-                          />
-                          <strong>{table.name}</strong>
-                          <span className={styles.muted}>
-                            {selectedFields ? `${selectedFields.size} / ${table.columns.length}` : `0 / ${table.columns.length}`}
-                          </span>
-                          <span className={styles.spacer} />
-                          <button type="button" className={styles.btn} onClick={() => toggleExpand(table.name)}>
-                            {isOpen ? 'Свернуть' : 'Поля'}
-                          </button>
-                        </div>
-                        {isOpen && (
-                          <div className={styles.fieldsGrid}>
-                            {table.columns.map(column => {
-                              const checked = selectedFields?.has(column.name) ?? false;
-                              return (
-                                <label key={column.name}>
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={e => setTableField(table.name, column.name, e.target.checked)}
-                                  />
-                                  {column.name}
-                                  <span className={styles.muted}> · {column.data_type}</span>
-                                </label>
-                              );
-                            })}
+                  {filteredGroups.map(group => (
+                    <div key={group.id} className={styles.groupBlock}>
+                      <div className={styles.groupHeader}>{group.title}</div>
+                      {group.tables.map(table => {
+                        const warmLabel = getTableLabel(table.name);
+                        const selectedFields = effectiveSelection.get(table.name);
+                        const allChecked = !!selectedFields && selectedFields.size === table.columns.length;
+                        const partial = !!selectedFields && selectedFields.size > 0 && !allChecked;
+                        const isOpen = expanded.has(table.name) || partial;
+                        return (
+                          <div key={table.name} className={styles.tableItem}>
+                            <div className={styles.tableHeader}>
+                              <input
+                                type="checkbox"
+                                checked={allChecked}
+                                ref={el => {
+                                  if (el) el.indeterminate = partial;
+                                }}
+                                onChange={e => toggleAllFields(table.name, table.columns.map(c => c.name), e.target.checked)}
+                              />
+                              <div className={styles.tableHeaderTitle}>
+                                <strong>{warmLabel ?? table.name}</strong>
+                                {warmLabel && (
+                                  <div className={styles.tableSubname}>
+                                    <code className={styles.mono}>{table.name}</code>
+                                  </div>
+                                )}
+                              </div>
+                              <span className={styles.muted}>
+                                {selectedFields ? `${selectedFields.size} / ${table.columns.length}` : `0 / ${table.columns.length}`}
+                              </span>
+                              <span className={styles.spacer} />
+                              <button type="button" className={styles.btn} onClick={() => toggleExpand(table.name)}>
+                                {isOpen ? 'Свернуть' : 'Поля'}
+                              </button>
+                            </div>
+                            {isOpen && (
+                              <div className={styles.fieldsGrid}>
+                                {table.columns.map(column => {
+                                  const checked = selectedFields?.has(column.name) ?? false;
+                                  return (
+                                    <label key={column.name}>
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={e => setTableField(table.name, column.name, e.target.checked)}
+                                      />
+                                      {column.name}
+                                      <span className={styles.muted}> · {column.data_type}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                  {filteredSchema.length === 0 && (
+                        );
+                      })}
+                    </div>
+                  ))}
+                  {totalFiltered === 0 && (
                     <div className={styles.empty}>Ничего не найдено</div>
                   )}
                 </div>
