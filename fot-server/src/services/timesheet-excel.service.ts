@@ -195,6 +195,7 @@ export const listObjectExportTargets = (data: IDepartmentTimesheetData): IObject
 
 interface IOneCDisplayDayValue {
   hours: number;
+  label?: string;
   isUnderwork: boolean;
 }
 
@@ -228,21 +229,33 @@ const createOneCTemplateWorkbook = async (sheetName: string): Promise<ExcelJS.Wo
   return workbook;
 };
 
+// Стандартная 1С-ставка за полностью отработанный по графику день (Т-13):
+// 8 ч для обычного дня, 7 ч для предпраздничного. Не зависит от длины личного графика —
+// если сотрудник на 6-часовом графике отработал свои 6 ч, в 1С уходит 8 (или 7).
+const ONE_C_FULL_DAY_HOURS = 8;
+const ONE_C_PRE_HOLIDAY_FULL_DAY_HOURS = 7;
+
 /**
  * Целые часы для 1С на конкретный день:
- *  - факт ≥ нормы дня → полный день (норма дня, округлённая до целого);
- *  - факт < нормы дня → факт, округлённый ВНИЗ до целого часа.
- * Это соответствует правилу Т-13: «отработал смену по графику — ставим стандартную ставку
- * (8 для пн-чт 5+0, 7 для пт, 11 для 6+0 и т.п.), даже если переработал».
+ *  - факт ≥ личной нормы дня → стандартная 1С-ставка (8 ч / 7 ч на предпраздник);
+ *  - факт < личной нормы дня → факт, округлённый ВНИЗ до целого часа.
  * Допуск 0.001 ч ≈ 4 секунды — компенсирует потери точности при хранении total_hours без total_minutes.
  */
-const compute1CDayHours = (factHours: number, dayNormHours: number): number => {
+const compute1CDayHours = (
+  factHours: number,
+  dayNormHours: number,
+  isPreHoliday: boolean,
+): number => {
   if (!hasPositiveHours(factHours)) return 0;
   if (dayNormHours > 0 && factHours + 0.001 >= dayNormHours) {
-    return Math.max(0, Math.round(dayNormHours));
+    return isPreHoliday ? ONE_C_PRE_HOLIDAY_FULL_DAY_HOURS : ONE_C_FULL_DAY_HOURS;
   }
   return Math.max(0, Math.floor(factHours));
 };
+
+const isPreHolidayDate = (data: IDepartmentTimesheetData, dateStr: string): boolean => (
+  Boolean(data.calendarMonth?.pre_holidays?.includes(dateStr))
+);
 
 const getDayNormForEmployeeOnDate = (
   data: IDepartmentTimesheetData,
@@ -288,9 +301,15 @@ const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCExportRo
     for (const day of data.exportDays) {
       const dateStr = `${data.year}-${pad2(data.mon)}-${pad2(day)}`;
       const entry = employeeDays?.get(dateStr);
-      if (!entry || !hasPositiveHours(entry.hours)) continue;
+      if (!entry) continue;
+      const label = STATUS_LABELS[entry.status];
+      if (label) {
+        dayValues.set(day, { hours: 0, label, isUnderwork: false });
+        continue;
+      }
+      if (!hasPositiveHours(entry.hours)) continue;
       const dayNormHours = getDayNormForEmployeeOnDate(data, employee.id, dateStr, schedule);
-      const roundedHours = compute1CDayHours(entry.hours, dayNormHours);
+      const roundedHours = compute1CDayHours(entry.hours, dayNormHours, isPreHolidayDate(data, dateStr));
       if (!roundedHours) continue;
       const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);
       dayValues.set(day, {
@@ -337,16 +356,25 @@ const buildObjectRowsForOneC = (
       for (const day of data.exportDays) {
         const dateStr = `${data.year}-${pad2(data.mon)}-${pad2(day)}`;
         const hours = employeeDays.get(dateStr) ?? 0;
-        if (!hasPositiveHours(hours)) continue;
-        const dayNormHours = getDayNormForEmployeeOnDate(data, employee.id, dateStr, schedule);
-        const roundedHours = compute1CDayHours(hours, dayNormHours);
-        if (!roundedHours) continue;
-        const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);
-        dayValues.set(day, {
-          hours: roundedHours,
-          isUnderwork: isUnderworkHours(roundedHours, thresholdHours),
-        });
-        totalHours += roundedHours;
+        if (hasPositiveHours(hours)) {
+          const dayNormHours = getDayNormForEmployeeOnDate(data, employee.id, dateStr, schedule);
+          const roundedHours = compute1CDayHours(hours, dayNormHours, isPreHolidayDate(data, dateStr));
+          if (!roundedHours) continue;
+          const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);
+          dayValues.set(day, {
+            hours: roundedHours,
+            isUnderwork: isUnderworkHours(roundedHours, thresholdHours),
+          });
+          totalHours += roundedHours;
+          continue;
+        }
+        // Часов на этом объекте нет — если в этот день у сотрудника статус-отсутствие
+        // (Б/От/Н/В/УУ/С/У), показываем буквенный код, иначе ячейка остаётся пустой.
+        const status = data.dataMap.get(employee.id)?.get(dateStr)?.status;
+        const label = status ? STATUS_LABELS[status] : '';
+        if (label) {
+          dayValues.set(day, { hours: 0, label, isUnderwork: false });
+        }
       }
 
       return {
@@ -375,8 +403,8 @@ const fillOneCWorksheet = (
     for (const [day, dayValue] of rowData.dayValues) {
       if (day < 1 || day > ONE_C_MAX_DAY_COLUMNS) continue;
       const cell = worksheet.getCell(rowNumber, ONE_C_DAY_START_COLUMN + day - 1);
-      cell.value = dayValue.hours;
-      if (dayValue.isUnderwork) {
+      cell.value = dayValue.label ?? dayValue.hours;
+      if (!dayValue.label && dayValue.isUnderwork) {
         cell.fill = cloneExcelValue(underworkFill);
       }
     }
