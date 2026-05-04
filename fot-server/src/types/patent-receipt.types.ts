@@ -104,6 +104,9 @@ export interface IPatentPaymentReceipt {
   reviewed_at: string | null;
   manually_edited: boolean;
 
+  period_start: string | null;
+  period_end: string | null;
+
   created_at: string;
   updated_at: string;
 }
@@ -136,4 +139,6 @@ export type PatentPaymentReceiptPatch = Partial<Pick<IPatentPaymentReceipt,
   | 'payer_account'
   | 'payment_method'
   | 'needs_review'
+  | 'period_start'
+  | 'period_end'
 >>;

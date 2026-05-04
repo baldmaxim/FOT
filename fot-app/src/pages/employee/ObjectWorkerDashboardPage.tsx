@@ -7,6 +7,12 @@ import { patentReceiptService, type IMyPatentReceipt, type RecognitionStatus } f
 import type { Employee } from '../../types/employee';
 import { ApiError } from '../../api/client';
 import { formatFioShort } from '../../utils/formatFio';
+import {
+  WorkerLocaleProvider,
+  WORKER_LOCALES,
+  useWorkerLocale,
+  type WorkerLocale,
+} from '../../i18n/workerCabinet';
 
 const pageStyle: CSSProperties = {
   minHeight: '100vh',
@@ -46,6 +52,17 @@ const primaryButton: CSSProperties = {
   cursor: 'pointer',
 };
 
+const secondaryButton: CSSProperties = {
+  padding: '12px 18px',
+  borderRadius: 12,
+  border: '1px solid var(--border-primary)',
+  background: 'transparent',
+  color: 'var(--text-primary)',
+  fontSize: 15,
+  fontWeight: 600,
+  cursor: 'pointer',
+};
+
 const logoutButtonStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -62,23 +79,42 @@ const logoutButtonStyle: CSSProperties = {
   cursor: 'pointer',
 };
 
+const langBarStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-end',
+  gap: 6,
+  flexWrap: 'wrap',
+};
+
+const langButtonStyle = (active: boolean): CSSProperties => ({
+  padding: '6px 12px',
+  borderRadius: 999,
+  border: `1px solid ${active ? 'var(--accent-primary, #4b6cff)' : 'var(--border-primary)'}`,
+  background: active ? 'var(--accent-primary, #4b6cff)' : 'transparent',
+  color: active ? '#fff' : 'var(--text-primary)',
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: 'pointer',
+});
+
 interface IRecognitionBadge {
   label: string;
   color: string;
 }
 
-const recognitionBadge = (status: RecognitionStatus | null | undefined): IRecognitionBadge => {
+const recognitionBadge = (status: RecognitionStatus | null | undefined, t: (k: string) => string): IRecognitionBadge => {
   switch (status) {
     case 'pending':
-      return { label: 'В очереди', color: '#7a7a7a' };
+      return { label: t('recognition.pending'), color: '#7a7a7a' };
     case 'processing':
-      return { label: 'Распознаётся…', color: '#b78103' };
+      return { label: t('recognition.processing'), color: '#b78103' };
     case 'done':
-      return { label: 'Распознан', color: '#1e7e34' };
+      return { label: t('recognition.done'), color: '#1e7e34' };
     case 'needs_review':
-      return { label: 'Требует проверки', color: '#b78103' };
+      return { label: t('recognition.needsReview'), color: '#b78103' };
     case 'failed':
-      return { label: 'Ошибка распознавания', color: '#b23a48' };
+      return { label: t('recognition.failed'), color: '#b23a48' };
     default:
       return { label: '—', color: 'var(--text-secondary)' };
   }
@@ -143,6 +179,17 @@ const overlayCardStyle: CSSProperties = {
   textAlign: 'center',
 };
 
+const uploadModalCardStyle: CSSProperties = {
+  width: '100%',
+  maxWidth: 420,
+  background: 'var(--bg-secondary)',
+  border: '1px solid var(--border-primary)',
+  borderRadius: 16,
+  padding: 24,
+  display: 'grid',
+  gap: 16,
+};
+
 const spinnerStyle: CSSProperties = {
   width: 44,
   height: 44,
@@ -153,21 +200,22 @@ const spinnerStyle: CSSProperties = {
   animation: 'workerUploadSpin 0.8s linear infinite',
 };
 
-interface IUploadModalProps {
+interface IUploadStatusModalProps {
   status: { state: 'uploading' | 'uploaded' | 'error'; message?: string };
   onClose: () => void;
 }
 
-const UploadReceiptStatusModal: FC<IUploadModalProps> = ({ status, onClose }) => {
+const UploadReceiptStatusModal: FC<IUploadStatusModalProps> = ({ status, onClose }) => {
+  const { t } = useWorkerLocale();
   const isUploading = status.state === 'uploading';
   const title =
-    status.state === 'uploading' ? 'Загружаем чек на сервер…' :
-    status.state === 'uploaded' ? 'Чек загружен' :
-    'Не удалось загрузить';
+    status.state === 'uploading' ? t('status.uploading.title') :
+    status.state === 'uploaded' ? t('status.uploaded.title') :
+    t('status.error.title');
   const subtitle =
-    status.state === 'uploading' ? 'Пожалуйста, не закрывайте страницу.' :
-    status.state === 'uploaded' ? 'Идёт проверка. Чек появится в списке после распознавания.' :
-    (status.message || 'Попробуйте ещё раз.');
+    status.state === 'uploading' ? t('status.uploading.subtitle') :
+    status.state === 'uploaded' ? t('status.uploaded.subtitle') :
+    (status.message || t('status.error.subtitleDefault'));
   const iconColor =
     status.state === 'uploaded' ? '#1e7e34' :
     status.state === 'error' ? '#b23a48' :
@@ -216,7 +264,7 @@ const UploadReceiptStatusModal: FC<IUploadModalProps> = ({ status, onClose }) =>
               cursor: 'pointer',
             }}
           >
-            Закрыть
+            {t('status.close')}
           </button>
         )}
       </div>
@@ -224,11 +272,148 @@ const UploadReceiptStatusModal: FC<IUploadModalProps> = ({ status, onClose }) =>
   );
 };
 
-export const ObjectWorkerDashboardPage: FC = () => {
+interface IUploadFormModalProps {
+  onClose: () => void;
+  onSubmit: (file: File, periodStart: string, periodEnd: string) => void;
+}
+
+const UploadReceiptFormModal: FC<IUploadFormModalProps> = ({ onClose, onSubmit }) => {
+  const { t } = useWorkerLocale();
+  const [file, setFile] = useState<File | null>(null);
+  const [periodStart, setPeriodStart] = useState('');
+  const [periodEnd, setPeriodEnd] = useState('');
+  const [touched, setTouched] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const periodInvalid = Boolean(periodStart && periodEnd && periodStart > periodEnd);
+  const canSubmit = Boolean(file && periodStart && periodEnd && !periodInvalid);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const next = e.target.files?.[0] ?? null;
+    setFile(next);
+  };
+
+  const handleSubmit = () => {
+    setTouched(true);
+    if (!canSubmit) return;
+    onSubmit(file as File, periodStart, periodEnd);
+  };
+
+  const inputStyle: CSSProperties = {
+    width: '100%',
+    padding: '10px 12px',
+    borderRadius: 10,
+    border: '1px solid var(--border-primary)',
+    background: 'var(--bg-primary)',
+    color: 'var(--text-primary)',
+    fontSize: 15,
+    boxSizing: 'border-box',
+  };
+
+  const labelText: CSSProperties = { fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 };
+
+  return (
+    <div style={overlayStyle} role="dialog" aria-modal="true" onClick={onClose}>
+      <div style={uploadModalCardStyle} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 18, fontWeight: 700 }}>{t('upload.modal.title')}</div>
+        <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
+          {t('upload.modal.periodHint')}
+        </div>
+
+        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr' }}>
+          <label>
+            <div style={labelText}>{t('upload.modal.periodFrom')}</div>
+            <input
+              type="date"
+              value={periodStart}
+              onChange={e => setPeriodStart(e.target.value)}
+              style={inputStyle}
+            />
+          </label>
+          <label>
+            <div style={labelText}>{t('upload.modal.periodTo')}</div>
+            <input
+              type="date"
+              value={periodEnd}
+              onChange={e => setPeriodEnd(e.target.value)}
+              style={inputStyle}
+            />
+          </label>
+        </div>
+
+        {periodInvalid && (
+          <div style={{ color: '#b23a48', fontSize: 13 }}>{t('upload.modal.errorPeriodOrder')}</div>
+        )}
+
+        <div>
+          <div style={labelText}>{t('upload.modal.fileLabel')}</div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,application/pdf"
+            style={{ display: 'none' }}
+            onChange={handleFileChange}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            style={{ ...secondaryButton, width: '100%' }}
+          >
+            {file ? t('upload.modal.changeFile') : t('upload.modal.selectFile')}
+          </button>
+          {file && (
+            <div style={{ marginTop: 8, fontSize: 13, color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
+              {file.name}
+            </div>
+          )}
+        </div>
+
+        {touched && !canSubmit && !periodInvalid && (
+          <div style={{ color: '#b23a48', fontSize: 13 }}>{t('upload.modal.errorMissing')}</div>
+        )}
+
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <button type="button" onClick={onClose} style={secondaryButton}>
+            {t('upload.modal.cancel')}
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+            style={{ ...primaryButton, opacity: canSubmit ? 1 : 0.5 }}
+          >
+            {t('upload.modal.submit')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const LanguageSwitcher: FC = () => {
+  const { locale, setLocale, t } = useWorkerLocale();
+  return (
+    <div style={langBarStyle} aria-label={t('language.label')}>
+      {WORKER_LOCALES.map(({ code, label }) => (
+        <button
+          key={code}
+          type="button"
+          onClick={() => setLocale(code as WorkerLocale)}
+          style={langButtonStyle(locale === code)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+};
+
+const ObjectWorkerDashboardContent: FC = () => {
   const { profile, logout, isAdmin } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { t } = useWorkerLocale();
 
   const isPreview = isAdmin && searchParams.get('preview') === 'worker';
   const employeeId = profile?.employee_id ?? null;
@@ -238,8 +423,7 @@ export const ObjectWorkerDashboardPage: FC = () => {
   const [receipts, setReceipts] = useState<IMyPatentReceipt[]>([]);
   const [receiptsLoading, setReceiptsLoading] = useState<boolean>(true);
   const [uploadStatus, setUploadStatus] = useState<{ state: 'uploading' | 'uploaded' | 'error'; message?: string } | null>(null);
-
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploadFormOpen, setUploadFormOpen] = useState(false);
 
   useEffect(() => {
     if (uploadStatus?.state !== 'uploaded') return;
@@ -258,11 +442,11 @@ export const ObjectWorkerDashboardPage: FC = () => {
       .then(data => { if (!cancelled) setEmployee(data); })
       .catch(err => {
         console.error('employee load error:', err);
-        if (!cancelled) toast.error('Не удалось загрузить данные сотрудника');
+        if (!cancelled) toast.error(t('toast.error.employeeLoad'));
       })
       .finally(() => { if (!cancelled) setEmployeeLoading(false); });
     return () => { cancelled = true; };
-  }, [employeeId, toast]);
+  }, [employeeId, toast, t]);
 
   const reloadReceipts = () => {
     if (!employeeId) {
@@ -275,7 +459,7 @@ export const ObjectWorkerDashboardPage: FC = () => {
       .then(data => setReceipts(data || []))
       .catch(err => {
         console.error('receipts load error:', err);
-        toast.error('Не удалось загрузить чеки');
+        toast.error(t('toast.error.receiptsLoad'));
       })
       .finally(() => setReceiptsLoading(false));
   };
@@ -295,35 +479,33 @@ export const ObjectWorkerDashboardPage: FC = () => {
   }, [patentDaysLeft]);
 
   const patentHelper = useMemo(() => {
-    if (!patentExpiryDate) return 'Срок патента не указан.';
+    if (!patentExpiryDate) return t('patent.helper.notSet');
     if (patentDaysLeft === null) return '';
-    if (patentDaysLeft < 0) return `Срок истёк ${Math.abs(patentDaysLeft)} дн. назад. Обновите патент как можно скорее.`;
-    if (patentDaysLeft === 0) return 'Срок истекает сегодня. Обновите патент.';
-    if (patentDaysLeft <= PATENT_WARN_DAYS) return `Осталось ${patentDaysLeft} дн. Не забудьте обновить.`;
-    return `Осталось ${patentDaysLeft} дн.`;
-  }, [patentExpiryDate, patentDaysLeft]);
+    if (patentDaysLeft < 0) return t('patent.helper.expired', { n: Math.abs(patentDaysLeft) });
+    if (patentDaysLeft === 0) return t('patent.helper.expiresToday');
+    if (patentDaysLeft <= PATENT_WARN_DAYS) return t('patent.helper.expiresSoon', { n: patentDaysLeft });
+    return t('patent.helper.daysLeft', { n: patentDaysLeft });
+  }, [patentExpiryDate, patentDaysLeft, t]);
 
   const uploading = uploadStatus?.state === 'uploading';
 
-  const handleOpenFilePicker = () => {
+  const handleOpenUploadForm = () => {
     if (!employeeId || uploading) return;
-    fileInputRef.current?.click();
+    setUploadFormOpen(true);
   };
 
-  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file || !employeeId) return;
-
+  const handleSubmitUpload = async (file: File, periodStart: string, periodEnd: string) => {
+    if (!employeeId) return;
+    setUploadFormOpen(false);
     setUploadStatus({ state: 'uploading' });
     try {
-      await patentReceiptService.uploadMy(file);
+      await patentReceiptService.uploadMy(file, periodStart, periodEnd);
       setUploadStatus({ state: 'uploaded' });
       reloadReceipts();
     } catch (err) {
       console.error('patent check upload error:', err);
       const detail = err instanceof ApiError ? err.message : null;
-      setUploadStatus({ state: 'error', message: detail || 'Не удалось загрузить чек' });
+      setUploadStatus({ state: 'error', message: detail || t('toast.error.uploadFailed') });
     }
   };
 
@@ -347,47 +529,45 @@ export const ObjectWorkerDashboardPage: FC = () => {
   return (
     <div style={pageStyle}>
       <div style={containerStyle}>
+        <LanguageSwitcher />
+
         {isPreview && (
           <div style={{ ...cardStyle, borderColor: '#b78103', background: '#b781031a' }}>
-            <div style={{ fontWeight: 600 }}>Режим предпросмотра (super_admin)</div>
-            <div style={labelStyle}>
-              Вы видите кабинет рабочего. Все действия выполняются от имени вашего учёта super_admin и привязанного employee_id.
-            </div>
+            <div style={{ fontWeight: 600 }}>{t('preview.banner.title')}</div>
+            <div style={labelStyle}>{t('preview.banner.hint')}</div>
           </div>
         )}
 
         {noEmployeeBinding && (
           <div style={{ ...cardStyle, borderColor: '#b23a48', background: '#b23a481a' }}>
-            <div style={{ fontWeight: 600 }}>Аккаунт не привязан к сотруднику</div>
-            <div style={labelStyle}>
-              Обратитесь к администратору — загрузка чека от патента пока недоступна.
-            </div>
+            <div style={{ fontWeight: 600 }}>{t('notLinked.title')}</div>
+            <div style={labelStyle}>{t('notLinked.hint')}</div>
           </div>
         )}
 
         <section style={cardStyle}>
           <div>
-            <div style={labelStyle}>Сотрудник</div>
+            <div style={labelStyle}>{t('profile.label.employee')}</div>
             <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4 }}>
-              {employeeLoading && !employee ? 'Загрузка…' : fullName}
+              {employeeLoading && !employee ? t('profile.loading') : fullName}
             </div>
           </div>
           <div>
-            <div style={labelStyle}>Отдел</div>
+            <div style={labelStyle}>{t('profile.label.department')}</div>
             <div style={valueStyle}>{departmentName || '—'}</div>
           </div>
           <div>
-            <div style={labelStyle}>Участок</div>
+            <div style={labelStyle}>{t('profile.label.site')}</div>
             <div style={valueStyle}>{siteDisplay || '—'}</div>
           </div>
           <div>
-            <div style={labelStyle}>Дата приёма на работу</div>
+            <div style={labelStyle}>{t('profile.label.hireDate')}</div>
             <div style={valueStyle}>{formatDate(hireDate)}</div>
           </div>
         </section>
 
         <section style={cardStyle}>
-          <div style={labelStyle}>Срок действия патента</div>
+          <div style={labelStyle}>{t('patent.label.expiry')}</div>
           <div style={{ fontSize: 28, fontWeight: 800, ...patentHighlight }}>
             {formatDate(patentExpiryDate)}
           </div>
@@ -395,36 +575,32 @@ export const ObjectWorkerDashboardPage: FC = () => {
             <div style={{ color: 'var(--text-secondary)', fontSize: 14 }}>{patentHelper}</div>
           )}
 
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*,application/pdf"
-            style={{ display: 'none' }}
-            onChange={handleFileChange}
-          />
           <button
             type="button"
             style={{ ...primaryButton, opacity: disableActions || uploading ? 0.6 : 1 }}
-            onClick={handleOpenFilePicker}
+            onClick={handleOpenUploadForm}
             disabled={disableActions || uploading}
           >
-            {uploading ? 'Загрузка…' : 'Загрузить чек от патента'}
+            {uploading ? t('patent.button.uploading') : t('patent.button.upload')}
           </button>
         </section>
 
         <section style={cardStyle}>
-          <div style={{ fontSize: 16, fontWeight: 700 }}>Мои чеки от патента</div>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>{t('receipts.title')}</div>
 
           <div style={{ display: 'grid', gap: 8 }}>
-            {receiptsLoading && <div style={labelStyle}>Загрузка…</div>}
+            {receiptsLoading && <div style={labelStyle}>{t('receipts.loading')}</div>}
             {!receiptsLoading && receipts.length === 0 && (
-              <div style={labelStyle}>Пока нет загруженных чеков.</div>
+              <div style={labelStyle}>{t('receipts.empty')}</div>
             )}
             {!receiptsLoading && receipts.map(receipt => {
-              const badge = recognitionBadge(receipt.documents?.recognition_status ?? null);
+              const badge = recognitionBadge(receipt.documents?.recognition_status ?? null, t);
               const dateLabel = receipt.payment_date
-                ? `Дата платежа: ${formatDate(receipt.payment_date)}`
-                : `Загружено: ${formatDate(receipt.created_at)}`;
+                ? t('receipts.label.paymentDate', { value: formatDate(receipt.payment_date) })
+                : t('receipts.label.uploaded', { value: formatDate(receipt.created_at) });
+              const periodLabel = receipt.period_start && receipt.period_end
+                ? t('receipts.label.period', { from: formatDate(receipt.period_start), to: formatDate(receipt.period_end) })
+                : null;
               return (
                 <div key={receipt.id} style={{ ...cardStyle, padding: 14, gap: 6 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -432,6 +608,9 @@ export const ObjectWorkerDashboardPage: FC = () => {
                     <span style={recognitionBadgeStyle(badge.color)}>{badge.label}</span>
                   </div>
                   <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{dateLabel}</div>
+                  {periodLabel && (
+                    <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{periodLabel}</div>
+                  )}
                   {receipt.documents?.file_name && (
                     <div style={{ fontSize: 13, color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
                       {receipt.documents.file_name}
@@ -444,7 +623,7 @@ export const ObjectWorkerDashboardPage: FC = () => {
                       rel="noopener noreferrer"
                       style={{ fontSize: 14, fontWeight: 600, color: 'var(--accent-primary, #4b6cff)' }}
                     >
-                      Открыть оригинал
+                      {t('receipts.openOriginal')}
                     </a>
                   )}
                 </div>
@@ -466,10 +645,16 @@ export const ObjectWorkerDashboardPage: FC = () => {
               <polyline points="16 17 21 12 16 7" />
               <line x1="21" y1="12" x2="9" y2="12" />
             </svg>
-            Выйти из системы
+            {t('logout')}
           </button>
         </section>
       </div>
+      {uploadFormOpen && (
+        <UploadReceiptFormModal
+          onClose={() => setUploadFormOpen(false)}
+          onSubmit={handleSubmitUpload}
+        />
+      )}
       {uploadStatus && (
         <UploadReceiptStatusModal
           status={uploadStatus}
@@ -479,3 +664,9 @@ export const ObjectWorkerDashboardPage: FC = () => {
     </div>
   );
 };
+
+export const ObjectWorkerDashboardPage: FC = () => (
+  <WorkerLocaleProvider>
+    <ObjectWorkerDashboardContent />
+  </WorkerLocaleProvider>
+);

@@ -26,6 +26,7 @@ const RECEIPT_COLUMNS = `
   payer_bank_name, payer_bank_bic, payer_account, payment_method,
   source_type, raw_response, confidence, recognition_model, prompt_tokens, completion_tokens, cost_usd,
   needs_review, reviewed_by, reviewed_at, manually_edited,
+  period_start, period_end,
   created_at, updated_at
 `;
 
@@ -56,6 +57,8 @@ const PATCH_ALLOWED_FIELDS = new Set<keyof PatentPaymentReceiptPatch>([
   'payer_account',
   'payment_method',
   'needs_review',
+  'period_start',
+  'period_end',
 ]);
 
 interface IDocumentListRow {
@@ -100,6 +103,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
           payment_date, payment_amount, payer_full_name, payer_inn, payer_passport,
           patent_number, kbk, oktmo, source_type, confidence,
           needs_review, manually_edited, recognition_model, cost_usd,
+          period_start, period_end,
           created_at
         )
       `)
@@ -147,6 +151,8 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
           manually_edited: Boolean(receipt?.manually_edited),
           recognition_model: (receipt?.recognition_model as string | null | undefined) ?? null,
           cost_usd: (receipt?.cost_usd as string | null | undefined) ?? null,
+          period_start: (receipt?.period_start as string | null | undefined) ?? null,
+          period_end: (receipt?.period_end as string | null | undefined) ?? null,
           created_at: (receipt?.created_at as string | undefined) ?? doc.created_at,
           documents: {
             file_name: doc.file_name,
@@ -262,7 +268,7 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
 
     const { data, error } = await supabase
       .from('patent_payment_receipts')
-      .select('id, employee_id, payment_date, payment_amount, created_at, documents:document_id ( file_name, mime_type, r2_key, recognition_status )')
+      .select('id, employee_id, payment_date, payment_amount, period_start, period_end, created_at, documents:document_id ( file_name, mime_type, r2_key, recognition_status )')
       .eq('employee_id', employeeId)
       .order('created_at', { ascending: false })
       .limit(100);
@@ -274,6 +280,8 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
       employee_id: number | null;
       payment_date: string | null;
       payment_amount: string | null;
+      period_start: string | null;
+      period_end: string | null;
       created_at: string;
       documents: { file_name: string | null; mime_type: string | null; r2_key: string | null; recognition_status: string | null } | null;
     }>;
@@ -303,6 +311,8 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
   }
 };
 
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 const uploadMy = async (req: MulterRequest, res: Response): Promise<void> => {
   try {
     const employeeId = req.user.employee_id;
@@ -316,6 +326,17 @@ const uploadMy = async (req: MulterRequest, res: Response): Promise<void> => {
     }
     if (!req.file) {
       res.status(400).json({ success: false, error: 'Файл обязателен' });
+      return;
+    }
+
+    const periodStart = typeof req.body?.period_start === 'string' ? req.body.period_start.trim() : '';
+    const periodEnd = typeof req.body?.period_end === 'string' ? req.body.period_end.trim() : '';
+    if (!ISO_DATE_RE.test(periodStart) || !ISO_DATE_RE.test(periodEnd)) {
+      res.status(400).json({ success: false, error: 'Период оплаты обязателен (формат YYYY-MM-DD)' });
+      return;
+    }
+    if (periodStart > periodEnd) {
+      res.status(400).json({ success: false, error: 'Дата «по» должна быть не раньше даты «с»' });
       return;
     }
 
@@ -361,6 +382,16 @@ const uploadMy = async (req: MulterRequest, res: Response): Promise<void> => {
       );
     if (linkError) {
       console.warn('patent-receipts.uploadMy document_links upsert failed:', linkError);
+    }
+
+    const { error: receiptInsertError } = await supabase
+      .from('patent_payment_receipts')
+      .upsert(
+        [{ document_id: documentId, employee_id: employeeId, period_start: periodStart, period_end: periodEnd }],
+        { onConflict: 'document_id' },
+      );
+    if (receiptInsertError) {
+      console.warn('patent-receipts.uploadMy patent_payment_receipts upsert failed:', receiptInsertError);
     }
 
     res.json({ success: true, data });

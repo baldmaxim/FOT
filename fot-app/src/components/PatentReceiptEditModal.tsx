@@ -38,6 +38,8 @@ interface IFormState {
   payer_bank_name: string;
   payment_method: PaymentMethod;
   needs_review: boolean;
+  period_start: string;
+  period_end: string;
 }
 
 const toForm = (r: IPatentReceiptDetail): IFormState => ({
@@ -62,6 +64,8 @@ const toForm = (r: IPatentReceiptDetail): IFormState => ({
   payer_bank_name: r.payer_bank_name || '',
   payment_method: (r.payment_method as PaymentMethod) ?? null,
   needs_review: r.needs_review,
+  period_start: r.period_start || '',
+  period_end: r.period_end || '',
 });
 
 const toPatch = (form: IFormState): IPatentReceiptPatch => ({
@@ -86,6 +90,8 @@ const toPatch = (form: IFormState): IPatentReceiptPatch => ({
   payer_bank_name: form.payer_bank_name || null,
   payment_method: form.payment_method,
   needs_review: form.needs_review,
+  period_start: form.period_start || null,
+  period_end: form.period_end || null,
 });
 
 const formatAmount = (value: string): string => {
@@ -220,6 +226,8 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
               <div className={styles.formGrid}>
                 <Field label="Дата платежа" type="date" value={form.payment_date} onChange={v => update('payment_date', v)} readOnly={readOnly} />
                 <AmountField label="Сумма ₽" value={form.payment_amount} onChange={v => update('payment_amount', v)} readOnly={readOnly} />
+                <Field label="Период с" type="date" value={form.period_start} onChange={v => update('period_start', v)} readOnly={readOnly} />
+                <Field label="Период по" type="date" value={form.period_end} onChange={v => update('period_end', v)} readOnly={readOnly} />
                 <AmountField label="Комиссия ₽" value={form.commission} onChange={v => update('commission', v)} readOnly={readOnly} />
                 <AmountField label="Итого ₽" value={form.total_amount} onChange={v => update('total_amount', v)} readOnly={readOnly} />
 

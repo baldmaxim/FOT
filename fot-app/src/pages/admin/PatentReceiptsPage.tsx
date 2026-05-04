@@ -32,6 +32,11 @@ const formatDate = (value: string | null): string => {
   return new Date(value).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
 };
 
+const formatPeriod = (from: string | null, to: string | null): string => {
+  if (!from && !to) return '—';
+  return `${formatDate(from)} — ${formatDate(to)}`;
+};
+
 const formatAmount = (value: string | null): string => {
   if (!value) return '—';
   const num = Number(value);
@@ -196,6 +201,7 @@ export const PatentReceiptsPage: FC = () => {
             <thead>
               <tr>
                 <th>Дата</th>
+                <th>Период оплаты</th>
                 <th>Сотрудник</th>
                 <th>Плательщик</th>
                 <th>Паспорт</th>
@@ -217,6 +223,7 @@ export const PatentReceiptsPage: FC = () => {
                 return (
                   <tr key={r.document_id} className={r.needs_review ? styles.rowNeedsReview : undefined}>
                     <td>{formatDate(r.payment_date)}</td>
+                    <td>{formatPeriod(r.period_start, r.period_end)}</td>
                     <td>{r.employees?.full_name || '—'}</td>
                     <td>
                       {r.payer_full_name || '—'}

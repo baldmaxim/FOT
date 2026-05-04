@@ -22,6 +22,8 @@ export interface IPatentReceiptListRow {
   manually_edited: boolean;
   recognition_model: string | null;
   cost_usd: string | null;
+  period_start: string | null;
+  period_end: string | null;
   created_at: string;
   documents: { file_name: string | null; mime_type: string | null; recognition_status: RecognitionStatus | null; recognition_error: string | null } | null;
   employees: { full_name: string | null } | null;
@@ -82,6 +84,8 @@ export interface IPatentReceiptPatch {
   payer_account?: string | null;
   payment_method?: PaymentMethod;
   needs_review?: boolean;
+  period_start?: string | null;
+  period_end?: string | null;
 }
 
 export interface IRecognizeResult {
@@ -111,6 +115,8 @@ export interface IMyPatentReceipt {
   employee_id: number | null;
   payment_date: string | null;
   payment_amount: string | null;
+  period_start: string | null;
+  period_end: string | null;
   created_at: string;
   download_url: string | null;
   documents: { file_name: string | null; mime_type: string | null; recognition_status: RecognitionStatus | null } | null;
@@ -157,9 +163,11 @@ export const patentReceiptService = {
     return res.data;
   },
 
-  uploadMy: async (file: File): Promise<{ id: number }> => {
+  uploadMy: async (file: File, periodStart: string, periodEnd: string): Promise<{ id: number }> => {
     const form = new FormData();
     form.append('file', file);
+    form.append('period_start', periodStart);
+    form.append('period_end', periodEnd);
     const res = await apiClient.post<ApiResponse<{ id: number }>>('/patent-receipts/my/upload', form);
     return res.data;
   },
