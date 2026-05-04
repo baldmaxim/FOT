@@ -1129,6 +1129,8 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
       let correctionExceedsSkud = false;
       let absentDays = false;
       let pendingWeekendDates: string[] = [];
+      let approvedWeekendDates: string[] = [];
+      let largeCorrectionDates: string[] = [];
 
       if (employeeIds.length > 0) {
         const adjRes = await supabase
@@ -1149,6 +1151,11 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
               .filter((a) => String(a.approval_status ?? '') === 'pending' && weekendSet.has(String(a.work_date)))
               .map((a) => String(a.work_date)),
           )].sort();
+          approvedWeekendDates = [...new Set(
+            adjustments
+              .filter((a) => String(a.approval_status ?? '') === 'approved' && weekendSet.has(String(a.work_date)))
+              .map((a) => String(a.work_date)),
+          )].sort();
         }
 
         if (anyCorrection) {
@@ -1165,14 +1172,16 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
             for (const s of skudRes.data || []) {
               skudMap.set(`${Number(s.employee_id)}_${String(s.date)}`, Number(s.total_minutes ?? 0));
             }
+            const largeDates = new Set<string>();
             for (const adj of workAdjustments) {
               const skudMinutes = skudMap.get(`${Number(adj.employee_id)}_${String(adj.work_date)}`) ?? 0;
               const adjHours = Number(adj.hours_override ?? 0);
               if (adjHours * 60 > skudMinutes + 1) {
                 correctionExceedsSkud = true;
-                break;
+                largeDates.add(String(adj.work_date));
               }
             }
+            largeCorrectionDates = [...largeDates].sort();
           }
         }
       }
@@ -1184,6 +1193,8 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         reviewed_by_name: row.reviewed_by ? userNames.get(row.reviewed_by) ?? null : null,
         weekend_work_dates: weekend.weekendWorkDates,
         pending_weekend_dates: pendingWeekendDates,
+        approved_weekend_dates: approvedWeekendDates,
+        large_correction_dates: largeCorrectionDates,
         problem_flags: {
           any_correction: anyCorrection,
           correction_exceeds_skud: correctionExceedsSkud,

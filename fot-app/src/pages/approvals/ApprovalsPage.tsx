@@ -1,6 +1,6 @@
 import { type FC, useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertTriangle, Pencil, UserX, MessageSquare } from 'lucide-react';
+import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertTriangle, Pencil, UserX, MessageSquare, Clock } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee } from '../../types';
 import {
   timesheetApprovalService,
@@ -615,14 +615,23 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
   const problemDates = useMemo(() => {
     const yellow = new Set<string>();
     const red = new Set<string>();
-    for (const d of row.weekend_work_dates) yellow.add(d);
-    for (const d of row.pending_weekend_dates) red.add(d);
+    const pendingWeekendSet = new Set(row.pending_weekend_dates);
+    const approvedWeekendSet = new Set(row.approved_weekend_dates);
+    const largeCorrSet = new Set(row.large_correction_dates);
     for (const e of tsQuery.data?.entries ?? []) {
       if (outOfPeriodDates.has(e.work_date)) continue;
-      if (e.is_correction || e.status === 'absent') yellow.add(e.work_date);
+      if (!e.is_correction) continue;
+      const key = `${e.employee_id}_${e.work_date}`;
+      if (pendingWeekendSet.has(e.work_date) && e.approval_status === 'pending') {
+        red.add(key);
+      } else if (approvedWeekendSet.has(e.work_date) && e.approval_status === 'approved') {
+        yellow.add(key);
+      } else if (largeCorrSet.has(e.work_date)) {
+        yellow.add(key);
+      }
     }
     return { yellow, red };
-  }, [row.weekend_work_dates, row.pending_weekend_dates, tsQuery.data?.entries, outOfPeriodDates]);
+  }, [row.pending_weekend_dates, row.approved_weekend_dates, row.large_correction_dates, tsQuery.data?.entries, outOfPeriodDates]);
 
   const reviewItems = useMemo<ReviewItem[]>(() => {
     if (!tsQuery.data) return [];
@@ -660,21 +669,21 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
 
   return (
     <div className="approvals-card-body">
-      {(row.problem_flags.correction_exceeds_skud || row.weekend_work_dates.length > 0 || hasPendingWeekend) && (
+      {(row.pending_weekend_dates.length > 0 || row.approved_weekend_dates.length > 0 || row.large_correction_dates.length > 0) && (
         <div className="approvals-flags">
-          {row.problem_flags.correction_exceeds_skud && (
-            <span className="approvals-flag approvals-flag--red">
-              <AlertTriangle size={12} /> Есть корректировки больше факта СКУД
+          {row.pending_weekend_dates.length > 0 && (
+            <span className="approvals-flag approvals-flag--yellow">
+              <Clock size={12} /> На рассмотрении (выходные/праздники): {row.pending_weekend_dates.join(', ')}
             </span>
           )}
-          {hasPendingWeekend && (
-            <span className="approvals-flag approvals-flag--red">
-              <AlertTriangle size={12} /> Несогласованные выходные: {row.pending_weekend_dates.join(', ')}
+          {row.approved_weekend_dates.length > 0 && (
+            <span className="approvals-flag approvals-flag--green">
+              <Check size={12} /> Согласованные выходные/праздники: {row.approved_weekend_dates.join(', ')}
             </span>
           )}
-          {row.weekend_work_dates.length > 0 && (
-            <span className="approvals-flag approvals-flag--info">
-              Выходные с работой: {row.weekend_work_dates.join(', ')}
+          {row.large_correction_dates.length > 0 && (
+            <span className="approvals-flag approvals-flag--red">
+              <AlertTriangle size={12} /> Большие корректировки времени: {row.large_correction_dates.join(', ')}
             </span>
           )}
         </div>
@@ -723,7 +732,7 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
                 className="approvals-action-btn approvals-action-btn--approve"
                 onClick={onApprove}
                 disabled={isApproving || hasPendingWeekend}
-                title={hasPendingWeekend ? 'Сначала согласуйте корректировки в выходные дни на вкладке «Выходные дни»' : undefined}
+                title={hasPendingWeekend ? 'Корректировки на выходных/праздниках на рассмотрении — попросите второго админа согласовать' : undefined}
               >
                 <Check size={16} /> Утвердить
               </button>

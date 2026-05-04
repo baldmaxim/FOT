@@ -131,6 +131,10 @@
   background: rgba(59, 130, 246, 0.14);
   color: var(--primary);
 }
+.approvals-flag--green {
+  background: rgba(34, 197, 94, 0.14);
+  color: var(--success);
+}
 .approvals-attachments {
   display: inline-flex;
   align-items: center;

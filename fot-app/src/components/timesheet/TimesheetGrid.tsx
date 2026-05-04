@@ -1047,9 +1047,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const inactiveCls = inactive ? ' ts-day--inactive' : '';
                         const preHolidayCls = preHoliday ? ' ts-day--pre-holiday' : '';
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                        const problemCls = problemDates?.red?.has(isoDate)
+                        const cellKey = `${row.employee.id}_${isoDate}`;
+                        const problemCls = (problemDates?.red?.has(cellKey) || problemDates?.red?.has(isoDate))
                           ? ' ts-day--problem-red'
-                          : problemDates?.yellow?.has(isoDate)
+                          : (problemDates?.yellow?.has(cellKey) || problemDates?.yellow?.has(isoDate))
                             ? ' ts-day--problem-yellow'
                             : '';
                         const outCls = outOfPeriodDates?.has(isoDate) ? ' ts-day--out-of-period' : '';
@@ -1350,9 +1351,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       const inactiveCls = inactive ? ' ts-day--inactive' : '';
                       const preHolidayCls = preHoliday ? ' ts-day--pre-holiday' : '';
                       const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                      const problemCls = problemDates?.red?.has(isoDate)
+                      const cellKey = `${row.employee.id}_${isoDate}`;
+                      const problemCls = (problemDates?.red?.has(cellKey) || problemDates?.red?.has(isoDate))
                         ? ' ts-day--problem-red'
-                        : problemDates?.yellow?.has(isoDate)
+                        : (problemDates?.yellow?.has(cellKey) || problemDates?.yellow?.has(isoDate))
                           ? ' ts-day--problem-yellow'
                           : '';
                       const outCls = outOfPeriodDates?.has(isoDate) ? ' ts-day--out-of-period' : '';
