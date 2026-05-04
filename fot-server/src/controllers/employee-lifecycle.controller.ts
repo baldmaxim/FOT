@@ -698,12 +698,17 @@ export async function moveDepartment(req: AuthenticatedRequest, res: Response): 
       : null;
 
     const connection = (req.body.connection as 'external' | 'internal') || undefined;
+    const effectiveDate = typeof req.body.effective_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.body.effective_date)
+      ? req.body.effective_date
+      : undefined;
+    const customReason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
     const source = await moveEmployeeToDepartmentInternal({
       req,
       employee: employeeRow,
       targetDepartment,
       connection,
-      reason: 'Перевод в другой отдел',
+      reason: customReason || 'Перевод в другой отдел',
+      effectiveDate,
     });
 
     employeeCache.invalidate(id);
@@ -744,11 +749,20 @@ export async function batchMoveEmployees(req: AuthenticatedRequest, res: Respons
       employee_ids,
       org_department_id,
       connection,
+      effective_date,
+      reason: bodyReason,
     } = req.body as {
       employee_ids?: number[];
       org_department_id?: string;
       connection?: 'external' | 'internal';
+      effective_date?: string;
+      reason?: string;
     };
+
+    const effectiveDate = typeof effective_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(effective_date)
+      ? effective_date
+      : undefined;
+    const customReason = typeof bodyReason === 'string' ? bodyReason.trim() : '';
 
     const employeeIds = Array.from(
       new Set((employee_ids || []).map(value => Number(value)).filter(value => Number.isFinite(value) && value > 0)),
@@ -807,7 +821,8 @@ export async function batchMoveEmployees(req: AuthenticatedRequest, res: Respons
           employee: employeeRow,
           targetDepartment,
           connection,
-          reason: 'Массовый перевод в другой отдел',
+          reason: customReason || 'Массовый перевод в другой отдел',
+          effectiveDate,
         });
 
         if (source === 'noop') {

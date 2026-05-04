@@ -25,6 +25,7 @@ export const paginatedEmployeesQueryKey = (params: PaginatedParams) =>
     params.view || 'list',
     params.status || 'active',
     params.departmentId || null,
+    params.scheduleId || null,
     params.search || '',
     params.archived ? 'archived' : 'live',
     params.page,

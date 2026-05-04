@@ -78,6 +78,26 @@
   cursor: default;
 }
 
+.sc-schedule-filter {
+  height: 36px;
+  min-width: 180px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sc-schedule-filter:hover {
+  border-color: var(--text-muted);
+}
+
+.sc-schedule-filter--mobile {
+  width: 100%;
+}
+
 .sc-dept-dropdown {
   position: absolute;
   top: calc(100% + 4px);

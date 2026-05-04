@@ -232,7 +232,7 @@ interface IStaffModalsProps {
   onClose: () => void;
   onSaveSalary: (empId: number, val: number, type: ModalType, reason?: string, date?: string) => Promise<void>;
   onSavePosition: (empId: number, val: string, reason?: string, date?: string) => Promise<void>;
-  onSaveDepartment: (empId: number, deptId: string) => Promise<void>;
+  onSaveDepartment: (empId: number, deptId: string, effectiveDate?: string, reason?: string) => Promise<void>;
   onSaveSchedule: (empId: number, scheduleId: string | null, effectiveFrom: string) => Promise<void>;
 }
 
@@ -257,6 +257,8 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   const [positionDate, setPositionDate] = useState(() => getLocalISODate());
   const [positionReason, setPositionReason] = useState('');
   const [deptVal, setDeptVal] = useState(() => modalEmp?.org_department_id || '');
+  const [deptDate, setDeptDate] = useState(() => getLocalISODate());
+  const [deptReason, setDeptReason] = useState('');
   const [scheduleVal, setScheduleVal] = useState(() => currentSchedule?.source === 'employee' ? currentSchedule.scheduleId || '' : '');
   const [scheduleDate, setScheduleDate] = useState(() => currentSchedule?.source === 'employee' ? currentSchedule.effectiveFrom || getLocalISODate() : getLocalISODate());
   const [saving, setSaving] = useState(false);
@@ -281,7 +283,7 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
     if (!deptVal) return;
     setSaving(true);
     try {
-      await onSaveDepartment(modalEmp.id, deptVal);
+      await onSaveDepartment(modalEmp.id, deptVal, deptDate || undefined, deptReason.trim() || undefined);
     } catch {
       // ошибка уже показана в верхнем хендлере через toast
     } finally {
@@ -429,10 +431,18 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
               ))}
             </select>
           </div>
+          <div className="sc-field">
+            <label>Дата перевода</label>
+            <input type="date" value={deptDate} onChange={e => setDeptDate(e.target.value)} />
+          </div>
+          <div className="sc-field">
+            <label>Причина (необязательно)</label>
+            <input value={deptReason} onChange={e => setDeptReason(e.target.value)} placeholder="Реорганизация, перевод..." />
+          </div>
         </div>
         <div className="sc-modal-footer">
           <button className="sc-btn cancel" onClick={onClose}>Отмена</button>
-          <button className="sc-btn apply" onClick={handleDepartment} disabled={!deptVal || deptVal === modalEmp.org_department_id || saving}>
+          <button className="sc-btn apply" onClick={handleDepartment} disabled={!deptVal || deptVal === modalEmp.org_department_id || !deptDate || saving}>
             {saving ? 'Сохранение...' : 'Применить'}
           </button>
         </div>
@@ -827,6 +837,100 @@ const BulkScheduleModal: FC<IBulkScheduleModalProps> = memo(({ open, targetCount
   );
 });
 
+interface IBulkMoveDepartmentModalProps {
+  open: boolean;
+  targetCount: number;
+  previewText: string;
+  departments: IFlatDepartmentOption[];
+  archiveDepartmentId: string | null;
+  onClose: () => void;
+  onApply: (departmentId: string, effectiveDate: string, reason?: string) => Promise<void>;
+}
+
+const BulkMoveDepartmentModal: FC<IBulkMoveDepartmentModalProps> = memo(({
+  open,
+  targetCount,
+  previewText,
+  departments,
+  archiveDepartmentId,
+  onClose,
+  onApply,
+}) => {
+  const [departmentId, setDepartmentId] = useState('');
+  const [effectiveDate, setEffectiveDate] = useState(() => getLocalISODate());
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setDepartmentId('');
+    setEffectiveDate(getLocalISODate());
+    setReason('');
+    setSaving(false);
+  }, [open, targetCount, previewText]);
+
+  if (!open) return null;
+
+  const availableDepartments = archiveDepartmentId
+    ? departments.filter(d => d.id !== archiveDepartmentId)
+    : departments;
+
+  const handleApply = async () => {
+    if (!departmentId || !effectiveDate || targetCount === 0) return;
+    setSaving(true);
+    try {
+      await onApply(departmentId, effectiveDate, reason.trim() || undefined);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="sc-overlay" onClick={onClose}>
+      <div className="sc-modal" onClick={e => e.stopPropagation()}>
+        <div className="sc-modal-header">
+          <h3>Массовый перевод в другой отдел</h3>
+          <button className="sc-modal-close" onClick={onClose}>&times;</button>
+        </div>
+        <div className="sc-modal-body">
+          <div className="sc-field">
+            <label>Целевой отдел</label>
+            <select value={departmentId} onChange={e => setDepartmentId(e.target.value)} autoFocus>
+              <option value="">Выберите отдел</option>
+              {availableDepartments.map(d => (
+                <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="sc-field">
+            <label>Дата перевода</label>
+            <input type="date" value={effectiveDate} onChange={e => setEffectiveDate(e.target.value)} />
+          </div>
+          <div className="sc-field">
+            <label>Причина (необязательно)</label>
+            <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Реорганизация, оптимизация..." />
+          </div>
+          <div className="sc-schedule-help">
+            <div><strong>Выбрано сотрудников:</strong> {targetCount}</div>
+            <div>{previewText}</div>
+            <div>С выбранной даты у каждого сотрудника закроется текущее назначение и создастся новое в выбранном отделе.</div>
+          </div>
+        </div>
+        <div className="sc-modal-footer">
+          <button className="sc-btn cancel" onClick={onClose}>Отмена</button>
+          <button
+            className="sc-btn apply"
+            onClick={handleApply}
+            disabled={saving || !departmentId || !effectiveDate || targetCount === 0}
+          >
+            {saving ? 'Сохранение...' : 'Применить'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 interface IBulkBrigadeScheduleModalProps {
   open: boolean;
   brigades: IBrigadeOption[];
@@ -1038,6 +1142,7 @@ export const StaffControlPage: FC = () => {
   const isMobile = useIsMobile(768);
   const [search, setSearch] = useState(() => urlParams.get('q') || '');
   const [deptId, setDeptId] = useState(() => urlParams.get('dept') || '');
+  const [scheduleFilter, setScheduleFilter] = useState(() => urlParams.get('schedule') || '');
   const [statusFilter, setStatusFilter] = useState<StaffStatusFilter>('active');
   const [page, setPage] = useState(1);
   const debouncedSearch = useDebouncedValue(search, 300);
@@ -1066,6 +1171,7 @@ export const StaffControlPage: FC = () => {
     pageSize: 100,
     search: debouncedSearch || undefined,
     departmentId: deptId || undefined,
+    scheduleId: scheduleFilter || undefined,
     status: statusFilter,
   });
 
@@ -1078,6 +1184,7 @@ export const StaffControlPage: FC = () => {
   const [bulkScheduleOpen, setBulkScheduleOpen] = useState(false);
   const [bulkFilterScheduleOpen, setBulkFilterScheduleOpen] = useState(false);
   const [bulkBrigadeScheduleOpen, setBulkBrigadeScheduleOpen] = useState(false);
+  const [bulkMoveDeptOpen, setBulkMoveDeptOpen] = useState(false);
   const visibleEmployeeIds = useMemo(() => employees.map(emp => emp.id), [employees]);
   const scheduleTemplatesQuery = useQuery({
     queryKey: ['schedules', 'templates'],
@@ -1177,8 +1284,9 @@ export const StaffControlPage: FC = () => {
     const p = new URLSearchParams();
     if (deptId) p.set('dept', deptId);
     if (debouncedSearch) p.set('q', debouncedSearch);
+    if (scheduleFilter) p.set('schedule', scheduleFilter);
     setUrlParams(p, { replace: true });
-  }, [deptId, debouncedSearch, setUrlParams]);
+  }, [deptId, debouncedSearch, scheduleFilter, setUrlParams]);
 
   // history panel
   const [panelEmp, setPanelEmp] = useState<Employee | null>(null);
@@ -1304,12 +1412,20 @@ export const StaffControlPage: FC = () => {
       const deptName = allDepts.find(dept => dept.id === deptId)?.name;
       if (deptName) parts.push(`Отдел: ${deptName}`);
     }
+    if (scheduleFilter) {
+      if (scheduleFilter === '__default__') {
+        parts.push('График: дефолтный');
+      } else {
+        const scheduleName = scheduleTemplates.find(t => t.id === scheduleFilter)?.name;
+        if (scheduleName) parts.push(`График: ${scheduleName}`);
+      }
+    }
     if (debouncedSearch) {
       parts.push(`Поиск: "${debouncedSearch}"`);
     }
     if (parts.length === 0) return 'Все активные сотрудники';
     return parts.join(' • ');
-  }, [deptId, debouncedSearch, allDepts]);
+  }, [deptId, scheduleFilter, debouncedSearch, allDepts, scheduleTemplates]);
 
   const handleSearchChange = useCallback((value: string) => {
     setSearch(value);
@@ -1318,6 +1434,11 @@ export const StaffControlPage: FC = () => {
 
   const handleDeptChange = useCallback((value: string) => {
     setDeptId(value);
+    setPage(1);
+  }, []);
+
+  const handleScheduleFilterChange = useCallback((value: string) => {
+    setScheduleFilter(value);
     setPage(1);
   }, []);
 
@@ -1396,7 +1517,7 @@ export const StaffControlPage: FC = () => {
     patchEmployee(empId, { position_name: val });
   }, [closeModal, patchEmployee]);
 
-  const handleSaveDepartment = useCallback(async (empId: number, newDeptId: string) => {
+  const handleSaveDepartment = useCallback(async (empId: number, newDeptId: string, effectiveDate?: string, reason?: string) => {
     try {
       const target = employees.find(emp => emp.id === empId);
       const isReturn = Boolean(target?.excluded_from_timesheet);
@@ -1404,10 +1525,10 @@ export const StaffControlPage: FC = () => {
         await timesheetService.addEmployeeToDepartment({
           employee_id: empId,
           department_id: newDeptId,
-          effective_from: getLocalISODate(),
+          effective_from: effectiveDate || getLocalISODate(),
         });
       } else {
-        await employeeService.moveDepartment(empId, newDeptId);
+        await employeeService.moveDepartment(empId, newDeptId, effectiveDate, reason);
       }
       closeModal();
       const deptName = allDepts.find(d => d.id === newDeptId)?.name;
@@ -1430,6 +1551,27 @@ export const StaffControlPage: FC = () => {
   const handleReturnToTimesheet = useCallback((emp: Employee) => {
     openModal(emp, 'department');
   }, [openModal]);
+
+  const handleBulkMoveDepartment = useCallback(async (newDeptId: string, effectiveDate: string, reason?: string) => {
+    if (selectedEmployeeIdsVisible.length === 0) return;
+    try {
+      const result = await employeeService.batchMove(selectedEmployeeIdsVisible, newDeptId, effectiveDate, reason);
+      const parts = [`Переведено ${result.moved_count}`];
+      if (result.skipped_count > 0) parts.push(`пропущено ${result.skipped_count}`);
+      if (result.failed_count > 0) parts.push(`ошибок ${result.failed_count}`);
+      const message = parts.join(', ');
+      if (result.failed_count > 0) toast.error(message);
+      else toast.success(message);
+      setBulkMoveDeptOpen(false);
+      setSelectionMode(false);
+      setSelectedEmployeeIds([]);
+      refresh();
+      void queryClient.invalidateQueries({ queryKey: ['employees'] });
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : 'Не удалось перевести сотрудников';
+      toast.error(msg);
+    }
+  }, [selectedEmployeeIdsVisible, toast, refresh, queryClient]);
 
   const handleSaveSchedule = useCallback(async (empId: number, scheduleId: string | null, effectiveFrom: string) => {
     if (scheduleId) {
@@ -1791,6 +1933,18 @@ export const StaffControlPage: FC = () => {
       <div className="sc-filter-search">
         <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
       </div>
+      <select
+        className="sc-schedule-filter"
+        value={scheduleFilter}
+        onChange={e => handleScheduleFilterChange(e.target.value)}
+        title="Фильтр по графику работы"
+      >
+        <option value="">Все графики</option>
+        <option value="__default__">Дефолтный (без персонального)</option>
+        {scheduleTemplates.map(tpl => (
+          <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
+        ))}
+      </select>
       <div className="sc-status-toggle">
         <button
           className={`sc-btn${statusFilter === 'active' ? ' apply' : ' secondary'}`}
@@ -1863,6 +2017,17 @@ export const StaffControlPage: FC = () => {
           <div className="sc-filter-search">
             <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
           </div>
+          <select
+            className="sc-schedule-filter sc-schedule-filter--mobile"
+            value={scheduleFilter}
+            onChange={e => handleScheduleFilterChange(e.target.value)}
+          >
+            <option value="">Все графики</option>
+            <option value="__default__">Дефолтный (без персонального)</option>
+            {scheduleTemplates.map(tpl => (
+              <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
+            ))}
+          </select>
           {isAdmin && (
             <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
               <UserPlus size={16} /> Добавить
@@ -1919,6 +2084,13 @@ export const StaffControlPage: FC = () => {
               disabled={selectedEmployeeIds.length === 0}
             >
               <Calendar size={14} /> График
+            </button>
+            <button
+              className="sc-btn secondary"
+              onClick={() => setBulkMoveDeptOpen(true)}
+              disabled={selectedEmployeeIds.length === 0}
+            >
+              <ArrowRightLeft size={14} /> Сменить отдел
             </button>
             <button className="sc-btn cancel" onClick={toggleSelectionMode}>
               Готово
@@ -2026,6 +2198,15 @@ export const StaffControlPage: FC = () => {
         templates={scheduleTemplates}
         onClose={() => setBulkBrigadeScheduleOpen(false)}
         onApply={handleBrigadeBulkSaveSchedule}
+      />
+      <BulkMoveDepartmentModal
+        open={bulkMoveDeptOpen}
+        targetCount={selectedEmployees.length}
+        previewText={selectedEmployeesPreview}
+        departments={allDepts}
+        archiveDepartmentId={archiveDepartmentId}
+        onClose={() => setBulkMoveDeptOpen(false)}
+        onApply={handleBulkMoveDepartment}
       />
 
       {/* ─── Import Modal ─── */}

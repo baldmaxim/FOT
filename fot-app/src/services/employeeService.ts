@@ -12,6 +12,8 @@ export interface PaginatedParams {
   search?: string;
   status?: 'active' | 'fired' | 'excluded';
   departmentId?: string;
+  /** UUID шаблона графика или '__default__' (без персонального override) */
+  scheduleId?: string;
   archived?: boolean;
   view?: 'list' | 'staff';
 }
@@ -70,6 +72,7 @@ export const employeeService = {
     if (params.search) qs.set('search', params.search);
     if (params.status) qs.set('status', params.status);
     if (params.departmentId) qs.set('department_id', params.departmentId);
+    if (params.scheduleId) qs.set('schedule_id', params.scheduleId);
     if (params.archived) qs.set('archived', 'true');
     const response = await apiClient.get<{ data: Employee[]; meta: PaginatedMeta }>(`/employees?${qs}`);
     return { data: response.data || [], meta: response.meta || { page: 1, pageSize: 50, total: 0, totalPages: 0 } };
@@ -194,17 +197,31 @@ export const employeeService = {
     await apiClient.delete(`/employees/${employeeId}/history/${eventId}?event_type=${eventType}`);
   },
 
-  async moveDepartment(id: number, orgDepartmentId: string): Promise<Employee> {
+  async moveDepartment(
+    id: number,
+    orgDepartmentId: string,
+    effectiveDate?: string,
+    reason?: string,
+  ): Promise<Employee> {
     const response = await apiClient.post<ApiResponse<Employee>>(`/employees/${id}/move-department`, {
       org_department_id: orgDepartmentId,
+      effective_date: effectiveDate,
+      reason,
     });
     return response.data;
   },
 
-  async batchMove(employeeIds: number[], orgDepartmentId: string): Promise<BatchMoveEmployeesResult> {
+  async batchMove(
+    employeeIds: number[],
+    orgDepartmentId: string,
+    effectiveDate?: string,
+    reason?: string,
+  ): Promise<BatchMoveEmployeesResult> {
     const response = await apiClient.post<ApiResponse<BatchMoveEmployeesResult>>('/employees/batch-move', {
       employee_ids: employeeIds,
       org_department_id: orgDepartmentId,
+      effective_date: effectiveDate,
+      reason,
     });
     return response.data;
   },

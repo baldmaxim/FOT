@@ -166,6 +166,51 @@ export const employeesController = {
         else if (status === 'excluded') q = q.eq('excluded_from_timesheet', true).neq('employment_status', 'fired');
         else if (status === 'active' || !status) q = q.neq('employment_status', 'fired');
 
+        // Фильтр по персональному графику: schedule_id=<uuid> или schedule_id=__default__
+        // (__default__ — те, у кого нет активной записи в employee_schedule_assignments)
+        const scheduleParam = typeof req.query.schedule_id === 'string' ? req.query.schedule_id.trim() : '';
+        if (scheduleParam) {
+          const today = new Date().toISOString().slice(0, 10);
+          if (scheduleParam === '__default__') {
+            const { data: activeAss, error: assErr } = await supabase
+              .from('employee_schedule_assignments')
+              .select('employee_id')
+              .lte('effective_from', today)
+              .or(`effective_to.is.null,effective_to.gte.${today}`);
+            if (assErr) {
+              console.error('Get default-schedule employees error:', assErr);
+              res.status(500).json({ success: false, error: 'Failed to fetch employees' });
+              return;
+            }
+            const assignedIds = [...new Set((activeAss || []).map(r => Number(r.employee_id)))];
+            if (assignedIds.length > 0) {
+              q = q.not('id', 'in', `(${assignedIds.join(',')})`);
+            }
+          } else {
+            const { data: activeAss, error: assErr } = await supabase
+              .from('employee_schedule_assignments')
+              .select('employee_id')
+              .eq('schedule_id', scheduleParam)
+              .lte('effective_from', today)
+              .or(`effective_to.is.null,effective_to.gte.${today}`);
+            if (assErr) {
+              console.error('Get schedule employees error:', assErr);
+              res.status(500).json({ success: false, error: 'Failed to fetch employees' });
+              return;
+            }
+            const ids = [...new Set((activeAss || []).map(r => Number(r.employee_id)))];
+            if (ids.length === 0) {
+              res.json({
+                success: true,
+                data: [],
+                meta: { page, pageSize, total: 0, totalPages: 0 },
+              });
+              return;
+            }
+            q = q.in('id', ids);
+          }
+        }
+
         const { data, error, count } = await q;
         if (error) {
           console.error('Get employees paginated error:', error);
