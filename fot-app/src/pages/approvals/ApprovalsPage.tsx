@@ -123,6 +123,7 @@ const CorrectionsTab: FC = () => {
   const [period, setPeriod] = useState(() => monthRange(now.getFullYear(), now.getMonth() + 1));
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [busyId, setBusyId] = useState<number | null>(null);
 
   useEffect(() => {
     setPeriod(monthRange(year, month));
@@ -147,18 +148,27 @@ const CorrectionsTab: FC = () => {
     queryFn: () => correctionApprovalService.getPendingByDepartment(period.startDate, period.endDate),
   });
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['correction-approvals'] });
+  const invalidate = () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['correction-approvals'] }),
+    queryClient.invalidateQueries({ queryKey: ['approval-timesheet'] }),
+    queryClient.invalidateQueries({ queryKey: ['approvals-review-list'] }),
+    queryClient.invalidateQueries({ queryKey: ['timesheet-page'] }),
+  ]);
 
   const approveMutation = useMutation({
     mutationFn: (id: number) => correctionApprovalService.approve(id),
+    onMutate: (id) => { setBusyId(id); },
     onSuccess: async () => { await invalidate(); toast.success?.('Корректировка утверждена'); },
     onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка утверждения'),
+    onSettled: () => { setBusyId(null); },
   });
 
   const rejectMutation = useMutation({
     mutationFn: (id: number) => correctionApprovalService.reject(id),
+    onMutate: (id) => { setBusyId(id); },
     onSuccess: async () => { await invalidate(); toast.success?.('Корректировка отклонена'); },
     onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка отклонения'),
+    onSettled: () => { setBusyId(null); },
   });
 
   const clearProcessedIds = (ids: number[]) => {
@@ -332,7 +342,7 @@ const CorrectionsTab: FC = () => {
                                 type="button"
                                 className="cor-item-btn cor-item-btn--approve"
                                 onClick={() => approveMutation.mutate(item.id)}
-                                disabled={approveMutation.isPending}
+                                disabled={busyId === item.id}
                               >
                                 <Check size={12} /> Утв.
                               </button>
@@ -340,7 +350,7 @@ const CorrectionsTab: FC = () => {
                                 type="button"
                                 className="cor-item-btn cor-item-btn--reject"
                                 onClick={() => rejectMutation.mutate(item.id)}
-                                disabled={rejectMutation.isPending}
+                                disabled={busyId === item.id}
                               >
                                 <X size={12} /> Откл.
                               </button>

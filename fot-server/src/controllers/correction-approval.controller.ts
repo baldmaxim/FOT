@@ -216,7 +216,7 @@ async function changeAdjustmentApproval(
   }
 
   const now = new Date().toISOString();
-  const { error } = await supabase
+  const { data: updatedRows, error } = await supabase
     .from('attendance_adjustments')
     .update({
       approval_status: nextStatus,
@@ -224,8 +224,18 @@ async function changeAdjustmentApproval(
       approved_at: now,
       approval_comment: comment,
     })
-    .eq('id', adjustmentId);
+    .eq('id', adjustmentId)
+    .eq('approval_status', 'pending')
+    .select('id');
   if (error) throw error;
+  if (!updatedRows || updatedRows.length === 0) {
+    res.status(409).json({
+      success: false,
+      error: 'Корректировка уже не в статусе pending',
+      code: 'ALREADY_PROCESSED',
+    });
+    return;
+  }
 
   await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.UPDATE_TIMESHEET_ENTRY, {
     entityType: 'attendance_adjustment',

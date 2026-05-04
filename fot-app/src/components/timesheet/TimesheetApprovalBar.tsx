@@ -25,7 +25,7 @@ interface IMissingDay {
   date: string;
   employee_id: number;
   employee_name: string | null;
-  kind: 'pending_correction' | 'leave_request' | 'weekend_no_correction';
+  kind: 'leave_request' | 'weekend_no_correction';
   reason: string;
 }
 
