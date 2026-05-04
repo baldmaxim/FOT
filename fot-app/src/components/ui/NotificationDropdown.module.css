@@ -190,11 +190,11 @@
 @media (max-width: 430px) {
   .dropdown {
     position: fixed;
-    top: 56px;
+    top: calc(56px + env(safe-area-inset-top, 0px));
     left: 8px;
     right: 8px;
     width: auto;
-    max-height: calc(100vh - 72px);
+    max-height: calc(100vh - 72px - env(safe-area-inset-top, 0px));
   }
 }
 
