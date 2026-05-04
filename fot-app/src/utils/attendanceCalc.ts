@@ -4,6 +4,7 @@ import {
   getEffectiveLateThresholdForDay,
   getFullDayThresholdHoursForDay,
   getScheduleForTimesheetDay,
+  getShiftDurationForDay,
   getWorkHoursForDay,
   isScheduleDayOff,
   parseHMToMinutes,
@@ -41,6 +42,7 @@ export interface IDayAttendance {
   isLate?: boolean;
   plannedHours?: number;
   scheduledStartMinutes?: number | null;
+  shiftDurationSeconds?: number;
 }
 
 export interface IMonthStats {
@@ -167,12 +169,16 @@ export const calculateAttendance = (
   const isRemoteSchedule = schedule && (schedule.schedule_type === 'remote');
 
   for (let d = 1; d <= daysInMonth; d++) {
+    const shiftDurationSeconds = schedule
+      ? Math.round(getShiftDurationForDay(schedule, year, month + 1, d) * 3600)
+      : undefined;
+
     if (isScheduleWeekend(year, month, d, schedule)) {
-      days.push({ day: d, status: 'weekend', totalSeconds: 0 });
+      days.push({ day: d, status: 'weekend', totalSeconds: 0, shiftDurationSeconds });
       continue;
     }
     if (isCurrentMonth && d > todayDate) {
-      days.push({ day: d, status: 'future', totalSeconds: 0, plannedHours: schedule ? schedule.work_hours : 8, scheduledStartMinutes: workStartMin });
+      days.push({ day: d, status: 'future', totalSeconds: 0, plannedHours: schedule ? schedule.work_hours : 8, scheduledStartMinutes: workStartMin, shiftDurationSeconds });
       continue;
     }
 
@@ -182,14 +188,14 @@ export const calculateAttendance = (
     if (isRemoteSchedule) {
       presentCount++;
       totalWorkSecs += targetSeconds;
-      days.push({ day: d, status: 'present', totalSeconds: targetSeconds, plannedHours: schedule ? schedule.work_hours : 8, scheduledStartMinutes: workStartMin });
+      days.push({ day: d, status: 'present', totalSeconds: targetSeconds, plannedHours: schedule ? schedule.work_hours : 8, scheduledStartMinutes: workStartMin, shiftDurationSeconds });
       continue;
     }
 
     const dayEvs = eventsByDay.get(d) || [];
 
     if (dayEvs.length === 0) {
-      days.push({ day: d, status: 'absent', totalSeconds: 0, plannedHours: schedule ? schedule.work_hours : 8, scheduledStartMinutes: workStartMin });
+      days.push({ day: d, status: 'absent', totalSeconds: 0, plannedHours: schedule ? schedule.work_hours : 8, scheduledStartMinutes: workStartMin, shiftDurationSeconds });
       continue;
     }
 
@@ -227,6 +233,7 @@ export const calculateAttendance = (
       isLate: late,
       plannedHours: schedule ? schedule.work_hours : 8,
       scheduledStartMinutes: workStartMin,
+      shiftDurationSeconds,
     });
   }
 
@@ -453,17 +460,20 @@ export const calculateAttendanceFromTimesheet = (params: {
       ? 0
       : getWorkHoursForDay(schedule, year, month + 1, day);
     const scheduledStartMinutes = getScheduledStartMinutes(schedule, year, month, day);
+    const shiftDurationSeconds = schedule
+      ? Math.round(getShiftDurationForDay(schedule, year, month + 1, day) * 3600)
+      : undefined;
     const entry = entryByDay.get(day);
     const isScheduledDayOff = plannedHours <= 0;
     const shouldUseLiveTodayEvents = isCurrentMonth && day === todayDate && liveTodayAttendanceEvents.length > 0;
 
     if (isCurrentMonth && day > todayDate) {
-      days.push({ day, status: 'future', totalSeconds: 0, plannedHours, scheduledStartMinutes });
+      days.push({ day, status: 'future', totalSeconds: 0, plannedHours, scheduledStartMinutes, shiftDurationSeconds });
       continue;
     }
 
     if (isScheduledDayOff && !entry && !shouldUseLiveTodayEvents) {
-      days.push({ day, status: 'weekend', totalSeconds: 0, plannedHours: 0, scheduledStartMinutes });
+      days.push({ day, status: 'weekend', totalSeconds: 0, plannedHours: 0, scheduledStartMinutes, shiftDurationSeconds });
       continue;
     }
 
@@ -477,7 +487,7 @@ export const calculateAttendanceFromTimesheet = (params: {
       const fallbackStatus: IDayAttendance['status'] = hasExternalSkud && !isScheduledDayOff
         ? 'incomplete_skud'
         : 'absent';
-      days.push({ day, status: fallbackStatus, totalSeconds: 0, plannedHours, scheduledStartMinutes });
+      days.push({ day, status: fallbackStatus, totalSeconds: 0, plannedHours, scheduledStartMinutes, shiftDurationSeconds });
       continue;
     }
     const liveTodayExternalEvents = shouldUseLiveTodayEvents
@@ -577,6 +587,7 @@ export const calculateAttendanceFromTimesheet = (params: {
       isLate,
       plannedHours,
       scheduledStartMinutes,
+      shiftDurationSeconds,
     });
   }
 

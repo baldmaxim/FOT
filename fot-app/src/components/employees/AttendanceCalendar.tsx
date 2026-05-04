@@ -114,7 +114,9 @@ export const AttendanceCalendar: FC<IAttendanceCalendarProps> = ({
                 >
                   {day}
                   {data && data.totalSeconds > 0 && (
-                    <span className="ec-time-badge">{formatWorkedTime(data.totalSeconds)}</span>
+                    <span className="ec-time-badge">
+                      {formatWorkedTime(data.shiftDurationSeconds ?? data.totalSeconds)}
+                    </span>
                   )}
                 </div>
               );
