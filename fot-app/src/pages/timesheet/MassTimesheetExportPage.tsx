@@ -116,17 +116,17 @@ export const MassTimesheetExportPage: FC = () => {
           </button>
           <button
             type="button"
-            className={`mte-half-chip ${half === 'FULL' ? 'mte-half-chip--active' : ''}`}
-            onClick={() => setHalf('FULL')}
-          >
-            {formatHalfLabel(year, month, 'FULL')}
-          </button>
-          <button
-            type="button"
             className={`mte-half-chip ${half === 'H2' ? 'mte-half-chip--active' : ''}`}
             onClick={() => setHalf('H2')}
           >
             {formatHalfLabel(year, month, 'H2')}
+          </button>
+          <button
+            type="button"
+            className={`mte-half-chip ${half === 'FULL' ? 'mte-half-chip--active' : ''}`}
+            onClick={() => setHalf('FULL')}
+          >
+            {formatHalfLabel(year, month, 'FULL')}
           </button>
         </section>
       </div>
