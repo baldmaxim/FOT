@@ -350,7 +350,7 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
           )}
 
           {!isAssignTo && !lookupLoading && lookupResult?.found && lookupResult.employee && (
-            <div className="scr-card scr-card--known">
+            <div className={`scr-card scr-card--known ${lookupResult.employee.source === 'sigur' ? 'scr-card--sigur-only' : ''}`}>
               <div className="scr-card-row">
                 <span className="scr-card-label">Сотрудник</span>
                 <span className="scr-card-name">{lookupResult.employee.full_name}</span>
@@ -373,25 +373,32 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
                 <span className="scr-card-label">Срок карты</span>
                 <span>{formatExpiry(lookupResult.card.expirationDate)}</span>
               </div>
-              <button
-                type="button"
-                className="scr-primary-btn"
-                onClick={() => {
-                  if (mode.kind === 'lookup' && lookupResult.employee) {
-                    mode.onEmployeeFound?.(lookupResult.employee.id);
-                  }
-                }}
-              >
-                Открыть профиль
-              </button>
+              {lookupResult.employee.source === 'sigur' && (
+                <div className="scr-source-note">
+                  Данные из Sigur (sigurEmployeeId <strong>{lookupResult.sigurEmployeeId}</strong>) — этот сотрудник не сматчен с ФОТ.
+                </div>
+              )}
+              {lookupResult.employee.source === 'fot' && lookupResult.employee.id != null && (
+                <button
+                  type="button"
+                  className="scr-primary-btn"
+                  onClick={() => {
+                    if (mode.kind === 'lookup' && lookupResult.employee?.id != null) {
+                      mode.onEmployeeFound?.(lookupResult.employee.id);
+                    }
+                  }}
+                >
+                  Открыть профиль
+                </button>
+              )}
             </div>
           )}
 
           {!isAssignTo && !lookupLoading && lookupResult?.found && !lookupResult.employee && (
             <div className="scr-card scr-card--orphan">
               <p>
-                Карта привязана к сотруднику Sigur (id <strong>{lookupResult.sigurEmployeeId}</strong>),
-                но он не сматчен с ФОТ. Запустите синхронизацию структуры или проверьте сотрудника в Sigur Manager.
+                Карта привязана к сотруднику Sigur{lookupResult.sigurEmployeeId ? <> (id <strong>{lookupResult.sigurEmployeeId}</strong>)</> : ''},
+                но получить его данные не удалось. Проверьте подключение к Sigur или сотрудника в Sigur Manager.
               </p>
             </div>
           )}

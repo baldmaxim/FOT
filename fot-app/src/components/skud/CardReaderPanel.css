@@ -268,6 +268,20 @@
   line-height: 1.5;
 }
 
+.scr-card--sigur-only {
+  border-color: rgba(14, 165, 233, 0.4);
+  background: rgba(14, 165, 233, 0.04);
+}
+
+.scr-source-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-hover);
+  line-height: 1.4;
+}
+
 .scr-card-row {
   display: grid;
   grid-template-columns: 130px 1fr;

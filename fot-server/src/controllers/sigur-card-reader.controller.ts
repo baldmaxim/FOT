@@ -17,12 +17,13 @@ interface ICardSummary {
 }
 
 interface IEmployeeBrief {
-  id: number;
+  id: number | null;
   full_name: string;
   position_name: string | null;
   department: string | null;
   tab_number: string | null;
   sigur_employee_id: number | null;
+  source: 'fot' | 'sigur';
 }
 
 const normalizeInt = (value: unknown): number | null => {
@@ -119,6 +120,53 @@ const fetchEmployeeBySigurId = async (sigurEmployeeId: number): Promise<IEmploye
     department: data.org_department_id ? cache.departments.get(data.org_department_id) || null : null,
     tab_number: data.tab_number || null,
     sigur_employee_id: data.sigur_employee_id,
+    source: 'fot',
+  };
+};
+
+const fetchSigurEmployeeBrief = async (sigurEmployeeId: number): Promise<IEmployeeBrief | null> => {
+  let raw: Record<string, unknown> | null = sigurService.findEmployeeInCache(sigurEmployeeId);
+  if (!raw) {
+    try {
+      raw = await sigurService.getEmployeeById(sigurEmployeeId) as Record<string, unknown>;
+    } catch (err) {
+      console.warn('[card-reader] sigur employee fetch failed:', err);
+      return null;
+    }
+  }
+  if (!raw) return null;
+
+  const fullName = trimOrNull(resolveField(raw, 'fullName', 'full_name', 'name', 'fio'));
+  const positionId = normalizeInt(resolveField(raw, 'positionId', 'position_id'));
+  const departmentId = normalizeInt(resolveField(raw, 'departmentId', 'department_id'));
+  const tabNumber = trimOrNull(resolveField(raw, 'tabNumber', 'tab_number', 'personnelNumber'));
+
+  let positionName: string | null = trimOrNull(resolveField(raw, 'positionName', 'position_name', 'position'));
+  let departmentName: string | null = trimOrNull(resolveField(raw, 'departmentName', 'department_name', 'department'));
+
+  if ((!positionName && positionId) || (!departmentName && departmentId)) {
+    try {
+      if (!positionName && positionId) {
+        const positions = await sigurService.getPositionOptionsCached();
+        positionName = positions.find(p => p.id === positionId)?.name || null;
+      }
+      if (!departmentName && departmentId) {
+        const departmentMap = await sigurService.getDepartmentMapCached();
+        departmentName = departmentMap.get(departmentId) || null;
+      }
+    } catch (err) {
+      console.warn('[card-reader] sigur structure cache lookup failed:', err);
+    }
+  }
+
+  return {
+    id: null,
+    full_name: fullName || `Сотрудник Sigur #${sigurEmployeeId}`,
+    position_name: positionName,
+    department: departmentName,
+    tab_number: tabNumber,
+    sigur_employee_id: sigurEmployeeId,
+    source: 'sigur',
   };
 };
 
@@ -198,6 +246,10 @@ export const sigurCardReaderController = {
           employee = await fetchEmployeeBySigurId(sigurEmployeeId);
         } catch (err) {
           console.warn('[card-reader] employee lookup failed:', err);
+        }
+        // Fallback: если в ФОТ нет — тянем из Sigur API напрямую
+        if (!employee) {
+          employee = await fetchSigurEmployeeBrief(sigurEmployeeId);
         }
       }
 

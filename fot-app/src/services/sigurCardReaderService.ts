@@ -16,12 +16,13 @@ export interface ISigurCardSummary {
 }
 
 export interface ISigurCardEmployee {
-  id: number;
+  id: number | null;
   full_name: string;
   position_name: string | null;
   department: string | null;
   tab_number: string | null;
   sigur_employee_id: number | null;
+  source: 'fot' | 'sigur';
 }
 
 export interface ICardLookupFound {

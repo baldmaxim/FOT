@@ -1141,25 +1141,23 @@ export class SigurDataService extends SigurServiceBase {
     return variants;
   }
 
-  /** Поля Sigur-карты, которые гарантированно НЕ содержат номер (а либо id/мета). */
-  private static readonly CARD_NON_NUMBER_FIELDS = new Set<string>([
-    'id', 'ID', 'Id',
-    'cardId', 'card_id', 'cardID', 'cardid',
-    'employeeId', 'employee_id',
-    'status', 'Status', 'state',
-    'format', 'Format', 'cardFormat',
-    'startDate', 'start_date', 'validFrom', 'startAt', 'startat',
-    'expirationDate', 'expiration_date', 'expiresAt', 'expiryDate', 'validTo', 'validto',
-    'createdAt', 'created_at', 'updatedAt', 'updated_at',
-    'description', 'comment', 'comments', 'note', 'notes',
-    'name', 'fullName', 'full_name',
+  /** Whitelist полей карты Sigur, в которых может лежать номер. Сравнение case-insensitive. */
+  private static readonly CARD_NUMBER_FIELDS_LOWER = new Set<string>([
+    'number', 'cardnumber', 'card_number',
+    'serialnumber', 'serial_number', 'serial',
+    'wiegandcode', 'wiegand_code', 'wiegand',
+    'code', 'cardcode', 'card_code',
+    'value', 'cardvalue',
+    'hex', 'cardhex',
+    'rfid', 'rfidcode',
+    'uid',
   ]);
 
   /** Возвращает все плоские строковые/числовые значения карты, которые могут быть номером. */
   static collectCardSearchableValues(card: Record<string, unknown>): string[] {
     const out: string[] = [];
     for (const [key, value] of Object.entries(card)) {
-      if (SigurDataService.CARD_NON_NUMBER_FIELDS.has(key)) continue;
+      if (!SigurDataService.CARD_NUMBER_FIELDS_LOWER.has(key.toLowerCase())) continue;
       if (typeof value === 'string') {
         const trimmed = value.trim();
         if (trimmed) out.push(trimmed);
