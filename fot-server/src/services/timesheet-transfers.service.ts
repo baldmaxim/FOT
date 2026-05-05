@@ -415,47 +415,112 @@ export interface IDeleteTransferResult {
   reopened_assignment_id: string;
 }
 
+function wrapPgError(err: unknown, fallback: string): Error {
+  if (err instanceof Error) return err;
+  if (err && typeof err === 'object') {
+    const obj = err as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown };
+    const parts: string[] = [];
+    if (typeof obj.message === 'string' && obj.message) parts.push(obj.message);
+    if (typeof obj.details === 'string' && obj.details) parts.push(obj.details);
+    if (typeof obj.hint === 'string' && obj.hint) parts.push(obj.hint);
+    if (parts.length > 0) return new Error(parts.join(' — '));
+  }
+  return new Error(fallback);
+}
+
 /**
  * Полная отмена перевода: удаляет новое назначение, открывает старое (effective_to=NULL),
  * возвращает employees.org_department_id к старому отделу. Sigur не трогается.
  *
  * Возвращает null, если парное закрытое назначение не найдено — вызывающий код решает,
  * как трактовать (deleteTransfer кидает ошибку, deleteAssignment бросает свой текст).
+ *
+ * Порядок операций важен: триггер trg_ensure_no_overlapping_employee_assignments
+ * не пускает пересечение диапазонов на BEFORE UPDATE/INSERT. Если просто переоткрыть
+ * old (effective_to=NULL) пока new ещё жив — оба диапазона [from, ∞) пересекаются.
+ * Поэтому сначала выправляем инвариант (old.effective_to = new.effective_from − 1),
+ * затем удаляем new, и только потом переоткрываем old.
  */
 export async function tryDeleteTransfer(assignmentNewId: string): Promise<IDeleteTransferResult | null> {
-  const newA = await loadAssignmentById(assignmentNewId);
-  if (!newA) throw new Error('Назначение не найдено');
-  if (newA.effective_to != null) throw new Error('Назначение уже закрыто, отмена не выполняется');
+  // Полная копия new — нужна, чтобы восстановить через INSERT, если переоткрытие old свалится.
+  const { data: fullNew, error: loadErr } = await supabase
+    .from('employee_assignments')
+    .select('*')
+    .eq('id', assignmentNewId)
+    .maybeSingle();
+  if (loadErr) throw wrapPgError(loadErr, 'Не удалось загрузить назначение');
+  if (!fullNew) throw new Error('Назначение не найдено');
+  if ((fullNew.effective_to as string | null) != null) {
+    throw new Error('Назначение уже закрыто, отмена не выполняется');
+  }
+
+  const newA: IAssignmentRow = {
+    id: String(fullNew.id),
+    employee_id: Number(fullNew.employee_id),
+    org_department_id: String(fullNew.org_department_id),
+    effective_from: String(fullNew.effective_from),
+    effective_to: null,
+  };
 
   const oldA = await findPreviousClosedAssignment(newA);
   if (!oldA) return null;
 
   const nowIso = new Date().toISOString();
+  const expectedClose = formatDateShift(newA.effective_from, -1);
+  const oldEffectiveToOriginal = oldA.effective_to;
+  const needFixInvariant = oldEffectiveToOriginal !== expectedClose;
 
-  const { error: openErr } = await supabase
-    .from('employee_assignments')
-    .update({ effective_to: null, updated_at: nowIso })
-    .eq('id', oldA.id);
-  if (openErr) throw openErr;
+  // Шаг 1: выправить инвариант на old (если нарушен). Закрытое [from, expectedClose] не
+  // пересекается с открытым new [new.effective_from, ∞) — триггер пройдёт.
+  if (needFixInvariant) {
+    const { error: fixErr } = await supabase
+      .from('employee_assignments')
+      .update({ effective_to: expectedClose, updated_at: nowIso })
+      .eq('id', oldA.id);
+    if (fixErr) throw wrapPgError(fixErr, 'Не удалось выправить дату закрытия предыдущего назначения');
+  }
 
+  // Шаг 2: удалить new — у сотрудника остаётся только закрытое old.
   const { error: delErr } = await supabase
     .from('employee_assignments')
     .delete()
     .eq('id', newA.id);
   if (delErr) {
-    // Откатываем открытие старого.
-    await supabase
-      .from('employee_assignments')
-      .update({ effective_to: oldA.effective_to, updated_at: nowIso })
-      .eq('id', oldA.id);
-    throw delErr;
+    // Откатываем шаг 1.
+    if (needFixInvariant) {
+      await supabase
+        .from('employee_assignments')
+        .update({ effective_to: oldEffectiveToOriginal, updated_at: nowIso })
+        .eq('id', oldA.id);
+    }
+    throw wrapPgError(delErr, 'Не удалось удалить назначение');
   }
 
+  // Шаг 3: переоткрыть old (других открытых нет, нет пересечения).
+  const { error: openErr } = await supabase
+    .from('employee_assignments')
+    .update({ effective_to: null, updated_at: nowIso })
+    .eq('id', oldA.id);
+  if (openErr) {
+    // Восстанавливаем new из сохранённой копии и откатываем шаг 1.
+    await supabase
+      .from('employee_assignments')
+      .insert(fullNew as Record<string, unknown>);
+    if (needFixInvariant) {
+      await supabase
+        .from('employee_assignments')
+        .update({ effective_to: oldEffectiveToOriginal, updated_at: nowIso })
+        .eq('id', oldA.id);
+    }
+    throw wrapPgError(openErr, 'Не удалось переоткрыть предыдущее назначение');
+  }
+
+  // Шаг 4: синхронизируем employees.org_department_id.
   const { error: empErr } = await supabase
     .from('employees')
     .update({ org_department_id: oldA.org_department_id, updated_at: nowIso })
     .eq('id', newA.employee_id);
-  if (empErr) throw empErr;
+  if (empErr) throw wrapPgError(empErr, 'Не удалось обновить отдел сотрудника');
 
   return {
     employee_id: newA.employee_id,
