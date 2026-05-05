@@ -141,6 +141,8 @@ interface ISummaryRow {
   last_exit: string | null;
   total_hours: number | null;
   total_minutes?: number | null;
+  break_hours?: number | null;
+  break_minutes?: number | null;
 }
 
 function roundHours(value: number): number {
@@ -157,16 +159,37 @@ function getPlannedHoursForScheduleOnDate(
 ): number | null {
   if (!schedule) return null;
   const [yearPart, monthPart, dayPart] = workDate.split('-').map(Number);
-  // Лимит для отображения руководителю = длительность смены (start–end, без вычета обеда),
-  // а не work_hours (которое хранится как нетто, без обеда).
-  return getShiftDurationHours(getScheduleForDate(schedule, new Date(yearPart, monthPart - 1, dayPart)));
+  // Норма дня = work_hours (нетто, без обеда). Cap до нормы прячет переработки в табеле:
+  // оплачиваемые часы > нормы обрезаются, day становится зелёным с visible_hours = norm.
+  return getScheduleForDate(schedule, new Date(yearPart, monthPart - 1, dayPart)).work_hours;
 }
 
-function getSummaryHours(summary: ISummaryRow): number {
-  if (typeof summary.total_minutes === 'number') {
-    return roundHours(summary.total_minutes / 60);
-  }
-  return roundHours(summary.total_hours || 0);
+function getSummaryBreakMinutes(summary: ISummaryRow): number {
+  if (typeof summary.break_minutes === 'number') return summary.break_minutes;
+  return Math.round((summary.break_hours || 0) * 60);
+}
+
+/**
+ * Оплачиваемое время за день: paid = span − max(lunch_quota, time_outside).
+ * skud_daily_summary.total_minutes хранит «время в офисе» (= span − break),
+ * break_minutes хранит сумму гэпов между парами (= time_outside).
+ * Эквивалентная форма: paid = total − max(0, lunch − break).
+ *
+ * Поведение: обед всегда вычитается. Если человек не выходил (break=0) — штраф = lunch_quota.
+ * Если выходил больше lunch_quota — штраф = реальное время вне офиса (его «съел» сам).
+ * Если в пределах lunch_quota — штраф = lunch_quota (ровно одна квота).
+ */
+function computeSummaryPaidMinutes(summary: ISummaryRow, lunchMinutes: number): number {
+  const total = typeof summary.total_minutes === 'number'
+    ? summary.total_minutes
+    : Math.round((summary.total_hours || 0) * 60);
+  const outside = getSummaryBreakMinutes(summary);
+  const lunch = Math.max(0, lunchMinutes || 0);
+  return Math.max(0, total - Math.max(0, lunch - outside));
+}
+
+function computeSummaryPaidHours(summary: ISummaryRow, lunchMinutes: number): number {
+  return roundHours(computeSummaryPaidMinutes(summary, lunchMinutes) / 60);
 }
 
 function createEmptyObjectAttendanceData(): IObjectAttendanceData {
@@ -347,7 +370,7 @@ async function loadDailySummaries(
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
     const { data, error } = await supabase
       .from('skud_daily_summary')
-      .select('employee_id, date, first_entry, last_exit, total_hours, total_minutes')
+      .select('employee_id, date, first_entry, last_exit, total_hours, total_minutes, break_hours, break_minutes')
       .in('employee_id', batch)
       .gte('date', startDate)
       .lte('date', endDate)
@@ -410,7 +433,8 @@ export async function buildAttendanceEntries(params: {
   };
 
   for (const summary of summaries) {
-    const hours = getSummaryHours(summary);
+    const skudMapSchedule = dailySchedulesMap.get(summary.employee_id)?.get(summary.date);
+    const hours = computeSummaryPaidHours(summary, skudMapSchedule?.lunch_minutes || 0);
     if (!skudMap.has(summary.employee_id)) {
       skudMap.set(summary.employee_id, new Map());
     }
@@ -490,13 +514,12 @@ export async function buildAttendanceEntries(params: {
 
     const key = `${summary.employee_id}_${summary.date}`;
     const travelSummary = travelSummaries.get(key);
-    const baseHours = getSummaryHours(summary);
+    const schedule = dailySchedulesMap.get(summary.employee_id)?.get(summary.date);
+    const baseHours = computeSummaryPaidHours(summary, schedule?.lunch_minutes || 0);
     const travelCreditedMinutes = travelSummary?.creditedMinutes || 0;
     const travelCreditedHours = roundHours(travelCreditedMinutes / 60);
     const hoursWorked = roundHours(baseHours + travelCreditedHours);
     const isPresent = baseHours > 0 || summary.first_entry !== null;
-
-    const schedule = dailySchedulesMap.get(summary.employee_id)?.get(summary.date);
     let presenceCoversShift: boolean | undefined;
     if (!isPresent) {
       presenceCoversShift = false;
@@ -566,7 +589,7 @@ export async function buildAttendanceEntries(params: {
 
         if (rawSummary) {
           const plannedHours = getScheduleForDate(schedule, dateObject).work_hours;
-          const baseHours = getSummaryHours(rawSummary);
+          const baseHours = computeSummaryPaidHours(rawSummary, schedule.lunch_minutes || 0);
           const hoursWorked = roundHours(Math.min(baseHours + travelCreditedHours, plannedHours));
           const isPresent = baseHours > 0 || rawSummary.first_entry !== null;
 

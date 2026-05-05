@@ -108,26 +108,53 @@ const isWeekend = (year: number, month: number, day: number): boolean => {
   return dow === 0 || dow === 6;
 };
 
-const calcWorkSeconds = (events: SkudEvent[], internalPoints: Set<string>, isToday = false): number => {
+/**
+ * Оплачиваемое время за день (в секундах) = span − max(lunch_quota, time_outside).
+ * span — от первого внешнего entry до последнего exit (или «сейчас», если открытая пара и isToday).
+ * time_outside — сумма гэпов между exit и следующим entry.
+ * Обед всегда вычитается: либо как полная квота (если человек обедал в офисе или меньше квоты),
+ * либо как фактический outside (если он выходил больше квоты — съел из своих часов).
+ */
+const calcWorkSeconds = (
+  events: SkudEvent[],
+  internalPoints: Set<string>,
+  isToday = false,
+  lunchQuotaSeconds = 0,
+): number => {
   const ext = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
   const sorted = [...ext].sort((a, b) => a.event_time.localeCompare(b.event_time));
-  let total = 0;
-  let entryTime: number | null = null;
+
+  let firstEntrySec: number | null = null;
+  let lastExitSec: number | null = null;
+  let outsideSec = 0;
+  let prevExitSec: number | null = null;
+
   for (const ev of sorted) {
+    const sec = timeToSeconds(ev.event_time);
     if (ev.direction === 'entry') {
-      if (entryTime === null) entryTime = timeToSeconds(ev.event_time);
-    } else if (ev.direction === 'exit' && entryTime !== null) {
-      total += timeToSeconds(ev.event_time) - entryTime;
-      entryTime = null;
+      if (firstEntrySec === null) firstEntrySec = sec;
+      if (prevExitSec !== null) {
+        outsideSec += Math.max(0, sec - prevExitSec);
+        prevExitSec = null;
+      }
+    } else if (ev.direction === 'exit') {
+      lastExitSec = sec;
+      prevExitSec = sec;
     }
   }
-  // Если последний вход без выхода и это сегодня — считаем до текущего момента
-  if (entryTime !== null && isToday) {
+
+  if (firstEntrySec === null) return 0;
+
+  // Открытая смена сегодня — закрываем «сейчас» для расчёта span.
+  if (prevExitSec === null && isToday) {
     const now = new Date();
-    const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-    total += nowSec - entryTime;
+    lastExitSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
   }
-  return total;
+  if (lastExitSec === null) return 0;
+
+  const span = Math.max(0, lastExitSec - firstEntrySec);
+  const lunch = Math.max(0, lunchQuotaSeconds);
+  return Math.max(0, span - Math.max(lunch, outsideSec));
 };
 
 export const getFirstDayOffset = (year: number, month: number): number => {
@@ -219,7 +246,8 @@ export const calculateAttendance = (
     }
 
     const isTodayDay = isCurrentMonth && d === todayDate;
-    const workSecs = calcWorkSeconds(dayEvs, internalPoints, isTodayDay);
+    const lunchQuotaSec = (schedule?.lunch_minutes || 0) * 60;
+    const workSecs = calcWorkSeconds(dayEvs, internalPoints, isTodayDay, lunchQuotaSec);
     totalWorkSecs += workSecs;
 
     const status = workSecs < targetSeconds ? 'underwork' : 'present';
@@ -500,8 +528,9 @@ export const calculateAttendanceFromTimesheet = (params: {
       .filter(event => event.direction === 'entry')
       .sort((a, b) => a.event_time.localeCompare(b.event_time));
 
+    const liveLunchQuotaSec = (schedule?.lunch_minutes || 0) * 60;
     const liveSeconds = shouldUseLiveTodayEvents
-      ? calcWorkSeconds(liveTodayEvents, liveInternalPoints, true)
+      ? calcWorkSeconds(liveTodayEvents, liveInternalPoints, true, liveLunchQuotaSec)
       : 0;
     const rawTotalSeconds = shouldUseLiveTodayEvents
       ? liveSeconds
