@@ -9,6 +9,7 @@ import {
   isScheduleDayOff,
   parseHMToMinutes,
 } from './scheduleUtils';
+import { selectVisibleHours } from './hoursDisplay';
 
 const WORK_START_MINUTES = 9 * 60; // 09:00
 const WORKDAY_TARGET_SECONDS = 8 * 3600; // 8 часов фактического присутствия
@@ -387,6 +388,7 @@ export const calculateAttendanceFromTimesheet = (params: {
   monthSkudEvents?: SkudEvent[];
   internalPoints?: Set<string>;
   capToSchedule?: boolean;
+  showActualHours?: boolean;
 }) => {
   const {
     employeeId,
@@ -400,6 +402,7 @@ export const calculateAttendanceFromTimesheet = (params: {
     monthSkudEvents,
     internalPoints,
     capToSchedule,
+    showActualHours = false,
   } = params;
 
   const today = new Date();
@@ -502,7 +505,7 @@ export const calculateAttendanceFromTimesheet = (params: {
       : 0;
     const rawTotalSeconds = shouldUseLiveTodayEvents
       ? liveSeconds
-      : Math.max(0, Math.round((entry?.hours_worked ?? 0) * 3600));
+      : Math.max(0, Math.round((selectVisibleHours(entry, showActualHours) ?? 0) * 3600));
     const totalSeconds = capToSchedule && plannedHours > 0
       ? Math.min(rawTotalSeconds, Math.round(plannedHours * 3600))
       : rawTotalSeconds;
@@ -530,7 +533,7 @@ export const calculateAttendanceFromTimesheet = (params: {
     const fullDayThresholdHours = getFullDayThresholdHoursForDay(schedule, calendar ?? null, year, month + 1, day);
 
     // Зеркалим логику TimesheetGrid.getDayCellClass, чтобы цвет в карточке совпадал с табелем.
-    const visibleHours = entry?.display_hours_worked ?? entry?.hours_worked ?? null;
+    const visibleHours = selectVisibleHours(entry, showActualHours);
     const hasSkudEvents = Boolean(entry?.first_entry || entry?.last_exit)
       || (shouldUseLiveTodayEvents && liveTodayExternalEvents.length > 0);
     const zeroHours = visibleHours == null || visibleHours <= 0;

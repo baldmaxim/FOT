@@ -158,7 +158,7 @@ export const EmployeeCardPage: FC = () => {
     }
     navigate('/employees', { replace: true });
   };
-  const { canEditPage, hasPermission, isAdmin } = useAuth();
+  const { canEditPage, hasPermission, isAdmin, showActualHours } = useAuth();
   const canEdit = canEditPage('/employees') || canEditPage('/staff-control');
   const TABS = useMemo<{ key: Tab; label: string }[]>(
     () => (isAdmin ? [...TABS_BASE, HISTORY_TAB] : TABS_BASE),
@@ -322,6 +322,7 @@ export const EmployeeCardPage: FC = () => {
         monthSkudEvents: skudEvents,
         internalPoints,
         capToSchedule,
+        showActualHours,
       });
     }
 
@@ -346,6 +347,7 @@ export const EmployeeCardPage: FC = () => {
     skudEvents,
     internalPoints,
     capToSchedule,
+    showActualHours,
   ]);
   const attendanceLoading = attendance === null;
   const onSite = useMemo(() => isEmployeeOnSite(todayEvents, internalPoints), [todayEvents, internalPoints]);
