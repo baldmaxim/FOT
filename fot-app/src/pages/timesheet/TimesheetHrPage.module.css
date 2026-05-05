@@ -3,6 +3,10 @@
   max-width: none;
   margin: 0;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 
 .workspace {
@@ -11,6 +15,10 @@
   background: transparent;
   box-shadow: none;
   overflow: visible;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .workspaceTabs {
@@ -19,6 +27,10 @@
 
 .workspaceBody {
   padding: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .loadingState {

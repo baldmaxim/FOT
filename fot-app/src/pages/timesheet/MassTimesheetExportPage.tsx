@@ -16,7 +16,7 @@ import './MassTimesheetExportPage.css';
 type TimesheetGroupingMode = 'employees' | 'objects';
 type ExportTab = 'departments' | 'assigned';
 
-const ACTIVE_TAB_STORAGE_KEY = 'timesheet_export_active_tab_v1';
+const ACTIVE_TAB_STORAGE_KEY = 'timesheet_export_active_tab_v2';
 
 const loadStoredActiveTab = (): ExportTab => {
   try {
@@ -116,6 +116,13 @@ export const MassTimesheetExportPage: FC = () => {
           </button>
           <button
             type="button"
+            className={`mte-half-chip ${half === 'FULL' ? 'mte-half-chip--active' : ''}`}
+            onClick={() => setHalf('FULL')}
+          >
+            {formatHalfLabel(year, month, 'FULL')}
+          </button>
+          <button
+            type="button"
             className={`mte-half-chip ${half === 'H2' ? 'mte-half-chip--active' : ''}`}
             onClick={() => setHalf('H2')}
           >
@@ -124,37 +131,31 @@ export const MassTimesheetExportPage: FC = () => {
         </section>
       </div>
 
-      <section className="mte-mode-switch" aria-label="Формат выгрузки">
-        <button
-          type="button"
-          className={`mte-mode-chip ${groupBy === 'employees' ? ' mte-mode-chip--active' : ''}`}
-          onClick={() => setGroupBy('employees')}
-        >
-          <span className="mte-mode-chip-label">По сотрудникам</span>
-          <span className="mte-mode-chip-subtitle">Один файл на выбранный отдел</span>
-        </button>
-        <button
-          type="button"
-          className={`mte-mode-chip ${groupBy === 'objects' ? ' mte-mode-chip--active' : ''}`}
-          onClick={() => setGroupBy('objects')}
-        >
-          <span className="mte-mode-chip-label">По объектам</span>
-          <span className="mte-mode-chip-subtitle">Отдельный файл на каждый объект</span>
-        </button>
-      </section>
-
-      <section className="mte-export-options" aria-label="Дополнительные параметры экспорта">
-        <label className={`mte-checkbox ${exportAs1C ? 'mte-checkbox--checked' : ''}`}>
+      <section className="mte-controls-row" aria-label="Параметры выгрузки">
+        <div className="mte-half-toggle" role="group" aria-label="Группировка">
+          <button
+            type="button"
+            className={`mte-half-chip ${groupBy === 'employees' ? 'mte-half-chip--active' : ''}`}
+            onClick={() => setGroupBy('employees')}
+          >
+            Сотрудники
+          </button>
+          <button
+            type="button"
+            className={`mte-half-chip ${groupBy === 'objects' ? 'mte-half-chip--active' : ''}`}
+            onClick={() => setGroupBy('objects')}
+          >
+            Объекты
+          </button>
+        </div>
+        <label className={`mte-inline-check ${exportAs1C ? 'mte-inline-check--on' : ''}`}>
           <input
             type="checkbox"
             checked={exportAs1C}
             onChange={e => setExportAs1C(e.target.checked)}
           />
-          <span className="mte-checkbox-box" aria-hidden="true" />
-          <span className="mte-checkbox-content">
-            <span className="mte-checkbox-label">Экспорт как в 1С</span>
-            <span className="mte-checkbox-subtitle">Шаблон 1С, только целые часы без доп. символов</span>
-          </span>
+          <span className="mte-inline-check-box" aria-hidden="true" />
+          <span className="mte-inline-check-label">Как в 1С</span>
         </label>
       </section>
 
