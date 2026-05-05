@@ -90,6 +90,8 @@ export const TransfersList: FC<IProps> = ({
       {error && <li className="ts-transfers-error">{error}</li>}
       {rows.map(row => {
         const isEditing = editingId === row.assignment_new_id;
+        const fromMissing = !deptOptions.some(d => d.id === row.from_department_id);
+        const toMissing = !deptOptions.some(d => d.id === row.to_department_id);
         return (
           <li
             key={row.assignment_new_id}
@@ -159,6 +161,11 @@ export const TransfersList: FC<IProps> = ({
                       onChange={e => setDraftFromDeptId(e.target.value)}
                       disabled={isPending}
                     >
+                      {fromMissing && (
+                        <option value={row.from_department_id} disabled>
+                          {row.from_department_name || '—'}
+                        </option>
+                      )}
                       {deptOptions.map(d => (
                         <option key={d.id} value={d.id}>{d.name}</option>
                       ))}
@@ -172,6 +179,11 @@ export const TransfersList: FC<IProps> = ({
                       onChange={e => setDraftToDeptId(e.target.value)}
                       disabled={isPending}
                     >
+                      {toMissing && (
+                        <option value={row.to_department_id} disabled>
+                          {row.to_department_name || '—'}
+                        </option>
+                      )}
                       {deptOptions.map(d => (
                         <option key={d.id} value={d.id}>{d.name}</option>
                       ))}
