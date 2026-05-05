@@ -410,6 +410,21 @@ const UploadReceiptFormModal: FC<IUploadFormModalProps> = ({ onClose, onSubmit }
   );
 };
 
+const themeToggleStyle: CSSProperties = {
+  width: 36,
+  height: 36,
+  padding: 0,
+  borderRadius: 12,
+  border: '1px solid var(--border)',
+  background: 'var(--bg-primary)',
+  color: 'var(--text-primary)',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginInlineStart: 4,
+};
+
 const ThemeToggleButton: FC = () => {
   const { theme, toggleTheme } = useTheme();
   const isDark = theme === 'dark';
@@ -417,16 +432,11 @@ const ThemeToggleButton: FC = () => {
     <button
       type="button"
       onClick={toggleTheme}
-      style={{
-        ...langButtonStyle(false),
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-      }}
+      style={themeToggleStyle}
       aria-label={isDark ? 'Светлая тема' : 'Тёмная тема'}
       title={isDark ? 'Светлая тема' : 'Тёмная тема'}
     >
-      {isDark ? <Sun size={14} /> : <Moon size={14} />}
+      {isDark ? <Sun size={18} /> : <Moon size={18} />}
     </button>
   );
 };
