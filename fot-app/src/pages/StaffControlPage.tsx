@@ -163,7 +163,7 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selected
           </button>
           <span className="sc-schedule-cell">
             <span className="sc-schedule-name">{scheduleView?.scheduleName || '—'}</span>
-            {scheduleView && <span className={`sc-schedule-badge ${scheduleView.source}`}>{SCHEDULE_SOURCE_LABELS[scheduleView.source]}</span>}
+            {scheduleView && scheduleView.source !== 'default' && <span className={`sc-schedule-badge ${scheduleView.source}`}>{SCHEDULE_SOURCE_LABELS[scheduleView.source]}</span>}
           </span>
         </span>
       </td>
@@ -369,6 +369,7 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   if (modalType === 'schedule') {
     const effectiveSchedule = scheduleViews.get(modalEmp.id);
     const baseSchedule = baseScheduleViews.get(modalEmp.id);
+    const defaultScheduleLabel = templates.find(t => t.is_default)?.name || '—';
     const hasEmployeeOverride = effectiveSchedule?.source === 'employee';
     const currentEmployeeScheduleId = effectiveSchedule?.source === 'employee' ? effectiveSchedule.scheduleId || '' : '';
     const currentEmployeeScheduleDate = effectiveSchedule?.source === 'employee' ? effectiveSchedule.effectiveFrom || getLocalISODate() : getLocalISODate();
@@ -383,8 +384,8 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
             <div className="sc-field">
               <label>Персональный график</label>
               <select value={scheduleVal} onChange={e => setScheduleVal(e.target.value)} autoFocus>
-                <option value="">— дефолтный график —</option>
-                {templates.map(tpl => (
+                <option value="">— {defaultScheduleLabel} —</option>
+                {templates.filter(tpl => !tpl.is_default).map(tpl => (
                   <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
                 ))}
               </select>
@@ -394,9 +395,9 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
               <input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} />
             </div>
             <div className="sc-schedule-help">
-              <div><strong>Сейчас действует:</strong> {effectiveSchedule?.scheduleName || '—'}{effectiveSchedule ? ` (${SCHEDULE_SOURCE_LABELS[effectiveSchedule.source]})` : ''}</div>
-              <div><strong>Базовый график:</strong> {baseSchedule?.scheduleName || 'дефолтный график'}</div>
-              <div>Если оставить пусто, с выбранной даты сотрудник вернётся к дефолтному графику.</div>
+              <div><strong>Сейчас действует:</strong> {effectiveSchedule?.scheduleName || '—'}{effectiveSchedule && effectiveSchedule.source !== 'default' ? ` (${SCHEDULE_SOURCE_LABELS[effectiveSchedule.source]})` : ''}</div>
+              <div><strong>Базовый график:</strong> {baseSchedule?.scheduleName || defaultScheduleLabel}</div>
+              <div>Если оставить пусто, с выбранной даты сотрудник вернётся к графику {defaultScheduleLabel}.</div>
             </div>
           </div>
           <div className="sc-modal-footer">
@@ -764,6 +765,7 @@ const BulkScheduleModal: FC<IBulkScheduleModalProps> = memo(({ open, targetCount
   const [scheduleId, setScheduleId] = useState('');
   const [effectiveFrom, setEffectiveFrom] = useState(() => getLocalISODate());
   const [saving, setSaving] = useState(false);
+  const defaultScheduleLabel = templates.find(t => t.is_default)?.name || 'по умолчанию';
 
   useEffect(() => {
     if (!open) return;
@@ -798,7 +800,7 @@ const BulkScheduleModal: FC<IBulkScheduleModalProps> = memo(({ open, targetCount
             <label>Действие</label>
             <select value={mode} onChange={e => setMode(e.target.value as 'assign' | 'reset')} autoFocus>
               <option value="assign">Назначить персональный график</option>
-              <option value="reset">Вернуть к дефолтному графику</option>
+              <option value="reset">Вернуть к графику {defaultScheduleLabel}</option>
             </select>
           </div>
           {mode === 'assign' && (
@@ -806,7 +808,7 @@ const BulkScheduleModal: FC<IBulkScheduleModalProps> = memo(({ open, targetCount
               <label>Шаблон графика</label>
               <select value={scheduleId} onChange={e => setScheduleId(e.target.value)}>
                 <option value="">Выберите график</option>
-                {templates.map(tpl => (
+                {templates.filter(tpl => !tpl.is_default).map(tpl => (
                   <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
                 ))}
               </select>
@@ -822,7 +824,7 @@ const BulkScheduleModal: FC<IBulkScheduleModalProps> = memo(({ open, targetCount
             <div>
               {mode === 'assign'
                 ? 'С выбранной даты персональный график будет назначен всем сотрудникам из выбранной области.'
-                : 'С выбранной даты персональный график будет снят, и сотрудники вернутся к дефолтному графику.'}
+                : `С выбранной даты персональный график будет снят, и сотрудники вернутся к графику ${defaultScheduleLabel}.`}
             </div>
           </div>
         </div>
@@ -952,6 +954,7 @@ const BulkBrigadeScheduleModal: FC<IBulkBrigadeScheduleModalProps> = memo(({
   const [scheduleId, setScheduleId] = useState('');
   const [effectiveFrom, setEffectiveFrom] = useState(() => getLocalISODate());
   const [saving, setSaving] = useState(false);
+  const defaultScheduleLabel = templates.find(t => t.is_default)?.name || 'по умолчанию';
 
   useEffect(() => {
     if (!open) return;
@@ -1089,7 +1092,7 @@ const BulkBrigadeScheduleModal: FC<IBulkBrigadeScheduleModalProps> = memo(({
               <label>Действие</label>
               <select value={mode} onChange={e => setMode(e.target.value as 'assign' | 'reset')}>
                 <option value="assign">Назначить персональный график</option>
-                <option value="reset">Вернуть к дефолтному графику</option>
+                <option value="reset">Вернуть к графику {defaultScheduleLabel}</option>
               </select>
             </div>
             {mode === 'assign' && (
@@ -1097,7 +1100,7 @@ const BulkBrigadeScheduleModal: FC<IBulkBrigadeScheduleModalProps> = memo(({
                 <label>Шаблон графика</label>
                 <select value={scheduleId} onChange={e => setScheduleId(e.target.value)}>
                   <option value="">Выберите график</option>
-                  {templates.map(tpl => (
+                  {templates.filter(tpl => !tpl.is_default).map(tpl => (
                     <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
                   ))}
                 </select>
@@ -1114,7 +1117,7 @@ const BulkBrigadeScheduleModal: FC<IBulkBrigadeScheduleModalProps> = memo(({
               <div>
                 {mode === 'assign'
                   ? 'С выбранной даты персональный график будет назначен всем текущим активным сотрудникам выбранных бригад.'
-                  : 'С выбранной даты персональный график будет снят, и сотрудники вернутся к дефолтному графику.'}
+                  : `С выбранной даты персональный график будет снят, и сотрудники вернутся к графику ${defaultScheduleLabel}.`}
               </div>
             </div>
           </div>
@@ -1484,7 +1487,8 @@ export const StaffControlPage: FC = () => {
     }
     if (scheduleFilter) {
       if (scheduleFilter === '__default__') {
-        parts.push('График: дефолтный');
+        const defaultName = scheduleTemplates.find(t => t.is_default)?.name;
+        parts.push(`График: ${defaultName || 'по умолчанию'}`);
       } else {
         const scheduleName = scheduleTemplates.find(t => t.id === scheduleFilter)?.name;
         if (scheduleName) parts.push(`График: ${scheduleName}`);
@@ -2087,7 +2091,6 @@ export const StaffControlPage: FC = () => {
         title="Фильтр по графику работы"
       >
         <option value="">Все графики</option>
-        <option value="__default__">Дефолтный (без персонального)</option>
         {scheduleTemplates.map(tpl => (
           <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
         ))}

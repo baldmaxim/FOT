@@ -166,39 +166,56 @@ export const employeesController = {
         else if (status === 'excluded') q = q.eq('excluded_from_timesheet', true).neq('employment_status', 'fired');
         else if (status === 'active' || !status) q = q.neq('employment_status', 'fired');
 
-        // Фильтр по персональному графику: schedule_id=<uuid> или schedule_id=__default__
-        // (__default__ — те, у кого нет активной записи в employee_schedule_assignments)
+        // Фильтр по графику: schedule_id=<uuid> или schedule_id=__default__ (legacy).
+        // Если запрошенный schedule — дефолтный (is_default=true), включаем и тех,
+        // у кого ESA на этот шаблон, и тех, у кого активного ESA нет вообще.
         const scheduleParam = typeof req.query.schedule_id === 'string' ? req.query.schedule_id.trim() : '';
         if (scheduleParam) {
           const today = new Date().toISOString().slice(0, 10);
+
+          let isDefaultRequested = false;
           if (scheduleParam === '__default__') {
-            const { data: activeAss, error: assErr } = await supabase
-              .from('employee_schedule_assignments')
-              .select('employee_id')
-              .lte('effective_from', today)
-              .or(`effective_to.is.null,effective_to.gte.${today}`);
-            if (assErr) {
-              console.error('Get default-schedule employees error:', assErr);
-              res.status(500).json({ success: false, error: 'Failed to fetch employees' });
-              return;
-            }
-            const assignedIds = [...new Set((activeAss || []).map(r => Number(r.employee_id)))];
-            if (assignedIds.length > 0) {
-              q = q.not('id', 'in', `(${assignedIds.join(',')})`);
-            }
+            isDefaultRequested = true;
           } else {
-            const { data: activeAss, error: assErr } = await supabase
-              .from('employee_schedule_assignments')
-              .select('employee_id')
-              .eq('schedule_id', scheduleParam)
-              .lte('effective_from', today)
-              .or(`effective_to.is.null,effective_to.gte.${today}`);
-            if (assErr) {
-              console.error('Get schedule employees error:', assErr);
+            const { data: tplRow, error: tplErr } = await supabase
+              .from('work_schedules')
+              .select('is_default')
+              .eq('id', scheduleParam)
+              .maybeSingle();
+            if (tplErr) {
+              console.error('Get schedule template error:', tplErr);
               res.status(500).json({ success: false, error: 'Failed to fetch employees' });
               return;
             }
-            const ids = [...new Set((activeAss || []).map(r => Number(r.employee_id)))];
+            isDefaultRequested = !!tplRow?.is_default;
+          }
+
+          const { data: activeAss, error: assErr } = await supabase
+            .from('employee_schedule_assignments')
+            .select('employee_id, schedule_id')
+            .lte('effective_from', today)
+            .or(`effective_to.is.null,effective_to.gte.${today}`);
+          if (assErr) {
+            console.error('Get schedule assignments error:', assErr);
+            res.status(500).json({ success: false, error: 'Failed to fetch employees' });
+            return;
+          }
+
+          if (isDefaultRequested) {
+            // Включаем тех, у кого либо нет активного ESA, либо ESA указывает на этот же
+            // дефолтный шаблон. Исключаем тех, чьё ESA ведёт на другой шаблон.
+            const excluded = [...new Set(
+              (activeAss || [])
+                .filter(r => r.schedule_id !== scheduleParam)
+                .map(r => Number(r.employee_id)),
+            )];
+            if (excluded.length > 0) q = q.not('id', 'in', `(${excluded.join(',')})`);
+          } else {
+            const ids = [...new Set(
+              (activeAss || [])
+                .filter(r => r.schedule_id === scheduleParam)
+                .map(r => Number(r.employee_id)),
+            )];
             if (ids.length === 0) {
               res.json({
                 success: true,
