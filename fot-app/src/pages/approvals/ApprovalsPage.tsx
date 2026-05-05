@@ -1,4 +1,4 @@
-import { type FC, useState, useMemo, useEffect, lazy, Suspense } from 'react';
+import { type FC, useState, useMemo, useEffect, useRef, lazy, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Clock } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee } from '../../types';

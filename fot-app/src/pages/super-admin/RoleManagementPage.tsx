@@ -259,6 +259,24 @@ export const RoleManagementPage: FC = () => {
     }
   };
 
+  const handleToggleShowActualHours = async (role: SystemRole, next: boolean) => {
+    try {
+      const updated = await rolesService.update(role.code, {
+        name: role.name,
+        description: role.description,
+        is_admin: role.is_admin,
+        employee_variant: role.employee_variant,
+        is_active: role.is_active,
+        show_actual_hours: next,
+      });
+      toast.success(next ? 'Роль показывает факт по СКУД' : 'Роль показывает урезанные часы');
+      upsertRoleInCache(updated);
+      await refreshProfile();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка изменения часов роли');
+    }
+  };
+
   const handleToggleActive = async (role: SystemRole) => {
     try {
       const updated = await rolesService.update(role.code, {
@@ -495,6 +513,8 @@ export const RoleManagementPage: FC = () => {
                           onChange={v => {
                             if (editState?.code === role.code) {
                               setEditState(s => (s ? { ...s, show_actual_hours: v } : s));
+                            } else {
+                              void handleToggleShowActualHours(role, v);
                             }
                           }}
                           withLabels={false}

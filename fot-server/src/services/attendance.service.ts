@@ -393,16 +393,22 @@ export async function buildAttendanceEntries(params: {
       existingSkud.corrected = true;
     }
 
-    let effectiveHours: number | null = adjustment.hours_override;
-    if (effectiveHours == null && ABSENCE_STATUSES_AS_WORKED.has(adjustment.status)) {
-      const adjSchedule = dailySchedulesMap.get(adjustment.employee_id)?.get(adjustment.work_date);
-      if (adjSchedule) {
-        const [adjY, adjM, adjD] = adjustment.work_date.split('-').map(Number);
-        const adjDate = new Date(adjY, adjM - 1, adjD);
-        effectiveHours = isWorkingDay(adjSchedule, adjDate, calendarMonth)
-          ? getScheduleForDate(adjSchedule, adjDate).work_hours
-          : 0;
-      }
+    const adjSchedule = dailySchedulesMap.get(adjustment.employee_id)?.get(adjustment.work_date);
+    const [adjY, adjM, adjD] = adjustment.work_date.split('-').map(Number);
+    const adjDate = new Date(adjY, adjM - 1, adjD);
+    const isAdjWorkingDay = adjSchedule ? isWorkingDay(adjSchedule, adjDate, calendarMonth) : true;
+
+    // Не-присутствие (отпуск/больничный/отгул/удалёнка/обучение/неоплачиваемый/прогул) в выходной
+    // или праздник не должно давать часов: иначе при норме 0 любые часы превращаются в переработку.
+    let effectiveHours: number | null;
+    if (NON_WORK_ADJUSTMENT_STATUSES.has(adjustment.status) && !isAdjWorkingDay) {
+      effectiveHours = 0;
+    } else if (adjustment.hours_override != null) {
+      effectiveHours = adjustment.hours_override;
+    } else if (ABSENCE_STATUSES_AS_WORKED.has(adjustment.status) && adjSchedule) {
+      effectiveHours = isAdjWorkingDay ? getScheduleForDate(adjSchedule, adjDate).work_hours : 0;
+    } else {
+      effectiveHours = null;
     }
 
     pushEntry({

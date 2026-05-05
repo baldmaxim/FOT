@@ -471,6 +471,71 @@
   font-weight: 600;
 }
 
+/* Двухпозиционный переключатель для бинарных пар-выбора («урезано/факт» и т.п.).
+   Применяется и в формах, и в ячейках таблицы — поэтому inline-flex и
+   читаемые подписи слева/справа. */
+.hoursToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  user-select: none;
+  cursor: pointer;
+}
+
+.hoursToggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.hoursToggleTrack {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 25%, var(--surface));
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+}
+
+.hoursToggleTrack::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform 0.15s ease;
+}
+
+.hoursToggle input:checked + .hoursToggleTrack {
+  background: var(--primary);
+}
+
+.hoursToggle input:checked + .hoursToggleTrack::after {
+  transform: translateX(16px);
+}
+
+.hoursToggle input:focus-visible + .hoursToggleTrack {
+  outline: 2px solid color-mix(in srgb, var(--primary) 50%, transparent);
+  outline-offset: 2px;
+}
+
+.hoursToggleLabelOn {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.hoursToggleLabelOff {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 .pageRows {
   display: grid;
   gap: 10px;
