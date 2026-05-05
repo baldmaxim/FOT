@@ -15,6 +15,7 @@ import {
   ShieldIcon,
   DollarIcon,
   FileTextIcon,
+  KeyIcon,
 } from '../ui/Icons';
 
 interface INavItem {
@@ -58,6 +59,7 @@ const navGroups: INavGroup[] = [
       { id: 'timesheet-transfers', path: '/admin/timesheet-transfers', label: 'Переводы и исключения', icon: CalendarIcon, requiredPage: '/admin/timesheet-transfers' },
       { id: 'skud-hub', path: '/skud', label: 'СКУД', icon: DatabaseIcon, requiredPage: '/skud-settings' },
       { id: 'sigur', path: '/sigur', label: 'SIGUR', icon: UsersIcon, requiredPage: '/skud-settings' },
+      { id: 'card-reader', path: '/skud-card-reader', label: 'Считыватель пропусков', icon: KeyIcon, requiredPage: '/skud-card-reader' },
       { id: 'system-hub', path: '/admin/system', label: 'Система', icon: ShieldIcon, requiredPage: ['/admin/users', '/admin/roles', '/admin/audit', '/admin/action-history', '/admin/settings', '/admin/data-api'] },
     ]
   }

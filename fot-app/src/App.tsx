@@ -56,6 +56,7 @@ const SigurSettingsPage = lazy(() => import('./pages/skud/SigurSettingsPage').th
 const SigurPage = lazy(() => import('./pages/skud/SigurPage').then(m => ({ default: m.SigurPage })));
 const SigurRawDataPage = lazy(() => import('./pages/skud/SigurRawDataPage').then(m => ({ default: m.SigurRawDataPage })));
 const SkudSupabasePage = lazy(() => import('./pages/skud/SkudSupabasePage').then(m => ({ default: m.SkudSupabasePage })));
+const SkudCardReaderPage = lazy(() => import('./pages/skud/SkudCardReaderPage').then(m => ({ default: m.SkudCardReaderPage })));
 
 // Timesheet
 const TimesheetPage = lazy(() => import('./pages/timesheet/TimesheetPage').then(m => ({ default: m.TimesheetPage })));
@@ -420,6 +421,17 @@ const AppRoutes = () => {
             element={
               <Layout title="Настройки СКУД" theme={theme} onToggleTheme={toggleTheme}>
                 <SigurSettingsPage />
+              </Layout>
+            }
+          />
+        </Route>
+
+        <Route element={<ProtectedRoute requiredPage="/skud-card-reader" />}>
+          <Route
+            path="/skud-card-reader"
+            element={
+              <Layout title="Считыватель пропусков" theme={theme} onToggleTheme={toggleTheme}>
+                <SkudCardReaderPage />
               </Layout>
             }
           />

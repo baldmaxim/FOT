@@ -4,6 +4,7 @@ import { sigurMonitorController } from '../controllers/sigur-monitor.controller.
 import { sigurSyncController } from '../controllers/sigur-sync.controller.js';
 import { sigurAdminController } from '../controllers/sigur-admin.controller.js';
 import { sigurFilterController } from '../controllers/sigur-filter.controller.js';
+import { sigurCardReaderController } from '../controllers/sigur-card-reader.controller.js';
 import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { noStore } from '../middleware/noStore.js';
@@ -326,6 +327,23 @@ router.get('/sync-filter', requirePageAccess('/skud-settings', 'view'), sigurFil
 
 // PUT /api/sigur/sync-filter — замена whitelist отделов
 router.put('/sync-filter', requirePageAccess('/skud-settings', 'edit'), sigurFilterController.updateFilter);
+
+// === Card Reader (USB-считыватель) ===
+
+// GET /api/sigur/cards/lookup?uid=<sigurCard16hex> — кому принадлежит карта
+router.get(
+  '/cards/lookup',
+  requirePageAccess('/skud-card-reader', 'view'),
+  sigurCardReaderController.lookup,
+);
+
+// POST /api/sigur/cards/assign — привязать карту к сотруднику
+router.post(
+  '/cards/assign',
+  requirePageAccess('/skud-card-reader', 'edit'),
+  requireCritical2FA,
+  sigurCardReaderController.assign,
+);
 
 // === Admin эндпоинты ===
 

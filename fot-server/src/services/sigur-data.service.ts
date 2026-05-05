@@ -1039,4 +1039,34 @@ export class SigurDataService extends SigurServiceBase {
       connection,
     );
   }
+
+  async createEmployeeCardBinding(
+    employeeId: number,
+    cardId: number,
+    startDate: string,
+    expirationDate: string,
+    connection?: ConnectionType,
+    format?: string,
+  ): Promise<void> {
+    const item: Record<string, unknown> = { employeeId, cardId, startDate, expirationDate };
+    if (format) item.format = format;
+    await this.mutate<void>(
+      'post',
+      '/api/v1/bindings/employees-cards',
+      [item],
+      undefined,
+      connection,
+    );
+  }
+
+  async findCardsByNumber(cardNumber: string, connection?: ConnectionType) {
+    const all = await this.getCards(undefined, connection) as Record<string, unknown>[];
+    const target = cardNumber.trim().toUpperCase();
+    return all.filter(card => {
+      const num = String(
+        card.number ?? card.Number ?? card.cardNumber ?? card.card_number ?? card.serialNumber ?? '',
+      ).trim().toUpperCase();
+      return num === target;
+    });
+  }
 }
