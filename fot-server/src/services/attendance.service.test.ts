@@ -23,6 +23,7 @@ const mockedState = vi.hoisted(() => ({
   }>(),
   internalPoints: new Set<string>(),
   scheduleWorkHours: 8,
+  scheduleShiftHours: 9,
   isWorkingDay: true,
   needsSkudCheck: false,
   objectSchedulesByDate: new Map<string, Map<string, IResolvedSchedule>>(),
@@ -104,9 +105,7 @@ vi.mock('./schedule.service.js', () => ({
     work_start: '09:00',
     work_end: '18:00',
   })),
-  getShiftDurationHours: vi.fn((dayParams?: { work_hours?: number }) => (
-    dayParams?.work_hours ?? mockedState.scheduleWorkHours
-  )),
+  getShiftDurationHours: vi.fn(() => mockedState.scheduleShiftHours),
   isPreHoliday: vi.fn(() => false),
   isWorkingDay: vi.fn(() => mockedState.isWorkingDay),
   needsSkudCheck: vi.fn(() => mockedState.needsSkudCheck),
@@ -132,6 +131,7 @@ describe('attendance.service', () => {
     mockedState.travelSummary = new Map();
     mockedState.internalPoints = new Set();
     mockedState.scheduleWorkHours = 8;
+    mockedState.scheduleShiftHours = 9;
     mockedState.isWorkingDay = true;
     mockedState.needsSkudCheck = false;
     mockedState.objectSchedulesByDate = new Map();
@@ -590,8 +590,9 @@ describe('attendance.service', () => {
     });
   });
 
-  it('proportionally caps object hours when actual total exceeds planned day hours', async () => {
+  it('proportionally caps object hours when actual total exceeds shift length', async () => {
     mockedState.scheduleWorkHours = 8;
+    mockedState.scheduleShiftHours = 9;
 
     const objectEntryA = {
       adjustment_id: 1,
@@ -665,9 +666,9 @@ describe('attendance.service', () => {
     expect(result.entries[0]).toMatchObject({
       employee_id: 1,
       work_date: '2026-04-01',
-      hours_worked: 8,
-      display_hours_worked: 8,
-      base_hours_worked: 8,
+      hours_worked: 9,
+      display_hours_worked: 9,
+      base_hours_worked: 9,
       first_entry: null,
       last_exit: null,
       object_detail_mode: 'available',
@@ -675,16 +676,17 @@ describe('attendance.service', () => {
 
     const objA = result.objectEntries.find(entry => entry.object_key === 'obj-a')!;
     const objB = result.objectEntries.find(entry => entry.object_key === 'obj-b')!;
-    expect(objA.display_hours_worked).toBeCloseTo(6 * 8 / 11, 2);
+    expect(objA.display_hours_worked).toBeCloseTo(6 * 9 / 11, 2);
     expect(objA.hours_worked).toBe(objA.display_hours_worked);
     expect(objA.base_hours_worked).toBe(objA.display_hours_worked);
-    expect(objB.display_hours_worked).toBeCloseTo(8 - objA.display_hours_worked, 2);
+    expect(objB.display_hours_worked).toBeCloseTo(9 - objA.display_hours_worked, 2);
     expect(objB.hours_worked).toBe(objB.display_hours_worked);
-    expect(objA.display_hours_worked + objB.display_hours_worked).toBeCloseTo(8, 2);
+    expect(objA.display_hours_worked + objB.display_hours_worked).toBeCloseTo(9, 2);
   });
 
-  it('keeps actual object hours when total is within planned day hours', async () => {
+  it('keeps actual object hours when total is within shift length', async () => {
     mockedState.scheduleWorkHours = 8;
+    mockedState.scheduleShiftHours = 9;
 
     const objectEntryA = {
       adjustment_id: 1,
@@ -771,6 +773,7 @@ describe('attendance.service', () => {
 
   it('caps and masks actual fields when the day has no object breakdown', async () => {
     mockedState.scheduleWorkHours = 8;
+    mockedState.scheduleShiftHours = 9;
 
     mockedState.resolver = (query) => {
       if (query.table === 'skud_daily_summary') {
@@ -809,9 +812,9 @@ describe('attendance.service', () => {
     expect(result.entries[0]).toMatchObject({
       employee_id: 1,
       work_date: '2026-04-01',
-      hours_worked: 8,
-      display_hours_worked: 8,
-      base_hours_worked: 8,
+      hours_worked: 9,
+      display_hours_worked: 9,
+      base_hours_worked: 9,
       first_entry: null,
       last_exit: null,
     });

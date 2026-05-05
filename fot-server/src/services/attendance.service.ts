@@ -153,15 +153,19 @@ function clampToScheduleHours(value: number, plannedHours: number): number {
   return roundHours(Math.max(0, Math.min(value, plannedHours)));
 }
 
-function getPlannedHoursForScheduleOnDate(
+// Длина смены = work_end − work_start (с учётом day_overrides). Отличается от
+// work_hours тем, что включает обед: например, при 09:00–18:00 + work_hours=7.5
+// возвращает 9 (тогда как work_hours = 7.5). Используется для cap фактических
+// часов в табеле руководителя — чтобы реальное присутствие в офисе не обрезалось
+// до нормы (раньше показывал 7:30 даже если человек был 9 часов).
+function getShiftLengthHoursForScheduleOnDate(
   schedule: IResolvedSchedule | null | undefined,
   workDate: string,
 ): number | null {
   if (!schedule) return null;
   const [yearPart, monthPart, dayPart] = workDate.split('-').map(Number);
-  // Норма дня = work_hours (нетто, без обеда). Cap до нормы прячет переработки в табеле:
-  // оплачиваемые часы > нормы обрезаются, day становится зелёным с visible_hours = norm.
-  return getScheduleForDate(schedule, new Date(yearPart, monthPart - 1, dayPart)).work_hours;
+  const day = getScheduleForDate(schedule, new Date(yearPart, monthPart - 1, dayPart));
+  return roundHours(getShiftDurationHours(day));
 }
 
 function getSummaryBreakMinutes(summary: ISummaryRow): number {
@@ -791,7 +795,7 @@ export async function buildAttendanceEntries(params: {
     if (entry.is_correction && entry.id != null) continue;
 
     const employeeSchedule = dailySchedulesMap.get(entry.employee_id)?.get(entry.work_date);
-    const plannedDayHours = getPlannedHoursForScheduleOnDate(employeeSchedule, entry.work_date);
+    const shiftLengthHours = getShiftLengthHoursForScheduleOnDate(employeeSchedule, entry.work_date);
     const dayObjectEntries = objectAttendanceData.objectEntriesByEmployeeDate
       .get(entry.employee_id)
       ?.get(entry.work_date) || [];
@@ -800,11 +804,11 @@ export async function buildAttendanceEntries(params: {
       const totalActualHours = roundHours(
         dayObjectEntries.reduce((sum, item) => sum + item.hours_worked, 0),
       );
-      entry.display_hours_worked = (plannedDayHours != null && totalActualHours > plannedDayHours)
-        ? plannedDayHours
+      entry.display_hours_worked = (shiftLengthHours != null && totalActualHours > shiftLengthHours)
+        ? shiftLengthHours
         : totalActualHours;
-    } else if (entry.hours_worked != null && plannedDayHours != null) {
-      entry.display_hours_worked = clampToScheduleHours(entry.hours_worked, plannedDayHours);
+    } else if (entry.hours_worked != null && shiftLengthHours != null) {
+      entry.display_hours_worked = clampToScheduleHours(entry.hours_worked, shiftLengthHours);
     } else {
       entry.display_hours_worked = entry.hours_worked;
     }
@@ -822,27 +826,27 @@ export async function buildAttendanceEntries(params: {
         ?.get(entry.work_date) || [];
 
       const employeeSchedule = dailySchedulesMap.get(entry.employee_id)?.get(entry.work_date);
-      const plannedDayHours = getPlannedHoursForScheduleOnDate(employeeSchedule, entry.work_date);
+      const shiftLengthHours = getShiftLengthHoursForScheduleOnDate(employeeSchedule, entry.work_date);
 
       if (dayObjectEntries.length > 0) {
         const totalActualHours = roundHours(
           dayObjectEntries.reduce((sum, item) => sum + item.hours_worked, 0),
         );
 
-        if (plannedDayHours != null && totalActualHours > plannedDayHours) {
-          const scale = plannedDayHours / totalActualHours;
+        if (shiftLengthHours != null && totalActualHours > shiftLengthHours) {
+          const scale = shiftLengthHours / totalActualHours;
           let allocated = 0;
           dayObjectEntries.forEach((item, idx) => {
             const isLast = idx === dayObjectEntries.length - 1;
             const share = isLast
-              ? roundHours(plannedDayHours - allocated)
+              ? roundHours(shiftLengthHours - allocated)
               : roundHours(item.hours_worked * scale);
             item.display_hours_worked = share;
             item.hours_worked = share;
             item.base_hours_worked = share;
             allocated = roundHours(allocated + share);
           });
-          entry.display_hours_worked = plannedDayHours;
+          entry.display_hours_worked = shiftLengthHours;
         } else {
           for (const item of dayObjectEntries) {
             item.display_hours_worked = item.hours_worked;
@@ -851,9 +855,9 @@ export async function buildAttendanceEntries(params: {
           entry.display_hours_worked = totalActualHours;
         }
       } else {
-        entry.display_hours_worked = entry.hours_worked == null || plannedDayHours == null
+        entry.display_hours_worked = entry.hours_worked == null || shiftLengthHours == null
           ? entry.hours_worked
-          : clampToScheduleHours(entry.hours_worked, plannedDayHours);
+          : clampToScheduleHours(entry.hours_worked, shiftLengthHours);
       }
 
       entry.hours_worked = entry.display_hours_worked;
