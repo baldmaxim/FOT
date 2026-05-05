@@ -34,12 +34,17 @@ export interface ICardLookupFound {
 
 export interface ICardLookupDebug {
   tried: string[];
-  sampleCards: ISigurCardSummary[];
+  sampleCards: Array<Record<string, string>>;
 }
 
 export interface ICardLookupMissing {
   found: false;
   uid: string;
+  debug?: ICardLookupDebug;
+}
+
+export interface ICardAssignErrorPayload {
+  error: string;
   debug?: ICardLookupDebug;
 }
 

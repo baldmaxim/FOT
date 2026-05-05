@@ -12,6 +12,7 @@ import {
   type ICardLookupDebug,
   type ISigurCardEmployee,
 } from '../../services/sigurCardReaderService';
+import { ApiError } from '../../api/client';
 import type { Employee } from '../../types';
 import './CardReaderPanel.css';
 
@@ -64,7 +65,7 @@ const UidPanel: FC<{ card: ICardEvent }> = ({ card }) => (
 const DebugBlock: FC<{ debug: ICardLookupDebug | undefined }> = ({ debug }) => {
   if (!debug) return null;
   return (
-    <details className="scr-debug">
+    <details className="scr-debug" open>
       <summary>Диагностика поиска</summary>
       <div className="scr-debug-section">
         <strong>Искали по:</strong>
@@ -74,15 +75,22 @@ const DebugBlock: FC<{ debug: ICardLookupDebug | undefined }> = ({ debug }) => {
       </div>
       {debug.sampleCards.length > 0 && (
         <div className="scr-debug-section">
-          <strong>Примеры карт в Sigur:</strong>
-          <ul>
-            {debug.sampleCards.map(c => (
-              <li key={c.cardId}>
-                <code>{c.cardNumber || '—'}</code>
-                {c.format && <span className="scr-debug-meta"> ({c.format})</span>}
-              </li>
-            ))}
-          </ul>
+          <strong>Сырые поля первых карт Sigur:</strong>
+          {debug.sampleCards.map((card, idx) => (
+            <div key={idx} className="scr-debug-card">
+              <div className="scr-debug-card-title">Карта #{idx + 1}</div>
+              <table className="scr-debug-table">
+                <tbody>
+                  {Object.entries(card).map(([k, v]) => (
+                    <tr key={k}>
+                      <td className="scr-debug-key"><code>{k}</code></td>
+                      <td className="scr-debug-val"><code>{v}</code></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
         </div>
       )}
     </details>
@@ -106,6 +114,7 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
   const [expirationDate, setExpirationDate] = useState<string>(defaultExpirationISO());
   const [assigning, setAssigning] = useState(false);
   const [assignSuccess, setAssignSuccess] = useState(false);
+  const [assignErrorDebug, setAssignErrorDebug] = useState<ICardLookupDebug | null>(null);
 
   const lookupSeqRef = useRef(0);
   const assignedCardRef = useRef<string | null>(null);
@@ -116,6 +125,7 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
     setLookupResult(null);
     setLookupError(null);
     setAssignSuccess(false);
+    setAssignErrorDebug(null);
     setSelectedEmployee(null);
     setSearchTerm('');
     setSearchResults([]);
@@ -130,6 +140,7 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
     assignedCardRef.current = card.sigurCard;
     setAssigning(true);
     setLookupError(null);
+    setAssignErrorDebug(null);
     try {
       const expIso = expirationDate ? new Date(expirationDate + 'T23:59:59').toISOString() : undefined;
       const uids = collectCardUids(card);
@@ -146,6 +157,12 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Не удалось привязать карту';
       setLookupError(msg);
+      if (err instanceof ApiError && err.details && typeof err.details === 'object') {
+        const dbg = (err.details as Record<string, unknown>).debug;
+        if (dbg && typeof dbg === 'object') {
+          setAssignErrorDebug(dbg as ICardLookupDebug);
+        }
+      }
       assignedCardRef.current = null;
     } finally {
       setAssigning(false);
@@ -318,6 +335,10 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
           {assigning && <div className="scr-loader">Привязка…</div>}
 
           {lookupError && <div className="scr-error">{lookupError}</div>}
+
+          {isAssignTo && assignErrorDebug && (
+            <DebugBlock debug={assignErrorDebug} />
+          )}
 
           {isAssignTo && assignSuccess && (
             <div className="scr-card scr-card--known">

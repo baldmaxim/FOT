@@ -79,6 +79,30 @@ const handleSigurError = (res: Response, err: unknown, fallback: string): void =
   res.status(500).json({ success: false, error: fallback });
 };
 
+/** Превращает сырую карту Sigur в плоский объект key→string для отладочного вывода. */
+const flattenCardForDebug = (raw: Record<string, unknown>): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed) out[key] = trimmed.length > 80 ? trimmed.slice(0, 80) + '…' : trimmed;
+    } else if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+      out[key] = String(value);
+    } else if (Array.isArray(value)) {
+      out[key] = `[${value.length}]`;
+    } else if (typeof value === 'object') {
+      try {
+        const json = JSON.stringify(value);
+        out[key] = json.length > 80 ? json.slice(0, 80) + '…' : json;
+      } catch {
+        out[key] = '[object]';
+      }
+    }
+  }
+  return out;
+};
+
 const fetchEmployeeBySigurId = async (sigurEmployeeId: number): Promise<IEmployeeBrief | null> => {
   const { data, error } = await supabase
     .from('employees')
@@ -144,8 +168,15 @@ export const sigurCardReaderController = {
       const { matches, tried, sample } = await sigurService.findCardByCandidates(candidates);
       const cards = matches.map(toCardSummary).filter((c): c is ICardSummary => !!c);
 
+      console.log('[card-reader] lookup', {
+        tried,
+        matched: cards.length,
+        totalSampled: sample.length,
+        sampleKeys: sample[0] ? Object.keys(sample[0]) : [],
+      });
+
       if (cards.length === 0) {
-        const sampleCards = sample.map(toCardSummary).filter((c): c is ICardSummary => !!c).slice(0, 3);
+        const sampleCards = sample.slice(0, 3).map(flattenCardForDebug);
         res.json({
           success: true,
           data: {
@@ -220,12 +251,15 @@ export const sigurCardReaderController = {
         return;
       }
 
-      const { matches } = await sigurService.findCardByCandidates(candidates);
+      const { matches, tried, sample } = await sigurService.findCardByCandidates(candidates);
       const cards = matches.map(toCardSummary).filter((c): c is ICardSummary => !!c);
+      console.log('[card-reader] assign', { tried, matched: cards.length, employeeId: fotEmployeeId });
       if (cards.length === 0) {
+        const sampleCards = sample.slice(0, 3).map(flattenCardForDebug);
         res.status(404).json({
           success: false,
           error: 'Карта не найдена в Sigur. Создайте карту в Sigur Manager перед привязкой.',
+          debug: { tried, sampleCards },
         });
         return;
       }

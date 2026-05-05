@@ -1081,30 +1081,52 @@ export class SigurDataService extends SigurServiceBase {
     const stripped = upper.replace(/^0+/, '');
     if (stripped) variants.add(stripped);
 
+    const addNumberRepresentations = (n: number | bigint): void => {
+      const big = typeof n === 'bigint' ? n : BigInt(n);
+      if (big < BigInt(0)) return;
+      variants.add(big.toString(10));
+      const hex = big.toString(16).toUpperCase();
+      variants.add(hex);
+      variants.add(hex.padStart(4, '0'));
+      variants.add(hex.padStart(6, '0'));
+      variants.add(hex.padStart(8, '0'));
+      variants.add(hex.padStart(16, '0'));
+    };
+
     const w26Match = upper.match(/^(\d+),(\d+)$/);
     if (w26Match) {
       const fac = Number(w26Match[1]);
       const num = Number(w26Match[2]);
       if (Number.isFinite(fac) && Number.isFinite(num) && fac >= 0 && num >= 0) {
+        // combined int (3 байта): (fac<<16) | num
         const combined = ((fac & 0xFF) << 16) | (num & 0xFFFF);
-        variants.add(combined.toString(10));
-        const hex = combined.toString(16).toUpperCase();
-        variants.add(hex);
-        variants.add(hex.padStart(8, '0'));
-        variants.add(hex.padStart(16, '0'));
+        addNumberRepresentations(combined);
+        // combined int (4 байта): включая trailing 00 в младшем байте
+        const combined4 = combined << 8;
+        addNumberRepresentations(combined4 >>> 0);
+        // num отдельно — Sigur может хранить только num
+        addNumberRepresentations(num);
+        // fac отдельно — для редких случаев
+        if (fac > 0) variants.add(String(fac));
+        // Альтернативные разделители
+        variants.add(`${fac}:${num}`);
+        variants.add(`${fac} ${num}`);
+        variants.add(`${fac}.${num}`);
       }
     }
 
     if (/^[0-9A-F]+$/.test(upper) && upper.length <= 16) {
       try {
         const big = BigInt('0x' + upper);
-        variants.add(big.toString(10));
+        addNumberRepresentations(big);
         const padded = upper.length % 2 === 0 ? upper : '0' + upper;
         const bytes = padded.match(/.{2}/g);
         if (bytes) {
           const leHex = bytes.slice().reverse().join('');
           variants.add(leHex);
-          variants.add(BigInt('0x' + leHex).toString(10));
+          if (/^[0-9A-F]+$/.test(leHex)) {
+            try { addNumberRepresentations(BigInt('0x' + leHex)); } catch { /* noop */ }
+          }
         }
       } catch { /* noop */ }
     }
@@ -1112,14 +1134,42 @@ export class SigurDataService extends SigurServiceBase {
     if (/^\d+$/.test(upper)) {
       try {
         const big = BigInt(upper);
-        const hex = big.toString(16).toUpperCase();
-        variants.add(hex);
-        variants.add(hex.padStart(8, '0'));
-        variants.add(hex.padStart(16, '0'));
+        addNumberRepresentations(big);
       } catch { /* noop */ }
     }
 
     return variants;
+  }
+
+  /** Поля Sigur-карты, которые гарантированно НЕ содержат номер (а либо id/мета). */
+  private static readonly CARD_NON_NUMBER_FIELDS = new Set<string>([
+    'id', 'ID', 'Id',
+    'cardId', 'card_id', 'cardID', 'cardid',
+    'employeeId', 'employee_id',
+    'status', 'Status', 'state',
+    'format', 'Format', 'cardFormat',
+    'startDate', 'start_date', 'validFrom', 'startAt', 'startat',
+    'expirationDate', 'expiration_date', 'expiresAt', 'expiryDate', 'validTo', 'validto',
+    'createdAt', 'created_at', 'updatedAt', 'updated_at',
+    'description', 'comment', 'comments', 'note', 'notes',
+    'name', 'fullName', 'full_name',
+  ]);
+
+  /** Возвращает все плоские строковые/числовые значения карты, которые могут быть номером. */
+  static collectCardSearchableValues(card: Record<string, unknown>): string[] {
+    const out: string[] = [];
+    for (const [key, value] of Object.entries(card)) {
+      if (SigurDataService.CARD_NON_NUMBER_FIELDS.has(key)) continue;
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed) out.push(trimmed);
+      } else if (typeof value === 'number' && Number.isFinite(value)) {
+        out.push(String(value));
+      } else if (typeof value === 'bigint') {
+        out.push(value.toString(10));
+      }
+    }
+    return out;
   }
 
   async findCardByCandidates(
@@ -1144,13 +1194,12 @@ export class SigurDataService extends SigurServiceBase {
 
     const all = await this.getCards(undefined, connection) as Record<string, unknown>[];
     const matches = all.filter(card => {
-      const raw = String(
-        card.number ?? card.Number ?? card.cardNumber ?? card.card_number ?? card.serialNumber ?? card.serial_number ?? '',
-      );
-      if (!raw.trim()) return false;
-      const cardVariants = SigurDataService.buildCardNumberVariants(raw);
-      for (const v of cardVariants) {
-        if (allCandidateVariants.has(v)) return true;
+      const searchable = SigurDataService.collectCardSearchableValues(card);
+      for (const value of searchable) {
+        const cardVariants = SigurDataService.buildCardNumberVariants(value);
+        for (const v of cardVariants) {
+          if (allCandidateVariants.has(v)) return true;
+        }
       }
       return false;
     });
