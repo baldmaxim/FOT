@@ -85,25 +85,25 @@ export const mapSigurEvent = (raw: Record<string, unknown>): IMappedSigurEvent |
 };
 
 /**
- * Парсит ISO-timestamp с таймзоной → { date: "YYYY-MM-DD", time: "HH:MM:SS" }
+ * Парсит ISO-timestamp в момент времени и возвращает компоненты в МСК
+ * (UTC+3) → { date: "YYYY-MM-DD", time: "HH:MM:SS" }.
+ *
+ * Раньше regex выдёргивал HH:MM:SS из строки, игнорируя TZ-offset. После того
+ * как сервер Sigur стал отдавать timestamp с offset, отличным от +03:00 (например
+ * +02:00 из-за слетевшего TZ), event_at в БД уезжал на 1 час в прошлое — отсюда
+ * был лаг ~30+ минут на дашборде. Теперь нормализуем к МСК через эпоху.
  */
 const parseTimestamp = (ts: string): { date: string | null; time: string | null } => {
   try {
     const d = new Date(ts);
     if (isNaN(d.getTime())) return { date: null, time: null };
 
-    // Извлекаем локальное время из ISO-строки (до +/Z)
-    // "2026-02-02T10:23:23+03:00" → date="2026-02-02", time="10:23:23"
-    const match = ts.match(/(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})/);
-    if (match) {
-      return { date: match[1], time: match[2] };
-    }
-
-    // Fallback: используем Date
+    const m = new Date(d.getTime() + 3 * 3600 * 1000);
     const pad = (n: number) => String(n).padStart(2, '0');
-    const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-    const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-    return { date, time };
+    return {
+      date: `${m.getUTCFullYear()}-${pad(m.getUTCMonth() + 1)}-${pad(m.getUTCDate())}`,
+      time: `${pad(m.getUTCHours())}:${pad(m.getUTCMinutes())}:${pad(m.getUTCSeconds())}`,
+    };
   } catch {
     return { date: null, time: null };
   }
