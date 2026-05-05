@@ -54,7 +54,7 @@ export const LoginPage: React.FC = () => {
             <div className={styles.logoIcon}>
               <span>F</span>
             </div>
-            <div className={styles.logoText}>FOT<span>by SU_10</span></div>
+            <div className={styles.logoText}>FOT</div>
           </div>
 
           <div className={styles.brandHeadline}>
@@ -100,7 +100,7 @@ export const LoginPage: React.FC = () => {
         {/* Мобильный логотип (скрыт на десктопе) */}
         <div className={styles.mobileLogo}>
           <div className={styles.logoIcon}><span>F</span></div>
-          <div className={styles.logoText}>FOT<span>by SU_10</span></div>
+          <div className={styles.logoText}>FOT</div>
         </div>
         <div className={styles.authContainer}>
           <div className={styles.authHeader}>

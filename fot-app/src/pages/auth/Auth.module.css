@@ -82,12 +82,6 @@
   color: var(--text-primary);
 }
 
-.logoText span {
-  color: var(--text-tertiary);
-  font-weight: 400;
-  margin-left: 4px;
-}
-
 .brandHeadline {
   max-width: 400px;
 }

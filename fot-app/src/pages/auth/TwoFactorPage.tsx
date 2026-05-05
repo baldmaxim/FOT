@@ -109,7 +109,7 @@ export const TwoFactorPage: React.FC = () => {
           <div className={styles.logoIcon}>
             <span>F</span>
           </div>
-          <div className={styles.logoText}>FOT<span>by SU_10</span></div>
+          <div className={styles.logoText}>FOT</div>
         </div>
 
         <div className={styles.card}>
