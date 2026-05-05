@@ -59,7 +59,8 @@
       "PowerShell(cd \"c:\\\\Users\\\\Usrr\\\\VSCode\\\\Odintsov\\\\FOT\\\\fot-app\"; npx tsc --noEmit 2>&1 | Select-Object -First 60; Write-Output \"EXIT_CODE=$LASTEXITCODE\")",
       "PowerShell(cd c:\\\\Users\\\\Usrr\\\\VSCode\\\\Odintsov\\\\FOT\\\\fot-server; npx tsc --noEmit 2>&1 | Select-Object -First 100; if \\($LASTEXITCODE -eq 0\\) { Write-Output \"EXIT_CODE=0 \\(server OK\\)\" } else { Write-Output \"EXIT_CODE=$LASTEXITCODE \\(server FAIL\\)\" })",
       "Bash(git restore *)",
-      "PowerShell($ErrorActionPreference = 'Continue'; Set-Location 'c:\\\\Users\\\\Usrr\\\\VSCode\\\\Odintsov\\\\FOT\\\\fot-server'; npx tsc --noEmit 2>&1 | Select-Object -First 50; Write-Output \"EXIT_CODE: $LASTEXITCODE\")"
+      "PowerShell($ErrorActionPreference = 'Continue'; Set-Location 'c:\\\\Users\\\\Usrr\\\\VSCode\\\\Odintsov\\\\FOT\\\\fot-server'; npx tsc --noEmit 2>&1 | Select-Object -First 50; Write-Output \"EXIT_CODE: $LASTEXITCODE\")",
+      "PowerShell(Set-Location C:\\\\Users\\\\Usrr\\\\VSCode\\\\Odintsov\\\\FOT\\\\fot-server; npx tsc --noEmit 2>&1 | Select-Object -First 30; \"EXIT=$LASTEXITCODE\")"
     ]
   }
 }

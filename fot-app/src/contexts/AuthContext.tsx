@@ -200,12 +200,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isTwoFactorEnabled: profile.two_factor_enabled,
         positionType: profile.role_code,
       }));
+      // Профиль мог измениться (managed departments, show_actual_hours и т.п.) —
+      // инвалидируем зависящие server-кэши, чтобы UI пересчитался без ручной перезагрузки.
+      queryClient.invalidateQueries({ queryKey: ['timesheet-page'] });
+      queryClient.invalidateQueries({ queryKey: ['timesheet-hr'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         logout();
       }
     }
-  }, [logout]);
+  }, [logout, queryClient]);
 
   // Sentry user context: ставим, как только знаем кто залогинен; чистим при логауте.
   useEffect(() => {

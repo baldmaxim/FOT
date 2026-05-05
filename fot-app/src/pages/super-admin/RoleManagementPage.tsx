@@ -272,6 +272,9 @@ export const RoleManagementPage: FC = () => {
       toast.success(next ? 'Роль показывает факт по СКУД' : 'Роль показывает урезанные часы');
       upsertRoleInCache(updated);
       await refreshProfile();
+      // refreshProfile уже инвалидирует timesheet-queries; дублируем явно — на случай,
+      // если админ переключает свою же роль, находясь на странице табеля.
+      queryClient.invalidateQueries({ queryKey: ['timesheet-page'] });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка изменения часов роли');
     }

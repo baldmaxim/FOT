@@ -16,6 +16,7 @@ import {
 } from '../../services/correctionApprovalService';
 import { timesheetService } from '../../services/timesheetService';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
+import { DateInput } from '../../components/ui/DateInput';
 import { ApprovalCommentModal } from './ApprovalCommentModal';
 const TimesheetCorrectionModal = lazy(() => import('../../components/timesheet/TimesheetCorrectionModal').then(module => ({
   default: module.TimesheetCorrectionModal,
@@ -251,18 +252,16 @@ const CorrectionsTab: FC = () => {
         </div>
         <label>
           С
-          <input
-            type="date"
+          <DateInput
             value={period.startDate}
-            onChange={e => setPeriod(p => ({ ...p, startDate: e.target.value }))}
+            onChange={v => setPeriod(p => ({ ...p, startDate: v }))}
           />
         </label>
         <label>
           По
-          <input
-            type="date"
+          <DateInput
             value={period.endDate}
-            onChange={e => setPeriod(p => ({ ...p, endDate: e.target.value }))}
+            onChange={v => setPeriod(p => ({ ...p, endDate: v }))}
           />
         </label>
       </div>

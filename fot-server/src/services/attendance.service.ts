@@ -662,6 +662,36 @@ export async function buildAttendanceEntries(params: {
     entry.object_detail_count = employeesWithMultiObjects.has(entry.employee_id) ? dayObjectEntries.length : 0;
   }
 
+  // Безусловно заполняем display_hours_worked = clamp(hours_worked, plannedDayHours)
+  // для всех entries — независимо от displayMode. Это даёт фронту оба значения
+  // (entry.hours_worked = факт, entry.display_hours_worked = урезанное под график)
+  // и позволяет per-role show_actual_hours переключать показ в обе стороны:
+  // selectVisibleHours(entry, true) → hours_worked, (entry, false) → display_hours_worked.
+  // Раньше при displayMode='actual' display_hours_worked оставался undefined для не-объектных
+  // кейсов → переключение факт→урезано на фронте не работало (фолбэк давал тот же hours_worked).
+  for (const entry of entries) {
+    if (entry.is_correction && entry.id != null) continue;
+
+    const employeeSchedule = dailySchedulesMap.get(entry.employee_id)?.get(entry.work_date);
+    const plannedDayHours = getPlannedHoursForScheduleOnDate(employeeSchedule, entry.work_date);
+    const dayObjectEntries = objectAttendanceData.objectEntriesByEmployeeDate
+      .get(entry.employee_id)
+      ?.get(entry.work_date) || [];
+
+    if (dayObjectEntries.length > 0) {
+      const totalActualHours = roundHours(
+        dayObjectEntries.reduce((sum, item) => sum + item.hours_worked, 0),
+      );
+      entry.display_hours_worked = (plannedDayHours != null && totalActualHours > plannedDayHours)
+        ? plannedDayHours
+        : totalActualHours;
+    } else if (entry.hours_worked != null && plannedDayHours != null) {
+      entry.display_hours_worked = clampToScheduleHours(entry.hours_worked, plannedDayHours);
+    } else {
+      entry.display_hours_worked = entry.hours_worked;
+    }
+  }
+
   if (displayMode === 'capped_to_schedule') {
     for (const entry of entries) {
       // Корректировка с явным hours_override авторитетна — не режем под смену,

@@ -968,17 +968,33 @@ export const timesheetController = {
       const startDay = Number.parseInt(startDate.slice(-2), 10);
       const endDay = Number.parseInt(endDate.slice(-2), 10);
 
+      // Дата выхода из табеля (включительно): min(excluded_from_timesheet_date, transferred_out_date).
+      // Дни >= cutoff не считаются в норму и не суммируются в факт — иначе у исключённого/переведённого
+      // сотрудника весь хвост периода уходит в недоработку (план есть, факта нет).
+      const cutoffByEmployeeId = new Map<number, string | null>();
+      for (const e of (employees || [])) {
+        const empId = Number(e.id);
+        const excluded = (e.excluded_from_timesheet_date as string | null) ?? null;
+        const transferred = transferredOutByEmployeeId.get(empId) ?? null;
+        const cutoff = excluded && transferred
+          ? (excluded < transferred ? excluded : transferred)
+          : (excluded ?? transferred ?? null);
+        cutoffByEmployeeId.set(empId, cutoff);
+      }
+
       // Compute stats (schedule-aware)
       let normHours = 0;
       let totalWorkingDays = 0;
       const employeeStatsMap = new Map<number, { norm_hours: number; fact_hours: number }>();
       for (const empId of employeeIds) {
+        const empCutoff = cutoffByEmployeeId.get(empId) ?? null;
         let empWorkDays = 0;
         let empNormHours = 0;
         for (let d = startDay; d <= endDay; d++) {
           const dateObj = new Date(year, mon - 1, d);
           const dateStr = `${month}-${String(d).padStart(2, '0')}`;
           if (dateStr > todayStr) continue;
+          if (empCutoff && dateStr >= empCutoff) continue;
 
           const sched = dailySchedulesMap.get(empId)?.get(dateStr);
           if (!sched) continue;
@@ -997,6 +1013,8 @@ export const timesheetController = {
       const deviations = { late: 0, absent: 0, sick: 0 };
 
       for (const entry of entries) {
+        const empCutoff = cutoffByEmployeeId.get(entry.employee_id as number) ?? null;
+        if (empCutoff && (entry.work_date as string) >= empCutoff) continue;
         const visibleHours = req.user.show_actual_hours
           ? entry.hours_worked
           : (entry.display_hours_worked ?? entry.hours_worked);

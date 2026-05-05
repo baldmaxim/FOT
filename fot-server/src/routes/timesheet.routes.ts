@@ -21,6 +21,9 @@ router.use((req, res, next) => {
   next();
 });
 
+// req.user.show_actual_hours включён в ключ: переключение per-role флага меняет
+// effectiveDisplayMode в timesheet.controller, поэтому два режима должны храниться
+// в разных bucket'ах, иначе после refreshProfile старый ответ переживает TTL.
 const timesheetCache = registerCache(
   'timesheet',
   (req) =>
@@ -33,6 +36,7 @@ const timesheetCache = registerCache(
       req.query.to ?? '',
       req.query.half ?? '',
       req.user.id,
+      req.user.show_actual_hours ? '1' : '0',
     ].join(':'),
   5 * 60_000,
   500,
@@ -49,6 +53,7 @@ const timesheetOverviewCache = registerCache(
       req.query.to ?? '',
       req.query.half ?? '',
       req.user.id,
+      req.user.show_actual_hours ? '1' : '0',
     ].join(':'),
   5 * 60_000,
 );
