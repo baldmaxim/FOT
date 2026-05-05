@@ -4,6 +4,7 @@ import { auditService } from '../services/audit.service.js';
 import {
   batchMoveSigurDepartments,
   batchMoveSigurEmployees,
+  batchMoveSigurEmployeesStreaming,
   createSigurPosition,
   createSigurDepartment,
   createSigurEmployee,
@@ -690,6 +691,58 @@ export const sigurAdminController = {
       const status = getErrorStatus(error);
       console.error('Sigur admin batchMoveEmployees error:', error);
       res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка массового перемещения сотрудников Sigur') });
+    }
+  },
+
+  async batchMoveEmployeesStream(req: AuthenticatedRequest, res: Response): Promise<void> {
+    const { employeeIds, departmentId } = req.body as { employeeIds?: unknown; departmentId?: unknown };
+    if (!Array.isArray(employeeIds)) {
+      res.status(400).json({ success: false, error: 'employeeIds должен быть массивом' });
+      return;
+    }
+
+    const parsedEmployeeIds = employeeIds
+      .map(value => parseInteger(value))
+      .filter((value): value is number => !!value);
+    const parsedDepartmentId = parseInteger(departmentId);
+    if (!parsedDepartmentId) {
+      res.status(400).json({ success: false, error: 'departmentId обязателен' });
+      return;
+    }
+
+    const connection = parseConnection(req.body.connection);
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const keepAliveTimer = setInterval(() => {
+      res.write(': keepalive\n\n');
+    }, 15_000);
+    res.on('close', () => clearInterval(keepAliveTimer));
+
+    const send = (data: Record<string, unknown>) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    try {
+      const result = await batchMoveSigurEmployeesStreaming(
+        parsedEmployeeIds,
+        parsedDepartmentId,
+        connection,
+        send,
+      );
+      send({ type: 'done', ...result });
+    } catch (error) {
+      console.error('Sigur admin batchMoveEmployeesStream error:', error);
+      send({
+        type: 'error',
+        error: getErrorMessage(error, 'Ошибка массового перемещения сотрудников Sigur'),
+      });
+    } finally {
+      clearInterval(keepAliveTimer);
+      res.end();
     }
   },
 

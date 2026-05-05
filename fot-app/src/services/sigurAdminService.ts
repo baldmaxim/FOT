@@ -1,4 +1,5 @@
-import { apiClient } from '../api/client';
+import { apiClient, buildApiUrl, buildAuthHeaders } from '../api/client';
+import { readSseResponse } from '../components/skud/sigur-settings.utils';
 import type {
   SigurConnectionScope,
   SigurDepartmentNode,
@@ -10,6 +11,18 @@ import type {
   SigurLiveEmployeeProfile,
   SigurPositionSummary,
 } from '../types';
+
+export type BatchMoveProgressEvent =
+  | { type: 'start'; total: number }
+  | {
+      type: 'progress';
+      processed: number;
+      total: number;
+      succeeded: number;
+      failed: number;
+      lastEmployeeId: number;
+      ok: boolean;
+    };
 
 interface ApiResponse<T> {
   data: T;
@@ -285,6 +298,52 @@ export const sigurAdminService = {
       { employeeIds, departmentId, connection },
     );
     return response.data;
+  },
+
+  async batchMoveEmployeesStream(
+    employeeIds: number[],
+    departmentId: number,
+    onProgress: (event: BatchMoveProgressEvent) => void,
+    connection?: SigurConnectionScope,
+  ): Promise<{ requested: number; moved: number; failedIds: number[] }> {
+    const response = await fetch(buildApiUrl('/sigur/admin/employees/batch-move-stream'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...buildAuthHeaders(),
+      },
+      body: JSON.stringify({ employeeIds, departmentId, connection }),
+    });
+
+    let result: { requested: number; moved: number; failedIds: number[] } | null = null;
+    let streamError: string | null = null;
+
+    await readSseResponse(response, data => {
+      if (data.type === 'start' || data.type === 'progress') {
+        onProgress(data as BatchMoveProgressEvent);
+        return;
+      }
+      if (data.type === 'done') {
+        result = {
+          requested: Number(data.requested ?? 0),
+          moved: Number(data.moved ?? 0),
+          failedIds: Array.isArray(data.failedIds) ? (data.failedIds as number[]) : [],
+        };
+        return;
+      }
+      if (data.type === 'error') {
+        streamError = typeof data.error === 'string' ? data.error : 'Ошибка массового перемещения сотрудников Sigur';
+      }
+    });
+
+    if (streamError) {
+      throw new Error(streamError);
+    }
+    if (!result) {
+      throw new Error('Стрим завершился без результата');
+    }
+    return result;
   },
 
   async saveEmployeeAccessPoints(

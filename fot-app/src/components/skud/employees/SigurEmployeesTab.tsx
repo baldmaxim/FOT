@@ -23,6 +23,7 @@ import type { SigurDepartmentNode, SigurEmployeeCardAccessStatus, SigurEmployeeS
 import '../../../styles/EmployeesPage.css';
 import './SigurEmployeesTab.css';
 import { SigurLiveEmployeeSidebar } from './SigurLiveEmployeeSidebar';
+import { ProgressBar } from '../../ui/ProgressBar';
 
 interface ISigurEmployeesTabProps {
   canEdit: boolean;
@@ -438,6 +439,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
   const [savingDepartment, setSavingDepartment] = useState(false);
   const [savingEmployee, setSavingEmployee] = useState(false);
   const [savingEmployeeMove, setSavingEmployeeMove] = useState(false);
+  const [moveProgress, setMoveProgress] = useState<{ processed: number; total: number; failed: number } | null>(null);
   const [creatingEmployeePosition, setCreatingEmployeePosition] = useState(false);
   const [isDeptPanelOpen, setIsDeptPanelOpen] = useState(false);
   const [employeePage, setEmployeePage] = useState(1);
@@ -992,10 +994,20 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
 
     try {
       setSavingEmployeeMove(true);
+      setMoveProgress({ processed: 0, total: employeeMoveDialog.employeeIds.length, failed: 0 });
       setError('');
-      await sigurAdminService.batchMoveEmployees(
+      await sigurAdminService.batchMoveEmployeesStream(
         employeeMoveDialog.employeeIds,
         Number(employeeMoveDialog.departmentId),
+        event => {
+          if (event.type === 'start') {
+            setMoveProgress({ processed: 0, total: event.total, failed: 0 });
+            return;
+          }
+          if (event.type === 'progress') {
+            setMoveProgress({ processed: event.processed, total: event.total, failed: event.failed });
+          }
+        },
       );
       setEmployeeMoveDialog(null);
       setSelectedEmployeeIds(new Set());
@@ -1004,6 +1016,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
       setError(error instanceof Error ? error.message : 'Не удалось переместить сотрудников Sigur');
     } finally {
       setSavingEmployeeMove(false);
+      setMoveProgress(null);
     }
   };
 
@@ -1921,7 +1934,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
       )}
 
       {employeeMoveDialog && (
-        <div className="ep-modal-overlay" onClick={() => setEmployeeMoveDialog(null)}>
+        <div className="ep-modal-overlay" onClick={() => { if (!savingEmployeeMove) setEmployeeMoveDialog(null); }}>
           <div className="ep-modal" onClick={event => event.stopPropagation()}>
             <div className="ep-modal-header">
               <div className="ep-modal-heading">
@@ -1935,6 +1948,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
                   className="ep-modal-select"
                   value={employeeMoveDialog.departmentId}
                   onChange={event => setEmployeeMoveDialog(prev => prev ? { ...prev, departmentId: event.target.value } : prev)}
+                  disabled={savingEmployeeMove}
                 >
                   <option value="">—</option>
                   {departmentOptions.map(option => (
@@ -1944,9 +1958,18 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
                   ))}
                 </select>
               </label>
+              {savingEmployeeMove && moveProgress && (
+                <ProgressBar
+                  label={moveProgress.failed > 0
+                    ? `Перенос сотрудников (ошибок: ${moveProgress.failed})`
+                    : 'Перенос сотрудников'}
+                  current={moveProgress.processed}
+                  total={moveProgress.total}
+                />
+              )}
             </div>
             <div className="ep-modal-footer">
-              <button className="ep-modal-btn secondary" onClick={() => setEmployeeMoveDialog(null)}>
+              <button className="ep-modal-btn secondary" onClick={() => setEmployeeMoveDialog(null)} disabled={savingEmployeeMove}>
                 Отмена
               </button>
               <button className="ep-modal-btn primary" onClick={() => void handleSaveEmployeeMove()} disabled={savingEmployeeMove}>

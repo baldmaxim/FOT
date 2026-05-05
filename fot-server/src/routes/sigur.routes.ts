@@ -177,6 +177,12 @@ router.post(
   requireCritical2FA,
   sigurAdminController.batchMoveEmployees,
 );
+router.post(
+  '/admin/employees/batch-move-stream',
+  requirePageAccess('/skud-settings', 'edit'),
+  requireCritical2FA,
+  sigurAdminController.batchMoveEmployeesStream,
+);
 router.put(
   '/admin/employees/:sigurEmployeeId/access-points',
   requirePageAccess('/skud-settings', 'edit'),

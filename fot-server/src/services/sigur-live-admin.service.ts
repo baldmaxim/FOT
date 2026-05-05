@@ -1470,6 +1470,74 @@ export async function batchMoveSigurEmployees(
   };
 }
 
+export type BatchMoveProgressEvent =
+  | { type: 'start'; total: number }
+  | {
+      type: 'progress';
+      processed: number;
+      total: number;
+      succeeded: number;
+      failed: number;
+      lastEmployeeId: number;
+      ok: boolean;
+    }
+  | { type: 'done'; requested: number; moved: number; failedIds: number[] };
+
+export async function batchMoveSigurEmployeesStreaming(
+  employeeIds: number[],
+  departmentId: number,
+  connection: ConnectionType | undefined,
+  onProgress: (event: BatchMoveProgressEvent) => void,
+): Promise<{ requested: number; moved: number; failedIds: number[] }> {
+  const normalizedEmployeeIds = Array.from(new Set(
+    employeeIds.filter(employeeId => Number.isFinite(employeeId) && employeeId > 0),
+  ));
+
+  const total = normalizedEmployeeIds.length;
+  onProgress({ type: 'start', total });
+
+  let processed = 0;
+  let succeeded = 0;
+  let failed = 0;
+  const failedIds: number[] = [];
+
+  await Promise.allSettled(
+    normalizedEmployeeIds.map(async employeeId => {
+      let ok = false;
+      try {
+        await sigurService.updateEmployee(employeeId, { departmentId }, connection);
+        succeeded += 1;
+        ok = true;
+      } catch (error) {
+        failed += 1;
+        failedIds.push(employeeId);
+        throw error;
+      } finally {
+        processed += 1;
+        onProgress({
+          type: 'progress',
+          processed,
+          total,
+          succeeded,
+          failed,
+          lastEmployeeId: employeeId,
+          ok,
+        });
+      }
+    }),
+  );
+
+  sigurService.invalidateEmployeeCache();
+  sigurService.invalidateDepartmentCache();
+  invalidateSigurDirectoryCaches();
+
+  return {
+    requested: total,
+    moved: succeeded,
+    failedIds,
+  };
+}
+
 export async function deleteSigurEmployee(
   sigurEmployeeId: number,
   connection?: ConnectionType,
