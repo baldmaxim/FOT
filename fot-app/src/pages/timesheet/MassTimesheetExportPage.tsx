@@ -129,9 +129,6 @@ export const MassTimesheetExportPage: FC = () => {
             {formatHalfLabel(year, month, 'FULL')}
           </button>
         </section>
-      </div>
-
-      <section className="mte-controls-row" aria-label="Параметры выгрузки">
         <div className="mte-half-toggle" role="group" aria-label="Группировка">
           <button
             type="button"
@@ -148,7 +145,7 @@ export const MassTimesheetExportPage: FC = () => {
             Объекты
           </button>
         </div>
-        <label className={`mte-inline-check ${exportAs1C ? 'mte-inline-check--on' : ''}`}>
+        <label className={`mte-inline-check mte-inline-check--push ${exportAs1C ? 'mte-inline-check--on' : ''}`}>
           <input
             type="checkbox"
             checked={exportAs1C}
@@ -157,7 +154,7 @@ export const MassTimesheetExportPage: FC = () => {
           <span className="mte-inline-check-box" aria-hidden="true" />
           <span className="mte-inline-check-label">Как в 1С</span>
         </label>
-      </section>
+      </div>
 
       <div className="mte-tabs" role="tablist">
         <button
