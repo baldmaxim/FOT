@@ -365,6 +365,26 @@
   gap: 8px;
 }
 
+.ep-sigur-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--border, #e5e7eb);
+  background: var(--surface, #fff);
+  color: var(--text-secondary, #6b7280);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.ep-sigur-icon-btn:hover {
+  background: var(--accent, #0ea5e9);
+  border-color: var(--accent, #0ea5e9);
+  color: #fff;
+}
+
 .ep-sigur-edit-actions {
   display: flex;
   justify-content: flex-end;

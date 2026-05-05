@@ -1069,4 +1069,92 @@ export class SigurDataService extends SigurServiceBase {
       return num === target;
     });
   }
+
+  static buildCardNumberVariants(rawNumber: string): Set<string> {
+    const variants = new Set<string>();
+    if (typeof rawNumber !== 'string') return variants;
+    const trimmed = rawNumber.trim();
+    if (!trimmed) return variants;
+
+    const upper = trimmed.toUpperCase();
+    variants.add(upper);
+    const stripped = upper.replace(/^0+/, '');
+    if (stripped) variants.add(stripped);
+
+    const w26Match = upper.match(/^(\d+),(\d+)$/);
+    if (w26Match) {
+      const fac = Number(w26Match[1]);
+      const num = Number(w26Match[2]);
+      if (Number.isFinite(fac) && Number.isFinite(num) && fac >= 0 && num >= 0) {
+        const combined = ((fac & 0xFF) << 16) | (num & 0xFFFF);
+        variants.add(combined.toString(10));
+        const hex = combined.toString(16).toUpperCase();
+        variants.add(hex);
+        variants.add(hex.padStart(8, '0'));
+        variants.add(hex.padStart(16, '0'));
+      }
+    }
+
+    if (/^[0-9A-F]+$/.test(upper) && upper.length <= 16) {
+      try {
+        const big = BigInt('0x' + upper);
+        variants.add(big.toString(10));
+        const padded = upper.length % 2 === 0 ? upper : '0' + upper;
+        const bytes = padded.match(/.{2}/g);
+        if (bytes) {
+          const leHex = bytes.slice().reverse().join('');
+          variants.add(leHex);
+          variants.add(BigInt('0x' + leHex).toString(10));
+        }
+      } catch { /* noop */ }
+    }
+
+    if (/^\d+$/.test(upper)) {
+      try {
+        const big = BigInt(upper);
+        const hex = big.toString(16).toUpperCase();
+        variants.add(hex);
+        variants.add(hex.padStart(8, '0'));
+        variants.add(hex.padStart(16, '0'));
+      } catch { /* noop */ }
+    }
+
+    return variants;
+  }
+
+  async findCardByCandidates(
+    candidates: string[],
+    connection?: ConnectionType,
+  ): Promise<{ matches: Record<string, unknown>[]; tried: string[]; sample: Record<string, unknown>[] }> {
+    const allCandidateVariants = new Set<string>();
+    const tried: string[] = [];
+    for (const candidate of candidates) {
+      if (typeof candidate !== 'string') continue;
+      const trimmed = candidate.trim();
+      if (!trimmed) continue;
+      tried.push(trimmed);
+      for (const variant of SigurDataService.buildCardNumberVariants(trimmed)) {
+        allCandidateVariants.add(variant);
+      }
+    }
+
+    if (allCandidateVariants.size === 0) {
+      return { matches: [], tried, sample: [] };
+    }
+
+    const all = await this.getCards(undefined, connection) as Record<string, unknown>[];
+    const matches = all.filter(card => {
+      const raw = String(
+        card.number ?? card.Number ?? card.cardNumber ?? card.card_number ?? card.serialNumber ?? card.serial_number ?? '',
+      );
+      if (!raw.trim()) return false;
+      const cardVariants = SigurDataService.buildCardNumberVariants(raw);
+      for (const v of cardVariants) {
+        if (allCandidateVariants.has(v)) return true;
+      }
+      return false;
+    });
+
+    return { matches, tried, sample: all.slice(0, 3) };
+  }
 }

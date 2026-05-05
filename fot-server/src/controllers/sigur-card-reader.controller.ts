@@ -98,21 +98,62 @@ const fetchEmployeeBySigurId = async (sigurEmployeeId: number): Promise<IEmploye
   };
 };
 
+const pickStringField = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+};
+
+const collectCandidatesFromQuery = (q: Record<string, unknown>): { primary: string | null; candidates: string[] } => {
+  const candidates: string[] = [];
+  const order: Array<keyof typeof q> = ['sigurCard', 'uid', 'w26', 'hex', 'decBe', 'decLe'];
+  for (const key of order) {
+    const v = pickStringField(q[key]);
+    if (v) candidates.push(v);
+  }
+  const primary = pickStringField(q.sigurCard) ?? pickStringField(q.uid) ?? candidates[0] ?? null;
+  return { primary, candidates };
+};
+
+const collectCandidatesFromBody = (body: Record<string, unknown>): string[] => {
+  const candidates: string[] = [];
+  const uid = pickStringField(body.uid);
+  if (uid) candidates.push(uid);
+  if (Array.isArray(body.uids)) {
+    for (const item of body.uids) {
+      const v = pickStringField(item);
+      if (v && !candidates.includes(v)) candidates.push(v);
+    }
+  }
+  return candidates;
+};
+
 export const sigurCardReaderController = {
   async lookup(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const uid = typeof req.query.uid === 'string' ? req.query.uid.trim() : '';
-      if (!uid) {
-        res.status(400).json({ success: false, error: 'uid обязателен' });
+      const { primary, candidates } = collectCandidatesFromQuery(req.query as Record<string, unknown>);
+      if (candidates.length === 0 || !primary) {
+        res.status(400).json({
+          success: false,
+          error: 'Укажите хотя бы один из параметров: uid, sigurCard, w26, hex, decBe, decLe',
+        });
         return;
       }
       if (!(await ensureSigurReady(res))) return;
 
-      const cardsRaw = await sigurService.findCardsByNumber(uid);
-      const cards = cardsRaw.map(toCardSummary).filter((c): c is ICardSummary => !!c);
+      const { matches, tried, sample } = await sigurService.findCardByCandidates(candidates);
+      const cards = matches.map(toCardSummary).filter((c): c is ICardSummary => !!c);
 
       if (cards.length === 0) {
-        res.json({ success: true, data: { found: false, uid } });
+        const sampleCards = sample.map(toCardSummary).filter((c): c is ICardSummary => !!c).slice(0, 3);
+        res.json({
+          success: true,
+          data: {
+            found: false,
+            uid: primary,
+            debug: { tried, sampleCards },
+          },
+        });
         return;
       }
 
@@ -133,7 +174,7 @@ export const sigurCardReaderController = {
         success: true,
         data: {
           found: true,
-          uid,
+          uid: primary,
           card,
           sigurEmployeeId,
           employee,
@@ -146,20 +187,18 @@ export const sigurCardReaderController = {
 
   async assign(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { uid, employeeId, expirationDate } = req.body as {
-        uid?: unknown;
-        employeeId?: unknown;
-        expirationDate?: unknown;
-      };
-      if (typeof uid !== 'string' || !uid.trim()) {
+      const body = (req.body || {}) as Record<string, unknown>;
+      const candidates = collectCandidatesFromBody(body);
+      if (candidates.length === 0) {
         res.status(400).json({ success: false, error: 'uid обязателен' });
         return;
       }
-      const fotEmployeeId = normalizeInt(employeeId);
+      const fotEmployeeId = normalizeInt(body.employeeId);
       if (!fotEmployeeId) {
         res.status(400).json({ success: false, error: 'employeeId обязателен' });
         return;
       }
+      const expirationDate = body.expirationDate;
       if (!(await ensureSigurReady(res))) return;
 
       const { data: emp, error: empErr } = await supabase
@@ -181,8 +220,8 @@ export const sigurCardReaderController = {
         return;
       }
 
-      const cardsRaw = await sigurService.findCardsByNumber(uid.trim());
-      const cards = cardsRaw.map(toCardSummary).filter((c): c is ICardSummary => !!c);
+      const { matches } = await sigurService.findCardByCandidates(candidates);
+      const cards = matches.map(toCardSummary).filter((c): c is ICardSummary => !!c);
       if (cards.length === 0) {
         res.status(404).json({
           success: false,
@@ -235,7 +274,8 @@ export const sigurCardReaderController = {
         entityId: `${fotEmployeeId}:${card.cardId}`,
         details: {
           source: 'card-reader',
-          uid: uid.trim(),
+          uid: candidates[0],
+          uids: candidates,
           employeeId: fotEmployeeId,
           sigurEmployeeId: emp.sigur_employee_id,
           cardId: card.cardId,

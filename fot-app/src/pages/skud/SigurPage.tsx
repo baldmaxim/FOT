@@ -1,7 +1,8 @@
 import { Suspense, lazy, useCallback, useState } from 'react';
-import { ArrowLeft, Settings } from 'lucide-react';
-import { useSearchParams } from 'react-router-dom';
+import { ArrowLeft, Scan, Settings } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { CardReaderModal } from '../../components/skud/CardReaderModal';
 import '../../styles/SigurSettingsPage.css';
 
 const SigurEmployeesTab = lazy(() => import('../../components/skud/employees/SigurEmployeesTab').then(module => ({
@@ -18,12 +19,15 @@ const resolveView = (value: string | null): SigurView => (
 );
 
 export const SigurPage = () => {
-  const { canEditPage } = useAuth();
+  const { canEditPage, canViewPage } = useAuth();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const canEdit = canEditPage('/skud-settings');
+  const canUseReader = canViewPage('/skud-card-reader');
 
   const view = resolveView(searchParams.get('view'));
   const [error, setError] = useState('');
+  const [readerOpen, setReaderOpen] = useState(false);
 
   const setView = useCallback((nextView: SigurView) => {
     setSearchParams(prev => {
@@ -45,13 +49,25 @@ export const SigurPage = () => {
   );
 
   const headerActionSlot = view === 'employees' ? (
-    <button
-      className="ep-toolbar-btn secondary sigur-fullpage__action"
-      onClick={() => setView('settings')}
-    >
-      <Settings size={16} />
-      <span>Настройка</span>
-    </button>
+    <>
+      {canUseReader && (
+        <button
+          className="ep-toolbar-btn secondary sigur-fullpage__action"
+          onClick={() => setReaderOpen(true)}
+          title="Считать пропуск через USB-считыватель"
+        >
+          <Scan size={16} />
+          <span>Считать пропуск</span>
+        </button>
+      )}
+      <button
+        className="ep-toolbar-btn secondary sigur-fullpage__action"
+        onClick={() => setView('settings')}
+      >
+        <Settings size={16} />
+        <span>Настройка</span>
+      </button>
+    </>
   ) : (
     <button
       className="sigur-btn sigur-fullpage__action"
@@ -93,6 +109,19 @@ export const SigurPage = () => {
           </Suspense>
         )}
       </div>
+
+      {readerOpen && (
+        <CardReaderModal
+          mode={{
+            kind: 'lookup',
+            onEmployeeFound: (employeeId) => {
+              setReaderOpen(false);
+              navigate(`/employees/${employeeId}`);
+            },
+          }}
+          onClose={() => setReaderOpen(false)}
+        />
+      )}
     </div>
   );
 };

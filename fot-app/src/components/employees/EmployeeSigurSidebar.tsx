@@ -7,6 +7,7 @@ import {
   MoveRight,
   RefreshCw,
   Save,
+  Scan,
   ShieldCheck,
   SquarePen,
   UserRoundX,
@@ -21,6 +22,7 @@ import type {
   SigurEmployeeProfileState,
 } from '../../types';
 import { AccessPointMapPreviewBadge } from './AccessPointMapPreviewBadge';
+import { CardReaderModal } from '../skud/CardReaderModal';
 import './EmployeeSigurSidebar.css';
 
 interface IEmployeeSigurSidebarProps {
@@ -138,6 +140,7 @@ export const EmployeeSigurSidebar: FC<IEmployeeSigurSidebarProps> = ({
   const [profile, setProfile] = useState<SigurEmployeeProfileState | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState('');
+  const [readerOpen, setReaderOpen] = useState(false);
   const [cardDrafts, setCardDrafts] = useState<Record<number, string>>({});
   const [startDateDrafts, setStartDateDrafts] = useState<Record<number, string>>({});
   const [savingCardId, setSavingCardId] = useState<number | null>(null);
@@ -504,7 +507,20 @@ export const EmployeeSigurSidebar: FC<IEmployeeSigurSidebarProps> = ({
               <CreditCard size={15} />
               <span>Карты доступа</span>
             </div>
-            <span className="ep-sigur-counter">{activeProfile?.cards.length || 0}</span>
+            <div className="ep-sigur-section-tools">
+              <span className="ep-sigur-counter">{activeProfile?.cards.length || 0}</span>
+              {canEdit && isLinked && (
+                <button
+                  type="button"
+                  className="ep-sigur-icon-btn"
+                  onClick={() => setReaderOpen(true)}
+                  title="Назначить пропуск через считыватель"
+                  aria-label="Назначить пропуск через считыватель"
+                >
+                  <Scan size={13} />
+                </button>
+              )}
+            </div>
           </div>
 
           {profileLoading && !activeProfile ? (
@@ -718,6 +734,22 @@ export const EmployeeSigurSidebar: FC<IEmployeeSigurSidebarProps> = ({
           )}
         </section>
       </div>
+
+      {readerOpen && employeeId && (
+        <CardReaderModal
+          title="Назначить пропуск"
+          mode={{
+            kind: 'assign-to',
+            presetEmployeeId: employeeId,
+            presetEmployeeName: fullName,
+            onAssigned: () => {
+              setReaderOpen(false);
+              void loadProfile(true);
+            },
+          }}
+          onClose={() => setReaderOpen(false)}
+        />
+      )}
     </aside>
   );
 };
