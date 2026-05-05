@@ -1326,11 +1326,12 @@ export const StaffControlPage: FC = () => {
     for (const emp of employees) {
       const personalAssignment = activeEmployeeScheduleAssignments.get(emp.id);
       if (personalAssignment?.work_schedules) {
+        const isSameAsDefault = !!defaultSchedule && personalAssignment.work_schedules.id === defaultSchedule.id;
         map.set(emp.id, {
           scheduleId: personalAssignment.work_schedules.id,
           scheduleName: personalAssignment.work_schedules.name,
-          source: 'employee',
-          effectiveFrom: personalAssignment.effective_from,
+          source: isSameAsDefault ? 'default' : 'employee',
+          effectiveFrom: isSameAsDefault ? null : personalAssignment.effective_from,
         });
         continue;
       }
@@ -1338,7 +1339,7 @@ export const StaffControlPage: FC = () => {
       if (baseSchedule) map.set(emp.id, baseSchedule);
     }
     return map;
-  }, [employees, activeEmployeeScheduleAssignments, baseScheduleViews]);
+  }, [employees, activeEmployeeScheduleAssignments, baseScheduleViews, defaultSchedule]);
 
   // Если админ снял у руководителя один из отделов, profile:access_changed обновляет
   // managedDepartmentIds — но в URL ещё может висеть ?dept= снятого отдела. Без сброса
