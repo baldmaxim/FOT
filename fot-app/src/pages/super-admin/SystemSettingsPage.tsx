@@ -27,6 +27,7 @@ export const SystemSettingsPage: FC = () => {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [s3Editing, setS3Editing] = useState(false);
   const queryClient = useQueryClient();
   const r2StatusQuery = useR2Status();
   const monitorSettingsQuery = useSigurMonitorSettings();
@@ -150,10 +151,26 @@ export const SystemSettingsPage: FC = () => {
       await queryClient.invalidateQueries({ queryKey: getR2StatusQueryKey() });
       setAccessKeyId('');
       setSecretAccessKey('');
+      setS3Editing(false);
     } catch {
       setTestResult({ ok: false, msg: 'Ошибка сохранения' });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleCancelS3Edit = () => {
+    setS3Editing(false);
+    setAccessKeyId('');
+    setSecretAccessKey('');
+    setTestResult(null);
+    if (status) {
+      setAccountId(status.account_id || '');
+      setBucketName(status.bucket_name || 'fot-documents');
+      setEndpoint(status.endpoint || '');
+      setRegion(status.region || '');
+      setForcePathStyle(!!status.force_path_style);
+      setKmsKeyId(status.kms_key_id || '');
     }
   };
 
@@ -247,6 +264,26 @@ export const SystemSettingsPage: FC = () => {
   return (
     <div className={styles.page}>
       {/* S3-compatible Storage */}
+      {status?.enabled && !s3Editing ? (
+        <div className={`${styles.section} ${styles.sectionCollapsed}`}>
+          <div className={styles.sectionHeader}>
+            <h2 className={styles.sectionTitle}>S3-совместимое хранилище (R2 / Cloud.ru / др.)</h2>
+            <div className={styles.headerRight}>
+              <span className={`${styles.statusBadge} ${styles.statusConnected}`}>Подключено</span>
+              <button className={styles.btnEdit} onClick={() => setS3Editing(true)}>Редактировать</button>
+            </div>
+          </div>
+          <div className={styles.summaryLine}>
+            <span><b>Bucket:</b>{status.bucket_name || '—'}</span>
+            {status.endpoint
+              ? <span><b>Endpoint:</b>{status.endpoint}</span>
+              : status.account_id && <span><b>Account ID:</b>{status.account_id.slice(0, 8)}…</span>
+            }
+            {status.region && <span><b>Region:</b>{status.region}</span>}
+            {status.has_kms_key && <span><b>KMS:</b>включён</span>}
+          </div>
+        </div>
+      ) : (
       <div className={styles.section}>
         <div className={styles.sectionHeader}>
           <h2 className={styles.sectionTitle}>S3-совместимое хранилище (R2 / Cloud.ru / др.)</h2>
@@ -352,6 +389,11 @@ export const SystemSettingsPage: FC = () => {
           <button className={styles.btnSecondary} onClick={handleTest} disabled={testing}>
             {testing ? 'Проверка...' : 'Тест подключения'}
           </button>
+          {status?.enabled && (
+            <button className={styles.btnSecondary} onClick={handleCancelS3Edit} disabled={saving}>
+              Отмена
+            </button>
+          )}
         </div>
 
         {testResult && (
@@ -360,6 +402,7 @@ export const SystemSettingsPage: FC = () => {
           </div>
         )}
       </div>
+      )}
 
       <div className={styles.section}>
         <div className={styles.sectionHeader}>

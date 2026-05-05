@@ -17,6 +17,7 @@ export const OpenRouterSettingsSection: FC = () => {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
     if (settingsQuery.data) {
@@ -42,11 +43,23 @@ export const OpenRouterSettingsSection: FC = () => {
       setApiKey('');
       await queryClient.invalidateQueries({ queryKey: ['openrouter-settings'] });
       setResult({ ok: true, msg: 'Настройки сохранены' });
+      setIsEditing(false);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Ошибка сохранения';
       setResult({ ok: false, msg });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setIsEditing(false);
+    setApiKey('');
+    setResult(null);
+    if (settingsQuery.data) {
+      setEnabled(settingsQuery.data.enabled);
+      setModel(settingsQuery.data.model);
+      setBaseUrl(settingsQuery.data.baseUrl);
     }
   };
 
@@ -67,6 +80,27 @@ export const OpenRouterSettingsSection: FC = () => {
       setTesting(false);
     }
   };
+
+  const isConfigured = !!config?.enabled && !!config?.hasApiKey;
+  const modelLabel = config?.allowedModels.find(m => m.id === config.model)?.label || config?.model || '—';
+
+  if (isConfigured && !isEditing) {
+    return (
+      <div className={`${styles.section} ${styles.sectionCollapsed}`}>
+        <div className={styles.sectionHeader}>
+          <h2 className={styles.sectionTitle}>Распознавание чеков (OpenRouter)</h2>
+          <div className={styles.headerRight}>
+            <span className={`${styles.statusBadge} ${styles.statusConnected}`}>Включено</span>
+            <button className={styles.btnEdit} onClick={() => setIsEditing(true)}>Редактировать</button>
+          </div>
+        </div>
+        <div className={styles.summaryLine}>
+          <span><b>Модель:</b>{modelLabel}</span>
+          <span><b>API ключ:</b>установлен</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.section}>
@@ -142,6 +176,11 @@ export const OpenRouterSettingsSection: FC = () => {
         <button className={styles.btnSecondary} onClick={handleTest} disabled={testing || !config?.hasApiKey}>
           {testing ? 'Проверка...' : 'Тест подключения'}
         </button>
+        {isConfigured && (
+          <button className={styles.btnSecondary} onClick={handleCancelEdit} disabled={saving}>
+            Отмена
+          </button>
+        )}
       </div>
 
       {result && (
