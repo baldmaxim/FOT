@@ -117,7 +117,9 @@ export async function exportTimesheetMass(req: AuthenticatedRequest, res: Respon
     for (let i = 0; i < scopedDepartmentIds.length; i += CONCURRENCY) {
       const batch = scopedDepartmentIds.slice(i, i + CONCURRENCY);
       const results = await Promise.all(
-        batch.map((deptId: string) => fetchTimesheetDataForDepartment(month, deptId, rangeArg, displayMode))
+        batch.map((deptId: string) => fetchTimesheetDataForDepartment(
+          month, deptId, rangeArg, displayMode, req.user.show_actual_hours,
+        )),
       );
 
       for (const data of results) {

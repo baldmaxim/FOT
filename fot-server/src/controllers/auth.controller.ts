@@ -83,6 +83,7 @@ async function buildProfileResponse(
     position_type: role.code,
     is_admin: role.is_admin,
     employee_variant: role.employee_variant,
+    show_actual_hours: !!role.show_actual_hours,
     employee_id: profile.employee_id,
     department_id: departmentId,
     managed_department_ids,

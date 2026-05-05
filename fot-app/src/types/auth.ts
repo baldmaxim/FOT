@@ -14,6 +14,7 @@ export interface SystemRole {
   is_admin: boolean;
   employee_variant: EmployeeVariant | null;
   is_active: boolean;
+  show_actual_hours: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -40,6 +41,7 @@ export interface UserProfile {
   position_type: EmployeePositionType;
   is_admin: boolean;
   employee_variant: EmployeeVariant | null;
+  show_actual_hours: boolean;
   employee_id: number | null;
   department_id: string | null;
   managed_department_ids: string[];

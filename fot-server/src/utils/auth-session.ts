@@ -58,7 +58,7 @@ export function parseCookieHeader(cookieHeader?: string | null): Record<string, 
 
 export function generateAccessToken(
   profile: Pick<UserProfile, 'id' | 'system_role_id' | 'employee_id' | 'is_approved' | 'two_factor_enabled'>,
-  role: Pick<SystemRole, 'code' | 'is_admin' | 'employee_variant'>,
+  role: Pick<SystemRole, 'code' | 'is_admin' | 'employee_variant' | 'show_actual_hours'>,
   email: string,
   twoFactorVerified: boolean,
   departmentId: string | null = null,
@@ -71,6 +71,7 @@ export function generateAccessToken(
     role_code: role.code,
     is_admin: !!role.is_admin,
     employee_variant: role.employee_variant ?? null,
+    show_actual_hours: !!role.show_actual_hours,
     employee_id: profile.employee_id,
     department_id: departmentId,
     is_approved: profile.is_approved,

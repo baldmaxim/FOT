@@ -60,7 +60,13 @@ export async function exportTimesheet(req: AuthenticatedRequest, res: Response) 
     const displayMode: 'actual' | 'capped_to_schedule' = explicitPresentation
       ? (explicitPresentation === 'manager' ? 'capped_to_schedule' : 'actual')
       : (scope === 'department' ? 'capped_to_schedule' : 'actual');
-    const data = await fetchTimesheetDataForDepartment(month, deptId, rangeArg, displayMode);
+    const data = await fetchTimesheetDataForDepartment(
+      month,
+      deptId,
+      rangeArg,
+      displayMode,
+      req.user.show_actual_hours,
+    );
 
     const wb = new ExcelJS.Workbook();
     buildTimesheetSheet(wb, 'Табель', data);

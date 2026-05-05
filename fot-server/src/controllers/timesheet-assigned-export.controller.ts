@@ -157,6 +157,7 @@ async function buildFilesForAssignedEmployee(params: {
   templateSuffix: string;
   presentationSuffix: string;
   displayMode: 'actual' | 'capped_to_schedule';
+  showActualHours: boolean;
 }): Promise<Array<{ name: string; data: Buffer }>> {
   const {
     employee,
@@ -170,6 +171,7 @@ async function buildFilesForAssignedEmployee(params: {
     templateSuffix,
     presentationSuffix,
     displayMode,
+    showActualHours,
   } = params;
 
   const leaderFio = formatNameWithInitials(employee.full_name);
@@ -177,7 +179,9 @@ async function buildFilesForAssignedEmployee(params: {
   const files: Array<{ name: string; data: Buffer }> = [];
 
   for (const departmentId of employee.department_ids) {
-    const data = await fetchTimesheetDataForDepartment(month, departmentId, rangeArg, displayMode);
+    const data = await fetchTimesheetDataForDepartment(
+      month, departmentId, rangeArg, displayMode, showActualHours,
+    );
     if (data.employees.length === 0) continue;
 
     const halfSuffix = rangeSuffix;
@@ -386,6 +390,7 @@ export async function exportTimesheetAssigned(req: AuthenticatedRequest, res: Re
           templateSuffix,
           presentationSuffix,
           displayMode,
+          showActualHours: req.user.show_actual_hours,
         });
         return { employee, files };
       }));
@@ -516,6 +521,7 @@ export async function emailTimesheetAssigned(req: AuthenticatedRequest, res: Res
           templateSuffix,
           presentationSuffix,
           displayMode,
+          showActualHours: req.user.show_actual_hours,
         });
         if (files.length === 0) return;
 

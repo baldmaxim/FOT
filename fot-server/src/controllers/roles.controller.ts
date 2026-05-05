@@ -157,7 +157,7 @@ export const rolesController = {
   async getLabels(_req: AuthenticatedRequest, res: Response): Promise<void> {
     const { data, error } = await supabase
       .from('system_roles')
-      .select('code, name, is_admin')
+      .select('code, name, is_admin, show_actual_hours')
       .eq('is_active', true)
       .order('is_admin', { ascending: false })
       .order('name', { ascending: true });
@@ -207,7 +207,7 @@ export const rolesController = {
       return;
     }
 
-    const { code, name, description, is_admin, employee_variant } = parsed.data;
+    const { code, name, description, is_admin, employee_variant, show_actual_hours } = parsed.data;
 
     const { data, error } = await supabase
       .from('system_roles')
@@ -217,6 +217,7 @@ export const rolesController = {
         description: description ?? null,
         is_admin: !!is_admin,
         employee_variant: employee_variant ?? null,
+        show_actual_hours: !!show_actual_hours,
         is_active: true,
       })
       .select()
@@ -269,6 +270,7 @@ export const rolesController = {
           employee_variant: parsed.data.employee_variant !== undefined
             ? parsed.data.employee_variant
             : sourceRole.employee_variant,
+          show_actual_hours: parsed.data.show_actual_hours ?? sourceRole.show_actual_hours,
           is_active: parsed.data.is_active ?? true,
         })
         .select()
@@ -334,6 +336,7 @@ export const rolesController = {
     if (parsed.data.is_active !== undefined) updates.is_active = parsed.data.is_active;
     if (parsed.data.is_admin !== undefined) updates.is_admin = parsed.data.is_admin;
     if (parsed.data.employee_variant !== undefined) updates.employee_variant = parsed.data.employee_variant;
+    if (parsed.data.show_actual_hours !== undefined) updates.show_actual_hours = parsed.data.show_actual_hours;
 
     const { data, error } = await supabase
       .from('system_roles')

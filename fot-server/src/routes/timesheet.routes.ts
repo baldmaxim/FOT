@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { timesheetController } from '../controllers/timesheet.controller.js';
 import { authenticate, requireAdmin, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
+import { cacheUnlessRangeIncludesToday } from '../middleware/skipCacheForToday.js';
 
 const router = Router();
 
@@ -63,14 +64,14 @@ const timesheetSearchCache = registerCache(
 router.get(
   '/overview',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'view'),
-  timesheetOverviewCache,
+  cacheUnlessRangeIncludesToday(timesheetOverviewCache),
   timesheetController.getOverview
 );
 
 router.get(
   '/',
   requireAnyPageAccess(['/employee', '/timesheet', '/timesheet-hr'], 'view'),
-  timesheetCache,
+  cacheUnlessRangeIncludesToday(timesheetCache),
   timesheetController.getAll
 );
 

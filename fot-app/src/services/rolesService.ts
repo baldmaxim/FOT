@@ -35,6 +35,7 @@ export interface RoleLabel {
   code: string;
   name: string;
   is_admin: boolean;
+  show_actual_hours: boolean;
 }
 
 export interface CreateRoleData {
@@ -43,6 +44,7 @@ export interface CreateRoleData {
   description?: string | null;
   is_admin?: boolean;
   employee_variant?: EmployeeVariant | null;
+  show_actual_hours?: boolean;
 }
 
 export interface UpdateRoleData {
@@ -51,6 +53,7 @@ export interface UpdateRoleData {
   is_admin?: boolean;
   employee_variant?: EmployeeVariant | null;
   is_active?: boolean;
+  show_actual_hours?: boolean;
 }
 
 export interface CloneRoleData {
@@ -60,6 +63,7 @@ export interface CloneRoleData {
   is_admin?: boolean;
   employee_variant?: EmployeeVariant | null;
   is_active?: boolean;
+  show_actual_hours?: boolean;
 }
 
 export interface UpdateAccessProfileData {

@@ -17,6 +17,8 @@ import {
   isPreHolidayForSchedule,
 } from '../../utils/scheduleUtils';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
+import { selectVisibleHours, selectVisibleObjectHours } from '../../utils/hoursDisplay';
+import { useAuth } from '../../contexts/AuthContext';
 import '../../pages/timesheet/TimesheetPage.css';
 
 type TimesheetViewMode = 'employees' | 'objects';
@@ -124,11 +126,15 @@ const parseBulkRowKey = (rowKey: string): ParsedRowKey | null => {
 };
 
 const roundHours = (value: number): number => Math.round(value * 100) / 100;
+// Per-role «фактические vs урезанные» часы. Делегируем единому хелперу, чтобы
+// весь UI был согласован. Подмена через module-level flag — TimesheetGrid
+// инстанцируется единожды на дашборде, race conditions не ожидаются.
+let showActualHoursFlag = false;
 const getVisibleHours = (entry: TimesheetEntry | null | undefined): number | null => (
-  entry?.display_hours_worked ?? entry?.hours_worked ?? null
+  selectVisibleHours(entry ?? null, showActualHoursFlag)
 );
 const getObjectVisibleHours = (entry: TimesheetObjectEntry | null | undefined): number => (
-  entry?.display_hours_worked ?? entry?.hours_worked ?? 0
+  selectVisibleObjectHours(entry ?? null, showActualHoursFlag)
 );
 
 const hasPositiveHours = (value: number | null | undefined): boolean => (
@@ -370,6 +376,14 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   onDayClick,
   onObjectDayClick,
 }) => {
+  const { showActualHours } = useAuth();
+  // Синхронизируем module-level flag, к которому обращаются helper-функции
+  // верхнего уровня (getVisibleHours/getObjectVisibleHours и зависящие от них
+  // getDayCellClass/Text/Title). useLayoutEffect, чтобы flag успел переключиться
+  // до commit-фазы рендера, иначе на смене роли первый рендер покажет старые часы.
+  if (showActualHoursFlag !== showActualHours) {
+    showActualHoursFlag = showActualHours;
+  }
   const daysCount = getDaysInMonth(year, month);
   const days = visibleDays || Array.from({ length: daysCount }, (_, i) => i + 1);
   const employeeStatsMap = useMemo(() => {

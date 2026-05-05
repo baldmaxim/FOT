@@ -148,8 +148,11 @@ const groupObjectEntriesForExport = (data: IDepartmentTimesheetData): Map<number
       hasCorrection: false,
     };
 
+    const visibleHours = data.showActualHours
+      ? entry.hours_worked
+      : (typeof entry.display_hours_worked === 'number' ? entry.display_hours_worked : entry.hours_worked);
     current.dayMap.set(entry.work_date, {
-      hours: typeof entry.display_hours_worked === 'number' ? entry.display_hours_worked : entry.hours_worked,
+      hours: visibleHours,
       corrected: entry.is_correction,
     });
     current.hasCorrection = current.hasCorrection || entry.is_correction;
@@ -342,7 +345,10 @@ const buildObjectRowsForOneC = (
     }
     const dayMap = grouped.get(entry.employee_id)!;
     const currentHours = dayMap.get(entry.work_date) ?? 0;
-    dayMap.set(entry.work_date, currentHours + (entry.display_hours_worked ?? entry.hours_worked));
+    const visibleHours = data.showActualHours
+      ? entry.hours_worked
+      : (entry.display_hours_worked ?? entry.hours_worked);
+    dayMap.set(entry.work_date, currentHours + visibleHours);
   }
 
   return data.employees

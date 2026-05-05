@@ -13,6 +13,7 @@ export interface SystemRole {
   is_admin: boolean;
   employee_variant: EmployeeVariant | null;
   is_active: boolean;
+  show_actual_hours: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -37,6 +38,7 @@ export interface UserProfileResponse {
   position_type: string;
   is_admin: boolean;
   employee_variant: EmployeeVariant | null;
+  show_actual_hours: boolean;
   employee_id: number | null;
   department_id: string | null;
   managed_department_ids: string[];
@@ -76,6 +78,7 @@ export interface AuthenticatedRequest extends Request {
     role_code: string;
     is_admin: boolean;
     employee_variant: EmployeeVariant | null;
+    show_actual_hours: boolean;
     employee_id: number | null;
     department_id: string | null;
     is_approved: boolean;
@@ -271,6 +274,7 @@ export interface JWTPayload {
   role_code: string;
   is_admin: boolean;
   employee_variant: EmployeeVariant | null;
+  show_actual_hours: boolean;
   employee_id: number | null;
   department_id: string | null;
   is_approved: boolean;

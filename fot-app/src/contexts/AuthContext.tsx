@@ -34,6 +34,9 @@ interface AuthContextType extends AuthState {
   roles: RoleLabel[];
   isAdmin: boolean;
   employeeVariant: EmployeeVariant | null;
+  // true → роль настроена показывать фактические часы по СКУД
+  // (hours_worked); false → текущее поведение, т.е. урезанные по графику.
+  showActualHours: boolean;
   login: (credentials: LoginCredentials) => Promise<{ requires2FA: boolean }>;
   verify2FA: (code: string) => Promise<void>;
   register: (data: RegisterData) => Promise<RegisterResponse | null>;
@@ -246,6 +249,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const isAdmin = !!state.profile?.is_admin;
   const employeeVariant = state.profile?.employee_variant ?? null;
+  const showActualHours = !!state.profile?.show_actual_hours;
 
   const ready = state.isAuthenticated && state.isApproved && (!state.isTwoFactorEnabled || state.isTwoFactorVerified);
 
@@ -290,6 +294,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     roles,
     isAdmin,
     employeeVariant,
+    showActualHours,
     login,
     verify2FA,
     register,

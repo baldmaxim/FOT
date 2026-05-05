@@ -38,6 +38,7 @@ export const authenticate = async (
       role_code: decoded.role_code,
       is_admin: !!decoded.is_admin,
       employee_variant: decoded.employee_variant ?? null,
+      show_actual_hours: !!decoded.show_actual_hours,
       employee_id: decoded.employee_id ?? null,
       department_id: decoded.department_id ?? null,
       is_approved: decoded.is_approved,

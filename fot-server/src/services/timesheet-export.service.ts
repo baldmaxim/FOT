@@ -46,6 +46,10 @@ export interface IDepartmentTimesheetData {
   daysInMonth: number;
   exportHalf: TimesheetExportHalf;
   exportDays: number[];
+  // true → отдавать фактические часы по СКУД (hours_worked) во всех табличных
+  // и Excel-представлениях; false → текущее поведение (display_hours_worked,
+  // т.е. часы, обрезанные под плановую норму дня).
+  showActualHours: boolean;
 }
 
 export const resolveTimesheetExportDays = (
@@ -68,7 +72,14 @@ export async function fetchTimesheetDataForDepartment(
   departmentId: string | null,
   rangeArg: TimesheetExportRangeArg = 'FULL',
   displayMode: 'actual' | 'capped_to_schedule' = 'actual',
+  showActualHours = false,
 ): Promise<IDepartmentTimesheetData> {
+  // Per-role show_actual_hours форсит «фактические часы по СКУД» во всех
+  // визуальных представлениях. При этом capped_to_schedule перетирает
+  // hours_worked = display_hours_worked в attendance.service, поэтому
+  // override displayMode на 'actual' нужен, иначе entry.hours_worked будет
+  // уже урезанным.
+  const effectiveDisplayMode = showActualHours ? 'actual' : displayMode;
   const periodRange = isExportRange(rangeArg)
     ? resolveTimesheetDateRange(month, rangeArg.startDate, rangeArg.endDate)
     : resolveTimesheetPeriodRange(month, rangeArg);
@@ -145,18 +156,21 @@ export async function fetchTimesheetDataForDepartment(
     dailySchedulesMap,
     calendarMonth,
     todayStr,
-    displayMode,
+    displayMode: effectiveDisplayMode,
   });
 
   const dataMap = new Map<number, Map<string, { status: string; hours: number; corrected?: boolean }>>();
   for (const [employeeId, dateMap] of attendance.byEmployeeDate) {
     dataMap.set(employeeId, new Map());
     for (const [date, entry] of dateMap) {
+      const visibleHours = showActualHours
+        ? (typeof entry.hours_worked === 'number' ? entry.hours_worked : 0)
+        : (typeof entry.display_hours_worked === 'number'
+          ? entry.display_hours_worked
+          : (typeof entry.hours_worked === 'number' ? entry.hours_worked : 0));
       dataMap.get(employeeId)!.set(date, {
         status: entry.status,
-        hours: typeof entry.display_hours_worked === 'number'
-          ? entry.display_hours_worked
-          : (typeof entry.hours_worked === 'number' ? entry.hours_worked : 0),
+        hours: visibleHours,
         corrected: entry.is_correction,
       });
     }
@@ -190,5 +204,6 @@ export async function fetchTimesheetDataForDepartment(
     daysInMonth,
     exportHalf,
     exportDays,
+    showActualHours,
   };
 }

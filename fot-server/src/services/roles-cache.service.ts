@@ -15,7 +15,7 @@ async function loadRolesCache(): Promise<void> {
 
   const { data, error } = await supabase
     .from('system_roles')
-    .select('id, code, name, description, is_admin, employee_variant, is_active, created_at, updated_at')
+    .select('id, code, name, description, is_admin, employee_variant, is_active, show_actual_hours, created_at, updated_at')
     .eq('is_active', true);
 
   if (error) {

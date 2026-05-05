@@ -678,12 +678,14 @@ async function buildManagedDepartmentTimesheetSummary(params: {
   startDate: string;
   endDate: string;
   isPrimary: boolean;
+  showActualHours: boolean;
 }): Promise<IManagedDepartmentTimesheetSummary> {
   const data = await fetchTimesheetDataForDepartment(
     params.month,
     params.departmentId,
     { startDate: params.startDate, endDate: params.endDate },
     'capped_to_schedule',
+    params.showActualHours,
   );
 
   let normHours = 0;
@@ -701,7 +703,9 @@ async function buildManagedDepartmentTimesheetSummary(params: {
   let actualHours = 0;
   const deviations = { late: 0, absent: 0, sick: 0 };
   for (const entry of data.entries) {
-    const visibleHours = entry.display_hours_worked ?? entry.hours_worked;
+    const visibleHours = data.showActualHours
+      ? entry.hours_worked
+      : (entry.display_hours_worked ?? entry.hours_worked);
     if (typeof visibleHours === 'number') {
       actualHours += visibleHours;
     }
@@ -780,6 +784,7 @@ export const timesheetController = {
           startDate: periodRange.startDate,
           endDate: periodRange.endDate,
           isPrimary: departmentId === req.user.department_id,
+          showActualHours: req.user.show_actual_hours,
         })),
       );
 
@@ -944,6 +949,9 @@ export const timesheetController = {
         (positions || []).forEach((p: { id: string; name: string }) => posMap.set(p.id, p.name));
       }
 
+      const effectiveDisplayMode: 'actual' | 'capped_to_schedule' = req.user.show_actual_hours
+        ? 'actual'
+        : (scope === 'department' ? 'capped_to_schedule' : 'actual');
       const { entries, objectEntries } = await buildAttendanceEntries({
         employees: (employees || []).map(employee => ({
           id: Number(employee.id),
@@ -954,7 +962,7 @@ export const timesheetController = {
         dailySchedulesMap,
         calendarMonth,
         todayStr,
-        displayMode: scope === 'department' ? 'capped_to_schedule' : 'actual',
+        displayMode: effectiveDisplayMode,
       });
 
       const startDay = Number.parseInt(startDate.slice(-2), 10);
@@ -989,7 +997,9 @@ export const timesheetController = {
       const deviations = { late: 0, absent: 0, sick: 0 };
 
       for (const entry of entries) {
-        const visibleHours = entry.display_hours_worked ?? entry.hours_worked;
+        const visibleHours = req.user.show_actual_hours
+          ? entry.hours_worked
+          : (entry.display_hours_worked ?? entry.hours_worked);
         if (typeof visibleHours === 'number') {
           actualHours += visibleHours;
           const empStats = employeeStatsMap.get(entry.employee_id as number);
