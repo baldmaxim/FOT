@@ -1,8 +1,8 @@
-import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo, type FC, type MouseEvent as ReactMouseEvent } from 'react';
+import { lazy, Suspense, Fragment, useState, useEffect, useCallback, useMemo, useRef, memo, type FC, type MouseEvent as ReactMouseEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, MoreHorizontal } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
 import { sigurAdminService } from '../services/sigurAdminService';
@@ -1134,6 +1134,75 @@ const BulkBrigadeScheduleModal: FC<IBulkBrigadeScheduleModalProps> = memo(({
   );
 });
 
+/* ───────── Overflow menu (•••) ───────── */
+
+interface IOverflowMenuItem {
+  label: string;
+  onClick: () => void;
+  icon?: React.ReactNode;
+  disabled?: boolean;
+  divideBefore?: boolean;
+}
+
+const OverflowMenu: FC<{ items: IOverflowMenuItem[]; ariaLabel?: string }> = ({ items, ariaLabel = 'Дополнительные действия' }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="sc-overflow" ref={ref}>
+      <button
+        type="button"
+        className="sc-overflow-trigger"
+        aria-label={ariaLabel}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen(prev => !prev)}
+      >
+        <MoreHorizontal size={16} />
+      </button>
+      {open && (
+        <div className="sc-overflow-menu" role="menu">
+          {items.map((item, idx) => (
+            <Fragment key={`${item.label}-${idx}`}>
+              {item.divideBefore && idx > 0 && <div className="sc-overflow-divider" />}
+              <button
+                type="button"
+                role="menuitem"
+                className="sc-overflow-item"
+                disabled={item.disabled}
+                onClick={() => {
+                  if (item.disabled) return;
+                  setOpen(false);
+                  item.onClick();
+                }}
+              >
+                {item.icon}
+                <span>{item.label}</span>
+              </button>
+            </Fragment>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 /* ───────── Main Page ───────── */
 
 export const StaffControlPage: FC = () => {
@@ -1917,8 +1986,103 @@ export const StaffControlPage: FC = () => {
     }
   };
 
-  const filtersContent = (
+  const overflowItems = useMemo<IOverflowMenuItem[]>(() => {
+    if (!isAdmin) return [];
+    const items: IOverflowMenuItem[] = [];
+    if (statusFilter === 'active') {
+      items.push({
+        label: selectionMode ? 'Выйти из режима выбора' : 'Выбрать нескольких',
+        icon: <CheckSquare size={14} />,
+        onClick: toggleSelectionMode,
+      });
+      items.push({
+        label: 'Назначить график по бригадам…',
+        icon: <Calendar size={14} />,
+        onClick: () => setBulkBrigadeScheduleOpen(true),
+        disabled: brigadeOptions.length === 0,
+      });
+      items.push({
+        label: 'Назначить график по фильтру…',
+        icon: <Calendar size={14} />,
+        onClick: () => setBulkFilterScheduleOpen(true),
+        disabled: meta.total === 0,
+      });
+      items.push({
+        label: 'Импорт…',
+        icon: <Upload size={14} />,
+        onClick: () => setShowImportModal(true),
+        divideBefore: true,
+      });
+    }
+    if (isAdmin && statusFilter !== 'excluded') {
+      items.push({
+        label: 'Без отдела (диагностика)',
+        icon: <ShieldCheck size={14} />,
+        onClick: () => { setStatusFilter('excluded'); setPage(1); },
+        divideBefore: items.length > 0,
+      });
+    } else if (isAdmin && statusFilter === 'excluded') {
+      items.push({
+        label: 'Вернуться к активным',
+        icon: <ShieldCheck size={14} />,
+        onClick: () => { setStatusFilter('active'); setPage(1); },
+      });
+    }
+    return items;
+  }, [isAdmin, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, meta.total]);
+
+  const pageHeader = (
+    <div className="sc-page-header">
+      <h1 className="sc-page-title">
+        <span className="sc-page-title-text">Управление кадрами</span>
+        <span className="sc-page-counter">
+          {meta.total}{statusFilter === 'active' ? ` из ${totalActive}` : ''}
+        </span>
+      </h1>
+      {isAdmin && (
+        <div className="sc-page-actions">
+          {statusFilter === 'active' && (
+            <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
+              <UserPlus size={14} /> Добавить
+            </button>
+          )}
+          {overflowItems.length > 0 && <OverflowMenu items={overflowItems} />}
+        </div>
+      )}
+    </div>
+  );
+
+  const filterBar = (
     <div className="sc-filters">
+      {statusFilter !== 'excluded' && (
+        <div className="sc-segmented" role="tablist" aria-label="Статус сотрудников">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={statusFilter === 'active'}
+            className={`sc-seg-btn${statusFilter === 'active' ? ' is-active' : ''}`}
+            onClick={() => { setStatusFilter('active'); setPage(1); }}
+          >
+            Активные
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={statusFilter === 'fired'}
+            className={`sc-seg-btn${statusFilter === 'fired' ? ' is-active' : ''}`}
+            onClick={() => { setStatusFilter('fired'); setPage(1); }}
+          >
+            Уволенные
+          </button>
+        </div>
+      )}
+      {statusFilter === 'excluded' && (
+        <div className="sc-segmented" aria-label="Режим диагностики">
+          <button type="button" className="sc-seg-btn is-active" disabled>
+            Без отдела (диагностика)
+          </button>
+        </div>
+      )}
       {isSingleManagedDept ? (
         <div className="sc-dept-fixed" title="Вам назначен один отдел">
           {singleManagedDeptName ?? 'Мой отдел'}
@@ -1934,7 +2098,7 @@ export const StaffControlPage: FC = () => {
         <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
       </div>
       <select
-        className="sc-schedule-filter"
+        className={`sc-schedule-filter${isMobile ? ' sc-schedule-filter--mobile' : ''}`}
         value={scheduleFilter}
         onChange={e => handleScheduleFilterChange(e.target.value)}
         title="Фильтр по графику работы"
@@ -1945,54 +2109,6 @@ export const StaffControlPage: FC = () => {
           <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
         ))}
       </select>
-      <div className="sc-status-toggle">
-        <button
-          className={`sc-btn${statusFilter === 'active' ? ' apply' : ' secondary'}`}
-          onClick={() => { setStatusFilter('active'); setPage(1); }}
-        >
-          Активные
-        </button>
-        <button
-          className={`sc-btn${statusFilter === 'fired' ? ' apply' : ' secondary'}`}
-          onClick={() => { setStatusFilter('fired'); setPage(1); }}
-        >
-          Уволенные
-        </button>
-        {isAdmin && (
-          <button
-            className={`sc-btn${statusFilter === 'excluded' ? ' apply' : ' secondary'}`}
-            onClick={() => { setStatusFilter('excluded'); setPage(1); }}
-            title="Активные сотрудники, исключённые из табеля и не закреплённые ни за одним отделом"
-          >
-            Исключённые из табеля
-          </button>
-        )}
-      </div>
-      <div className="sc-filter-count">
-        {meta.total}{statusFilter === 'active' ? ` из ${totalActive}` : ''}
-      </div>
-      {statusFilter === 'active' && isAdmin && (
-        <div className="sc-filter-actions">
-          <button
-            className={`sc-btn ${selectionMode ? 'apply' : 'secondary'}`}
-            onClick={toggleSelectionMode}
-          >
-            <CheckSquare size={14} /> {selectionMode ? 'Готово' : 'Выбор нескольких'}
-          </button>
-          <button className="sc-btn secondary" onClick={() => setBulkBrigadeScheduleOpen(true)} disabled={brigadeOptions.length === 0}>
-            <Calendar size={14} /> По бригадам
-          </button>
-          <button className="sc-btn secondary" onClick={() => setBulkFilterScheduleOpen(true)} disabled={meta.total === 0}>
-            <Calendar size={14} /> По фильтру
-          </button>
-          <button className="sc-btn secondary" onClick={() => setShowImportModal(true)}>
-            <Upload size={14} /> Импорт
-          </button>
-          <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
-            <UserPlus size={14} /> Добавить
-          </button>
-        </div>
-      )}
     </div>
   );
 
@@ -2000,73 +2116,8 @@ export const StaffControlPage: FC = () => {
 
   return (
     <div className="sc-page">
-      {/* Filters */}
-      {isMobile ? (
-        <div className="sc-mobile-toolbar">
-          {isSingleManagedDept ? (
-            <div className="sc-dept-fixed" title="Вам назначен один отдел">
-              {singleManagedDeptName ?? 'Мой отдел'}
-            </div>
-          ) : (
-            <DeptSelect
-              departments={allDepts}
-              value={deptId}
-              onChange={handleDeptChange}
-            />
-          )}
-          <div className="sc-filter-search">
-            <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
-          </div>
-          <select
-            className="sc-schedule-filter sc-schedule-filter--mobile"
-            value={scheduleFilter}
-            onChange={e => handleScheduleFilterChange(e.target.value)}
-          >
-            <option value="">Все графики</option>
-            <option value="__default__">Дефолтный (без персонального)</option>
-            {scheduleTemplates.map(tpl => (
-              <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
-            ))}
-          </select>
-          {isAdmin && (
-            <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
-              <UserPlus size={16} /> Добавить
-            </button>
-          )}
-          {statusFilter === 'active' && isAdmin && (
-            <button
-              className={`sc-btn ${selectionMode ? 'apply' : 'secondary'}`}
-              onClick={toggleSelectionMode}
-            >
-              <CheckSquare size={16} /> {selectionMode ? 'Готово' : 'Выбор нескольких'}
-            </button>
-          )}
-          <div className="sc-status-toggle sc-status-toggle--mobile">
-            <button
-              className={`sc-btn${statusFilter === 'active' ? ' apply' : ' secondary'}`}
-              onClick={() => { setStatusFilter('active'); setPage(1); }}
-            >
-              Активные
-            </button>
-            <button
-              className={`sc-btn${statusFilter === 'fired' ? ' apply' : ' secondary'}`}
-              onClick={() => { setStatusFilter('fired'); setPage(1); }}
-            >
-              Уволенные
-            </button>
-            {isAdmin && (
-              <button
-                className={`sc-btn${statusFilter === 'excluded' ? ' apply' : ' secondary'}`}
-                onClick={() => { setStatusFilter('excluded'); setPage(1); }}
-              >
-                Исключённые
-              </button>
-            )}
-          </div>
-        </div>
-      ) : (
-        filtersContent
-      )}
+      {pageHeader}
+      {filterBar}
 
       {selectionMode && (
         <div className="sc-bulk-bar">
