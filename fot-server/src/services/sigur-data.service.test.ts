@@ -95,10 +95,18 @@ describe('SigurDataService.buildCardNumberVariants', () => {
     const intersect = [...hex].some(v => dec.has(v));
     expect(intersect).toBe(true);
   });
+
+  it('NO false match between two different W26 cards with same facility', () => {
+    // Регрессия: раньше String(fac) добавлялся в variants и любые W26 с одинаковым fac совпадали.
+    const userCard = SigurDataService.buildCardNumberVariants('189,43414');  // Одинцов
+    const otherCard = SigurDataService.buildCardNumberVariants('189,29124'); // Бабий
+    const intersect = [...userCard].some(v => otherCard.has(v));
+    expect(intersect).toBe(false);
+  });
 });
 
 describe('SigurDataService.collectCardSearchableValues', () => {
-  it('extracts string and number values, excluding meta fields', () => {
+  it('extracts only whitelisted card-number fields, ignoring random custom fields', () => {
     const card = {
       id: 42,
       cardId: 42,
@@ -108,22 +116,39 @@ describe('SigurDataService.collectCardSearchableValues', () => {
       expirationDate: '2030-01-01',
       employeeId: 7,
       wiegandCode: 'ABE9',
-      customField: 12345,
+      customField: 12345,        // не в whitelist — игнорируется
+      groupId: 44009,            // не в whitelist — не должно вызвать ложный матч
     };
     const values = SigurDataService.collectCardSearchableValues(card);
     expect(values).toContain('53,44009');
     expect(values).toContain('ABE9');
-    expect(values).toContain('12345');
-    expect(values).not.toContain('42');         // id/cardId исключены
-    expect(values).not.toContain('W26');        // format исключён
-    expect(values).not.toContain('active');     // status исключён
-    expect(values).not.toContain('2030-01-01'); // expirationDate исключён
-    expect(values).not.toContain('7');          // employeeId исключён
+    expect(values).not.toContain('12345');
+    expect(values).not.toContain('44009');
+    expect(values).not.toContain('42');
+    expect(values).not.toContain('W26');
+    expect(values).not.toContain('active');
+    expect(values).not.toContain('2030-01-01');
+    expect(values).not.toContain('7');
   });
 
-  it('skips empty/null values', () => {
-    const card = { number: '', cardNumber: null, custom: '   ', other: 'real' };
+  it('case-insensitive field name matching', () => {
+    const card = { Number: '123', CardNumber: '456', WIEGAND: '789' };
+    const values = SigurDataService.collectCardSearchableValues(card);
+    expect(values).toContain('123');
+    expect(values).toContain('456');
+    expect(values).toContain('789');
+  });
+
+  it('skips empty/null values, keeps real whitelisted', () => {
+    const card = { number: '', cardNumber: null, code: '   ', wiegand: 'real' };
     const values = SigurDataService.collectCardSearchableValues(card);
     expect(values).toEqual(['real']);
+  });
+
+  it('extracts numeric values from whitelisted fields', () => {
+    const card = { number: 44009, code: 'ABE9' };
+    const values = SigurDataService.collectCardSearchableValues(card);
+    expect(values).toContain('44009');
+    expect(values).toContain('ABE9');
   });
 });

@@ -31,6 +31,7 @@ export interface ICardLookupFound {
   card: ISigurCardSummary;
   sigurEmployeeId: number | null;
   employee: ISigurCardEmployee | null;
+  debug?: ICardLookupDebug;
 }
 
 export interface ICardLookupDebug {
@@ -55,6 +56,7 @@ export interface ICardAssignResult {
   card: ISigurCardSummary;
   employeeId: number;
   sigurEmployeeId: number;
+  previousSigurEmployeeId?: number | null;
 }
 
 const buildLookupQuery = (input: ICardEvent | string): string => {

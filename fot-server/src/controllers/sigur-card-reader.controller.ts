@@ -44,9 +44,15 @@ const trimOrNull = (value: unknown): string | null => {
 const toCardSummary = (raw: Record<string, unknown>): ICardSummary | null => {
   const cardId = normalizeInt(resolveField(raw, 'id', 'ID', 'Id', 'cardId', 'card_id', 'cardID'));
   if (!cardId) return null;
+  // Sigur API возвращает номер в `formattedValue` (W26 строка) или `value` (hex).
+  // Сохраняем приоритет formattedValue → value → number/cardNumber/serialNumber.
+  const cardNumber =
+    trimOrNull(resolveField(raw, 'formattedValue', 'formatted_value'))
+    ?? trimOrNull(resolveField(raw, 'value', 'cardValue'))
+    ?? trimOrNull(resolveField(raw, 'number', 'Number', 'cardNumber', 'card_number', 'serialNumber', 'serial_number'));
   return {
     cardId,
-    cardNumber: trimOrNull(resolveField(raw, 'number', 'Number', 'cardNumber', 'card_number', 'serialNumber', 'serial_number')),
+    cardNumber,
     status: trimOrNull(resolveField(raw, 'status', 'Status', 'state')),
     format: trimOrNull(resolveField(raw, 'format', 'Format', 'cardFormat')),
     startDate: trimOrNull(resolveField(raw, 'startDate', 'start_date', 'validFrom', 'startAt')),
@@ -55,7 +61,20 @@ const toCardSummary = (raw: Record<string, unknown>): ICardSummary | null => {
 };
 
 const toBindingEmployeeId = (raw: Record<string, unknown>): number | null => {
-  return normalizeInt(resolveField(raw, 'employeeId', 'employee_id'));
+  // Прямые поля
+  const direct = normalizeInt(resolveField(raw, 'employeeId', 'employee_id'));
+  if (direct) return direct;
+  // Sigur вкладывает в holder: { holderId, type: 'EMP' }
+  const holder = raw.holder;
+  if (holder && typeof holder === 'object') {
+    const holderObj = holder as Record<string, unknown>;
+    const type = typeof holderObj.type === 'string' ? holderObj.type.toUpperCase() : '';
+    if (!type || type === 'EMP' || type === 'EMPLOYEE') {
+      const holderId = normalizeInt(resolveField(holderObj, 'holderId', 'holder_id', 'id'));
+      if (holderId) return holderId;
+    }
+  }
+  return null;
 };
 
 const ensureSigurReady = async (res: Response): Promise<boolean> => {
@@ -221,6 +240,7 @@ export const sigurCardReaderController = {
         matched: cards.length,
         totalSampled: sample.length,
         sampleKeys: sample[0] ? Object.keys(sample[0]) : [],
+        matchedRaw: matches[0] ? flattenCardForDebug(matches[0]) : null,
       });
 
       if (cards.length === 0) {
@@ -261,6 +281,7 @@ export const sigurCardReaderController = {
           card,
           sigurEmployeeId,
           employee,
+          debug: { tried, sampleCards: [flattenCardForDebug(matches[0])] },
         },
       });
     } catch (err) {
@@ -334,26 +355,36 @@ export const sigurCardReaderController = {
 
       const existingBindings = await sigurService.getCardBindings({ cardId: card.cardId }) as Record<string, unknown>[];
       const existingEmployeeId = existingBindings.map(toBindingEmployeeId).find((id): id is number => !!id) || null;
+      const cardFormat = card.format || 'W26';
 
       if (existingEmployeeId === emp.sigur_employee_id) {
+        // Тот же сотрудник — продлеваем сроки
         await sigurService.patchEmployeeCardBinding(
           emp.sigur_employee_id,
           card.cardId,
           startIso,
           expiresIso,
           undefined,
-          card.format || undefined,
+          cardFormat,
         );
       } else {
+        // Карта свободна или у другого сотрудника — Sigur не даёт POST на занятую карту (422),
+        // поэтому сначала удаляем старую привязку, потом создаём новую.
+        if (existingEmployeeId) {
+          await sigurService.deleteEmployeeCardBinding(existingEmployeeId, card.cardId, cardFormat);
+        }
         await sigurService.createEmployeeCardBinding(
           emp.sigur_employee_id,
           card.cardId,
           startIso,
           expiresIso,
           undefined,
-          card.format || undefined,
+          cardFormat,
         );
       }
+
+      // Сбрасываем кэш карт — теперь там новая привязка
+      sigurService.invalidateCardListCache();
 
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
         entityType: 'sigur_card_binding',
@@ -371,12 +402,14 @@ export const sigurCardReaderController = {
         },
       });
 
+      const wasReassigned = existingEmployeeId !== null && existingEmployeeId !== emp.sigur_employee_id;
       res.json({
         success: true,
         data: {
           card: { ...card, startDate: startIso, expirationDate: expiresIso },
           employeeId: fotEmployeeId,
           sigurEmployeeId: emp.sigur_employee_id,
+          previousSigurEmployeeId: wasReassigned ? existingEmployeeId : null,
         },
       });
     } catch (err) {

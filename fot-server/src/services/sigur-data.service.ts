@@ -11,6 +11,9 @@ export class SigurDataService extends SigurServiceBase {
   private accessPointCache: { map: Map<number, string>; fetchedAt: number } | null = null;
   private accessRuleCache: { map: Map<number, string>; fetchedAt: number } | null = null;
   private positionCache: { data: Array<{ id: number; name: string }>; fetchedAt: number } | null = null;
+  private cardListCache: { data: Record<string, unknown>[]; fetchedAt: number } | null = null;
+  private cardListFetchPromise: Promise<Record<string, unknown>[]> | null = null;
+  private readonly CARD_LIST_TTL = 60 * 1000; // 1 минута — карты в Sigur не меняются часто
   private readonly CACHE_TTL = 5 * 60 * 1000;
   private readonly EVENT_CHUNK_MS = 2 * 60 * 60 * 1000;
   private readonly EVENT_CHUNK_OVERLAP_MS = 60 * 1000;
@@ -51,12 +54,18 @@ export class SigurDataService extends SigurServiceBase {
     this.positionCache = null;
   }
 
+  invalidateCardListCache(): void {
+    this.cardListCache = null;
+    this.cardListFetchPromise = null;
+  }
+
   invalidateLiveAdminCaches(): void {
     this.invalidateEmployeeCache();
     this.invalidateDepartmentCache();
     this.invalidateAccessPointCache();
     this.invalidateAccessRuleCache();
     this.invalidatePositionCache();
+    this.invalidateCardListCache();
   }
 
   async testConnection(
@@ -407,6 +416,25 @@ export class SigurDataService extends SigurServiceBase {
 
   async getCards(filters?: Record<string, any>, connection?: ConnectionType) {
     return this.fetchAllPaginated('/api/v1/cards', filters, connection);
+  }
+
+  /** Кэшированная версия getCards без фильтров — для матчинга карт. TTL 60с. */
+  async getCardsCached(connection?: ConnectionType): Promise<Record<string, unknown>[]> {
+    const now = Date.now();
+    if (this.cardListCache && (now - this.cardListCache.fetchedAt) < this.CARD_LIST_TTL) {
+      return this.cardListCache.data;
+    }
+    if (this.cardListFetchPromise) {
+      return this.cardListFetchPromise;
+    }
+    this.cardListFetchPromise = (async () => {
+      const data = await this.getCards(undefined, connection) as Record<string, unknown>[];
+      this.cardListCache = { data, fetchedAt: Date.now() };
+      return data;
+    })().finally(() => {
+      this.cardListFetchPromise = null;
+    });
+    return this.cardListFetchPromise;
   }
 
   async getCardBindings(filters?: Record<string, any>, connection?: ConnectionType) {
@@ -1059,8 +1087,24 @@ export class SigurDataService extends SigurServiceBase {
     );
   }
 
+  async deleteEmployeeCardBinding(
+    employeeId: number,
+    cardId: number,
+    format: string,
+    connection?: ConnectionType,
+  ): Promise<void> {
+    // Sigur API: POST /bindings/employees-cards/delete с массивом, format обязателен.
+    await this.mutate<void>(
+      'post',
+      '/api/v1/bindings/employees-cards/delete',
+      [{ employeeId, cardId, format }],
+      undefined,
+      connection,
+    );
+  }
+
   async findCardsByNumber(cardNumber: string, connection?: ConnectionType) {
-    const all = await this.getCards(undefined, connection) as Record<string, unknown>[];
+    const all = await this.getCardsCached(connection);
     const target = cardNumber.trim().toUpperCase();
     return all.filter(card => {
       const num = String(
@@ -1106,9 +1150,7 @@ export class SigurDataService extends SigurServiceBase {
         addNumberRepresentations(combined4 >>> 0);
         // num отдельно — Sigur может хранить только num
         addNumberRepresentations(num);
-        // fac отдельно — для редких случаев
-        if (fac > 0) variants.add(String(fac));
-        // Альтернативные разделители
+        // Альтернативные разделители (строкой)
         variants.add(`${fac}:${num}`);
         variants.add(`${fac} ${num}`);
         variants.add(`${fac}.${num}`);
@@ -1147,7 +1189,7 @@ export class SigurDataService extends SigurServiceBase {
     'serialnumber', 'serial_number', 'serial',
     'wiegandcode', 'wiegand_code', 'wiegand',
     'code', 'cardcode', 'card_code',
-    'value', 'cardvalue',
+    'value', 'cardvalue', 'formattedvalue', 'formatted_value',
     'hex', 'cardhex',
     'rfid', 'rfidcode',
     'uid',
@@ -1170,12 +1212,62 @@ export class SigurDataService extends SigurServiceBase {
     return out;
   }
 
+  /**
+   * Компактный список поисковых ключей по кандидату — то, что имеет смысл подсунуть в Sigur ?value=.
+   * Возвращает максимум 4 ключа: для W26 «fac,num» — combined-hex без zeros, formattedValue, num-hex; для hex/dec — hex с/без trailing zeros.
+   */
+  private static buildSearchKeys(candidate: string): string[] {
+    const keys: string[] = [];
+    const upper = candidate.trim().toUpperCase();
+    if (!upper) return keys;
+
+    const w26 = upper.match(/^(\d+),(\d+)$/);
+    if (w26) {
+      const fac = Number(w26[1]);
+      const num = Number(w26[2]);
+      if (Number.isFinite(fac) && Number.isFinite(num) && fac >= 0 && num >= 0) {
+        const combined = ((fac & 0xFF) << 16) | (num & 0xFFFF);
+        const combinedHex = combined.toString(16).toUpperCase();
+        keys.push(combinedHex);
+        keys.push(`${fac},${num}`);
+        keys.push(num.toString(16).toUpperCase());
+      }
+      return keys;
+    }
+
+    if (/^[0-9A-F]+$/.test(upper)) {
+      keys.push(upper);
+      const stripped = upper.replace(/^0+/, '');
+      if (stripped && stripped !== upper) keys.push(stripped);
+      const trailingStripped = upper.replace(/0+$/, '');
+      if (trailingStripped && trailingStripped !== upper && trailingStripped !== stripped) {
+        keys.push(trailingStripped);
+      }
+      return keys;
+    }
+
+    if (/^\d+$/.test(upper)) {
+      try {
+        const big = BigInt(upper);
+        const hex = big.toString(16).toUpperCase();
+        keys.push(hex);
+        const trailingStripped = hex.replace(/0+$/, '');
+        if (trailingStripped && trailingStripped !== hex) keys.push(trailingStripped);
+      } catch { /* noop */ }
+      return keys;
+    }
+
+    keys.push(upper);
+    return keys;
+  }
+
   async findCardByCandidates(
     candidates: string[],
     connection?: ConnectionType,
   ): Promise<{ matches: Record<string, unknown>[]; tried: string[]; sample: Record<string, unknown>[] }> {
     const allCandidateVariants = new Set<string>();
     const tried: string[] = [];
+    const searchKeys = new Set<string>();
     for (const candidate of candidates) {
       if (typeof candidate !== 'string') continue;
       const trimmed = candidate.trim();
@@ -1184,13 +1276,46 @@ export class SigurDataService extends SigurServiceBase {
       for (const variant of SigurDataService.buildCardNumberVariants(trimmed)) {
         allCandidateVariants.add(variant);
       }
+      for (const key of SigurDataService.buildSearchKeys(trimmed)) {
+        searchKeys.add(key);
+      }
     }
 
     if (allCandidateVariants.size === 0) {
       return { matches: [], tried, sample: [] };
     }
 
-    const all = await this.getCards(undefined, connection) as Record<string, unknown>[];
+    // Быстрый путь: точечный запрос ?value=<key> к Sigur (сервер фильтрует — отдаёт 1 карту вместо 20890).
+    // Если Sigur не понял фильтр и вернул всю базу — переходим к кэшированному локальному матчингу.
+    for (const key of searchKeys) {
+      try {
+        const found = await this.getCards({ value: key }, connection) as Record<string, unknown>[];
+        if (found.length === 0) continue;
+        if (found.length > 50) {
+          // Фильтр не сработал на этом ключе — Sigur вернул весь список.
+          break;
+        }
+        // Доп. валидация: совпадает ли реально хотя бы одно поле карты с нашими variants.
+        const verified = found.filter(card => {
+          const searchable = SigurDataService.collectCardSearchableValues(card);
+          for (const value of searchable) {
+            const cardVariants = SigurDataService.buildCardNumberVariants(value);
+            for (const v of cardVariants) {
+              if (allCandidateVariants.has(v)) return true;
+            }
+          }
+          return false;
+        });
+        if (verified.length > 0) {
+          return { matches: verified, tried, sample: verified.slice(0, 3) };
+        }
+      } catch {
+        break;
+      }
+    }
+
+    // Fallback: грузим все карты с кэшем и матчим вручную.
+    const all = await this.getCardsCached(connection);
     const matches = all.filter(card => {
       const searchable = SigurDataService.collectCardSearchableValues(card);
       for (const value of searchable) {

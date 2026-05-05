@@ -150,7 +150,10 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
         employeeId: mode.presetEmployeeId,
         expirationDate: expIso,
       });
-      success(`Пропуск привязан: ${mode.presetEmployeeName}`);
+      const reassignNote = result.previousSigurEmployeeId
+        ? ` (переоформлено с sigurEmployeeId ${result.previousSigurEmployeeId})`
+        : '';
+      success(`Пропуск привязан: ${mode.presetEmployeeName}${reassignNote}`);
       setAssignSuccess(true);
       onAssignSuccess?.(result);
       mode.onAssigned();
@@ -182,6 +185,21 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
         setLookupResult(result);
         if (mode.kind === 'assign-to') {
           void runAutoAssign(lastCard);
+          return;
+        }
+        // mode === 'lookup' и сотрудник найден в ФОТ — авто-переход на его профиль (800ms задержка чтобы пользователь увидел карточку).
+        if (
+          mode.kind === 'lookup'
+          && result.found
+          && result.employee?.source === 'fot'
+          && result.employee.id != null
+          && mode.onEmployeeFound
+        ) {
+          const empId = result.employee.id;
+          setTimeout(() => {
+            if (seq !== lookupSeqRef.current) return;
+            mode.onEmployeeFound!(empId);
+          }, 800);
         }
       })
       .catch((err: unknown) => {
@@ -246,6 +264,7 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
         department: selectedEmployee.department ?? null,
         tab_number: selectedEmployee.tab_number ?? null,
         sigur_employee_id: result.sigurEmployeeId,
+        source: 'fot',
       };
       setLookupResult({
         found: true,
@@ -391,6 +410,7 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
                   Открыть профиль
                 </button>
               )}
+              <DebugBlock debug={lookupResult.debug} />
             </div>
           )}
 
@@ -400,6 +420,7 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
                 Карта привязана к сотруднику Sigur{lookupResult.sigurEmployeeId ? <> (id <strong>{lookupResult.sigurEmployeeId}</strong>)</> : ''},
                 но получить его данные не удалось. Проверьте подключение к Sigur или сотрудника в Sigur Manager.
               </p>
+              <DebugBlock debug={lookupResult.debug} />
             </div>
           )}
 
@@ -427,16 +448,29 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
               {!searching && searchResults.length > 0 && !selectedEmployee && (
                 <ul className="scr-search-list">
                   {searchResults.map(emp => (
-                    <li key={emp.id}>
+                    <li key={emp.id} className="scr-search-row">
                       <button
                         type="button"
                         className="scr-search-item"
-                        onClick={() => setSelectedEmployee(emp)}
+                        onClick={() => {
+                          if (mode.kind === 'lookup' && mode.onEmployeeFound) {
+                            mode.onEmployeeFound(emp.id);
+                          }
+                        }}
+                        title="Открыть профиль сотрудника"
                       >
                         <span className="scr-search-name">{emp.full_name}</span>
                         <span className="scr-search-meta">
                           {[emp.position_name, emp.department].filter(Boolean).join(' · ') || '—'}
                         </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="scr-search-attach"
+                        onClick={() => setSelectedEmployee(emp)}
+                        title="Привязать карту к этому сотруднику"
+                      >
+                        Привязать
                       </button>
                     </li>
                   ))}
