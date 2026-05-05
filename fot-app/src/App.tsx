@@ -47,6 +47,7 @@ const SystemSettingsPage = lazy(() => import('./pages/super-admin/SystemSettings
 const PayslipManagePage = lazy(() => import('./pages/super-admin/PayslipManagePage').then(m => ({ default: m.PayslipManagePage })));
 const SchedulesPage = lazy(() => import('./pages/admin/SchedulesPage').then(m => ({ default: m.SchedulesPage })));
 const PatentReceiptsPage = lazy(() => import('./pages/admin/PatentReceiptsPage').then(m => ({ default: m.PatentReceiptsPage })));
+const PatentReceiptsEncryptionBadge = lazy(() => import('./pages/admin/PatentReceiptsPage').then(m => ({ default: m.PatentReceiptsEncryptionBadge })));
 const TimesheetTransfersAdminPage = lazy(() => import('./pages/admin/TimesheetTransfersAdminPage').then(m => ({ default: m.TimesheetTransfersAdminPage })));
 
 // Employees & SKUD
@@ -483,7 +484,12 @@ const AppRoutes = () => {
           <Route
             path="/admin/patent-receipts"
             element={
-              <Layout title="Чеки за патент" theme={theme} onToggleTheme={toggleTheme}>
+              <Layout
+                title="Чеки за патент"
+                theme={theme}
+                onToggleTheme={toggleTheme}
+                titleAddon={<Suspense fallback={null}><PatentReceiptsEncryptionBadge /></Suspense>}
+              >
                 <PatentReceiptsPage />
               </Layout>
             }

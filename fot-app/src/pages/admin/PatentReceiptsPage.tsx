@@ -1,6 +1,15 @@
 import { type FC, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Eye, RefreshCw, AlertTriangle, CheckCircle2, Clock, XCircle, UserX, ShieldCheck, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
+
+export const PatentReceiptsEncryptionBadge: FC = () => (
+  <span
+    className={styles.encryptionBadge}
+    title="ПДн (ФИО, паспорт, ИНН, банковские реквизиты) зашифрованы AES-256-GCM в БД и при передаче"
+  >
+    <ShieldCheck size={14} /> Данные зашифрованы
+  </span>
+);
 import {
   patentReceiptService,
   type IPatentReceiptListRow,
@@ -135,16 +144,6 @@ export const PatentReceiptsPage: FC = () => {
 
   return (
     <div className={styles.page}>
-      <div className={styles.header}>
-        <h1 className={styles.title}>Чеки за патент</h1>
-        <span
-          className={styles.encryptionBadge}
-          title="ПДн (ФИО, паспорт, ИНН, банковские реквизиты) зашифрованы AES-256-GCM в БД и при передаче"
-        >
-          <ShieldCheck size={14} /> Данные зашифрованы
-        </span>
-      </div>
-
       <div className={styles.filters}>
         <label className={styles.field}>
           <span>Сотрудник</span>

@@ -2,7 +2,7 @@ import axios from 'axios';
 import * as Sentry from '@sentry/node';
 import { supabase } from '../config/database.js';
 import { r2Service } from './r2.service.js';
-import { openRouterService, type IChatMessage } from './openrouter.service.js';
+import { openRouterService, OpenRouterError, type IChatMessage } from './openrouter.service.js';
 import { encryptReceiptFields, encryptRawResponse } from './patent-receipt-encryption.helper.js';
 import {
   IRecognitionRunResult,
@@ -444,14 +444,19 @@ export const aiReceiptRecognitionService = {
       };
     } catch (err) {
       console.error('[ai-receipt-recognition]', err);
-      const errorMessage = err instanceof Error ? err.message : 'unknown error';
-      Sentry.captureException(err, {
-        tags: { service: 'ai-receipt-recognition', stage: 'recognize' },
-        extra: {
-          documentId,
-          rawLlmContent: rawLlmContent ? rawLlmContent.slice(0, 4000) : null,
-        },
-      });
+      const isRateLimit = err instanceof OpenRouterError && err.status === 429;
+      const errorMessage = isRateLimit
+        ? `Лимит OpenRouter исчерпан${(err as OpenRouterError).retryAfterSec ? ` (попробуйте через ${(err as OpenRouterError).retryAfterSec} сек)` : ''}. Бесплатные модели OpenRouter ограничены по числу запросов в минуту/сутки — подождите и повторите, либо настройте платный ключ.`
+        : err instanceof Error ? err.message : 'unknown error';
+      if (!isRateLimit) {
+        Sentry.captureException(err, {
+          tags: { service: 'ai-receipt-recognition', stage: 'recognize' },
+          extra: {
+            documentId,
+            rawLlmContent: rawLlmContent ? rawLlmContent.slice(0, 4000) : null,
+          },
+        });
+      }
       await updateDocumentStatus(documentId, 'failed', false, errorMessage);
       return {
         ok: false,

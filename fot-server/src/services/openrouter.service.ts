@@ -6,6 +6,33 @@ const RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
 const RETRY_CODES = new Set(['ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN']);
 const RETRY_ATTEMPTS = 3;
 const RETRY_BASE_MS = 800;
+const RETRY_429_BASE_MS = 4_000;
+const RETRY_MAX_MS = 30_000;
+
+export class OpenRouterError extends Error {
+  status: number | null;
+  retryAfterSec: number | null;
+  constructor(message: string, status: number | null, retryAfterSec: number | null = null) {
+    super(message);
+    this.name = 'OpenRouterError';
+    this.status = status;
+    this.retryAfterSec = retryAfterSec;
+  }
+}
+
+const parseRetryAfter = (header: unknown): number | null => {
+  if (typeof header !== 'string') return null;
+  const trimmed = header.trim();
+  if (!trimmed) return null;
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds, 60);
+  const dateMs = Date.parse(trimmed);
+  if (!Number.isNaN(dateMs)) {
+    const diff = Math.ceil((dateMs - Date.now()) / 1000);
+    return diff > 0 ? Math.min(diff, 60) : 0;
+  }
+  return null;
+};
 
 export interface IChatMessageContentText {
   type: 'text';
@@ -113,17 +140,26 @@ export const openRouterService = {
         lastErr = err;
         const axErr = err as AxiosError;
         if (attempt < RETRY_ATTEMPTS && isRetryable(axErr)) {
-          const delay = RETRY_BASE_MS * 2 ** (attempt - 1);
-          console.warn(`[openrouter] retry ${attempt}/${RETRY_ATTEMPTS} after ${delay}ms (${axErr.response?.status || axErr.code})`);
+          const status = axErr.response?.status;
+          const retryAfter = parseRetryAfter(axErr.response?.headers?.['retry-after']);
+          let delay: number;
+          if (status === 429) {
+            const base = retryAfter !== null ? retryAfter * 1000 : RETRY_429_BASE_MS * 2 ** (attempt - 1);
+            delay = Math.min(base, RETRY_MAX_MS);
+          } else {
+            delay = Math.min(RETRY_BASE_MS * 2 ** (attempt - 1), RETRY_MAX_MS);
+          }
+          console.warn(`[openrouter] retry ${attempt}/${RETRY_ATTEMPTS} after ${delay}ms (${status || axErr.code}${retryAfter !== null ? `, retry-after=${retryAfter}s` : ''})`);
           await sleep(delay);
           continue;
         }
-        const status = axErr.response?.status;
+        const status = axErr.response?.status ?? null;
+        const retryAfter = parseRetryAfter(axErr.response?.headers?.['retry-after']);
         const data = axErr.response?.data as unknown;
         const msg = (data && typeof data === 'object' && 'error' in data && (data as { error: { message?: string } }).error?.message)
           || axErr.message
           || 'OpenRouter request failed';
-        throw new Error(`OpenRouter error${status ? ` ${status}` : ''}: ${msg}`);
+        throw new OpenRouterError(`OpenRouter error${status ? ` ${status}` : ''}: ${msg}`, status, retryAfter);
       }
     }
 
