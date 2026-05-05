@@ -417,6 +417,14 @@ export const rolesController = {
       return;
     }
 
+    if (code === 'admin') {
+      res.status(400).json({
+        success: false,
+        error: 'Системную роль «admin» удалить нельзя',
+      });
+      return;
+    }
+
     try {
       await ensureCriticalAdminAccess({ removedRoleCodes: [code] });
     } catch (error) {

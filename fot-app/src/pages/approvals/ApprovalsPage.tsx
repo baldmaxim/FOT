@@ -1,6 +1,6 @@
-import { type FC, useState, useMemo, useEffect, useRef } from 'react';
+import { type FC, useState, useMemo, useEffect, lazy, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertTriangle, Pencil, UserX, MessageSquare, Clock } from 'lucide-react';
+import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Clock } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee } from '../../types';
 import {
   timesheetApprovalService,
@@ -17,6 +17,9 @@ import {
 import { timesheetService } from '../../services/timesheetService';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { ApprovalCommentModal } from './ApprovalCommentModal';
+const TimesheetCorrectionModal = lazy(() => import('../../components/timesheet/TimesheetCorrectionModal').then(module => ({
+  default: module.TimesheetCorrectionModal,
+})));
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { getMonthBounds, listDatesInRange } from '../../utils/timesheetApprovalPeriod';
@@ -400,181 +403,6 @@ const CorrectionsTab: FC = () => {
   );
 };
 
-type ReviewItem =
-  | {
-      kind: 'correction';
-      date: string;
-      employee: TimesheetEmployee;
-      hoursBefore: number | null;
-      hoursAfter: number | null;
-      author: string | null;
-      correctedAt: string | null;
-      notes: string | null;
-      exceedsSkud: boolean;
-    }
-  | {
-      kind: 'absent';
-      date: string;
-      employee: TimesheetEmployee;
-    };
-
-const parseTimeToHours = (value: string | null | undefined): number | null => {
-  if (!value || typeof value !== 'string') return null;
-  const m = value.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
-  if (!m) return null;
-  const h = Number(m[1]);
-  const min = Number(m[2]);
-  const s = m[3] ? Number(m[3]) : 0;
-  if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
-  return h + min / 60 + s / 3600;
-};
-
-const computeSkudHours = (entry: TimesheetEntry): number | null => {
-  const start = parseTimeToHours(entry.first_entry);
-  const end = parseTimeToHours(entry.last_exit);
-  if (start == null || end == null) return null;
-  const diff = end - start;
-  return diff > 0 ? Math.round(diff * 100) / 100 : 0;
-};
-
-const formatHHMM = (decimal: number | null): string => {
-  if (decimal == null) return '—';
-  const totalMinutes = Math.round(decimal * 60);
-  const h = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-};
-
-const buildReviewItems = (
-  entries: TimesheetEntry[],
-  employees: TimesheetEmployee[],
-  outOfPeriodDates: Set<string>,
-  rangeStart: string,
-  rangeEnd: string,
-): ReviewItem[] => {
-  const empMap = new Map<number, TimesheetEmployee>(employees.map(e => [e.id, e]));
-  const items: ReviewItem[] = [];
-  for (const entry of entries) {
-    if (outOfPeriodDates.has(entry.work_date)) continue;
-    if (entry.work_date < rangeStart || entry.work_date > rangeEnd) continue;
-    const employee = empMap.get(entry.employee_id);
-    if (!employee) continue;
-    if (entry.is_correction) {
-      const hoursBefore = computeSkudHours(entry);
-      const hoursAfter = entry.display_hours_worked ?? entry.hours_worked ?? null;
-      const exceedsSkud = hoursBefore != null && hoursAfter != null && hoursAfter > hoursBefore + 0.0167;
-      items.push({
-        kind: 'correction',
-        date: entry.work_date,
-        employee,
-        hoursBefore,
-        hoursAfter,
-        author: entry.corrected_by_name ?? null,
-        correctedAt: entry.corrected_at ?? null,
-        notes: entry.notes ?? null,
-        exceedsSkud,
-      });
-    } else if (entry.status === 'absent') {
-      items.push({ kind: 'absent', date: entry.work_date, employee });
-    }
-  }
-  items.sort((a, b) => {
-    const sevA = a.kind === 'correction' ? (a.exceedsSkud ? 0 : 1) : 2;
-    const sevB = b.kind === 'correction' ? (b.exceedsSkud ? 0 : 1) : 2;
-    if (sevA !== sevB) return sevA - sevB;
-    if (a.date !== b.date) return a.date.localeCompare(b.date);
-    return a.employee.full_name.localeCompare(b.employee.full_name, 'ru');
-  });
-  return items;
-};
-
-const formatCorrectedAt = (iso: string | null): string => {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-};
-
-interface IReviewChecklistProps {
-  items: ReviewItem[];
-  onJump: (employeeId: number, date: string) => void;
-}
-
-const ReviewChecklist: FC<IReviewChecklistProps> = ({ items, onJump }) => {
-  if (items.length === 0) {
-    return (
-      <div className="approvals-checklist approvals-checklist--empty">
-        <Check size={14} /> Без замечаний — табель чистый
-      </div>
-    );
-  }
-  return (
-    <div className="approvals-checklist">
-      <div className="approvals-checklist-head">
-        К проверке <span className="approvals-checklist-count">{items.length}</span>
-      </div>
-      <ul className="approvals-checklist-list">
-        {items.map((item, idx) => {
-          if (item.kind === 'correction') {
-            const cls = `approvals-checklist-item approvals-checklist-item--${item.exceedsSkud ? 'exceeds' : 'correction'}`;
-            return (
-              <li
-                key={`${item.kind}-${item.employee.id}-${item.date}-${idx}`}
-                className={cls}
-                onClick={() => onJump(item.employee.id, item.date)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onJump(item.employee.id, item.date); } }}
-              >
-                <span className="approvals-checklist-icon" aria-hidden>
-                  {item.exceedsSkud ? <AlertTriangle size={14} /> : <Pencil size={14} />}
-                </span>
-                <span className="approvals-checklist-date">{formatDateWithWeekday(item.date)}</span>
-                <span className="approvals-checklist-employee">{item.employee.full_name}</span>
-                <span className="approvals-checklist-diff">
-                  <span className="approvals-checklist-diff-label">СКУД</span>
-                  <span className="approvals-checklist-diff-before">{formatHHMM(item.hoursBefore)}</span>
-                  <span className="approvals-checklist-diff-arrow">→</span>
-                  <span className="approvals-checklist-diff-after">{formatHHMM(item.hoursAfter)}</span>
-                  {item.exceedsSkud && (
-                    <span className="approvals-checklist-tag">&gt; СКУД</span>
-                  )}
-                </span>
-                <span className="approvals-checklist-meta">
-                  {item.author && <span className="approvals-checklist-author">{item.author}</span>}
-                  {item.correctedAt && <span className="approvals-checklist-time">{formatCorrectedAt(item.correctedAt)}</span>}
-                </span>
-                <div className="approvals-checklist-notes-row">
-                  <MessageSquare size={12} />
-                  <span>{item.notes ? `«${item.notes}»` : <em>без комментария</em>}</span>
-                </div>
-              </li>
-            );
-          }
-          return (
-            <li
-              key={`${item.kind}-${item.employee.id}-${item.date}-${idx}`}
-              className="approvals-checklist-item approvals-checklist-item--absent"
-              onClick={() => onJump(item.employee.id, item.date)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onJump(item.employee.id, item.date); } }}
-            >
-              <span className="approvals-checklist-icon" aria-hidden>
-                <UserX size={14} />
-              </span>
-              <span className="approvals-checklist-date">{formatDateWithWeekday(item.date)}</span>
-              <span className="approvals-checklist-employee">{item.employee.full_name}</span>
-              <span className="approvals-checklist-diff approvals-checklist-diff--absent">отсутствие</span>
-              <span className="approvals-checklist-meta" />
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-};
-
 interface IApprovalCardBodyProps {
   row: IApprovalReviewItem;
   canReview: boolean;
@@ -643,59 +471,25 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
     return { yellow, red };
   }, [row.pending_weekend_dates, row.approved_weekend_dates, row.large_correction_dates, tsQuery.data?.entries, outOfPeriodDates]);
 
-  const reviewItems = useMemo<ReviewItem[]>(() => {
-    if (!tsQuery.data) return [];
-    return buildReviewItems(
-      tsQuery.data.entries,
-      tsQuery.data.employees,
-      outOfPeriodDates,
-      row.start_date,
-      row.end_date,
-    );
-  }, [tsQuery.data, outOfPeriodDates, row.start_date, row.end_date]);
+  const [dayModal, setDayModal] = useState<{
+    employee: TimesheetEmployee;
+    day: number;
+    entry: TimesheetEntry | null;
+  } | null>(null);
 
-  const frameRef = useRef<HTMLDivElement | null>(null);
-  const [highlightedCell, setHighlightedCell] = useState<{ employeeId: number; date: string } | null>(null);
-  const flashTimerRef = useRef<number | null>(null);
-
-  useEffect(() => () => {
-    if (flashTimerRef.current != null) window.clearTimeout(flashTimerRef.current);
-  }, []);
-
-  const handleJump = (employeeId: number, date: string) => {
-    const frame = frameRef.current;
-    if (frame) {
-      const cell = frame.querySelector<HTMLElement>(`td[data-employee="${employeeId}"][data-date="${date}"]`);
-      if (cell) {
-        cell.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
-      }
-    }
-    setHighlightedCell({ employeeId, date });
-    if (flashTimerRef.current != null) window.clearTimeout(flashTimerRef.current);
-    flashTimerRef.current = window.setTimeout(() => setHighlightedCell(null), 1600);
-  };
+  const dayModalDate = dayModal
+    ? `${year}-${String(month).padStart(2, '0')}-${String(dayModal.day).padStart(2, '0')}`
+    : null;
 
   const hasPendingWeekend = row.pending_weekend_dates.length > 0;
 
   return (
     <div className="approvals-card-body">
-      {(row.pending_weekend_dates.length > 0 || row.approved_weekend_dates.length > 0 || row.large_correction_dates.length > 0) && (
+      {hasPendingWeekend && (
         <div className="approvals-flags">
-          {row.pending_weekend_dates.length > 0 && (
-            <span className="approvals-flag approvals-flag--yellow">
-              <Clock size={12} /> На рассмотрении (выходные/праздники): {row.pending_weekend_dates.join(', ')}
-            </span>
-          )}
-          {row.approved_weekend_dates.length > 0 && (
-            <span className="approvals-flag approvals-flag--green">
-              <Check size={12} /> Согласованные выходные/праздники: {row.approved_weekend_dates.join(', ')}
-            </span>
-          )}
-          {row.large_correction_dates.length > 0 && (
-            <span className="approvals-flag approvals-flag--red">
-              <AlertTriangle size={12} /> Большие корректировки времени: {row.large_correction_dates.join(', ')}
-            </span>
-          )}
+          <span className="approvals-flag approvals-flag--yellow">
+            <Clock size={12} /> На рассмотрении (выходные/праздники): {row.pending_weekend_dates.join(', ')}
+          </span>
         </div>
       )}
 
@@ -703,9 +497,7 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
         <div className="approvals-comment">Комментарий: {row.review_comment}</div>
       )}
 
-      {tsQuery.data && <ReviewChecklist items={reviewItems} onJump={handleJump} />}
-
-      <div className="approvals-timesheet-frame" ref={frameRef}>
+      <div className="approvals-timesheet-frame">
         {tsQuery.isLoading ? (
           <div className="approvals-timesheet-loading">Загрузка табеля…</div>
         ) : tsQuery.isError ? (
@@ -725,13 +517,28 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
             calendar={tsQuery.data.calendar}
             problemDates={problemDates}
             outOfPeriodDates={outOfPeriodDates}
-            highlightedCell={highlightedCell}
+            highlightedCell={null}
             onEmployeeClick={() => {}}
-            onDayClick={() => {}}
+            onDayClick={(emp, day, entry) => setDayModal({ employee: emp, day, entry })}
             onObjectDayClick={() => {}}
           />
         ) : null}
       </div>
+
+      <Suspense fallback={null}>
+        <TimesheetCorrectionModal
+          open={dayModal !== null}
+          onClose={() => setDayModal(null)}
+          onSave={() => {}}
+          hideCorrectionTab
+          employeeId={dayModal?.employee.id}
+          employeeName={dayModal?.employee.full_name}
+          workDate={dayModalDate ?? undefined}
+          dayLabel={dayModalDate ? formatDateWithWeekday(dayModalDate) : undefined}
+          timesheetEntry={dayModal?.entry ?? null}
+          allowAccessPointMap={false}
+        />
+      </Suspense>
 
       {canReview && (
         <div className="approvals-actions">
@@ -874,6 +681,15 @@ const TimesheetsTab: FC = () => {
                     <span className="approvals-card-range">{formatDate(row.start_date)} — {formatDate(row.end_date)}</span>
                   </div>
                   <span className="approvals-card-status">{APPROVAL_STATUS_LABELS[row.status]}</span>
+                  {row.status === 'approved' && canReview && (
+                    <span
+                      className="approvals-card-return-hint"
+                      title="Можно вернуть на доработку — раскройте карточку"
+                      aria-label="Можно вернуть на доработку"
+                    >
+                      <RotateCcw size={14} />
+                    </span>
+                  )}
                   <span className="approvals-card-submitted">
                     {row.submitted_by_name ?? '—'}{row.submitted_at ? `, ${formatDate(row.submitted_at.slice(0, 10))}` : ''}
                   </span>

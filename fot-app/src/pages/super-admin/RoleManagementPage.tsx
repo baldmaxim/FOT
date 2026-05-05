@@ -54,10 +54,34 @@ const serializePageAccess = (pageAccess: Record<string, AccessMode> | undefined)
 const toRoleCode = (value: string): string => value.toLowerCase().replace(/[^a-z_]/g, '');
 
 const employeeVariantLabel = (variant: EmployeeVariant | null): string => {
-  if (variant === 'object') return 'Рабочий (/employee, object)';
-  if (variant === 'office') return 'Офис (/employee, office)';
+  if (variant === 'object') return 'Рабочий';
+  if (variant === 'office') return 'Офис';
   return '—';
 };
+
+interface IHoursToggleProps {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  withLabels?: boolean;
+  title?: string;
+}
+
+const HoursToggle: FC<IHoursToggleProps> = ({ checked, onChange, withLabels = true, title }) => (
+  <label className={styles.hoursToggle} title={title}>
+    {withLabels && (
+      <span className={checked ? undefined : styles.hoursToggleLabelOff}>урезано</span>
+    )}
+    <input
+      type="checkbox"
+      checked={checked}
+      onChange={e => onChange(e.target.checked)}
+    />
+    <span className={styles.hoursToggleTrack} />
+    {withLabels && (
+      <span className={checked ? styles.hoursToggleLabelOn : undefined}>факт</span>
+    )}
+  </label>
+);
 
 export const RoleManagementPage: FC = () => {
   const toast = useToast();
@@ -371,7 +395,7 @@ export const RoleManagementPage: FC = () => {
             <div>
               <h2 className={styles.sectionTitle}>Роли</h2>
               <p className={styles.sectionHint}>
-                Флаг «Админ» — видит все данные, обходит фильтр по отделам. «Вариант /employee» — какой личный кабинет открывать.
+                Флаг «Админ» — видит все данные, обходит фильтр по отделам. «Кабинет» — какой личный кабинет открывается на /employee. «Часы» — показывать пользователям фактическое время по СКУД (факт) или урезанное под плановую норму дня (урезано).
               </p>
             </div>
             <button className={styles.primaryButton} onClick={() => setShowNewForm(v => !v)}>
@@ -401,14 +425,11 @@ export const RoleManagementPage: FC = () => {
                 />
                 <span>Админ (видит все данные)</span>
               </label>
-              <label className={styles.inlineCheckbox} title="Показывать часы по СКУД без обрезки до плановой нормы дня">
-                <input
-                  type="checkbox"
-                  checked={newForm.show_actual_hours}
-                  onChange={e => setNewForm(s => ({ ...s, show_actual_hours: e.target.checked }))}
-                />
-                <span>Фактические часы (вместо урезанных)</span>
-              </label>
+              <HoursToggle
+                checked={newForm.show_actual_hours}
+                onChange={v => setNewForm(s => ({ ...s, show_actual_hours: v }))}
+                title="Показывать часы по СКУД без обрезки до плановой нормы дня"
+              />
               <select
                 className={styles.input}
                 value={newForm.employee_variant}
@@ -440,7 +461,7 @@ export const RoleManagementPage: FC = () => {
                     <th>Название</th>
                     <th>Админ</th>
                     <th title="Включено — пользователи роли видят часы по СКУД без урезания под плановую норму дня">Часы</th>
-                    <th>/employee</th>
+                    <th title="Какой личный кабинет открывается у пользователей этой роли на /employee">Кабинет</th>
                     <th>Статус</th>
                     <th></th>
                   </tr>
@@ -469,13 +490,15 @@ export const RoleManagementPage: FC = () => {
                         ) : (role.is_admin ? '✓' : '—')}
                       </td>
                       <td title={role.show_actual_hours ? 'факт по СКУД' : 'урезано под график'}>
-                        {editState?.code === role.code ? (
-                          <input
-                            type="checkbox"
-                            checked={editState.show_actual_hours}
-                            onChange={e => setEditState(s => (s ? { ...s, show_actual_hours: e.target.checked } : s))}
-                          />
-                        ) : (role.show_actual_hours ? 'факт' : 'урезано')}
+                        <HoursToggle
+                          checked={editState?.code === role.code ? editState.show_actual_hours : role.show_actual_hours}
+                          onChange={v => {
+                            if (editState?.code === role.code) {
+                              setEditState(s => (s ? { ...s, show_actual_hours: v } : s));
+                            }
+                          }}
+                          withLabels={false}
+                        />
                       </td>
                       <td>
                         {editState?.code === role.code ? (
@@ -522,9 +545,11 @@ export const RoleManagementPage: FC = () => {
                                 })
                               }
                             >Изменить</button>
-                            <button className={styles.dangerButton} onClick={() => handleDeleteRole(role.code)}>
-                              Удалить
-                            </button>
+                            {role.code !== 'admin' && (
+                              <button className={styles.dangerButton} onClick={() => handleDeleteRole(role.code)}>
+                                Удалить
+                              </button>
+                            )}
                           </>
                         )}
                       </td>
@@ -622,14 +647,11 @@ export const RoleManagementPage: FC = () => {
                       />
                       <span>Админ</span>
                     </label>
-                    <label className={styles.inlineCheckbox} title="Показывать часы по СКУД без обрезки до плановой нормы дня">
-                      <input
-                        type="checkbox"
-                        checked={cloneForm.show_actual_hours}
-                        onChange={e => setCloneForm(s => ({ ...s, show_actual_hours: e.target.checked }))}
-                      />
-                      <span>Фактические часы</span>
-                    </label>
+                    <HoursToggle
+                      checked={cloneForm.show_actual_hours}
+                      onChange={v => setCloneForm(s => ({ ...s, show_actual_hours: v }))}
+                      title="Показывать часы по СКУД без обрезки до плановой нормы дня"
+                    />
                     <select
                       className={styles.input}
                       value={cloneForm.employee_variant}
