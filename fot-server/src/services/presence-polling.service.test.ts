@@ -671,6 +671,263 @@ describe('presence-polling.service', () => {
     }));
   });
 
+  it('retries the upsert on transient Supabase errors and succeeds on the second attempt', async () => {
+    vi.useFakeTimers();
+    try {
+      const now = new Date(2026, 2, 27, 10, 0, 0);
+      let upsertCalls = 0;
+
+      mockedState.queryResolver = (query) => {
+        if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
+          return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
+        }
+        if (query.table === 'employees') {
+          return { data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }], error: null };
+        }
+        if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
+          upsertCalls += 1;
+          if (upsertCalls === 1) {
+            return { data: null, error: { message: '<!DOCTYPE html><html>502 Bad Gateway</html>' } };
+          }
+          return { data: null, error: null };
+        }
+        throw new Error(`Unexpected query: ${query.table}`);
+      };
+
+      mockedState.sigurServiceMock.getEvents.mockResolvedValue([
+        makeEvent({ timestamp: '2026-03-27T09:15:00+03:00' }),
+      ] as Array<Record<string, unknown>>);
+
+      const cyclePromise = pollEventsOnce(now);
+      await vi.runAllTimersAsync();
+      await cyclePromise;
+
+      expect(upsertCalls).toBe(2);
+      expect(mockedState.sigurMonitorMock.recordSigurMonitorFailure).not.toHaveBeenCalled();
+      expect(mockedState.sigurMonitorMock.recordSigurMonitorSuccess).toHaveBeenCalledWith(expect.objectContaining({
+        meta: expect.objectContaining({ inserted: 1, persistenceErrors: 0, summaryError: null }),
+      }));
+      expect(mockedState.runtimeStateMock.mergeSigurRuntimeState).toHaveBeenCalledWith(expect.objectContaining({
+        checkpointAt: expect.any(Date),
+        meta: expect.objectContaining({ lastError: null }),
+      }));
+      expect(mockedState.ioMock.emit).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does NOT advance the checkpoint when ALL upsert retries fail with statement timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const now = new Date(2026, 2, 27, 10, 0, 0);
+      let upsertCalls = 0;
+
+      mockedState.queryResolver = (query) => {
+        if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
+          return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
+        }
+        if (query.table === 'employees') {
+          return { data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }], error: null };
+        }
+        if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
+          upsertCalls += 1;
+          return { data: null, error: { message: 'canceling statement due to statement timeout' } };
+        }
+        throw new Error(`Unexpected query: ${query.table}`);
+      };
+
+      mockedState.sigurServiceMock.getEvents.mockResolvedValue([
+        makeEvent({ timestamp: '2026-03-27T09:15:00+03:00' }),
+      ] as Array<Record<string, unknown>>);
+
+      const cyclePromise = pollEventsOnce(now);
+      await vi.runAllTimersAsync();
+      await cyclePromise;
+
+      // 1 первичная + 2 retry = 3 attempts
+      expect(upsertCalls).toBe(3);
+      expect(mockedState.runtimeStateMock.mergeSigurRuntimeState).toHaveBeenCalledTimes(1);
+      const mergeCall = mockedState.runtimeStateMock.mergeSigurRuntimeState.mock.calls[0][0] as unknown as {
+        checkpointAt?: Date;
+        meta: { lastError: string };
+      };
+      expect(mergeCall.checkpointAt).toBeUndefined();
+      expect(mergeCall.meta.lastError).toContain('statement timeout');
+      expect(mockedState.sigurMonitorMock.recordSigurMonitorFailure).toHaveBeenCalledWith(expect.objectContaining({
+        errorMessage: expect.stringContaining('statement timeout'),
+      }));
+      expect(mockedState.sigurMonitorMock.recordSigurMonitorSuccess).not.toHaveBeenCalled();
+      expect(mockedState.ioMock.emit).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('advances the checkpoint to the last successful event when a later batch fails with timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const now = new Date(2026, 2, 27, 10, 0, 0);
+      let upsertCalls = 0;
+
+      mockedState.queryResolver = (query) => {
+        if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
+          return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
+        }
+        if (query.table === 'employees') {
+          return { data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }], error: null };
+        }
+        if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
+          upsertCalls += 1;
+          // 1-й батч (200 событий) — ОК; все попытки 2-го батча (50 событий) — timeout
+          if (upsertCalls === 1) return { data: null, error: null };
+          return { data: null, error: { message: 'canceling statement due to statement timeout' } };
+        }
+        throw new Error(`Unexpected query: ${query.table}`);
+      };
+
+      const events: Array<Record<string, unknown>> = [];
+      // 250 событий = 200 (батч 1, успех) + 50 (батч 2, fail после retries)
+      for (let i = 0; i < 250; i++) {
+        const minute = String(Math.floor(i / 60)).padStart(2, '0');
+        const second = String(i % 60).padStart(2, '0');
+        events.push(makeEvent({
+          timestamp: `2026-03-27T09:${minute}:${second}+03:00`,
+          name: `Сотрудник${i}`,
+          employeeId: 200 + i,
+        }));
+      }
+      mockedState.sigurServiceMock.getEvents.mockResolvedValue(events);
+
+      const cyclePromise = pollEventsOnce(now);
+      await vi.runAllTimersAsync();
+      await cyclePromise;
+
+      // 1 успешный + 1 первичный fail + 2 retry на 2-м батче = 4
+      expect(upsertCalls).toBe(4);
+      expect(mockedState.runtimeStateMock.mergeSigurRuntimeState).toHaveBeenCalledTimes(1);
+      const mergeCall = mockedState.runtimeStateMock.mergeSigurRuntimeState.mock.calls[0][0] as unknown as {
+        checkpointAt?: Date;
+        meta: { lastError: string };
+      };
+      // Checkpoint должен быть выставлен — до event_at последнего события 1-го батча минус 10s.
+      // 200-е событие: i=199 → minute=Math.floor(199/60)=3, second=199%60=19 → 09:03:19 MSK → 06:03:19 UTC
+      expect(mergeCall.checkpointAt).toBeInstanceOf(Date);
+      const checkpointMs = mergeCall.checkpointAt!.getTime();
+      const expectedMaxMs = Date.parse('2026-03-27T09:03:19+03:00');
+      expect(checkpointMs).toBe(expectedMaxMs - 10_000);
+      expect(mergeCall.meta.lastError).toContain('statement timeout');
+      expect(mockedState.sigurMonitorMock.recordSigurMonitorFailure).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries the summary RPC on <!DOCTYPE html> Supabase responses and records partial failure', async () => {
+    vi.useFakeTimers();
+    try {
+      const now = new Date(2026, 2, 27, 10, 0, 0);
+
+      mockedState.queryResolver = (query) => {
+        if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
+          return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
+        }
+        if (query.table === 'employees') {
+          return { data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }], error: null };
+        }
+        if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
+          return { data: null, error: null };
+        }
+        throw new Error(`Unexpected query: ${query.table}`);
+      };
+
+      let rpcCalls = 0;
+      (mockedState.supabaseMock.rpc as unknown as { mockImplementation: (impl: (...args: unknown[]) => Promise<unknown>) => void }).mockImplementation(async () => {
+        rpcCalls += 1;
+        return { data: null, error: { message: '<!DOCTYPE html><html><head><title>502</title></head></html>' } };
+      });
+
+      mockedState.sigurServiceMock.getEvents.mockResolvedValue([
+        makeEvent({ timestamp: '2026-03-27T09:15:00+03:00' }),
+      ] as Array<Record<string, unknown>>);
+
+      const cyclePromise = pollEventsOnce(now);
+      await vi.runAllTimersAsync();
+      await cyclePromise;
+
+      // 1 первичная + 2 retry = 3 attempts
+      expect(rpcCalls).toBe(3);
+      expect(mockedState.runtimeStateMock.mergeSigurRuntimeState).toHaveBeenCalledTimes(1);
+      const mergeCall = mockedState.runtimeStateMock.mergeSigurRuntimeState.mock.calls[0][0] as unknown as {
+        checkpointAt?: Date;
+        meta: { lastError: string };
+      };
+      // Inserted ОК → есть lastSuccessfulEventAt → checkpointAt выставляется (— 10s overlap)
+      expect(mergeCall.checkpointAt).toBeInstanceOf(Date);
+      expect(mergeCall.meta.lastError.toLowerCase()).toContain('<!doctype');
+      expect(mockedState.sigurMonitorMock.recordSigurMonitorFailure).toHaveBeenCalled();
+      expect(mockedState.sigurMonitorMock.recordSigurMonitorSuccess).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('chunks summary recalc RPC into batches of at most 100 pairs', async () => {
+    const now = new Date(2026, 2, 27, 10, 0, 0);
+
+    // 250 событий = 250 уникальных (employee_id, date) пар (employee_id зашит в sigur_employee_id)
+    const employees: Array<{ id: number; full_name: string; sigur_employee_id: number }> = [];
+    for (let i = 0; i < 250; i++) {
+      employees.push({ id: 1000 + i, full_name: `Сотрудник${i}`, sigur_employee_id: 200 + i });
+    }
+
+    mockedState.queryResolver = (query) => {
+      if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
+        return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
+      }
+      if (query.table === 'employees') {
+        return { data: employees, error: null };
+      }
+      if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
+        return { data: null, error: null };
+      }
+      throw new Error(`Unexpected query: ${query.table}`);
+    };
+
+    const events: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < 250; i++) {
+      const minute = String(Math.floor(i / 60)).padStart(2, '0');
+      const second = String(i % 60).padStart(2, '0');
+      events.push(makeEvent({
+        timestamp: `2026-03-27T09:${minute}:${second}+03:00`,
+        name: `Сотрудник${i}`,
+        employeeId: 200 + i,
+      }));
+    }
+    mockedState.sigurServiceMock.getEvents.mockResolvedValue(events);
+
+    vi.useFakeTimers();
+    try {
+      const cyclePromise = pollEventsOnce(now);
+      await vi.runAllTimersAsync();
+      await cyclePromise;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // 250 пар → 3 чанка (100 + 100 + 50)
+    expect(mockedState.supabaseMock.rpc).toHaveBeenCalledTimes(3);
+    const rpcCalls = (mockedState.supabaseMock.rpc as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    for (const call of rpcCalls) {
+      const args = call[1] as { p_pairs: unknown[] };
+      expect(args.p_pairs.length).toBeLessThanOrEqual(100);
+    }
+    const totalPairs = rpcCalls.reduce((sum: number, call: unknown[]) => {
+      return sum + ((call[1] as { p_pairs: unknown[] }).p_pairs.length);
+    }, 0);
+    expect(totalPairs).toBe(250);
+  });
+
   it('uses a dedicated lease for the background structure scheduler', async () => {
     await acquireStructureSyncSchedulerLock();
     await releaseStructureSyncSchedulerLock();

@@ -38,7 +38,11 @@ import type { ConnectionType } from './sigur.service.js';
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const MIN_POLL_INTERVAL_MS = 5_000;
 const EMPLOYEE_CACHE_TTL = 10 * 60_000;
-const BATCH_SIZE = 500;
+const BATCH_SIZE = 200;
+const BATCH_DELAY_MS = 150;
+const SUMMARY_BATCH = 100;
+const SUMMARY_DELAY_MS = 200;
+const RETRY_BACKOFF_MS = [400, 1200];
 export const POLL_OVERLAP_MS = 2 * 60_000;
 const POLL_MAX_WINDOW_MS = 10 * 60_000;
 const SIGUR_EXCLUSIVE_SYNC_STATE_KEY = 'sigur_exclusive_sync';
@@ -372,6 +376,18 @@ export function resetPresencePollingStateForTests(): void {
   invalidatePresencePollingEmployeeCache();
 }
 
+function isTransientDbError(message: string): boolean {
+  const m = message.toLowerCase();
+  return m.includes('statement timeout')
+    || m.includes('canceling statement')
+    || m.includes('502')
+    || m.includes('504')
+    || m.includes('<!doctype')
+    || m.includes('fetch failed')
+    || m.includes('econnreset')
+    || m.includes('etimedout');
+}
+
 export async function pollEventsOnce(now = new Date()): Promise<void> {
   const cycleStartedAt = Date.now();
   const cycleStartedAtIso = new Date(cycleStartedAt).toISOString();
@@ -494,46 +510,87 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     const insertedSummaryKeys = new Set<string>();
     const insertedEmployeeIds = new Set<number>();
     const persistenceErrors: string[] = [];
+    let lastSuccessfulEventAt: Date | null = null;
     const tInsertStart = Date.now();
     for (let i = 0; i < inserts.length; i += BATCH_SIZE) {
       const batch = inserts.slice(i, i + BATCH_SIZE);
-      const { data: insertedRows, error } = await supabase
-        .from('skud_events')
-        .upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true })
-        .select('employee_id,event_date');
-      if (error) {
-        console.error('[presence-polling] insert error:', error.message);
-        persistenceErrors.push(error.message);
-      } else {
-        const rows = Array.isArray(insertedRows) ? insertedRows : [];
-        totalInserted += rows.length;
-        for (const row of rows as Array<{ employee_id: number | null; event_date: string | null }>) {
-          if (row.employee_id == null || !row.event_date) continue;
-          insertedSummaryKeys.add(`${row.employee_id}:${row.event_date}`);
-          insertedEmployeeIds.add(Number(row.employee_id));
+      let batchError: string | null = null;
+      let attempt = 0;
+      // Первичная попытка + повторы при transient-ошибках Supabase (statement timeout / 502 / 504).
+      // Без retry единичный таймаут блокировал весь цикл и не давал двигать checkpoint.
+      while (attempt <= RETRY_BACKOFF_MS.length) {
+        const { data: insertedRows, error } = await supabase
+          .from('skud_events')
+          .upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true })
+          .select('employee_id,event_date');
+        if (!error) {
+          const rows = Array.isArray(insertedRows) ? insertedRows : [];
+          totalInserted += rows.length;
+          for (const row of rows as Array<{ employee_id: number | null; event_date: string | null }>) {
+            if (row.employee_id == null || !row.event_date) continue;
+            insertedSummaryKeys.add(`${row.employee_id}:${row.event_date}`);
+            insertedEmployeeIds.add(Number(row.employee_id));
+          }
+          for (const row of batch) {
+            const t = Date.parse(row.event_at);
+            if (!Number.isNaN(t) && (!lastSuccessfulEventAt || t > lastSuccessfulEventAt.getTime())) {
+              lastSuccessfulEventAt = new Date(t);
+            }
+          }
+          batchError = null;
+          break;
         }
+        batchError = error.message;
+        if (!isTransientDbError(error.message) || attempt === RETRY_BACKOFF_MS.length) break;
+        const jitter = Math.floor(Math.random() * 200);
+        await wait(RETRY_BACKOFF_MS[attempt] + jitter);
+        attempt++;
       }
+      if (batchError) {
+        console.error(`[presence-polling] insert error (batch ${i}/${inserts.length}):`, batchError);
+        persistenceErrors.push(batchError);
+        // Останавливаем цикл вставок: следующие батчи скорее всего тоже упадут, лучше
+        // финализировать с partial checkpoint и попробовать на следующем тике.
+        break;
+      }
+      if (i + BATCH_SIZE < inserts.length) await wait(BATCH_DELAY_MS);
     }
     const tInsert = Date.now() - tInsertStart;
 
-    if (persistenceErrors.length > 0) {
-      throw new Error(`Failed to persist Sigur events: ${persistenceErrors[0]}`);
-    }
-
     let tSummary = 0;
+    let summaryError: string | null = null;
     if (insertedSummaryKeys.size > 0) {
       const tSummaryStart = Date.now();
-      const pairs = [...insertedSummaryKeys].map(key => {
+      const allPairs = [...insertedSummaryKeys].map(key => {
         const [empId, date] = key.split(':');
         return { emp_id: parseInt(empId, 10), date };
       });
-      const { error: summaryError } = await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: pairs });
-      tSummary = Date.now() - tSummaryStart;
-      if (summaryError) {
-        throw new Error(`[presence-polling] summary recalc error: ${summaryError.message}`);
+      for (let i = 0; i < allPairs.length; i += SUMMARY_BATCH) {
+        const chunk = allPairs.slice(i, i + SUMMARY_BATCH);
+        let chunkError: string | null = null;
+        let attempt = 0;
+        while (attempt <= RETRY_BACKOFF_MS.length) {
+          const { error } = await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: chunk });
+          if (!error) {
+            chunkError = null;
+            break;
+          }
+          chunkError = error.message;
+          if (!isTransientDbError(error.message) || attempt === RETRY_BACKOFF_MS.length) break;
+          await wait(RETRY_BACKOFF_MS[attempt] + Math.floor(Math.random() * 200));
+          attempt++;
+        }
+        if (chunkError) {
+          console.error(`[presence-polling] summary recalc error (chunk ${i}/${allPairs.length}):`, chunkError);
+          summaryError = chunkError;
+          break;
+        }
+        if (i + SUMMARY_BATCH < allPairs.length) await wait(SUMMARY_DELAY_MS);
       }
+      tSummary = Date.now() - tSummaryStart;
     }
 
+    const hadFailure = persistenceErrors.length > 0 || summaryError !== null;
     const presenceChanged = totalInserted > 0 || insertedSummaryKeys.size > 0;
     const cycleFinishedAt = new Date();
 
@@ -554,6 +611,9 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     const monitorCheckedAt = new Date();
     const totalMs = Date.now() - cycleStartedAt;
     const timings = { tFetch, tEmpRefresh, tInsert, tSummary, totalMs };
+    const failureMessage = persistenceErrors.length > 0
+      ? `Failed to persist Sigur events: ${persistenceErrors[0]}`
+      : (summaryError ? `[presence-polling] summary recalc error: ${summaryError}` : null);
     const cycleMeta = {
       connectionType,
       checkpointSource: window.checkpointSource,
@@ -575,22 +635,34 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       latestObservedEventAt: latestObservedEventAt?.toISOString() || null,
       durationMs: totalMs,
       checkpointLagMs: Math.max(0, now.getTime() - window.endAt.getTime()),
+      persistenceErrors: persistenceErrors.length,
+      summaryError,
       timings,
     };
+
+    // При partial failure двигаем checkpoint только до последнего успешно записанного
+    // event_at (минус 10 сек overlap), чтобы при следующем тике переиграть только
+    // непрошедшую часть окна. При полном провале без единого успешного батча
+    // checkpoint не двигаем — пусть следующий цикл попробует то же окно заново.
+    const nextCheckpoint: Date | null = hadFailure
+      ? (lastSuccessfulEventAt ? new Date(lastSuccessfulEventAt.getTime() - 10_000) : null)
+      : window.endAt;
+
     await mergeSigurRuntimeState({
       key: SIGUR_POLLING_STATE_KEY,
       owner: POLLING_LEASE_OWNER,
-      checkpointAt: window.endAt,
+      ...(nextCheckpoint ? { checkpointAt: nextCheckpoint } : {}),
       meta: {
         lastSignalAt: monitorCheckedAt.toISOString(),
-        lastSuccessAt: monitorCheckedAt.toISOString(),
+        ...(hadFailure
+          ? { lastFailureAt: monitorCheckedAt.toISOString(), lastError: failureMessage }
+          : { lastSuccessAt: monitorCheckedAt.toISOString(), lastError: null }),
         lastCycle: cycleMeta,
-        lastError: null,
         ...(latestObservedEventAt ? { lastEventFlowAt: latestObservedEventAt.toISOString() } : {}),
       },
     });
     console.log(
-      `[presence-polling] cycle done source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} fetched=${rawEvents.length} attempted=${inserts.length} inserted=${totalInserted} duplicates=${Math.max(0, inserts.length - totalInserted)} unmatched=${storedUnmatched} summaries=${insertedSummaryKeys.size} tFetch=${tFetch}ms tEmpRefresh=${tEmpRefresh}ms tInsert=${tInsert}ms tSummary=${tSummary}ms total=${totalMs}ms`,
+      `[presence-polling] cycle done source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} fetched=${rawEvents.length} attempted=${inserts.length} inserted=${totalInserted} duplicates=${Math.max(0, inserts.length - totalInserted)} unmatched=${storedUnmatched} summaries=${insertedSummaryKeys.size} tFetch=${tFetch}ms tEmpRefresh=${tEmpRefresh}ms tInsert=${tInsert}ms tSummary=${tSummary}ms total=${totalMs}ms${hadFailure ? ` PARTIAL_FAILURE=${failureMessage}` : ''}`,
     );
     if (totalMs > 5_000) {
       const pollIntervalMs = resolvePresencePollIntervalMs();
@@ -603,18 +675,46 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         extra: { ...timings, pollIntervalMs, fetched: rawEvents.length, inserted: totalInserted },
       });
     }
-    void recordSigurMonitorSuccess({
-      source: 'presence_polling',
-      checkedAt: monitorCheckedAt,
-      connectionType,
-      responseMs: totalMs,
-      eventsLastWindow: rawEvents.length,
-      meta: {
-        ...cycleMeta,
-      },
-    }).catch(error => {
-      console.error('[presence-polling] monitor success hook error:', (error as Error).message);
-    });
+    if (hadFailure) {
+      Sentry.captureMessage('presence-polling partial success', {
+        level: 'warning',
+        tags: { service: 'presence-polling', stage: 'persistence' },
+        extra: {
+          failureMessage,
+          persistenceErrors: persistenceErrors.length,
+          summaryError,
+          inserted: totalInserted,
+          attempted: inserts.length,
+          lastSuccessfulEventAt: lastSuccessfulEventAt?.toISOString() || null,
+          checkpointMoved: nextCheckpoint?.toISOString() || null,
+        },
+      });
+      void recordSigurMonitorFailure({
+        source: 'presence_polling',
+        checkedAt: monitorCheckedAt,
+        connectionType,
+        responseMs: totalMs,
+        errorMessage: failureMessage || 'unknown',
+        meta: {
+          ...cycleMeta,
+        },
+      }).catch(error => {
+        console.error('[presence-polling] monitor failure hook error:', (error as Error).message);
+      });
+    } else {
+      void recordSigurMonitorSuccess({
+        source: 'presence_polling',
+        checkedAt: monitorCheckedAt,
+        connectionType,
+        responseMs: totalMs,
+        eventsLastWindow: rawEvents.length,
+        meta: {
+          ...cycleMeta,
+        },
+      }).catch(error => {
+        console.error('[presence-polling] monitor success hook error:', (error as Error).message);
+      });
+    }
   } catch (error) {
     console.error('[presence-polling] error:', (error as Error).message);
     Sentry.captureException(error, { tags: { service: 'presence-polling', stage: 'pollEvents' } });
