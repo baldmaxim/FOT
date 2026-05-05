@@ -387,11 +387,14 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       `[presence-polling] window source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime}`,
     );
 
+    const tFetchStart = Date.now();
     const rawEvents = await sigurService.getEvents(window.startTime, window.endTime, connectionType, 'PASS_DETECTED');
+    const tFetch = Date.now() - tFetchStart;
     console.log(
-      `[presence-polling] fetched=${rawEvents.length} source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime}`,
+      `[presence-polling] fetched=${rawEvents.length} source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} tFetch=${tFetch}ms`,
     );
 
+    let tEmpRefresh = 0;
     let maps = await getEmployeeMaps();
 
     // Lazy-refresh: если среди событий есть неизвестный physicalPerson и кэшу > 30с —
@@ -408,8 +411,10 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       const cached = getEmployeeCache();
       const cacheAgeMs = cached ? Date.now() - cached.fetchedAt : Number.POSITIVE_INFINITY;
       if (cacheAgeMs > 30_000) {
+        const tEmpStart = Date.now();
         invalidatePresencePollingEmployeeCache();
         maps = await getEmployeeMaps();
+        tEmpRefresh = Date.now() - tEmpStart;
       }
     }
     const { byName, bySigurId, byUniqueName } = maps;
@@ -489,6 +494,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     const insertedSummaryKeys = new Set<string>();
     const insertedEmployeeIds = new Set<number>();
     const persistenceErrors: string[] = [];
+    const tInsertStart = Date.now();
     for (let i = 0; i < inserts.length; i += BATCH_SIZE) {
       const batch = inserts.slice(i, i + BATCH_SIZE);
       const { data: insertedRows, error } = await supabase
@@ -508,17 +514,21 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         }
       }
     }
+    const tInsert = Date.now() - tInsertStart;
 
     if (persistenceErrors.length > 0) {
       throw new Error(`Failed to persist Sigur events: ${persistenceErrors[0]}`);
     }
 
+    let tSummary = 0;
     if (insertedSummaryKeys.size > 0) {
+      const tSummaryStart = Date.now();
       const pairs = [...insertedSummaryKeys].map(key => {
         const [empId, date] = key.split(':');
         return { emp_id: parseInt(empId, 10), date };
       });
       const { error: summaryError } = await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: pairs });
+      tSummary = Date.now() - tSummaryStart;
       if (summaryError) {
         throw new Error(`[presence-polling] summary recalc error: ${summaryError.message}`);
       }
@@ -542,6 +552,8 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     }
 
     const monitorCheckedAt = new Date();
+    const totalMs = Date.now() - cycleStartedAt;
+    const timings = { tFetch, tEmpRefresh, tInsert, tSummary, totalMs };
     const cycleMeta = {
       connectionType,
       checkpointSource: window.checkpointSource,
@@ -561,8 +573,9 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       candidateSummaries: candidateSummaryKeys.size,
       summaries: insertedSummaryKeys.size,
       latestObservedEventAt: latestObservedEventAt?.toISOString() || null,
-      durationMs: Date.now() - cycleStartedAt,
+      durationMs: totalMs,
       checkpointLagMs: Math.max(0, now.getTime() - window.endAt.getTime()),
+      timings,
     };
     await mergeSigurRuntimeState({
       key: SIGUR_POLLING_STATE_KEY,
@@ -577,13 +590,24 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       },
     });
     console.log(
-      `[presence-polling] cycle done source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} fetched=${rawEvents.length} attempted=${inserts.length} inserted=${totalInserted} duplicates=${Math.max(0, inserts.length - totalInserted)} unmatched=${storedUnmatched} summaries=${insertedSummaryKeys.size} durationMs=${Date.now() - cycleStartedAt}`,
+      `[presence-polling] cycle done source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} fetched=${rawEvents.length} attempted=${inserts.length} inserted=${totalInserted} duplicates=${Math.max(0, inserts.length - totalInserted)} unmatched=${storedUnmatched} summaries=${insertedSummaryKeys.size} tFetch=${tFetch}ms tEmpRefresh=${tEmpRefresh}ms tInsert=${tInsert}ms tSummary=${tSummary}ms total=${totalMs}ms`,
     );
+    if (totalMs > 5_000) {
+      const pollIntervalMs = resolvePresencePollIntervalMs();
+      console.warn(
+        `[presence-polling] SLOW cycle ${totalMs}ms exceeds polling interval ${pollIntervalMs}ms`,
+      );
+      Sentry.captureMessage('presence-polling cycle slow', {
+        level: 'warning',
+        tags: { service: 'presence-polling' },
+        extra: { ...timings, pollIntervalMs, fetched: rawEvents.length, inserted: totalInserted },
+      });
+    }
     void recordSigurMonitorSuccess({
       source: 'presence_polling',
       checkedAt: monitorCheckedAt,
       connectionType,
-      responseMs: Date.now() - cycleStartedAt,
+      responseMs: totalMs,
       eventsLastWindow: rawEvents.length,
       meta: {
         ...cycleMeta,
@@ -722,7 +746,12 @@ async function runPollCycle(): Promise<void> {
       });
 
       await pollEvents();
+      const tBackfillStart = Date.now();
       await backfillUnmatchedEvents();
+      const tBackfill = Date.now() - tBackfillStart;
+      if (tBackfill > 1_000) {
+        console.log(`[presence-polling] backfill done in ${tBackfill}ms`);
+      }
     } catch (err) {
       console.error('[presence-polling] cycle error:', (err as Error).message);
       Sentry.captureException(err, { tags: { service: 'presence-polling', stage: 'cycle' } });

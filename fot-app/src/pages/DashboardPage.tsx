@@ -198,8 +198,11 @@ export const DashboardPage: React.FC = () => {
     refreshStats();
   }, [refreshPresence, refreshStats]);
 
+  // Подписка не должна зависеть от выбора отдела: для админа без выбранного
+  // отдела effectiveSelectedDeptId = null, но дашборд всё равно показывает
+  // данные по всему порталу и должен оживать на presence_updated.
   usePresenceRealtime({
-    enabled: !!effectiveSelectedDeptId,
+    enabled: true,
     owner: 'dashboard-presence',
     onPresenceUpdate: handlePresenceRealtime,
     onVisible: handleDashboardVisible,
