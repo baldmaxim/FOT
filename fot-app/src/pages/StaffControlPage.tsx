@@ -2032,29 +2032,11 @@ export const StaffControlPage: FC = () => {
     return items;
   }, [isAdmin, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, meta.total]);
 
-  const pageHeader = (
-    <div className="sc-page-header">
-      <h1 className="sc-page-title">
-        <span className="sc-page-title-text">Управление кадрами</span>
-        <span className="sc-page-counter">
-          {meta.total}{statusFilter === 'active' ? ` из ${totalActive}` : ''}
-        </span>
-      </h1>
-      {isAdmin && (
-        <div className="sc-page-actions">
-          {statusFilter === 'active' && (
-            <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
-              <UserPlus size={14} /> Добавить
-            </button>
-          )}
-          {overflowItems.length > 0 && <OverflowMenu items={overflowItems} />}
-        </div>
-      )}
-    </div>
-  );
-
-  const filterBar = (
+  const controlsBar = (
     <div className="sc-filters">
+      <span className="sc-page-counter">
+        {meta.total}{statusFilter === 'active' ? ` из ${totalActive}` : ''}
+      </span>
       {statusFilter !== 'excluded' && (
         <div className="sc-segmented" role="tablist" aria-label="Статус сотрудников">
           <button
@@ -2110,6 +2092,16 @@ export const StaffControlPage: FC = () => {
           <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
         ))}
       </select>
+      {isAdmin && (
+        <div className="sc-page-actions">
+          {statusFilter === 'active' && (
+            <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
+              <UserPlus size={14} /> Добавить
+            </button>
+          )}
+          {overflowItems.length > 0 && <OverflowMenu items={overflowItems} />}
+        </div>
+      )}
     </div>
   );
 
@@ -2117,8 +2109,7 @@ export const StaffControlPage: FC = () => {
 
   return (
     <div className="sc-page">
-      {pageHeader}
-      {filterBar}
+      {controlsBar}
 
       {selectionMode && (
         <div className="sc-bulk-bar">
