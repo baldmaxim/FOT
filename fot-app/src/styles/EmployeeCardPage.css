@@ -527,38 +527,29 @@
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   padding: 3px 6px;
-  gap: 1px;
 }
 
-.date-input-segment {
+.date-input-group:focus-within {
+  border-color: var(--accent, #4b6cff);
+}
+
+.date-input {
   border: none;
   background: transparent;
   color: var(--text-primary);
   font-size: 13px;
-  font-family: inherit;
-  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+  text-align: left;
   outline: none;
   padding: 2px 0;
+  width: 92px;
+  caret-color: var(--accent, #4b6cff);
 }
 
-.date-input-dd,
-.date-input-mm {
-  width: 24px;
-}
-
-.date-input-yyyy {
-  width: 38px;
-}
-
-.date-input-dot {
-  color: var(--text-tertiary);
-  font-size: 13px;
-  user-select: none;
-}
-
-.date-input-segment::placeholder {
-  color: var(--text-tertiary);
-  opacity: 0.6;
+.date-input::selection {
+  background: var(--accent-soft, rgba(75, 108, 255, 0.25));
 }
 
 .skud-period-btn {
