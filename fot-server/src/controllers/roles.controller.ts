@@ -23,6 +23,7 @@ const createRoleSchema = z.object({
   description: z.string().max(500).nullable().optional(),
   is_admin: z.boolean().optional().default(false),
   employee_variant: employeeVariantSchema,
+  show_actual_hours: z.boolean().optional().default(false),
 });
 
 const updateRoleSchema = z.object({
@@ -31,6 +32,7 @@ const updateRoleSchema = z.object({
   is_admin: z.boolean().optional(),
   employee_variant: employeeVariantSchema,
   is_active: z.boolean().optional(),
+  show_actual_hours: z.boolean().optional(),
 });
 
 const updateAccessProfileSchema = z.object({
@@ -44,6 +46,7 @@ const cloneRoleSchema = z.object({
   is_admin: z.boolean().optional(),
   employee_variant: employeeVariantSchema,
   is_active: z.boolean().optional(),
+  show_actual_hours: z.boolean().optional(),
 });
 
 function isMissingFunctionError(error: unknown): boolean {

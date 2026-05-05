@@ -15,6 +15,7 @@ interface INewRoleForm {
   name: string;
   is_admin: boolean;
   employee_variant: EmployeeVariant | '';
+  show_actual_hours: boolean;
 }
 
 interface ICloneRoleForm {
@@ -23,6 +24,7 @@ interface ICloneRoleForm {
   description: string;
   is_admin: boolean;
   employee_variant: EmployeeVariant | '';
+  show_actual_hours: boolean;
 }
 
 interface IEditState {
@@ -30,6 +32,7 @@ interface IEditState {
   name: string;
   is_admin: boolean;
   employee_variant: EmployeeVariant | '';
+  show_actual_hours: boolean;
 }
 
 interface IPageGroup {
@@ -68,6 +71,7 @@ export const RoleManagementPage: FC = () => {
     name: '',
     is_admin: false,
     employee_variant: '',
+    show_actual_hours: false,
   });
   const [editState, setEditState] = useState<IEditState | null>(null);
   const [savingRole, setSavingRole] = useState(false);
@@ -83,6 +87,7 @@ export const RoleManagementPage: FC = () => {
     description: '',
     is_admin: false,
     employee_variant: '',
+    show_actual_hours: false,
   });
 
   const rolesQuery = useQuery<SystemRole[]>({
@@ -191,9 +196,10 @@ export const RoleManagementPage: FC = () => {
         name: newForm.name,
         is_admin: newForm.is_admin,
         employee_variant: newForm.employee_variant || null,
+        show_actual_hours: newForm.show_actual_hours,
       });
       toast.success('Роль создана');
-      setNewForm({ code: '', name: '', is_admin: false, employee_variant: '' });
+      setNewForm({ code: '', name: '', is_admin: false, employee_variant: '', show_actual_hours: false });
       setShowNewForm(false);
       setSelectedRoleCode(createdRole.code);
       upsertRoleInCache(createdRole);
@@ -217,6 +223,7 @@ export const RoleManagementPage: FC = () => {
         description: roles.find(r => r.code === code)?.description,
         is_admin: editState.is_admin,
         employee_variant: editState.employee_variant || null,
+        show_actual_hours: editState.show_actual_hours,
       });
       toast.success('Роль обновлена');
       setEditState(null);
@@ -236,6 +243,7 @@ export const RoleManagementPage: FC = () => {
         is_admin: role.is_admin,
         employee_variant: role.employee_variant,
         is_active: !role.is_active,
+        show_actual_hours: role.show_actual_hours,
       });
       toast.success(role.is_active ? 'Роль деактивирована' : 'Роль активирована');
       upsertRoleInCache(updated);
@@ -291,6 +299,7 @@ export const RoleManagementPage: FC = () => {
       description: selectedRole.description ?? '',
       is_admin: selectedRole.is_admin,
       employee_variant: selectedRole.employee_variant ?? '',
+      show_actual_hours: selectedRole.show_actual_hours,
     });
     setShowCloneForm(true);
   };
@@ -309,6 +318,7 @@ export const RoleManagementPage: FC = () => {
         description: cloneForm.description || null,
         is_admin: cloneForm.is_admin,
         employee_variant: cloneForm.employee_variant || null,
+        show_actual_hours: cloneForm.show_actual_hours,
       });
       toast.success('Роль-копия создана');
       setShowCloneForm(false);
@@ -391,6 +401,14 @@ export const RoleManagementPage: FC = () => {
                 />
                 <span>Админ (видит все данные)</span>
               </label>
+              <label className={styles.inlineCheckbox} title="Показывать часы по СКУД без обрезки до плановой нормы дня">
+                <input
+                  type="checkbox"
+                  checked={newForm.show_actual_hours}
+                  onChange={e => setNewForm(s => ({ ...s, show_actual_hours: e.target.checked }))}
+                />
+                <span>Фактические часы (вместо урезанных)</span>
+              </label>
               <select
                 className={styles.input}
                 value={newForm.employee_variant}
@@ -421,6 +439,7 @@ export const RoleManagementPage: FC = () => {
                     <th>Код</th>
                     <th>Название</th>
                     <th>Админ</th>
+                    <th title="Включено — пользователи роли видят часы по СКУД без урезания под плановую норму дня">Часы</th>
                     <th>/employee</th>
                     <th>Статус</th>
                     <th></th>
@@ -448,6 +467,15 @@ export const RoleManagementPage: FC = () => {
                             onChange={e => setEditState(s => (s ? { ...s, is_admin: e.target.checked } : s))}
                           />
                         ) : (role.is_admin ? '✓' : '—')}
+                      </td>
+                      <td title={role.show_actual_hours ? 'факт по СКУД' : 'урезано под график'}>
+                        {editState?.code === role.code ? (
+                          <input
+                            type="checkbox"
+                            checked={editState.show_actual_hours}
+                            onChange={e => setEditState(s => (s ? { ...s, show_actual_hours: e.target.checked } : s))}
+                          />
+                        ) : (role.show_actual_hours ? 'факт' : 'урезано')}
                       </td>
                       <td>
                         {editState?.code === role.code ? (
@@ -490,6 +518,7 @@ export const RoleManagementPage: FC = () => {
                                   name: role.name,
                                   is_admin: role.is_admin,
                                   employee_variant: role.employee_variant ?? '',
+                                  show_actual_hours: role.show_actual_hours,
                                 })
                               }
                             >Изменить</button>
@@ -592,6 +621,14 @@ export const RoleManagementPage: FC = () => {
                         onChange={e => setCloneForm(s => ({ ...s, is_admin: e.target.checked }))}
                       />
                       <span>Админ</span>
+                    </label>
+                    <label className={styles.inlineCheckbox} title="Показывать часы по СКУД без обрезки до плановой нормы дня">
+                      <input
+                        type="checkbox"
+                        checked={cloneForm.show_actual_hours}
+                        onChange={e => setCloneForm(s => ({ ...s, show_actual_hours: e.target.checked }))}
+                      />
+                      <span>Фактические часы</span>
                     </label>
                     <select
                       className={styles.input}

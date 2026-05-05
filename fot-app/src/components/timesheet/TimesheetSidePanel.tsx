@@ -26,6 +26,7 @@ import {
   getFullDayThresholdHoursForDay,
 } from '../../utils/scheduleUtils';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
+import { selectVisibleHours } from '../../utils/hoursDisplay';
 
 interface ISidePanelProps {
   open: boolean;
@@ -114,7 +115,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
   calendar = null,
   visibleDays,
 }) => {
-  const { canViewPage } = useAuth();
+  const { canViewPage, showActualHours } = useAuth();
   const {
     canOpenAccessPointMap,
     openAccessPointMap,
@@ -196,7 +197,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
   }, [employee, entries, year, month, schedules, dailySchedules, calendar, visibleDays]);
 
   const getHoursClass = (entry: TimesheetEntry | null, fullDayThreshold: number): string => {
-    const visibleHours = entry?.display_hours_worked ?? entry?.hours_worked ?? null;
+    const visibleHours = selectVisibleHours(entry, showActualHours);
     if (!entry) return 'ts-day-detail-hours--absent';
     if (entry.status === 'absent') return 'ts-day-detail-hours--absent';
     if (entry.status === 'sick') return 'ts-day-detail-hours--sick';
@@ -213,7 +214,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
   };
 
   const getHoursLabel = (entry: TimesheetEntry | null): string => {
-    const visibleHours = entry?.display_hours_worked ?? entry?.hours_worked ?? null;
+    const visibleHours = selectVisibleHours(entry, showActualHours);
     if (!entry) return '—';
     if (entry.status === 'absent') return 'Неявка';
     if (entry.status === 'sick') return 'Б/л';
@@ -268,7 +269,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
               const hasEvents = dayEventsData && dayEventsData.events.length > 0;
               const summaryFirstEntry = entry?.first_entry || dayEventsData?.firstEntry || null;
               const summaryLastExit = entry?.last_exit || dayEventsData?.lastExit || null;
-              const visibleHours = entry?.display_hours_worked ?? entry?.hours_worked ?? null;
+              const visibleHours = selectVisibleHours(entry, showActualHours);
               const summaryTotalSeconds = visibleHours != null
                 ? Math.max(0, Math.round(visibleHours * 3600))
                 : (dayEventsData?.totalSeconds || 0);

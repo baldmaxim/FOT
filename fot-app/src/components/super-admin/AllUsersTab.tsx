@@ -379,6 +379,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
               is_admin: false,
               employee_variant: null,
               is_active: false,
+              show_actual_hours: false,
               created_at: '',
               updated_at: '',
             });

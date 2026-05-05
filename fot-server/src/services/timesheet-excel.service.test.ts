@@ -157,6 +157,7 @@ const makeBaseData = (): IDepartmentTimesheetData => {
     daysInMonth: 30,
     exportHalf: 'FULL',
     exportDays: [1],
+    showActualHours: false,
   };
 };
 
