@@ -2,7 +2,8 @@ import { Response } from 'express';
 import { AxiosError } from 'axios';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
-import { employeeChangesService } from '../services/employee-changes.service.js';
+import { loadEmployeeFullName } from '../services/audit-context.helpers.js';
+import { DomainValidationError, employeeChangesService } from '../services/employee-changes.service.js';
 import { loadStructureCache, decryptEmployee } from '../services/employee-mapper.service.js';
 import { employeeCache } from '../services/employee-cache.service.js';
 import {
@@ -988,7 +989,8 @@ export async function updateHistoryEvent(req: AuthenticatedRequest, res: Respons
   } catch (error) {
     console.error('Update history event error:', error);
     const message = error instanceof Error ? error.message : 'Failed to update history event';
-    res.status(500).json({ success: false, error: message });
+    const status = error instanceof DomainValidationError ? 400 : 500;
+    res.status(status).json({ success: false, error: message });
   }
 }
 
@@ -1015,13 +1017,29 @@ export async function deleteHistoryEvent(req: AuthenticatedRequest, res: Respons
       }
       await employeeChangesService.deleteSalaryHistory(historyId, employeeId);
     } else {
-      await employeeChangesService.deleteAssignment(eventId, employeeId);
+      const { reverted } = await employeeChangesService.deleteAssignment(eventId, employeeId);
+      if (reverted) {
+        const auditFullName = await loadEmployeeFullName(reverted.employee_id);
+        await auditService.logFromRequest(req, req.user.id, 'REVERT_TRANSFER_LOCAL_ONLY', {
+          entityType: 'employee',
+          entityId: String(reverted.employee_id),
+          details: {
+            source: 'employee_history',
+            employee_id: reverted.employee_id,
+            employee_full_name: auditFullName,
+            removed_assignment_id: reverted.removed_assignment_id,
+            reopened_assignment_id: reverted.reopened_assignment_id,
+            restored_department_id: reverted.restored_department_id,
+          },
+        });
+      }
     }
 
     res.json({ success: true });
   } catch (error) {
     console.error('Delete history event error:', error);
     const message = error instanceof Error ? error.message : 'Failed to delete history event';
-    res.status(500).json({ success: false, error: message });
+    const status = error instanceof DomainValidationError ? 400 : 500;
+    res.status(status).json({ success: false, error: message });
   }
 }

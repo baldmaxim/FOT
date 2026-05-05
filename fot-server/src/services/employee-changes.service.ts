@@ -6,6 +6,18 @@ import {
   getEmployeeAssignments,
   isAssignmentActiveOnDateInclusive,
 } from './timesheet-department-assignments.service.js';
+import { tryDeleteTransfer, type IDeleteTransferResult } from './timesheet-transfers.service.js';
+
+/**
+ * Доменная ошибка валидации: бизнес-правило не выполнено, не серверный сбой.
+ * Контроллер должен мапить такие ошибки в HTTP 400, а не 500.
+ */
+export class DomainValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DomainValidationError';
+  }
+}
 
 interface ChangeOpts {
   reason?: string;
@@ -372,7 +384,7 @@ export const employeeChangesService = {
       .select('id');
     if (error) throw error;
     if (!deleted || deleted.length === 0) {
-      throw new Error('Salary history record not found');
+      throw new DomainValidationError('Salary history record not found');
     }
 
     const { data: latest } = await supabase
@@ -410,7 +422,7 @@ export const employeeChangesService = {
       .select('id');
     if (error) throw error;
     if (!updated || updated.length === 0) {
-      throw new Error('Assignment record not found');
+      throw new DomainValidationError('Assignment record not found');
     }
 
     await syncEmployeeAssignmentSnapshot(employeeId);
@@ -420,11 +432,21 @@ export const employeeChangesService = {
 
   /**
    * Удалить запись employee_assignments.
-   * Нельзя удалять последнее открытое назначение у активного сотрудника — иначе он
-   * остаётся «без отдела», табель ломается, а Sigur sync через час создаёт запись
-   * задним числом today() и образуется gap в днях.
+   *
+   * Логика:
+   * 1. Если удаляем закрытое назначение — просто удаляем.
+   * 2. Если удаляем открытое и оно НЕ единственное открытое (теоретически, схема блокирует
+   *    оверлап через триггер) — просто удаляем.
+   * 3. Если удаляем единственное открытое у активного сотрудника:
+   *    - Пробуем «откат перевода»: переоткрыть последнее закрытое назначение и удалить
+   *      это (то же, что делает страница «Переводы и исключения»).
+   *    - Если парного закрытого нет (свежий найм без истории) — кидаем DomainValidationError:
+   *      сотрудник останется «без отдела», табель ломается, Sigur sync создаст gap.
    */
-  async deleteAssignment(assignmentId: string, employeeId: number): Promise<void> {
+  async deleteAssignment(
+    assignmentId: string,
+    employeeId: number,
+  ): Promise<{ reverted: IDeleteTransferResult | null }> {
     const { data: target, error: loadErr } = await supabase
       .from('employee_assignments')
       .select('id, effective_to')
@@ -432,7 +454,7 @@ export const employeeChangesService = {
       .eq('employee_id', employeeId)
       .maybeSingle();
     if (loadErr) throw loadErr;
-    if (!target) throw new Error('Assignment record not found');
+    if (!target) throw new DomainValidationError('Assignment record not found');
 
     if (target.effective_to == null) {
       const { data: emp } = await supabase
@@ -449,10 +471,16 @@ export const employeeChangesService = {
           .is('effective_to', null);
         if (cntErr) throw cntErr;
         if ((count ?? 0) <= 1) {
-          throw new Error(
-            'Нельзя удалить единственное открытое назначение у активного сотрудника. '
-            + 'Сначала создайте новое назначение или уволите/архивируйте сотрудника.',
-          );
+          const reverted = await tryDeleteTransfer(assignmentId);
+          if (!reverted) {
+            throw new DomainValidationError(
+              'Нельзя удалить единственное открытое назначение у активного сотрудника. '
+              + 'Сначала создайте новое назначение или уволите/архивируйте сотрудника.',
+            );
+          }
+          await syncEmployeeAssignmentSnapshot(employeeId);
+          employeeCache.invalidate(employeeId);
+          return { reverted };
         }
       }
     }
@@ -465,11 +493,12 @@ export const employeeChangesService = {
       .select('id');
     if (error) throw error;
     if (!deleted || deleted.length === 0) {
-      throw new Error('Assignment record not found');
+      throw new DomainValidationError('Assignment record not found');
     }
 
     await syncEmployeeAssignmentSnapshot(employeeId);
 
     employeeCache.invalidate(employeeId);
+    return { reverted: null };
   },
 };

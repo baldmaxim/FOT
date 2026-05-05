@@ -66,12 +66,17 @@ async function loadAssignmentById(id: string): Promise<IAssignmentRow | null> {
 }
 
 /**
- * Парный assignment к назначению `assignment` — закрытое назначение того же сотрудника
- * с effective_to = assignment.effective_from − 1 (инвариант, поддерживаемый changeDepartment).
+ * Парный assignment к назначению `assignment` — закрытое назначение того же сотрудника.
+ *
+ * Сначала ищем строго по инварианту effective_to = assignment.effective_from − 1
+ * (так пишет changeDepartment). Если инвариант нарушен (правка вручную, sigur sync
+ * с другой датой и т.п.) — фолбэк: последнее закрытое до open.effective_from. Так же
+ * как делает buildAllTransfers при построении списка — список и удаление становятся
+ * симметричны.
  */
 async function findPreviousClosedAssignment(assignment: IAssignmentRow): Promise<IAssignmentRow | null> {
   const expectedClose = formatDateShift(assignment.effective_from, -1);
-  const { data, error } = await supabase
+  const { data: strict, error: strictErr } = await supabase
     .from('employee_assignments')
     .select('id, employee_id, org_department_id, effective_from, effective_to')
     .eq('employee_id', assignment.employee_id)
@@ -79,14 +84,35 @@ async function findPreviousClosedAssignment(assignment: IAssignmentRow): Promise
     .order('effective_from', { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (error) throw error;
-  if (!data) return null;
+  if (strictErr) throw strictErr;
+  if (strict) {
+    return {
+      id: String(strict.id),
+      employee_id: Number(strict.employee_id),
+      org_department_id: String(strict.org_department_id),
+      effective_from: String(strict.effective_from),
+      effective_to: (strict.effective_to as string | null) ?? null,
+    };
+  }
+
+  const { data: lenient, error: lenientErr } = await supabase
+    .from('employee_assignments')
+    .select('id, employee_id, org_department_id, effective_from, effective_to')
+    .eq('employee_id', assignment.employee_id)
+    .neq('id', assignment.id)
+    .not('effective_to', 'is', null)
+    .lt('effective_to', assignment.effective_from)
+    .order('effective_to', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (lenientErr) throw lenientErr;
+  if (!lenient) return null;
   return {
-    id: String(data.id),
-    employee_id: Number(data.employee_id),
-    org_department_id: String(data.org_department_id),
-    effective_from: String(data.effective_from),
-    effective_to: (data.effective_to as string | null) ?? null,
+    id: String(lenient.id),
+    employee_id: Number(lenient.employee_id),
+    org_department_id: String(lenient.org_department_id),
+    effective_from: String(lenient.effective_from),
+    effective_to: (lenient.effective_to as string | null) ?? null,
   };
 }
 
@@ -392,14 +418,17 @@ export interface IDeleteTransferResult {
 /**
  * Полная отмена перевода: удаляет новое назначение, открывает старое (effective_to=NULL),
  * возвращает employees.org_department_id к старому отделу. Sigur не трогается.
+ *
+ * Возвращает null, если парное закрытое назначение не найдено — вызывающий код решает,
+ * как трактовать (deleteTransfer кидает ошибку, deleteAssignment бросает свой текст).
  */
-export async function deleteTransfer(assignmentNewId: string): Promise<IDeleteTransferResult> {
+export async function tryDeleteTransfer(assignmentNewId: string): Promise<IDeleteTransferResult | null> {
   const newA = await loadAssignmentById(assignmentNewId);
   if (!newA) throw new Error('Назначение не найдено');
   if (newA.effective_to != null) throw new Error('Назначение уже закрыто, отмена не выполняется');
 
   const oldA = await findPreviousClosedAssignment(newA);
-  if (!oldA) throw new Error('Парное предыдущее назначение не найдено — отмена невозможна');
+  if (!oldA) return null;
 
   const nowIso = new Date().toISOString();
 
@@ -434,6 +463,12 @@ export async function deleteTransfer(assignmentNewId: string): Promise<IDeleteTr
     removed_assignment_id: newA.id,
     reopened_assignment_id: oldA.id,
   };
+}
+
+export async function deleteTransfer(assignmentNewId: string): Promise<IDeleteTransferResult> {
+  const result = await tryDeleteTransfer(assignmentNewId);
+  if (!result) throw new Error('Парное предыдущее назначение не найдено — отмена невозможна');
+  return result;
 }
 
 export interface IUpdateExclusionResult {
