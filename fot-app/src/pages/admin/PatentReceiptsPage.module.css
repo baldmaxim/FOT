@@ -1,12 +1,13 @@
 ﻿.page {
-  padding: 20px;
+  padding: 24px 32px;
 }
 
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .title {
@@ -20,7 +21,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  align-items: end;
+  align-items: flex-end;
   margin-bottom: 16px;
   padding: 12px;
   background: var(--surface);
@@ -38,7 +39,8 @@
 
 .field input,
 .field select {
-  padding: 6px 10px;
+  padding: 0 10px;
+  height: 32px;
   font-size: 13px;
   background: var(--bg-card);
   color: var(--text-primary);
@@ -83,6 +85,7 @@
 .checkbox {
   display: inline-flex;
   align-items: center;
+  height: 32px;
   gap: 6px;
   font-size: 13px;
   color: var(--text-primary);
@@ -90,7 +93,8 @@
 }
 
 .btnSecondary {
-  padding: 8px 14px;
+  height: 32px;
+  padding: 0 14px;
   background: var(--bg-secondary);
   color: var(--text-primary);
   border: 1px solid var(--border);
@@ -112,9 +116,6 @@
 }
 
 .tableWrap {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior-x: contain;
   background: var(--surface);
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -260,7 +261,37 @@
   color: var(--success);
   font-size: 12px;
   font-weight: 500;
-  margin-left: 12px;
+}
+
+.table th.colWide,
+.table td.colWide {
+  white-space: normal;
+  word-break: break-word;
+  min-width: 140px;
+}
+
+@media (max-width: 1100px) {
+  .page {
+    padding: 20px;
+  }
+  .field input,
+  .field select {
+    min-width: 180px;
+  }
+}
+
+@media (max-width: 900px) {
+  .tableWrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  .table th.colWide,
+  .table td.colWide {
+    white-space: nowrap;
+    word-break: normal;
+    min-width: 0;
+  }
 }
 
 @media (max-width: 768px) {
@@ -270,5 +301,28 @@
   .filters {
     flex-direction: column;
     align-items: stretch;
+  }
+  .field input,
+  .field select {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+@media (max-width: 600px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .title {
+    font-size: 18px;
+  }
+  .table {
+    font-size: 12px;
+  }
+  .table th,
+  .table td {
+    padding: 8px 8px;
   }
 }

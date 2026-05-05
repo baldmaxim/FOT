@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FC } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Sun, Moon } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { employeeService } from '../../services/employeeService';
@@ -7,6 +8,7 @@ import { patentReceiptService, type IMyPatentReceipt, type RecognitionStatus } f
 import type { Employee } from '../../types/employee';
 import { ApiError } from '../../api/client';
 import { formatFioShort } from '../../utils/formatFio';
+import { useTheme } from '../../hooks/useTheme';
 import {
   WorkerLocaleProvider,
   WORKER_LOCALES,
@@ -31,7 +33,7 @@ const containerStyle: CSSProperties = {
 
 const cardStyle: CSSProperties = {
   background: 'var(--bg-secondary)',
-  border: '1px solid var(--border-primary)',
+  border: '1px solid var(--border)',
   borderRadius: 20,
   padding: 20,
   display: 'grid',
@@ -45,7 +47,7 @@ const primaryButton: CSSProperties = {
   padding: '14px 20px',
   borderRadius: 14,
   border: 'none',
-  background: 'var(--accent-primary, #4b6cff)',
+  background: 'var(--accent)',
   color: '#fff',
   fontSize: 16,
   fontWeight: 600,
@@ -55,7 +57,7 @@ const primaryButton: CSSProperties = {
 const secondaryButton: CSSProperties = {
   padding: '12px 18px',
   borderRadius: 12,
-  border: '1px solid var(--border-primary)',
+  border: '1px solid var(--border)',
   background: 'transparent',
   color: 'var(--text-primary)',
   fontSize: 15,
@@ -90,8 +92,8 @@ const langBarStyle: CSSProperties = {
 const langButtonStyle = (active: boolean): CSSProperties => ({
   padding: '6px 12px',
   borderRadius: 999,
-  border: `1px solid ${active ? 'var(--accent-primary, #4b6cff)' : 'var(--border-primary)'}`,
-  background: active ? 'var(--accent-primary, #4b6cff)' : 'transparent',
+  border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+  background: active ? 'var(--accent)' : 'transparent',
   color: active ? '#fff' : 'var(--text-primary)',
   fontSize: 13,
   fontWeight: 600,
@@ -171,7 +173,7 @@ const overlayCardStyle: CSSProperties = {
   width: '100%',
   maxWidth: 360,
   background: 'var(--bg-secondary)',
-  border: '1px solid var(--border-primary)',
+  border: '1px solid var(--border)',
   borderRadius: 16,
   padding: 24,
   display: 'grid',
@@ -183,7 +185,7 @@ const uploadModalCardStyle: CSSProperties = {
   width: '100%',
   maxWidth: 420,
   background: 'var(--bg-secondary)',
-  border: '1px solid var(--border-primary)',
+  border: '1px solid var(--border)',
   borderRadius: 16,
   padding: 24,
   display: 'grid',
@@ -194,8 +196,8 @@ const spinnerStyle: CSSProperties = {
   width: 44,
   height: 44,
   margin: '0 auto',
-  border: '4px solid var(--border-primary)',
-  borderTopColor: 'var(--accent-primary, #4b6cff)',
+  border: '4px solid var(--border)',
+  borderTopColor: 'var(--accent)',
   borderRadius: '50%',
   animation: 'workerUploadSpin 0.8s linear infinite',
 };
@@ -219,7 +221,7 @@ const UploadReceiptStatusModal: FC<IUploadStatusModalProps> = ({ status, onClose
   const iconColor =
     status.state === 'uploaded' ? '#1e7e34' :
     status.state === 'error' ? '#b23a48' :
-    'var(--accent-primary, #4b6cff)';
+    'var(--accent)';
 
   return (
     <div style={overlayStyle} role="dialog" aria-modal="true" aria-live="polite">
@@ -257,7 +259,7 @@ const UploadReceiptStatusModal: FC<IUploadStatusModalProps> = ({ status, onClose
               padding: '12px 20px',
               borderRadius: 12,
               border: 'none',
-              background: 'var(--accent-primary, #4b6cff)',
+              background: 'var(--accent)',
               color: '#fff',
               fontSize: 15,
               fontWeight: 600,
@@ -303,7 +305,7 @@ const UploadReceiptFormModal: FC<IUploadFormModalProps> = ({ onClose, onSubmit }
     width: '100%',
     padding: '10px 12px',
     borderRadius: 10,
-    border: '1px solid var(--border-primary)',
+    border: '1px solid var(--border)',
     background: 'var(--bg-primary)',
     color: 'var(--text-primary)',
     fontSize: 15,
@@ -316,30 +318,48 @@ const UploadReceiptFormModal: FC<IUploadFormModalProps> = ({ onClose, onSubmit }
     <div style={overlayStyle} role="dialog" aria-modal="true" onClick={onClose}>
       <div style={uploadModalCardStyle} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 18, fontWeight: 700 }}>{t('upload.modal.title')}</div>
-        <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
-          {t('upload.modal.periodHint')}
-        </div>
 
-        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr' }}>
-          <label>
-            <div style={labelText}>{t('upload.modal.periodFrom')}</div>
-            <input
-              type="date"
-              value={periodStart}
-              onChange={e => setPeriodStart(e.target.value)}
-              style={inputStyle}
-            />
-          </label>
-          <label>
-            <div style={labelText}>{t('upload.modal.periodTo')}</div>
-            <input
-              type="date"
-              value={periodEnd}
-              onChange={e => setPeriodEnd(e.target.value)}
-              style={inputStyle}
-            />
-          </label>
-        </div>
+        <fieldset
+          style={{
+            border: '1px solid var(--border)',
+            borderRadius: 12,
+            padding: '12px 14px 14px',
+            margin: 0,
+            display: 'grid',
+            gap: 10,
+          }}
+        >
+          <legend
+            style={{
+              padding: '0 6px',
+              fontSize: 13,
+              fontWeight: 600,
+              color: 'var(--text-secondary)',
+            }}
+          >
+            {t('upload.modal.periodHint')}
+          </legend>
+          <div style={{ display: 'grid', gap: 16, gridTemplateColumns: '1fr 1fr' }}>
+            <label>
+              <div style={labelText}>{t('upload.modal.periodFrom')}</div>
+              <input
+                type="date"
+                value={periodStart}
+                onChange={e => setPeriodStart(e.target.value)}
+                style={inputStyle}
+              />
+            </label>
+            <label>
+              <div style={labelText}>{t('upload.modal.periodTo')}</div>
+              <input
+                type="date"
+                value={periodEnd}
+                onChange={e => setPeriodEnd(e.target.value)}
+                style={inputStyle}
+              />
+            </label>
+          </div>
+        </fieldset>
 
         {periodInvalid && (
           <div style={{ color: '#b23a48', fontSize: 13 }}>{t('upload.modal.errorPeriodOrder')}</div>
@@ -390,6 +410,27 @@ const UploadReceiptFormModal: FC<IUploadFormModalProps> = ({ onClose, onSubmit }
   );
 };
 
+const ThemeToggleButton: FC = () => {
+  const { theme, toggleTheme } = useTheme();
+  const isDark = theme === 'dark';
+  return (
+    <button
+      type="button"
+      onClick={toggleTheme}
+      style={{
+        ...langButtonStyle(false),
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+      }}
+      aria-label={isDark ? 'Светлая тема' : 'Тёмная тема'}
+      title={isDark ? 'Светлая тема' : 'Тёмная тема'}
+    >
+      {isDark ? <Sun size={14} /> : <Moon size={14} />}
+    </button>
+  );
+};
+
 const LanguageSwitcher: FC = () => {
   const { locale, setLocale, t } = useWorkerLocale();
   return (
@@ -404,6 +445,7 @@ const LanguageSwitcher: FC = () => {
           {label}
         </button>
       ))}
+      <ThemeToggleButton />
     </div>
   );
 };
@@ -621,7 +663,7 @@ const ObjectWorkerDashboardContent: FC = () => {
                       href={receipt.download_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      style={{ fontSize: 14, fontWeight: 600, color: 'var(--accent-primary, #4b6cff)' }}
+                      style={{ fontSize: 14, fontWeight: 600, color: 'var(--accent)' }}
                     >
                       {t('receipts.openOriginal')}
                     </a>

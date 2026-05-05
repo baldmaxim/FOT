@@ -136,6 +136,7 @@ export const PatentReceiptsPage: FC = () => {
   return (
     <div className={styles.page}>
       <div className={styles.header}>
+        <h1 className={styles.title}>Чеки за патент</h1>
         <span
           className={styles.encryptionBadge}
           title="ПДн (ФИО, паспорт, ИНН, банковские реквизиты) зашифрованы AES-256-GCM в БД и при передаче"
@@ -202,13 +203,13 @@ export const PatentReceiptsPage: FC = () => {
               <tr>
                 <th>Дата</th>
                 <th>Период оплаты</th>
-                <th>Сотрудник</th>
-                <th>Плательщик</th>
+                <th className={styles.colWide}>Сотрудник</th>
+                <th className={styles.colWide}>Плательщик</th>
                 <th>Паспорт</th>
                 <th>ИНН</th>
                 <th>№ патента</th>
                 <th className={styles.alignRight}>Сумма ₽</th>
-                <th>Источник</th>
+                <th className={styles.colWide}>Источник</th>
                 <th>Статус</th>
                 <th></th>
               </tr>
@@ -224,8 +225,8 @@ export const PatentReceiptsPage: FC = () => {
                   <tr key={r.document_id} className={r.needs_review ? styles.rowNeedsReview : undefined}>
                     <td>{formatDate(r.payment_date)}</td>
                     <td>{formatPeriod(r.period_start, r.period_end)}</td>
-                    <td>{r.employees?.full_name || '—'}</td>
-                    <td>
+                    <td className={styles.colWide}>{r.employees?.full_name || '—'}</td>
+                    <td className={styles.colWide}>
                       {r.payer_full_name || '—'}
                       {fioMismatch && (
                         <span
@@ -240,7 +241,7 @@ export const PatentReceiptsPage: FC = () => {
                     <td>{r.payer_inn || '—'}</td>
                     <td>{r.patent_number || '—'}</td>
                     <td className={styles.alignRight}>{formatAmount(r.payment_amount)}</td>
-                    <td>{SOURCE_LABELS[r.source_type || 'unknown'] || r.source_type || '—'}</td>
+                    <td className={styles.colWide}>{SOURCE_LABELS[r.source_type || 'unknown'] || r.source_type || '—'}</td>
                     <td>
                       {badge ? (
                         <span

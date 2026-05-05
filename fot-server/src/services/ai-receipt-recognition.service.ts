@@ -18,6 +18,10 @@ const SYSTEM_PROMPT = `Ты извлекаешь поля из чека/квит
 Чек может быть из терминала «Солидарность», Сбербанк-онлайн или Т-Банка.
 Верни строго JSON по заданной схеме. Если поля нет — null. Не выдумывай.
 
+Особое внимание к ФИО (русские транслитерации с тюркских/таджикских имён):
+- Не удваивай согласные (Д, Н, Л, М, Т, С) если в оригинале одна буква. Распространённые ошибки OCR: «УМЕДЖОНОВИЧ» → ошибочно «УМЕДДЖОНОВИЧ», «АХМАДЖОН» → «АХМАДДЖОН». Сравнивай каждое слово ФИО посимвольно с изображением, считай число одинаковых букв подряд.
+- Сохраняй регистр как в документе. Не добавляй буквы, которых нет в изображении.
+
 Поля и пояснения:
 - payment_date: дата платежа в формате YYYY-MM-DD
 - payment_amount: сумма платежа (число рублей, без валюты)
@@ -160,6 +164,59 @@ const validatePayload = (raw: unknown): IRecognizedReceiptPayload => {
   };
 };
 
+const FIO_MAX_WORD_DISTANCE = 2;
+
+const normalizeFioWord = (s: string): string => s.toUpperCase().replace(/Ё/g, 'Е').trim();
+
+const levenshtein = (a: string, b: string): number => {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  let prev = new Array(b.length + 1);
+  let curr = new Array(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[b.length];
+};
+
+interface IFioNormalizationResult {
+  value: string | null;
+  corrected: boolean;
+}
+
+const normalizePayerFio = (
+  payerFio: string | null,
+  employeeFio: string | null | undefined,
+  confidence: number,
+): IFioNormalizationResult => {
+  if (!payerFio || !employeeFio || confidence < 0.7) {
+    return { value: payerFio, corrected: false };
+  }
+  const payerWords = payerFio.split(/\s+/).filter(Boolean).map(normalizeFioWord);
+  const employeeWords = employeeFio.split(/\s+/).filter(Boolean).map(normalizeFioWord);
+  if (payerWords.length === 0 || employeeWords.length === 0) {
+    return { value: payerFio, corrected: false };
+  }
+  if (payerWords.length !== employeeWords.length) {
+    return { value: payerFio, corrected: false };
+  }
+  let anyDifference = false;
+  for (let i = 0; i < payerWords.length; i++) {
+    const dist = levenshtein(payerWords[i], employeeWords[i]);
+    if (dist > FIO_MAX_WORD_DISTANCE) return { value: payerFio, corrected: false };
+    if (dist > 0) anyDifference = true;
+  }
+  if (!anyDifference) return { value: payerFio, corrected: false };
+  return { value: employeeFio, corrected: true };
+};
+
 const decideStatus = (payload: IRecognizedReceiptPayload): RecognitionStatus => {
   const allKeyFieldsEmpty =
     !payload.payment_date &&
@@ -297,6 +354,21 @@ export const aiReceiptRecognitionService = {
       }
 
       const payload = validatePayload(parsed);
+
+      if (doc.employee_id && payload.payer_full_name) {
+        const { data: emp } = await supabase
+          .from('employees')
+          .select('full_name')
+          .eq('id', doc.employee_id)
+          .single();
+        const employeeFullName = (emp?.full_name as string | null | undefined) ?? null;
+        const fioRes = normalizePayerFio(payload.payer_full_name, employeeFullName, payload.confidence);
+        if (fioRes.corrected && fioRes.value) {
+          console.log(`[ai-receipt-recognition] auto-corrected fio doc=${documentId} "${payload.payer_full_name}" -> "${fioRes.value}"`);
+          payload.payer_full_name = fioRes.value;
+        }
+      }
+
       const status = decideStatus(payload);
 
       if (status === 'failed') {
