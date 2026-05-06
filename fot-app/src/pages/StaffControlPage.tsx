@@ -39,44 +39,20 @@ const HistoryPanel = lazy(() => import('../components/staff/HistoryPanel').then(
 const ImportModal = lazy(() => import('../components/employees/ImportModal').then(m => ({ default: m.ImportModal })));
 const EnrichPreviewModal = lazy(() => import('../components/employees/EnrichPreviewModal').then(m => ({ default: m.EnrichPreviewModal })));
 
-const fmt = (n: number | null | undefined) =>
-  n ? n.toLocaleString('ru-RU') + ' ₽' : '—';
-
-const getLocalISODate = (): string => {
-  const now = new Date();
-  const offsetMs = now.getTimezoneOffset() * 60_000;
-  return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10);
-};
-
-const isActiveScheduleAssignment = (effectiveFrom: string, effectiveTo: string | null, date: string): boolean =>
-  effectiveFrom <= date && (effectiveTo === null || effectiveTo >= date);
-
-type ModalType = 'salary' | 'salary_actual' | 'position' | 'department' | 'schedule';
-type StaffStatusFilter = 'active' | 'fired' | 'excluded';
-
-type ScheduleSource = 'employee' | 'default';
-
-interface IEmployeeScheduleView {
-  scheduleId: string | null;
-  scheduleName: string;
-  source: ScheduleSource;
-  effectiveFrom?: string | null;
-}
-
-interface IAddEmployeeForm {
-  full_name: string;
-  hire_date: string;
-  org_department_id: string;
-  position_id: string;
-  tab_number: string;
-}
-
-const SCHEDULE_SOURCE_LABELS: Record<ScheduleSource, string> = {
-  employee: 'инд.',
-  default: 'деф.',
-};
-const EMPTY_SCHEDULE_TEMPLATES: IWorkSchedule[] = [];
-const EMPTY_EMPLOYEE_SCHEDULE_ASSIGNMENTS: IEmployeeScheduleAssignment[] = [];
+import {
+  EMPTY_EMPLOYEE_SCHEDULE_ASSIGNMENTS,
+  EMPTY_SCHEDULE_TEMPLATES,
+  fmt,
+  getLocalISODate,
+  handleMiddleClickMouseDown,
+  isActiveScheduleAssignment,
+  openEmployeeInNewTab,
+  SCHEDULE_SOURCE_LABELS,
+  type IAddEmployeeForm,
+  type IEmployeeScheduleView,
+  type ModalType,
+  type StaffStatusFilter,
+} from './staffControlPage.helpers';
 
 /* ───────── Memoized table row ───────── */
 
@@ -95,15 +71,6 @@ interface IStaffRowProps {
   onFire?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
 }
-
-const openEmployeeInNewTab = (empId: number) => {
-  window.open(`/employees/${empId}`, '_blank', 'noopener,noreferrer');
-};
-
-const handleMiddleClickMouseDown = (e: ReactMouseEvent) => {
-  // Отключаем авто-скролл в браузере на нажатии колеса, чтобы отработал onAuxClick.
-  if (e.button === 1) e.preventDefault();
-};
 
 const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selectedIds, selectionMode, canManage, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
