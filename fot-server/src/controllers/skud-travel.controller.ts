@@ -7,25 +7,27 @@ import {
   confirmTravelObjectMapUpload as confirmTravelObjectMapUploadService,
   createTravelObject,
   createTravelObjectMapUploadUrl as createTravelObjectMapUploadUrlService,
-  getTravelConfig as getTravelConfigService,
   getTravelSegmentEmployeeId,
   getAccessPointMapView as getAccessPointMapViewService,
   getTravelObjectMap as getTravelObjectMapService,
-  createTravelRoute,
   deleteTravelObjectMap as deleteTravelObjectMapService,
   deleteTravelObject,
-  deleteTravelRoute,
   listTravelObjects,
-  listTravelRoutes,
   listTravelSegments,
   listTravelSegmentsForEmployeeDay,
   rebuildTravelSegmentsForScope,
   rejectTravelSegment as rejectTravelSegmentService,
   saveTravelObjectMapPoints as saveTravelObjectMapPointsService,
-  saveTravelConfig as saveTravelConfigService,
   updateTravelObject,
-  updateTravelRoute,
 } from '../services/skud-travel.service.js';
+import {
+  createTravelRoute,
+  deleteTravelRoute,
+  getTravelConfig as getTravelConfigService,
+  listTravelRoutes,
+  saveTravelConfig as saveTravelConfigService,
+  updateTravelRoute,
+} from '../services/skud-travel-routes.service.js';
 import { resolveAccessibleDepartmentIds, resolveScopedDepartmentId } from '../services/data-scope.service.js';
 
 const monthRegex = /^\d{4}-\d{2}$/;

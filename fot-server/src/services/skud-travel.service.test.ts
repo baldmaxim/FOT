@@ -78,7 +78,8 @@ vi.mock('./settings.service.js', () => ({
   },
 }));
 
-import { calculateAndSyncTravelSegments, listTravelRoutes } from './skud-travel.service.js';
+import { calculateAndSyncTravelSegments } from './skud-travel.service.js';
+import { listTravelRoutes } from './skud-travel-routes.service.js';
 
 describe('skud-travel.service', () => {
   beforeEach(() => {
