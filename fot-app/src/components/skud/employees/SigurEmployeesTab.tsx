@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type FC, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FC, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowRightLeft,
@@ -6,7 +6,6 @@ import {
   ChevronRight,
   Database,
   Folder,
-  FolderOpen,
   FolderPlus,
   Pencil,
   Plus,
@@ -19,11 +18,36 @@ import {
 } from 'lucide-react';
 import { sigurAdminService } from '../../../services/sigurAdminService';
 import { useIsMobile } from '../../../hooks/useIsMobile';
-import type { SigurDepartmentNode, SigurEmployeeCardAccessStatus, SigurEmployeeSummary } from '../../../types';
+import type { SigurDepartmentNode, SigurEmployeeSummary } from '../../../types';
 import '../../../styles/EmployeesPage.css';
 import './SigurEmployeesTab.css';
 import { SigurLiveEmployeeSidebar } from './SigurLiveEmployeeSidebar';
 import { ProgressBar } from '../../ui/ProgressBar';
+import { DepartmentTreeNode } from './DepartmentTreeNode';
+import {
+  buildDepartmentNodeMap,
+  collectDepartmentIds,
+  collectExpandedSearchIds,
+  DEPT_PANEL_MAX_WIDTH,
+  DEPT_PANEL_MIN_WIDTH,
+  DEPT_PANEL_WIDTH_KEY,
+  EMPLOYEE_DRAG_TYPE,
+  EMPLOYEES_PAGE_SIZE,
+  findDepartmentById,
+  flattenDepartments,
+  getContextMenuPosition,
+  getDepartmentPathIds,
+  getEmployeeStatusPresentation,
+  getMatchingDepartmentIds,
+  getRootExpandedIds,
+  readInitialDeptPanelWidth,
+  type DeleteDepartmentsDialogState,
+  type DepartmentContextMenuState,
+  type DepartmentDialogState,
+  type EmployeeDialogState,
+  type EmployeeMoveDialogState,
+  type EmployeeStatusFilter,
+} from './sigurEmployeesTab.helpers';
 
 interface ISigurEmployeesTabProps {
   canEdit: boolean;
@@ -33,341 +57,7 @@ interface ISigurEmployeesTabProps {
   pendingOpen?: { sigurEmployeeId: number; fullName: string; key: number } | null;
 }
 
-const DEPT_PANEL_WIDTH_KEY = 'sigur-dept-panel-width';
-const DEPT_PANEL_MIN_WIDTH = 200;
-const DEPT_PANEL_MAX_WIDTH = 640;
-const DEPT_PANEL_DEFAULT_WIDTH = 288;
-
-const readInitialDeptPanelWidth = (): number => {
-  if (typeof window === 'undefined') return DEPT_PANEL_DEFAULT_WIDTH;
-  const raw = window.localStorage.getItem(DEPT_PANEL_WIDTH_KEY);
-  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
-  if (!Number.isFinite(parsed)) return DEPT_PANEL_DEFAULT_WIDTH;
-  return Math.min(DEPT_PANEL_MAX_WIDTH, Math.max(DEPT_PANEL_MIN_WIDTH, parsed));
-};
-
-type EmployeeStatusFilter = 'all' | 'active' | 'blocked';
-
-type DepartmentDialogState =
-  | { mode: 'create'; name: string; parentId: number | null }
-  | { mode: 'rename'; name: string; departmentId: number }
-  | { mode: 'move'; departmentIds: number[]; parentId: number | null }
-  | null;
-
-type DeleteDepartmentsDialogState = {
-  departmentIds: number[];
-  names: string[];
-  totalChildDepts: number;
-  directEmployees: number;
-  totalEmployees: number;
-  hasChildren: boolean;
-} | null;
-
-type EmployeeDialogState = {
-  mode: 'create' | 'edit';
-  sigurEmployeeId: number | null;
-  name: string;
-  departmentId: string;
-  positionId: string;
-  tabId: string;
-  description: string;
-  blocked: boolean;
-} | null;
-
-type EmployeeMoveDialogState = {
-  employeeIds: number[];
-  departmentId: string;
-} | null;
-
-type DepartmentContextMenuState = {
-  x: number;
-  y: number;
-  selection: number[];
-} | null;
-
-interface IDepartmentTreeNodeProps {
-  node: SigurDepartmentNode;
-  level: number;
-  selectedDeptId: number | null;
-  expandedIds: Set<number>;
-  visibleIds: Set<number> | null;
-  manageSelectedIds: Set<number>;
-  canManage: boolean;
-  onSelect: (departmentId: number | null) => void;
-  onToggle: (departmentId: number) => void;
-  onToggleManageSelection: (departmentId: number) => void;
-  onOpenContextMenu: (event: ReactMouseEvent<HTMLDivElement>, departmentId: number) => void;
-  onDropEmployees: (departmentId: number, employeeIds: number[]) => void;
-  registerNodeRef: (departmentId: number, element: HTMLDivElement | null) => void;
-}
-
 const SIGUR_ADMIN_QUERY_KEY = ['sigur-admin'] as const;
-const EMPLOYEE_DRAG_TYPE = 'application/x-fot-sigur-employees';
-const EMPLOYEES_PAGE_SIZE = 100;
-
-const formatStatusDate = (value: string | null): string => {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString('ru-RU');
-};
-
-const getEmployeeStatusPresentation = (
-  employee: SigurEmployeeSummary,
-  cardStatus?: SigurEmployeeCardAccessStatus,
-  loading = false,
-): { text: string; tone: 'ok' | 'danger' | 'muted' | 'warn' } => {
-  if (employee.blocked) {
-    return { text: 'Заблокирован', tone: 'danger' };
-  }
-
-  if (!cardStatus) {
-    return { text: loading ? 'Проверяем...' : 'Нет данных', tone: 'muted' };
-  }
-
-  if (cardStatus.state === 'active') {
-    return {
-      text: cardStatus.expirationDate ? `До ${formatStatusDate(cardStatus.expirationDate)}` : 'Активен',
-      tone: 'ok',
-    };
-  }
-
-  if (cardStatus.state === 'expired') {
-    return {
-      text: cardStatus.expirationDate ? `Истек ${formatStatusDate(cardStatus.expirationDate)}` : 'Истек',
-      tone: 'warn',
-    };
-  }
-
-  if (cardStatus.state === 'no_expiration') {
-    return { text: 'Без срока', tone: 'ok' };
-  }
-
-  if (cardStatus.state === 'no_card') {
-    return { text: 'Нет пропуска', tone: 'muted' };
-  }
-
-  return { text: 'Нет данных', tone: 'muted' };
-};
-
-const flattenDepartments = (
-  nodes: SigurDepartmentNode[],
-  level = 0,
-): Array<{ id: number; name: string; level: number; parentId: number | null }> => (
-  nodes.flatMap(node => [
-    { id: node.id, name: node.name, level, parentId: node.parentId },
-    ...flattenDepartments(node.children || [], level + 1),
-  ])
-);
-
-const buildDepartmentNodeMap = (nodes: SigurDepartmentNode[]): Map<number, SigurDepartmentNode> => {
-  const map = new Map<number, SigurDepartmentNode>();
-  const walk = (items: SigurDepartmentNode[]) => {
-    items.forEach(item => {
-      map.set(item.id, item);
-      walk(item.children || []);
-    });
-  };
-  walk(nodes);
-  return map;
-};
-
-const findDepartmentById = (nodes: SigurDepartmentNode[], id: number | null): SigurDepartmentNode | null => {
-  if (id == null) return null;
-  for (const node of nodes) {
-    if (node.id === id) return node;
-    const child = findDepartmentById(node.children || [], id);
-    if (child) return child;
-  }
-  return null;
-};
-
-const collectDepartmentIds = (node: SigurDepartmentNode | null): Set<number> => {
-  if (!node) return new Set();
-  const ids = new Set<number>();
-  const stack = [node];
-  while (stack.length > 0) {
-    const current = stack.pop()!;
-    ids.add(current.id);
-    for (const child of current.children || []) stack.push(child);
-  }
-  return ids;
-};
-
-const getMatchingDepartmentIds = (nodes: SigurDepartmentNode[], query: string): Set<number> | null => {
-  const trimmed = query.trim().toLocaleLowerCase('ru');
-  if (!trimmed) return null;
-
-  const visible = new Set<number>();
-
-  const walk = (node: SigurDepartmentNode): boolean => {
-    const childMatched = (node.children || []).some(walk);
-    const selfMatched = node.name.toLocaleLowerCase('ru').includes(trimmed);
-    if (selfMatched || childMatched) {
-      visible.add(node.id);
-      return true;
-    }
-    return false;
-  };
-
-  nodes.forEach(walk);
-  return visible;
-};
-
-const collectExpandedSearchIds = (
-  nodes: SigurDepartmentNode[],
-  visibleIds: Set<number> | null,
-  target: Set<number> = new Set(),
-): Set<number> => {
-  if (!visibleIds) return target;
-
-  const walk = (node: SigurDepartmentNode): boolean => {
-    const visibleChildren = (node.children || []).filter(child => walk(child));
-    const selfVisible = visibleIds.has(node.id);
-    if (selfVisible && visibleChildren.length > 0) {
-      target.add(node.id);
-    }
-    return selfVisible;
-  };
-
-  nodes.forEach(walk);
-  return target;
-};
-
-const getRootExpandedIds = (nodes: SigurDepartmentNode[]): Set<number> => (
-  new Set(
-    nodes
-      .filter(node => (node.children || []).length > 0)
-      .map(node => node.id),
-  )
-);
-
-const getDepartmentPathIds = (
-  nodes: SigurDepartmentNode[],
-  targetId: number,
-): number[] => {
-  for (const node of nodes) {
-    if (node.id === targetId) return [node.id];
-    const childPath = getDepartmentPathIds(node.children || [], targetId);
-    if (childPath.length > 0) return [node.id, ...childPath];
-  }
-  return [];
-};
-
-const getContextMenuPosition = (contextMenu: NonNullable<DepartmentContextMenuState>): { left: number; top: number } => {
-  if (typeof window === 'undefined') return { left: contextMenu.x, top: contextMenu.y };
-  return {
-    left: Math.min(contextMenu.x, window.innerWidth - 240),
-    top: Math.min(contextMenu.y, window.innerHeight - 220),
-  };
-};
-
-const DepartmentTreeNode: FC<IDepartmentTreeNodeProps> = ({
-  node,
-  level,
-  selectedDeptId,
-  expandedIds,
-  visibleIds,
-  manageSelectedIds,
-  canManage,
-  onSelect,
-  onToggle,
-  onToggleManageSelection,
-  onOpenContextMenu,
-  onDropEmployees,
-  registerNodeRef,
-}) => {
-  if (visibleIds && !visibleIds.has(node.id)) return null;
-
-  const hasChildren = (node.children || []).length > 0;
-  const isExpanded = expandedIds.has(node.id);
-  const isSelected = selectedDeptId === node.id;
-  const isManageSelected = manageSelectedIds.has(node.id);
-
-  const handleDrop = (event: ReactDragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const raw = event.dataTransfer.getData(EMPLOYEE_DRAG_TYPE);
-    if (!raw) return;
-
-    try {
-      const payload = JSON.parse(raw) as { employeeIds?: number[] };
-      const employeeIds = Array.from(new Set((payload.employeeIds || []).map(Number).filter(Number.isFinite)));
-      if (employeeIds.length > 0) {
-        onDropEmployees(node.id, employeeIds);
-      }
-    } catch {
-      // ignore malformed drag payload
-    }
-  };
-
-  return (
-    <div key={node.id} className="ep-dept-item">
-      <div
-        ref={element => registerNodeRef(node.id, element)}
-        className={[
-          'ep-dept-header',
-          isSelected ? 'active' : '',
-          isManageSelected ? 'manage-selected' : '',
-          'droppable',
-        ].filter(Boolean).join(' ')}
-        style={{ paddingLeft: `${12 + level * 20}px` }}
-        onClick={() => onSelect(isSelected ? null : node.id)}
-        onContextMenu={event => onOpenContextMenu(event, node.id)}
-        onDragOver={event => event.preventDefault()}
-        onDrop={handleDrop}
-      >
-        {canManage && (
-          <button
-            className={`ep-manage-check ${isManageSelected ? 'checked' : ''}`}
-            onClick={event => {
-              event.stopPropagation();
-              onToggleManageSelection(node.id);
-            }}
-            title={isManageSelected ? 'Убрать из выбора' : 'Выбрать отдел'}
-          />
-        )}
-        <button
-          className={`ep-dept-toggle ${hasChildren ? (isExpanded ? 'expanded' : '') : 'empty'}`}
-          onClick={event => {
-            event.stopPropagation();
-            if (hasChildren) onToggle(node.id);
-          }}
-        >
-          <ChevronRight size={14} />
-        </button>
-        {hasChildren && isExpanded ? <FolderOpen size={16} className="ep-dept-icon" /> : <Folder size={16} className="ep-dept-icon" />}
-        <span className="ep-dept-name">{node.name}</span>
-        <span className="ep-dept-count">
-          {node.employeeCountLoaded === false
-            ? (node.employeeCount > 0 ? `${node.employeeCount}+` : '…')
-            : node.employeeCount}
-        </span>
-      </div>
-      {hasChildren && isExpanded && (
-        <div className="ep-dept-children">
-          {node.children!.map(child => (
-            <DepartmentTreeNode
-              key={child.id}
-              node={child}
-              level={level + 1}
-              selectedDeptId={selectedDeptId}
-              expandedIds={expandedIds}
-              visibleIds={visibleIds}
-              manageSelectedIds={manageSelectedIds}
-              canManage={canManage}
-              onSelect={onSelect}
-              onToggle={onToggle}
-              onToggleManageSelection={onToggleManageSelection}
-              onOpenContextMenu={onOpenContextMenu}
-              onDropEmployees={onDropEmployees}
-              registerNodeRef={registerNodeRef}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
 
 export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setError, headerActionSlot, pendingOpen }) => {
   const queryClient = useQueryClient();
