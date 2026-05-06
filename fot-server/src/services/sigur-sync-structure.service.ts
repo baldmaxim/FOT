@@ -10,7 +10,7 @@ import {
   normalizeDepartmentLookupName,
   type ISyncContext,
 } from './sigur-sync-shared.js';
-import { invalidateDeptTreeCache, invalidateSyncFilterCache } from './skud-shared.service.js';
+import { invalidateOrgStructureCaches } from './employee-mapper.service.js';
 import { detectDepartmentKindFromName } from '../utils/department-kind.utils.js';
 
 // ─── Типы результатов ───
@@ -266,7 +266,8 @@ export async function syncDepartmentsLogic(
   }
 
   console.log(`[syncDepartments] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${filtered} filtered, ${parentLinksSet} parent links`);
-  invalidateDeptTreeCache();
-  invalidateSyncFilterCache();
+  // Sync структуры из Sigur меняет и имена (employee-mapper), и иерархию
+  // (dept tree), и whitelist sync-фильтра — инвалидируем все три согласованно.
+  invalidateOrgStructureCaches();
   return { imported, updated, skipped, filtered, total: departments.length, parentLinksSet, errors };
 }

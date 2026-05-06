@@ -3,7 +3,8 @@ import { readExcelRows } from '../utils/excel-reader.js';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import { parseDate } from '../utils/date.utils.js';
-import { parseFIO } from '../utils/fio.utils.js';
+import { parseFIO, normalizeFullName } from '../utils/fio.utils.js';
+import { cleanCell } from '../utils/import-cells.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 interface MulterRequest extends AuthenticatedRequest {
@@ -24,16 +25,6 @@ interface ParsedRow {
   workObject: string | null;
   departmentName: string | null;
 }
-
-const normalizeFullName = (name: string): string =>
-  name.trim().replace(/\s+/g, ' ').toLowerCase();
-
-const cleanCell = (val: unknown): string | null => {
-  if (val === undefined || val === null) return null;
-  const s = String(val).trim();
-  if (!s || s === '-' || s === '—') return null;
-  return s;
-};
 
 /**
  * Определяет, является ли строка заголовком отдела.

@@ -6,6 +6,7 @@ import {
   type IAdminExclusionRow,
   type IAdminTransferRow,
 } from '../../services/timesheetService';
+import { structureKeys, timesheetKeys, TIMESHEET_FAMILY_KEYS } from '../../api/queryKeys';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
 import { TransfersList, type ITransferEditPatch } from './TransfersList';
 import { ExclusionsList } from './ExclusionsList';
@@ -20,20 +21,19 @@ export const TimesheetTransfersTab: FC<IProps> = ({ departmentId, departmentName
   const { managedDepartments } = useManagedDepartments();
 
   const listingQuery = useQuery({
-    queryKey: ['timesheet-transfers', departmentId],
+    queryKey: timesheetKeys.transfers(departmentId),
     queryFn: () => timesheetService.listDepartmentTransfers(departmentId!),
     enabled: !!departmentId,
     staleTime: 0,
   });
 
   const invalidateAll = () => {
-    queryClient.invalidateQueries({ queryKey: ['timesheet-transfers'] });
-    queryClient.invalidateQueries({ queryKey: ['admin-timesheet-transfers'] });
-    queryClient.invalidateQueries({ queryKey: ['timesheet'] });
-    queryClient.invalidateQueries({ queryKey: ['timesheet-grid'] });
-    queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] });
-    queryClient.invalidateQueries({ queryKey: ['timesheet-page'] });
-    queryClient.invalidateQueries({ queryKey: ['structure'] });
+    // Перевод/исключение в табеле затрагивает все семьи timesheet-кэшей
+    // и структуру (т.к. сотрудник мог сменить отдел в окне табеля).
+    for (const key of TIMESHEET_FAMILY_KEYS) {
+      queryClient.invalidateQueries({ queryKey: key });
+    }
+    queryClient.invalidateQueries({ queryKey: structureKeys.all });
   };
 
   const updateTransferMutation = useMutation({

@@ -4,7 +4,8 @@ import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import { employeeChangesService } from '../services/employee-changes.service.js';
 import { parseDate } from '../utils/date.utils.js';
-import { parseFIO } from '../utils/fio.utils.js';
+import { parseFIO, normalizeFullName } from '../utils/fio.utils.js';
+import { cleanCell, parseNumber } from '../utils/import-cells.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 interface MulterRequest extends AuthenticatedRequest {
@@ -20,48 +21,6 @@ interface ParsedSalaryRow {
   staffUnits: number | null;
   salaryActual: number | null;
 }
-
-const normalizeFullName = (name: string): string =>
-  name.trim().replace(/\s+/g, ' ').toLowerCase();
-
-const cleanCell = (val: unknown): string | null => {
-  if (val === undefined || val === null) return null;
-  const s = String(val).trim();
-  if (!s || s === '-' || s === '—') return null;
-  return s;
-};
-
-const parseNumber = (val: unknown): number | null => {
-  if (val === undefined || val === null) return null;
-  if (typeof val === 'number') return isNaN(val) ? null : val;
-  let s = String(val).trim();
-  if (!s || s === '-' || s === '—') return null;
-  // Убираем пробелы (включая неразрывные)
-  s = s.replace(/[\s\u00A0\u202F]/g, '');
-  // Определяем формат: "110,000.00" (EN) или "110 000,00" (RU)
-  if (s.includes('.') && s.includes(',')) {
-    // Оба разделителя — последний является десятичным
-    const lastComma = s.lastIndexOf(',');
-    const lastDot = s.lastIndexOf('.');
-    if (lastDot > lastComma) {
-      // EN: 110,000.00 → убираем запятые
-      s = s.replace(/,/g, '');
-    } else {
-      // RU: 110.000,00 → убираем точки, запятая→точка
-      s = s.replace(/\./g, '').replace(',', '.');
-    }
-  } else if (s.includes(',')) {
-    // Только запятая — десятичный разделитель (RU) или тысячный (EN)
-    const parts = s.split(',');
-    if (parts.length === 2 && parts[1].length <= 2) {
-      s = s.replace(',', '.'); // "130,50" → десятичный
-    } else {
-      s = s.replace(/,/g, ''); // "130,000" → тысячный
-    }
-  }
-  const n = parseFloat(s);
-  return isNaN(n) ? null : n;
-};
 
 /**
  * Парсит Excel-файл формата "Оклады и ставки"

@@ -3,6 +3,12 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import * as Sentry from '@sentry/react';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiClient, ApiError, getSessionToken, setSessionToken, subscribeSessionToken } from '../api/client';
+import {
+  dashboardKeys,
+  employeesKeys,
+  structureKeys,
+  timesheetKeys,
+} from '../api/queryKeys';
 import { wsService } from '../services/websocket';
 import type { RoleLabel } from '../services/rolesService';
 import type {
@@ -202,9 +208,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }));
       // Профиль мог измениться (managed departments, show_actual_hours и т.п.) —
       // инвалидируем зависящие server-кэши, чтобы UI пересчитался без ручной перезагрузки.
-      queryClient.invalidateQueries({ queryKey: ['timesheet-page'] });
-      queryClient.invalidateQueries({ queryKey: ['timesheet-hr'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: timesheetKeys.page() });
+      queryClient.invalidateQueries({ queryKey: timesheetKeys.hr() });
+      queryClient.invalidateQueries({ queryKey: dashboardKeys.all });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         logout();
@@ -239,8 +245,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     wsService.connect(token, 'auth-context');
     const unsubscribe = wsService.on('profile:access_changed', () => {
       void refreshProfileRef.current();
-      void queryClient.invalidateQueries({ queryKey: ['structure'] });
-      void queryClient.invalidateQueries({ queryKey: ['employees'] });
+      void queryClient.invalidateQueries({ queryKey: structureKeys.all });
+      void queryClient.invalidateQueries({ queryKey: employeesKeys.all });
     });
     return () => {
       unsubscribe();

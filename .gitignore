@@ -6,6 +6,18 @@ Thumbs.db
 # Archives
 *.zip
 
+# Binaries / installers
+*.exe
+
+# Screenshots in repo root (Windows-style names)
+/Снимок*.png
+/Screenshot*.png
+/screenshot*.png
+
+# Agent scratch files
+/memory.md
+/Pre-prod
+
 # Temporary exports
 exports/
 

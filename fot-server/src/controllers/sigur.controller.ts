@@ -14,13 +14,12 @@ import { sigurService } from '../services/sigur.service.js';
 import { resolveField } from '../services/sigur-sync-shared.js';
 import { createCache } from '../utils/cache.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
+import {
+  loadAccessPointObjectMetaMap,
+  normalizeAccessPointKey,
+  type IAccessPointObjectMeta,
+} from '../services/sigur-access-point-meta.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-
-interface IAccessPointObjectMeta {
-  objectId: string | null;
-  objectName: string | null;
-  hasMapPreview: boolean;
-}
 
 interface IEnrichedAccessPointBinding {
   accessPointId: number;
@@ -62,20 +61,14 @@ interface IEmployeeProfileResponse {
   accessPoints: IEnrichedAccessPointBinding[];
 }
 
-const SIGUR_METADATA_CACHE_TTL_MS = 5 * 60 * 1000;
 const SIGUR_EMPLOYEE_PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PASSIVE_CONNECTION_STATUS_TTL_MS = 15 * 60 * 1000;
 
-const accessPointObjectMetaCache = createCache<{ map: Map<string, IAccessPointObjectMeta> }>({
-  max: 1,
-  ttlMs: SIGUR_METADATA_CACHE_TTL_MS,
-});
 const employeeProfileCache = createCache<{ data: IEmployeeProfileResponse }>({
   max: 500,
   ttlMs: SIGUR_EMPLOYEE_PROFILE_CACHE_TTL_MS,
 });
 const employeeProfileInFlight = new Map<string, Promise<IEmployeeProfileResponse>>();
-let accessPointObjectMetaInFlight: Promise<Map<string, IAccessPointObjectMeta>> | null = null;
 
 async function ensureSigurConfigured(
   res: Response,
@@ -91,10 +84,6 @@ async function ensureSigurConfigured(
     connections: await sigurService.getAvailableConnections(),
   });
   return false;
-}
-
-function normalizeAccessPointKey(value: string | null | undefined): string {
-  return value?.trim().toLocaleLowerCase('ru') || '';
 }
 
 function parseOptionalIsoDate(value: string | null | undefined): Date | null {
@@ -113,80 +102,6 @@ function invalidateEmployeeProfileCache(employeeId: number): void {
     employeeProfileCache.delete(key);
     employeeProfileInFlight.delete(key);
   }
-}
-
-async function loadAccessPointObjectMetaMap(): Promise<Map<string, IAccessPointObjectMeta>> {
-  const cached = accessPointObjectMetaCache.get('default');
-  if (cached) {
-    return cached.map;
-  }
-
-  if (accessPointObjectMetaInFlight) {
-    return accessPointObjectMetaInFlight;
-  }
-
-  accessPointObjectMetaInFlight = (async () => {
-    const [objectsResult, accessPointsResult, mapPointsResult] = await Promise.all([
-      supabase.from('skud_objects').select('id, name, map_storage_path'),
-      supabase.from('skud_object_access_points').select('object_id, access_point_name'),
-      supabase.from('skud_object_map_points').select('object_id, access_point_name'),
-    ]);
-
-    if (objectsResult.error) throw objectsResult.error;
-    if (accessPointsResult.error) throw accessPointsResult.error;
-    if (mapPointsResult.error) throw mapPointsResult.error;
-
-    const objectMetaById = new Map<string, { name: string | null; hasMap: boolean }>();
-    for (const row of objectsResult.data || []) {
-      objectMetaById.set(String(row.id), {
-        name: typeof row.name === 'string' && row.name.trim() ? row.name.trim() : null,
-        hasMap: !!row.map_storage_path,
-      });
-    }
-
-    const mapPointObjectByName = new Map<string, string>();
-    for (const row of mapPointsResult.data || []) {
-      const key = normalizeAccessPointKey(row.access_point_name);
-      if (!key) continue;
-      mapPointObjectByName.set(key, String(row.object_id));
-    }
-
-    const metaMap = new Map<string, IAccessPointObjectMeta>();
-    for (const row of accessPointsResult.data || []) {
-      const key = normalizeAccessPointKey(row.access_point_name);
-      if (!key) continue;
-
-      const objectId = row.object_id ? String(row.object_id) : (mapPointObjectByName.get(key) || null);
-      const objectMeta = objectId ? objectMetaById.get(objectId) : null;
-      metaMap.set(key, {
-        objectId,
-        objectName: objectMeta?.name || null,
-        hasMapPreview: !!objectId && mapPointObjectByName.has(key) && !!objectMeta?.hasMap,
-      });
-    }
-
-    for (const [key, objectId] of mapPointObjectByName.entries()) {
-      if (metaMap.has(key)) continue;
-      const objectMeta = objectMetaById.get(objectId);
-      metaMap.set(key, {
-        objectId,
-        objectName: objectMeta?.name || null,
-        hasMapPreview: !!objectMeta?.hasMap,
-      });
-    }
-
-    accessPointObjectMetaCache.set('default', { map: metaMap });
-    return metaMap;
-  })()
-    .catch((error) => {
-      console.warn('Sigur access point object metadata warning:', error);
-      return new Map<string, IAccessPointObjectMeta>();
-    })
-    .finally(() => {
-      accessPointObjectMetaInFlight = null;
-    });
-
-  return accessPointObjectMetaInFlight;
 }
 
 function enrichAccessPointBinding(

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { DEFAULT_ACCESS_PAGE_CATALOG } from '../config/access-control.js';
+import { DEFAULT_ACCESS_PAGE_CATALOG, PAGE_PATHS } from '../config/access-control.js';
 
 const SERVER_ROOT = path.resolve(__dirname, '..', '..');
 const REPO_ROOT = path.resolve(SERVER_ROOT, '..');
@@ -85,5 +85,28 @@ describe('Access page catalog contract', () => {
       .map((entry) => entry.key);
 
     expect([...new Set(invalid)]).toEqual([]);
+  });
+
+  it('PAGE_PATHS константы соответствуют каталогу 1-в-1', () => {
+    const constantPaths = new Set<string>(Object.values(PAGE_PATHS));
+    const inCatalogButNotInConst = [...catalogKeys].filter((key) => !constantPaths.has(key));
+    const inConstButNotInCatalog = [...constantPaths].filter((key) => !catalogKeys.has(key));
+    expect({ inCatalogButNotInConst, inConstButNotInCatalog }).toEqual({
+      inCatalogButNotInConst: [],
+      inConstButNotInCatalog: [],
+    });
+  });
+
+  it('каталог не содержит orphan-ключей, не используемых ни во фронте, ни в бэке', () => {
+    const usedKeys = new Set<string>([
+      ...frontendRequiredPages,
+      ...backendAccessUsages.map((entry) => entry.key),
+    ]);
+    // technical-страницы могут использоваться только через канал API, а не Route props,
+    // поэтому исключаем их из проверки на orphan.
+    const orphan = [...catalogKeys]
+      .filter((key) => !usedKeys.has(key))
+      .filter((key) => catalogByKey.get(key)?.surface !== 'technical');
+    expect(orphan).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 import { sigurService } from './sigur.service.js';
 import { supabase } from '../config/database.js';
-import { parseFIO } from '../utils/fio.utils.js';
+import { parseFIO, normalizeFullName } from '../utils/fio.utils.js';
 import {
   getPositionsRaw,
   getWhitelistedDepartmentIdsCached,
@@ -352,13 +352,10 @@ export async function syncEmployeesLogic(
     portalOffset += EMP_PAGE;
   }
 
-  const normalizeFullName = (name: string): string => (
-    name.trim().toLowerCase().replace(/\s+/g, ' ').replace(/ё/g, 'е')
-  );
   const portalOnlyByName = new Map<string, IPortalOnlyRow[]>();
   for (const e of portalOnlyEmps) {
     if (!e.full_name) continue;
-    const key = normalizeFullName(e.full_name);
+    const key = normalizeFullName(e.full_name, { collapseYo: true });
     const arr = portalOnlyByName.get(key);
     if (arr) arr.push(e);
     else portalOnlyByName.set(key, [e]);
@@ -543,7 +540,7 @@ export async function syncEmployeesLogic(
       // Защита от дублей: если в БД уже есть активный portal-only сотрудник с таким же ФИО
       // (например, восстановленный через rehire с auto-detach), привязываем нового Sigur-сотрудника
       // к существующей портальной записи вместо создания новой.
-      const nameKey = normalizeFullName(fullName);
+      const nameKey = normalizeFullName(fullName, { collapseYo: true });
       const portalMatches = portalOnlyByName.get(nameKey);
       if (portalMatches && portalMatches.length === 1 && sigurEmpId) {
         const match = portalMatches[0];

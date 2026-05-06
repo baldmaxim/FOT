@@ -9,6 +9,20 @@ export interface IParsedFIO {
   middleName: string | null;
 }
 
+/**
+ * Каноническая форма ФИО для сравнения/матчинга:
+ * trim → lowercase → схлопывание пробелов.
+ * При `collapseYo: true` дополнительно заменяет «ё» на «е» —
+ * нужно при матчинге Sigur ↔ FOT, где написания «Алексеев/Алексёев» расходятся.
+ */
+export const normalizeFullName = (
+  name: string,
+  options: { collapseYo?: boolean } = {},
+): string => {
+  const base = name.trim().toLowerCase().replace(/\s+/g, ' ');
+  return options.collapseYo ? base.replace(/ё/g, 'е') : base;
+};
+
 export const parseFIO = (fullName: string): IParsedFIO => {
   const parts = fullName.trim().split(/\s+/);
   return {

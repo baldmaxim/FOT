@@ -21,7 +21,7 @@ import {
   type ISyncContext,
   type SyncAllStepName,
 } from '../services/sigur-sync.service.js';
-import { invalidateStructureCache } from '../services/employee-mapper.service.js';
+import { invalidateStructureCache, invalidateOrgStructureCaches } from '../services/employee-mapper.service.js';
 import {
   isSigurRuntimeNotAllowedError,
   type SigurRuntimeNotAllowedError,
@@ -269,7 +269,7 @@ export const sigurSyncController = {
 
       sigurService.invalidateDepartmentCache();
       const result = await syncDepartmentsLogic(connection, {});
-      invalidateStructureCache();
+      invalidateOrgStructureCaches();
       res.json({ success: true, data: result });
     } catch (error) {
       if (isManualSyncConflict(error)) {
@@ -498,8 +498,12 @@ export const sigurSyncController = {
 
       const hasErrors = failedSteps.length > 0;
 
-      // Сбрасываем кэш структуры если были шаги структуры/сотрудников
-      if (steps.some(s => s === 'departments' || s === 'positions' || s === 'employees')) {
+      // Сбрасываем кэш структуры если были шаги структуры/сотрудников.
+      // Если синхронизировались departments/employees — инвалидируем все три
+      // (employee-mapper + dept tree + sync filter), иначе только лёгкий name-кэш.
+      if (steps.includes('departments') || steps.includes('employees')) {
+        invalidateOrgStructureCaches();
+      } else if (steps.includes('positions')) {
         invalidateStructureCache();
       }
 

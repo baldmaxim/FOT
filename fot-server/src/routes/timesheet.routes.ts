@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { timesheetController } from '../controllers/timesheet.controller.js';
+import { timesheetTeamManagementController as tm } from '../controllers/timesheet-team-management.controller.js';
 import { authenticate, requireAdmin, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { cacheWithShortTtlForToday } from '../middleware/skipCacheForToday.js';
@@ -124,62 +125,62 @@ router.get(
 router.get(
   '/team-management-config',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr', 'timesheet-team-management'], 'view'),
-  timesheetController.getTeamManagementConfig
+  tm.getTeamManagementConfig
 );
 
 router.get(
   '/team-management/search-employees',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr', 'timesheet-team-management'], 'edit'),
   timesheetSearchCache,
-  timesheetController.searchTeamEmployees
+  tm.searchTeamEmployees
 );
 
 router.post(
   '/team-management/add-employee',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr', 'timesheet-team-management'], 'edit'),
-  timesheetController.addEmployeeToDepartment
+  tm.addEmployeeToDepartment
 );
 
 router.post(
   '/team-management/exclude-employee',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr', 'timesheet-team-management'], 'edit'),
-  timesheetController.excludeEmployeeFromDepartment
+  tm.excludeEmployeeFromDepartment
 );
 
 router.get(
   '/admin/transfers',
   requireAdmin,
-  timesheetController.listAdminTransfers
+  tm.listAdminTransfers
 );
 
 router.get(
   '/team-management/transfers',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
-  timesheetController.listTransfers
+  tm.listTransfers
 );
 
 router.patch(
   '/team-management/transfers/:assignmentId',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
-  timesheetController.patchTransfer
+  tm.patchTransfer
 );
 
 router.delete(
   '/team-management/transfers/:assignmentId',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
-  timesheetController.deleteTransferEntry
+  tm.deleteTransferEntry
 );
 
 router.patch(
   '/team-management/exclusions/:employeeId',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
-  timesheetController.patchExclusion
+  tm.patchExclusion
 );
 
 router.delete(
   '/team-management/exclusions/:employeeId',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
-  timesheetController.deleteExclusionEntry
+  tm.deleteExclusionEntry
 );
 
 // GET /api/timesheet/export?month=YYYY-MM&department_id=...

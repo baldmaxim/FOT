@@ -1,4 +1,5 @@
 import { supabase } from '../config/database.js';
+import { invalidateDeptTreeCache, invalidateSyncFilterCache } from './skud-shared.service.js';
 import type { Employee, EmployeeEncrypted } from '../types/index.js';
 
 // Кэш для расшифрованных названий структуры
@@ -18,6 +19,26 @@ const STRUCTURE_CACHE_KEY = '__global__';
 
 export function invalidateStructureCache(): void {
   structureCacheStore.delete(STRUCTURE_CACHE_KEY);
+}
+
+/**
+ * Сбрасывает все три связанных кэша структуры разом:
+ *   - employee-mapper structure cache (id→name отделов и должностей FOT БД, TTL 60c)
+ *   - skud-shared dept tree cache (id, parent_id отделов FOT БД, TTL 5мин)
+ *   - skud-shared sync filter cache (whitelist sync-фильтра по отделам, TTL 5мин)
+ *
+ * Использовать в точках, где меняется И список отделов, И их имена/иерархия —
+ * т.е. после Sigur structure sync (manual или scheduled), а также после CRUD
+ * структурных изменений, которые могут затронуть несколько слоёв.
+ *
+ * Для гранулярных операций (только переименование одного отдела, перемещение
+ * сотрудника, изменение sync-фильтра) — продолжать использовать конкретные
+ * invalidate*-функции, чтобы не ронять дешёвые длинноживущие кэши без причины.
+ */
+export function invalidateOrgStructureCaches(): void {
+  invalidateStructureCache();
+  invalidateDeptTreeCache();
+  invalidateSyncFilterCache();
 }
 
 export async function loadStructureCache(): Promise<StructureCache> {

@@ -12,7 +12,7 @@ import {
   seedPositionsLogic,
   syncEmployeesLogic,
 } from './sigur-sync.service.js';
-import { invalidateStructureCache } from './employee-mapper.service.js';
+import { invalidateOrgStructureCaches } from './employee-mapper.service.js';
 import type { ISyncContext } from './sigur-sync-shared.js';
 import { isSigurRuntimeAllowed, logSigurRuntimeGuardSkip } from './sigur-runtime-guard.service.js';
 
@@ -42,9 +42,10 @@ async function runStructureSyncCycle(): Promise<void> {
       await seedPositionsLogic();
       await syncEmployeesLogic(connectionType, () => {}, context, true);
 
-      // Сбрасываем кэш структуры, чтобы карточка сотрудника не мигала
-      // между старыми и новыми именами отделов/должностей
-      invalidateStructureCache();
+      // Сбрасываем все кэши структуры, чтобы карточка сотрудника не мигала
+      // между старыми и новыми именами отделов/должностей, а dept tree
+      // и sync filter не отдавали стейл данные ещё 5 минут после sync.
+      invalidateOrgStructureCaches();
 
       console.log(`[structure-scheduler] hourly sync done connection=${connectionType}`);
     } catch (err) {

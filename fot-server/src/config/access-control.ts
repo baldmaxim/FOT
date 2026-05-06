@@ -23,6 +23,48 @@ export interface PageAccessEntry {
 
 export const CRITICAL_ADMIN_PAGE_KEYS = ['/admin/roles', '/admin/users'] as const;
 
+/**
+ * Тип-сейфтные константы путей страниц. Используются как единый источник
+ * для DEFAULT_ACCESS_PAGE_CATALOG ниже, а также могут импортироваться из
+ * routes/* и других мест вместо string-литералов.
+ *
+ * Контракт-тест `access-page-catalog-contract.test.ts` следит за тем, чтобы
+ * каждый PAGE_PATHS.* присутствовал в каталоге и использовался либо во
+ * фронте, либо в защите бэкенд-роутов.
+ */
+export const PAGE_PATHS = {
+  EMPLOYEE: '/employee',
+  EMPLOYEE_REQUESTS: '/employee/requests',
+  EMPLOYEE_DOCUMENTS: '/employee/documents',
+  EMPLOYEE_TASKS: '/employee/tasks',
+  EMPLOYEE_SALARY_RAISE: '/employee/salary-raise',
+  DASHBOARD: '/dashboard',
+  TIMESHEET: '/timesheet',
+  TIMESHEET_HR: '/timesheet-hr',
+  LEAVE_REQUESTS: '/leave-requests',
+  SALARY_RAISE_REVIEW: '/salary-raise-review',
+  DISCIPLINE: '/discipline',
+  STAFF_CONTROL: '/staff-control',
+  SKUD_RAW: '/skud-raw',
+  SKUD_DB: '/skud-db',
+  SKUD_SETTINGS: '/skud-settings',
+  SKUD_CARD_READER: '/skud-card-reader',
+  ADMIN_USERS: '/admin/users',
+  ADMIN_AUDIT: '/admin/audit',
+  ADMIN_ACTION_HISTORY: '/admin/action-history',
+  ADMIN_ROLES: '/admin/roles',
+  ADMIN_SETTINGS: '/admin/settings',
+  ADMIN_SCHEDULES: '/admin/schedules',
+  ADMIN_SCHEDULES_TEMPLATES: '/admin/schedules/templates',
+  ADMIN_PAYSLIPS: '/admin/payslips',
+  ADMIN_PATENT_RECEIPTS: '/admin/patent-receipts',
+  ADMIN_TIMESHEET_TRANSFERS: '/admin/timesheet-transfers',
+  ADMIN_DATA_API: '/admin/data-api',
+  TIMESHEET_TEAM_MANAGEMENT: 'timesheet-team-management',
+} as const;
+
+export type PagePath = typeof PAGE_PATHS[keyof typeof PAGE_PATHS];
+
 export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/employee',                   label: 'Личный кабинет',                 group_code: 'employee', group_label: 'Личный кабинет',       surface: 'page',      supports_edit: false, sort_order: 10,  is_active: true },
   { key: '/employee/requests',          label: 'Мои заявления',                  group_code: 'employee', group_label: 'Личный кабинет',       surface: 'page',      supports_edit: true,  sort_order: 20,  is_active: true },

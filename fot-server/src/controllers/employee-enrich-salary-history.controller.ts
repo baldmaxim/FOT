@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { readExcelRows } from '../utils/excel-reader.js';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
+import { cleanCell } from '../utils/import-cells.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 interface MulterRequest extends AuthenticatedRequest {
@@ -28,13 +29,6 @@ const MONTHS: Record<string, string> = {
   'январь': '01', 'февраль': '02', 'март': '03', 'апрель': '04',
   'май': '05', 'июнь': '06', 'июль': '07', 'август': '08',
   'сентябрь': '09', 'октябрь': '10', 'ноябрь': '11', 'декабрь': '12',
-};
-
-const cleanCell = (val: unknown): string | null => {
-  if (val === undefined || val === null) return null;
-  const s = String(val).trim();
-  if (!s || s === '-' || s === '—') return null;
-  return s;
 };
 
 /**
