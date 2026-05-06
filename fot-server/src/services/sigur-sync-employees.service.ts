@@ -12,7 +12,7 @@ import { employeeChangesService } from './employee-changes.service.js';
 import { employeeCache } from './employee-cache.service.js';
 import { assignEmployeesToArchiveDepartment } from './employee-archive-department.service.js';
 import { invalidatePresencePollingEmployeeCache } from './presence-polling-cache.service.js';
-import { batchMoveSigurEmployees } from './sigur-live-admin.service.js';
+import { batchMoveSigurEmployees } from './sigur-live-employees-crud.service.js';
 import { settingsService } from './settings.service.js';
 import { upsertTechnicalDepartmentAccess } from './employee-department-access.service.js';
 

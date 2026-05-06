@@ -13,7 +13,7 @@ import {
   syncLinkedEmployeeFromSigur,
 } from '../services/sigur-linked-employees.service.js';
 import { sigurService } from '../services/sigur.service.js';
-import { createSigurEmployee } from '../services/sigur-live-admin.service.js';
+import { createSigurEmployee } from '../services/sigur-live-employees-crud.service.js';
 import { isProtectedArchiveDepartment } from '../services/employee-archive-department.service.js';
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 import {

@@ -3,14 +3,10 @@ import { AxiosError } from 'axios';
 import { auditService } from '../services/audit.service.js';
 import {
   batchMoveSigurDepartments,
-  batchMoveSigurEmployees,
-  batchMoveSigurEmployeesStreaming,
   createSigurPosition,
   createSigurDepartment,
-  createSigurEmployee,
   deleteSigurDepartmentRecursive,
   deleteSigurDepartment,
-  deleteSigurEmployee,
   deleteSigurPosition,
   getSigurEmployeeProfile,
   getSigurEmployeeCardStatuses,
@@ -18,11 +14,17 @@ import {
   listSigurDepartmentsTree,
   listSigurEmployees,
   listSigurPositions,
-  moveSigurEmployee,
   updateSigurDepartment,
-  updateSigurEmployee,
   updateSigurPosition,
 } from '../services/sigur-live-admin.service.js';
+import {
+  batchMoveSigurEmployees,
+  batchMoveSigurEmployeesStreaming,
+  createSigurEmployee,
+  deleteSigurEmployee,
+  moveSigurEmployee,
+  updateSigurEmployee,
+} from '../services/sigur-live-employees-crud.service.js';
 import {
   replaceSigurEmployeeAccessPoints,
   replaceSigurEmployeeAccessRules,
