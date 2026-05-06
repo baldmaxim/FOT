@@ -24,6 +24,7 @@ import {
 } from '../../utils/scheduleUtils';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { selectVisibleHours, formatHoursLabel, formatSecondsLabel } from '../../utils/hoursDisplay';
+import { getDayStatus, STATUS_TO_DETAIL_HOURS_CLASS } from '../../utils/dayStatus';
 
 interface ISidePanelProps {
   open: boolean;
@@ -171,14 +172,13 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
     return details;
   }, [employee, entries, year, month, schedules, dailySchedules, calendar, visibleDays]);
 
-  const getHoursClass = (entry: TimesheetEntry | null, fullDayThreshold: number): string => {
-    const visibleHours = selectVisibleHours(entry, showActualHours);
-    if (!entry) return 'ts-day-detail-hours--absent';
-    if (entry.status === 'absent') return 'ts-day-detail-hours--absent';
-    if (entry.status === 'sick') return 'ts-day-detail-hours--sick';
-    if (entry.status === 'vacation') return 'ts-day-detail-hours--vacation';
-    if (visibleHours != null && visibleHours >= fullDayThreshold) return 'ts-day-detail-hours--full';
-    return 'ts-day-detail-hours--partial';
+  const getHoursClass = (entry: TimesheetEntry | null, fullDayThreshold: number, isWeekendDay: boolean): string => {
+    const status = getDayStatus(entry, {
+      showActualHours,
+      fullDayThresholdHours: fullDayThreshold,
+      isScheduledDayOff: isWeekendDay,
+    });
+    return STATUS_TO_DETAIL_HOURS_CLASS[status];
   };
 
   const getHoursLabel = (entry: TimesheetEntry | null): string => {
@@ -229,7 +229,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
 
           <div className="ts-panel-section">
             <div className="ts-panel-section-title">Детализация по дням</div>
-            {dayDetails.map(({ day, entry, isPreHoliday, fullDayThreshold }) => {
+            {dayDetails.map(({ day, entry, isWeekend: isWeekendDay, isPreHoliday, fullDayThreshold }) => {
               const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
               const dayEventsData = skudEvents.get(dateStr);
               const expanded = expandedDays.has(day);
@@ -275,7 +275,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                           {formatTime(summaryLastExit)}
                         </span>
                       )}
-                      <div className={`ts-day-detail-hours ${getHoursClass(entry, fullDayThreshold)}`}>
+                      <div className={`ts-day-detail-hours ${getHoursClass(entry, fullDayThreshold, isWeekendDay)}`}>
                         {getHoursLabel(entry)}
                       </div>
                       {entry && (

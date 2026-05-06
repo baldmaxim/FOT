@@ -731,6 +731,25 @@
   border-color: rgba(168, 85, 247, 0.35);
 }
 
+/* Зеркала классов основной таблицы (ts-day--unpaid / ts-day--educational) —
+   единые цвета по статусу обеспечивают совпадение окраски в табеле, боковой
+   панели и календаре карточки. */
+.ec-cal-day.unpaid {
+  background: rgba(234, 179, 8, 0.14);
+  color: var(--warning);
+  border-color: rgba(234, 179, 8, 0.35);
+}
+
+.ec-cal-day.educational_leave {
+  background: rgba(217, 70, 239, 0.12);
+  color: #a21caf;
+  border-color: rgba(217, 70, 239, 0.35);
+}
+
+.ec-cal-day.future {
+  pointer-events: none;
+}
+
 .ec-cal-day.today {
   box-shadow: 0 0 0 2px var(--primary);
 }

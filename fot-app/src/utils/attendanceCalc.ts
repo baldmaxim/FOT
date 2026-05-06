@@ -10,6 +10,7 @@ import {
   parseHMToMinutes,
 } from './scheduleUtils';
 import { selectVisibleHours } from './hoursDisplay';
+import { getDayStatus, type DayStatus } from './dayStatus';
 
 const WORK_START_MINUTES = 9 * 60; // 09:00
 const WORKDAY_TARGET_SECONDS = 8 * 3600; // 8 часов фактического присутствия
@@ -28,16 +29,7 @@ const isScheduleWeekend = (year: number, month: number, day: number, schedule?: 
 
 export interface IDayAttendance {
   day: number;
-  status:
-    | 'present'
-    | 'underwork'
-    | 'absent'
-    | 'weekend'
-    | 'future'
-    | 'sick'
-    | 'vacation'
-    | 'remote'
-    | 'incomplete_skud';
+  status: DayStatus;
   arrivalTime?: string;
   totalSeconds: number;
   isLate?: boolean;
@@ -560,46 +552,31 @@ export const calculateAttendanceFromTimesheet = (params: {
 
     const fullDayThresholdHours = getFullDayThresholdHoursForDay(schedule, calendar ?? null, year, month + 1, day);
 
-    // Зеркалим логику TimesheetGrid.getDayCellClass, чтобы цвет в карточке совпадал с табелем.
-    const visibleHours = selectVisibleHours(entry, showActualHours);
-    const hasSkudEvents = Boolean(entry?.first_entry || entry?.last_exit)
-      || (shouldUseLiveTodayEvents && liveTodayExternalEvents.length > 0);
-    const zeroHours = visibleHours == null || visibleHours <= 0;
-    const incompleteSkud = hasSkudEvents && zeroHours;
-
+    // Источник правды для статуса дня — единый getDayStatus (см. utils/dayStatus.ts).
+    // Зеркалит логику TimesheetGrid.getDayCellClass и TimesheetSidePanel.getHoursClass,
+    // чтобы цвет в табеле, боковой панели и календаре карточки совпадал на одном дне.
+    const hasExternalSkud = shouldUseLiveTodayEvents && liveTodayExternalEvents.length > 0;
     let status: IDayAttendance['status'];
-    switch (entry?.status) {
-      case 'sick':
-        status = 'sick';
-        break;
-      case 'vacation':
-      case 'dayoff':
-        status = 'vacation';
-        break;
-      case 'remote':
-        status = 'remote';
-        break;
-      case 'absent':
-        status = hasSkudEvents ? 'incomplete_skud' : 'absent';
-        break;
-      case 'unpaid':
-        status = 'absent';
-        break;
-      case 'work':
-      case 'manual':
-      default: {
-        if (incompleteSkud) {
-          status = 'incomplete_skud';
-        } else if (hasActualPresence) {
-          const hoursOk = plannedHours <= 0 || totalSeconds >= Math.round(fullDayThresholdHours * 3600);
-          const spanOk = entry?.is_correction || entry?.presence_covers_shift !== false;
-          status = (hoursOk && spanOk) ? 'present' : 'underwork';
-        } else if (isScheduledDayOff) {
-          status = 'weekend';
-        } else {
-          status = 'absent';
-        }
-      }
+    if (entry) {
+      status = getDayStatus(entry, {
+        showActualHours,
+        fullDayThresholdHours,
+        isScheduledDayOff,
+        hasExternalSkud,
+      });
+    } else if (shouldUseLiveTodayEvents && hasActualPresence) {
+      // Today, табель ещё не пополнен, но live-СКУД уже идёт. Считаем как «present»/
+      // «underwork» по фактическим секундам — это вне сферы getDayStatus, который
+      // работает только с entry.
+      const hoursOk = plannedHours <= 0 || totalSeconds >= Math.round(fullDayThresholdHours * 3600);
+      status = hoursOk ? 'present' : 'underwork';
+    } else {
+      status = getDayStatus(null, {
+        showActualHours,
+        fullDayThresholdHours,
+        isScheduledDayOff,
+        hasExternalSkud,
+      });
     }
 
     if (!isScheduledDayOff && status !== 'absent') {

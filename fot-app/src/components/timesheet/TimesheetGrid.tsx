@@ -18,6 +18,7 @@ import {
 } from '../../utils/scheduleUtils';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { selectVisibleHours, selectVisibleObjectHours, formatHoursLabel } from '../../utils/hoursDisplay';
+import { getDayStatus, STATUS_TO_GRID_CLASS } from '../../utils/dayStatus';
 import { useAuth } from '../../contexts/AuthContext';
 import '../../pages/timesheet/TimesheetPage.css';
 
@@ -209,60 +210,21 @@ const getDayCellClass = (
   thresholdHours = 8,
 ): string => {
   const classes = ['ts-day'];
-  const visibleHours = getVisibleHours(entry);
   if (today) classes.push('ts-day--today');
-  if (weekend && !entry) {
-    classes.push('ts-day--weekend');
-    return classes.join(' ');
-  }
-  if (!entry) {
-    if (future) classes.push('ts-day--empty');
-    return classes.join(' ');
-  }
-  const hasSkudEvents = Boolean(entry.first_entry || entry.last_exit);
-  const zeroHours = !hasPositiveHours(visibleHours);
-  const incompleteSkud = hasSkudEvents && zeroHours;
-  switch (entry.status) {
-    case 'work':
-    case 'manual': {
-      if (incompleteSkud) {
-        classes.push('ts-day--incomplete-skud');
-        break;
-      }
-      const hoursOk = hasPositiveHours(visibleHours) && (visibleHours as number) >= thresholdHours;
-      const spanOk = entry.is_correction || entry.presence_covers_shift !== false;
-      classes.push(hoursOk && spanOk ? 'ts-day--full' : 'ts-day--partial');
-      break;
-    }
-    case 'remote':
-      classes.push('ts-day--remote');
-      break;
-    case 'sick':
-      classes.push('ts-day--sick');
-      break;
-    case 'vacation':
-    case 'dayoff':
-      classes.push('ts-day--vacation');
-      break;
-    case 'absent':
-      if (hasSkudEvents) {
-        classes.push('ts-day--incomplete-skud');
-      } else {
-        classes.push('ts-day--absent');
-      }
-      break;
-    case 'unpaid':
-      classes.push('ts-day--unpaid');
-      break;
-    case 'educational_leave':
-      classes.push('ts-day--educational');
-      break;
-  }
-  if (entry.is_correction) classes.push('ts-day--corrected');
-  if (entry.approval_status === 'pending') classes.push('ts-day--approval-pending');
-  else if (entry.approval_status === 'approved') classes.push('ts-day--approval-approved');
-  else if (entry.approval_status === 'rejected') classes.push('ts-day--approval-rejected');
-  if ((entry.travel_problematic_segments || 0) > 0 || (entry.travel_delay_minutes || 0) > 0) {
+
+  const status = getDayStatus(entry, {
+    showActualHours: showActualHoursFlag,
+    fullDayThresholdHours: thresholdHours,
+    isScheduledDayOff: weekend,
+    isFuture: future,
+  });
+  classes.push(STATUS_TO_GRID_CLASS[status]);
+
+  if (entry?.is_correction) classes.push('ts-day--corrected');
+  if (entry?.approval_status === 'pending') classes.push('ts-day--approval-pending');
+  else if (entry?.approval_status === 'approved') classes.push('ts-day--approval-approved');
+  else if (entry?.approval_status === 'rejected') classes.push('ts-day--approval-rejected');
+  if (entry && ((entry.travel_problematic_segments || 0) > 0 || (entry.travel_delay_minutes || 0) > 0)) {
     classes.push('ts-day--travel-issue');
   }
   return classes.join(' ');
