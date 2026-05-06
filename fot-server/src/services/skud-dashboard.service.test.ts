@@ -311,7 +311,7 @@ describe('skud-dashboard.service', () => {
       pushEventRows(employees, date, '09:00:00', 'entry');
     }
 
-    const stats = await getDashboardStats({ departmentId: 'dept-1', period: 'week' });
+    const stats = await getDashboardStats({ departmentId: 'dept-1', period: 'week', showActualHours: false });
 
     expect(stats.periodStats).toEqual({
       avgPresent: 1500,
@@ -358,6 +358,7 @@ describe('skud-dashboard.service', () => {
       departmentId: 'dept-1',
       period: 'month',
       month: '2026-04',
+      showActualHours: false,
     });
 
     expect(stats.periodStats).toMatchObject({
@@ -444,7 +445,7 @@ describe('skud-dashboard.service', () => {
       },
     ];
 
-    const stats = await getDashboardStats({ departmentId: 'dept-1', period: 'today' });
+    const stats = await getDashboardStats({ departmentId: 'dept-1', period: 'today', showActualHours: false });
 
     expect(stats.lateToday).toBe(1);
     expect(stats.lateYesterday).toBe(1);
@@ -483,7 +484,7 @@ describe('skud-dashboard.service', () => {
       direction: 'entry' as const,
     }));
 
-    const stats = await getDashboardStats({ departmentId: 'dept-1', period: 'month', month: '2026-04' });
+    const stats = await getDashboardStats({ departmentId: 'dept-1', period: 'month', month: '2026-04', showActualHours: false });
 
     expect(stats.topLate).toHaveLength(6);
     expect(stats.topLate.map(item => item.employee_id)).toEqual(employees.map(employee => employee.id));

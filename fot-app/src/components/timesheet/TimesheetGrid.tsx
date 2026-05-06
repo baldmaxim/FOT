@@ -17,7 +17,7 @@ import {
   isPreHolidayForSchedule,
 } from '../../utils/scheduleUtils';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
-import { selectVisibleHours, selectVisibleObjectHours } from '../../utils/hoursDisplay';
+import { selectVisibleHours, selectVisibleObjectHours, formatHoursLabel } from '../../utils/hoursDisplay';
 import { useAuth } from '../../contexts/AuthContext';
 import '../../pages/timesheet/TimesheetPage.css';
 
@@ -140,13 +140,6 @@ const getObjectVisibleHours = (entry: TimesheetObjectEntry | null | undefined): 
 const hasPositiveHours = (value: number | null | undefined): boolean => (
   typeof value === 'number' && value > 0.001
 );
-
-const formatHM = (decimal: number): string => {
-  const h = Math.floor(decimal);
-  const m = Math.round((decimal - h) * 60);
-  if (m === 0) return `${h}ч`;
-  return `${h}ч${m}м`;
-};
 
 const formatDeviationHours = (value: number): string => {
   const totalMinutes = Math.round(Math.abs(value) * 60);
@@ -302,7 +295,7 @@ const getDayCellTitle = (entry: TimesheetEntry | null, weekend: boolean): string
 
   const parts: string[] = [];
   if (visibleHours != null) {
-    parts.push(`Часы: ${formatHM(visibleHours)}`);
+    parts.push(`Часы: ${formatHoursLabel(visibleHours)}`);
   }
   if ((entry.status === 'work' || entry.status === 'manual') && entry.presence_covers_shift === false) {
     parts.push('Присутствие меньше длительности смены');
@@ -313,7 +306,7 @@ const getDayCellTitle = (entry: TimesheetEntry | null, weekend: boolean): string
     parts.push('Есть события СКУД, но время не учтено (только вход или только выход)');
   }
   if ((entry.travel_delay_minutes || 0) > 0) {
-    parts.push(`Превышение лимита передвижения: ${formatHM((entry.travel_delay_minutes || 0) / 60)}`);
+    parts.push(`Превышение лимита передвижения: ${formatHoursLabel((entry.travel_delay_minutes || 0) / 60)}`);
   }
   if ((entry.travel_problematic_segments || 0) > 0) {
     parts.push(`Есть передвижения без привязки объекта: ${entry.travel_problematic_segments}`);
@@ -336,7 +329,7 @@ const getObjectCellTitle = (entry: TimesheetObjectEntry | null, objectName?: str
   if (!entry && !objectName) return undefined;
   const parts = [`Объект: ${objectName || entry?.object_name || UNASSIGNED_OBJECT_NAME}`];
   if (entry) {
-    parts.push(`Часы: ${formatHM(getObjectVisibleHours(entry))}`);
+    parts.push(`Часы: ${formatHoursLabel(getObjectVisibleHours(entry))}`);
     if (entry.is_correction) {
       parts.push('Есть корректировка по объекту');
     }
@@ -981,7 +974,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     {stat && (
                       <span
                         className={`ts-mobile-deviation ${getDeviationCellClass(stat.deviation_hours)}`}
-                        title={`План ${formatHM(stat.norm_hours)}, факт ${formatHM(stat.fact_hours)}`}
+                        title={`План ${formatHoursLabel(stat.norm_hours)}, факт ${formatHoursLabel(stat.fact_hours)}`}
                       >
                         {formatDeviationHours(stat.deviation_hours)}
                       </span>
@@ -1419,7 +1412,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       }
                       const dev = stat.deviation_hours;
                       const cls = getDeviationCellClass(dev);
-                      const tip = `План ${formatHM(stat.norm_hours)}, факт ${formatHM(stat.fact_hours)}`;
+                      const tip = `План ${formatHoursLabel(stat.norm_hours)}, факт ${formatHoursLabel(stat.fact_hours)}`;
                       return (
                         <td className={`ts-col-deviation-sticky ${cls}`} title={tip}>
                           {formatDeviationHours(dev)}

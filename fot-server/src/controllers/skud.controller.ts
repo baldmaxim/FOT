@@ -421,7 +421,12 @@ const skudReadController = {
         return;
       }
 
-      const data = await getDashboardStats({ departmentId, period, month });
+      const data = await getDashboardStats({
+        departmentId,
+        period,
+        month,
+        showActualHours: !!req.user.show_actual_hours,
+      });
       res.json({ success: true, data });
     } catch (error) {
       console.error('getDashboardStats error:', error);

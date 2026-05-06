@@ -158,15 +158,12 @@ export const EmployeeCardPage: FC = () => {
     }
     navigate('/employees', { replace: true });
   };
-  const { canEditPage, hasPermission, isAdmin, showActualHours } = useAuth();
+  const { canEditPage, isAdmin, showActualHours } = useAuth();
   const canEdit = canEditPage('/employees') || canEditPage('/staff-control');
   const TABS = useMemo<{ key: Tab; label: string }[]>(
     () => (isAdmin ? [...TABS_BASE, HISTORY_TAB] : TABS_BASE),
     [isAdmin],
   );
-  const capToSchedule = hasPermission('timesheet.workflow.submit')
-    && !hasPermission('timesheet.workflow.review')
-    && !hasPermission('timesheet.workflow.monitor');
 
   // Deep-link: ?tab=skud&date=2026-03-18
   const urlTab = searchParams.get('tab') as Tab | null;
@@ -321,7 +318,6 @@ export const EmployeeCardPage: FC = () => {
         liveDayEvents: todayEvents,
         monthSkudEvents: skudEvents,
         internalPoints,
-        capToSchedule,
         showActualHours,
       });
     }
@@ -346,7 +342,6 @@ export const EmployeeCardPage: FC = () => {
     todayEvents,
     skudEvents,
     internalPoints,
-    capToSchedule,
     showActualHours,
   ]);
   const attendanceLoading = attendance === null;

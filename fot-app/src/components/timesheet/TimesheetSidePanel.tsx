@@ -9,9 +9,6 @@ import { skudService } from '../../services/skudService';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 import {
   buildDisplayItems,
-  calculateWorkSeconds,
-  findFirstExternalEntry,
-  findLastExternalExit,
 } from '../../utils/skudDisplay';
 import {
   getDaysInMonth,
@@ -26,7 +23,7 @@ import {
   getFullDayThresholdHoursForDay,
 } from '../../utils/scheduleUtils';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
-import { selectVisibleHours } from '../../utils/hoursDisplay';
+import { selectVisibleHours, formatHoursLabel, formatSecondsLabel } from '../../utils/hoursDisplay';
 
 interface ISidePanelProps {
   open: boolean;
@@ -44,9 +41,6 @@ interface ISidePanelProps {
 interface IDayEvents {
   date: string;
   events: SkudEvent[];
-  firstEntry: string | null;
-  lastExit: string | null;
-  totalSeconds: number;
 }
 
 const getInitials = (name: string): string => {
@@ -57,15 +51,6 @@ const getInitials = (name: string): string => {
 
 const formatTime = (time: string): string => time.slice(0, 5);
 
-const formatDuration = (seconds: number): string => {
-  if (seconds <= 0) return '';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h === 0) return `${m}м`;
-  if (m === 0) return `${h}ч`;
-  return `${h}ч ${m}м`;
-};
-
 const formatTravelMinutes = (minutes: number): string => {
   if (minutes <= 0) return '0 мин';
   const hours = Math.floor(minutes / 60);
@@ -75,7 +60,7 @@ const formatTravelMinutes = (minutes: number): string => {
   return `${hours}ч ${mins}м`;
 };
 
-const groupEventsByDay = (events: SkudEvent[], internalPoints: Set<string>): Map<string, IDayEvents> => {
+const groupEventsByDay = (events: SkudEvent[]): Map<string, IDayEvents> => {
   const map = new Map<string, SkudEvent[]>();
   for (const ev of events) {
     const key = ev.event_date;
@@ -86,17 +71,7 @@ const groupEventsByDay = (events: SkudEvent[], internalPoints: Set<string>): Map
   const result = new Map<string, IDayEvents>();
   for (const [date, dayEvents] of map) {
     dayEvents.sort((a, b) => a.event_time.localeCompare(b.event_time));
-    const totalSeconds = calculateWorkSeconds(dayEvents, internalPoints, date);
-    const firstExt = findFirstExternalEntry(dayEvents, internalPoints);
-    const lastExt = findLastExternalExit(dayEvents, internalPoints);
-
-    result.set(date, {
-      date,
-      events: dayEvents,
-      firstEntry: firstExt?.event_time || null,
-      lastExit: lastExt?.event_time || null,
-      totalSeconds,
-    });
+    result.set(date, { date, events: dayEvents });
   }
 
   return result;
@@ -142,13 +117,13 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
       const startDate = `${year}-${String(month).padStart(2, '0')}-${String(firstVisibleDay).padStart(2, '0')}`;
       const endDate = `${year}-${String(month).padStart(2, '0')}-${String(lastVisibleDay).padStart(2, '0')}`;
       const events = await skudService.getEmployeeEvents(employee.id, startDate, endDate);
-      setSkudEvents(groupEventsByDay(events, internalPoints));
+      setSkudEvents(groupEventsByDay(events));
     } catch {
       setSkudEvents(new Map());
     } finally {
       setLoadingSkud(false);
     }
-  }, [employee, open, year, month, internalPoints, visibleDays]);
+  }, [employee, open, year, month, visibleDays]);
 
   useEffect(() => {
     if (open && employee) {
@@ -206,21 +181,13 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
     return 'ts-day-detail-hours--partial';
   };
 
-  const formatHM = (decimal: number): string => {
-    const h = Math.floor(decimal);
-    const m = Math.round((decimal - h) * 60);
-    if (m === 0) return `${h}ч`;
-    return `${h}ч ${m}м`;
-  };
-
   const getHoursLabel = (entry: TimesheetEntry | null): string => {
     const visibleHours = selectVisibleHours(entry, showActualHours);
     if (!entry) return '—';
     if (entry.status === 'absent') return 'Неявка';
     if (entry.status === 'sick') return 'Б/л';
     if (entry.status === 'vacation') return 'Отпуск';
-    if (visibleHours != null) return formatHM(visibleHours);
-    return '—';
+    return formatHoursLabel(visibleHours);
   };
 
   const getTravelIssueLabel = (entry: TimesheetEntry): string => {
@@ -267,12 +234,16 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
               const dayEventsData = skudEvents.get(dateStr);
               const expanded = expandedDays.has(day);
               const hasEvents = dayEventsData && dayEventsData.events.length > 0;
-              const summaryFirstEntry = entry?.first_entry || dayEventsData?.firstEntry || null;
-              const summaryLastExit = entry?.last_exit || dayEventsData?.lastExit || null;
+              // Источник суммарного времени и пограничных меток — табельная запись
+              // (entry). Бэк уже замыкает open-entry для today по now() и применяет
+              // cap по длине смены / show_actual_hours. Раньше здесь был fallback
+              // на сырые СКУД-секунды без вычета обеда — он давал расхождение.
+              const summaryFirstEntry = entry?.first_entry || null;
+              const summaryLastExit = entry?.last_exit || null;
               const visibleHours = selectVisibleHours(entry, showActualHours);
               const summaryTotalSeconds = visibleHours != null
                 ? Math.max(0, Math.round(visibleHours * 3600))
-                : (dayEventsData?.totalSeconds || 0);
+                : 0;
 
               return (
                 <div key={day} className="ts-day-detail-wrap">
@@ -331,7 +302,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                               return (
                                 <div key={`break-${idx}`} className="ts-day-event-row ts-day-event-row--break">
                                   <span className="ts-day-event-break-label">
-                                    Перерыв: {formatDuration(item.breakSeconds)}
+                                    Перерыв: {formatSecondsLabel(item.breakSeconds)}
                                   </span>
                                 </div>
                               );
@@ -361,7 +332,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                               )}
                               {pairDurationSeconds !== null && pairDurationSeconds > 0 && (
                                 <span className="ts-day-event-pair-duration">
-                                  {formatDuration(pairDurationSeconds)}
+                                  {formatSecondsLabel(pairDurationSeconds)}
                                 </span>
                               )}
                             </div>
@@ -380,7 +351,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                                 </span>
                               )}
                               <span className="skud-time-badge duration">
-                                <Timer size={11} /> {formatDuration(summaryTotalSeconds)}
+                                <Timer size={11} /> {formatSecondsLabel(summaryTotalSeconds)}
                               </span>
                             </div>
                           )}

@@ -28,3 +28,23 @@ export const selectVisibleObjectHours = (
   }
   return entry.display_hours_worked ?? entry.hours_worked ?? 0;
 };
+
+// Единый форматтер часов «Hч Mм» / «Hч» / «Mм» / «—».
+// Используется во всех точках вывода рабочего времени за день, чтобы цифра
+// и форма записи совпадали в табеле, боковой панели, модалке дня и карточке
+// сотрудника.
+export const formatHoursLabel = (hours: number | null | undefined): string => {
+  if (hours == null || !Number.isFinite(hours)) return '—';
+  if (hours <= 0) return '0ч';
+  const h = Math.floor(hours);
+  const m = Math.round((hours - h) * 60);
+  if (m === 60) return `${h + 1}ч`;
+  if (m === 0) return `${h}ч`;
+  if (h === 0) return `${m}м`;
+  return `${h}ч ${m}м`;
+};
+
+export const formatSecondsLabel = (seconds: number | null | undefined): string => {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return '—';
+  return formatHoursLabel(seconds / 3600);
+};

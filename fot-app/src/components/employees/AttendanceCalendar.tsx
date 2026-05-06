@@ -1,6 +1,7 @@
 import { useMemo, type FC } from 'react';
 import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 import { getFirstDayOffset, getDaysInMonth, type IDayAttendance } from '../../utils/attendanceCalc';
+import { formatSecondsLabel } from '../../utils/hoursDisplay';
 
 const MONTH_NAMES = [
   'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
@@ -20,12 +21,6 @@ interface IAttendanceCalendarProps {
   selectedDay?: number | null;
   loading?: boolean;
 }
-
-const formatWorkedTime = (totalSeconds: number): string => {
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  return m > 0 ? `${h}ч${m}м` : `${h}ч`;
-};
 
 export const AttendanceCalendar: FC<IAttendanceCalendarProps> = ({
   days, month, year, onPrevMonth, onNextMonth, onDayClick, onDayPrefetch, selectedDay = null, loading = false,
@@ -115,7 +110,7 @@ export const AttendanceCalendar: FC<IAttendanceCalendarProps> = ({
                   {day}
                   {data && data.totalSeconds > 0 && (
                     <span className="ec-time-badge">
-                      {formatWorkedTime(data.totalSeconds)}
+                      {formatSecondsLabel(data.totalSeconds)}
                     </span>
                   )}
                 </div>

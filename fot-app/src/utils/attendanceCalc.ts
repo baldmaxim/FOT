@@ -415,7 +415,6 @@ export const calculateAttendanceFromTimesheet = (params: {
   liveDayEvents?: SkudEvent[];
   monthSkudEvents?: SkudEvent[];
   internalPoints?: Set<string>;
-  capToSchedule?: boolean;
   showActualHours?: boolean;
 }) => {
   const {
@@ -429,7 +428,6 @@ export const calculateAttendanceFromTimesheet = (params: {
     liveDayEvents,
     monthSkudEvents,
     internalPoints,
-    capToSchedule,
     showActualHours = false,
   } = params;
 
@@ -532,12 +530,13 @@ export const calculateAttendanceFromTimesheet = (params: {
     const liveSeconds = shouldUseLiveTodayEvents
       ? calcWorkSeconds(liveTodayEvents, liveInternalPoints, true, liveLunchQuotaSec)
       : 0;
-    const rawTotalSeconds = shouldUseLiveTodayEvents
+    // Источник часов: либо table-серверная обрезка по длине смены (display_hours_worked
+     // при show_actual_hours=false / hours_worked при true — выбирает selectVisibleHours),
+     // либо «живой» расчёт для сегодняшнего открытого дня. Локальный cap до plannedHours
+     // (work_hours) убран — он давал двойную/неверную обрезку относительно бэка.
+    const totalSeconds = shouldUseLiveTodayEvents
       ? liveSeconds
       : Math.max(0, Math.round((selectVisibleHours(entry, showActualHours) ?? 0) * 3600));
-    const totalSeconds = capToSchedule && plannedHours > 0
-      ? Math.min(rawTotalSeconds, Math.round(plannedHours * 3600))
-      : rawTotalSeconds;
     const arrivalTime = shouldUseLiveTodayEvents
       ? liveTodayEntries[0]?.event_time.slice(0, 5)
       : entry?.first_entry?.slice(0, 5);

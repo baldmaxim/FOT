@@ -4,9 +4,9 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
 import type { Employee, EmployeeInput, SkudEvent } from '../../types';
 import type { IAlert, IDayAttendance } from '../../utils/attendanceCalc';
+import { formatSecondsLabel } from '../../utils/hoursDisplay';
 import {
   buildDisplayItems,
-  calculateWorkSeconds,
   findFirstExternalEntry,
   findLastExternalExit,
   sumBreakSeconds,
@@ -20,6 +20,7 @@ interface IEmployeeAttendanceSectionProps {
   employee: Employee;
   attendanceDays: IDayAttendance[];
   attendanceLoading: boolean;
+  // year/month — текущий выбранный календарный месяц (month — 0-based, как Date.getMonth()).
   year: number;
   month: number;
   onPrevMonth: () => void;
@@ -41,7 +42,11 @@ interface IEmployeeAttendanceSectionProps {
   onCancel: () => void;
 }
 
-const formatHM = (seconds: number): string => {
+// Форматтер для длительностей внутри СКУД-таймлайна (длительность пары вход→выход
+// и строки «Перерыв»). Это сырые отрезки времени между событиями, отдельные от
+// табельной суммы за день — поэтому здесь сохраняем особый кейс «<1м» для очень
+// коротких отрезков, который не подходит для итоговой суммы дня.
+const formatTimelineSegment = (seconds: number): string => {
   if (seconds <= 0) return '';
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
@@ -82,27 +87,32 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
     accessPointMapModal,
   } = useAccessPointMapViewer(canViewPage('/skud-settings'));
 
-  const { items, totalSec, firstEntry, lastExit, breakSec } = useMemo(() => {
+  const { items, firstEntry, lastExit, breakSec } = useMemo(() => {
     const sortedEvents = [...showEvents].sort((a, b) => a.event_time.localeCompare(b.event_time));
     const displayItems = buildDisplayItems(sortedEvents, internalPoints, showDate);
-    const total = calculateWorkSeconds(sortedEvents, internalPoints, showDate);
     const firstExt = findFirstExternalEntry(sortedEvents, internalPoints);
     const lastExt = findLastExternalExit(sortedEvents, internalPoints);
     return {
       items: displayItems,
-      totalSec: total,
       firstEntry: firstExt?.event_time.slice(0, 5) || null,
       lastExit: lastExt?.event_time.slice(0, 5) || null,
       breakSec: sumBreakSeconds(displayItems),
     };
   }, [showDate, showEvents, internalPoints]);
 
-  const workCalc = totalSec > 0
-    ? `${Math.floor(totalSec / 3600)}ч ${Math.floor((totalSec % 3600) / 60)}м`
-    : null;
-  const breakCalc = breakSec > 0
-    ? `${Math.floor(breakSec / 3600)}ч ${Math.floor((breakSec % 3600) / 60)}м`
-    : null;
+  // Источник времени за выбранный день — табельные данные (selectVisibleHours).
+  // Та же цифра, что и в календаре, табеле и боковой панели — единая для всех точек.
+  const totalSec = useMemo(() => {
+    const parts = showDate.split('-').map(Number);
+    if (parts.length !== 3 || parts.some(Number.isNaN)) return 0;
+    const [y, m, d] = parts;
+    if (y !== year || m - 1 !== month) return 0;
+    const dayData = attendanceDays.find(item => item.day === d);
+    return dayData?.totalSeconds ?? 0;
+  }, [showDate, year, month, attendanceDays]);
+
+  const workCalc = totalSec > 0 ? formatSecondsLabel(totalSec) : null;
+  const breakCalc = breakSec > 0 ? formatSecondsLabel(breakSec) : null;
 
   return (
     <div className="ec-attendance-merged">
@@ -122,7 +132,7 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
                 if (item.kind === 'break') {
                   return (
                     <div key={`break-${index}`} className="ec-event-row ec-pair-break">
-                      <span className="ec-pair-break-label">Перерыв: {formatHM(item.breakSeconds)}</span>
+                      <span className="ec-pair-break-label">Перерыв: {formatTimelineSegment(item.breakSeconds)}</span>
                     </div>
                   );
                 }
@@ -146,7 +156,7 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
                       />
                     )}
                     {pairDurationSeconds !== null && pairDurationSeconds > 0 && (
-                      <span className="ec-pair-duration-inline">{formatHM(pairDurationSeconds)}</span>
+                      <span className="ec-pair-duration-inline">{formatTimelineSegment(pairDurationSeconds)}</span>
                     )}
                   </div>
                 );

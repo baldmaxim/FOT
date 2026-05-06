@@ -26,6 +26,11 @@ export interface IDashboardStatsParams {
   departmentId: string;
   period: string;
   month?: string; // YYYY-MM — конкретный месяц (только для period=month)
+  // Per-role «Факт / Урезанные часы» (system_roles.show_actual_hours):
+  // true → hours_worked (фактические по СКУД), false → display_hours_worked
+  // (cap по длине смены через attendance.service). Совпадает с логикой
+  // /api/timesheet, чтобы цифры на дашборде и в табеле не расходились.
+  showActualHours: boolean;
 }
 
 export interface IDashboardRecentEvent {

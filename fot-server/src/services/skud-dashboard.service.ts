@@ -49,17 +49,21 @@ export function invalidateDashboardCache(): void {
   dashboardCache.clear();
 }
 
-// Считает часы по той же логике, что и табель руководителя (displayMode='capped_to_schedule'):
-// учитывает attendance_adjustments.hours_override, замыкает open entry по now() для «сегодня»
-// и ограничивает часы длительностью смены. buildAttendanceEntries работает по одному
-// календарному месяцу, поэтому диапазон режется помесячно.
+// Считает часы по той же логике, что и табель: показ «фактических» (hours_worked)
+// или «урезанных по длине смены» (display_hours_worked) определяется параметром
+// showActualHours — он же приходит из system_roles.show_actual_hours и используется
+// /api/timesheet. Учитываются attendance_adjustments.hours_override, замыкание open
+// entry по now() для «сегодня» и cap длиной смены (внутри attendance.service).
+// buildAttendanceEntries работает по одному календарному месяцу, поэтому диапазон
+// режется помесячно.
 async function loadAttendanceHoursMap(params: {
   employees: IAttendanceEmployee[];
   startDate: string;
   endDate: string;
   todayStr: string;
+  showActualHours: boolean;
 }): Promise<Map<number, Map<string, number>>> {
-  const { employees, startDate, endDate, todayStr } = params;
+  const { employees, startDate, endDate, todayStr, showActualHours } = params;
   const result = new Map<number, Map<string, number>>();
   if (employees.length === 0 || startDate > endDate) return result;
 
@@ -85,6 +89,8 @@ async function loadAttendanceHoursMap(params: {
     if (curM > 12) { curM = 1; curY++; }
   }
 
+  const displayMode: 'actual' | 'capped_to_schedule' = showActualHours ? 'actual' : 'capped_to_schedule';
+
   await Promise.all(months.map(async (m) => {
     const calendarMonth = await loadCalendarMonth(m.year, m.month);
     const { entries } = await buildAttendanceEntries({
@@ -94,10 +100,12 @@ async function loadAttendanceHoursMap(params: {
       dailySchedulesMap,
       calendarMonth,
       todayStr,
-      displayMode: 'capped_to_schedule',
+      displayMode,
     });
     for (const entry of entries) {
-      const hours = entry.display_hours_worked ?? entry.hours_worked ?? 0;
+      const hours = showActualHours
+        ? (entry.hours_worked ?? entry.display_hours_worked ?? 0)
+        : (entry.display_hours_worked ?? entry.hours_worked ?? 0);
       if (!result.has(entry.employee_id)) {
         result.set(entry.employee_id, new Map());
       }
@@ -215,9 +223,12 @@ async function fetchTodayEventPages(
 export async function getDashboardStats(
   params: IDashboardStatsParams,
 ): Promise<IDashboardStatsResult> {
-  const { departmentId, period, month } = params;
+  const { departmentId, period, month, showActualHours } = params;
 
-  const cacheKey = `${departmentId ?? 'all'}|${period ?? 'default'}|${month ?? 'current'}`;
+  // showActualHours зашит в кэш-ключ: ответы для «факт» и «урезанные» — разные,
+  // и без отдельного бакета пользователи с разными ролями могли бы видеть чужие
+  // цифры в окне TTL=60с.
+  const cacheKey = `${departmentId ?? 'all'}|${period ?? 'default'}|${month ?? 'current'}|${showActualHours ? 'actual' : 'capped'}`;
   const cached = dashboardCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.data;
@@ -381,6 +392,7 @@ export async function getDashboardStats(
       startDate: summaryStartDate,
       endDate: summaryEndDate,
       todayStr,
+      showActualHours,
     }),
   ]);
 
@@ -553,9 +565,10 @@ export async function getDashboardStats(
       ? `${String(Math.floor(avgArrivalMin / 60)).padStart(2, '0')}:${String(avgArrivalMin % 60).padStart(2, '0')}`
       : '--:--';
 
-    // Часы берём из карты, посчитанной по логике табеля (capped_to_schedule):
-    // attendance_adjustments.hours_override → skud_daily_summary → пересчёт по объектам
-    // с лимитом длительности смены и замыканием open entry на now() для «сегодня».
+    // Часы берём из карты, посчитанной по логике табеля (showActualHours из роли
+    // определяет actual vs capped_to_schedule): attendance_adjustments.hours_override →
+    // skud_daily_summary → пересчёт по объектам с лимитом длительности смены и
+    // замыканием open entry на now() для «сегодня».
     const hoursArr = weekData
       .map(s => attendanceHoursMap.get(s.employee_id)?.get(s.date) ?? 0)
       .filter(h => h > 0);
