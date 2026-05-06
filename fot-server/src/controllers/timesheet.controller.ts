@@ -1200,7 +1200,10 @@ export const timesheetController = {
 	        return res.status(404).json({ success: false, error: 'Запись не найдена' });
 	      }
 	      if (String(existing.source_type) === OBJECT_ADJUSTMENT_SOURCE_TYPE) {
-	        return res.status(409).json({ success: false, error: 'Для корректировки объекта используйте отдельный endpoint object-entry' });
+	        return res.status(409).json({
+	          success: false,
+	          error: 'Часы за этот день заданы корректировкой по объекту. Откройте детализацию по объектам и измените часы в нужной строке.',
+	        });
 	      }
 	      const scope = await resolveTimesheetScope(req);
 	      if (scope === 'department') {
@@ -1686,6 +1689,12 @@ export const timesheetController = {
       if (!existing) return res.status(404).json({ success: false, error: 'Запись не найдена' });
 
       const sourceType = String(existing.source_type ?? '');
+      if (sourceType === OBJECT_ADJUSTMENT_SOURCE_TYPE) {
+        return res.status(409).json({
+          success: false,
+          error: 'Часы за этот день заданы корректировкой по объекту. Удалите часы в детализации по объектам.',
+        });
+      }
       if (sourceType !== 'manual') {
         return res.status(409).json({ success: false, error: 'Эта корректировка не удаляется' });
       }
