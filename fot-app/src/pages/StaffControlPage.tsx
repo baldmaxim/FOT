@@ -1,8 +1,8 @@
-import { lazy, Suspense, Fragment, useState, useEffect, useCallback, useMemo, useRef, memo, type FC, type MouseEvent as ReactMouseEvent } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo, type FC, type MouseEvent as ReactMouseEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, MoreHorizontal } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
 import { sigurAdminService } from '../services/sigurAdminService';
@@ -28,6 +28,7 @@ import {
   BulkScheduleModal,
   type IBrigadeOption,
 } from '../components/staff/BulkOperationModals';
+import { OverflowMenu, type IOverflowMenuItem } from '../components/staff/OverflowMenu';
 import type { Employee, EmployeeHistoryEvent, EnrichPreview, ContactsEnrichPreview } from '../types';
 import { structureApi } from '../api/structure';
 import type { IFlatDepartmentOption } from '../utils/departmentUtils';
@@ -752,75 +753,6 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, se
   );
 });
 
-
-/* ───────── Overflow menu (•••) ───────── */
-
-interface IOverflowMenuItem {
-  label: string;
-  onClick: () => void;
-  icon?: React.ReactNode;
-  disabled?: boolean;
-  divideBefore?: boolean;
-}
-
-const OverflowMenu: FC<{ items: IOverflowMenuItem[]; ariaLabel?: string }> = ({ items, ariaLabel = 'Дополнительные действия' }) => {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const handleClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', handleClick);
-    document.addEventListener('keydown', handleKey);
-    return () => {
-      document.removeEventListener('mousedown', handleClick);
-      document.removeEventListener('keydown', handleKey);
-    };
-  }, [open]);
-
-  return (
-    <div className="sc-overflow" ref={ref}>
-      <button
-        type="button"
-        className="sc-overflow-trigger"
-        aria-label={ariaLabel}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen(prev => !prev)}
-      >
-        <MoreHorizontal size={16} />
-      </button>
-      {open && (
-        <div className="sc-overflow-menu" role="menu">
-          {items.map((item, idx) => (
-            <Fragment key={`${item.label}-${idx}`}>
-              {item.divideBefore && idx > 0 && <div className="sc-overflow-divider" />}
-              <button
-                type="button"
-                role="menuitem"
-                className="sc-overflow-item"
-                disabled={item.disabled}
-                onClick={() => {
-                  if (item.disabled) return;
-                  setOpen(false);
-                  item.onClick();
-                }}
-              >
-                {item.icon}
-                <span>{item.label}</span>
-              </button>
-            </Fragment>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
 
 /* ───────── Main Page ───────── */
 
