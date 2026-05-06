@@ -22,8 +22,12 @@ import type { SigurDepartmentNode, SigurEmployeeSummary } from '../../../types';
 import '../../../styles/EmployeesPage.css';
 import './SigurEmployeesTab.css';
 import { SigurLiveEmployeeSidebar } from './SigurLiveEmployeeSidebar';
-import { ProgressBar } from '../../ui/ProgressBar';
 import { DepartmentTreeNode } from './DepartmentTreeNode';
+import {
+  DeleteDepartmentsDialog,
+  DepartmentDialog,
+  EmployeeMoveDialog,
+} from './SigurEmployeeDialogs';
 import {
   buildDepartmentNodeMap,
   collectDepartmentIds,
@@ -1383,125 +1387,22 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
       )}
 
       {departmentDialog && (
-        <div className="ep-modal-overlay" onClick={() => setDepartmentDialog(null)}>
-          <div className="ep-modal" onClick={event => event.stopPropagation()}>
-            <div className="ep-modal-header">
-              <div className="ep-modal-heading">
-                <div className="ep-modal-title">
-                  {departmentDialog.mode === 'create' && 'Новый отдел Sigur'}
-                  {departmentDialog.mode === 'rename' && 'Переименовать отдел Sigur'}
-                  {departmentDialog.mode === 'move' && `Переместить ${departmentDialog.departmentIds.length} ${departmentDialog.departmentIds.length === 1 ? 'отдел' : 'отдела'}`}
-                </div>
-              </div>
-            </div>
-            <div className="ep-modal-body">
-              {departmentDialog.mode === 'create' || departmentDialog.mode === 'rename' ? (
-                <label>
-                  Название
-                  <input
-                    className="ep-modal-input"
-                    value={departmentDialog.name}
-                    onChange={event => setDepartmentDialog(prev => (
-                      prev && (prev.mode === 'create' || prev.mode === 'rename')
-                        ? { ...prev, name: event.target.value }
-                        : prev
-                    ))}
-                  />
-                </label>
-              ) : (
-                <label>
-                  Новый родитель
-                  <select
-                    className="ep-modal-select"
-                    value={departmentDialog.parentId == null ? '' : String(departmentDialog.parentId)}
-                    onChange={event => setDepartmentDialog(prev => (
-                      prev && prev.mode === 'move'
-                        ? { ...prev, parentId: event.target.value ? Number(event.target.value) : null }
-                        : prev
-                    ))}
-                  >
-                    <option value="">В корень</option>
-                    {moveTargetOptions.map(option => (
-                      <option key={option.id} value={option.id}>
-                        {'\u00A0\u00A0'.repeat(option.level)}{option.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-            </div>
-            <div className="ep-modal-footer">
-              <button className="ep-modal-btn secondary" onClick={() => setDepartmentDialog(null)}>
-                Отмена
-              </button>
-              <button className="ep-modal-btn primary" onClick={() => void handleSaveDepartment()} disabled={savingDepartment}>
-                {savingDepartment ? 'Сохранение...' : 'Сохранить'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <DepartmentDialog
+          dialog={departmentDialog}
+          setDialog={setDepartmentDialog}
+          saving={savingDepartment}
+          onSave={() => void handleSaveDepartment()}
+          moveTargetOptions={moveTargetOptions}
+        />
       )}
 
       {deleteDepartmentsDialog && (
-        <div className="ep-modal-overlay" onClick={() => !deletingDepartments && setDeleteDepartmentsDialog(null)}>
-          <div className="ep-modal" onClick={event => event.stopPropagation()}>
-            <div className="ep-modal-header">
-              <div className="ep-modal-heading">
-                <div className="ep-modal-title">
-                  {deleteDepartmentsDialog.departmentIds.length === 1
-                    ? `Удалить отдел «${deleteDepartmentsDialog.names[0] ?? ''}»?`
-                    : `Удалить ${deleteDepartmentsDialog.departmentIds.length} отдел(ов)?`}
-                </div>
-              </div>
-            </div>
-            <div className="ep-modal-body">
-              {deleteDepartmentsDialog.names.length > 1 && (
-                <ul className="ep-delete-list">
-                  {deleteDepartmentsDialog.names.map((name, index) => (
-                    <li key={`${name}-${index}`}>{name}</li>
-                  ))}
-                </ul>
-              )}
-              <div className="ep-danger-note">
-                <Trash2 size={18} />
-                <div>
-                  {deleteDepartmentsDialog.hasChildren ? (
-                    <>
-                      <div><b>Будет удалена вся ветка</b> — вместе со вложенными отделами{deleteDepartmentsDialog.totalChildDepts > 0 ? ` (${deleteDepartmentsDialog.totalChildDepts} шт.)` : ''}.</div>
-                      {deleteDepartmentsDialog.totalEmployees > 0 && (
-                        <div style={{ marginTop: 6 }}>
-                          Сотрудники ({deleteDepartmentsDialog.totalEmployees}) будут перенесены в родительский отдел.
-                        </div>
-                      )}
-                    </>
-                  ) : deleteDepartmentsDialog.directEmployees > 0 ? (
-                    <div>
-                      В отделе {deleteDepartmentsDialog.directEmployees} сотрудник(ов). Они будут перенесены в родительский отдел.
-                    </div>
-                  ) : (
-                    <div>Отдел пуст — будет удалён без последствий.</div>
-                  )}
-                </div>
-              </div>
-            </div>
-            <div className="ep-modal-footer">
-              <button
-                className="ep-modal-btn secondary"
-                onClick={() => setDeleteDepartmentsDialog(null)}
-                disabled={deletingDepartments}
-              >
-                Отмена
-              </button>
-              <button
-                className="ep-modal-btn danger"
-                onClick={() => void confirmDeleteDepartments()}
-                disabled={deletingDepartments}
-              >
-                {deletingDepartments ? 'Удаление...' : 'Удалить'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <DeleteDepartmentsDialog
+          dialog={deleteDepartmentsDialog}
+          setDialog={setDeleteDepartmentsDialog}
+          deleting={deletingDepartments}
+          onConfirm={() => void confirmDeleteDepartments()}
+        />
       )}
 
       {employeeDialog && (
@@ -1639,50 +1540,14 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
       )}
 
       {employeeMoveDialog && (
-        <div className="ep-modal-overlay" onClick={() => { if (!savingEmployeeMove) setEmployeeMoveDialog(null); }}>
-          <div className="ep-modal" onClick={event => event.stopPropagation()}>
-            <div className="ep-modal-header">
-              <div className="ep-modal-heading">
-                <div className="ep-modal-title">{`Переместить ${employeeMoveDialog.employeeIds.length} сотрудников`}</div>
-              </div>
-            </div>
-            <div className="ep-modal-body">
-              <label>
-                Целевой отдел
-                <select
-                  className="ep-modal-select"
-                  value={employeeMoveDialog.departmentId}
-                  onChange={event => setEmployeeMoveDialog(prev => prev ? { ...prev, departmentId: event.target.value } : prev)}
-                  disabled={savingEmployeeMove}
-                >
-                  <option value="">—</option>
-                  {departmentOptions.map(option => (
-                    <option key={option.id} value={option.id}>
-                      {'\u00A0\u00A0'.repeat(option.level)}{option.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {savingEmployeeMove && moveProgress && (
-                <ProgressBar
-                  label={moveProgress.failed > 0
-                    ? `Перенос сотрудников (ошибок: ${moveProgress.failed})`
-                    : 'Перенос сотрудников'}
-                  current={moveProgress.processed}
-                  total={moveProgress.total}
-                />
-              )}
-            </div>
-            <div className="ep-modal-footer">
-              <button className="ep-modal-btn secondary" onClick={() => setEmployeeMoveDialog(null)} disabled={savingEmployeeMove}>
-                Отмена
-              </button>
-              <button className="ep-modal-btn primary" onClick={() => void handleSaveEmployeeMove()} disabled={savingEmployeeMove}>
-                {savingEmployeeMove ? 'Перемещение...' : 'Переместить'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <EmployeeMoveDialog
+          dialog={employeeMoveDialog}
+          setDialog={setEmployeeMoveDialog}
+          saving={savingEmployeeMove}
+          onSave={() => void handleSaveEmployeeMove()}
+          departmentOptions={departmentOptions}
+          progress={moveProgress}
+        />
       )}
     </div>
   );
