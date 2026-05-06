@@ -2,11 +2,7 @@ import { Response } from 'express';
 import { AxiosError } from 'axios';
 import { auditService } from '../services/audit.service.js';
 import {
-  batchMoveSigurDepartments,
   createSigurPosition,
-  createSigurDepartment,
-  deleteSigurDepartmentRecursive,
-  deleteSigurDepartment,
   deleteSigurPosition,
   getSigurEmployeeProfile,
   getSigurEmployeeCardStatuses,
@@ -14,9 +10,15 @@ import {
   listSigurDepartmentsTree,
   listSigurEmployees,
   listSigurPositions,
-  updateSigurDepartment,
   updateSigurPosition,
 } from '../services/sigur-live-admin.service.js';
+import {
+  batchMoveSigurDepartments,
+  createSigurDepartment,
+  deleteSigurDepartment,
+  deleteSigurDepartmentRecursive,
+  updateSigurDepartment,
+} from '../services/sigur-live-departments-crud.service.js';
 import {
   batchMoveSigurEmployees,
   batchMoveSigurEmployeesStreaming,
