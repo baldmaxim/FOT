@@ -17,7 +17,13 @@ import type { Employee } from '../../types';
 import './CardReaderPanel.css';
 
 export type CardReaderMode =
-  | { kind: 'lookup'; onEmployeeFound?: (employeeId: number) => void }
+  | {
+      kind: 'lookup';
+      /** Найден сотрудник в ФОТ — переход на /employees/{id}. */
+      onEmployeeFound?: (employeeId: number) => void;
+      /** Найден sigurEmployeeId в Sigur (с FOT-сматчем или без) — открыть его inline (например, в SigurEmployeesTab). Приоритетнее onEmployeeFound, если задан. */
+      onSigurEmployeeFound?: (sigurEmployeeId: number, fullName: string) => void;
+    }
   | { kind: 'assign-to'; presetEmployeeId: number; presetEmployeeName: string; onAssigned: () => void };
 
 interface ICardReaderPanelProps {
@@ -187,18 +193,19 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
           void runAutoAssign(lastCard);
           return;
         }
-        // mode === 'lookup' и сотрудник найден в ФОТ — авто-переход на его профиль (800ms задержка чтобы пользователь увидел карточку).
-        if (
-          mode.kind === 'lookup'
-          && result.found
-          && result.employee?.source === 'fot'
-          && result.employee.id != null
-          && mode.onEmployeeFound
-        ) {
-          const empId = result.employee.id;
+        // mode === 'lookup' и сотрудник найден — авто-открытие через 800ms (чтобы пользователь увидел кого нашли).
+        if (mode.kind === 'lookup' && result.found && result.sigurEmployeeId) {
+          const sigurId = result.sigurEmployeeId;
+          const fullName = result.employee?.full_name || `Сотрудник Sigur #${sigurId}`;
+          const fotId = result.employee?.source === 'fot' ? result.employee.id : null;
           setTimeout(() => {
             if (seq !== lookupSeqRef.current) return;
-            mode.onEmployeeFound!(empId);
+            // Приоритет: inline-открытие в SigurEmployeesTab, иначе переход на /employees/{id}.
+            if (mode.onSigurEmployeeFound) {
+              mode.onSigurEmployeeFound(sigurId, fullName);
+            } else if (fotId != null && mode.onEmployeeFound) {
+              mode.onEmployeeFound(fotId);
+            }
           }, 800);
         }
       })
@@ -397,13 +404,17 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
                   Данные из Sigur (sigurEmployeeId <strong>{lookupResult.sigurEmployeeId}</strong>) — этот сотрудник не сматчен с ФОТ.
                 </div>
               )}
-              {lookupResult.employee.source === 'fot' && lookupResult.employee.id != null && (
+              {(lookupResult.employee.source === 'sigur' || (lookupResult.employee.source === 'fot' && lookupResult.employee.id != null)) && (
                 <button
                   type="button"
                   className="scr-primary-btn"
                   onClick={() => {
-                    if (mode.kind === 'lookup' && lookupResult.employee?.id != null) {
-                      mode.onEmployeeFound?.(lookupResult.employee.id);
+                    if (mode.kind !== 'lookup' || !lookupResult.employee) return;
+                    const sigurId = lookupResult.sigurEmployeeId;
+                    if (mode.onSigurEmployeeFound && sigurId != null) {
+                      mode.onSigurEmployeeFound(sigurId, lookupResult.employee.full_name);
+                    } else if (mode.onEmployeeFound && lookupResult.employee.id != null) {
+                      mode.onEmployeeFound(lookupResult.employee.id);
                     }
                   }}
                 >
@@ -453,7 +464,10 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
                         type="button"
                         className="scr-search-item"
                         onClick={() => {
-                          if (mode.kind === 'lookup' && mode.onEmployeeFound) {
+                          if (mode.kind !== 'lookup') return;
+                          if (mode.onSigurEmployeeFound && emp.sigur_employee_id) {
+                            mode.onSigurEmployeeFound(emp.sigur_employee_id, emp.full_name);
+                          } else if (mode.onEmployeeFound) {
                             mode.onEmployeeFound(emp.id);
                           }
                         }}

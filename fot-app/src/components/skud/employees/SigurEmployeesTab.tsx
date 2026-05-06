@@ -29,6 +29,8 @@ interface ISigurEmployeesTabProps {
   canEdit: boolean;
   setError: (error: string) => void;
   headerActionSlot?: ReactNode;
+  /** Внешний триггер открытия сотрудника по Sigur ID (через считыватель пропусков). key должен меняться, чтобы повторный пинг с тем же id срабатывал. */
+  pendingOpen?: { sigurEmployeeId: number; fullName: string; key: number } | null;
 }
 
 const DEPT_PANEL_WIDTH_KEY = 'sigur-dept-panel-width';
@@ -367,7 +369,7 @@ const DepartmentTreeNode: FC<IDepartmentTreeNodeProps> = ({
   );
 };
 
-export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setError, headerActionSlot }) => {
+export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setError, headerActionSlot, pendingOpen }) => {
   const queryClient = useQueryClient();
   const isMobile = useIsMobile(768);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1061,6 +1063,19 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
       node.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     });
   }, [selectedDeptId, effectiveExpandedIds]);
+
+  // Внешний триггер из считывателя пропусков: открыть сотрудника + sidebar.
+  useEffect(() => {
+    if (!pendingOpen) return;
+    const { sigurEmployeeId, fullName } = pendingOpen;
+    setSelectedDeptId(null);            // снимаем фильтр по отделу — глобальный поиск
+    setDepartmentSearch('');
+    setEmployeeStatusFilter('all');
+    setEmployeeSearch(fullName);        // подгрузит сотрудника по ФИО
+    setSelectedEmployeeId(sigurEmployeeId);
+    setSelectedEmployeeIds(new Set());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingOpen?.key]);
 
   const registerDepartmentNodeRef = (departmentId: number, element: HTMLDivElement | null) => {
     if (element) {

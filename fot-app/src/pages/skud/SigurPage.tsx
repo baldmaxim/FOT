@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useState } from 'react';
 import { ArrowLeft, Scan, Settings } from 'lucide-react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { CardReaderModal } from '../../components/skud/CardReaderModal';
 import '../../styles/SigurSettingsPage.css';
@@ -20,7 +20,6 @@ const resolveView = (value: string | null): SigurView => (
 
 export const SigurPage = () => {
   const { canEditPage, canViewPage } = useAuth();
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const canEdit = canEditPage('/skud-settings');
   const canUseReader = canViewPage('/skud-card-reader');
@@ -28,6 +27,7 @@ export const SigurPage = () => {
   const view = resolveView(searchParams.get('view'));
   const [error, setError] = useState('');
   const [readerOpen, setReaderOpen] = useState(false);
+  const [pendingOpen, setPendingOpen] = useState<{ sigurEmployeeId: number; fullName: string; key: number } | null>(null);
 
   const setView = useCallback((nextView: SigurView) => {
     setSearchParams(prev => {
@@ -94,6 +94,7 @@ export const SigurPage = () => {
               canEdit={canEdit}
               setError={setError}
               headerActionSlot={headerActionSlot}
+              pendingOpen={pendingOpen}
             />
           </Suspense>
         )}
@@ -114,9 +115,11 @@ export const SigurPage = () => {
         <CardReaderModal
           mode={{
             kind: 'lookup',
-            onEmployeeFound: (employeeId) => {
+            onSigurEmployeeFound: (sigurEmployeeId, fullName) => {
               setReaderOpen(false);
-              navigate(`/employees/${employeeId}`);
+              // Если открыты "Настройки" — переключаемся на "Сотрудники", чтобы открыть sidebar в нужном табе.
+              if (view !== 'employees') setView('employees');
+              setPendingOpen({ sigurEmployeeId, fullName, key: Date.now() });
             },
           }}
           onClose={() => setReaderOpen(false)}
