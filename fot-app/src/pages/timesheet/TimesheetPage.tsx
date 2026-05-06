@@ -58,89 +58,23 @@ const DEFAULT_STATS: ITimesheetStats = {
 const EMPTY_SCHEDULES: Record<number, IResolvedSchedule> = {};
 const EMPTY_DAILY_SCHEDULES: Record<number, Record<string, IResolvedSchedule>> = {};
 
-interface IBulkCorrectionTarget {
-  employee: TimesheetEmployee;
-  day: number;
-  workDate: string;
-  entry: TimesheetEntry | null;
-}
-
-interface IBulkObjectCorrectionTarget {
-  employee: TimesheetEmployee;
-  day: number;
-  workDate: string;
-  objectTarget: IObjectModalTarget;
-  objectEntry: TimesheetObjectEntry | null;
-}
-
-interface IObjectModalTarget {
-  object_key: string;
-  object_id: string | null;
-  object_name: string;
-}
-
-type TimesheetViewMode = 'employees' | 'objects' | 'corrections' | 'transfers';
-
-const getTodayDateInputValue = (): string => new Date().toISOString().slice(0, 10);
-const UNASSIGNED_OBJECT_KEY = '__timesheet_unassigned__';
-const UNASSIGNED_OBJECT_NAME = 'Не определён / без объекта';
-
-const MONTH_NAMES_RU = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
-
-const formatFioWithInitials = (fullName?: string | null): string => {
-  if (!fullName) return '';
-  const [last, first, middle] = fullName.trim().split(/\s+/);
-  if (!last) return '';
-  const initials = [first, middle]
-    .filter(Boolean)
-    .map(part => `${part!.charAt(0).toUpperCase()}.`)
-    .join('');
-  return initials ? `${last} ${initials}` : last;
-};
-
-const sanitizeDownloadName = (name: string): string => name.replace(/[\\/:*?"<>|]/g, '_');
-
-const buildObjectBulkMetaKey = (employeeId: number, objectKey: string): string => `${employeeId}:${objectKey}`;
-
-const parseBulkCellKey = (
-  key: string,
-): { kind: 'employee'; employeeId: number; day: number } | { kind: 'object'; employeeId: number; objectKey: string; day: number } | null => {
-  const parts = key.split(':');
-  if (parts[0] === 'employee' && parts.length === 3) {
-    const employeeId = Number.parseInt(parts[1] || '', 10);
-    const day = Number.parseInt(parts[2] || '', 10);
-    if (!Number.isFinite(employeeId) || !Number.isFinite(day)) return null;
-    return { kind: 'employee', employeeId, day };
-  }
-
-  if (parts[0] === 'object' && parts.length === 4) {
-    const employeeId = Number.parseInt(parts[1] || '', 10);
-    const objectKey = decodeURIComponent(parts[2] || '');
-    const day = Number.parseInt(parts[3] || '', 10);
-    if (!Number.isFinite(employeeId) || !Number.isFinite(day) || !objectKey) return null;
-    return { kind: 'object', employeeId, objectKey, day };
-  }
-
-  return null;
-};
-
-const parseMonthParam = (value: string | null): { year: number; month: number } | null => {
-  if (!/^\d{4}-\d{2}$/.test(value || '')) return null;
-
-  const year = Number.parseInt((value as string).slice(0, 4), 10);
-  const month = Number.parseInt((value as string).slice(5, 7), 10);
-  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return null;
-
-  return { year, month };
-};
-
-const toMonthIndex = (year: number, month: number): number => year * 12 + month - 1;
-
-const fromMonthIndex = (index: number): { year: number; month: number } => ({
-  year: Math.floor(index / 12),
-  month: (index % 12) + 1,
-});
+import {
+  buildObjectBulkMetaKey,
+  formatFioWithInitials,
+  fromMonthIndex,
+  getTodayDateInputValue,
+  MONTH_NAMES_RU,
+  parseBulkCellKey,
+  parseMonthParam,
+  sanitizeDownloadName,
+  toMonthIndex,
+  UNASSIGNED_OBJECT_KEY,
+  UNASSIGNED_OBJECT_NAME,
+  type IBulkCorrectionTarget,
+  type IBulkObjectCorrectionTarget,
+  type IObjectModalTarget,
+  type TimesheetViewMode,
+} from './timesheetPage.helpers';
 
 export const TimesheetPage: FC = () => {
   const { hasPermission, profile, canEditPage, canViewPage } = useAuth();
