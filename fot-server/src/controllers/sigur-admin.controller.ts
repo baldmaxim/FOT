@@ -19,14 +19,16 @@ import {
   listSigurEmployees,
   listSigurPositions,
   moveSigurEmployee,
-  replaceSigurEmployeeAccessPoints,
-  replaceSigurEmployeeAccessRules,
   updateSigurDepartment,
   updateSigurEmployee,
-  updateSigurEmployeeCardBinding,
-  updateSigurEmployeeCardExpiration,
   updateSigurPosition,
 } from '../services/sigur-live-admin.service.js';
+import {
+  replaceSigurEmployeeAccessPoints,
+  replaceSigurEmployeeAccessRules,
+  updateSigurEmployeeCardBinding,
+  updateSigurEmployeeCardExpiration,
+} from '../services/sigur-live-cards.service.js';
 import { sigurService } from '../services/sigur.service.js';
 import {
   seedPositionsLogic,
