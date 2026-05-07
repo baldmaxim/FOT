@@ -92,8 +92,6 @@ const SalaryRaiseReviewPage = lazy(() => import('./pages/SalaryRaiseReviewPage')
 
 // Hubs (объединяющие страницы-обёртки с табами)
 const LeaveRequestsHubPage = lazy(() => import('./pages/hubs/LeaveRequestsHubPage').then(m => ({ default: m.LeaveRequestsHubPage })));
-const PayrollHubPage = lazy(() => import('./pages/hubs/PayrollHubPage').then(m => ({ default: m.PayrollHubPage })));
-const SkudHubPage = lazy(() => import('./pages/hubs/SkudHubPage').then(m => ({ default: m.SkudHubPage })));
 const SystemAdminPage = lazy(() => import('./pages/hubs/SystemAdminPage').then(m => ({ default: m.SystemAdminPage })));
 
 // Компонент для умного редиректа на основе должности
@@ -526,28 +524,9 @@ const AppRoutes = () => {
           />
         </Route>
 
-        {/* Hub routes: объединённые страницы с табами */}
-        <Route element={<ProtectedRoute requiredPage="/skud-settings" />}>
-          <Route
-            path="/skud"
-            element={
-              <Layout title="СКУД" theme={theme} onToggleTheme={toggleTheme}>
-                <SkudHubPage />
-              </Layout>
-            }
-          />
-        </Route>
-
-        <Route element={<ProtectedRoute requiredPage={['/admin/schedules', '/admin/schedules/templates']} />}>
-          <Route
-            path="/admin/payroll"
-            element={
-              <Layout title="Графики работы" theme={theme} onToggleTheme={toggleTheme}>
-                <PayrollHubPage />
-              </Layout>
-            }
-          />
-        </Route>
+        {/* Legacy-редиректы: пустые hub-обёртки убраны, ссылки ведут напрямую. */}
+        <Route path="/skud" element={<Navigate to="/skud-settings" replace />} />
+        <Route path="/admin/payroll" element={<Navigate to="/admin/schedules" replace />} />
 
         <Route element={<ProtectedRoute requiredPage={['/admin/users', '/admin/roles', '/admin/audit', '/admin/action-history', '/admin/settings', '/admin/data-api']} />}>
           <Route

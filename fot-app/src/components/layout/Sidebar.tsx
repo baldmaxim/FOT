@@ -54,10 +54,10 @@ const navGroups: INavGroup[] = [
   {
     label: 'Администрирование',
     items: [
-      { id: 'payroll-hub', path: '/admin/payroll', label: 'Графики работы', icon: DollarIcon, requiredPage: ['/admin/schedules', '/admin/schedules/templates'] },
+      { id: 'payroll-hub', path: '/admin/schedules', label: 'Графики работы', icon: DollarIcon, requiredPage: ['/admin/schedules', '/admin/schedules/templates'] },
       { id: 'patent-receipts', path: '/admin/patent-receipts', label: 'Чеки за патент', icon: FileTextIcon, requiredPage: '/admin/patent-receipts' },
       { id: 'timesheet-transfers', path: '/admin/timesheet-transfers', label: 'Переводы и исключения', icon: CalendarIcon, requiredPage: '/admin/timesheet-transfers' },
-      { id: 'skud-hub', path: '/skud', label: 'СКУД', icon: DatabaseIcon, requiredPage: '/skud-settings' },
+      { id: 'skud-hub', path: '/skud-settings', label: 'СКУД', icon: DatabaseIcon, requiredPage: '/skud-settings' },
       { id: 'sigur', path: '/sigur', label: 'SIGUR', icon: UsersIcon, requiredPage: '/skud-settings' },
       { id: 'card-reader', path: '/skud-card-reader', label: 'Считыватель пропусков', icon: KeyIcon, requiredPage: '/skud-card-reader' },
       { id: 'system-hub', path: '/admin/system', label: 'Система', icon: ShieldIcon, requiredPage: ['/admin/users', '/admin/roles', '/admin/audit', '/admin/action-history', '/admin/settings', '/admin/data-api'] },
