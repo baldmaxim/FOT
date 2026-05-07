@@ -26,6 +26,10 @@ const makeSchedule = (): IResolvedSchedule => ({
   expected_saturdays_per_month: 0,
   full_day_threshold_minutes: null,
   weekend_full_day_threshold_minutes: null,
+  cycle_length: null,
+  cycle_days: null,
+  anchor_date: null,
+  assignment_anchor_date: null,
   source: 'default',
 });
 

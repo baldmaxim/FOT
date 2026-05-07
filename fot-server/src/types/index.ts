@@ -435,12 +435,23 @@ export interface Payment {
 }
 
 export type ScheduleType = 'office' | 'remote' | 'hybrid' | 'shift';
-export type PatternType = '5+0' | '5+2' | '6+0' | 'custom';
+export type PatternType = '5+0' | '5+2' | '6+0' | 'custom' | 'cycle';
 
 export interface IDayOverride {
   work_start: string;
   work_end: string;
   work_hours: number;
+}
+
+/**
+ * Слот циклического графика (один день цикла).
+ * Для нерабочего дня (work_hours=0) поля времени могут быть пропущены.
+ */
+export interface ICycleDay {
+  work_hours: number;
+  work_start?: string;
+  work_end?: string;
+  lunch_minutes?: number;
 }
 
 export interface WorkSchedule {
@@ -461,6 +472,9 @@ export interface WorkSchedule {
   expected_saturdays_per_month: number;
   full_day_threshold_minutes: number | null;
   weekend_full_day_threshold_minutes: number | null;
+  cycle_length: number | null;
+  cycle_days: ICycleDay[] | null;
+  anchor_date: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -471,6 +485,7 @@ export interface IEmployeeScheduleAssignment {
   schedule_id: string;
   effective_from: string;
   effective_to: string | null;
+  anchor_date: string | null;
   created_by: number | null;
   created_at: string;
   updated_at: string;
@@ -482,6 +497,7 @@ export interface IObjectScheduleAssignment {
   schedule_id: string;
   effective_from: string;
   effective_to: string | null;
+  anchor_date: string | null;
   created_by: number | null;
   created_at: string;
   updated_at: string;
@@ -503,6 +519,11 @@ export interface IResolvedSchedule {
   expected_saturdays_per_month: number;
   full_day_threshold_minutes: number | null;
   weekend_full_day_threshold_minutes: number | null;
+  cycle_length: number | null;
+  cycle_days: ICycleDay[] | null;
+  anchor_date: string | null;
+  /** anchor_date конкретного назначения (если задан) перебивает anchor_date паттерна */
+  assignment_anchor_date: string | null;
   source: 'object' | 'employee' | 'default';
 }
 

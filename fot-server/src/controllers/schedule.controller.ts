@@ -9,7 +9,7 @@ import { canAccessEmployeeInScope, resolveRequestDataScope, resolveScopedDepartm
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const scheduleTypeEnum = z.enum(['office', 'remote', 'hybrid', 'shift']);
-const patternTypeEnum = z.enum(['5+0', '5+2', '6+0', 'custom']);
+const patternTypeEnum = z.enum(['5+0', '5+2', '6+0', 'custom', 'cycle']);
 const weekDayArray = z.array(z.number().int().min(1).max(7)).min(1).max(7);
 
 // work_hours принимается опционально и игнорируется — бэк сам пересчитывает из shift − lunch.
@@ -19,13 +19,23 @@ const dayOverrideSchema = z.object({
   work_hours: z.number().min(0).max(24).optional(),
 });
 
+const cycleDaySchema = z.object({
+  work_hours: z.number().min(0).max(24),
+  work_start: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
+  work_end: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
+  lunch_minutes: z.number().int().min(0).max(240).optional(),
+});
+
+const isoDateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
 const baseScheduleSchema = z.object({
   name: z.string().min(1).max(100),
   schedule_type: scheduleTypeEnum,
   work_start: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
   work_end: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
   work_hours: z.number().min(0).max(24).optional(),
-  work_days: weekDayArray,
+  // work_days обязателен для не-cycle графиков; для cycle игнорируется (БД дефолт {1,2,3,4,5}).
+  work_days: weekDayArray.optional(),
   office_days: weekDayArray.nullable().optional(),
   late_threshold_minutes: z.number().int().min(0).max(120).optional(),
   day_overrides: z.record(z.string().regex(/^[1-7]$/), dayOverrideSchema).nullable().optional(),
@@ -35,17 +45,54 @@ const baseScheduleSchema = z.object({
   expected_saturdays_per_month: z.number().int().min(0).max(5).optional(),
   full_day_threshold_minutes: z.number().int().min(0).max(1440).nullable().optional(),
   weekend_full_day_threshold_minutes: z.number().int().min(0).max(1440).nullable().optional(),
+  cycle_length: z.number().int().min(2).max(28).nullable().optional(),
+  cycle_days: z.array(cycleDaySchema).max(28).nullable().optional(),
+  anchor_date: isoDateString.nullable().optional(),
 });
 
-const createScheduleSchema = baseScheduleSchema.refine((data) => {
-  if (!data.day_overrides) return true;
-  return Object.keys(data.day_overrides).every(k => data.work_days.includes(Number(k)));
-}, { message: 'day_overrides keys must be in work_days' });
+const validateScheduleConsistency = (
+  data: z.infer<typeof baseScheduleSchema>,
+  ctx: z.RefinementCtx,
+): void => {
+  if (data.day_overrides && data.work_days) {
+    const missing = Object.keys(data.day_overrides).find(
+      (k) => !data.work_days!.includes(Number(k)),
+    );
+    if (missing) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'day_overrides keys must be in work_days', path: ['day_overrides'] });
+    }
+  }
+
+  if (data.pattern_type === 'cycle') {
+    if (data.cycle_length == null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'cycle_length обязателен для cycle', path: ['cycle_length'] });
+    }
+    if (!Array.isArray(data.cycle_days)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'cycle_days обязателен для cycle', path: ['cycle_days'] });
+    } else if (data.cycle_length != null && data.cycle_days.length !== data.cycle_length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `cycle_days длина (${data.cycle_days.length}) не совпадает с cycle_length (${data.cycle_length})`,
+        path: ['cycle_days'],
+      });
+    }
+    if (!data.anchor_date) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'anchor_date обязателен для cycle', path: ['anchor_date'] });
+    }
+  } else {
+    if (!data.work_days || data.work_days.length === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'work_days обязателен для не-cycle графика', path: ['work_days'] });
+    }
+  }
+};
+
+const createScheduleSchema = baseScheduleSchema.superRefine(validateScheduleConsistency);
 
 const assignmentBodySchema = z.object({
   schedule_id: z.string().uuid(),
-  effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  effective_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  effective_from: isoDateString,
+  effective_to: isoDateString.nullable().optional(),
+  anchor_date: isoDateString.nullable().optional(),
 });
 const employeeIdParamSchema = z.coerce.number().int().positive();
 const objectIdParamSchema = z.string().uuid();
@@ -181,6 +228,7 @@ const assignEmployeeSchedule = async (
   createdBy: number | null,
   effectiveTo?: string | null,
   preloadedRows?: EmployeeScheduleRow[],
+  anchorDate?: string | null,
 ): Promise<unknown> => {
   const rows = preloadedRows ?? await loadEmployeeScheduleRows(employeeId);
   const nowIso = new Date().toISOString();
@@ -189,13 +237,15 @@ const assignEmployeeSchedule = async (
 
   if (activeAtDate?.effective_from === effectiveFrom) {
     const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : activeAtDate.effective_to ?? null);
+    const update: Record<string, unknown> = {
+      schedule_id: scheduleId,
+      effective_to: nextEffectiveTo,
+      updated_at: nowIso,
+    };
+    if (anchorDate !== undefined) update.anchor_date = anchorDate;
     const { data, error } = await supabase
       .from('employee_schedule_assignments')
-      .update({
-        schedule_id: scheduleId,
-        effective_to: nextEffectiveTo,
-        updated_at: nowIso,
-      })
+      .update(update)
       .eq('id', activeAtDate.id)
       .select('*, work_schedules(*)')
       .single();
@@ -213,15 +263,17 @@ const assignEmployeeSchedule = async (
   }
 
   const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : null);
+  const insert: Record<string, unknown> = {
+    employee_id: employeeId,
+    schedule_id: scheduleId,
+    effective_from: effectiveFrom,
+    effective_to: nextEffectiveTo,
+    created_by: createdBy,
+  };
+  if (anchorDate !== undefined) insert.anchor_date = anchorDate;
   const { data, error } = await supabase
     .from('employee_schedule_assignments')
-    .insert({
-      employee_id: employeeId,
-      schedule_id: scheduleId,
-      effective_from: effectiveFrom,
-      effective_to: nextEffectiveTo,
-      created_by: createdBy,
-    })
+    .insert(insert)
     .select('*, work_schedules(*)')
     .single();
 
@@ -267,6 +319,7 @@ const assignObjectSchedule = async (
   effectiveFrom: string,
   createdBy: number | null,
   effectiveTo?: string | null,
+  anchorDate?: string | null,
 ): Promise<unknown> => {
   const rows = await loadObjectScheduleRows(objectId);
   const nowIso = new Date().toISOString();
@@ -275,13 +328,15 @@ const assignObjectSchedule = async (
 
   if (activeAtDate?.effective_from === effectiveFrom) {
     const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : activeAtDate.effective_to ?? null);
+    const update: Record<string, unknown> = {
+      schedule_id: scheduleId,
+      effective_to: nextEffectiveTo,
+      updated_at: nowIso,
+    };
+    if (anchorDate !== undefined) update.anchor_date = anchorDate;
     const { data, error } = await supabase
       .from('object_schedule_assignments')
-      .update({
-        schedule_id: scheduleId,
-        effective_to: nextEffectiveTo,
-        updated_at: nowIso,
-      })
+      .update(update)
       .eq('id', activeAtDate.id)
       .select('*, work_schedules(*)')
       .single();
@@ -299,15 +354,17 @@ const assignObjectSchedule = async (
   }
 
   const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : null);
+  const insert: Record<string, unknown> = {
+    object_id: objectId,
+    schedule_id: scheduleId,
+    effective_from: effectiveFrom,
+    effective_to: nextEffectiveTo,
+    created_by: createdBy,
+  };
+  if (anchorDate !== undefined) insert.anchor_date = anchorDate;
   const { data, error } = await supabase
     .from('object_schedule_assignments')
-    .insert({
-      object_id: objectId,
-      schedule_id: scheduleId,
-      effective_from: effectiveFrom,
-      effective_to: nextEffectiveTo,
-      created_by: createdBy,
-    })
+    .insert(insert)
     .select('*, work_schedules(*)')
     .single();
 
@@ -603,6 +660,8 @@ export const scheduleController = {
         parsed.data.effective_from,
         req.user.employee_id,
         parsed.data.effective_to,
+        undefined,
+        parsed.data.anchor_date,
       );
 
       res.json({ success: true, data });
@@ -629,6 +688,7 @@ export const scheduleController = {
         parsed.data.effective_from,
         req.user.employee_id,
         parsed.data.effective_to,
+        parsed.data.anchor_date,
       );
 
       res.json({ success: true, data });

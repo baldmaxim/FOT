@@ -81,7 +81,7 @@ export const scheduleService = {
   /** Назначить персональный график сотруднику */
   async assignEmployee(
     employeeId: number,
-    data: { schedule_id: string; effective_from: string; effective_to?: string | null },
+    data: { schedule_id: string; effective_from: string; effective_to?: string | null; anchor_date?: string | null },
   ): Promise<IEmployeeScheduleAssignment> {
     const res = await apiClient.put<ApiResponse<IEmployeeScheduleAssignment>>(`/schedules/employee/${employeeId}`, data);
     if (!res.data) throw new Error(res.error || 'Ошибка назначения графика сотруднику');
@@ -91,7 +91,7 @@ export const scheduleService = {
   /** Назначить график объекту */
   async assignObject(
     objectId: string,
-    data: { schedule_id: string; effective_from: string; effective_to?: string | null },
+    data: { schedule_id: string; effective_from: string; effective_to?: string | null; anchor_date?: string | null },
   ): Promise<IObjectScheduleAssignment> {
     const res = await apiClient.put<ApiResponse<IObjectScheduleAssignment>>(`/schedules/object/${objectId}`, data);
     if (!res.data) throw new Error(res.error || 'Ошибка назначения графика объекту');

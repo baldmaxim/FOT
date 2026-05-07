@@ -5,6 +5,7 @@ import { scheduleService } from '../../services/scheduleService';
 import { travelTimeService } from '../../services/travelTimeService';
 import type {
   IDayOverride,
+  ICycleDay,
   IWorkSchedule,
   IObjectScheduleAssignment,
   ScheduleType,
@@ -25,6 +26,14 @@ const ProductionCalendarPage = lazy(() => import('../super-admin/ProductionCalen
 
 type TabKey = 'templates' | 'object-assignments' | 'production-calendar';
 
+/** UI-представление дня цикла. Все поля — строки (HH:MM/число) для удобства редактирования. */
+interface ICycleDayDraft {
+  is_work: boolean;
+  work_start: string;
+  work_end: string;
+  lunch_minutes: number;
+}
+
 interface IFormState {
   id: string | null;
   name: string;
@@ -40,7 +49,28 @@ interface IFormState {
   late_threshold_minutes: number;
   full_day_threshold: string;          // "HH:MM", "" = авто (чистое время)
   weekend_full_day_threshold: string;  // "HH:MM", "" = авто (= full_day_threshold)
+  cycle_length: number;                // длина цикла (актуально при pattern_type='cycle')
+  cycle_days: ICycleDayDraft[];        // массив длиной cycle_length
+  anchor_date: string;                 // YYYY-MM-DD, актуально при pattern_type='cycle'
 }
+
+const makeDefaultCycleDay = (isWork: boolean): ICycleDayDraft => ({
+  is_work: isWork,
+  work_start: '08:00',
+  work_end: '20:00',
+  lunch_minutes: 60,
+});
+
+const buildCycleDaysOfLength = (
+  length: number,
+  template: ICycleDayDraft[] = [],
+): ICycleDayDraft[] => {
+  const result: ICycleDayDraft[] = [];
+  for (let i = 0; i < length; i++) {
+    result.push(template[i] ?? makeDefaultCycleDay(i < Math.ceil(length / 2)));
+  }
+  return result;
+};
 
 const EMPTY_FORM: IFormState = {
   id: null,
@@ -57,12 +87,17 @@ const EMPTY_FORM: IFormState = {
   late_threshold_minutes: 0,
   full_day_threshold: '',
   weekend_full_day_threshold: '',
+  cycle_length: 4,
+  cycle_days: buildCycleDaysOfLength(4),
+  anchor_date: '',
 };
 
 const createEmptyForm = (): IFormState => ({
   ...EMPTY_FORM,
   work_days: [...EMPTY_FORM.work_days],
   day_overrides: {},
+  cycle_days: buildCycleDaysOfLength(EMPTY_FORM.cycle_length),
+  anchor_date: getLocalISODate(),
 });
 
 const formatHours = (decimalHours: number): string => {
@@ -126,6 +161,8 @@ const PATTERN_PRESETS: Record<PatternType, Partial<IFormState>> = {
   '5+2': { work_days: [1, 2, 3, 4, 5], expected_saturdays_per_month: 2 },
   '6+0': { work_days: [1, 2, 3, 4, 5, 6], expected_saturdays_per_month: 0 },
   'custom': {},
+  // Циклические графики: смены (вахта) обычно в праздники работают.
+  'cycle': { schedule_type: 'shift', respects_holidays: false, expected_saturdays_per_month: 0 },
 };
 const EMPTY_TEMPLATES: IWorkSchedule[] = [];
 const EMPTY_OBJECT_ASSIGNMENTS: IObjectScheduleAssignment[] = [];
@@ -210,6 +247,13 @@ export const SchedulesPage: FC = () => {
   }, [shiftHours, form.lunch_minutes]);
 
   const handleStartEdit = (tpl: IWorkSchedule) => {
+    const cycleLength = tpl.cycle_length ?? EMPTY_FORM.cycle_length;
+    const cycleDaysFromTpl: ICycleDayDraft[] = (tpl.cycle_days ?? []).map((slot) => ({
+      is_work: slot.work_hours > 0,
+      work_start: (slot.work_start ?? '08:00').slice(0, 5),
+      work_end: (slot.work_end ?? '20:00').slice(0, 5),
+      lunch_minutes: slot.lunch_minutes ?? 0,
+    }));
     setForm({
       id: tpl.id,
       name: tpl.name,
@@ -225,6 +269,9 @@ export const SchedulesPage: FC = () => {
       late_threshold_minutes: tpl.late_threshold_minutes,
       full_day_threshold: minutesToHM(tpl.full_day_threshold_minutes),
       weekend_full_day_threshold: minutesToHM(tpl.weekend_full_day_threshold_minutes),
+      cycle_length: cycleLength,
+      cycle_days: buildCycleDaysOfLength(cycleLength, cycleDaysFromTpl),
+      anchor_date: tpl.anchor_date ?? getLocalISODate(),
     });
     setShowForm(true);
   };
@@ -241,8 +288,39 @@ export const SchedulesPage: FC = () => {
       const nextDayOverrides = Object.fromEntries(
         Object.entries(f.day_overrides).filter(([day]) => nextWorkDays.includes(Number(day))),
       ) as Partial<Record<number, Pick<IDayOverride, 'work_start' | 'work_end'>>>;
-      return { ...f, pattern_type: pattern, ...preset, work_days: nextWorkDays, day_overrides: nextDayOverrides };
+      const next: IFormState = {
+        ...f,
+        ...preset,
+        pattern_type: pattern,
+        work_days: nextWorkDays,
+        day_overrides: nextDayOverrides,
+      };
+      // При первом переключении на cycle — гарантировать наличие массива дней и якоря.
+      if (pattern === 'cycle') {
+        if (!next.anchor_date) next.anchor_date = getLocalISODate();
+        next.cycle_days = buildCycleDaysOfLength(next.cycle_length, f.cycle_days);
+      }
+      return next;
     });
+  };
+
+  const handleCycleLengthChange = (rawLength: number) => {
+    const length = Math.max(2, Math.min(28, Math.floor(rawLength) || 2));
+    setForm(f => ({
+      ...f,
+      cycle_length: length,
+      cycle_days: buildCycleDaysOfLength(length, f.cycle_days),
+    }));
+  };
+
+  const updateCycleDay = (
+    index: number,
+    patch: Partial<ICycleDayDraft>,
+  ): void => {
+    setForm(f => ({
+      ...f,
+      cycle_days: f.cycle_days.map((day, idx) => (idx === index ? { ...day, ...patch } : day)),
+    }));
   };
 
   const toggleWorkDay = (day: number) => {
@@ -288,11 +366,7 @@ export const SchedulesPage: FC = () => {
   const handleSave = async () => {
     setError('');
     try {
-      const computedHours = computeShiftHours(form.work_start, form.work_end);
-      if (computedHours <= 0) {
-        setError('Некорректное время начала/конца смены');
-        return;
-      }
+      const isCycle = form.pattern_type === 'cycle';
       const fullDayMin = form.full_day_threshold ? parseHMToMinutes(form.full_day_threshold) : null;
       if (form.full_day_threshold && fullDayMin === null) {
         setError('Порог полного дня: формат ЧЧ:ММ');
@@ -305,44 +379,117 @@ export const SchedulesPage: FC = () => {
         setError('Порог полного дня (выходной): формат ЧЧ:ММ');
         return;
       }
-      // work_hours хранится как нетто: длительность смены минус обед
-      const lunchHours = (form.lunch_minutes || 0) / 60;
-      const netHours = Math.max(0, computedHours - lunchHours);
-      const dayOverridesPayload: Record<string, IDayOverride> = {};
-      for (const day of form.work_days) {
-        const override = form.day_overrides[day];
-        if (!override) continue;
-        const overrideHours = computeShiftHours(override.work_start, override.work_end);
-        if (overrideHours <= 0) {
-          setError(`Некорректное время для дня ${WEEKDAY_LABELS[day - 1]}`);
+
+      let cyclePayload: { cycle_length: number; cycle_days: ICycleDay[]; anchor_date: string } | null = null;
+      let workStartForPayload = form.work_start;
+      let workEndForPayload = form.work_end;
+      let workDaysForPayload: number[] = form.work_days;
+      let dayOverridesPayload: Record<string, IDayOverride> | null = null;
+      let netHours = 0;
+
+      if (isCycle) {
+        if (!form.anchor_date) {
+          setError('Укажите дату-якорь цикла');
           return;
         }
-        if (override.work_start === form.work_start && override.work_end === form.work_end) {
-          continue;
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(form.anchor_date)) {
+          setError('Дата-якорь: формат YYYY-MM-DD');
+          return;
         }
-        const overrideNetHours = Math.max(0, overrideHours - lunchHours);
-        dayOverridesPayload[String(day)] = {
-          work_start: override.work_start,
-          work_end: override.work_end,
-          work_hours: Number(overrideNetHours.toFixed(4)),
+        if (form.cycle_length < 2 || form.cycle_length > 28) {
+          setError('Длина цикла должна быть от 2 до 28 дней');
+          return;
+        }
+        if (form.cycle_days.length !== form.cycle_length) {
+          setError('Дни цикла не соответствуют его длине');
+          return;
+        }
+        const cycleDaysOut: ICycleDay[] = [];
+        for (let i = 0; i < form.cycle_days.length; i++) {
+          const draft = form.cycle_days[i];
+          if (!draft.is_work) {
+            cycleDaysOut.push({ work_hours: 0 });
+            continue;
+          }
+          const shiftH = computeShiftHours(draft.work_start, draft.work_end);
+          if (shiftH <= 0) {
+            setError(`Некорректное время в дне цикла № ${i + 1}`);
+            return;
+          }
+          const lunchH = (draft.lunch_minutes || 0) / 60;
+          const netH = Math.max(0, shiftH - lunchH);
+          cycleDaysOut.push({
+            work_hours: Number(netH.toFixed(4)),
+            work_start: draft.work_start,
+            work_end: draft.work_end,
+            lunch_minutes: draft.lunch_minutes,
+          });
+        }
+        cyclePayload = {
+          cycle_length: form.cycle_length,
+          cycle_days: cycleDaysOut,
+          anchor_date: form.anchor_date,
         };
+        // Глобальные work_start/work_end/work_days для cycle не используются резолвером,
+        // но колонки NOT NULL — кладём первый рабочий слот цикла или дефолт.
+        const firstWorkSlot = cycleDaysOut.find(s => s.work_hours > 0);
+        if (firstWorkSlot) {
+          workStartForPayload = firstWorkSlot.work_start ?? form.work_start;
+          workEndForPayload = firstWorkSlot.work_end ?? form.work_end;
+          netHours = firstWorkSlot.work_hours;
+        } else {
+          netHours = 0;
+        }
+        workDaysForPayload = [1, 2, 3, 4, 5];
+      } else {
+        const computedHours = computeShiftHours(form.work_start, form.work_end);
+        if (computedHours <= 0) {
+          setError('Некорректное время начала/конца смены');
+          return;
+        }
+        const lunchHours = (form.lunch_minutes || 0) / 60;
+        netHours = Math.max(0, computedHours - lunchHours);
+        const overridesAcc: Record<string, IDayOverride> = {};
+        for (const day of form.work_days) {
+          const override = form.day_overrides[day];
+          if (!override) continue;
+          const overrideHours = computeShiftHours(override.work_start, override.work_end);
+          if (overrideHours <= 0) {
+            setError(`Некорректное время для дня ${WEEKDAY_LABELS[day - 1]}`);
+            return;
+          }
+          if (override.work_start === form.work_start && override.work_end === form.work_end) {
+            continue;
+          }
+          const overrideNetHours = Math.max(0, overrideHours - lunchHours);
+          overridesAcc[String(day)] = {
+            work_start: override.work_start,
+            work_end: override.work_end,
+            work_hours: Number(overrideNetHours.toFixed(4)),
+          };
+        }
+        if (Object.keys(overridesAcc).length > 0) dayOverridesPayload = overridesAcc;
       }
+
       const payload = {
         name: form.name.trim(),
         schedule_type: form.schedule_type,
         pattern_type: form.pattern_type,
-        work_start: form.work_start,
-        work_end: form.work_end,
+        work_start: workStartForPayload,
+        work_end: workEndForPayload,
         work_hours: Number(netHours.toFixed(4)),
-        work_days: form.work_days,
+        work_days: workDaysForPayload,
         office_days: null,
-        day_overrides: Object.keys(dayOverridesPayload).length > 0 ? dayOverridesPayload : null,
+        day_overrides: dayOverridesPayload,
         lunch_minutes: form.lunch_minutes,
         respects_holidays: form.respects_holidays,
         expected_saturdays_per_month: form.expected_saturdays_per_month,
         late_threshold_minutes: form.late_threshold_minutes,
         full_day_threshold_minutes: fullDayMin,
         weekend_full_day_threshold_minutes: weekendFullDayMin,
+        cycle_length: cyclePayload?.cycle_length ?? null,
+        cycle_days: cyclePayload?.cycle_days ?? null,
+        anchor_date: cyclePayload?.anchor_date ?? null,
       };
       if (!payload.name) {
         setError('Название обязательно');
@@ -475,49 +622,53 @@ export const SchedulesPage: FC = () => {
                   ))}
                 </select>
               </label>
-              <label>
-                Начало смены
-                <input
-                  type="time"
-                  value={form.work_start}
-                  onChange={e => setForm({ ...form, work_start: e.target.value })}
-                />
-              </label>
-              <label>
-                Конец смены
-                <input
-                  type="time"
-                  value={form.work_end}
-                  onChange={e => setForm({ ...form, work_end: e.target.value })}
-                />
-              </label>
-              <label>
-                Длина смены (с обедом)
-                <input type="text" value={shiftLabel} readOnly />
-              </label>
-              <label>
-                Обед (минут)
-                <input
-                  type="number"
-                  min={0}
-                  max={240}
-                  value={form.lunch_minutes}
-                  onChange={e => setForm({ ...form, lunch_minutes: parseInt(e.target.value) || 0 })}
-                />
-              </label>
-              <label>
-                Ожидаемые рабочие субботы в месяц
-                <input
-                  type="number"
-                  min={0}
-                  max={5}
-                  value={form.expected_saturdays_per_month}
-                  onChange={e =>
-                    setForm({ ...form, expected_saturdays_per_month: parseInt(e.target.value) || 0 })
-                  }
-                  disabled={form.pattern_type !== '5+2' && form.pattern_type !== 'custom'}
-                />
-              </label>
+              {form.pattern_type !== 'cycle' && (
+                <>
+                  <label>
+                    Начало смены
+                    <input
+                      type="time"
+                      value={form.work_start}
+                      onChange={e => setForm({ ...form, work_start: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Конец смены
+                    <input
+                      type="time"
+                      value={form.work_end}
+                      onChange={e => setForm({ ...form, work_end: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Длина смены (с обедом)
+                    <input type="text" value={shiftLabel} readOnly />
+                  </label>
+                  <label>
+                    Обед (минут)
+                    <input
+                      type="number"
+                      min={0}
+                      max={240}
+                      value={form.lunch_minutes}
+                      onChange={e => setForm({ ...form, lunch_minutes: parseInt(e.target.value) || 0 })}
+                    />
+                  </label>
+                  <label>
+                    Ожидаемые рабочие субботы в месяц
+                    <input
+                      type="number"
+                      min={0}
+                      max={5}
+                      value={form.expected_saturdays_per_month}
+                      onChange={e =>
+                        setForm({ ...form, expected_saturdays_per_month: parseInt(e.target.value) || 0 })
+                      }
+                      disabled={form.pattern_type !== '5+2' && form.pattern_type !== 'custom'}
+                    />
+                  </label>
+                </>
+              )}
               <label>
                 Порог опоздания (минут)
                 <input
@@ -548,27 +699,161 @@ export const SchedulesPage: FC = () => {
                   placeholder="авто"
                 />
               </label>
-              <div style={{ gridColumn: '1 / -1' }}>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
-                  Рабочие дни
+              {form.pattern_type === 'cycle' && (
+                <div style={{ gridColumn: '1 / -1', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div className={styles.sectionTitle}>Циклический график</div>
+                  <div className={styles.sectionHint}>
+                    Цикл повторяется бесконечно от даты-якоря. Для каждого дня цикла укажите,
+                    рабочий он или выходной, и время смены. Подходит для графиков «2 через 2», «сутки/трое», ночных смен.
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '160px 200px', columnGap: 16, rowGap: 8, alignItems: 'center' }}>
+                    <label style={{ margin: 0 }}>
+                      Длина цикла (дней)
+                      <input
+                        type="number"
+                        min={2}
+                        max={28}
+                        value={form.cycle_length}
+                        onChange={e => handleCycleLengthChange(parseInt(e.target.value) || 0)}
+                      />
+                    </label>
+                    <label style={{ margin: 0 }} title="Дата, с которой начинается отсчёт первого дня цикла">
+                      Дата-якорь
+                      <input
+                        type="date"
+                        value={form.anchor_date}
+                        onChange={e => setForm({ ...form, anchor_date: e.target.value })}
+                      />
+                    </label>
+                  </div>
+                  <div className={styles.dayOverridesGrid}>
+                    {form.cycle_days.map((slot, index) => {
+                      const slotShiftHours = slot.is_work
+                        ? computeShiftHours(slot.work_start, slot.work_end)
+                        : 0;
+                      const slotNetHours = slot.is_work
+                        ? formatMinutes(slotShiftHours * 60 - (slot.lunch_minutes || 0))
+                        : '0:00';
+                      return (
+                        <div key={index} className={styles.dayOverrideCard}>
+                          <div className={styles.dayOverrideHeader}>
+                            <div>
+                              <div className={styles.dayOverrideTitle}>День {index + 1}</div>
+                              <div className={styles.dayOverrideMeta}>
+                                {slot.is_work ? `Рабочий ${slot.work_start}-${slot.work_end}` : 'Выходной'}
+                              </div>
+                            </div>
+                            <label className={styles.dayOverrideToggle}>
+                              <input
+                                type="checkbox"
+                                checked={slot.is_work}
+                                onChange={e => updateCycleDay(index, { is_work: e.target.checked })}
+                              />
+                              Рабочий
+                            </label>
+                          </div>
+                          {slot.is_work ? (
+                            <div className={styles.dayOverrideFields}>
+                              <label>
+                                Начало
+                                <input
+                                  type="time"
+                                  value={slot.work_start}
+                                  onChange={e => updateCycleDay(index, { work_start: e.target.value })}
+                                />
+                              </label>
+                              <label>
+                                Конец
+                                <input
+                                  type="time"
+                                  value={slot.work_end}
+                                  onChange={e => updateCycleDay(index, { work_end: e.target.value })}
+                                />
+                              </label>
+                              <label>
+                                Обед (мин)
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={240}
+                                  value={slot.lunch_minutes}
+                                  onChange={e => updateCycleDay(index, { lunch_minutes: parseInt(e.target.value) || 0 })}
+                                />
+                              </label>
+                              <label>
+                                Длина смены
+                                <input type="text" value={formatHours(slotShiftHours)} readOnly />
+                              </label>
+                            </div>
+                          ) : null}
+                          <div className={styles.dayOverrideSummary}>
+                            Чистое рабочее время: <strong>{slotNetHours}</strong>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {form.anchor_date && form.cycle_days.length === form.cycle_length && (
+                    <div className={styles.sectionHint}>
+                      Превью на 14 дней от {form.anchor_date}:{' '}
+                      {(() => {
+                        const anchor = new Date(`${form.anchor_date}T00:00:00`);
+                        if (isNaN(anchor.getTime())) return '—';
+                        return Array.from({ length: 14 }).map((_, dayShift) => {
+                          const d = new Date(anchor.getTime());
+                          d.setDate(d.getDate() + dayShift);
+                          const idx = ((dayShift % form.cycle_length) + form.cycle_length) % form.cycle_length;
+                          const slot = form.cycle_days[idx];
+                          const dd = String(d.getDate()).padStart(2, '0');
+                          const mm = String(d.getMonth() + 1).padStart(2, '0');
+                          return (
+                            <span
+                              key={dayShift}
+                              style={{
+                                display: 'inline-block',
+                                padding: '2px 6px',
+                                marginRight: 4,
+                                marginBottom: 4,
+                                borderRadius: 4,
+                                background: slot?.is_work ? 'var(--primary-light)' : 'var(--surface-hover)',
+                                color: 'var(--text-primary)',
+                                fontSize: 12,
+                              }}
+                              title={slot?.is_work ? `Рабочий ${slot.work_start}-${slot.work_end}` : 'Выходной'}
+                            >
+                              {dd}.{mm}
+                            </span>
+                          );
+                        });
+                      })()}
+                    </div>
+                  )}
                 </div>
-                <div className={styles.daysRow}>
-                  {WEEKDAY_LABELS.map((label, idx) => {
-                    const day = idx + 1;
-                    const active = form.work_days.includes(day);
-                    return (
-                      <button
-                        key={day}
-                        type="button"
-                        className={`${styles.dayBtn} ${active ? styles.dayBtnActive : ''}`}
-                        onClick={() => toggleWorkDay(day)}
-                      >
-                        {label}
-                      </button>
-                    );
-                  })}
+              )}
+              {form.pattern_type !== 'cycle' && (
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                    Рабочие дни
+                  </div>
+                  <div className={styles.daysRow}>
+                    {WEEKDAY_LABELS.map((label, idx) => {
+                      const day = idx + 1;
+                      const active = form.work_days.includes(day);
+                      return (
+                        <button
+                          key={day}
+                          type="button"
+                          className={`${styles.dayBtn} ${active ? styles.dayBtnActive : ''}`}
+                          onClick={() => toggleWorkDay(day)}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
+              )}
+              {form.pattern_type !== 'cycle' && (
               <div className={styles.dayOverridesSection}>
                 <div className={styles.sectionTitle}>Детальная настройка по дням</div>
                 <div className={styles.sectionHint}>
@@ -638,6 +923,7 @@ export const SchedulesPage: FC = () => {
                   })}
                 </div>
               </div>
+              )}
               <label className={styles.checkboxRow} style={{ gridColumn: '1 / -1' }}>
                 <input
                   type="checkbox"
@@ -646,9 +932,11 @@ export const SchedulesPage: FC = () => {
                 />
                 Учитывать праздники РФ (из производственного календаря)
               </label>
-              <div className={styles.hint}>
-                Чистое рабочее время: <strong>{netHoursLabel}</strong> (длина смены − обед)
-              </div>
+              {form.pattern_type !== 'cycle' && (
+                <div className={styles.hint}>
+                  Чистое рабочее время: <strong>{netHoursLabel}</strong> (длина смены − обед)
+                </div>
+              )}
               <div className={styles.actions}>
                 <button className={`${styles.btn} ${styles.btnSecondary}`} onClick={() => setShowForm(false)}>
                   Отмена
@@ -682,13 +970,27 @@ export const SchedulesPage: FC = () => {
                       {t.name}
                       {t.is_default && <span className={`${styles.badge} ${styles.badgeDefault}`} style={{ marginLeft: 8 }}>дефолт</span>}
                     </td>
-                    <td>{PATTERN_TYPE_LABELS[t.pattern_type]}</td>
                     <td>
-                      {t.work_start.slice(0, 5)}–{t.work_end.slice(0, 5)} ({formatHours(Number(t.work_hours))})
-                      {t.day_overrides && (
+                      {PATTERN_TYPE_LABELS[t.pattern_type]}
+                      {t.pattern_type === 'cycle' && t.cycle_length != null && t.cycle_days && (
                         <div className={styles.cellHint}>
-                          Особые дни: {formatDayOverridesSummary(t.day_overrides)}
+                          {t.cycle_length}д: {t.cycle_days.map(s => Math.round(s.work_hours)).join('/')}
+                          {t.anchor_date ? `, якорь ${t.anchor_date}` : ''}
                         </div>
+                      )}
+                    </td>
+                    <td>
+                      {t.pattern_type === 'cycle' ? (
+                        <span style={{ color: 'var(--text-secondary)' }}>цикл</span>
+                      ) : (
+                        <>
+                          {t.work_start.slice(0, 5)}–{t.work_end.slice(0, 5)} ({formatHours(Number(t.work_hours))})
+                          {t.day_overrides && (
+                            <div className={styles.cellHint}>
+                              Особые дни: {formatDayOverridesSummary(t.day_overrides)}
+                            </div>
+                          )}
+                        </>
                       )}
                     </td>
                     <td>{t.lunch_minutes} мин</td>

@@ -64,8 +64,12 @@ vi.mock('../config/database.js', () => ({
 
 import {
   countNormHoursForSchedule,
+  getCycleSlot,
   getDayNormHours,
   getFullDayThresholdHoursForDate,
+  getScheduleForDate,
+  isWorkingDay,
+  needsSkudCheck,
   resolveObjectSchedule,
   resolveObjectSchedulesForPeriod,
 } from './schedule.service.js';
@@ -214,6 +218,10 @@ describe('schedule.service pre-holidays', () => {
     expected_saturdays_per_month: 0,
     full_day_threshold_minutes: null,
     weekend_full_day_threshold_minutes: null,
+    cycle_length: null,
+    cycle_days: null,
+    anchor_date: null,
+    assignment_anchor_date: null,
     source: 'default',
   };
 
@@ -272,5 +280,209 @@ describe('schedule.service pre-holidays', () => {
     const sched = { ...baseSchedule, full_day_threshold_minutes: 480 };
     expect(getFullDayThresholdHoursForDate(sched, new Date(2026, 11, 29), calendar)).toBe(8);
     expect(getFullDayThresholdHoursForDate(sched, new Date(2026, 11, 30), calendar)).toBe(7);
+  });
+});
+
+describe('schedule.service cycle patterns', () => {
+  // 2/2: 2 дня по 11ч, 2 дня выходных. Цикл длиной 4 дня.
+  // anchor_date = 2026-05-04 (понедельник). Дни 0..3 = 04,05,06,07 (Пн,Вт,Ср,Чт):
+  //   04 Пн: work, 05 Вт: work, 06 Ср: off, 07 Чт: off, далее повтор.
+  const buildCycle22 = (overrides: Partial<IResolvedSchedule> = {}): IResolvedSchedule => ({
+    schedule_id: 'sched-2-2',
+    schedule_type: 'shift',
+    work_start: '08:00:00',
+    work_end: '20:00:00',
+    work_hours: 11,
+    work_days: [],
+    office_days: null,
+    late_threshold_minutes: 0,
+    day_overrides: null,
+    lunch_minutes: 60,
+    respects_holidays: false,
+    pattern_type: 'cycle',
+    expected_saturdays_per_month: 0,
+    full_day_threshold_minutes: null,
+    weekend_full_day_threshold_minutes: null,
+    cycle_length: 4,
+    cycle_days: [
+      { work_hours: 11, work_start: '08:00:00', work_end: '20:00:00', lunch_minutes: 60 },
+      { work_hours: 11, work_start: '08:00:00', work_end: '20:00:00', lunch_minutes: 60 },
+      { work_hours: 0 },
+      { work_hours: 0 },
+    ],
+    anchor_date: '2026-05-04',
+    assignment_anchor_date: null,
+    source: 'employee',
+    ...overrides,
+  });
+
+  // Сутки/трое: 1 день по 24ч + 3 выходных. Цикл длиной 4 дня.
+  const buildCycle24x3 = (overrides: Partial<IResolvedSchedule> = {}): IResolvedSchedule => ({
+    schedule_id: 'sched-24-3',
+    schedule_type: 'shift',
+    work_start: '08:00:00',
+    work_end: '08:00:00',
+    work_hours: 24,
+    work_days: [],
+    office_days: null,
+    late_threshold_minutes: 0,
+    day_overrides: null,
+    lunch_minutes: 0,
+    respects_holidays: false,
+    pattern_type: 'cycle',
+    expected_saturdays_per_month: 0,
+    full_day_threshold_minutes: null,
+    weekend_full_day_threshold_minutes: null,
+    cycle_length: 4,
+    cycle_days: [
+      { work_hours: 24, work_start: '08:00:00', work_end: '08:00:00' },
+      { work_hours: 0 },
+      { work_hours: 0 },
+      { work_hours: 0 },
+    ],
+    anchor_date: '2026-05-04',
+    assignment_anchor_date: null,
+    source: 'employee',
+    ...overrides,
+  });
+
+  it('getCycleSlot: возвращает корректный слот по индексу (anchor + N) mod cycle_length', () => {
+    const s = buildCycle22();
+    expect(getCycleSlot(s, new Date(2026, 4, 4))?.work_hours).toBe(11); // Пн (idx 0)
+    expect(getCycleSlot(s, new Date(2026, 4, 5))?.work_hours).toBe(11); // Вт (idx 1)
+    expect(getCycleSlot(s, new Date(2026, 4, 6))?.work_hours).toBe(0);  // Ср (idx 2)
+    expect(getCycleSlot(s, new Date(2026, 4, 7))?.work_hours).toBe(0);  // Чт (idx 3)
+    expect(getCycleSlot(s, new Date(2026, 4, 8))?.work_hours).toBe(11); // Пт (idx 0 повтор)
+  });
+
+  it('getCycleSlot: даты раньше anchor нормализуются корректно (отрицательный сдвиг)', () => {
+    const s = buildCycle22();
+    // 2026-05-03 (Вс) = anchor − 1 = idx ((-1 % 4) + 4) % 4 = 3 → выходной
+    expect(getCycleSlot(s, new Date(2026, 4, 3))?.work_hours).toBe(0);
+    // 2026-05-02 (Сб) = anchor − 2 = idx 2 → выходной
+    expect(getCycleSlot(s, new Date(2026, 4, 2))?.work_hours).toBe(0);
+    // 2026-05-01 (Пт) = anchor − 3 = idx 1 → 11ч (рабочий из «прошлого» цикла)
+    expect(getCycleSlot(s, new Date(2026, 4, 1))?.work_hours).toBe(11);
+  });
+
+  it('isWorkingDay: цикл сутки/трое — рабочий каждый 4-й день', () => {
+    const s = buildCycle24x3();
+    expect(isWorkingDay(s, new Date(2026, 4, 4))).toBe(true);
+    expect(isWorkingDay(s, new Date(2026, 4, 5))).toBe(false);
+    expect(isWorkingDay(s, new Date(2026, 4, 6))).toBe(false);
+    expect(isWorkingDay(s, new Date(2026, 4, 7))).toBe(false);
+    expect(isWorkingDay(s, new Date(2026, 4, 8))).toBe(true);
+    expect(isWorkingDay(s, new Date(2026, 4, 12))).toBe(true);
+  });
+
+  it('isWorkingDay: цикл с respects_holidays=false работает в праздники', () => {
+    const s = buildCycle22(); // respects_holidays=false
+    const cal: IProductionCalendarMonth = {
+      year: 2026, month: 5, norm_days: 0, norm_hours: 0,
+      holidays: ['2026-05-04'],
+      mandatory_holidays: [],
+      pre_holidays: [],
+    };
+    expect(isWorkingDay(s, new Date(2026, 4, 4), cal)).toBe(true);
+  });
+
+  it('isWorkingDay: цикл с respects_holidays=true пропускает праздник', () => {
+    const s = buildCycle22({ respects_holidays: true });
+    const cal: IProductionCalendarMonth = {
+      year: 2026, month: 5, norm_days: 0, norm_hours: 0,
+      holidays: ['2026-05-04'],
+      mandatory_holidays: [],
+      pre_holidays: [],
+    };
+    expect(isWorkingDay(s, new Date(2026, 4, 4), cal)).toBe(false);
+    // 5-е по циклу — рабочий, не праздник → работает
+    expect(isWorkingDay(s, new Date(2026, 4, 5), cal)).toBe(true);
+  });
+
+  it('getScheduleForDate: возвращает work_start/work_end из слота цикла', () => {
+    const s = buildCycle22();
+    const day = getScheduleForDate(s, new Date(2026, 4, 4));
+    expect(day).toEqual({ work_start: '08:00:00', work_end: '20:00:00', work_hours: 11 });
+  });
+
+  it('getScheduleForDate: для нерабочего дня цикла work_hours=0, время — fallback на schedule', () => {
+    const s = buildCycle22();
+    const day = getScheduleForDate(s, new Date(2026, 4, 6)); // выходной по циклу
+    expect(day.work_hours).toBe(0);
+  });
+
+  it('getDayNormHours: цикл 2/2 — 11ч в рабочий день, 0 в выходной', () => {
+    const s = buildCycle22();
+    expect(getDayNormHours(s, new Date(2026, 4, 4))).toBe(11);
+    expect(getDayNormHours(s, new Date(2026, 4, 6))).toBe(0);
+  });
+
+  it('countNormHoursForSchedule: для цикла 2/2 в мае 2026 = 31 день / 4 × 2 раб ≈ 15.5 рабочих дней × 11ч', () => {
+    const s = buildCycle22();
+    // Май 2026: 31 день, anchor=04.05. По циклу (4-04+offset) рабочие дни:
+    // 1,4,5,8,9,12,13,16,17,20,21,24,25,28,29 = 15 дней × 11 = 165
+    expect(countNormHoursForSchedule(2026, 5, s)).toBe(165);
+  });
+
+  it('assignment_anchor_date перебивает schedule.anchor_date', () => {
+    // Сдвигаем anchor через назначение на 1 день вперёд: 04.05 теперь idx 3 (выходной).
+    const s = buildCycle22({ assignment_anchor_date: '2026-05-05' });
+    // 05.05: idx 0 → 11ч
+    expect(getDayNormHours(s, new Date(2026, 4, 5))).toBe(11);
+    // 04.05: idx ((-1 % 4) + 4) % 4 = 3 → 0
+    expect(getDayNormHours(s, new Date(2026, 4, 4))).toBe(0);
+  });
+
+  it('пограничный переход через границу месяца сохраняет фазу цикла', () => {
+    const s = buildCycle22();
+    // 31.05.26 = 27 дней от anchor → idx 27 % 4 = 3 (выходной)
+    expect(getDayNormHours(s, new Date(2026, 4, 31))).toBe(0);
+    // 01.06.26 = 28 дней → idx 0 (рабочий)
+    expect(getDayNormHours(s, new Date(2026, 5, 1))).toBe(11);
+    // 02.06.26 = 29 дней → idx 1 (рабочий)
+    expect(getDayNormHours(s, new Date(2026, 5, 2))).toBe(11);
+  });
+
+  it('ночные смены: цикл 24/0/24/0 (через день)', () => {
+    const night: IResolvedSchedule = {
+      ...buildCycle22(),
+      schedule_id: 'sched-night',
+      cycle_length: 2,
+      cycle_days: [
+        { work_hours: 12, work_start: '20:00:00', work_end: '08:00:00' },
+        { work_hours: 0 },
+      ],
+      work_hours: 12,
+      work_start: '20:00:00',
+      work_end: '08:00:00',
+    };
+    // anchor 04.05 → 04 рабочий, 05 выходной, 06 рабочий, 07 выходной...
+    expect(isWorkingDay(night, new Date(2026, 4, 4))).toBe(true);
+    expect(isWorkingDay(night, new Date(2026, 4, 5))).toBe(false);
+    expect(isWorkingDay(night, new Date(2026, 4, 6))).toBe(true);
+    const day = getScheduleForDate(night, new Date(2026, 4, 4));
+    expect(day.work_start).toBe('20:00:00');
+    expect(day.work_end).toBe('08:00:00');
+  });
+
+  it('needsSkudCheck: в рабочий день цикла = true, в выходной = false', () => {
+    const s = buildCycle22();
+    expect(needsSkudCheck(s, new Date(2026, 4, 4))).toBe(true);
+    expect(needsSkudCheck(s, new Date(2026, 4, 6))).toBe(false);
+  });
+
+  it('countNormHoursForSchedule: формула 5+2-суббот не применяется к cycle', () => {
+    const s = buildCycle22({ pattern_type: 'cycle', expected_saturdays_per_month: 4 });
+    // Если бы 5+2-формула применялась, было бы 165 + 4*11 = 209.
+    expect(countNormHoursForSchedule(2026, 5, s)).toBe(165);
+  });
+
+  it('cycle с битыми данными (cycle_days длина не совпадает с cycle_length) → null, фоллбек на work_days', () => {
+    const broken: IResolvedSchedule = {
+      ...buildCycle22(),
+      cycle_length: 4,
+      cycle_days: [{ work_hours: 11 }], // длина 1 ≠ 4
+    };
+    expect(getCycleSlot(broken, new Date(2026, 4, 4))).toBeNull();
   });
 });

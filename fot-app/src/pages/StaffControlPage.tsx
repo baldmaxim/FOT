@@ -203,7 +203,7 @@ interface IStaffModalsProps {
   onSaveSalary: (empId: number, val: number, type: ModalType, reason?: string, date?: string) => Promise<void>;
   onSavePosition: (empId: number, val: string, reason?: string, date?: string) => Promise<void>;
   onSaveDepartment: (empId: number, deptId: string, effectiveDate?: string, reason?: string) => Promise<void>;
-  onSaveSchedule: (empId: number, scheduleId: string | null, effectiveFrom: string) => Promise<void>;
+  onSaveSchedule: (empId: number, scheduleId: string | null, effectiveFrom: string, anchorDate: string | null) => Promise<void>;
 }
 
 const StaffModals: FC<IStaffModalsProps> = memo(({
@@ -231,7 +231,10 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   const [deptReason, setDeptReason] = useState('');
   const [scheduleVal, setScheduleVal] = useState(() => currentSchedule?.source === 'employee' ? currentSchedule.scheduleId || '' : '');
   const [scheduleDate, setScheduleDate] = useState(() => currentSchedule?.source === 'employee' ? currentSchedule.effectiveFrom || getLocalISODate() : getLocalISODate());
+  const [scheduleAnchor, setScheduleAnchor] = useState(() => currentSchedule?.assignmentAnchorDate ?? '');
   const [saving, setSaving] = useState(false);
+  const selectedScheduleTemplate = scheduleVal ? templates.find(t => t.id === scheduleVal) ?? null : null;
+  const isCycleTemplate = selectedScheduleTemplate?.pattern_type === 'cycle';
 
   if (!modalType || !modalEmp) return null;
 
@@ -264,7 +267,8 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   const handleSchedule = async () => {
     setSaving(true);
     const value = scheduleVal === '' ? null : scheduleVal;
-    await onSaveSchedule(modalEmp.id, value, scheduleDate);
+    const anchor = isCycleTemplate && scheduleAnchor.trim() ? scheduleAnchor : null;
+    await onSaveSchedule(modalEmp.id, value, scheduleDate, anchor);
     setSaving(false);
   };
 
@@ -343,6 +347,11 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
     const hasEmployeeOverride = effectiveSchedule?.source === 'employee';
     const currentEmployeeScheduleId = effectiveSchedule?.source === 'employee' ? effectiveSchedule.scheduleId || '' : '';
     const currentEmployeeScheduleDate = effectiveSchedule?.source === 'employee' ? effectiveSchedule.effectiveFrom || getLocalISODate() : getLocalISODate();
+    const currentEmployeeAnchor = effectiveSchedule?.assignmentAnchorDate ?? '';
+    const anchorChanged = (scheduleAnchor || '') !== currentEmployeeAnchor;
+    const isUnchanged = (scheduleVal || '') === currentEmployeeScheduleId
+      && scheduleDate === currentEmployeeScheduleDate
+      && !anchorChanged;
     return (
       <div className="sc-overlay" onClick={onClose}>
         <div className="sc-modal" onClick={e => e.stopPropagation()}>
@@ -364,6 +373,25 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
               <label>{scheduleVal ? 'Дата вступления в силу' : 'Дата снятия персонального графика'}</label>
               <input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} />
             </div>
+            {isCycleTemplate && (
+              <div className="sc-field">
+                <label title="Опционально перебивает дату-якорь паттерна для этого назначения. Пусто = использовать якорь паттерна.">
+                  Якорь цикла (override)
+                </label>
+                <input
+                  type="date"
+                  value={scheduleAnchor}
+                  onChange={e => setScheduleAnchor(e.target.value)}
+                  placeholder={selectedScheduleTemplate?.anchor_date || ''}
+                />
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+                  Якорь паттерна: <strong>{selectedScheduleTemplate?.anchor_date || '—'}</strong>
+                  {scheduleAnchor && scheduleAnchor !== selectedScheduleTemplate?.anchor_date
+                    ? ' · цикл сдвинется для этого сотрудника'
+                    : ''}
+                </div>
+              </div>
+            )}
             <div className="sc-schedule-help">
               <div><strong>Сейчас действует:</strong> {effectiveSchedule?.scheduleName || '—'}{effectiveSchedule && effectiveSchedule.source !== 'default' ? ` (${SCHEDULE_SOURCE_LABELS[effectiveSchedule.source]})` : ''}</div>
               <div><strong>Базовый график:</strong> {baseSchedule?.scheduleName || defaultScheduleLabel}</div>
@@ -375,7 +403,7 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
             <button
               className="sc-btn apply"
               onClick={handleSchedule}
-              disabled={saving || !scheduleDate || (!hasEmployeeOverride && scheduleVal === '') || ((scheduleVal || '') === currentEmployeeScheduleId && scheduleDate === currentEmployeeScheduleDate)}
+              disabled={saving || !scheduleDate || (!hasEmployeeOverride && scheduleVal === '') || isUnchanged}
             >
               {saving ? 'Сохранение...' : 'Применить'}
             </button>
@@ -850,6 +878,7 @@ export const StaffControlPage: FC = () => {
           scheduleName: personalAssignment.work_schedules.name,
           source: isSameAsDefault ? 'default' : 'employee',
           effectiveFrom: isSameAsDefault ? null : personalAssignment.effective_from,
+          assignmentAnchorDate: personalAssignment.anchor_date,
         });
         continue;
       }
@@ -1162,11 +1191,12 @@ export const StaffControlPage: FC = () => {
     }
   }, [selectedEmployeeIdsVisible, toast, refresh, queryClient]);
 
-  const handleSaveSchedule = useCallback(async (empId: number, scheduleId: string | null, effectiveFrom: string) => {
+  const handleSaveSchedule = useCallback(async (empId: number, scheduleId: string | null, effectiveFrom: string, anchorDate: string | null) => {
     if (scheduleId) {
       await scheduleService.assignEmployee(empId, {
         schedule_id: scheduleId,
         effective_from: effectiveFrom,
+        anchor_date: anchorDate,
       });
     } else {
       await scheduleService.removeEmployeeAssignment(empId, effectiveFrom);

@@ -19,6 +19,8 @@ export interface IEmployeeScheduleView {
   scheduleName: string;
   source: ScheduleSource;
   effectiveFrom?: string | null;
+  /** anchor_date конкретного назначения (override якоря cycle-паттерна), если задан */
+  assignmentAnchorDate?: string | null;
 }
 
 export interface IAddEmployeeForm {

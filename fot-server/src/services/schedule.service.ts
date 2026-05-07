@@ -6,6 +6,7 @@ import { supabase } from '../config/database.js';
 import type {
   IResolvedSchedule,
   IDayOverride,
+  ICycleDay,
   ScheduleType,
   PatternType,
   IProductionCalendarMonth,
@@ -33,6 +34,10 @@ const DEFAULT_SCHEDULE: IResolvedSchedule = {
   expected_saturdays_per_month: 0,
   full_day_threshold_minutes: null,
   weekend_full_day_threshold_minutes: null,
+  cycle_length: null,
+  cycle_days: null,
+  anchor_date: null,
+  assignment_anchor_date: null,
   source: 'default',
 };
 
@@ -48,6 +53,35 @@ const toISODate = (date: Date): string => {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+};
+
+/**
+ * Слот циклического графика для конкретной даты.
+ * Возвращает null, если график не циклический или у него нет валидных cycle_*-полей.
+ *
+ * Сдвиг считается в календарных днях между anchor_date и target date в локальной TZ
+ * (UTC-полночь обоих, чтобы DST не плыл). Отрицательный сдвиг (date раньше anchor)
+ * корректно нормализуется через ((x % n) + n) % n.
+ */
+export const getCycleSlot = (
+  schedule: IResolvedSchedule,
+  date: Date,
+): ICycleDay | null => {
+  if (schedule.pattern_type !== 'cycle') return null;
+  const cycleLength = schedule.cycle_length;
+  const cycleDays = schedule.cycle_days;
+  const anchor = schedule.assignment_anchor_date ?? schedule.anchor_date;
+  if (!cycleLength || !cycleDays || cycleDays.length !== cycleLength || !anchor) {
+    return null;
+  }
+
+  const [ay, am, ad] = anchor.split('-').map(Number);
+  if (!ay || !am || !ad) return null;
+  const anchorUtc = Date.UTC(ay, am - 1, ad);
+  const targetUtc = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+  const dayDiff = Math.round((targetUtc - anchorUtc) / 86_400_000);
+  const idx = ((dayDiff % cycleLength) + cycleLength) % cycleLength;
+  return cycleDays[idx] ?? null;
 };
 
 /** Праздник ли день по календарю (holidays + mandatory_holidays) */
@@ -79,12 +113,27 @@ export const isWorkingDay = (
   date: Date,
   calendar: IProductionCalendarMonth | null = null,
 ): boolean => {
+  // Цикл-графики: рабочий статус определяется слотом цикла, а не днём недели.
+  // Праздники из календаря применяются только если respects_holidays=true.
+  const slot = getCycleSlot(schedule, date);
+  if (slot) {
+    if (slot.work_hours <= 0) return false;
+    return !isHoliday(date, schedule, calendar);
+  }
   if (isHoliday(date, schedule, calendar)) return false;
   return schedule.work_days.includes(getISODow(date));
 };
 
-/** Возвращает work_start/work_end/work_hours для конкретного дня с учётом day_overrides */
+/** Возвращает work_start/work_end/work_hours для конкретного дня с учётом day_overrides и cycle_days */
 export const getScheduleForDate = (schedule: IResolvedSchedule, date: Date): IDayScheduleParams => {
+  const slot = getCycleSlot(schedule, date);
+  if (slot) {
+    return {
+      work_start: slot.work_start ?? schedule.work_start,
+      work_end: slot.work_end ?? schedule.work_end,
+      work_hours: slot.work_hours,
+    };
+  }
   if (schedule.day_overrides) {
     const dow = String(getISODow(date));
     const override = schedule.day_overrides[dow];
@@ -251,6 +300,8 @@ export const countNormHoursForSchedule = (
   for (let d = 1; d <= daysInMonth; d++) {
     total += getDayNormHours(schedule, new Date(year, month - 1, d), calendar);
   }
+  // Дополнительные субботы — только для классического 5+2 (на день недели).
+  // Для cycle норма уже посчитана через getDayNormHours (по слотам цикла).
   if (schedule.pattern_type === '5+2' && schedule.expected_saturdays_per_month > 0) {
     total += schedule.expected_saturdays_per_month * schedule.work_hours;
   }
@@ -342,16 +393,26 @@ const iterateDates = (startDate: string, endDate: string, cb: (date: string) => 
   }
 };
 
+interface IPickedAssignment {
+  schedule: Record<string, unknown>;
+  assignment_anchor_date: string | null;
+}
+
 const pickScheduleForDate = (
   rows: Record<string, unknown>[],
   date: string,
-): Record<string, unknown> | null => {
+): IPickedAssignment | null => {
   for (const row of rows) {
     if (!isAssignmentActiveOnDate(row.effective_from as string | null | undefined, row.effective_to as string | null | undefined, date)) {
       continue;
     }
     const schedule = extractWorkSchedule(row.work_schedules);
-    if (schedule) return schedule;
+    if (schedule) {
+      return {
+        schedule,
+        assignment_anchor_date: (row.anchor_date as string | null | undefined) ?? null,
+      };
+    }
   }
   return null;
 };
@@ -363,7 +424,7 @@ export const resolveObjectSchedule = async (
 ): Promise<IResolvedSchedule | null> => {
   const { data } = await supabase
     .from('object_schedule_assignments')
-    .select('schedule_id, work_schedules(*)')
+    .select('schedule_id, anchor_date, work_schedules(*)')
     .eq('object_id', objectId)
     .lte('effective_from', date)
     .or(`effective_to.is.null,effective_to.gte.${date}`)
@@ -372,7 +433,9 @@ export const resolveObjectSchedule = async (
     .maybeSingle();
 
   const objectSchedule = extractWorkSchedule(data?.work_schedules);
-  return objectSchedule ? mapToResolved(objectSchedule, 'object') : null;
+  if (!objectSchedule) return null;
+  const assignmentAnchor = (data?.anchor_date as string | null | undefined) ?? null;
+  return mapToResolved(objectSchedule, 'object', assignmentAnchor);
 };
 
 /** Resolve графиков объектов по каждому дню периода. Возвращает только даты с объектным назначением */
@@ -389,7 +452,7 @@ export const resolveObjectSchedulesForPeriod = async (
 
   const { data } = await supabase
     .from('object_schedule_assignments')
-    .select('object_id, effective_from, effective_to, work_schedules(*)')
+    .select('object_id, effective_from, effective_to, anchor_date, work_schedules(*)')
     .in('object_id', uniqueObjectIds)
     .lte('effective_from', endDate)
     .or(`effective_to.is.null,effective_to.gte.${startDate}`)
@@ -409,9 +472,9 @@ export const resolveObjectSchedulesForPeriod = async (
     const assignmentRows = objectRows.get(objectId) || [];
 
     iterateDates(startDate, endDate, (date) => {
-      const objectSchedule = pickScheduleForDate(assignmentRows, date);
-      if (objectSchedule) {
-        dailyMap.set(date, mapToResolved(objectSchedule, 'object'));
+      const picked = pickScheduleForDate(assignmentRows, date);
+      if (picked) {
+        dailyMap.set(date, mapToResolved(picked.schedule, 'object', picked.assignment_anchor_date));
       }
     });
 
@@ -432,7 +495,7 @@ export const resolveSchedule = async (
   // 1. Проверить персональный график сотрудника
   const { data: empSched } = await supabase
     .from('employee_schedule_assignments')
-    .select('schedule_id, work_schedules(*)')
+    .select('schedule_id, anchor_date, work_schedules(*)')
     .eq('employee_id', employeeId)
     .lte('effective_from', date)
     .or(`effective_to.is.null,effective_to.gte.${date}`)
@@ -442,7 +505,8 @@ export const resolveSchedule = async (
 
   const employeeSchedule = extractWorkSchedule(empSched?.work_schedules);
   if (employeeSchedule) {
-    return mapToResolved(employeeSchedule, 'employee');
+    const assignmentAnchor = (empSched?.anchor_date as string | null | undefined) ?? null;
+    return mapToResolved(employeeSchedule, 'employee', assignmentAnchor);
   }
 
   // 2. Дефолт
@@ -473,7 +537,7 @@ export const resolveSchedulesBulk = async (
   const [empSchedsRes, defaultRes] = await Promise.all([
     supabase
       .from('employee_schedule_assignments')
-      .select('employee_id, effective_from, work_schedules(*)')
+      .select('employee_id, effective_from, anchor_date, work_schedules(*)')
       .in('employee_id', employeeIds)
       .lte('effective_from', date)
       .or(`effective_to.is.null,effective_to.gte.${date}`)
@@ -487,20 +551,26 @@ export const resolveSchedulesBulk = async (
       .maybeSingle(),
   ]);
 
-  const employeeMap = new Map<number, Record<string, unknown>>();
+  const employeeMap = new Map<number, { schedule: Record<string, unknown>; anchor: string | null }>();
   for (const row of (empSchedsRes.data || []) as Record<string, unknown>[]) {
     const employeeId = row.employee_id as number;
     if (!employeeMap.has(employeeId)) {
       const schedule = extractWorkSchedule(row.work_schedules);
-      if (schedule) employeeMap.set(employeeId, schedule);
+      if (schedule) {
+        employeeMap.set(employeeId, {
+          schedule,
+          anchor: (row.anchor_date as string | null | undefined) ?? null,
+        });
+      }
     }
   }
 
   const defaultSched = defaultRes.data as Record<string, unknown> | null;
 
   for (const emp of employees) {
-    if (employeeMap.has(emp.id)) {
-      result.set(emp.id, mapToResolved(employeeMap.get(emp.id)!, 'employee'));
+    const empEntry = employeeMap.get(emp.id);
+    if (empEntry) {
+      result.set(emp.id, mapToResolved(empEntry.schedule, 'employee', empEntry.anchor));
     } else if (defaultSched) {
       result.set(emp.id, mapToResolved(defaultSched, 'default'));
     } else {
@@ -525,7 +595,7 @@ export const resolveSchedulesForPeriod = async (
   const [empSchedsRes, defaultRes] = await Promise.all([
     supabase
       .from('employee_schedule_assignments')
-      .select('employee_id, effective_from, effective_to, work_schedules(*)')
+      .select('employee_id, effective_from, effective_to, anchor_date, work_schedules(*)')
       .in('employee_id', employeeIds)
       .lte('effective_from', endDate)
       .or(`effective_to.is.null,effective_to.gte.${startDate}`)
@@ -556,9 +626,9 @@ export const resolveSchedulesForPeriod = async (
     const employeeAssignments = employeeRows.get(employee.id) || [];
 
     iterateDates(startDate, endDate, (date) => {
-      const employeeSchedule = pickScheduleForDate(employeeAssignments, date);
-      if (employeeSchedule) {
-        dailyMap.set(date, mapToResolved(employeeSchedule, 'employee'));
+      const picked = pickScheduleForDate(employeeAssignments, date);
+      if (picked) {
+        dailyMap.set(date, mapToResolved(picked.schedule, 'employee', picked.assignment_anchor_date));
         return;
       }
       dailyMap.set(date, defaultSchedule);
@@ -570,10 +640,31 @@ export const resolveSchedulesForPeriod = async (
   return result;
 };
 
+function parseCycleDays(value: unknown): ICycleDay[] | null {
+  if (!Array.isArray(value)) return null;
+  const result: ICycleDay[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return null;
+    const obj = item as Record<string, unknown>;
+    const workHours = Number(obj.work_hours);
+    if (!Number.isFinite(workHours)) return null;
+    const slot: ICycleDay = { work_hours: workHours };
+    if (typeof obj.work_start === 'string') slot.work_start = obj.work_start;
+    if (typeof obj.work_end === 'string') slot.work_end = obj.work_end;
+    if (obj.lunch_minutes != null && Number.isFinite(Number(obj.lunch_minutes))) {
+      slot.lunch_minutes = Number(obj.lunch_minutes);
+    }
+    result.push(slot);
+  }
+  return result;
+}
+
 function mapToResolved(
   ws: Record<string, unknown>,
   source: 'object' | 'employee' | 'default',
+  assignmentAnchorDate: string | null = null,
 ): IResolvedSchedule {
+  const cycleLength = ws.cycle_length == null ? null : Number(ws.cycle_length);
   return {
     schedule_id: ws.id as string,
     schedule_type: (ws.schedule_type as ScheduleType) || 'office',
@@ -592,6 +683,10 @@ function mapToResolved(
       ws.full_day_threshold_minutes == null ? null : Number(ws.full_day_threshold_minutes),
     weekend_full_day_threshold_minutes:
       ws.weekend_full_day_threshold_minutes == null ? null : Number(ws.weekend_full_day_threshold_minutes),
+    cycle_length: Number.isFinite(cycleLength) ? (cycleLength as number) : null,
+    cycle_days: parseCycleDays(ws.cycle_days),
+    anchor_date: (ws.anchor_date as string | null) ?? null,
+    assignment_anchor_date: assignmentAnchorDate,
     source,
   };
 }
