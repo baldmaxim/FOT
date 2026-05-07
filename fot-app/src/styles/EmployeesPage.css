@@ -2222,9 +2222,9 @@
   min-width: 210px;
   padding: 6px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.98);
-  border: 1px solid #e5e7eb;
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
   backdrop-filter: blur(8px);
 }
 
@@ -2328,7 +2328,7 @@
   padding: 8px 12px;
   border-radius: 10px;
   background: var(--bg-secondary);
-  border-color: #e5e7eb;
+  border-color: var(--border);
 }
 
 .ep-toolbar-search input {
@@ -2349,7 +2349,7 @@
   padding: 3px;
   border-radius: 10px;
   background: var(--bg-secondary);
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
 }
 
 .ep-filter-chip {
@@ -2382,7 +2382,7 @@
 
 .ep-filter-chip.ghost {
   background: var(--surface);
-  border-color: #e5e7eb;
+  border-color: var(--border);
 }
 
 .ep-emp-list {
@@ -2397,7 +2397,7 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow: visible;
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--border);
 }
 
 .ep-emp-table {
@@ -2529,7 +2529,7 @@
 
 .ep-pagination {
   padding: 10px 16px;
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--border);
   background: var(--surface);
 }
 
