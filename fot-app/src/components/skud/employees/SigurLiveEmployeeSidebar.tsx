@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type FC, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FC, type ReactNode } from 'react';
 import {
   CalendarDays,
   Check,
+  ChevronDown,
   CreditCard,
   FolderTree,
   MoreVertical,
@@ -9,6 +10,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Search,
   ShieldCheck,
   Trash2,
   UserLock,
@@ -46,7 +48,6 @@ interface IEmployeeDraft {
   departmentId: string;
   positionId: string;
   tabId: string;
-  description: string;
 }
 
 interface IAccessPointViewItem {
@@ -161,39 +162,198 @@ const profileToDraft = (profile: SigurLiveEmployeeProfile | null): IEmployeeDraf
   departmentId: profile?.profile.departmentId != null ? String(profile.profile.departmentId) : '',
   positionId: profile?.profile.positionId != null ? String(profile.profile.positionId) : '',
   tabId: profile?.profile.tabNumber || '',
-  description: profile?.profile.description || '',
 });
 
 interface IFieldRowProps {
   label: string;
+  displayValue: string;
+  editing: boolean;
+  onStartEdit: () => void;
+  onCancel: () => void;
   changed: boolean;
   saving: boolean;
   saved: boolean;
   canEdit: boolean;
   onSave: () => void;
-  stacked?: boolean;
   children: ReactNode;
+  extraEditChildren?: ReactNode;
 }
 
-const FieldRow: FC<IFieldRowProps> = ({ label, changed, saving, saved, canEdit, onSave, stacked, children }) => (
-  <div className={`ep-sigur-field-row ${stacked ? 'stacked' : ''}`}>
+const FieldRow: FC<IFieldRowProps> = ({
+  label,
+  displayValue,
+  editing,
+  onStartEdit,
+  onCancel,
+  changed,
+  saving,
+  saved,
+  canEdit,
+  onSave,
+  children,
+  extraEditChildren,
+}) => (
+  <div className={`ep-sigur-field-row ${editing ? 'editing' : ''}`}>
     <label className="ep-sigur-field-label">{label}</label>
-    <div className="ep-sigur-field-control">
-      {children}
-      {canEdit && (
-        <button
-          className={`ep-sigur-field-save ${saved ? 'saved' : ''}`}
-          type="button"
-          onClick={onSave}
-          disabled={saving || (!changed && !saved)}
-          aria-label={`Сохранить ${label.toLowerCase()}`}
-        >
-          {saving ? <RefreshCw size={14} className="ep-sigur-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
-        </button>
-      )}
-    </div>
+    {editing ? (
+      <div className="ep-sigur-field-edit">
+        <div className="ep-sigur-field-control">
+          {children}
+          {canEdit && (
+            <button
+              className={`ep-sigur-field-save ${saved ? 'saved' : ''}`}
+              type="button"
+              onClick={onSave}
+              disabled={saving || (!changed && !saved)}
+              aria-label={`Сохранить ${label.toLowerCase()}`}
+            >
+              {saving ? <RefreshCw size={14} className="ep-sigur-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
+            </button>
+          )}
+          {canEdit && (
+            <button
+              className="ep-sigur-field-cancel"
+              type="button"
+              onClick={onCancel}
+              disabled={saving}
+              aria-label={`Отменить ${label.toLowerCase()}`}
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+        {extraEditChildren}
+      </div>
+    ) : (
+      <div className="ep-sigur-field-view">
+        <span className="ep-sigur-field-value">{displayValue || '—'}</span>
+        {canEdit && (
+          <button
+            className="ep-sigur-field-edit-btn"
+            type="button"
+            onClick={onStartEdit}
+            aria-label={`Редактировать ${label.toLowerCase()}`}
+          >
+            <Pencil size={14} />
+          </button>
+        )}
+      </div>
+    )}
   </div>
 );
+
+interface ISearchableOption {
+  id: string;
+  label: string;
+  indent?: number;
+}
+
+interface ISearchableSelectProps {
+  options: ISearchableOption[];
+  value: string;
+  onChange: (id: string) => void;
+  placeholder?: string;
+  searchPlaceholder?: string;
+  emptyText?: string;
+  disabled?: boolean;
+  loading?: boolean;
+  autoOpen?: boolean;
+}
+
+const SearchableSelect: FC<ISearchableSelectProps> = ({
+  options,
+  value,
+  onChange,
+  placeholder = '—',
+  searchPlaceholder = 'Поиск...',
+  emptyText = 'Не найдено',
+  disabled = false,
+  loading = false,
+  autoOpen = false,
+}) => {
+  const [open, setOpen] = useState(autoOpen);
+  const [query, setQuery] = useState('');
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  const selected = useMemo(() => options.find(o => o.id === value), [options, value]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter(o => o.label.toLowerCase().includes(q));
+  }, [options, query]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClick = (event: MouseEvent) => {
+      if (!ref.current) return;
+      if (!ref.current.contains(event.target as Node)) setOpen(false);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [open]);
+
+  const pick = useCallback((id: string) => {
+    onChange(id);
+    setOpen(false);
+    setQuery('');
+  }, [onChange]);
+
+  return (
+    <div className="ep-sigur-search-select" ref={ref}>
+      <button
+        type="button"
+        className="ep-sigur-search-trigger"
+        onClick={() => !disabled && setOpen(prev => !prev)}
+        disabled={disabled}
+      >
+        <span className="ep-sigur-search-trigger-text">
+          {loading ? 'Загрузка...' : selected ? selected.label : placeholder}
+        </span>
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <div className="ep-sigur-search-dropdown">
+          <div className="ep-sigur-search-input-wrap">
+            <Search size={13} />
+            <input
+              type="text"
+              className="ep-sigur-search-input"
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              placeholder={searchPlaceholder}
+              autoFocus
+            />
+          </div>
+          <div className="ep-sigur-search-list">
+            {filtered.length === 0 ? (
+              <div className="ep-sigur-search-empty">{emptyText}</div>
+            ) : (
+              filtered.map(option => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={`ep-sigur-search-option ${option.id === value ? 'active' : ''}`}
+                  style={option.indent ? { paddingLeft: `${10 + option.indent * 12}px` } : undefined}
+                  onClick={() => pick(option.id)}
+                >
+                  {option.label}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   sigurEmployeeId,
@@ -237,6 +397,10 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   const actionsMenuRef = useRef<HTMLDivElement | null>(null);
   const [cardReaderOpen, setCardReaderOpen] = useState(false);
   const [removingCardId, setRemovingCardId] = useState<number | null>(null);
+  const [editingField, setEditingField] = useState<keyof IEmployeeDraft | null>(null);
+  const [accessPointSearchQuery, setAccessPointSearchQuery] = useState('');
+  const [accessRulesPickerOpen, setAccessRulesPickerOpen] = useState(false);
+  const accessRulesPickerRef = useRef<HTMLDivElement | null>(null);
 
   const departmentOptions = useMemo(() => flattenDepartments(departments), [departments]);
 
@@ -294,6 +458,9 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
       setSavingField(null);
       setSavedFieldFlash(null);
       setAccessPointPickerOpen(false);
+      setAccessPointSearchQuery('');
+      setAccessRulesPickerOpen(false);
+      setEditingField(null);
       setNewPositionName('');
       return;
     }
@@ -301,7 +468,10 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   }, [sigurEmployeeId]);
 
   useEffect(() => {
-    if (!accessPointPickerOpen) return;
+    if (!accessPointPickerOpen) {
+      setAccessPointSearchQuery('');
+      return;
+    }
     const handleClick = (event: MouseEvent) => {
       if (!accessPointPickerRef.current) return;
       if (!accessPointPickerRef.current.contains(event.target as Node)) {
@@ -318,6 +488,25 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
       document.removeEventListener('keydown', handleKey);
     };
   }, [accessPointPickerOpen]);
+
+  useEffect(() => {
+    if (!accessRulesPickerOpen) return;
+    const handleClick = (event: MouseEvent) => {
+      if (!accessRulesPickerRef.current) return;
+      if (!accessRulesPickerRef.current.contains(event.target as Node)) {
+        setAccessRulesPickerOpen(false);
+      }
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAccessRulesPickerOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [accessRulesPickerOpen]);
 
   const fullName = profile?.profile.fullName || employee?.name || '—';
   const tabNumber = profile?.profile.tabNumber || employee?.tabId || '—';
@@ -350,6 +539,58 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
 
   const profileBaseline = useMemo<IEmployeeDraft>(() => profileToDraft(profile), [profile]);
 
+  const positionDisplay = profile?.profile.positionName || '—';
+  const departmentDisplay = profile?.profile.departmentName || '—';
+
+  const positionOptions = useMemo<ISearchableOption[]>(
+    () => positions.map(position => ({ id: String(position.id), label: position.name })),
+    [positions],
+  );
+  const departmentSelectOptions = useMemo<ISearchableOption[]>(
+    () => departmentOptions.map(option => ({
+      id: String(option.id),
+      label: option.name,
+      indent: option.level,
+    })),
+    [departmentOptions],
+  );
+
+  const filteredAvailableAccessPointGroups = useMemo<IAccessPointGroup[]>(() => {
+    const q = accessPointSearchQuery.trim().toLowerCase();
+    if (!q) return availableAccessPointGroups;
+    return availableAccessPointGroups
+      .map(group => {
+        const titleMatch = group.title.toLowerCase().includes(q);
+        const items = titleMatch
+          ? group.items
+          : group.items.filter(item => item.label.toLowerCase().includes(q));
+        return { ...group, items };
+      })
+      .filter(group => group.items.length > 0);
+  }, [availableAccessPointGroups, accessPointSearchQuery]);
+
+  const availableAccessRuleOptions = useMemo<ISearchableOption[]>(
+    () => (profile?.accessRuleOptions || [])
+      .filter(rule => !boundAccessRuleSet.has(rule.accessRuleId))
+      .map(rule => ({
+        id: String(rule.accessRuleId),
+        label: rule.accessRuleName || `Режим #${rule.accessRuleId}`,
+      })),
+    [profile?.accessRuleOptions, boundAccessRuleSet],
+  );
+
+  const handleStartEditField = (field: keyof IEmployeeDraft) => {
+    setFieldDrafts(profileToDraft(profile));
+    setProfileError('');
+    setEditingField(field);
+  };
+
+  const handleCancelEditField = () => {
+    setFieldDrafts(profileToDraft(profile));
+    setProfileError('');
+    setEditingField(null);
+  };
+
   const handleFieldDraftChange = <K extends keyof IEmployeeDraft>(key: K, value: IEmployeeDraft[K]) => {
     setFieldDrafts(prev => ({ ...prev, [key]: value }));
     if (savedFieldFlash === key) setSavedFieldFlash(null);
@@ -375,12 +616,11 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
         payload.positionId = value ? Number(value) : null;
       } else if (field === 'tabId') {
         payload.tabId = (value as string).trim() || null;
-      } else if (field === 'description') {
-        payload.description = (value as string).trim() || null;
       }
       const nextProfile = await sigurAdminService.updateEmployee(sigurEmployeeId, payload);
       setProfile(nextProfile);
       setFieldDrafts(profileToDraft(nextProfile));
+      setEditingField(null);
       setSavedFieldFlash(field);
       window.setTimeout(() => {
         setSavedFieldFlash(prev => (prev === field ? null : prev));
@@ -613,6 +853,14 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
     }
   };
 
+  const handleAddAccessRule = (ruleId: string) => {
+    const numericId = Number(ruleId);
+    if (!Number.isFinite(numericId) || numericId <= 0) return;
+    if (boundAccessRuleSet.has(numericId)) return;
+    setAccessRulesPickerOpen(false);
+    void handleToggleAccessRule(numericId);
+  };
+
   if (!sigurEmployeeId) {
     return null;
   }
@@ -723,76 +971,77 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
           <div className="ep-sigur-field-stack">
             <FieldRow
               label="Должность"
+              displayValue={positionDisplay}
+              editing={editingField === 'positionId'}
+              onStartEdit={() => handleStartEditField('positionId')}
+              onCancel={handleCancelEditField}
               changed={fieldDrafts.positionId !== profileBaseline.positionId}
               saving={savingField === 'positionId'}
               saved={savedFieldFlash === 'positionId'}
               canEdit={canEdit}
               onSave={() => void handleSaveField('positionId')}
+              extraEditChildren={canEdit ? (
+                <div className="ep-sigur-field-create">
+                  <input
+                    className="ep-sigur-field-input"
+                    value={newPositionName}
+                    onChange={event => setNewPositionName(event.target.value)}
+                    placeholder="Новая должность..."
+                    disabled={creatingPosition}
+                  />
+                  <button
+                    className="ep-sigur-field-create-btn"
+                    type="button"
+                    onClick={() => void handleCreatePosition()}
+                    disabled={creatingPosition || !newPositionName.trim()}
+                  >
+                    {creatingPosition ? <RefreshCw size={13} className="ep-sigur-spin" /> : <Plus size={13} />}
+                    <span>{creatingPosition ? 'Создание...' : 'Создать'}</span>
+                  </button>
+                </div>
+              ) : null}
             >
-              <select
-                className="ep-sigur-field-input"
+              <SearchableSelect
+                options={positionOptions}
                 value={fieldDrafts.positionId}
-                onChange={event => handleFieldDraftChange('positionId', event.target.value)}
-                disabled={!canEdit || savingField === 'positionId' || (positionsLoading && positions.length === 0)}
-              >
-                {positionsLoading && positions.length === 0 ? (
-                  <option value="" disabled>Загрузка...</option>
-                ) : (
-                  <>
-                    <option value="">—</option>
-                    {positions.map(position => (
-                      <option key={position.id} value={position.id}>{position.name}</option>
-                    ))}
-                  </>
-                )}
-              </select>
+                onChange={value => handleFieldDraftChange('positionId', value)}
+                placeholder="Не указана"
+                searchPlaceholder="Поиск должности..."
+                disabled={!canEdit || savingField === 'positionId'}
+                loading={positionsLoading && positions.length === 0}
+                autoOpen
+              />
             </FieldRow>
-            {canEdit && (
-              <div className="ep-sigur-field-create">
-                <input
-                  className="ep-sigur-field-input"
-                  value={newPositionName}
-                  onChange={event => setNewPositionName(event.target.value)}
-                  placeholder="Новая должность..."
-                  disabled={creatingPosition}
-                />
-                <button
-                  className="ep-sigur-field-create-btn"
-                  type="button"
-                  onClick={() => void handleCreatePosition()}
-                  disabled={creatingPosition || !newPositionName.trim()}
-                >
-                  {creatingPosition ? <RefreshCw size={13} className="ep-sigur-spin" /> : <Plus size={13} />}
-                  <span>{creatingPosition ? 'Создание...' : 'Создать'}</span>
-                </button>
-              </div>
-            )}
 
             <FieldRow
               label="Отдел"
+              displayValue={departmentDisplay}
+              editing={editingField === 'departmentId'}
+              onStartEdit={() => handleStartEditField('departmentId')}
+              onCancel={handleCancelEditField}
               changed={fieldDrafts.departmentId !== profileBaseline.departmentId}
               saving={savingField === 'departmentId'}
               saved={savedFieldFlash === 'departmentId'}
               canEdit={canEdit}
               onSave={() => void handleSaveField('departmentId')}
             >
-              <select
-                className="ep-sigur-field-input"
+              <SearchableSelect
+                options={departmentSelectOptions}
                 value={fieldDrafts.departmentId}
-                onChange={event => handleFieldDraftChange('departmentId', event.target.value)}
+                onChange={value => handleFieldDraftChange('departmentId', value)}
+                placeholder="Не указан"
+                searchPlaceholder="Поиск отдела..."
                 disabled={!canEdit || savingField === 'departmentId'}
-              >
-                  <option value="">—</option>
-                  {departmentOptions.map(option => (
-                    <option key={option.id} value={option.id}>
-                      {'\u00A0\u00A0'.repeat(option.level)}{option.name}
-                    </option>
-                  ))}
-              </select>
+                autoOpen
+              />
             </FieldRow>
 
             <FieldRow
               label="ФИО"
+              displayValue={fullName}
+              editing={editingField === 'name'}
+              onStartEdit={() => handleStartEditField('name')}
+              onCancel={handleCancelEditField}
               changed={fieldDrafts.name !== profileBaseline.name}
               saving={savingField === 'name'}
               saved={savedFieldFlash === 'name'}
@@ -804,11 +1053,16 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                 value={fieldDrafts.name}
                 onChange={event => handleFieldDraftChange('name', event.target.value)}
                 disabled={!canEdit || savingField === 'name'}
+                autoFocus
               />
             </FieldRow>
 
             <FieldRow
               label="Табельный номер"
+              displayValue={tabNumber}
+              editing={editingField === 'tabId'}
+              onStartEdit={() => handleStartEditField('tabId')}
+              onCancel={handleCancelEditField}
               changed={fieldDrafts.tabId !== profileBaseline.tabId}
               saving={savingField === 'tabId'}
               saved={savedFieldFlash === 'tabId'}
@@ -820,26 +1074,10 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                 value={fieldDrafts.tabId}
                 onChange={event => handleFieldDraftChange('tabId', event.target.value)}
                 disabled={!canEdit || savingField === 'tabId'}
+                autoFocus
               />
             </FieldRow>
 
-            <FieldRow
-              label="Описание"
-              changed={fieldDrafts.description !== profileBaseline.description}
-              saving={savingField === 'description'}
-              saved={savedFieldFlash === 'description'}
-              canEdit={canEdit}
-              onSave={() => void handleSaveField('description')}
-              stacked
-            >
-              <textarea
-                className="ep-sigur-field-input"
-                value={fieldDrafts.description}
-                onChange={event => handleFieldDraftChange('description', event.target.value)}
-                disabled={!canEdit || savingField === 'description'}
-                rows={3}
-              />
-            </FieldRow>
           </div>
         </section>
 
@@ -1007,10 +1245,23 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
               </button>
               {accessPointPickerOpen && (
                 <div className="ep-sigur-access-picker">
-                  {availableAccessPointGroups.length === 0 ? (
-                    <div className="ep-sigur-placeholder">Нет доступных точек для добавления.</div>
+                  <div className="ep-sigur-picker-search-wrap">
+                    <Search size={13} />
+                    <input
+                      type="text"
+                      className="ep-sigur-picker-search"
+                      value={accessPointSearchQuery}
+                      onChange={event => setAccessPointSearchQuery(event.target.value)}
+                      placeholder="Поиск по объекту или точке..."
+                      autoFocus
+                    />
+                  </div>
+                  {filteredAvailableAccessPointGroups.length === 0 ? (
+                    <div className="ep-sigur-placeholder">
+                      {accessPointSearchQuery.trim() ? 'Ничего не найдено.' : 'Нет доступных точек для добавления.'}
+                    </div>
                   ) : (
-                    availableAccessPointGroups.map(group => (
+                    filteredAvailableAccessPointGroups.map(group => (
                       <div key={group.key} className="ep-sigur-access-group">
                         <div className="ep-sigur-access-title">{group.title}</div>
                         <div className="ep-sigur-access-list">
@@ -1058,27 +1309,59 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
             <div className="ep-sigur-placeholder">Данные ещё не загружены.</div>
           ) : profile.accessRuleOptions.length === 0 ? (
             <div className="ep-sigur-placeholder">Режимы доступа не настроены в Sigur.</div>
+          ) : profile.accessRules.length === 0 ? (
+            <div className="ep-sigur-placeholder">Режимы доступа не назначены.</div>
           ) : (
-            <div className="ep-sigur-access-list selectable">
-              {profile.accessRuleOptions.map(rule => (
-                <label
-                  key={rule.accessRuleId}
-                  className={`ep-sigur-access-check ${boundAccessRuleSet.has(rule.accessRuleId) ? 'checked' : ''}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={boundAccessRuleSet.has(rule.accessRuleId)}
-                    onChange={() => void handleToggleAccessRule(rule.accessRuleId)}
-                    disabled={!canEdit || savingRuleId !== null}
-                  />
+            <div className="ep-sigur-access-list">
+              {profile.accessRules.map(rule => (
+                <div key={rule.accessRuleId} className="ep-sigur-access-item">
                   <span>{rule.accessRuleName || `Режим #${rule.accessRuleId}`}</span>
-                  {savingRuleId === rule.accessRuleId && (
-                    <RefreshCw size={13} className="ep-sigur-spin" />
-                  )}
-                </label>
+                  <div className="ep-sigur-access-item-actions">
+                    {canEdit && (
+                      <button
+                        className="ep-sigur-access-remove-btn"
+                        type="button"
+                        aria-label={`Удалить режим ${rule.accessRuleName || rule.accessRuleId}`}
+                        onClick={() => void handleToggleAccessRule(rule.accessRuleId)}
+                        disabled={savingRuleId !== null}
+                      >
+                        {savingRuleId === rule.accessRuleId
+                          ? <RefreshCw size={14} className="ep-sigur-spin" />
+                          : <X size={14} />}
+                      </button>
+                    )}
+                  </div>
+                </div>
               ))}
             </div>
           )}
+
+          {canEdit && profile && availableAccessRuleOptions.length > 0 && (
+            <div className="ep-sigur-access-add-wrap" ref={accessRulesPickerRef}>
+              <button
+                className="ep-sigur-access-add-btn"
+                type="button"
+                onClick={() => setAccessRulesPickerOpen(prev => !prev)}
+                disabled={savingRuleId !== null}
+              >
+                <Plus size={14} />
+                <span>Добавить режим доступа</span>
+              </button>
+              {accessRulesPickerOpen && (
+                <div className="ep-sigur-access-picker">
+                  <SearchableSelect
+                    options={availableAccessRuleOptions}
+                    value=""
+                    onChange={handleAddAccessRule}
+                    placeholder="Выберите режим доступа"
+                    searchPlaceholder="Поиск режима..."
+                    autoOpen
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
           {accessRuleError && <div className="ep-sigur-inline-error">{accessRuleError}</div>}
         </section>
       </div>
