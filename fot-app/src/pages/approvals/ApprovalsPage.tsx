@@ -79,6 +79,16 @@ const formatDateCompact = (iso: string): { day: string; weekday: string } => {
   };
 };
 
+const formatDateTimeShort = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const day = d.getDate();
+  const m = MONTH_GENITIVE_SHORT_RU[d.getMonth()];
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${day} ${m}, ${hh}:${mm}`;
+};
+
 const formatHM = (decimal: number | null): string => {
   if (decimal == null) return '—';
   const h = Math.floor(decimal);
@@ -131,6 +141,7 @@ const CorrectionsTab: FC = () => {
 
   const now = useMemo(() => new Date(), []);
   const [period, setPeriod] = useState(() => monthRange(now.getFullYear(), now.getMonth() + 1));
+  const [view, setView] = useState<'pending' | 'history'>('pending');
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -150,8 +161,10 @@ const CorrectionsTab: FC = () => {
   }, [period.startDate, period.endDate]);
 
   const query = useQuery({
-    queryKey: ['correction-approvals', period.startDate, period.endDate],
-    queryFn: () => correctionApprovalService.getPendingByDepartment(period.startDate, period.endDate),
+    queryKey: ['correction-approvals', view, period.startDate, period.endDate],
+    queryFn: () => view === 'pending'
+      ? correctionApprovalService.getPendingByDepartment(period.startDate, period.endDate)
+      : correctionApprovalService.getHistoryByDepartment(period.startDate, period.endDate),
   });
 
   const invalidate = () => Promise.all([
@@ -174,6 +187,14 @@ const CorrectionsTab: FC = () => {
     onMutate: (id) => { setBusyId(id); },
     onSuccess: async () => { await invalidate(); toast.success?.('Корректировка отклонена'); },
     onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка отклонения'),
+    onSettled: () => { setBusyId(null); },
+  });
+
+  const revertMutation = useMutation({
+    mutationFn: (id: number) => correctionApprovalService.revert(id),
+    onMutate: (id) => { setBusyId(id); },
+    onSuccess: async () => { await invalidate(); toast.success?.('Возвращено на проверку'); },
+    onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка отката'),
     onSettled: () => { setBusyId(null); },
   });
 
@@ -264,11 +285,33 @@ const CorrectionsTab: FC = () => {
   };
 
   const bulkPending = bulkApproveSelectedMutation.isPending || bulkRejectSelectedMutation.isPending;
+  const isHistory = view === 'history';
+  const canBulkReview = canReview && !isHistory;
 
   return (
     <>
       <div className="approvals-toolbar">
         <PeriodPicker period={period} onChange={setPeriod} />
+        <div className="cor-view-tabs" role="tablist" aria-label="Раздел согласования">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'pending'}
+            className={`cor-view-tab${view === 'pending' ? ' is-active' : ''}`}
+            onClick={() => { if (view !== 'pending') { setSelectedIds(new Set()); setView('pending'); } }}
+          >
+            На проверке
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'history'}
+            className={`cor-view-tab${view === 'history' ? ' is-active' : ''}`}
+            onClick={() => { if (view !== 'history') { setSelectedIds(new Set()); setView('history'); } }}
+          >
+            История
+          </button>
+        </div>
       </div>
 
       {query.isLoading ? (
@@ -276,10 +319,12 @@ const CorrectionsTab: FC = () => {
       ) : query.isError ? (
         <div className="approvals-empty">Ошибка загрузки</div>
       ) : groups.length === 0 ? (
-        <div className="approvals-empty">Нет выходных дней на согласовании за период</div>
+        <div className="approvals-empty">
+          {isHistory ? 'В истории за период ничего нет' : 'Нет выходных дней на согласовании за период'}
+        </div>
       ) : (
         <>
-          {canReview && (
+          {canBulkReview && (
             <div className="cor-master-bar">
               <GroupCheckbox
                 state={allSelectionState}
@@ -289,17 +334,29 @@ const CorrectionsTab: FC = () => {
               <span className="cor-master-label">
                 Выбрать все · <b>{allItemIds.length}</b> в <b>{groups.length}</b> отд. · <b>{totalEmployees}</b> чел
               </span>
-              <button
-                type="button"
-                className="cor-master-approve"
-                onClick={() => bulkApproveSelectedMutation.mutate(allItemIds)}
-                disabled={bulkPending || allItemIds.length === 0}
-                title={`Согласовать все (${allItemIds.length})`}
-              >
-                <Check size={14} />
-                <span className="cor-master-approve-text">Согласовать все</span>
-                <span className="cor-master-approve-count">{allItemIds.length}</span>
-              </button>
+              <div className="cor-master-actions">
+                <button
+                  type="button"
+                  className="cor-master-btn cor-master-btn--approve"
+                  onClick={() => bulkApproveSelectedMutation.mutate(allItemIds)}
+                  disabled={bulkPending || allItemIds.length === 0}
+                  title={`Утвердить все (${allItemIds.length})`}
+                >
+                  <Check size={14} />
+                  <span className="cor-master-btn-text">Утвердить все</span>
+                  <span className="cor-master-btn-count">{allItemIds.length}</span>
+                </button>
+                <button
+                  type="button"
+                  className="cor-master-btn cor-master-btn--reject"
+                  onClick={() => bulkRejectSelectedMutation.mutate(allItemIds)}
+                  disabled={bulkPending || allItemIds.length === 0}
+                  title={`Отклонить все (${allItemIds.length})`}
+                >
+                  <X size={14} />
+                  <span className="cor-master-btn-text">Отклонить все</span>
+                </button>
+              </div>
             </div>
           )}
           <ul className="approvals-list">
@@ -308,7 +365,7 @@ const CorrectionsTab: FC = () => {
             return (
               <li key={group.department_id} className="cor-dept-card">
                 <div className={`cor-dept-header${isOpen ? ' cor-dept-header--expanded' : ''}`}>
-                  {canReview && (
+                  {canBulkReview && (
                     <GroupCheckbox
                       state={groupSelectionState(group)}
                       onChange={(checked) => toggleGroup(group, checked)}
@@ -326,22 +383,35 @@ const CorrectionsTab: FC = () => {
                   </button>
                   <span
                     className="cor-dept-stats"
-                    title={`Выходных дней: ${group.pending_count} · Сотрудников: ${group.employees_count}`}
+                    title={`Записей: ${group.pending_count} · Сотрудников: ${group.employees_count}`}
                   >
                     {group.pending_count} · {group.employees_count}&thinsp;чел
                   </span>
-                  {canReview && (
-                    <button
-                      type="button"
-                      className="cor-dept-bulk"
-                      onClick={() => bulkApproveSelectedMutation.mutate(group.items.map(item => item.id))}
-                      disabled={bulkPending || group.items.length === 0}
-                      aria-label={`Утвердить все (${group.pending_count})`}
-                    >
-                      <Check size={14} />
-                      <span className="cor-dept-bulk-text">Все</span>
-                      <span className="cor-dept-bulk-count">{group.pending_count}</span>
-                    </button>
+                  {canBulkReview && (
+                    <div className="cor-dept-actions">
+                      <button
+                        type="button"
+                        className="cor-item-btn cor-item-btn--approve"
+                        onClick={() => bulkApproveSelectedMutation.mutate(group.items.map(item => item.id))}
+                        disabled={bulkPending || group.items.length === 0}
+                        aria-label={`Утвердить все в отделе (${group.pending_count})`}
+                        title={`Утвердить все (${group.pending_count})`}
+                      >
+                        <Check size={14} />
+                        <span className="cor-item-btn-text">Утв.</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="cor-item-btn cor-item-btn--reject"
+                        onClick={() => bulkRejectSelectedMutation.mutate(group.items.map(item => item.id))}
+                        disabled={bulkPending || group.items.length === 0}
+                        aria-label={`Отклонить все в отделе (${group.pending_count})`}
+                        title={`Отклонить все (${group.pending_count})`}
+                      >
+                        <X size={14} />
+                        <span className="cor-item-btn-text">Откл.</span>
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -351,16 +421,21 @@ const CorrectionsTab: FC = () => {
                       const trimmed = (item.notes ?? '').trim();
                       const isShort = trimmed.length > 0 && trimmed.length < 10;
                       const noNotes = trimmed.length === 0;
-                      const itemMods = noNotes
-                        ? ' cor-item--no-notes'
-                        : isShort ? ' cor-item--short-notes' : '';
+                      const decisionMod = isHistory && item.approval_status === 'approved'
+                        ? ' cor-item--decided-approved'
+                        : isHistory && item.approval_status === 'rejected'
+                          ? ' cor-item--decided-rejected'
+                          : '';
+                      const warningMod = !isHistory && (noNotes ? ' cor-item--no-notes' : isShort ? ' cor-item--short-notes' : '');
+                      const itemMods = `${warningMod}${decisionMod}`;
                       const notesExpanded = expandedNotes.has(item.id);
                       const hours = formatHM(item.hours_override);
                       const dateParts = formatDateCompact(item.work_date);
                       const showAuthor = !!item.created_by_name && item.created_by_name !== item.employee_name;
+                      const decisionLabel = item.approval_status === 'approved' ? 'Утв.' : item.approval_status === 'rejected' ? 'Откл.' : '';
                       return (
                         <li key={item.id} className={`cor-item${itemMods}`}>
-                          {canReview && (
+                          {canBulkReview && (
                             <input
                               type="checkbox"
                               className="cor-item-check"
@@ -383,7 +458,7 @@ const CorrectionsTab: FC = () => {
                           </div>
                           <span className="cor-item-hours">{hours}</span>
                           <div
-                            className={`cor-item-notes${noNotes ? ' cor-item-notes--empty' : ''}${isShort ? ' cor-item-notes--short' : ''}${notesExpanded ? ' cor-item-notes--expanded' : ''}`}
+                            className={`cor-item-notes${noNotes ? ' cor-item-notes--empty' : ''}${isShort && !isHistory ? ' cor-item-notes--short' : ''}${notesExpanded ? ' cor-item-notes--expanded' : ''}`}
                             onClick={() => toggleNotes(item.id)}
                             role="button"
                             tabIndex={0}
@@ -397,31 +472,55 @@ const CorrectionsTab: FC = () => {
                             {showAuthor && (
                               <span className="cor-item-notes-author">— {item.created_by_name}</span>
                             )}
+                            {isHistory && (item.approved_by_name || item.approved_at) && (
+                              <span className={`cor-item-decision cor-item-decision--${item.approval_status}`}>
+                                {item.approval_status === 'approved' ? <Check size={11} /> : <X size={11} />}
+                                <span className="cor-item-decision-label">{decisionLabel}</span>
+                                {item.approved_by_name && <span className="cor-item-decision-by">{item.approved_by_name}</span>}
+                                {item.approved_at && <span className="cor-item-decision-at">· {formatDateTimeShort(item.approved_at)}</span>}
+                              </span>
+                            )}
                           </div>
                           {canReview && (
                             <div className="cor-item-actions">
-                              <button
-                                type="button"
-                                className="cor-item-btn cor-item-btn--approve"
-                                onClick={() => approveMutation.mutate(item.id)}
-                                disabled={busyId === item.id}
-                                aria-label="Утвердить"
-                                title="Утвердить"
-                              >
-                                <Check size={14} />
-                                <span className="cor-item-btn-text">Утв.</span>
-                              </button>
-                              <button
-                                type="button"
-                                className="cor-item-btn cor-item-btn--reject"
-                                onClick={() => rejectMutation.mutate(item.id)}
-                                disabled={busyId === item.id}
-                                aria-label="Отклонить"
-                                title="Отклонить"
-                              >
-                                <X size={14} />
-                                <span className="cor-item-btn-text">Откл.</span>
-                              </button>
+                              {!isHistory ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="cor-item-btn cor-item-btn--approve"
+                                    onClick={() => approveMutation.mutate(item.id)}
+                                    disabled={busyId === item.id}
+                                    aria-label="Утвердить"
+                                    title="Утвердить"
+                                  >
+                                    <Check size={14} />
+                                    <span className="cor-item-btn-text">Утв.</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="cor-item-btn cor-item-btn--reject"
+                                    onClick={() => rejectMutation.mutate(item.id)}
+                                    disabled={busyId === item.id}
+                                    aria-label="Отклонить"
+                                    title="Отклонить"
+                                  >
+                                    <X size={14} />
+                                    <span className="cor-item-btn-text">Откл.</span>
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="cor-item-btn cor-item-btn--revert"
+                                  onClick={() => revertMutation.mutate(item.id)}
+                                  disabled={busyId === item.id}
+                                  aria-label="Вернуть на проверку"
+                                  title="Вернуть на проверку"
+                                >
+                                  <RotateCcw size={14} />
+                                  <span className="cor-item-btn-text">Вернуть</span>
+                                </button>
+                              )}
                             </div>
                           )}
                         </li>
@@ -436,7 +535,7 @@ const CorrectionsTab: FC = () => {
         </>
       )}
 
-      {canReview && selectedIds.size > 0 && (
+      {canBulkReview && selectedIds.size > 0 && (
         <div className="cor-bulk-bar">
           <span className="cor-bulk-count">Выбрано: <b>{selectedIds.size}</b></span>
           <button

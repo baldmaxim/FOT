@@ -1,5 +1,7 @@
 import { apiClient } from '../api/client';
 
+export type CorrectionApprovalStatus = 'pending' | 'approved' | 'rejected' | 'auto_approved';
+
 export interface ICorrectionPendingItem {
   id: number;
   employee_id: number;
@@ -11,6 +13,11 @@ export interface ICorrectionPendingItem {
   created_by: string | null;
   created_by_name: string | null;
   created_at: string;
+  approval_status?: CorrectionApprovalStatus;
+  approved_by?: string | null;
+  approved_by_name?: string | null;
+  approved_at?: string | null;
+  approval_comment?: string | null;
 }
 
 export interface ICorrectionDepartmentGroup {
@@ -71,5 +78,25 @@ export const correctionApprovalService = {
       comment ? { ids, comment } : { ids },
     );
     return res.data ?? { processed_count: 0, skipped_not_pending: 0, skipped_no_access: 0 };
+  },
+
+  async getHistoryByDepartment(
+    startDate: string,
+    endDate: string,
+    statuses: Array<'approved' | 'rejected'> = ['approved', 'rejected'],
+  ): Promise<ICorrectionDepartmentGroup[]> {
+    const params = new URLSearchParams({
+      start_date: startDate,
+      end_date: endDate,
+      statuses: statuses.join(','),
+    });
+    const res = await apiClient.get<ApiResponse<ICorrectionDepartmentGroup[]>>(
+      `/correction-approvals/history-by-department?${params.toString()}`,
+    );
+    return res.data ?? [];
+  },
+
+  async revert(id: number): Promise<void> {
+    await apiClient.post(`/correction-approvals/${id}/revert`, {});
   },
 };

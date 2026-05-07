@@ -12,6 +12,12 @@ router.get(
   correctionApprovalController.getPendingByDepartment,
 );
 
+router.get(
+  '/history-by-department',
+  requirePageAccess('/timesheet-hr', 'view'),
+  correctionApprovalController.getHistoryByDepartment,
+);
+
 router.post(
   '/:id/approve',
   requirePageAccess('/timesheet-hr', 'edit'),
@@ -22,6 +28,12 @@ router.post(
   '/:id/reject',
   requirePageAccess('/timesheet-hr', 'edit'),
   correctionApprovalController.rejectOne,
+);
+
+router.post(
+  '/:id/revert',
+  requirePageAccess('/timesheet-hr', 'edit'),
+  correctionApprovalController.revertOne,
 );
 
 router.post(
