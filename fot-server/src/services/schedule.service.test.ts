@@ -70,6 +70,7 @@ import {
   getScheduleForDate,
   isWorkingDay,
   needsSkudCheck,
+  NON_WORKING_STATUSES,
   resolveObjectSchedule,
   resolveObjectSchedulesForPeriod,
 } from './schedule.service.js';
@@ -484,5 +485,25 @@ describe('schedule.service cycle patterns', () => {
       cycle_days: [{ work_hours: 11 }], // длина 1 ≠ 4
     };
     expect(getCycleSlot(broken, new Date(2026, 4, 4))).toBeNull();
+  });
+});
+
+describe('schedule.service NON_WORKING_STATUSES', () => {
+  it('содержит отпуск, больничный, учебный и неоплачиваемый отпуск', () => {
+    expect(NON_WORKING_STATUSES.has('vacation')).toBe(true);
+    expect(NON_WORKING_STATUSES.has('sick')).toBe(true);
+    expect(NON_WORKING_STATUSES.has('educational_leave')).toBe(true);
+    expect(NON_WORKING_STATUSES.has('unpaid')).toBe(true);
+  });
+
+  it('НЕ содержит прогул, удалёнку, обычную работу — у этих статусов план остаётся', () => {
+    expect(NON_WORKING_STATUSES.has('absent')).toBe(false);
+    expect(NON_WORKING_STATUSES.has('work')).toBe(false);
+    expect(NON_WORKING_STATUSES.has('remote')).toBe(false);
+    expect(NON_WORKING_STATUSES.has('dayoff')).toBe(false);
+  });
+
+  it('состоит ровно из 4 статусов (защита от случайного расширения)', () => {
+    expect(NON_WORKING_STATUSES.size).toBe(4);
   });
 });

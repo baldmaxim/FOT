@@ -12,7 +12,7 @@ import type { DataScope } from '../config/access-control.js';
 import { exportTimesheet } from './timesheet-export.controller.js';
 import { exportTimesheetMass } from './timesheet-mass-export.controller.js';
 import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned } from './timesheet-assigned-export.controller.js';
-import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, getShiftDurationHours, loadCalendarMonth } from '../services/schedule.service.js';
+import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, getShiftDurationHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
 import {
   getMinSelfHistoryDate,
   isSelfEmployeeRequest,
@@ -944,12 +944,27 @@ export const timesheetController = {
         cutoffByEmployeeId.set(empId, cutoff);
       }
 
+      // Индекс «не рабочих» дней (отпуск/больничный/учебный/неоплачиваемый):
+      // эти дни вычитаются из плана и не идут в факт. См. NON_WORKING_STATUSES.
+      const nonWorkDaysByEmp = new Map<number, Set<string>>();
+      for (const entry of entries) {
+        if (!NON_WORKING_STATUSES.has(entry.status as string)) continue;
+        const empId = entry.employee_id as number;
+        let set = nonWorkDaysByEmp.get(empId);
+        if (!set) {
+          set = new Set<string>();
+          nonWorkDaysByEmp.set(empId, set);
+        }
+        set.add(entry.work_date as string);
+      }
+
       // Compute stats (schedule-aware)
       let normHours = 0;
       let totalWorkingDays = 0;
       const employeeStatsMap = new Map<number, { norm_hours: number; fact_hours: number }>();
       for (const empId of employeeIds) {
         const empCutoff = cutoffByEmployeeId.get(empId) ?? null;
+        const nonWorkSet = nonWorkDaysByEmp.get(empId);
         let empWorkDays = 0;
         let empNormHours = 0;
         for (let d = startDay; d <= endDay; d++) {
@@ -961,6 +976,7 @@ export const timesheetController = {
           const sched = dailySchedulesMap.get(empId)?.get(dateStr);
           if (!sched) continue;
           if (!isWorkingDay(sched, dateObj, calendarMonth)) continue;
+          if (nonWorkSet?.has(dateStr)) continue;
 
           empWorkDays++;
           empNormHours += getScheduleForDate(sched, dateObj).work_hours;
@@ -977,6 +993,12 @@ export const timesheetController = {
       for (const entry of entries) {
         const empCutoff = cutoffByEmployeeId.get(entry.employee_id as number) ?? null;
         if (empCutoff && (entry.work_date as string) >= empCutoff) continue;
+
+        if (NON_WORKING_STATUSES.has(entry.status as string)) {
+          if (entry.status === 'sick') deviations.sick++;
+          continue;
+        }
+
         const visibleHours = req.user.show_actual_hours
           ? entry.hours_worked
           : (entry.display_hours_worked ?? entry.hours_worked);
@@ -986,7 +1008,6 @@ export const timesheetController = {
           if (empStats) empStats.fact_hours += visibleHours;
         }
         if (entry.status === 'absent') deviations.absent++;
-        if (entry.status === 'sick') deviations.sick++;
 
         // Проверка опоздания по времени прихода
         const workDate = entry.work_date as string;

@@ -234,6 +234,18 @@ export const getDayNormHours = (
   return Math.max(0, day.work_hours - minus);
 };
 
+/**
+ * Статусы записей табеля, при которых день считается «не рабочим» — он
+ * не идёт ни в план (norm), ни в факт (fact). На выходных просто игнорируется.
+ * absent (прогул) сюда НЕ входит: план остаётся, факт=0 → красная недоработка.
+ */
+export const NON_WORKING_STATUSES: ReadonlySet<string> = new Set([
+  'vacation',
+  'sick',
+  'educational_leave',
+  'unpaid',
+]);
+
 /** Считает рабочие дни (будни по графику + minus праздники) */
 export const countWorkingDaysForSchedule = (
   year: number,

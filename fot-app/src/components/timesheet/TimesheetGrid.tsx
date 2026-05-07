@@ -145,12 +145,11 @@ const hasPositiveHours = (value: number | null | undefined): boolean => (
 const formatDeviationHours = (value: number): string => {
   const totalMinutes = Math.round(Math.abs(value) * 60);
   if (totalMinutes === 0) return '0м';
-  const sign = value > 0 ? '+' : '−';
   const h = Math.floor(totalMinutes / 60);
   const m = totalMinutes % 60;
-  if (h === 0) return `${sign}${m}м`;
-  if (m === 0) return `${sign}${h}ч`;
-  return `${sign}${h}ч ${m}м`;
+  if (h === 0) return `${m}м`;
+  if (m === 0) return `${h}ч`;
+  return `${h}ч ${m}м`;
 };
 
 const formatBadgeDate = (iso: string): string => {
