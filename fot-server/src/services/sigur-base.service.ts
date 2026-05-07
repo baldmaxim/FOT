@@ -1,6 +1,7 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import https from 'https';
 import { IS_PRODUCTION } from '../config/features.js';
+import { env } from '../config/env.js';
 import { settingsService } from './settings.service.js';
 
 export type ConnectionType = 'external' | 'internal';
@@ -23,7 +24,7 @@ const PAGE_SIZE = 3000;
 export const SIGUR_TIMEOUTS = {
   auth: 30_000,
   quick: 15_000,
-  bulk: 120_000,
+  bulk: Math.max(15_000, Number.parseInt(env.SIGUR_BULK_TIMEOUT_MS, 10) || 60_000),
 } as const;
 
 const SIGUR_MAX_CONCURRENCY = Math.max(1, Number(process.env.SIGUR_MAX_CONCURRENCY) || 3);

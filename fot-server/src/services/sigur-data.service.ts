@@ -1,4 +1,18 @@
 import { SigurServiceBase, ConnectionType, SIGUR_TIMEOUTS } from './sigur-base.service.js';
+import { env } from '../config/env.js';
+
+const SIGUR_EVENT_CHUNK_MS = Math.max(
+  5 * 60 * 1000,
+  Number.parseInt(env.SIGUR_EVENT_CHUNK_MS, 10) || 30 * 60 * 1000,
+);
+const SIGUR_EVENT_PAGE_SIZE = Math.max(
+  100,
+  Number.parseInt(env.SIGUR_EVENT_PAGE_SIZE, 10) || 1000,
+);
+const SIGUR_EVENT_CHUNK_PARALLELISM = Math.max(
+  1,
+  Math.min(8, Number.parseInt(env.SIGUR_EVENT_CHUNK_PARALLELISM, 10) || 3),
+);
 
 export class SigurDataService extends SigurServiceBase {
   private employeeCache: { data: Record<string, unknown>[]; fetchedAt: number; complete: boolean } | null = null;
@@ -15,7 +29,7 @@ export class SigurDataService extends SigurServiceBase {
   private cardListFetchPromise: Promise<Record<string, unknown>[]> | null = null;
   private readonly CARD_LIST_TTL = 60 * 1000; // 1 минута — карты в Sigur не меняются часто
   private readonly CACHE_TTL = 5 * 60 * 1000;
-  private readonly EVENT_CHUNK_MS = 2 * 60 * 60 * 1000;
+  private readonly EVENT_CHUNK_MS = SIGUR_EVENT_CHUNK_MS;
   private readonly EVENT_CHUNK_OVERLAP_MS = 60 * 1000;
   private static readonly SIGUR_TIMEZONE_OFFSET_MS = 3 * 60 * 60 * 1000;
 
@@ -676,75 +690,91 @@ export class SigurDataService extends SigurServiceBase {
     delete baseParams.startTime;
     delete baseParams.endTime;
 
-    const allEvents: T[] = [];
     const rangeStart = startDate.getTime();
     const rangeEnd = endDate.getTime();
+
+    // Сначала собираем план chunks (без HTTP), затем запускаем воркер-пул.
+    // Каждый chunk тащит fetchAllByLastId с ретраями, sigurLimiter сериализует
+    // фактические HTTP, поэтому суммарный RPS не растёт — wall-clock падает,
+    // пока один chunk ждёт ответа Sigur, другой воркер успевает занять слот.
+    interface ChunkPlan {
+      index: number;
+      params: Record<string, unknown>;
+      startLabel: string;
+      endLabel: string;
+    }
+    const plans: ChunkPlan[] = [];
     let chunkStart = rangeStart;
-    let chunkIndex = 0;
-    let failedChunks = 0;
-
     while (chunkStart <= rangeEnd) {
-      chunkIndex++;
-
       const chunkEnd = Math.min(chunkStart + this.EVENT_CHUNK_MS - 1, rangeEnd);
-      const chunkParams = {
-        ...baseParams,
-        startTime: this.ensureTimezone(this.formatSigurDateTime(new Date(chunkStart))),
-        endTime: this.ensureTimezone(this.formatSigurDateTime(new Date(chunkEnd))),
-      };
+      const startLabel = this.ensureTimezone(this.formatSigurDateTime(new Date(chunkStart)));
+      const endLabel = this.ensureTimezone(this.formatSigurDateTime(new Date(chunkEnd)));
+      plans.push({
+        index: plans.length + 1,
+        params: { ...baseParams, startTime: startLabel, endTime: endLabel },
+        startLabel,
+        endLabel,
+      });
+      if (chunkEnd >= rangeEnd) break;
+      chunkStart = Math.max(chunkEnd + 1 - this.EVENT_CHUNK_OVERLAP_MS, rangeStart);
+    }
 
-      console.log(
-        `[sigur chunk] window ${chunkIndex}: ${chunkParams.startTime} -> ${chunkParams.endTime}`,
-      );
+    const CHUNK_MAX_ATTEMPTS = 3;
+    const CHUNK_RETRY_BASE_MS = 500;
+    const results: T[][] = new Array(plans.length).fill(null).map(() => []);
+    let failedChunks = 0;
+    let cursor = 0;
 
-      // Retry chunk'а с exponential backoff: сетевые флапы Sigur не должны терять
-      // целое 2-часовое окно событий. После 3-х неудач chunk пропускается, а
-      // backfill за 7 дней подхватит всё, что окажется unmatched.
-      const CHUNK_MAX_ATTEMPTS = 3;
-      const CHUNK_RETRY_BASE_MS = 500;
-      let chunkDone = false;
-      for (let attempt = 1; attempt <= CHUNK_MAX_ATTEMPTS && !chunkDone; attempt++) {
-        try {
-          const chunkEvents = await this.fetchAllByLastId<T>(
-            '/api/v1/events',
-            chunkParams,
-            connection,
-            pageSize,
-          );
-          console.log(
-            `[sigur chunk] window ${chunkIndex} attempt ${attempt} got ${chunkEvents.length} events`,
-          );
-          allEvents.push(...chunkEvents);
-          chunkDone = true;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (attempt < CHUNK_MAX_ATTEMPTS) {
-            const backoff = CHUNK_RETRY_BASE_MS * Math.pow(2, attempt - 1);
-            console.warn(
-              `[sigur chunk] window ${chunkIndex} attempt ${attempt} failed: ${message}. Retrying in ${backoff}ms`,
+    const runWorker = async (): Promise<void> => {
+      while (true) {
+        const i = cursor++;
+        if (i >= plans.length) return;
+        const plan = plans[i];
+        console.log(
+          `[sigur chunk] window ${plan.index}: ${plan.startLabel} -> ${plan.endLabel}`,
+        );
+        let done = false;
+        for (let attempt = 1; attempt <= CHUNK_MAX_ATTEMPTS && !done; attempt++) {
+          try {
+            const events = await this.fetchAllByLastId<T>(
+              '/api/v1/events',
+              plan.params,
+              connection,
+              pageSize,
             );
-            await new Promise(resolve => setTimeout(resolve, backoff));
-          } else {
-            failedChunks++;
-            console.warn(
-              `[sigur chunk] window ${chunkIndex} FAILED permanently after ${attempt} attempts (${chunkParams.startTime} -> ${chunkParams.endTime}): ${message}`,
+            console.log(
+              `[sigur chunk] window ${plan.index} attempt ${attempt} got ${events.length} events`,
             );
+            results[i] = events;
+            done = true;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (attempt < CHUNK_MAX_ATTEMPTS) {
+              const backoff = CHUNK_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+              console.warn(
+                `[sigur chunk] window ${plan.index} attempt ${attempt} failed: ${message}. Retrying in ${backoff}ms`,
+              );
+              await new Promise(resolve => setTimeout(resolve, backoff));
+            } else {
+              failedChunks++;
+              console.warn(
+                `[sigur chunk] window ${plan.index} FAILED permanently after ${attempt} attempts (${plan.startLabel} -> ${plan.endLabel}): ${message}`,
+              );
+            }
           }
         }
       }
+    };
 
-      if (chunkEnd >= rangeEnd) break;
+    const workerCount = Math.min(SIGUR_EVENT_CHUNK_PARALLELISM, plans.length);
+    await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
 
-      chunkStart = Math.max(
-        chunkEnd + 1 - this.EVENT_CHUNK_OVERLAP_MS,
-        rangeStart,
-      );
-    }
-
+    const allEvents: T[] = results.flat();
     const dedupedEvents = this.dedupeEventsById(allEvents);
     console.log(
-      `[sigur chunk] combined ${allEvents.length} events into ${dedupedEvents.length} unique events` +
-        (failedChunks > 0 ? ` (failed chunks: ${failedChunks}/${chunkIndex})` : ''),
+      `[sigur chunk] combined ${allEvents.length} events into ${dedupedEvents.length} unique events (chunks=${plans.length} parallelism=${workerCount}` +
+        (failedChunks > 0 ? `, failed=${failedChunks}` : '') +
+        `)`,
     );
 
     return dedupedEvents;
@@ -756,7 +786,7 @@ export class SigurDataService extends SigurServiceBase {
     connection?: ConnectionType,
     extraParams?: Record<string, any>,
   ) {
-    const pageSize = extraParams?.pageSize || 1000;
+    const pageSize = extraParams?.pageSize || SIGUR_EVENT_PAGE_SIZE;
     const params: Record<string, any> = {};
 
     if (startTime) params.startTime = this.ensureTimezone(startTime);
@@ -782,7 +812,7 @@ export class SigurDataService extends SigurServiceBase {
     eventType?: string,
     extraParams?: Record<string, any>,
   ) {
-    const pageSize = extraParams?.pageSize || 3000;
+    const pageSize = extraParams?.pageSize || SIGUR_EVENT_PAGE_SIZE;
     const params: Record<string, any> = {};
 
     if (startTime) params.startTime = this.ensureTimezone(startTime);
