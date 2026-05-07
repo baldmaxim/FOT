@@ -14,7 +14,6 @@ import type {
 import type { ITravelObject } from '../../types/travel';
 import {
   PATTERN_TYPE_LABELS,
-  SCHEDULE_TYPE_LABELS,
   WEEKDAY_LABELS,
 } from '../../types/schedule';
 import { parseHMToMinutes, minutesToHM } from '../../utils/scheduleUtils';
@@ -37,7 +36,13 @@ interface ICycleDayDraft {
 interface IFormState {
   id: string | null;
   name: string;
-  schedule_type: ScheduleType;
+  /**
+   * Загруженный из БД schedule_type. Нужен, чтобы при сохранении немодифицированного
+   * существующего шаблона (например, hybrid-legacy) не подменять тип. UI-уровневое
+   * различие сводится к чекбоксу is_remote — см. handleSave.
+   */
+  loaded_schedule_type: ScheduleType | null;
+  is_remote: boolean;
   pattern_type: PatternType;
   work_start: string;
   work_end: string;
@@ -75,7 +80,8 @@ const buildCycleDaysOfLength = (
 const EMPTY_FORM: IFormState = {
   id: null,
   name: '',
-  schedule_type: 'office',
+  loaded_schedule_type: null,
+  is_remote: false,
   pattern_type: '5+0',
   work_start: '09:00',
   work_end: '18:00',
@@ -161,8 +167,17 @@ const PATTERN_PRESETS: Record<PatternType, Partial<IFormState>> = {
   '5+2': { work_days: [1, 2, 3, 4, 5], expected_saturdays_per_month: 2 },
   '6+0': { work_days: [1, 2, 3, 4, 5, 6], expected_saturdays_per_month: 0 },
   'custom': {},
-  // Циклические графики: смены (вахта) обычно в праздники работают.
-  'cycle': { schedule_type: 'shift', respects_holidays: false, expected_saturdays_per_month: 0 },
+  // Циклические графики: вахта/смена обычно работает в праздники.
+  // schedule_type для cycle вычисляется в handleSave (всегда 'shift').
+  'cycle': { respects_holidays: false, expected_saturdays_per_month: 0 },
+};
+
+const PATTERN_HINTS: Record<PatternType, string> = {
+  '5+0': 'Пн–Пт по одному и тому же графику, выходные сб/вс',
+  '5+2': 'Пн–Пт + N рабочих суббот в месяц (поле в «Дополнительно»)',
+  '6+0': 'Пн–Сб, выходной только воскресенье',
+  'custom': 'Произвольный набор дней недели — настраивается ниже',
+  'cycle': 'Любой повторяющийся цикл: 2/2, сутки/трое, ночные смены',
 };
 const EMPTY_TEMPLATES: IWorkSchedule[] = [];
 const EMPTY_OBJECT_ASSIGNMENTS: IObjectScheduleAssignment[] = [];
@@ -184,6 +199,9 @@ export const SchedulesPage: FC = () => {
 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<IFormState>(createEmptyForm());
+  // По дефолту блок «Особые дни недели» скрыт. Открывается при редактировании
+  // шаблона с уже настроенными day_overrides (см. handleStartEdit) или вручную.
+  const [showOverrides, setShowOverrides] = useState(false);
 
   const needsTemplates = tab === 'templates' || tab === 'object-assignments';
   const needsObjectAssignments = tab === 'object-assignments';
@@ -257,7 +275,8 @@ export const SchedulesPage: FC = () => {
     setForm({
       id: tpl.id,
       name: tpl.name,
-      schedule_type: tpl.schedule_type,
+      loaded_schedule_type: tpl.schedule_type,
+      is_remote: tpl.schedule_type === 'remote',
       pattern_type: tpl.pattern_type,
       work_start: tpl.work_start.slice(0, 5),
       work_end: tpl.work_end.slice(0, 5),
@@ -273,11 +292,13 @@ export const SchedulesPage: FC = () => {
       cycle_days: buildCycleDaysOfLength(cycleLength, cycleDaysFromTpl),
       anchor_date: tpl.anchor_date ?? getLocalISODate(),
     });
+    setShowOverrides(Boolean(tpl.day_overrides && Object.keys(tpl.day_overrides).length > 0));
     setShowForm(true);
   };
 
   const handleStartCreate = () => {
     setForm(createEmptyForm());
+    setShowOverrides(false);
     setShowForm(true);
   };
 
@@ -471,9 +492,20 @@ export const SchedulesPage: FC = () => {
         if (Object.keys(overridesAcc).length > 0) dayOverridesPayload = overridesAcc;
       }
 
+      // schedule_type: для cycle всегда 'shift'; для не-cycle — 'remote' если is_remote,
+      // иначе сохраняем загруженный тип (office/hybrid/shift). Это защищает legacy-шаблоны
+      // hybrid/shift от случайной подмены, если пользователь только переименовал/поменял время.
+      const computedScheduleType: ScheduleType = isCycle
+        ? 'shift'
+        : form.is_remote
+          ? 'remote'
+          : (form.loaded_schedule_type && form.loaded_schedule_type !== 'remote'
+            ? form.loaded_schedule_type
+            : 'office');
+
       const payload = {
         name: form.name.trim(),
-        schedule_type: form.schedule_type,
+        schedule_type: computedScheduleType,
         pattern_type: form.pattern_type,
         work_start: workStartForPayload,
         work_end: workEndForPayload,
@@ -587,356 +619,380 @@ export const SchedulesPage: FC = () => {
 
           {showForm && (
             <div className={styles.form}>
-              <label>
-                Название
-                <input
-                  type="text"
-                  value={form.name}
-                  onChange={e => setForm({ ...form, name: e.target.value })}
-                  placeholder="ИТР 5+2"
-                />
-              </label>
-              <label>
-                Паттерн
-                <select
-                  value={form.pattern_type}
-                  onChange={e => handlePatternChange(e.target.value as PatternType)}
-                >
-                  {(Object.keys(PATTERN_TYPE_LABELS) as PatternType[]).map(p => (
-                    <option key={p} value={p}>
-                      {PATTERN_TYPE_LABELS[p]}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Тип работы
-                <select
-                  value={form.schedule_type}
-                  onChange={e => setForm({ ...form, schedule_type: e.target.value as ScheduleType })}
-                >
-                  {(Object.keys(SCHEDULE_TYPE_LABELS) as ScheduleType[]).map(t => (
-                    <option key={t} value={t}>
-                      {SCHEDULE_TYPE_LABELS[t]}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {form.pattern_type !== 'cycle' && (
-                <>
-                  <label>
-                    Начало смены
-                    <input
-                      type="time"
-                      value={form.work_start}
-                      onChange={e => setForm({ ...form, work_start: e.target.value })}
-                    />
-                  </label>
-                  <label>
-                    Конец смены
-                    <input
-                      type="time"
-                      value={form.work_end}
-                      onChange={e => setForm({ ...form, work_end: e.target.value })}
-                    />
-                  </label>
-                  <label>
-                    Длина смены (с обедом)
-                    <input type="text" value={shiftLabel} readOnly />
-                  </label>
-                  <label>
-                    Обед (минут)
-                    <input
-                      type="number"
-                      min={0}
-                      max={240}
-                      value={form.lunch_minutes}
-                      onChange={e => setForm({ ...form, lunch_minutes: parseInt(e.target.value) || 0 })}
-                    />
-                  </label>
-                  <label>
-                    Ожидаемые рабочие субботы в месяц
-                    <input
-                      type="number"
-                      min={0}
-                      max={5}
-                      value={form.expected_saturdays_per_month}
-                      onChange={e =>
-                        setForm({ ...form, expected_saturdays_per_month: parseInt(e.target.value) || 0 })
-                      }
-                      disabled={form.pattern_type !== '5+2' && form.pattern_type !== 'custom'}
-                    />
-                  </label>
-                </>
-              )}
-              <label>
-                Порог опоздания (минут)
-                <input
-                  type="number"
-                  min={0}
-                  max={120}
-                  value={form.late_threshold_minutes}
-                  onChange={e =>
-                    setForm({ ...form, late_threshold_minutes: parseInt(e.target.value) || 0 })
-                  }
-                />
-              </label>
-              <label title="Ниже этого значения день считается недоработкой (жёлтый), выше — полный день (зелёный). Пусто = чистое время смены (без обеда).">
-                Порог полного дня (ЧЧ:ММ)
-                <input
-                  type="time"
-                  value={form.full_day_threshold}
-                  onChange={e => setForm({ ...form, full_day_threshold: e.target.value })}
-                  placeholder="авто"
-                />
-              </label>
-              <label title="Порог для дней, когда сотрудник вышел в выходной. Пусто = использовать обычный порог.">
-                Порог полного дня, выходной (ЧЧ:ММ)
-                <input
-                  type="time"
-                  value={form.weekend_full_day_threshold}
-                  onChange={e => setForm({ ...form, weekend_full_day_threshold: e.target.value })}
-                  placeholder="авто"
-                />
-              </label>
-              {form.pattern_type === 'cycle' && (
-                <div style={{ gridColumn: '1 / -1', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div className={styles.sectionTitle}>Циклический график</div>
-                  <div className={styles.sectionHint}>
-                    Цикл повторяется бесконечно от даты-якоря. Для каждого дня цикла укажите,
-                    рабочий он или выходной, и время смены. Подходит для графиков «2 через 2», «сутки/трое», ночных смен.
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '160px 200px', columnGap: 16, rowGap: 8, alignItems: 'center' }}>
-                    <label style={{ margin: 0 }}>
-                      Длина цикла (дней)
+              {/* ─── Секция «Основное» ───────────────────────────────── */}
+              <section className={styles.formSection}>
+                <div className={styles.sectionTitle}>Основное</div>
+                <label>
+                  Название
+                  <input
+                    type="text"
+                    value={form.name}
+                    onChange={e => setForm({ ...form, name: e.target.value })}
+                    placeholder="ИТР 5+2"
+                  />
+                </label>
+                <label>
+                  Паттерн
+                  <select
+                    value={form.pattern_type}
+                    onChange={e => handlePatternChange(e.target.value as PatternType)}
+                  >
+                    {(Object.keys(PATTERN_TYPE_LABELS) as PatternType[]).map(p => (
+                      <option key={p} value={p}>
+                        {PATTERN_TYPE_LABELS[p]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className={styles.patternHint}>{PATTERN_HINTS[form.pattern_type]}</div>
+                <label className={styles.checkboxRow} title="Сотрудник работает удалённо — СКУД-проверка отключена для этого графика.">
+                  <input
+                    type="checkbox"
+                    checked={form.is_remote}
+                    onChange={e => setForm({ ...form, is_remote: e.target.checked })}
+                  />
+                  Удалённая работа (без СКУД-контроля)
+                </label>
+                <label className={styles.checkboxRow}>
+                  <input
+                    type="checkbox"
+                    checked={form.respects_holidays}
+                    onChange={e => setForm({ ...form, respects_holidays: e.target.checked })}
+                  />
+                  Учитывать праздники РФ (из производственного календаря)
+                </label>
+              </section>
+
+              {/* ─── Секция «Время работы» ──────────────────────────────── */}
+              <section className={styles.formSection}>
+                <div className={styles.sectionTitle}>Время работы</div>
+
+                {form.pattern_type !== 'cycle' && (
+                  <>
+                    <label>
+                      Начало смены
+                      <input
+                        type="time"
+                        value={form.work_start}
+                        onChange={e => setForm({ ...form, work_start: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Конец смены
+                      <input
+                        type="time"
+                        value={form.work_end}
+                        onChange={e => setForm({ ...form, work_end: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Обед (минут)
                       <input
                         type="number"
-                        min={2}
-                        max={28}
-                        value={form.cycle_length}
-                        onChange={e => handleCycleLengthChange(parseInt(e.target.value) || 0)}
+                        min={0}
+                        max={240}
+                        value={form.lunch_minutes}
+                        onChange={e => setForm({ ...form, lunch_minutes: parseInt(e.target.value) || 0 })}
                       />
                     </label>
-                    <label style={{ margin: 0 }} title="Дата, с которой начинается отсчёт первого дня цикла">
-                      Дата-якорь
-                      <input
-                        type="date"
-                        value={form.anchor_date}
-                        onChange={e => setForm({ ...form, anchor_date: e.target.value })}
-                      />
+                    <label>
+                      Чистое рабочее время
+                      <input type="text" value={netHoursLabel} readOnly />
                     </label>
-                  </div>
-                  <div className={styles.dayOverridesGrid}>
-                    {form.cycle_days.map((slot, index) => {
-                      const slotShiftHours = slot.is_work
-                        ? computeShiftHours(slot.work_start, slot.work_end)
-                        : 0;
-                      const slotNetHours = slot.is_work
-                        ? formatMinutes(slotShiftHours * 60 - (slot.lunch_minutes || 0))
-                        : '0:00';
-                      return (
-                        <div key={index} className={styles.dayOverrideCard}>
-                          <div className={styles.dayOverrideHeader}>
-                            <div>
-                              <div className={styles.dayOverrideTitle}>День {index + 1}</div>
-                              <div className={styles.dayOverrideMeta}>
-                                {slot.is_work ? `Рабочий ${slot.work_start}-${slot.work_end}` : 'Выходной'}
-                              </div>
-                            </div>
-                            <label className={styles.dayOverrideToggle}>
-                              <input
-                                type="checkbox"
-                                checked={slot.is_work}
-                                onChange={e => updateCycleDay(index, { is_work: e.target.checked })}
-                              />
-                              Рабочий
-                            </label>
-                          </div>
-                          {slot.is_work ? (
-                            <div className={styles.dayOverrideFields}>
-                              <label>
-                                Начало
-                                <input
-                                  type="time"
-                                  value={slot.work_start}
-                                  onChange={e => updateCycleDay(index, { work_start: e.target.value })}
-                                />
-                              </label>
-                              <label>
-                                Конец
-                                <input
-                                  type="time"
-                                  value={slot.work_end}
-                                  onChange={e => updateCycleDay(index, { work_end: e.target.value })}
-                                />
-                              </label>
-                              <label>
-                                Обед (мин)
-                                <input
-                                  type="number"
-                                  min={0}
-                                  max={240}
-                                  value={slot.lunch_minutes}
-                                  onChange={e => updateCycleDay(index, { lunch_minutes: parseInt(e.target.value) || 0 })}
-                                />
-                              </label>
-                              <label>
-                                Длина смены
-                                <input type="text" value={formatHours(slotShiftHours)} readOnly />
-                              </label>
-                            </div>
-                          ) : null}
-                          <div className={styles.dayOverrideSummary}>
-                            Чистое рабочее время: <strong>{slotNetHours}</strong>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {form.anchor_date && form.cycle_days.length === form.cycle_length && (
-                    <div className={styles.sectionHint}>
-                      Превью на 14 дней от {form.anchor_date}:{' '}
-                      {(() => {
-                        const anchor = new Date(`${form.anchor_date}T00:00:00`);
-                        if (isNaN(anchor.getTime())) return '—';
-                        return Array.from({ length: 14 }).map((_, dayShift) => {
-                          const d = new Date(anchor.getTime());
-                          d.setDate(d.getDate() + dayShift);
-                          const idx = ((dayShift % form.cycle_length) + form.cycle_length) % form.cycle_length;
-                          const slot = form.cycle_days[idx];
-                          const dd = String(d.getDate()).padStart(2, '0');
-                          const mm = String(d.getMonth() + 1).padStart(2, '0');
-                          return (
-                            <span
-                              key={dayShift}
-                              style={{
-                                display: 'inline-block',
-                                padding: '2px 6px',
-                                marginRight: 4,
-                                marginBottom: 4,
-                                borderRadius: 4,
-                                background: slot?.is_work ? 'var(--primary-light)' : 'var(--surface-hover)',
-                                color: 'var(--text-primary)',
-                                fontSize: 12,
-                              }}
-                              title={slot?.is_work ? `Рабочий ${slot.work_start}-${slot.work_end}` : 'Выходной'}
-                            >
-                              {dd}.{mm}
-                            </span>
-                          );
-                        });
-                      })()}
+                    <div className={styles.patternHint}>
+                      Длина смены: {shiftLabel}. Чистое = смена − обед.
                     </div>
-                  )}
-                </div>
-              )}
-              {form.pattern_type !== 'cycle' && (
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
-                    Рабочие дни
-                  </div>
-                  <div className={styles.daysRow}>
-                    {WEEKDAY_LABELS.map((label, idx) => {
-                      const day = idx + 1;
-                      const active = form.work_days.includes(day);
-                      return (
-                        <button
-                          key={day}
-                          type="button"
-                          className={`${styles.dayBtn} ${active ? styles.dayBtnActive : ''}`}
-                          onClick={() => toggleWorkDay(day)}
-                        >
-                          {label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-              {form.pattern_type !== 'cycle' && (
-              <div className={styles.dayOverridesSection}>
-                <div className={styles.sectionTitle}>Детальная настройка по дням</div>
-                <div className={styles.sectionHint}>
-                  Если, например, в пятницу короткий день, включите для пятницы своё время и задайте
-                  отдельное окончание смены.
-                </div>
-                <div className={styles.dayOverridesGrid}>
-                  {form.work_days.map(day => {
-                    const override = form.day_overrides[day];
-                    const dayStart = override?.work_start ?? form.work_start;
-                    const dayEnd = override?.work_end ?? form.work_end;
-                    const dayShiftHours = computeShiftHours(dayStart, dayEnd);
-                    const dayNetHours = formatMinutes(dayShiftHours * 60 - form.lunch_minutes);
-                    return (
-                      <div key={day} className={styles.dayOverrideCard}>
-                        <div className={styles.dayOverrideHeader}>
-                          <div>
-                            <div className={styles.dayOverrideTitle}>{WEEKDAY_LABELS[day - 1]}</div>
-                            <div className={styles.dayOverrideMeta}>
-                              {override ? 'Индивидуальное расписание' : `Общий график ${form.work_start}-${form.work_end}`}
-                            </div>
-                          </div>
-                          <label className={styles.dayOverrideToggle}>
-                            <input
-                              type="checkbox"
-                              checked={Boolean(override)}
-                              onChange={() => toggleDayOverride(day)}
-                            />
-                            Своё время
-                          </label>
+
+                    {form.pattern_type === 'custom' && (
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                          Рабочие дни недели
                         </div>
-
-                        {override ? (
-                          <div className={styles.dayOverrideFields}>
-                            <label>
-                              Начало
-                              <input
-                                type="time"
-                                value={dayStart}
-                                onChange={e => updateDayOverride(day, 'work_start', e.target.value)}
-                              />
-                            </label>
-                            <label>
-                              Конец
-                              <input
-                                type="time"
-                                value={dayEnd}
-                                onChange={e => updateDayOverride(day, 'work_end', e.target.value)}
-                              />
-                            </label>
-                            <label>
-                              Длина смены
-                              <input type="text" value={formatHours(dayShiftHours)} readOnly />
-                            </label>
-                          </div>
-                        ) : (
-                          <div className={styles.dayOverrideSummary}>
-                            Наследует общий график: {form.work_start}-{form.work_end}, смена {shiftLabel}
-                          </div>
-                        )}
-
-                        <div className={styles.dayOverrideSummary}>
-                          Чистое рабочее время: <strong>{dayNetHours}</strong>
+                        <div className={styles.daysRow}>
+                          {WEEKDAY_LABELS.map((label, idx) => {
+                            const day = idx + 1;
+                            const active = form.work_days.includes(day);
+                            return (
+                              <button
+                                key={day}
+                                type="button"
+                                className={`${styles.dayBtn} ${active ? styles.dayBtnActive : ''}`}
+                                onClick={() => toggleWorkDay(day)}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
-                    );
-                  })}
+                    )}
+
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <button
+                        type="button"
+                        className={styles.toggleLink}
+                        onClick={() => setShowOverrides(v => !v)}
+                      >
+                        {showOverrides ? '▾ Особые дни недели' : '▸ Особые дни недели (короткая пятница и т.п.)'}
+                      </button>
+                    </div>
+
+                    {showOverrides && (
+                      <div className={styles.dayOverridesSection}>
+                        <div className={styles.sectionHint}>
+                          Если, например, в пятницу короткий день, включите для пятницы своё время и задайте
+                          отдельное окончание смены.
+                        </div>
+                        <div className={styles.dayOverridesGrid}>
+                          {form.work_days.map(day => {
+                            const override = form.day_overrides[day];
+                            const dayStart = override?.work_start ?? form.work_start;
+                            const dayEnd = override?.work_end ?? form.work_end;
+                            const dayShiftHours = computeShiftHours(dayStart, dayEnd);
+                            const dayNetHours = formatMinutes(dayShiftHours * 60 - form.lunch_minutes);
+                            return (
+                              <div key={day} className={styles.dayOverrideCard}>
+                                <div className={styles.dayOverrideHeader}>
+                                  <div>
+                                    <div className={styles.dayOverrideTitle}>{WEEKDAY_LABELS[day - 1]}</div>
+                                    <div className={styles.dayOverrideMeta}>
+                                      {override ? 'Индивидуальное расписание' : `Общий график ${form.work_start}-${form.work_end}`}
+                                    </div>
+                                  </div>
+                                  <label className={styles.dayOverrideToggle}>
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(override)}
+                                      onChange={() => toggleDayOverride(day)}
+                                    />
+                                    Своё время
+                                  </label>
+                                </div>
+
+                                {override ? (
+                                  <div className={styles.dayOverrideFields}>
+                                    <label>
+                                      Начало
+                                      <input
+                                        type="time"
+                                        value={dayStart}
+                                        onChange={e => updateDayOverride(day, 'work_start', e.target.value)}
+                                      />
+                                    </label>
+                                    <label>
+                                      Конец
+                                      <input
+                                        type="time"
+                                        value={dayEnd}
+                                        onChange={e => updateDayOverride(day, 'work_end', e.target.value)}
+                                      />
+                                    </label>
+                                    <label>
+                                      Длина смены
+                                      <input type="text" value={formatHours(dayShiftHours)} readOnly />
+                                    </label>
+                                  </div>
+                                ) : (
+                                  <div className={styles.dayOverrideSummary}>
+                                    Наследует общий график: {form.work_start}-{form.work_end}, смена {shiftLabel}
+                                  </div>
+                                )}
+
+                                <div className={styles.dayOverrideSummary}>
+                                  Чистое рабочее время: <strong>{dayNetHours}</strong>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {form.pattern_type === 'cycle' && (
+                  <div style={{ gridColumn: '1 / -1', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div className={styles.sectionHint}>
+                      Цикл повторяется бесконечно от даты-якоря. Для каждого дня цикла укажите,
+                      рабочий он или выходной, и время смены. Подходит для графиков «2 через 2», «сутки/трое», ночных смен.
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '160px 200px', columnGap: 16, rowGap: 8, alignItems: 'center' }}>
+                      <label style={{ margin: 0 }}>
+                        Длина цикла (дней)
+                        <input
+                          type="number"
+                          min={2}
+                          max={28}
+                          value={form.cycle_length}
+                          onChange={e => handleCycleLengthChange(parseInt(e.target.value) || 0)}
+                        />
+                      </label>
+                      <label style={{ margin: 0 }} title="Дата, с которой начинается отсчёт первого дня цикла">
+                        Дата-якорь
+                        <input
+                          type="date"
+                          value={form.anchor_date}
+                          onChange={e => setForm({ ...form, anchor_date: e.target.value })}
+                        />
+                      </label>
+                    </div>
+                    <div className={styles.dayOverridesGrid}>
+                      {form.cycle_days.map((slot, index) => {
+                        const slotShiftHours = slot.is_work
+                          ? computeShiftHours(slot.work_start, slot.work_end)
+                          : 0;
+                        const slotNetHours = slot.is_work
+                          ? formatMinutes(slotShiftHours * 60 - (slot.lunch_minutes || 0))
+                          : '0:00';
+                        return (
+                          <div key={index} className={styles.dayOverrideCard}>
+                            <div className={styles.dayOverrideHeader}>
+                              <div>
+                                <div className={styles.dayOverrideTitle}>День {index + 1}</div>
+                                <div className={styles.dayOverrideMeta}>
+                                  {slot.is_work ? `Рабочий ${slot.work_start}-${slot.work_end}` : 'Выходной'}
+                                </div>
+                              </div>
+                              <label className={styles.dayOverrideToggle}>
+                                <input
+                                  type="checkbox"
+                                  checked={slot.is_work}
+                                  onChange={e => updateCycleDay(index, { is_work: e.target.checked })}
+                                />
+                                Рабочий
+                              </label>
+                            </div>
+                            {slot.is_work ? (
+                              <div className={styles.dayOverrideFields}>
+                                <label>
+                                  Начало
+                                  <input
+                                    type="time"
+                                    value={slot.work_start}
+                                    onChange={e => updateCycleDay(index, { work_start: e.target.value })}
+                                  />
+                                </label>
+                                <label>
+                                  Конец
+                                  <input
+                                    type="time"
+                                    value={slot.work_end}
+                                    onChange={e => updateCycleDay(index, { work_end: e.target.value })}
+                                  />
+                                </label>
+                                <label>
+                                  Обед (мин)
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    max={240}
+                                    value={slot.lunch_minutes}
+                                    onChange={e => updateCycleDay(index, { lunch_minutes: parseInt(e.target.value) || 0 })}
+                                  />
+                                </label>
+                                <label>
+                                  Длина смены
+                                  <input type="text" value={formatHours(slotShiftHours)} readOnly />
+                                </label>
+                              </div>
+                            ) : null}
+                            <div className={styles.dayOverrideSummary}>
+                              Чистое рабочее время: <strong>{slotNetHours}</strong>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {form.anchor_date && form.cycle_days.length === form.cycle_length && (
+                      <div className={styles.sectionHint}>
+                        Превью на 14 дней от {form.anchor_date}:{' '}
+                        {(() => {
+                          const anchor = new Date(`${form.anchor_date}T00:00:00`);
+                          if (isNaN(anchor.getTime())) return '—';
+                          return Array.from({ length: 14 }).map((_, dayShift) => {
+                            const d = new Date(anchor.getTime());
+                            d.setDate(d.getDate() + dayShift);
+                            const idx = ((dayShift % form.cycle_length) + form.cycle_length) % form.cycle_length;
+                            const slot = form.cycle_days[idx];
+                            const dd = String(d.getDate()).padStart(2, '0');
+                            const mm = String(d.getMonth() + 1).padStart(2, '0');
+                            return (
+                              <span
+                                key={dayShift}
+                                style={{
+                                  display: 'inline-block',
+                                  padding: '2px 6px',
+                                  marginRight: 4,
+                                  marginBottom: 4,
+                                  borderRadius: 4,
+                                  background: slot?.is_work ? 'var(--primary-light)' : 'var(--surface-hover)',
+                                  color: 'var(--text-primary)',
+                                  fontSize: 12,
+                                }}
+                                title={slot?.is_work ? `Рабочий ${slot.work_start}-${slot.work_end}` : 'Выходной'}
+                              >
+                                {dd}.{mm}
+                              </span>
+                            );
+                          });
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              {/* ─── Секция «Дополнительно» (свёрнута по умолчанию) ───── */}
+              <details className={styles.formAdvanced}>
+                <summary>Дополнительные параметры (пороги, особые случаи)</summary>
+                <div className={styles.formAdvancedGrid}>
+                  <label title="Сколько минут после начала смены не считать опозданием.">
+                    Порог опоздания (минут)
+                    <input
+                      type="number"
+                      min={0}
+                      max={120}
+                      value={form.late_threshold_minutes}
+                      onChange={e =>
+                        setForm({ ...form, late_threshold_minutes: parseInt(e.target.value) || 0 })
+                      }
+                    />
+                  </label>
+                  <label title="Ниже этого значения день считается недоработкой (жёлтый), выше — полный день (зелёный). Пусто = чистое время смены (без обеда).">
+                    Порог полного дня (ЧЧ:ММ)
+                    <input
+                      type="time"
+                      value={form.full_day_threshold}
+                      onChange={e => setForm({ ...form, full_day_threshold: e.target.value })}
+                      placeholder="авто"
+                    />
+                  </label>
+                  <label title="Порог для дней, когда сотрудник вышел в выходной. Пусто = использовать обычный порог.">
+                    Порог полного дня, выходной (ЧЧ:ММ)
+                    <input
+                      type="time"
+                      value={form.weekend_full_day_threshold}
+                      onChange={e => setForm({ ...form, weekend_full_day_threshold: e.target.value })}
+                      placeholder="авто"
+                    />
+                  </label>
+                  {(form.pattern_type === '5+2' || form.pattern_type === 'custom') && (
+                    <label title="Сколько суббот в месяце считаются рабочими по умолчанию для паттерна 5+2.">
+                      Ожидаемые рабочие субботы в месяц
+                      <input
+                        type="number"
+                        min={0}
+                        max={5}
+                        value={form.expected_saturdays_per_month}
+                        onChange={e =>
+                          setForm({ ...form, expected_saturdays_per_month: parseInt(e.target.value) || 0 })
+                        }
+                      />
+                    </label>
+                  )}
                 </div>
-              </div>
-              )}
-              <label className={styles.checkboxRow} style={{ gridColumn: '1 / -1' }}>
-                <input
-                  type="checkbox"
-                  checked={form.respects_holidays}
-                  onChange={e => setForm({ ...form, respects_holidays: e.target.checked })}
-                />
-                Учитывать праздники РФ (из производственного календаря)
-              </label>
-              {form.pattern_type !== 'cycle' && (
-                <div className={styles.hint}>
-                  Чистое рабочее время: <strong>{netHoursLabel}</strong> (длина смены − обед)
-                </div>
-              )}
+              </details>
+
               <div className={styles.actions}>
                 <button className={`${styles.btn} ${styles.btnSecondary}`} onClick={() => setShowForm(false)}>
                   Отмена
