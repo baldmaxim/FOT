@@ -303,7 +303,7 @@ export const adminUsersController = {
     try {
       const { data: employees, error: employeesError } = await supabase
         .from('employees')
-        .select('id, full_name')
+        .select('id, full_name, position_id, org_department_id')
         .eq('employment_status', 'active')
         .eq('is_archived', false)
         .order('full_name', { ascending: true })
@@ -321,10 +321,38 @@ export const adminUsersController = {
       // не попадает — иначе каждый сотрудник виднелся бы с 1 «назначением».
       const explicitDepartmentMap = await loadEmployeeManagerAssignmentMap(employeeIds);
 
+      const positionIds = [...new Set((employees || [])
+        .map(e => e.position_id as string | number | null)
+        .filter((id): id is string | number => id != null))];
+      const departmentIds = [...new Set((employees || [])
+        .map(e => e.org_department_id as string | null)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0))];
+
+      const [positionRows, departmentRows] = await Promise.all([
+        positionIds.length > 0
+          ? supabase.from('positions').select('id, name').in('id', positionIds)
+          : Promise.resolve({ data: [] as Array<{ id: string | number; name: string }>, error: null }),
+        departmentIds.length > 0
+          ? supabase.from('org_departments').select('id, name').in('id', departmentIds)
+          : Promise.resolve({ data: [] as Array<{ id: string; name: string }>, error: null }),
+      ]);
+      const positionMap = new Map<string, string>(
+        (positionRows.data || []).map(p => [String(p.id), p.name as string]),
+      );
+      const departmentMap = new Map<string, string>(
+        (departmentRows.data || []).map(d => [String(d.id), d.name as string]),
+      );
+
       const payload = (employees || []).map(employee => ({
         employee_id: employee.id,
         full_name: employee.full_name,
         assigned_department_ids: explicitDepartmentMap.get(employee.id as number) || [],
+        position_name: employee.position_id != null
+          ? (positionMap.get(String(employee.position_id)) ?? null)
+          : null,
+        department_name: employee.org_department_id
+          ? (departmentMap.get(String(employee.org_department_id)) ?? null)
+          : null,
       }));
 
       res.json({ success: true, data: payload });

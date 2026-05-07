@@ -8,7 +8,7 @@ import { useStructureTree } from '../../hooks/useStructure';
 import { useToast } from '../../contexts/ToastContext';
 import type { IUserFromApi } from './AllUsersTab';
 import { getTreeFlatDepartments } from '../../utils/departmentUtils';
-import { DirectReportsForEmployee } from './DirectReportsForEmployee';
+import { EmployeeAssignmentPanel } from './EmployeeAssignmentPanel';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
 
 interface IEmployeeDepartmentAssignmentsTabProps {
@@ -20,16 +20,9 @@ const normalizeAdditionalDepartmentIds = (departmentIds: string[]): string[] => 
   [...new Set(departmentIds.filter(Boolean))]
 );
 
-const areDepartmentSelectionsEqual = (left: string[], right: string[]): boolean => {
-  if (left.length !== right.length) return false;
-  const normalizedLeft = [...left].sort();
-  const normalizedRight = [...right].sort();
-  return normalizedLeft.every((value, index) => value === normalizedRight[index]);
-};
-
 const normalizeText = (value: string | null | undefined): string => (
   String(value || '')
-    .replace(/\u00A0/g, ' ')
+    .replace(/ /g, ' ')
     .replace(/ё/giu, 'е')
     .replace(/\s+/g, ' ')
     .trim()
@@ -40,12 +33,10 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
   const toast = useToast();
   const queryClient = useQueryClient();
   const structureQuery = useStructureTree();
-  const [expandedEmployeeId, setExpandedEmployeeId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [showAllEmployees, setShowAllEmployees] = useState(false);
-  const [departmentAccessDrafts, setDepartmentAccessDrafts] = useState<Record<number, string[]>>({});
-  const [departmentAccessQuery, setDepartmentAccessQuery] = useState<Record<number, string>>({});
-  const [savingEmployeeId, setSavingEmployeeId] = useState<number | null>(null);
+  const [selectedEmployee, setSelectedEmployee] = useState<EmployeeDepartmentAssignmentFromApi | null>(null);
+
   const employeesQuery = useQuery<EmployeeDepartmentAssignmentFromApi[]>({
     queryKey: ['admin-employees', 'department-access'],
     queryFn: () => adminService.getEmployeeDepartmentAssignments(),
@@ -91,62 +82,14 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
         employee.full_name,
         linkedUser?.full_name,
         linkedUser?.email,
+        employee.position_name,
+        employee.department_name,
         ...additionalDepartmentIds.map(departmentId => departmentMap.get(departmentId)?.name || null),
       ];
 
       return searchableParts.some(part => normalizeText(part).includes(normalizedSearch));
     });
   }, [departmentMap, employees, linkedUserByEmployeeId, searchQuery, showAllEmployees]);
-
-  const getAdditionalDepartmentIds = (employee: EmployeeDepartmentAssignmentFromApi): string[] => (
-    normalizeAdditionalDepartmentIds(
-      departmentAccessDrafts[employee.employee_id] ?? employee.assigned_department_ids ?? [],
-    )
-  );
-
-  const handleDepartmentAccessToggle = (employee: EmployeeDepartmentAssignmentFromApi, departmentId: string) => {
-    const currentDepartmentIds = getAdditionalDepartmentIds(employee);
-    const nextDepartmentIds = currentDepartmentIds.includes(departmentId)
-      ? currentDepartmentIds.filter(id => id !== departmentId)
-      : [...currentDepartmentIds, departmentId];
-
-    setDepartmentAccessDrafts(prev => ({
-      ...prev,
-      [employee.employee_id]: normalizeAdditionalDepartmentIds(nextDepartmentIds),
-    }));
-  };
-
-  const handleDepartmentAccessReset = (employee: EmployeeDepartmentAssignmentFromApi) => {
-    setDepartmentAccessDrafts(prev => ({
-      ...prev,
-      [employee.employee_id]: normalizeAdditionalDepartmentIds(employee.assigned_department_ids ?? []),
-    }));
-    setDepartmentAccessQuery(prev => ({
-      ...prev,
-      [employee.employee_id]: '',
-    }));
-  };
-
-  const handleDepartmentAccessSave = async (employee: EmployeeDepartmentAssignmentFromApi) => {
-    const additionalDepartmentIds = getAdditionalDepartmentIds(employee);
-    setSavingEmployeeId(employee.employee_id);
-    try {
-      const response = await adminService.updateEmployeeDepartmentAccess(employee.employee_id, additionalDepartmentIds);
-      setDepartmentAccessDrafts(prev => ({
-        ...prev,
-        [employee.employee_id]: normalizeAdditionalDepartmentIds(response.assigned_department_ids),
-      }));
-      toast.success('Назначения сотрудника сохранены');
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['admin-employees', 'department-access'] }),
-        onReload(),
-      ]);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Ошибка сохранения назначений сотрудника');
-    } finally {
-      setSavingEmployeeId(null);
-    }
-  };
 
   if (employeesQuery.isPending || structureQuery.isPending) {
     return <div className={styles.loading}>Загрузка назначений сотрудников...</div>;
@@ -156,15 +99,26 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
     return <div className={styles.error}>Не удалось загрузить назначения сотрудников</div>;
   }
 
+  const handleSaved = async () => {
+    try {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['admin-employees', 'department-access'] }),
+        onReload(),
+      ]);
+    } catch {
+      toast.error('Ошибка обновления списка');
+    }
+  };
+
   return (
     <div className={styles.importSection}>
       <div className={styles.importIntro}>
         <div>
           <h3>Назначения сотрудников</h3>
           <p>
-            Здесь назначаются отделы и бригады, за которые сотрудник отвечает как руководитель.
-            Без явного назначения сотрудник не видит ни одного отдела в табелях и связанных разделах.
-            Назначения работают и для людей без аккаунта портала: после регистрации доступы активируются автоматически.
+            Кликните по строке сотрудника, чтобы открыть панель назначений: отделы, бригады или
+            прямые подчинённые. Назначения работают и для людей без аккаунта портала: после регистрации
+            доступы активируются автоматически.
           </p>
         </div>
         <div className={styles.assignmentFilters}>
@@ -208,37 +162,33 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
           </div>
 
           {filteredEmployees.map(employee => {
-            const isExpanded = expandedEmployeeId === employee.employee_id;
             const linkedUser = linkedUserByEmployeeId.get(employee.employee_id) || null;
-            const additionalDepartmentIds = getAdditionalDepartmentIds(employee);
-            const initialDepartmentIds = normalizeAdditionalDepartmentIds(employee.assigned_department_ids ?? []);
-            const hasDepartmentAccessChanges = !areDepartmentSelectionsEqual(additionalDepartmentIds, initialDepartmentIds);
-            const departmentSearchQuery = normalizeText(departmentAccessQuery[employee.employee_id] || '');
-            const filteredAdditionalDepartments = flatDepts.filter(department => (
-              !departmentSearchQuery || normalizeText(department.name).includes(departmentSearchQuery)
-            ));
-            const selectedDepartments = additionalDepartmentIds
-              .map(departmentId => departmentMap.get(departmentId) || {
-                id: departmentId,
-                name: `Не найденный отдел (${departmentId.slice(0, 8)})`,
-                level: 0,
-              });
+            const additionalDepartmentIds = normalizeAdditionalDepartmentIds(employee.assigned_department_ids ?? []);
 
             return (
-              <div key={employee.employee_id} className={`${styles.userRow} ${isExpanded ? styles.expanded : ''}`}>
+              <div key={employee.employee_id} className={styles.userRow}>
                 <div
                   className={styles.userRowHeader}
-                  onClick={() => setExpandedEmployeeId(prev => prev === employee.employee_id ? null : employee.employee_id)}
+                  onClick={() => setSelectedEmployee(employee)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setSelectedEmployee(employee);
+                    }
+                  }}
                 >
                   <div className={styles.userRowInfo}>
                     <div className={styles.userRowName}>
                       {employee.full_name}
                     </div>
                     <div className={styles.userRowEmail}>
-                      ID {employee.employee_id}
+                      {employee.position_name || 'Должность не указана'}
+                      {employee.department_name ? ` · ${employee.department_name}` : ''}
                       {linkedUser
-                        ? <span className={styles.emailConfirmed}>аккаунт: {linkedUser.full_name || linkedUser.email || linkedUser.id}</span>
-                        : <span className={styles.emailNotConfirmed}>без аккаунта портала</span>
+                        ? <span className={styles.emailConfirmed} style={{ marginLeft: 8 }}>аккаунт: {linkedUser.full_name || linkedUser.email || linkedUser.id}</span>
+                        : <span className={styles.emailNotConfirmed} style={{ marginLeft: 8 }}>без аккаунта портала</span>
                       }
                     </div>
                   </div>
@@ -253,133 +203,20 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
                       </span>
                     </div>
                   </div>
-
-                  <div className={styles.expandIcon}>
-                    <svg
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      style={{ transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
-                    >
-                      <polyline points="6 9 12 15 18 9" />
-                    </svg>
-                  </div>
                 </div>
-
-                {isExpanded && (
-                  <div className={styles.userRowControls}>
-                    <div className={styles.departmentAccessSection}>
-                      <div className={styles.departmentAccessHeader}>
-                        <div>
-                          <div className={styles.departmentAccessTitle}>Назначенные отделы и бригады</div>
-                          <div className={styles.departmentAccessHint}>
-                            Сотрудник видит табели и управляет только теми отделами, которые назначены здесь.
-                          </div>
-                        </div>
-                        <div className={styles.departmentAccessCount}>
-                          {additionalDepartmentIds.length} выбрано
-                        </div>
-                      </div>
-
-                      <input
-                        type="text"
-                        placeholder="Поиск отдела или бригады..."
-                        value={departmentAccessQuery[employee.employee_id] || ''}
-                        onChange={(event) => setDepartmentAccessQuery(prev => ({
-                          ...prev,
-                          [employee.employee_id]: event.target.value,
-                        }))}
-                        className={`${styles.nameInput} ${styles.departmentAccessSearch}`}
-                      />
-
-                      {selectedDepartments.length > 0 && (
-                        <div className={styles.departmentAccessTags}>
-                          {selectedDepartments.map(department => (
-                            <button
-                              key={department.id}
-                              type="button"
-                              className={styles.departmentAccessTag}
-                              onClick={() => handleDepartmentAccessToggle(employee, department.id)}
-                            >
-                              {department.name}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-
-                      <div className={styles.departmentAccessList}>
-                        {filteredAdditionalDepartments.length > 0 ? (
-                          filteredAdditionalDepartments.map(department => {
-                            if (department.hasChildren) {
-                              return (
-                                <div
-                                  key={department.id}
-                                  className={styles.departmentAccessGroupHeader}
-                                  style={{ paddingLeft: `${department.level * 14}px` }}
-                                >
-                                  {department.name}
-                                </div>
-                              );
-                            }
-                            const checked = additionalDepartmentIds.includes(department.id);
-                            return (
-                              <label
-                                key={department.id}
-                                className={`${styles.departmentAccessItem} ${checked ? styles.departmentAccessItemChecked : ''}`}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => handleDepartmentAccessToggle(employee, department.id)}
-                                />
-                                <span
-                                  className={styles.departmentAccessItemLabel}
-                                  style={{ paddingLeft: `${department.level * 14}px` }}
-                                >
-                                  {department.name}
-                                </span>
-                              </label>
-                            );
-                          })
-                        ) : (
-                          <div className={styles.departmentAccessEmpty}>
-                            {departmentSearchQuery ? 'По запросу ничего не найдено' : 'Нет доступных подразделений'}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className={styles.departmentAccessActions}>
-                        <button
-                          type="button"
-                          className={styles.cancelBtn}
-                          onClick={() => handleDepartmentAccessReset(employee)}
-                          disabled={!hasDepartmentAccessChanges || savingEmployeeId === employee.employee_id}
-                        >
-                          Сбросить
-                        </button>
-                        <button
-                          type="button"
-                          className={styles.saveBtn}
-                          onClick={() => void handleDepartmentAccessSave(employee)}
-                          disabled={!hasDepartmentAccessChanges || savingEmployeeId === employee.employee_id}
-                        >
-                          {savingEmployeeId === employee.employee_id ? 'Сохраняю...' : 'Сохранить назначения'}
-                        </button>
-                      </div>
-                    </div>
-                    <DirectReportsForEmployee
-                      managerEmployeeId={employee.employee_id}
-                      managerFullName={employee.full_name}
-                      allEmployees={employees.map(e => ({ employee_id: e.employee_id, full_name: e.full_name }))}
-                    />
-                  </div>
-                )}
               </div>
             );
           })}
         </div>
       )}
+
+      <EmployeeAssignmentPanel
+        isOpen={!!selectedEmployee}
+        employee={selectedEmployee}
+        allEmployees={employees}
+        onClose={() => setSelectedEmployee(null)}
+        onSaved={() => void handleSaved()}
+      />
     </div>
   );
 };
