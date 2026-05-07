@@ -650,7 +650,7 @@
   letter-spacing: 0.04em;
 }
 .period-picker-popover-row .date-input-group {
-  height: 32px;
+  width: 100%;
 }
 .period-picker-popover-actions {
   display: flex;
@@ -870,13 +870,33 @@
   flex-direction: column;
 }
 .cor-item {
+  position: relative;
   display: grid;
-  grid-template-columns: 24px 80px 1fr 110px 80px minmax(180px, 1fr) auto;
-  gap: 12px;
+  grid-template-columns: 24px 96px 1fr 130px 60px minmax(180px, 1.4fr) auto;
+  gap: 14px;
   align-items: center;
-  padding: 10px 16px;
+  padding: 10px 16px 10px 19px;
   border-top: 1px solid var(--border);
   font-size: 13px;
+  transition: background var(--transition);
+}
+.cor-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: transparent;
+  transition: background var(--transition);
+}
+.cor-item:hover {
+  background: var(--surface-hover, rgba(0, 0, 0, 0.02));
+}
+.cor-item--no-notes::before,
+.cor-item--short-notes::before {
+  background: var(--warning);
 }
 .cor-item-check,
 .cor-dept-check {
@@ -888,36 +908,107 @@
 }
 .cor-item:first-child { border-top: none; }
 .cor-item-date {
-  font-weight: 600;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
   color: var(--text-primary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.cor-item-date-day {
+  font-weight: 600;
+}
+.cor-item-date-wd {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  text-transform: lowercase;
 }
 .cor-item-employee {
   color: var(--text-primary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 .cor-item-status {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--surface-elevated, var(--bg-secondary));
+  border: 1px solid var(--border);
+  width: fit-content;
+}
+.cor-item-status-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+.cor-item-status-label {
+  white-space: nowrap;
+}
+.cor-item-status--remote {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+  border-color: rgba(37, 99, 235, 0.2);
+}
+.cor-item-status--vacation {
+  color: var(--warning);
+  background: var(--warning-muted);
+  border-color: rgba(245, 158, 11, 0.25);
+}
+.cor-item-status--sick {
+  color: var(--error);
+  background: var(--error-muted);
+  border-color: rgba(239, 68, 68, 0.25);
+}
+.cor-item-status--absent {
+  color: var(--text-secondary);
+}
+.cor-item-status--unpaid,
+.cor-item-status--educational_leave,
+.cor-item-status--manual,
+.cor-item-status--dayoff,
+.cor-item-status--work {
   color: var(--text-secondary);
 }
 .cor-item-hours {
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  text-align: right;
 }
 .cor-item-notes {
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-secondary);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--surface-elevated, var(--bg-secondary));
   color: var(--text-primary);
   word-break: break-word;
+  cursor: pointer;
+  transition: background var(--transition);
 }
-.cor-item-notes--short {
-  border-color: var(--error);
-  box-shadow: 0 0 0 1px var(--error);
+.cor-item-notes:hover {
+  background: var(--bg-tertiary, var(--bg-secondary));
+}
+.cor-item-notes--empty {
+  background: transparent;
+}
+.cor-item-notes-text {
+  line-height: 1.4;
+}
+.cor-item-notes-placeholder {
+  color: var(--text-tertiary);
+  font-style: italic;
+  font-size: 12px;
 }
 .cor-item-notes-author {
   font-size: 11px;
@@ -926,26 +1017,43 @@
 .cor-item-actions {
   display: flex;
   gap: 6px;
+  flex-shrink: 0;
 }
 .cor-item-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
-  padding: 4px 10px;
-  border-radius: 4px;
-  border: none;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
   cursor: pointer;
   font-size: 12px;
+  font-weight: 500;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
 }
 .cor-item-btn--approve {
+  background: var(--success-muted);
+  color: var(--success);
+  border-color: rgba(34, 197, 94, 0.2);
+}
+.cor-item-btn--approve:hover:not(:disabled) {
   background: var(--success);
   color: #fff;
+  border-color: var(--success);
 }
 .cor-item-btn--reject {
+  background: var(--error-muted);
+  color: var(--error);
+  border-color: rgba(239, 68, 68, 0.2);
+}
+.cor-item-btn--reject:hover:not(:disabled) {
   background: var(--error);
   color: #fff;
+  border-color: var(--error);
 }
-.cor-item-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.cor-item-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .cor-bulk-bar {
   position: sticky;
@@ -1088,9 +1196,10 @@
     border-radius: 10px;
     background: var(--surface);
   }
+  .cor-item::before { display: none; }
   .cor-item:first-child { border-top: 1px solid var(--border); }
   .cor-item--no-notes,
-  .cor-item--short-notes { border-left-color: var(--error); }
+  .cor-item--short-notes { border-left-color: var(--warning); }
 
   .cor-item-check {
     grid-area: check;
@@ -1102,11 +1211,13 @@
   .cor-item-date {
     grid-area: head;
     font-size: 15px;
-    font-weight: 700;
     display: inline-flex;
     align-items: baseline;
     gap: 8px;
+    flex-wrap: wrap;
   }
+  .cor-item-date-day { font-weight: 700; }
+  .cor-item-date-wd { font-size: 12px; }
   .cor-item-date::after {
     content: attr(data-hours);
     margin-left: auto;
@@ -1117,6 +1228,8 @@
   .cor-item-employee {
     grid-area: emp;
     font-size: 14px;
+    white-space: normal;
+    overflow: visible;
   }
   .cor-item-status {
     grid-area: meta;
@@ -1137,10 +1250,6 @@
     -webkit-line-clamp: unset;
     overflow: visible;
   }
-  .cor-item-notes--short {
-    border-color: var(--border);
-    box-shadow: none;
-  }
 
   .cor-item-actions {
     grid-area: actions;
@@ -1155,6 +1264,16 @@
     font-size: 14px;
     font-weight: 600;
     padding: 0;
+  }
+  .cor-item-btn--approve {
+    background: var(--success);
+    color: #fff;
+    border-color: var(--success);
+  }
+  .cor-item-btn--reject {
+    background: var(--error);
+    color: #fff;
+    border-color: var(--error);
   }
 
   .cor-bulk-bar {

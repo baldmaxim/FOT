@@ -64,10 +64,19 @@ const formatDate = (iso: string): string => {
 };
 
 const WEEKDAY_SHORT_RU = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+const MONTH_GENITIVE_SHORT_RU = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 
 const formatDateWithWeekday = (iso: string): string => {
   const d = new Date(iso + 'T00:00:00');
   return `${formatDate(iso)} (${WEEKDAY_SHORT_RU[d.getDay()]})`;
+};
+
+const formatDateCompact = (iso: string): { day: string; weekday: string } => {
+  const d = new Date(iso + 'T00:00:00');
+  return {
+    day: `${d.getDate()} ${MONTH_GENITIVE_SHORT_RU[d.getMonth()]}`,
+    weekday: WEEKDAY_SHORT_RU[d.getDay()].toLowerCase(),
+  };
 };
 
 const formatHM = (decimal: number | null): string => {
@@ -298,6 +307,8 @@ const CorrectionsTab: FC = () => {
                         : isShort ? ' cor-item--short-notes' : '';
                       const notesExpanded = expandedNotes.has(item.id);
                       const hours = formatHM(item.hours_override);
+                      const dateParts = formatDateCompact(item.work_date);
+                      const showAuthor = !!item.created_by_name && item.created_by_name !== item.employee_name;
                       return (
                         <li key={item.id} className={`cor-item${itemMods}`}>
                           {canReview && (
@@ -309,21 +320,29 @@ const CorrectionsTab: FC = () => {
                               aria-label={`Выбрать корректировку ${item.employee_name ?? item.employee_id} ${item.work_date}`}
                             />
                           )}
-                          <span className="cor-item-date" data-hours={hours}>{formatDateWithWeekday(item.work_date)}</span>
+                          <span className="cor-item-date" data-hours={hours}>
+                            <span className="cor-item-date-day">{dateParts.day}</span>
+                            <span className="cor-item-date-wd">{dateParts.weekday}</span>
+                          </span>
                           <span className="cor-item-employee">{item.employee_name ?? `#${item.employee_id}`}</span>
-                          <span className="cor-item-status">
-                            {STATUS_ICONS[item.status] ?? '•'} {STATUS_LABELS[item.status] ?? item.status}
+                          <span className={`cor-item-status cor-item-status--${item.status}`}>
+                            <span className="cor-item-status-icon" aria-hidden="true">{STATUS_ICONS[item.status] ?? '•'}</span>
+                            <span className="cor-item-status-label">{STATUS_LABELS[item.status] ?? item.status}</span>
                           </span>
                           <span className="cor-item-hours">{hours}</span>
                           <div
-                            className={`cor-item-notes${isShort || noNotes ? ' cor-item-notes--short' : ''}${notesExpanded ? ' cor-item-notes--expanded' : ''}`}
+                            className={`cor-item-notes${noNotes ? ' cor-item-notes--empty' : ''}${isShort ? ' cor-item-notes--short' : ''}${notesExpanded ? ' cor-item-notes--expanded' : ''}`}
                             onClick={() => toggleNotes(item.id)}
                             role="button"
                             tabIndex={0}
                             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleNotes(item.id); } }}
                           >
-                            <span>{trimmed || <em>без комментария</em>}</span>
-                            {item.created_by_name && (
+                            {noNotes ? (
+                              <span className="cor-item-notes-placeholder">Без комментария</span>
+                            ) : (
+                              <span className="cor-item-notes-text">{trimmed}</span>
+                            )}
+                            {showAuthor && (
                               <span className="cor-item-notes-author">— {item.created_by_name}</span>
                             )}
                           </div>
@@ -334,16 +353,22 @@ const CorrectionsTab: FC = () => {
                                 className="cor-item-btn cor-item-btn--approve"
                                 onClick={() => approveMutation.mutate(item.id)}
                                 disabled={busyId === item.id}
+                                aria-label="Утвердить"
+                                title="Утвердить"
                               >
-                                <Check size={12} /> Утв.
+                                <Check size={14} />
+                                <span className="cor-item-btn-text">Утв.</span>
                               </button>
                               <button
                                 type="button"
                                 className="cor-item-btn cor-item-btn--reject"
                                 onClick={() => rejectMutation.mutate(item.id)}
                                 disabled={busyId === item.id}
+                                aria-label="Отклонить"
+                                title="Отклонить"
                               >
-                                <X size={12} /> Откл.
+                                <X size={14} />
+                                <span className="cor-item-btn-text">Откл.</span>
                               </button>
                             </div>
                           )}

@@ -1,5 +1,6 @@
 import { useRef, useState, useLayoutEffect, type FC } from 'react';
 import { Calendar } from 'lucide-react';
+import './DateInput.css';
 
 interface IDateInputProps {
   value: string; // YYYY-MM-DD или ''

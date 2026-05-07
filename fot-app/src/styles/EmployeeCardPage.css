@@ -520,68 +520,6 @@
   color: var(--text-secondary);
 }
 
-.date-input-group {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  padding: 3px 6px;
-}
-
-.date-input-group:focus-within {
-  border-color: var(--accent, #4b6cff);
-}
-
-.date-input {
-  border: none;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 13px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.5px;
-  text-align: left;
-  outline: none;
-  padding: 2px 0;
-  width: 92px;
-  caret-color: var(--accent, #4b6cff);
-}
-
-.date-input::selection {
-  background: var(--accent-soft, rgba(75, 108, 255, 0.25));
-}
-
-.date-input-group { position: relative; }
-.date-input-calendar-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: 4px;
-  padding: 2px;
-  border: none;
-  background: transparent;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  border-radius: 4px;
-  transition: color var(--transition);
-}
-.date-input-calendar-btn:hover {
-  color: var(--accent, #4b6cff);
-}
-.date-input-calendar-hidden {
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-  border: 0;
-  padding: 0;
-  margin: 0;
-}
-
 .skud-period-btn {
   padding: 6px 14px;
   border-radius: var(--radius-sm);
