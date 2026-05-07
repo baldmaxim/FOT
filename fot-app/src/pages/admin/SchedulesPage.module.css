@@ -78,7 +78,8 @@
 .table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--surface-elevated);
+  background: transparent;
+  border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
 }
@@ -112,12 +113,12 @@
 }
 
 .modal {
-  background: var(--surface-elevated);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
   width: 100%;
   max-width: 760px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-xl, 0 20px 60px rgba(0, 0, 0, 0.5));
   display: flex;
   flex-direction: column;
 }
@@ -259,7 +260,7 @@
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--surface);
+  background: var(--bg-tertiary);
   color: var(--text-primary);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
@@ -281,7 +282,7 @@
 .form select:focus {
   outline: none;
   border-color: var(--primary);
-  background: var(--surface-hover);
+  background: var(--surface);
 }
 
 .form input[readonly] {
@@ -296,15 +297,15 @@
   padding: 8px 12px;
   font-size: 13px;
   color: var(--text-primary);
-  background: var(--surface);
+  background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 6px;
   cursor: pointer;
 }
 
 .checkboxRow:hover {
-  border-color: var(--border-light);
-  background: var(--surface-hover);
+  border-color: var(--primary);
+  background: var(--bg-tertiary);
 }
 
 .checkboxRow input[type='checkbox'] {
@@ -350,7 +351,7 @@
 .dayOverrideCard {
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--surface);
+  background: var(--bg-secondary);
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
@@ -359,7 +360,7 @@
 }
 
 .dayOverrideCard:hover {
-  border-color: var(--border-light);
+  border-color: var(--primary);
 }
 
 .dayOverrideHeader {
@@ -415,7 +416,7 @@
   padding: 6px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--surface);
+  background: var(--bg-tertiary);
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
@@ -536,9 +537,74 @@
 }
 
 @media (max-width: 768px) {
+  .page {
+    padding: 12px;
+  }
+
+  .tabs {
+    overflow-x: auto;
+    white-space: nowrap;
+    margin-bottom: 12px;
+  }
+
+  .tab {
+    padding: 10px 12px;
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+
+  /* Таблица — горизонтальный скролл, чтобы колонки не сжимались */
+  .table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table thead,
+  .table tbody {
+    display: table;
+    width: 100%;
+    min-width: 720px;
+  }
+
+  /* Модалка — почти full-screen на мобилке */
+  .modalOverlay {
+    padding: 0;
+    align-items: stretch;
+  }
+
+  .modal {
+    max-width: 100%;
+    border-radius: 0;
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  .modalHeader {
+    padding: 12px 14px;
+  }
+
+  .form {
+    padding: 12px 14px;
+    gap: 8px;
+  }
+
   .formSection,
   .formAdvancedGrid {
     grid-template-columns: 1fr;
+    column-gap: 8px;
+    row-gap: 6px;
+  }
+
+  /* 4-колоночная сетка времени → 2 колонны */
+  .form section > div[style*='grid-template-columns: repeat(4'] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  /* Карточки рабочих слотов — 1 в ряд */
+  .form section > div[style*='auto-fill'] {
+    grid-template-columns: 1fr !important;
   }
 
   .dayOverridesGrid,
@@ -547,7 +613,17 @@
   }
 
   .dayOverrideHeader {
-    flex-direction: column;
-    align-items: stretch;
+    flex-direction: row;
+    align-items: flex-start;
+  }
+
+  .actions {
+    padding: 10px 14px;
+  }
+
+  .previewDay {
+    min-width: 42px;
+    padding: 5px 6px;
+    font-size: 11px;
   }
 }
