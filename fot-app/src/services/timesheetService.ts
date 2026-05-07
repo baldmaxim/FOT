@@ -438,6 +438,32 @@ export const timesheetService = {
     return res.data;
   },
 
+  /**
+   * Сгенерировать .xlsx-шаблон служебной записки о работе в выходные.
+   * Бэк сам соберёт сотрудников и даты по корректировкам status='work' на выходные.
+   */
+  async generateWeekendMemo(payload: {
+    department_id: string;
+    start_date: string;
+    end_date: string;
+    reason: string;
+  }): Promise<Blob> {
+    const response = await fetch(buildApiUrl('/timesheet/weekend-memo/generate'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...buildAuthHeaders(),
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: 'Ошибка формирования служебной записки' }));
+      throw new Error(err.error || 'Ошибка формирования служебной записки');
+    }
+    return response.blob();
+  },
+
   async emailAssigned(filters: {
     month: string;
     half?: string;

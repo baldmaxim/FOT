@@ -1,6 +1,6 @@
-import { type FC, useState } from 'react';
+import { type FC, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Check, X, Send, Clock, CheckCircle, XCircle, RotateCcw, AlertCircle } from 'lucide-react';
+import { Check, X, Send, Clock, CheckCircle, XCircle, RotateCcw, AlertCircle, Download, Upload, FileText } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   timesheetApprovalService,
@@ -8,9 +8,12 @@ import {
   type ITimesheetApproval,
   type TimesheetApprovalStatus,
 } from '../../services/timesheetApprovalService';
+import { timesheetService } from '../../services/timesheetService';
 import { ApiError } from '../../api/client';
 import { useTimesheetApprovalStatus, useTimesheetDepartmentApprovals } from '../../hooks/useTimesheetApprovalData';
 import { formatTimesheetRangeLabel } from '../../utils/timesheetApprovalPeriod';
+
+const MANAGER_OBJ_ROLE_CODE = 'manager_obj';
 
 interface IProps {
   departmentId: string | null;
@@ -150,9 +153,10 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   compact = false,
   allowReview = true,
 }) => {
-  const { hasPermission } = useAuth();
+  const { hasPermission, profile } = useAuth();
   const canSubmitDepartment = hasPermission('timesheet.workflow.submit');
   const canReviewApproval = allowReview && hasPermission('timesheet.workflow.review');
+  const isManagerObj = profile?.role_code === MANAGER_OBJ_ROLE_CODE;
   const queryClient = useQueryClient();
   const activeStatus = useTimesheetApprovalStatus(departmentId, startDate, endDate);
   const monthApprovals = useTimesheetDepartmentApprovals(departmentId, month);
@@ -160,6 +164,10 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const [comment, setComment] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [missingDays, setMissingDays] = useState<IMissingDay[]>([]);
+  const [memoRequired, setMemoRequired] = useState(false);
+  const [memoReason, setMemoReason] = useState('');
+  const [memoDownloading, setMemoDownloading] = useState(false);
+  const memoFileInputRef = useRef<HTMLInputElement>(null);
 
   const invalidate = () => Promise.all([
     queryClient.invalidateQueries({ queryKey: ['timesheet-approval'] }),
@@ -181,6 +189,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
     if (!departmentId) return;
     setSubmitError(null);
     setMissingDays([]);
+    setMemoRequired(false);
     setLoading(true);
     try {
       await timesheetApprovalService.submit(departmentId, startDate, endDate);
@@ -190,10 +199,64 @@ export const TimesheetApprovalBar: FC<IProps> = ({
         const days = (err.details?.missing_days as IMissingDay[] | undefined) ?? [];
         setMissingDays(days);
         setSubmitError(err.message);
+      } else if (err instanceof ApiError && err.code === 'WEEKEND_MEMO_REQUIRED') {
+        setMemoRequired(true);
+        setSubmitError(err.message);
       } else {
         const message = err instanceof Error ? err.message : 'Ошибка подачи табеля';
         setSubmitError(message);
       }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDownloadMemo = async () => {
+    if (!departmentId) return;
+    setMemoDownloading(true);
+    try {
+      const blob = await timesheetService.generateWeekendMemo({
+        department_id: departmentId,
+        start_date: startDate,
+        end_date: endDate,
+        reason: memoReason,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `weekend-memo-${startDate}_${endDate}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Ошибка скачивания служебки';
+      setSubmitError(message);
+    } finally {
+      setMemoDownloading(false);
+    }
+  };
+
+  const handleUploadMemoClick = () => memoFileInputRef.current?.click();
+
+  const handleMemoFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !departmentId) return;
+    setLoading(true);
+    setSubmitError(null);
+    try {
+      await timesheetApprovalService.uploadAttachment({
+        department_id: departmentId,
+        start_date: startDate,
+        end_date: endDate,
+        file,
+      });
+      setMemoRequired(false);
+      await invalidate();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Ошибка загрузки служебки';
+      setSubmitError(message);
     } finally {
       setLoading(false);
     }
@@ -226,7 +289,13 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const dismissMissing = () => {
     setMissingDays([]);
     setSubmitError(null);
+    setMemoRequired(false);
   };
+
+  const activeApproval = activeStatus.data ?? null;
+  const memoSectionAllowed = isManagerObj && canSubmitDepartment && (
+    !activeApproval || activeApproval.status === 'draft' || activeApproval.status === 'rejected' || activeApproval.status === 'returned'
+  );
 
   return (
     <div className={`ts-approval-bar${compact ? ' ts-approval-bar--compact' : ''}`}>
@@ -247,7 +316,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
         onSubmit={handleSubmit}
         onCommentChange={setComment}
       />
-      {(submitError || missingDays.length > 0) && (
+      {(submitError || missingDays.length > 0 || memoRequired) && (
         <div className="ts-approval-submit-error">
           <div className="ts-approval-submit-error-header">
             <AlertCircle size={14} />
@@ -272,6 +341,45 @@ export const TimesheetApprovalBar: FC<IProps> = ({
               ))}
             </ul>
           )}
+        </div>
+      )}
+      {memoSectionAllowed && (
+        <div className="ts-approval-memo">
+          <div className="ts-approval-memo-title">
+            <FileText size={14} /> Служебная записка о работе в выходные
+          </div>
+          <textarea
+            className="ts-approval-memo-reason"
+            placeholder="Кратко обоснуйте необходимость работы в выходные (попадёт в шаблон)"
+            value={memoReason}
+            onChange={e => setMemoReason(e.target.value)}
+            rows={2}
+          />
+          <div className="ts-approval-memo-actions">
+            <button
+              type="button"
+              className="ts-btn"
+              onClick={handleDownloadMemo}
+              disabled={memoDownloading || !departmentId}
+            >
+              <Download size={14} /> Скачать шаблон
+            </button>
+            <button
+              type="button"
+              className="ts-btn"
+              onClick={handleUploadMemoClick}
+              disabled={loading || !departmentId}
+            >
+              <Upload size={14} /> Загрузить подписанную
+            </button>
+            <input
+              ref={memoFileInputRef}
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg,.xlsx"
+              style={{ display: 'none' }}
+              onChange={handleMemoFileSelected}
+            />
+          </div>
         </div>
       )}
       {otherApprovals.length > 0 && (

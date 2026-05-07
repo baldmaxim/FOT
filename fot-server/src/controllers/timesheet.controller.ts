@@ -12,6 +12,7 @@ import type { DataScope } from '../config/access-control.js';
 import { exportTimesheet } from './timesheet-export.controller.js';
 import { exportTimesheetMass } from './timesheet-mass-export.controller.js';
 import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned } from './timesheet-assigned-export.controller.js';
+import { generateWeekendMemo } from './timesheet-weekend-memo.controller.js';
 import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, getShiftDurationHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
 import {
   getMinSelfHistoryDate,
@@ -2063,4 +2064,7 @@ export const timesheetController = {
 
   /** POST /api/timesheet/email-assigned */
   emailAssigned: emailTimesheetAssigned,
+
+  /** POST /api/timesheet/weekend-memo/generate */
+  generateWeekendMemo,
 };

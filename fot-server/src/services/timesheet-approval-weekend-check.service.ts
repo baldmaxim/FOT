@@ -1,10 +1,19 @@
 import { supabase } from '../config/database.js';
 import { loadCalendarMonth } from './schedule.service.js';
 import { listEmployeeIdsAssignedToDepartmentPeriod } from './timesheet-department-assignments.service.js';
+import { countApprovalAttachments } from './timesheet-approval-attachments.service.js';
+
+export const MANAGER_OBJ_ROLE_CODE = 'manager_obj';
 
 export interface IWeekendWorkCheck {
   requires: boolean;
   weekendDates: string[];
+  weekendWorkDates: string[];
+}
+
+export interface IManagerObjMemoCheck {
+  required: boolean;
+  satisfied: boolean;
   weekendWorkDates: string[];
 }
 
@@ -97,4 +106,60 @@ export async function checkWeekendWorkRequirement(params: {
     weekendDates,
     weekendWorkDates: sortedWeekendWork,
   };
+}
+
+/**
+ * Чистая логика: по роли + найденным выходным дням + количеству вложений
+ * вычисляет, нужна ли служебка и приложена ли она.
+ * Вынесено отдельно от IO для удобного юнит-тестирования.
+ */
+export function evaluateManagerObjMemoRequirement(input: {
+  submitterRoleCode: string;
+  weekendWorkDates: string[];
+  attachmentCount: number;
+}): IManagerObjMemoCheck {
+  if (input.submitterRoleCode !== MANAGER_OBJ_ROLE_CODE) {
+    return { required: false, satisfied: true, weekendWorkDates: [] };
+  }
+  if (input.weekendWorkDates.length === 0) {
+    return { required: false, satisfied: true, weekendWorkDates: [] };
+  }
+  return {
+    required: true,
+    satisfied: input.attachmentCount > 0,
+    weekendWorkDates: [...input.weekendWorkDates].sort(),
+  };
+}
+
+/**
+ * IO-обёртка: грузит выходные дни диапазона и количество вложений,
+ * передаёт в чистую evaluateManagerObjMemoRequirement.
+ * Если submitter — не manager_obj, IO-запросы пропускаются ради экономии времени.
+ */
+export async function checkManagerObjWeekendMemoRequirement(params: {
+  submitterRoleCode: string;
+  departmentId: string;
+  startDate: string;
+  endDate: string;
+  approvalId: number | null;
+}): Promise<IManagerObjMemoCheck> {
+  if (params.submitterRoleCode !== MANAGER_OBJ_ROLE_CODE) {
+    return { required: false, satisfied: true, weekendWorkDates: [] };
+  }
+
+  const weekend = await checkWeekendWorkRequirement({
+    departmentId: params.departmentId,
+    startDate: params.startDate,
+    endDate: params.endDate,
+  });
+
+  const attachmentCount = params.approvalId
+    ? await countApprovalAttachments(params.approvalId)
+    : 0;
+
+  return evaluateManagerObjMemoRequirement({
+    submitterRoleCode: params.submitterRoleCode,
+    weekendWorkDates: weekend.weekendWorkDates,
+    attachmentCount,
+  });
 }

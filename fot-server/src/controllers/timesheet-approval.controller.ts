@@ -22,7 +22,10 @@ import {
 import { timesheetResponsiblesService } from '../services/timesheet-responsibles.service.js';
 import { timesheetApprovalHistoryService } from '../services/timesheet-approval-history.service.js';
 import { listTimesheetWorkflowRecipientIds } from '../services/timesheet-workflow-recipients.service.js';
-import { checkWeekendWorkRequirement } from '../services/timesheet-approval-weekend-check.service.js';
+import {
+  checkManagerObjWeekendMemoRequirement,
+  checkWeekendWorkRequirement,
+} from '../services/timesheet-approval-weekend-check.service.js';
 import { validateCorrectionAttachments } from '../services/timesheet-approval-correction-validation.service.js';
 import {
   APPROVAL_ATTACHMENT_CATEGORY,
@@ -294,6 +297,23 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         error: 'Есть несогласованные корректировки или незакрытые работы в выходные — подача невозможна',
         code: 'CORRECTION_VALIDATION_FAILED',
         missing_days: correctionCheck.missing,
+      });
+      return;
+    }
+
+    const memoCheck = await checkManagerObjWeekendMemoRequirement({
+      submitterRoleCode: req.user.role_code,
+      departmentId: deptId,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      approvalId: existing?.id ?? null,
+    });
+    if (memoCheck.required && !memoCheck.satisfied) {
+      res.status(400).json({
+        success: false,
+        error: 'Подача с работой в выходные требует подписанной служебной записки. Сформируйте, подпишите и приложите файл перед подачей.',
+        code: 'WEEKEND_MEMO_REQUIRED',
+        weekend_work_dates: memoCheck.weekendWorkDates,
       });
       return;
     }
