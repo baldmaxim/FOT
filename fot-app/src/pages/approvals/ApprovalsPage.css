@@ -954,11 +954,10 @@
 }
 .cor-item {
   position: relative;
-  display: grid;
-  grid-template-columns: 24px 96px minmax(0, 1fr) 130px 60px minmax(180px, 1.4fr) auto;
-  grid-template-areas: "check date emp task hours notes actions";
-  gap: 14px;
+  display: flex;
+  flex-wrap: nowrap;
   align-items: center;
+  gap: 14px;
   padding: 10px 16px 10px 19px;
   border-top: 1px solid var(--border);
   font-size: 13px;
@@ -990,10 +989,10 @@
   cursor: pointer;
   accent-color: var(--primary);
 }
-.cor-item-check { grid-area: check; }
+.cor-item-check { flex: 0 0 16px; }
 .cor-item:first-child { border-top: none; }
 .cor-item-date {
-  grid-area: date;
+  flex: 0 0 96px;
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
@@ -1011,17 +1010,17 @@
   text-transform: lowercase;
 }
 .cor-item-employee {
-  grid-area: emp;
+  flex: 1 1 0;
+  min-width: 0;
   color: var(--text-primary);
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
 }
 .cor-item-task {
-  grid-area: task;
-  display: inline-flex;
+  flex: 0 0 130px;
+  display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 3px;
@@ -1081,14 +1080,15 @@
   color: var(--text-secondary);
 }
 .cor-item-hours {
-  grid-area: hours;
+  flex: 0 0 60px;
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
   font-weight: 500;
   text-align: right;
 }
 .cor-item-notes {
-  grid-area: notes;
+  flex: 1 1 0;
+  min-width: 180px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1120,10 +1120,9 @@
   color: var(--text-tertiary);
 }
 .cor-item-actions {
-  grid-area: actions;
+  flex-shrink: 0;
   display: flex;
   gap: 6px;
-  flex-shrink: 0;
 }
 .cor-item-btn {
   display: inline-flex;
