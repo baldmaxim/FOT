@@ -1591,6 +1591,9 @@ export const StaffControlPage: FC = () => {
 
   const controlsBar = (
     <div className="sc-filters">
+      <div className="sc-filter-search">
+        <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
+      </div>
       {isSingleManagedDept ? (
         <div className="sc-dept-fixed" title="Вам назначен один отдел">
           {singleManagedDeptName ?? 'Мой отдел'}
@@ -1602,7 +1605,18 @@ export const StaffControlPage: FC = () => {
           onChange={handleDeptChange}
         />
       )}
-      {statusFilter !== 'excluded' && (
+      <select
+        className={`sc-schedule-filter${isMobile ? ' sc-schedule-filter--mobile' : ''}`}
+        value={scheduleFilter}
+        onChange={e => handleScheduleFilterChange(e.target.value)}
+        title="Фильтр по графику работы"
+      >
+        <option value="">Все графики</option>
+        {scheduleTemplates.map(tpl => (
+          <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
+        ))}
+      </select>
+      {isAdmin && statusFilter !== 'excluded' && (
         <div className="sc-segmented" role="tablist" aria-label="Статус сотрудников">
           <button
             type="button"
@@ -1624,27 +1638,13 @@ export const StaffControlPage: FC = () => {
           </button>
         </div>
       )}
-      {statusFilter === 'excluded' && (
+      {isAdmin && statusFilter === 'excluded' && (
         <div className="sc-segmented" aria-label="Режим диагностики">
           <button type="button" className="sc-seg-btn is-active" disabled>
             Без отдела (диагностика)
           </button>
         </div>
       )}
-      <div className="sc-filter-search">
-        <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
-      </div>
-      <select
-        className={`sc-schedule-filter${isMobile ? ' sc-schedule-filter--mobile' : ''}`}
-        value={scheduleFilter}
-        onChange={e => handleScheduleFilterChange(e.target.value)}
-        title="Фильтр по графику работы"
-      >
-        <option value="">Все графики</option>
-        {scheduleTemplates.map(tpl => (
-          <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
-        ))}
-      </select>
       {isAdmin && (
         <div className="sc-page-actions">
           {statusFilter === 'active' && (

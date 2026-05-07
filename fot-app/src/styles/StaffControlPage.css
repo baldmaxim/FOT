@@ -289,9 +289,9 @@
 }
 
 .sc-filter-search {
-  flex: 1;
   min-width: 200px;
   max-width: 360px;
+  margin-right: auto;
 }
 
 .sc-bulk-bar {
@@ -1320,6 +1320,7 @@
     flex: 1;
     min-width: 0;
     max-width: unset;
+    margin-right: 0;
   }
 
   .sc-segmented {
