@@ -78,7 +78,7 @@
 .table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--bg-card);
+  background: var(--surface-elevated);
   border-radius: 8px;
   overflow: hidden;
 }
@@ -112,7 +112,7 @@
 }
 
 .modal {
-  background: var(--bg-card);
+  background: var(--surface-elevated);
   border: 1px solid var(--border);
   border-radius: 10px;
   width: 100%;
