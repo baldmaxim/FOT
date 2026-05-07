@@ -21,6 +21,40 @@ import {
   toCardSummary,
   type IAccessPointBinding,
 } from './sigur-live-admin.service.js';
+import { resolveField } from './sigur-sync-shared.js';
+
+interface ISigurCardSummary {
+  cardId: number;
+  cardNumber: string | null;
+  status: string | null;
+  format: string | null;
+  startDate: string | null;
+  expirationDate: string | null;
+}
+
+const normalizeIntLocal = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+};
+
+const getBindingEmployeeIdLocal = (raw: Record<string, unknown>): number | null => {
+  const direct = normalizeIntLocal(resolveField(raw, 'employeeId', 'employee_id'));
+  if (direct) return direct;
+  const holder = raw.holder;
+  if (holder && typeof holder === 'object') {
+    const holderObj = holder as Record<string, unknown>;
+    const type = typeof holderObj.type === 'string' ? holderObj.type.toUpperCase() : '';
+    if (!type || type === 'EMP' || type === 'EMPLOYEE') {
+      const holderId = normalizeIntLocal(resolveField(holderObj, 'holderId', 'holder_id', 'id'));
+      if (holderId) return holderId;
+    }
+  }
+  return null;
+};
 
 export async function updateSigurEmployeeCardExpiration(
   sigurEmployeeId: number,
@@ -132,6 +166,103 @@ export async function replaceSigurEmployeeAccessPoints(
     removedIds: result.removedIds,
     bindings: result.bindings.map(binding => enrichAccessPointBinding(binding, accessPointObjectMeta)),
   };
+}
+
+/**
+ * Привязать карту к sigur-сотруднику по UID кандидатам (Sigur card / W26 / HEX / DEC).
+ * Если карта уже у того же сотрудника — продлевает срок (PATCH).
+ * Если карта у другого — снимает с него (DELETE) и создаёт привязку (POST).
+ * Бросает ошибку с понятным текстом, если карта не найдена в Sigur.
+ */
+export async function assignSigurEmployeeCardBinding(
+  sigurEmployeeId: number,
+  candidates: string[],
+  expirationDate?: string,
+  connection?: ConnectionType,
+): Promise<{ card: ISigurCardSummary; previousSigurEmployeeId: number | null; reassigned: boolean }> {
+  if (candidates.length === 0) {
+    throw new Error('UID карты обязателен');
+  }
+
+  const { matches } = await sigurService.findCardByCandidates(candidates, connection);
+  const cards = matches.map(toCardSummary).filter((c): c is NonNullable<ReturnType<typeof toCardSummary>> => !!c);
+  if (cards.length === 0) {
+    throw new Error('Карта не найдена в Sigur. Создайте карту в Sigur Manager перед привязкой.');
+  }
+  const card = cards[0];
+
+  const startIso = new Date().toISOString();
+  let expiresIso: string;
+  if (typeof expirationDate === 'string' && expirationDate.trim()) {
+    const parsed = new Date(expirationDate);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new Error('Некорректная дата срока действия');
+    }
+    expiresIso = parsed.toISOString();
+  } else {
+    const inFiveYears = new Date();
+    inFiveYears.setFullYear(inFiveYears.getFullYear() + 5);
+    expiresIso = inFiveYears.toISOString();
+  }
+
+  const existingBindings = await sigurService.getCardBindings({ cardId: card.cardId }, connection) as Record<string, unknown>[];
+  const existingEmployeeId = existingBindings.map(getBindingEmployeeIdLocal).find((id): id is number => !!id) || null;
+  const cardFormat = card.format || 'W26';
+
+  if (existingEmployeeId === sigurEmployeeId) {
+    await sigurService.patchEmployeeCardBinding(
+      sigurEmployeeId,
+      card.cardId,
+      startIso,
+      expiresIso,
+      connection,
+      cardFormat,
+    );
+  } else {
+    if (existingEmployeeId) {
+      await sigurService.deleteEmployeeCardBinding(existingEmployeeId, card.cardId, cardFormat, connection);
+    }
+    await sigurService.createEmployeeCardBinding(
+      sigurEmployeeId,
+      card.cardId,
+      startIso,
+      expiresIso,
+      connection,
+      cardFormat,
+    );
+  }
+
+  sigurService.invalidateCardListCache();
+
+  return {
+    card: { ...card, startDate: startIso, expirationDate: expiresIso },
+    previousSigurEmployeeId: existingEmployeeId && existingEmployeeId !== sigurEmployeeId ? existingEmployeeId : null,
+    reassigned: existingEmployeeId !== null && existingEmployeeId !== sigurEmployeeId,
+  };
+}
+
+/**
+ * Снять привязку карты с sigur-сотрудника. Формат карты подтягивается из текущей привязки.
+ */
+export async function removeSigurEmployeeCardBinding(
+  sigurEmployeeId: number,
+  cardId: number,
+  connection?: ConnectionType,
+): Promise<{ cardId: number }> {
+  const existingBindings = await sigurService.getCardBindings({ employeeId: sigurEmployeeId, cardId }, connection) as Record<string, unknown>[];
+  const ownerId = existingBindings.map(getBindingEmployeeIdLocal).find((id): id is number => !!id) || null;
+  if (ownerId !== sigurEmployeeId) {
+    throw new Error('Карта не привязана к этому сотруднику');
+  }
+  const cards = existingBindings
+    .map(raw => toCardSummary(raw))
+    .filter((c): c is NonNullable<ReturnType<typeof toCardSummary>> => !!c);
+  const cardFormat = cards[0]?.format || 'W26';
+
+  await sigurService.deleteEmployeeCardBinding(sigurEmployeeId, cardId, cardFormat, connection);
+  sigurService.invalidateCardListCache();
+
+  return { cardId };
 }
 
 export async function replaceSigurEmployeeAccessRules(

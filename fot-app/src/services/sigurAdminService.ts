@@ -397,4 +397,33 @@ export const sigurAdminService = {
     );
     return response.data;
   },
+
+  async assignEmployeeCardBinding(
+    sigurEmployeeId: number,
+    payload: { uid: string; uids?: string[]; expirationDate?: string },
+    connection?: SigurConnectionScope,
+  ): Promise<{
+    card: SigurEmployeeCardSummary;
+    previousSigurEmployeeId: number | null;
+    reassigned: boolean;
+  }> {
+    const response = await apiClient.post<ApiResponse<{
+      card: SigurEmployeeCardSummary;
+      previousSigurEmployeeId: number | null;
+      reassigned: boolean;
+    }>>(
+      `/sigur/admin/employees/${sigurEmployeeId}/cards/binding`,
+      { ...payload, connection },
+    );
+    return response.data;
+  },
+
+  async deleteEmployeeCardBinding(
+    sigurEmployeeId: number,
+    cardId: number,
+  ): Promise<void> {
+    await apiClient.delete<ApiResponse<{ cardId: number }>>(
+      `/sigur/admin/employees/${sigurEmployeeId}/cards/${cardId}/binding`,
+    );
+  },
 };

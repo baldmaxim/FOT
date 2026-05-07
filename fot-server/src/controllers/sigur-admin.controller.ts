@@ -30,6 +30,8 @@ import {
   updateSigurEmployee,
 } from '../services/sigur-live-employees-crud.service.js';
 import {
+  assignSigurEmployeeCardBinding,
+  removeSigurEmployeeCardBinding,
   replaceSigurEmployeeAccessPoints,
   replaceSigurEmployeeAccessRules,
   updateSigurEmployeeCardBinding,
@@ -886,6 +888,88 @@ export const sigurAdminController = {
         console.error('[Sigur 400] full data=', JSON.stringify(data));
       }
       res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка обновления дат карты Sigur') });
+    }
+  },
+
+  async assignEmployeeCardBinding(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const sigurEmployeeId = parseInteger(req.params.sigurEmployeeId);
+      if (!sigurEmployeeId) {
+        res.status(400).json({ success: false, error: 'sigurEmployeeId обязателен' });
+        return;
+      }
+
+      const body = (req.body || {}) as Record<string, unknown>;
+      const candidates: string[] = [];
+      const uid = typeof body.uid === 'string' ? body.uid.trim() : '';
+      if (uid) candidates.push(uid);
+      if (Array.isArray(body.uids)) {
+        for (const item of body.uids) {
+          if (typeof item === 'string' && item.trim() && !candidates.includes(item.trim())) {
+            candidates.push(item.trim());
+          }
+        }
+      }
+      if (candidates.length === 0) {
+        res.status(400).json({ success: false, error: 'uid обязателен' });
+        return;
+      }
+
+      const expirationDate = typeof body.expirationDate === 'string' ? body.expirationDate : undefined;
+      const connection = parseConnection(body.connection);
+      const result = await assignSigurEmployeeCardBinding(sigurEmployeeId, candidates, expirationDate, connection);
+
+      await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
+        entityType: 'sigur_card_binding',
+        entityId: `${sigurEmployeeId}:${result.card.cardId}`,
+        details: {
+          source: 'sigur-live-sidebar',
+          uid: candidates[0],
+          uids: candidates,
+          sigurEmployeeId,
+          cardId: result.card.cardId,
+          startDate: result.card.startDate,
+          expirationDate: result.card.expirationDate,
+          replacedSigurEmployeeId: result.previousSigurEmployeeId,
+        },
+      });
+
+      res.json({ success: true, data: result });
+    } catch (error) {
+      const status = getErrorStatus(error);
+      console.error('Sigur admin assignEmployeeCardBinding error:', error);
+      const message = error instanceof Error ? error.message : 'Ошибка привязки карты Sigur';
+      res.status(status === 500 ? 400 : status).json({ success: false, error: getErrorMessage(error, message) });
+    }
+  },
+
+  async deleteEmployeeCardBinding(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const sigurEmployeeId = parseInteger(req.params.sigurEmployeeId);
+      const cardId = parseInteger(req.params.cardId);
+      if (!sigurEmployeeId || !cardId) {
+        res.status(400).json({ success: false, error: 'sigurEmployeeId и cardId обязательны' });
+        return;
+      }
+
+      const connection = parseConnection(req.body?.connection);
+      const result = await removeSigurEmployeeCardBinding(sigurEmployeeId, cardId, connection);
+
+      await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
+        entityType: 'sigur_card_binding',
+        entityId: `${sigurEmployeeId}:${cardId}`,
+        details: {
+          action: 'remove_card_binding',
+          sigurEmployeeId,
+          cardId,
+        },
+      });
+
+      res.json({ success: true, data: result });
+    } catch (error) {
+      const status = getErrorStatus(error);
+      console.error('Sigur admin deleteEmployeeCardBinding error:', error);
+      res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка удаления карты Sigur') });
     }
   },
 };

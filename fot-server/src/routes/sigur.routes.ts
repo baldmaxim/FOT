@@ -207,6 +207,18 @@ router.patch(
   requireCritical2FA,
   sigurAdminController.updateEmployeeCardBinding,
 );
+router.post(
+  '/admin/employees/:sigurEmployeeId/cards/binding',
+  requirePageAccess('/skud-settings', 'edit'),
+  requireCritical2FA,
+  sigurAdminController.assignEmployeeCardBinding,
+);
+router.delete(
+  '/admin/employees/:sigurEmployeeId/cards/:cardId/binding',
+  requirePageAccess('/skud-settings', 'edit'),
+  requireCritical2FA,
+  sigurAdminController.deleteEmployeeCardBinding,
+);
 
 // === Monitor эндпоинты (admin+) ===
 

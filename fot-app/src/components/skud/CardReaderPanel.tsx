@@ -12,6 +12,7 @@ import {
   type ICardLookupDebug,
   type ISigurCardEmployee,
 } from '../../services/sigurCardReaderService';
+import { sigurAdminService } from '../../services/sigurAdminService';
 import { ApiError } from '../../api/client';
 import type { Employee } from '../../types';
 import './CardReaderPanel.css';
@@ -24,7 +25,8 @@ export type CardReaderMode =
       /** Найден sigurEmployeeId в Sigur (с FOT-сматчем или без) — открыть его inline (например, в SigurEmployeesTab). Приоритетнее onEmployeeFound, если задан. */
       onSigurEmployeeFound?: (sigurEmployeeId: number, fullName: string) => void;
     }
-  | { kind: 'assign-to'; presetEmployeeId: number; presetEmployeeName: string; onAssigned: () => void };
+  | { kind: 'assign-to'; presetEmployeeId: number; presetEmployeeName: string; onAssigned: () => void }
+  | { kind: 'assign-to-sigur'; presetSigurEmployeeId: number; presetEmployeeName: string; onAssigned: () => void };
 
 interface ICardReaderPanelProps {
   mode: CardReaderMode;
@@ -125,7 +127,7 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
   const lookupSeqRef = useRef(0);
   const assignedCardRef = useRef<string | null>(null);
 
-  const isAssignTo = mode.kind === 'assign-to';
+  const isAssignTo = mode.kind === 'assign-to' || mode.kind === 'assign-to-sigur';
 
   const resetForNewCard = useCallback(() => {
     setLookupResult(null);
@@ -141,7 +143,7 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
   }, [isAssignTo]);
 
   const runAutoAssign = useCallback(async (card: ICardEvent) => {
-    if (mode.kind !== 'assign-to') return;
+    if (mode.kind !== 'assign-to' && mode.kind !== 'assign-to-sigur') return;
     if (assignedCardRef.current === card.sigurCard) return;
     assignedCardRef.current = card.sigurCard;
     setAssigning(true);
@@ -150,6 +152,22 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
     try {
       const expIso = expirationDate ? new Date(expirationDate + 'T23:59:59').toISOString() : undefined;
       const uids = collectCardUids(card);
+
+      if (mode.kind === 'assign-to-sigur') {
+        const result = await sigurAdminService.assignEmployeeCardBinding(mode.presetSigurEmployeeId, {
+          uid: card.sigurCard,
+          uids,
+          expirationDate: expIso,
+        });
+        const reassignNote = result.previousSigurEmployeeId
+          ? ` (переоформлено с sigurEmployeeId ${result.previousSigurEmployeeId})`
+          : '';
+        success(`Пропуск привязан: ${mode.presetEmployeeName}${reassignNote}`);
+        setAssignSuccess(true);
+        mode.onAssigned();
+        return;
+      }
+
       const result = await sigurCardReaderService.assign({
         uid: card.sigurCard,
         uids,
@@ -189,7 +207,7 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
       .then(result => {
         if (seq !== lookupSeqRef.current) return;
         setLookupResult(result);
-        if (mode.kind === 'assign-to') {
+        if (mode.kind === 'assign-to' || mode.kind === 'assign-to-sigur') {
           void runAutoAssign(lastCard);
           return;
         }
@@ -321,7 +339,9 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
       {isAssignTo && (
         <div className="scr-assign-target">
           <div className="scr-assign-target-label">Сотрудник</div>
-          <div className="scr-assign-target-name">{(mode as Extract<CardReaderMode, { kind: 'assign-to' }>).presetEmployeeName}</div>
+          <div className="scr-assign-target-name">
+            {mode.kind === 'assign-to' || mode.kind === 'assign-to-sigur' ? mode.presetEmployeeName : ''}
+          </div>
           <label className="scr-field scr-field--inline">
             <span>Срок действия</span>
             <input

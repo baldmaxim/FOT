@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState, type FC } from 'react';
+import { useEffect, useMemo, useRef, useState, type FC } from 'react';
 import {
   CalendarDays,
   Check,
   CreditCard,
   FolderTree,
+  MoreVertical,
   Pencil,
+  Plus,
   RefreshCw,
   Save,
   ShieldCheck,
@@ -23,6 +25,7 @@ import type {
   SigurPositionSummary,
 } from '../../../types';
 import { AccessPointMapPreviewBadge } from '../../employees/AccessPointMapPreviewBadge';
+import { CardReaderModal } from '../CardReaderModal';
 import '../../employees/EmployeeSigurSidebar.css';
 
 interface ISigurLiveEmployeeSidebarProps {
@@ -202,7 +205,31 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
 
   const [runningAction, setRunningAction] = useState<'delete' | 'block' | 'unblock' | null>(null);
 
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
+  const actionsMenuRef = useRef<HTMLDivElement | null>(null);
+  const [cardReaderOpen, setCardReaderOpen] = useState(false);
+  const [removingCardId, setRemovingCardId] = useState<number | null>(null);
+
   const departmentOptions = useMemo(() => flattenDepartments(departments), [departments]);
+
+  useEffect(() => {
+    if (!actionsMenuOpen) return;
+    const handleClick = (event: MouseEvent) => {
+      if (!actionsMenuRef.current) return;
+      if (!actionsMenuRef.current.contains(event.target as Node)) {
+        setActionsMenuOpen(false);
+      }
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setActionsMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [actionsMenuOpen]);
 
   const loadProfile = async (refresh = false, includeAccessPointCatalog = false) => {
     if (!sigurEmployeeId) return;
@@ -444,6 +471,42 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
     }
   };
 
+  const handleRemoveCard = async (card: SigurEmployeeCardSummary) => {
+    if (!sigurEmployeeId) return;
+    const label = card.cardNumber || `#${card.cardId}`;
+    if (!confirm(`Удалить карту ${label} у сотрудника?`)) return;
+
+    try {
+      setRemovingCardId(card.cardId);
+      setCardSaveError('');
+      await sigurAdminService.deleteEmployeeCardBinding(sigurEmployeeId, card.cardId);
+      setProfile(prev => (
+        prev
+          ? { ...prev, cards: prev.cards.filter(item => item.cardId !== card.cardId) }
+          : prev
+      ));
+      setCardDrafts(prev => {
+        const next = { ...prev };
+        delete next[card.cardId];
+        return next;
+      });
+      setStartDateDrafts(prev => {
+        const next = { ...prev };
+        delete next[card.cardId];
+        return next;
+      });
+    } catch (error) {
+      setCardSaveError(error instanceof Error ? error.message : 'Не удалось удалить карту');
+    } finally {
+      setRemovingCardId(null);
+    }
+  };
+
+  const handleCardAssigned = () => {
+    setCardReaderOpen(false);
+    void loadProfile(true);
+  };
+
   const toggleAccessPointDraft = (accessPointId: number) => {
     setAccessPointDraftIds(prev => (
       prev.includes(accessPointId)
@@ -561,28 +624,64 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
           </div>
         </div>
 
-        <div className="ep-sigur-top-actions">
-          {canEdit && (
-            <button className="ep-sigur-action" type="button" onClick={() => setEditMode(prev => !prev)}>
+        {canEdit && (
+          <div className="ep-sigur-top-actions">
+            <button
+              className="ep-sigur-action ep-sigur-action--primary"
+              type="button"
+              onClick={() => setEditMode(prev => !prev)}
+            >
               <Pencil size={14} />
               {editMode ? 'Свернуть форму' : 'Редактировать'}
             </button>
-          )}
-          {canEdit && (
-            <button className="ep-sigur-action" type="button" onClick={() => void handleToggleBlocked()}>
-              {isBlocked ? <UserRoundCheck size={14} /> : <UserLock size={14} />}
-              {runningAction === 'block' || runningAction === 'unblock'
-                ? 'Сохранение...'
-                : isBlocked ? 'Разблокировать' : 'Заблокировать'}
-            </button>
-          )}
-          {canEdit && (
-            <button className="ep-sigur-action danger" type="button" onClick={() => void handleDelete()}>
-              <Trash2 size={14} />
-              {runningAction === 'delete' ? 'Удаление...' : 'Удалить'}
-            </button>
-          )}
-        </div>
+            <div className="ep-sigur-kebab-wrap" ref={actionsMenuRef}>
+              <button
+                className="ep-sigur-kebab-btn"
+                type="button"
+                aria-label="Дополнительно"
+                aria-haspopup="menu"
+                aria-expanded={actionsMenuOpen}
+                onClick={() => setActionsMenuOpen(prev => !prev)}
+              >
+                <MoreVertical size={16} />
+              </button>
+              {actionsMenuOpen && (
+                <div className="ep-sigur-kebab-menu" role="menu">
+                  <button
+                    className="ep-sigur-kebab-item"
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setActionsMenuOpen(false);
+                      void handleToggleBlocked();
+                    }}
+                    disabled={runningAction === 'block' || runningAction === 'unblock'}
+                  >
+                    {isBlocked ? <UserRoundCheck size={14} /> : <UserLock size={14} />}
+                    <span>
+                      {runningAction === 'block' || runningAction === 'unblock'
+                        ? 'Сохранение...'
+                        : isBlocked ? 'Разблокировать' : 'Заблокировать'}
+                    </span>
+                  </button>
+                  <button
+                    className="ep-sigur-kebab-item danger"
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setActionsMenuOpen(false);
+                      void handleDelete();
+                    }}
+                    disabled={runningAction === 'delete'}
+                  >
+                    <Trash2 size={14} />
+                    <span>{runningAction === 'delete' ? 'Удаление...' : 'Удалить'}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="ep-sigur-tags">
           <span className={`ep-sigur-tag ${isBlocked ? 'danger' : 'accent'}`}>
@@ -730,7 +829,19 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
               <CreditCard size={15} />
               <span>Карты доступа</span>
             </div>
-            <span className="ep-sigur-counter">{profile?.cards.length || 0}</span>
+            <div className="ep-sigur-section-tools">
+              <span className="ep-sigur-counter">{profile?.cards.length || 0}</span>
+              {canEdit && (
+                <button
+                  className="ep-sigur-head-btn primary"
+                  type="button"
+                  onClick={() => setCardReaderOpen(true)}
+                >
+                  <Plus size={13} />
+                  Сканировать
+                </button>
+              )}
+            </div>
           </div>
 
           {!profile ? (
@@ -784,6 +895,17 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                           disabled={!changed || savingCardId === card.cardId}
                         >
                           {savingCardId === card.cardId ? <RefreshCw size={13} className="ep-sigur-spin" /> : <Save size={13} />}
+                        </button>
+                      )}
+                      {canEdit && (
+                        <button
+                          className="ep-sigur-card-trash-btn"
+                          type="button"
+                          aria-label="Удалить карту"
+                          onClick={() => void handleRemoveCard(card)}
+                          disabled={removingCardId === card.cardId}
+                        >
+                          {removingCardId === card.cardId ? <RefreshCw size={13} className="ep-sigur-spin" /> : <Trash2 size={13} />}
                         </button>
                       )}
                     </div>
@@ -961,6 +1083,19 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
           {accessRuleError && <div className="ep-sigur-inline-error">{accessRuleError}</div>}
         </section>
       </div>
+
+      {cardReaderOpen && sigurEmployeeId && (
+        <CardReaderModal
+          title="Привязать карту к сотруднику"
+          mode={{
+            kind: 'assign-to-sigur',
+            presetSigurEmployeeId: sigurEmployeeId,
+            presetEmployeeName: fullName,
+            onAssigned: handleCardAssigned,
+          }}
+          onClose={() => setCardReaderOpen(false)}
+        />
+      )}
     </aside>
   );
 };
