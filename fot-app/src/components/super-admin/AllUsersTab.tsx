@@ -39,6 +39,7 @@ interface ITwoFactorModal {
 interface IAllUsersTabProps {
   allUsers: IUserFromApi[];
   onReload: () => Promise<void>;
+  patchAllUsersCache: (updater: (prev: IUserFromApi[]) => IUserFromApi[]) => void;
 }
 
 type IRoleOption = SystemRole;
@@ -433,7 +434,7 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
 
 UserRowExpanded.displayName = 'UserRowExpanded';
 
-export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
+export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAllUsersCache }) => {
   const toast = useToast();
   const { getRoleLabel, profile, refreshProfile } = useAuth();
   // Полный список ролей нужен админу для approval-формы (employee_variant,
@@ -511,11 +512,12 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload }) => {
     try {
       await adminService.updateUserEmployee(userId, employeeId);
       toast.success(employeeId ? `Привязан: ${empName ?? ''}` : 'Сотрудник отвязан');
+      patchAllUsersCache((prev) => prev.map((u) => u.id === userId ? { ...u, employee_id: employeeId } : u));
       await onReload();
     } catch {
       toast.error('Ошибка привязки сотрудника');
     }
-  }, [onReload, toast]);
+  }, [onReload, patchAllUsersCache, toast]);
 
   const handleNameSave = useCallback(async (userId: string, name: string) => {
     try {

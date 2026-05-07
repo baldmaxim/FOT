@@ -30,9 +30,10 @@ interface IApprovalModal {
 interface IPendingUsersTabProps {
   pendingUsers: IPendingUser[];
   onReload: () => Promise<void>;
+  patchPendingCache: (updater: (prev: IPendingUser[]) => IPendingUser[]) => void;
 }
 
-export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onReload }) => {
+export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onReload, patchPendingCache }) => {
   const toast = useToast();
   const { roles } = useAuth();
   const [approvalModal, setApprovalModal] = useState<IApprovalModal | null>(null);
@@ -79,12 +80,14 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onRel
     }
 
     try {
-      await adminService.approveUser(approvalModal.userId, {
+      const userId = approvalModal.userId;
+      await adminService.approveUser(userId, {
         position_type: approvalModal.positionType,
         employee_id: approvalModal.employeeId || undefined,
       });
       toast.success('Пользователь одобрен. Теперь выдайте ему 2FA.');
       setApprovalModal(null);
+      patchPendingCache((prev) => prev.filter((u) => u.id !== userId));
       await onReload();
     } catch {
       toast.error('Ошибка одобрения пользователя');
@@ -97,6 +100,7 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onRel
     try {
       await adminService.rejectUser(userId);
       toast.success('Заявка отклонена');
+      patchPendingCache((prev) => prev.filter((u) => u.id !== userId));
       await onReload();
     } catch {
       toast.error('Ошибка отклонения пользователя');
@@ -107,6 +111,7 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onRel
     try {
       await adminService.confirmUserEmail(userId);
       toast.success('Email подтверждён');
+      patchPendingCache((prev) => prev.map((u) => u.id === userId ? { ...u, email_confirmed: true } : u));
       await onReload();
     } catch {
       toast.error('Ошибка подтверждения email');

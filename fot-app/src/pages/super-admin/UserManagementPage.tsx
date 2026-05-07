@@ -41,13 +41,21 @@ export const UserManagementPage: React.FC = () => {
   const reloadUsers = async () => {
     try {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['admin-users', 'pending'] }),
-        queryClient.invalidateQueries({ queryKey: ['admin-users', 'all'] }),
-        queryClient.invalidateQueries({ queryKey: ['admin-employees', 'department-access'] }),
+        queryClient.refetchQueries({ queryKey: ['admin-users', 'pending'] }),
+        queryClient.refetchQueries({ queryKey: ['admin-users', 'all'] }),
+        queryClient.refetchQueries({ queryKey: ['admin-employees', 'department-access'] }),
       ]);
     } catch {
       toast.error('Ошибка загрузки данных');
     }
+  };
+
+  const patchPendingCache = (updater: (prev: IPendingUser[]) => IPendingUser[]) => {
+    queryClient.setQueryData<IPendingUser[]>(['admin-users', 'pending'], (old) => updater(old || []));
+  };
+
+  const patchAllUsersCache = (updater: (prev: IUserFromApi[]) => IUserFromApi[]) => {
+    queryClient.setQueryData<IUserFromApi[]>(['admin-users', 'all'], (old) => updater(old || []));
   };
 
   if (loading) {
@@ -100,6 +108,7 @@ export const UserManagementPage: React.FC = () => {
           <PendingUsersTab
             pendingUsers={pendingUsers}
             onReload={reloadUsers}
+            patchPendingCache={patchPendingCache}
           />
         </Suspense>
       )}
@@ -109,6 +118,7 @@ export const UserManagementPage: React.FC = () => {
           <AllUsersTab
             allUsers={allUsers}
             onReload={reloadUsers}
+            patchAllUsersCache={patchAllUsersCache}
           />
         </Suspense>
       )}
