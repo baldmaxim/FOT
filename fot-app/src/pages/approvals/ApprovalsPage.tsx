@@ -126,8 +126,18 @@ const CorrectionsTab: FC = () => {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [period, setPeriod] = useState(() => monthRange(now.getFullYear(), now.getMonth() + 1));
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [busyId, setBusyId] = useState<number | null>(null);
+
+  const toggleNotes = (id: number) => {
+    setExpandedNotes(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   useEffect(() => {
     setPeriod(monthRange(year, month));
@@ -315,8 +325,13 @@ const CorrectionsTab: FC = () => {
                       const trimmed = (item.notes ?? '').trim();
                       const isShort = trimmed.length > 0 && trimmed.length < 10;
                       const noNotes = trimmed.length === 0;
+                      const itemMods = noNotes
+                        ? ' cor-item--no-notes'
+                        : isShort ? ' cor-item--short-notes' : '';
+                      const notesExpanded = expandedNotes.has(item.id);
+                      const hours = formatHM(item.hours_override);
                       return (
-                        <li key={item.id} className="cor-item">
+                        <li key={item.id} className={`cor-item${itemMods}`}>
                           {canReview && (
                             <input
                               type="checkbox"
@@ -326,13 +341,19 @@ const CorrectionsTab: FC = () => {
                               aria-label={`Выбрать корректировку ${item.employee_name ?? item.employee_id} ${item.work_date}`}
                             />
                           )}
-                          <span className="cor-item-date">{formatDateWithWeekday(item.work_date)}</span>
+                          <span className="cor-item-date" data-hours={hours}>{formatDateWithWeekday(item.work_date)}</span>
                           <span className="cor-item-employee">{item.employee_name ?? `#${item.employee_id}`}</span>
                           <span className="cor-item-status">
                             {STATUS_ICONS[item.status] ?? '•'} {STATUS_LABELS[item.status] ?? item.status}
                           </span>
-                          <span className="cor-item-hours">{formatHM(item.hours_override)}</span>
-                          <div className={`cor-item-notes${isShort || noNotes ? ' cor-item-notes--short' : ''}`}>
+                          <span className="cor-item-hours">{hours}</span>
+                          <div
+                            className={`cor-item-notes${isShort || noNotes ? ' cor-item-notes--short' : ''}${notesExpanded ? ' cor-item-notes--expanded' : ''}`}
+                            onClick={() => toggleNotes(item.id)}
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleNotes(item.id); } }}
+                          >
                             <span>{trimmed || <em>без комментария</em>}</span>
                             {item.created_by_name && (
                               <span className="cor-item-notes-author">— {item.created_by_name}</span>
@@ -692,7 +713,9 @@ const TimesheetsTab: FC = () => {
                     </span>
                   )}
                   <span className="approvals-card-submitted">
-                    {row.submitted_by_name ?? '—'}{row.submitted_at ? `, ${formatDate(row.submitted_at.slice(0, 10))}` : ''}
+                    {row.status === 'submitted'
+                      ? `${row.submitted_by_name ?? '—'}${row.submitted_at ? `, ${formatDate(row.submitted_at.slice(0, 10))}` : ''}`
+                      : `${row.reviewed_by_name ?? row.submitted_by_name ?? '—'}${row.reviewed_at ? `, ${formatDate(row.reviewed_at.slice(0, 10))}` : ''}`}
                   </span>
                   {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                 </button>

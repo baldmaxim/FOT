@@ -552,6 +552,36 @@
   background: var(--accent-soft, rgba(75, 108, 255, 0.25));
 }
 
+.date-input-group { position: relative; }
+.date-input-calendar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4px;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color var(--transition);
+}
+.date-input-calendar-btn:hover {
+  color: var(--accent, #4b6cff);
+}
+.date-input-calendar-hidden {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
 .skud-period-btn {
   padding: 6px 14px;
   border-radius: var(--radius-sm);

@@ -1,4 +1,5 @@
 import { useRef, useState, useLayoutEffect, type FC } from 'react';
+import { Calendar } from 'lucide-react';
 
 interface IDateInputProps {
   value: string; // YYYY-MM-DD или ''
@@ -61,6 +62,7 @@ const computeIso = (digits: (string | null)[]): string | null => {
 
 export const DateInput: FC<IDateInputProps> = ({ value, onChange, className }) => {
   const inputRef = useRef<HTMLInputElement>(null);
+  const hiddenRef = useRef<HTMLInputElement>(null);
   const [digits, setDigits] = useState<(string | null)[]>(() => parse(value));
   const [lastSyncedValue, setLastSyncedValue] = useState(value);
   const pendingCaretRef = useRef<number | null>(null);
@@ -233,6 +235,25 @@ export const DateInput: FC<IDateInputProps> = ({ value, onChange, className }) =
     updateDigits(next, nextCaret);
   };
 
+  const openPicker = () => {
+    const node = hiddenRef.current;
+    if (!node) return;
+    type WithShowPicker = HTMLInputElement & { showPicker?: () => void };
+    const withPicker = node as WithShowPicker;
+    if (typeof withPicker.showPicker === 'function') {
+      try { withPicker.showPicker(); return; } catch { /* fallback ниже */ }
+    }
+    node.focus();
+    node.click();
+  };
+
+  const handleHiddenChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const iso = e.target.value;
+    if (!iso) return;
+    setDigits(parse(iso));
+    if (iso !== value) onChange(iso);
+  };
+
   return (
     <div className={`date-input-group ${className || ''}`}>
       <input
@@ -249,6 +270,24 @@ export const DateInput: FC<IDateInputProps> = ({ value, onChange, className }) =
         spellCheck={false}
         autoComplete="off"
         aria-label="Дата"
+      />
+      <button
+        type="button"
+        className="date-input-calendar-btn"
+        onClick={openPicker}
+        aria-label="Открыть календарь"
+        tabIndex={-1}
+      >
+        <Calendar size={14} />
+      </button>
+      <input
+        ref={hiddenRef}
+        type="date"
+        className="date-input-calendar-hidden"
+        value={value || ''}
+        onChange={handleHiddenChange}
+        tabIndex={-1}
+        aria-hidden="true"
       />
     </div>
   );
