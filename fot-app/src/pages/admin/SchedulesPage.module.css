@@ -265,6 +265,20 @@
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   transition: border-color 0.15s, background 0.15s;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* Тип time/date: не сжимать picker-icon в ущерб цифрам */
+.form input[type='time'],
+.form input[type='date'] {
+  min-width: 92px;
+  padding-right: 4px;
+}
+
+.form input[type='number'] {
+  min-width: 56px;
 }
 
 .form input[type='text']:hover,
@@ -402,9 +416,14 @@
 }
 
 .dayOverrideFields {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
+}
+
+.dayOverrideFields > label {
+  flex: 1 1 92px;
+  min-width: 0;
 }
 
 .dayOverrideSummary {
@@ -492,6 +511,27 @@
   line-height: 1.4;
 }
 
+/* Строка из 4 полей времени, переносится при нехватке места */
+.timeRow {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.timeRow > label {
+  flex: 1 1 110px;
+  min-width: 0;
+}
+
+/* Сетка карточек рабочих слотов цикла */
+.slotsGrid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+
 .actions {
   display: flex;
   gap: 8px;
@@ -568,17 +608,20 @@
     min-width: 720px;
   }
 
-  /* Модалка — почти full-screen на мобилке */
+  /* Модалка full-screen на мобилке: сплошной фон, чтобы страница не просвечивала между секциями */
   .modalOverlay {
     padding: 0;
     align-items: stretch;
+    background: var(--bg-primary);
   }
 
   .modal {
     max-width: 100%;
     border-radius: 0;
+    border: none;
     min-height: 100vh;
     min-height: 100dvh;
+    background: var(--surface);
   }
 
   .modalHeader {
@@ -597,14 +640,9 @@
     row-gap: 6px;
   }
 
-  /* 4-колоночная сетка времени → 2 колонны */
-  .form section > div[style*='grid-template-columns: repeat(4'] {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
-
-  /* Карточки рабочих слотов — 1 в ряд */
-  .form section > div[style*='auto-fill'] {
-    grid-template-columns: 1fr !important;
+  /* На узком экране 4 поля времени остаются flex-wrap (timeRow). Карточки слотов — 1 в ряд. */
+  .slotsGrid {
+    grid-template-columns: 1fr;
   }
 
   .dayOverridesGrid,

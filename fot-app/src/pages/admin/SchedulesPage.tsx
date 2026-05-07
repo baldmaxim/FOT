@@ -646,8 +646,8 @@ export const SchedulesPage: FC = () => {
                       />
                     </label>
 
-                    {/* Время смены — 4 поля в один ряд */}
-                    <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 8 }}>
+                    {/* Время смены — 4 поля, при нехватке места переносятся */}
+                    <div className={styles.timeRow}>
                       <label>
                         Начало
                         <input
@@ -711,7 +711,7 @@ export const SchedulesPage: FC = () => {
                   <div className={styles.patternHint}>
                     Можно выделить отдельные рабочие дни цикла со своим временем (например, пятница 9:00-17:00). Без переключателя — все рабочие дни идут по общему времени выше.
                   </div>
-                  <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
+                  <div className={styles.slotsGrid}>
                     {Array.from({ length: form.work_days_count }).map((_, idx) => {
                       const ovr = form.slot_overrides[idx];
                       const start = ovr?.work_start ?? form.work_start;
