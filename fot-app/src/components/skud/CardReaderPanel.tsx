@@ -332,7 +332,7 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
       {!connected && (
         <div className="scr-hint">
           Запустите приложение <strong>Sigur Reader EH</strong> на этом ПК. Если оно ещё не установлено —{' '}
-          смотрите <a href="/docs/skud-card-reader.md" target="_blank" rel="noreferrer">инструкцию</a>.
+          смотрите <a href="/docs/skud-card-reader.html" target="_blank" rel="noreferrer">инструкцию</a>.
         </div>
       )}
 
