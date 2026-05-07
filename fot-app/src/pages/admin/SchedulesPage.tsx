@@ -421,10 +421,23 @@ export const SchedulesPage: FC = () => {
   );
   const visibleError = error || (queryError instanceof Error ? queryError.message : '');
 
+  /**
+   * После CRUD-операции с шаблоном/назначением — сбрасываем не только локальные кэши
+   * страницы графиков, но и все производные:
+   * - кэш табеля (`timesheet-page` / `timesheet` / `timesheet-grid`) — резолв расписаний
+   *   приходит в payload табеля, поэтому без инвалидации покраска полного дня /
+   *   weekend_threshold останется по старым значениям до F5.
+   * - кэш карточки сотрудника (`employee-timesheet`).
+   * - кэш approvals (`timesheet-approval`) — там тоже виден график.
+   */
   const reloadScheduleData = async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['schedules', 'templates'] }),
-      queryClient.invalidateQueries({ queryKey: ['schedules', 'object-assignments'] }),
+      queryClient.invalidateQueries({ queryKey: ['schedules'] }),
+      queryClient.invalidateQueries({ queryKey: ['timesheet-page'] }),
+      queryClient.invalidateQueries({ queryKey: ['timesheet'] }),
+      queryClient.invalidateQueries({ queryKey: ['timesheet-grid'] }),
+      queryClient.invalidateQueries({ queryKey: ['timesheet-approval'] }),
+      queryClient.invalidateQueries({ queryKey: ['employee-timesheet'] }),
     ]);
   };
 

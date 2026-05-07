@@ -1201,9 +1201,15 @@ export const TimesheetPage: FC = () => {
         { signal: controller.signal, sync_mode: 'quick' },
       );
       setRefreshState({ phase: 'invalidating', message: 'Обновление данных табеля…' });
+      // Полное обновление: данные табеля + резолв расписаний + согласования.
+      // Без инвалидации schedules покраска полного дня (full_day_threshold) останется
+      // по старым значениям шаблона, если он был отредактирован в другой вкладке.
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+        queryClient.invalidateQueries({ queryKey: ['schedules'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-approval'] }),
+        queryClient.invalidateQueries({ queryKey: ['employee-timesheet'] }),
       ]);
       const parts: string[] = [];
       if (result.sync) {
