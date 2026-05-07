@@ -22,6 +22,7 @@ import { useManagedDepartments } from '../hooks/useManagedDepartments';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { DeptSelect } from '../components/staff/DeptSelect';
+import { useHeaderAddon } from '../components/layout/HeaderAddonContext';
 import {
   BulkBrigadeScheduleModal,
   BulkMoveDepartmentModal,
@@ -1581,11 +1582,26 @@ export const StaffControlPage: FC = () => {
     return items;
   }, [isAdmin, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, meta.total]);
 
+  const headerCounter = useMemo(() => (
+    <span className="sc-page-counter sc-page-counter--in-header">
+      {meta.total}{statusFilter === 'active' ? ` из ${totalActive}` : ''}
+    </span>
+  ), [meta.total, statusFilter, totalActive]);
+  useHeaderAddon(headerCounter);
+
   const controlsBar = (
     <div className="sc-filters">
-      <span className="sc-page-counter">
-        {meta.total}{statusFilter === 'active' ? ` из ${totalActive}` : ''}
-      </span>
+      {isSingleManagedDept ? (
+        <div className="sc-dept-fixed" title="Вам назначен один отдел">
+          {singleManagedDeptName ?? 'Мой отдел'}
+        </div>
+      ) : (
+        <DeptSelect
+          departments={allDepts}
+          value={deptId}
+          onChange={handleDeptChange}
+        />
+      )}
       {statusFilter !== 'excluded' && (
         <div className="sc-segmented" role="tablist" aria-label="Статус сотрудников">
           <button
@@ -1614,17 +1630,6 @@ export const StaffControlPage: FC = () => {
             Без отдела (диагностика)
           </button>
         </div>
-      )}
-      {isSingleManagedDept ? (
-        <div className="sc-dept-fixed" title="Вам назначен один отдел">
-          {singleManagedDeptName ?? 'Мой отдел'}
-        </div>
-      ) : (
-        <DeptSelect
-          departments={allDepts}
-          value={deptId}
-          onChange={handleDeptChange}
-        />
       )}
       <div className="sc-filter-search">
         <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />

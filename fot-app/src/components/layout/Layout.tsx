@@ -3,6 +3,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import styles from './Layout.module.css';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
+import { useHeaderAddonState } from './HeaderAddonContext';
+import { HeaderAddonProvider } from './HeaderAddonProvider';
 import { useMobileMenu } from '../../hooks/useMobileMenu';
 import { useSidebarCollapse } from '../../hooks/useSidebarCollapse';
 import { useSwipe } from '../../hooks/useSwipe';
@@ -32,6 +34,7 @@ export const Layout: FC<ILayoutProps> = ({
   const { isCollapsed, toggle: toggleCollapse } = useSidebarCollapse();
   const swipeHandlers = useSwipe({ isOpen, onOpen: open, onClose: close });
   const queryClient = useQueryClient();
+  const { addon: dynamicAddon, setAddon } = useHeaderAddonState();
 
   // Префетч структуры отделов: используется почти на всех админ-страницах
   // (selectорах отделов, дашборде, управлении кадрами). Загружаем сразу после
@@ -66,10 +69,12 @@ export const Layout: FC<ILayoutProps> = ({
           onToggleTheme={onToggleTheme}
           onMenuOpen={open}
           showPeriodTabs={showPeriodTabs}
-          titleAddon={titleAddon}
+          titleAddon={titleAddon ?? dynamicAddon}
         />
         <div className={styles.content}>
-          {children}
+          <HeaderAddonProvider setAddon={setAddon}>
+            {children}
+          </HeaderAddonProvider>
         </div>
       </main>
     </div>

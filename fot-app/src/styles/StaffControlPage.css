@@ -16,6 +16,13 @@
   background: var(--bg-secondary);
 }
 
+.sc-page-counter--in-header {
+  background: var(--bg-tertiary);
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+}
+
 .sc-page-actions {
   display: inline-flex;
   align-items: center;

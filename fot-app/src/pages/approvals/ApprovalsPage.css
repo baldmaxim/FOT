@@ -954,9 +954,8 @@
 }
 .cor-item {
   position: relative;
-  display: flex !important;
-  flex-direction: row !important;
-  flex-wrap: nowrap !important;
+  display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 14px;
   padding: 10px 16px 10px 19px;
@@ -1367,8 +1366,7 @@
     padding: 8px;
   }
   .cor-item {
-    display: grid !important;
-    flex-direction: initial !important;
+    display: grid;
     grid-template-areas:
       "head    check"
       "emp     emp"

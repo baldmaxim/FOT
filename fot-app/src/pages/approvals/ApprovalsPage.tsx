@@ -426,7 +426,9 @@ const CorrectionsTab: FC = () => {
                         : isHistory && item.approval_status === 'rejected'
                           ? ' cor-item--decided-rejected'
                           : '';
-                      const warningMod = !isHistory && (noNotes ? ' cor-item--no-notes' : isShort ? ' cor-item--short-notes' : '');
+                      const warningMod = !isHistory
+                        ? (noNotes ? ' cor-item--no-notes' : isShort ? ' cor-item--short-notes' : '')
+                        : '';
                       const itemMods = `${warningMod}${decisionMod}`;
                       const notesExpanded = expandedNotes.has(item.id);
                       const hours = formatHM(item.hours_override);
