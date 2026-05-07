@@ -10,7 +10,7 @@
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(100vw, 380px);
+  width: 100vw;
   max-width: 100%;
   z-index: 60;
   transform: translateX(100%);
@@ -208,131 +208,297 @@
   color: var(--text-secondary);
 }
 
-.ep-sigur-summary-dept {
+.ep-sigur-pill-row {
   margin-top: 6px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--text-secondary);
-  font-size: 11px;
-  border: 1px solid var(--border-subtle);
-}
-
-.ep-sigur-top-actions {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: stretch;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.ep-sigur-tags {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 10px;
 }
 
-.ep-sigur-tag {
+.ep-sigur-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 9px;
+  padding: 4px 9px;
   border-radius: 999px;
   background: var(--surface);
   border: 1px solid var(--border);
   font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
+  white-space: nowrap;
 }
 
-.ep-sigur-tag.accent {
-  color: var(--primary);
-}
-
-.ep-sigur-tag.danger {
-  color: var(--error);
-}
-
-.ep-sigur-meta {
-  margin-top: 10px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.ep-sigur-meta-row {
-  padding: 10px 11px;
-  border-radius: 12px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
-}
-
-.ep-sigur-meta-row span {
-  display: block;
-  margin-bottom: 4px;
+.ep-sigur-pill-key {
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.04em;
   text-transform: uppercase;
+  letter-spacing: 0.04em;
   color: var(--text-tertiary);
 }
 
-.ep-sigur-meta-row strong {
-  display: block;
-  font-size: 13px;
-  line-height: 1.3;
+.ep-sigur-pill-value {
   color: var(--text-primary);
 }
 
-.ep-sigur-note {
-  margin-top: 10px;
-  padding: 9px 11px;
-  border-radius: 12px;
-  background: var(--surface);
-  border: 1px solid var(--border-subtle);
+.ep-sigur-pill--success {
+  background: var(--success-muted);
+  border-color: rgba(22, 163, 74, 0.18);
+  color: var(--success);
+}
+
+.ep-sigur-pill--danger {
+  background: var(--error-muted);
+  border-color: rgba(220, 38, 38, 0.18);
+  color: var(--error);
+}
+
+.ep-sigur-field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ep-sigur-field-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.ep-sigur-field-row.stacked {
+  grid-template-columns: 1fr;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.ep-sigur-field-label {
+  font-size: 11px;
+  font-weight: 600;
   color: var(--text-secondary);
-  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.ep-sigur-field-control {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ep-sigur-field-input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+textarea.ep-sigur-field-input {
+  height: auto;
+  padding: 8px 10px;
+  resize: vertical;
   line-height: 1.45;
 }
 
-.ep-sigur-action {
+.ep-sigur-field-input:focus {
+  border-color: var(--primary);
+}
+
+.ep-sigur-field-input:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.ep-sigur-field-save {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-height: 36px;
-  padding: 8px 11px;
-  border-radius: 11px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-primary);
-  font-size: 12px;
-  font-weight: 600;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 10px;
+  background: var(--primary-light);
+  color: var(--primary);
   cursor: pointer;
   transition: all 0.15s ease;
   font-family: inherit;
 }
 
-.ep-sigur-action:hover {
-  background: var(--surface-hover);
-}
-
-.ep-sigur-action--primary {
-  flex: 1;
+.ep-sigur-field-save:hover:not(:disabled) {
   background: var(--primary);
   color: #fff;
   border-color: var(--primary);
 }
 
-.ep-sigur-action--primary:hover {
-  background: var(--primary-hover);
-  border-color: var(--primary-hover);
-  color: #fff;
+.ep-sigur-field-save:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ep-sigur-field-save.saved {
+  background: var(--success-muted);
+  border-color: rgba(22, 163, 74, 0.18);
+  color: var(--success);
+  opacity: 1;
+}
+
+.ep-sigur-field-create {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  margin-left: 120px;
+}
+
+.ep-sigur-field-create-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.ep-sigur-field-create-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.ep-sigur-field-create-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ep-sigur-access-item-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ep-sigur-access-remove-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--error);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.ep-sigur-access-remove-btn:hover:not(:disabled) {
+  background: var(--error-muted);
+  border-color: var(--error);
+}
+
+.ep-sigur-access-remove-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ep-sigur-access-add-wrap {
+  margin-top: 10px;
+  position: relative;
+}
+
+.ep-sigur-access-add-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.ep-sigur-access-add-btn:hover:not(:disabled) {
+  background: var(--primary-light);
+  border-color: var(--primary);
+}
+
+.ep-sigur-access-add-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ep-sigur-access-picker {
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-md);
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ep-sigur-access-pick-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.ep-sigur-access-pick-btn:hover:not(:disabled) {
+  background: var(--primary-light);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.ep-sigur-access-pick-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ep-sigur-access-check.checked {
+  background: var(--primary-light);
+  border-color: rgba(37, 99, 235, 0.24);
+}
+
+.ep-sigur-access-check input:disabled {
+  cursor: not-allowed;
 }
 
 .ep-sigur-kebab-wrap {
@@ -848,8 +1014,11 @@
     padding: 12px;
   }
 
-  .ep-sigur-meta {
-    grid-template-columns: 1fr;
+  .ep-sigur-avatar {
+    width: 48px;
+    height: 48px;
+    font-size: 18px;
+    border-radius: 12px;
   }
 
   .ep-sigur-tool span {
@@ -872,5 +1041,50 @@
 
   .ep-sigur-kebab-menu {
     min-width: 220px;
+  }
+
+  .ep-sigur-field-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .ep-sigur-field-input,
+  .ep-sigur-field-save,
+  .ep-sigur-field-create-btn,
+  .ep-sigur-access-add-btn,
+  .ep-sigur-access-pick-btn,
+  .ep-sigur-save-btn,
+  .ep-sigur-card-trash-btn {
+    min-height: 44px;
+  }
+
+  .ep-sigur-field-save {
+    width: 44px;
+    height: 44px;
+  }
+
+  textarea.ep-sigur-field-input {
+    min-height: 88px;
+  }
+
+  .ep-sigur-field-create {
+    margin-left: 0;
+    flex-direction: column;
+  }
+
+  .ep-sigur-access-item,
+  .ep-sigur-access-check {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
+  .ep-sigur-access-remove-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  .ep-sigur-pill {
+    font-size: 12px;
+    padding: 6px 10px;
   }
 }

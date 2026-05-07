@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FC } from 'react';
+import { useEffect, useMemo, useRef, useState, type FC, type ReactNode } from 'react';
 import {
   CalendarDays,
   Check,
@@ -164,6 +164,37 @@ const profileToDraft = (profile: SigurLiveEmployeeProfile | null): IEmployeeDraf
   description: profile?.profile.description || '',
 });
 
+interface IFieldRowProps {
+  label: string;
+  changed: boolean;
+  saving: boolean;
+  saved: boolean;
+  canEdit: boolean;
+  onSave: () => void;
+  stacked?: boolean;
+  children: ReactNode;
+}
+
+const FieldRow: FC<IFieldRowProps> = ({ label, changed, saving, saved, canEdit, onSave, stacked, children }) => (
+  <div className={`ep-sigur-field-row ${stacked ? 'stacked' : ''}`}>
+    <label className="ep-sigur-field-label">{label}</label>
+    <div className="ep-sigur-field-control">
+      {children}
+      {canEdit && (
+        <button
+          className={`ep-sigur-field-save ${saved ? 'saved' : ''}`}
+          type="button"
+          onClick={onSave}
+          disabled={saving || (!changed && !saved)}
+          aria-label={`Сохранить ${label.toLowerCase()}`}
+        >
+          {saving ? <RefreshCw size={14} className="ep-sigur-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
+        </button>
+      )}
+    </div>
+  </div>
+);
+
 export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   sigurEmployeeId,
   employee,
@@ -179,9 +210,9 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   const [profile, setProfile] = useState<SigurLiveEmployeeProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const [profileError, setProfileError] = useState('');
-  const [editMode, setEditMode] = useState(false);
-  const [savingProfile, setSavingProfile] = useState(false);
-  const [draft, setDraft] = useState<IEmployeeDraft>(profileToDraft(null));
+  const [fieldDrafts, setFieldDrafts] = useState<IEmployeeDraft>(profileToDraft(null));
+  const [savingField, setSavingField] = useState<keyof IEmployeeDraft | null>(null);
+  const [savedFieldFlash, setSavedFieldFlash] = useState<keyof IEmployeeDraft | null>(null);
   const [newPositionName, setNewPositionName] = useState('');
   const [creatingPosition, setCreatingPosition] = useState(false);
 
@@ -190,16 +221,13 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   const [savingCardId, setSavingCardId] = useState<number | null>(null);
   const [cardSaveError, setCardSaveError] = useState('');
 
-  const [accessPointEditMode, setAccessPointEditMode] = useState(false);
-  const [accessPointDraftIds, setAccessPointDraftIds] = useState<number[]>([]);
-  const [accessPointInitialIds, setAccessPointInitialIds] = useState<number[]>([]);
   const [accessPointSaving, setAccessPointSaving] = useState(false);
   const [accessPointSavedFlash, setAccessPointSavedFlash] = useState(false);
   const [accessPointError, setAccessPointError] = useState('');
-  const [accessRuleEditMode, setAccessRuleEditMode] = useState(false);
-  const [accessRuleDraftIds, setAccessRuleDraftIds] = useState<number[]>([]);
-  const [accessRuleInitialIds, setAccessRuleInitialIds] = useState<number[]>([]);
-  const [accessRuleSaving, setAccessRuleSaving] = useState(false);
+  const [accessPointPickerOpen, setAccessPointPickerOpen] = useState(false);
+  const accessPointPickerRef = useRef<HTMLDivElement | null>(null);
+
+  const [savingRuleId, setSavingRuleId] = useState<number | null>(null);
   const [accessRuleSavedFlash, setAccessRuleSavedFlash] = useState(false);
   const [accessRuleError, setAccessRuleError] = useState('');
 
@@ -240,7 +268,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
       const data = await sigurAdminService.getEmployeeProfile(sigurEmployeeId, { includeAccessPointCatalog });
       if (!refresh || data.sigurEmployeeId === sigurEmployeeId) {
         setProfile(data);
-        setDraft(profileToDraft(data));
+        setFieldDrafts(profileToDraft(data));
         const nextCardDrafts = Object.fromEntries(
           data.cards.map(card => [card.cardId, toDateInputValue(card.expirationDate)]),
         );
@@ -249,12 +277,6 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
           data.cards.map(card => [card.cardId, toDateInputValue(card.startDate)]),
         );
         setStartDateDrafts(nextStartDateDrafts);
-        const boundIds = data.accessPoints.map(point => point.accessPointId).sort((left, right) => left - right);
-        setAccessPointInitialIds(boundIds);
-        setAccessPointDraftIds(boundIds);
-        const ruleIds = data.accessRules.map(rule => rule.accessRuleId).sort((left, right) => left - right);
-        setAccessRuleInitialIds(ruleIds);
-        setAccessRuleDraftIds(ruleIds);
       }
     } catch (error) {
       setProfileError(error instanceof Error ? error.message : 'Не удалось загрузить профиль Sigur');
@@ -266,86 +288,108 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   useEffect(() => {
     if (!sigurEmployeeId) {
       setProfile(null);
-      setDraft(profileToDraft(null));
+      setFieldDrafts(profileToDraft(null));
       setCardDrafts({});
       setStartDateDrafts({});
-      setAccessPointDraftIds([]);
-      setAccessPointInitialIds([]);
-      setAccessRuleDraftIds([]);
-      setAccessRuleInitialIds([]);
-      setEditMode(false);
-      setAccessPointEditMode(false);
-      setAccessRuleEditMode(false);
+      setSavingField(null);
+      setSavedFieldFlash(null);
+      setAccessPointPickerOpen(false);
       setNewPositionName('');
       return;
     }
-    void loadProfile(false);
+    void loadProfile(false, true);
   }, [sigurEmployeeId]);
 
   useEffect(() => {
-    if (!sigurEmployeeId || !accessPointEditMode) return;
-    if ((profile?.accessPointOptions.length || 0) > 0) return;
-    void loadProfile(true, true);
-  }, [accessPointEditMode, profile?.accessPointOptions.length, sigurEmployeeId]);
+    if (!accessPointPickerOpen) return;
+    const handleClick = (event: MouseEvent) => {
+      if (!accessPointPickerRef.current) return;
+      if (!accessPointPickerRef.current.contains(event.target as Node)) {
+        setAccessPointPickerOpen(false);
+      }
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAccessPointPickerOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [accessPointPickerOpen]);
 
   const fullName = profile?.profile.fullName || employee?.name || '—';
-  const positionName = profile?.profile.positionName || employee?.positionName || '—';
-  const departmentName = profile?.profile.departmentName || employee?.departmentName || '—';
   const tabNumber = profile?.profile.tabNumber || employee?.tabId || '—';
   const isBlocked = profile?.profile.blocked === true || employee?.blocked === true;
 
   const summaryBadge = tabNumber && tabNumber !== '—' ? tabNumber.slice(0, 4) : getInitials(fullName);
 
+  const boundAccessPointIds = useMemo(
+    () => (profile?.accessPoints || []).map(point => point.accessPointId),
+    [profile?.accessPoints],
+  );
+  const boundAccessPointSet = useMemo(() => new Set(boundAccessPointIds), [boundAccessPointIds]);
+  const boundAccessRuleIds = useMemo(
+    () => (profile?.accessRules || []).map(rule => rule.accessRuleId),
+    [profile?.accessRules],
+  );
+  const boundAccessRuleSet = useMemo(() => new Set(boundAccessRuleIds), [boundAccessRuleIds]);
   const boundAccessPointGroups = useMemo(
     () => groupAccessPoints((profile?.accessPoints || []).map(bindingToViewItem)),
     [profile?.accessPoints],
   );
-  const catalogAccessPointGroups = useMemo(
+  const availableAccessPointGroups = useMemo(
     () => groupAccessPoints(
       (profile?.accessPointOptions || [])
         .map(optionToViewItem)
-        .filter((point): point is IAccessPointViewItem => !!point),
+        .filter((point): point is IAccessPointViewItem => !!point && !boundAccessPointSet.has(point.id)),
     ),
-    [profile?.accessPointOptions],
+    [profile?.accessPointOptions, boundAccessPointSet],
   );
-  const accessPointDraftSet = useMemo(() => new Set(accessPointDraftIds), [accessPointDraftIds]);
-  const accessPointHasChanges = useMemo(() => {
-    if (accessPointInitialIds.length !== accessPointDraftIds.length) return true;
-    const stableDraft = [...accessPointDraftIds].sort((left, right) => left - right);
-    return stableDraft.some((value, index) => value !== accessPointInitialIds[index]);
-  }, [accessPointDraftIds, accessPointInitialIds]);
-  const accessRuleDraftSet = useMemo(() => new Set(accessRuleDraftIds), [accessRuleDraftIds]);
-  const accessRuleHasChanges = useMemo(() => {
-    if (accessRuleInitialIds.length !== accessRuleDraftIds.length) return true;
-    const stableDraft = [...accessRuleDraftIds].sort((left, right) => left - right);
-    return stableDraft.some((value, index) => value !== accessRuleInitialIds[index]);
-  }, [accessRuleDraftIds, accessRuleInitialIds]);
 
-  const handleDraftChange = <K extends keyof IEmployeeDraft>(key: K, value: IEmployeeDraft[K]) => {
-    setDraft(prev => ({ ...prev, [key]: value }));
+  const profileBaseline = useMemo<IEmployeeDraft>(() => profileToDraft(profile), [profile]);
+
+  const handleFieldDraftChange = <K extends keyof IEmployeeDraft>(key: K, value: IEmployeeDraft[K]) => {
+    setFieldDrafts(prev => ({ ...prev, [key]: value }));
+    if (savedFieldFlash === key) setSavedFieldFlash(null);
+    setProfileError('');
   };
 
-  const handleSaveProfile = async () => {
+  const handleSaveField = async (field: keyof IEmployeeDraft) => {
     if (!sigurEmployeeId) return;
 
+    const baseline = profileBaseline[field];
+    const value = fieldDrafts[field];
+    if (value === baseline) return;
+
     try {
-      setSavingProfile(true);
+      setSavingField(field);
       setProfileError('');
-      const nextProfile = await sigurAdminService.updateEmployee(sigurEmployeeId, {
-        name: draft.name.trim(),
-        departmentId: draft.departmentId ? Number(draft.departmentId) : null,
-        positionId: draft.positionId ? Number(draft.positionId) : null,
-        tabId: draft.tabId.trim() || null,
-        description: draft.description.trim() || null,
-      });
+      const payload: Parameters<typeof sigurAdminService.updateEmployee>[1] = {};
+      if (field === 'name') {
+        payload.name = (value as string).trim();
+      } else if (field === 'departmentId') {
+        payload.departmentId = value ? Number(value) : null;
+      } else if (field === 'positionId') {
+        payload.positionId = value ? Number(value) : null;
+      } else if (field === 'tabId') {
+        payload.tabId = (value as string).trim() || null;
+      } else if (field === 'description') {
+        payload.description = (value as string).trim() || null;
+      }
+      const nextProfile = await sigurAdminService.updateEmployee(sigurEmployeeId, payload);
       setProfile(nextProfile);
-      setDraft(profileToDraft(nextProfile));
-      setEditMode(false);
+      setFieldDrafts(profileToDraft(nextProfile));
+      setSavedFieldFlash(field);
+      window.setTimeout(() => {
+        setSavedFieldFlash(prev => (prev === field ? null : prev));
+      }, 2200);
       await onDirectoryChanged();
     } catch (error) {
       setProfileError(error instanceof Error ? error.message : 'Не удалось сохранить изменения сотрудника');
     } finally {
-      setSavingProfile(false);
+      setSavingField(null);
     }
   };
 
@@ -360,7 +404,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
       setCreatingPosition(true);
       setProfileError('');
       const created = await sigurAdminService.createPosition(name);
-      setDraft(prev => ({ ...prev, positionId: String(created.id) }));
+      setFieldDrafts(prev => ({ ...prev, positionId: String(created.id) }));
       setNewPositionName('');
       await onPositionsChanged();
     } catch (error) {
@@ -507,16 +551,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
     void loadProfile(true);
   };
 
-  const toggleAccessPointDraft = (accessPointId: number) => {
-    setAccessPointDraftIds(prev => (
-      prev.includes(accessPointId)
-        ? prev.filter(id => id !== accessPointId)
-        : [...prev, accessPointId]
-    ));
-    setAccessPointSavedFlash(false);
-  };
-
-  const handleSaveAccessPoints = async () => {
+  const persistAccessPointIds = async (nextIds: number[]) => {
     if (!sigurEmployeeId) return;
 
     try {
@@ -524,18 +559,14 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
       setAccessPointError('');
       const result = await sigurAdminService.saveEmployeeAccessPoints(
         sigurEmployeeId,
-        [...accessPointDraftIds].sort((left, right) => left - right),
+        [...nextIds].sort((left, right) => left - right),
       );
-      const nextIds = result.bindings.map(binding => binding.accessPointId).sort((left, right) => left - right);
-      setAccessPointInitialIds(nextIds);
-      setAccessPointDraftIds(nextIds);
       setProfile(prev => (
         prev
           ? { ...prev, accessPoints: result.bindings }
           : prev
       ));
       setAccessPointSavedFlash(true);
-      setAccessPointEditMode(false);
       window.setTimeout(() => setAccessPointSavedFlash(false), 2200);
     } catch (error) {
       setAccessPointError(error instanceof Error ? error.message : 'Не удалось сохранить точки доступа');
@@ -544,40 +575,41 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
     }
   };
 
-  const toggleAccessRuleDraft = (accessRuleId: number) => {
-    setAccessRuleDraftIds(prev => (
-      prev.includes(accessRuleId)
-        ? prev.filter(id => id !== accessRuleId)
-        : [...prev, accessRuleId]
-    ));
-    setAccessRuleSavedFlash(false);
+  const handleAddAccessPoint = async (accessPointId: number) => {
+    if (boundAccessPointSet.has(accessPointId)) return;
+    setAccessPointPickerOpen(false);
+    await persistAccessPointIds([...boundAccessPointIds, accessPointId]);
   };
 
-  const handleSaveAccessRules = async () => {
+  const handleRemoveAccessPoint = async (accessPointId: number) => {
+    if (!boundAccessPointSet.has(accessPointId)) return;
+    await persistAccessPointIds(boundAccessPointIds.filter(id => id !== accessPointId));
+  };
+
+  const handleToggleAccessRule = async (accessRuleId: number) => {
     if (!sigurEmployeeId) return;
+    const nextIds = boundAccessRuleSet.has(accessRuleId)
+      ? boundAccessRuleIds.filter(id => id !== accessRuleId)
+      : [...boundAccessRuleIds, accessRuleId];
 
     try {
-      setAccessRuleSaving(true);
+      setSavingRuleId(accessRuleId);
       setAccessRuleError('');
       const result = await sigurAdminService.saveEmployeeAccessRules(
         sigurEmployeeId,
-        [...accessRuleDraftIds].sort((left, right) => left - right),
+        [...nextIds].sort((left, right) => left - right),
       );
-      const nextIds = result.bindings.map(binding => binding.accessRuleId).sort((left, right) => left - right);
-      setAccessRuleInitialIds(nextIds);
-      setAccessRuleDraftIds(nextIds);
       setProfile(prev => (
         prev
           ? { ...prev, accessRules: result.bindings }
           : prev
       ));
       setAccessRuleSavedFlash(true);
-      setAccessRuleEditMode(false);
       window.setTimeout(() => setAccessRuleSavedFlash(false), 2200);
     } catch (error) {
       setAccessRuleError(error instanceof Error ? error.message : 'Не удалось сохранить режимы доступа');
     } finally {
-      setAccessRuleSaving(false);
+      setSavingRuleId(null);
     }
   };
 
@@ -589,25 +621,68 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
     <aside className="ep-sigur-panel">
       <div className="ep-sigur-panel-header">
         <div className="ep-sigur-header-top">
-          <div className="ep-sigur-kicker">SIGUR LIVE</div>
           <div className="ep-sigur-header-actions">
             <button
               className="ep-sigur-tool"
               type="button"
-              onClick={() => void loadProfile(true)}
+              onClick={() => void loadProfile(true, true)}
               disabled={loading}
             >
               <RefreshCw size={14} />
               <span>Обновить</span>
             </button>
+            {canEdit && (
+              <div className="ep-sigur-kebab-wrap" ref={actionsMenuRef}>
+                <button
+                  className="ep-sigur-kebab-btn"
+                  type="button"
+                  aria-label="Дополнительно"
+                  aria-haspopup="menu"
+                  aria-expanded={actionsMenuOpen}
+                  onClick={() => setActionsMenuOpen(prev => !prev)}
+                >
+                  <MoreVertical size={16} />
+                </button>
+                {actionsMenuOpen && (
+                  <div className="ep-sigur-kebab-menu" role="menu">
+                    <button
+                      className="ep-sigur-kebab-item"
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setActionsMenuOpen(false);
+                        void handleToggleBlocked();
+                      }}
+                      disabled={runningAction === 'block' || runningAction === 'unblock'}
+                    >
+                      {isBlocked ? <UserRoundCheck size={14} /> : <UserLock size={14} />}
+                      <span>
+                        {runningAction === 'block' || runningAction === 'unblock'
+                          ? 'Сохранение...'
+                          : isBlocked ? 'Разблокировать' : 'Заблокировать'}
+                      </span>
+                    </button>
+                    <button
+                      className="ep-sigur-kebab-item danger"
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setActionsMenuOpen(false);
+                        void handleDelete();
+                      }}
+                      disabled={runningAction === 'delete'}
+                    >
+                      <Trash2 size={14} />
+                      <span>{runningAction === 'delete' ? 'Удаление...' : 'Удалить'}</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             <button className="ep-sigur-close" type="button" onClick={onClose} aria-label="Закрыть">
               <X size={16} />
             </button>
           </div>
-        </div>
-        <div className="ep-sigur-panel-heading">
-          <h3>Сотрудник Sigur</h3>
-          <p className="ep-sigur-subtitle">Live-профиль, базовые поля, карты, режимы и прямые точки доступа.</p>
         </div>
       </div>
 
@@ -616,212 +691,157 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
           <div className="ep-sigur-avatar">{summaryBadge}</div>
           <div className="ep-sigur-summary-main">
             <div className="ep-sigur-summary-name">{fullName}</div>
-            <div className="ep-sigur-summary-role">{positionName}</div>
-            <div className="ep-sigur-summary-dept">
-              <FolderTree size={13} />
-              <span>{departmentName}</span>
+            <div className="ep-sigur-pill-row">
+              <span className={`ep-sigur-pill ${isBlocked ? 'ep-sigur-pill--danger' : 'ep-sigur-pill--success'}`}>
+                <ShieldCheck size={12} />
+                {isBlocked ? 'Заблокирован' : 'Активен'}
+              </span>
+              <span className="ep-sigur-pill">
+                <span className="ep-sigur-pill-key">ID</span>
+                <span className="ep-sigur-pill-value">{sigurEmployeeId}</span>
+              </span>
+              <span className="ep-sigur-pill">
+                <span className="ep-sigur-pill-key">Таб. №</span>
+                <span className="ep-sigur-pill-value">{tabNumber}</span>
+              </span>
             </div>
           </div>
         </div>
-
-        {canEdit && (
-          <div className="ep-sigur-top-actions">
-            <button
-              className="ep-sigur-action ep-sigur-action--primary"
-              type="button"
-              onClick={() => setEditMode(prev => !prev)}
-            >
-              <Pencil size={14} />
-              {editMode ? 'Свернуть форму' : 'Редактировать'}
-            </button>
-            <div className="ep-sigur-kebab-wrap" ref={actionsMenuRef}>
-              <button
-                className="ep-sigur-kebab-btn"
-                type="button"
-                aria-label="Дополнительно"
-                aria-haspopup="menu"
-                aria-expanded={actionsMenuOpen}
-                onClick={() => setActionsMenuOpen(prev => !prev)}
-              >
-                <MoreVertical size={16} />
-              </button>
-              {actionsMenuOpen && (
-                <div className="ep-sigur-kebab-menu" role="menu">
-                  <button
-                    className="ep-sigur-kebab-item"
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setActionsMenuOpen(false);
-                      void handleToggleBlocked();
-                    }}
-                    disabled={runningAction === 'block' || runningAction === 'unblock'}
-                  >
-                    {isBlocked ? <UserRoundCheck size={14} /> : <UserLock size={14} />}
-                    <span>
-                      {runningAction === 'block' || runningAction === 'unblock'
-                        ? 'Сохранение...'
-                        : isBlocked ? 'Разблокировать' : 'Заблокировать'}
-                    </span>
-                  </button>
-                  <button
-                    className="ep-sigur-kebab-item danger"
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setActionsMenuOpen(false);
-                      void handleDelete();
-                    }}
-                    disabled={runningAction === 'delete'}
-                  >
-                    <Trash2 size={14} />
-                    <span>{runningAction === 'delete' ? 'Удаление...' : 'Удалить'}</span>
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        <div className="ep-sigur-tags">
-          <span className={`ep-sigur-tag ${isBlocked ? 'danger' : 'accent'}`}>
-            <ShieldCheck size={13} />
-            {isBlocked ? 'Заблокирован' : 'Активен'}
-          </span>
-        </div>
-
-        <div className="ep-sigur-meta">
-          <div className="ep-sigur-meta-row">
-            <span>Sigur ID</span>
-            <strong>{sigurEmployeeId}</strong>
-          </div>
-          <div className="ep-sigur-meta-row">
-            <span>Табельный номер</span>
-            <strong>{tabNumber}</strong>
-          </div>
-          <div className="ep-sigur-meta-row">
-            <span>Должность</span>
-            <strong>{positionName}</strong>
-          </div>
-          <div className="ep-sigur-meta-row">
-            <span>Отдел</span>
-            <strong>{departmentName}</strong>
-          </div>
-        </div>
-
-        {profile?.profile.description && (
-          <div className="ep-sigur-note">{profile.profile.description}</div>
-        )}
 
         {loading && !profile && (
           <div className="ep-sigur-placeholder">Загрузка данных Sigur...</div>
         )}
         {profileError && <div className="ep-sigur-inline-error">{profileError}</div>}
 
-        {editMode && (
-          <section className="ep-sigur-section">
-            <div className="ep-sigur-section-head">
-              <div className="ep-sigur-section-title">
-                <Pencil size={15} />
-                <span>Редактирование</span>
-              </div>
+        <section className="ep-sigur-section">
+          <div className="ep-sigur-section-head">
+            <div className="ep-sigur-section-title">
+              <Pencil size={15} />
+              <span>Профиль</span>
             </div>
-            <div className="ep-modal-stack">
-              <label>
-                ФИО
+          </div>
+          <div className="ep-sigur-field-stack">
+            <FieldRow
+              label="Должность"
+              changed={fieldDrafts.positionId !== profileBaseline.positionId}
+              saving={savingField === 'positionId'}
+              saved={savedFieldFlash === 'positionId'}
+              canEdit={canEdit}
+              onSave={() => void handleSaveField('positionId')}
+            >
+              <select
+                className="ep-sigur-field-input"
+                value={fieldDrafts.positionId}
+                onChange={event => handleFieldDraftChange('positionId', event.target.value)}
+                disabled={!canEdit || savingField === 'positionId' || (positionsLoading && positions.length === 0)}
+              >
+                {positionsLoading && positions.length === 0 ? (
+                  <option value="" disabled>Загрузка...</option>
+                ) : (
+                  <>
+                    <option value="">—</option>
+                    {positions.map(position => (
+                      <option key={position.id} value={position.id}>{position.name}</option>
+                    ))}
+                  </>
+                )}
+              </select>
+            </FieldRow>
+            {canEdit && (
+              <div className="ep-sigur-field-create">
                 <input
-                  className="ep-modal-input"
-                  value={draft.name}
-                  onChange={event => handleDraftChange('name', event.target.value)}
-                  disabled={!canEdit || savingProfile}
+                  className="ep-sigur-field-input"
+                  value={newPositionName}
+                  onChange={event => setNewPositionName(event.target.value)}
+                  placeholder="Новая должность..."
+                  disabled={creatingPosition}
                 />
-              </label>
-              <label>
-                Отдел
-                <select
-                  className="ep-modal-select"
-                  value={draft.departmentId}
-                  onChange={event => handleDraftChange('departmentId', event.target.value)}
-                  disabled={!canEdit || savingProfile}
+                <button
+                  className="ep-sigur-field-create-btn"
+                  type="button"
+                  onClick={() => void handleCreatePosition()}
+                  disabled={creatingPosition || !newPositionName.trim()}
                 >
+                  {creatingPosition ? <RefreshCw size={13} className="ep-sigur-spin" /> : <Plus size={13} />}
+                  <span>{creatingPosition ? 'Создание...' : 'Создать'}</span>
+                </button>
+              </div>
+            )}
+
+            <FieldRow
+              label="Отдел"
+              changed={fieldDrafts.departmentId !== profileBaseline.departmentId}
+              saving={savingField === 'departmentId'}
+              saved={savedFieldFlash === 'departmentId'}
+              canEdit={canEdit}
+              onSave={() => void handleSaveField('departmentId')}
+            >
+              <select
+                className="ep-sigur-field-input"
+                value={fieldDrafts.departmentId}
+                onChange={event => handleFieldDraftChange('departmentId', event.target.value)}
+                disabled={!canEdit || savingField === 'departmentId'}
+              >
                   <option value="">—</option>
                   {departmentOptions.map(option => (
                     <option key={option.id} value={option.id}>
                       {'\u00A0\u00A0'.repeat(option.level)}{option.name}
                     </option>
                   ))}
-                </select>
-              </label>
-              <label>
-                Должность
-                <select
-                  className="ep-modal-select"
-                  value={draft.positionId}
-                  onChange={event => handleDraftChange('positionId', event.target.value)}
-                  disabled={!canEdit || savingProfile || (positionsLoading && positions.length === 0)}
-                >
-                  {positionsLoading && positions.length === 0 ? (
-                    <option value="" disabled>Загрузка...</option>
-                  ) : (
-                    <>
-                      <option value="">—</option>
-                      {positions.map(position => (
-                        <option key={position.id} value={position.id}>{position.name}</option>
-                      ))}
-                    </>
-                  )}
-                </select>
-              </label>
-              {canEdit && (
-                <div className="sigur-live-inline-create">
-                  <input
-                    className="ep-modal-input"
-                    value={newPositionName}
-                    onChange={event => setNewPositionName(event.target.value)}
-                    placeholder="Новая должность..."
-                    disabled={creatingPosition || savingProfile}
-                  />
-                  <button
-                    className="ep-modal-btn secondary"
-                    type="button"
-                    onClick={() => void handleCreatePosition()}
-                    disabled={creatingPosition || savingProfile}
-                  >
-                    {creatingPosition ? 'Создание...' : 'Создать'}
-                  </button>
-                </div>
-              )}
-              <label>
-                Табельный номер
-                <input
-                  className="ep-modal-input"
-                  value={draft.tabId}
-                  onChange={event => handleDraftChange('tabId', event.target.value)}
-                  disabled={!canEdit || savingProfile}
-                />
-              </label>
-              <label>
-                Описание
-                <textarea
-                  className="ep-modal-input"
-                  value={draft.description}
-                  onChange={event => handleDraftChange('description', event.target.value)}
-                  disabled={!canEdit || savingProfile}
-                  rows={4}
-                />
-              </label>
-            </div>
-            <div className="ep-modal-footer">
-              <button className="ep-modal-btn secondary" type="button" onClick={() => setEditMode(false)}>
-                Отмена
-              </button>
-              <button className="ep-modal-btn primary" type="button" onClick={() => void handleSaveProfile()} disabled={savingProfile}>
-                <Save size={14} />
-                {savingProfile ? 'Сохранение...' : 'Сохранить'}
-              </button>
-            </div>
-          </section>
-        )}
+              </select>
+            </FieldRow>
+
+            <FieldRow
+              label="ФИО"
+              changed={fieldDrafts.name !== profileBaseline.name}
+              saving={savingField === 'name'}
+              saved={savedFieldFlash === 'name'}
+              canEdit={canEdit}
+              onSave={() => void handleSaveField('name')}
+            >
+              <input
+                className="ep-sigur-field-input"
+                value={fieldDrafts.name}
+                onChange={event => handleFieldDraftChange('name', event.target.value)}
+                disabled={!canEdit || savingField === 'name'}
+              />
+            </FieldRow>
+
+            <FieldRow
+              label="Табельный номер"
+              changed={fieldDrafts.tabId !== profileBaseline.tabId}
+              saving={savingField === 'tabId'}
+              saved={savedFieldFlash === 'tabId'}
+              canEdit={canEdit}
+              onSave={() => void handleSaveField('tabId')}
+            >
+              <input
+                className="ep-sigur-field-input"
+                value={fieldDrafts.tabId}
+                onChange={event => handleFieldDraftChange('tabId', event.target.value)}
+                disabled={!canEdit || savingField === 'tabId'}
+              />
+            </FieldRow>
+
+            <FieldRow
+              label="Описание"
+              changed={fieldDrafts.description !== profileBaseline.description}
+              saving={savingField === 'description'}
+              saved={savedFieldFlash === 'description'}
+              canEdit={canEdit}
+              onSave={() => void handleSaveField('description')}
+              stacked
+            >
+              <textarea
+                className="ep-sigur-field-input"
+                value={fieldDrafts.description}
+                onChange={event => handleFieldDraftChange('description', event.target.value)}
+                disabled={!canEdit || savingField === 'description'}
+                rows={3}
+              />
+            </FieldRow>
+          </div>
+        </section>
 
         <section className="ep-sigur-section">
           <div className="ep-sigur-section-head">
@@ -930,58 +950,12 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                   Сохранено
                 </span>
               )}
-              {canEdit && (
-                <button
-                  className="ep-sigur-head-btn primary"
-                  type="button"
-                  onClick={() => setAccessPointEditMode(prev => !prev)}
-                >
-                  {accessPointEditMode ? <X size={13} /> : <Pencil size={13} />}
-                  {accessPointEditMode ? 'Закрыть' : 'Изменить'}
-                </button>
-              )}
+              <span className="ep-sigur-counter">{boundAccessPointIds.length}</span>
             </div>
           </div>
 
           {!profile ? (
             <div className="ep-sigur-placeholder">Данные ещё не загружены.</div>
-          ) : accessPointEditMode ? (
-            <>
-              <div className="ep-sigur-access-groups">
-                {catalogAccessPointGroups.map(group => (
-                  <div key={group.key} className="ep-sigur-access-group">
-                    <div className="ep-sigur-access-title">{group.title}</div>
-                    <div className="ep-sigur-access-list selectable">
-                      {group.items.map(item => (
-                        <label key={item.id} className="ep-sigur-access-check">
-                          <input
-                            type="checkbox"
-                            checked={accessPointDraftSet.has(item.id)}
-                            onChange={() => toggleAccessPointDraft(item.id)}
-                            disabled={accessPointSaving}
-                          />
-                          <span>{item.label}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="ep-modal-footer">
-                <button className="ep-modal-btn secondary" type="button" onClick={() => setAccessPointEditMode(false)}>
-                  Отмена
-                </button>
-                <button
-                  className="ep-modal-btn primary"
-                  type="button"
-                  onClick={() => void handleSaveAccessPoints()}
-                  disabled={accessPointSaving || !accessPointHasChanges}
-                >
-                  <Save size={14} />
-                  {accessPointSaving ? 'Сохранение...' : 'Сохранить'}
-                </button>
-              </div>
-            </>
           ) : boundAccessPointGroups.length === 0 ? (
             <div className="ep-sigur-placeholder">Прямые точки доступа не назначены.</div>
           ) : (
@@ -993,17 +967,71 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                     {group.items.map(item => (
                       <div key={item.id} className="ep-sigur-access-item">
                         <span>{item.label}</span>
-                        {item.hasMapPreview && (
-                          <AccessPointMapPreviewBadge
-                            accessPointName={item.name}
-                            enabled={item.hasMapPreview}
-                          />
-                        )}
+                        <div className="ep-sigur-access-item-actions">
+                          {item.hasMapPreview && (
+                            <AccessPointMapPreviewBadge
+                              accessPointName={item.name}
+                              enabled={item.hasMapPreview}
+                            />
+                          )}
+                          {canEdit && (
+                            <button
+                              className="ep-sigur-access-remove-btn"
+                              type="button"
+                              aria-label={`Удалить ${item.name}`}
+                              onClick={() => void handleRemoveAccessPoint(item.id)}
+                              disabled={accessPointSaving}
+                            >
+                              <X size={14} />
+                            </button>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {canEdit && profile && (
+            <div className="ep-sigur-access-add-wrap" ref={accessPointPickerRef}>
+              <button
+                className="ep-sigur-access-add-btn"
+                type="button"
+                onClick={() => setAccessPointPickerOpen(prev => !prev)}
+                disabled={accessPointSaving}
+              >
+                <Plus size={14} />
+                <span>Добавить точку доступа</span>
+              </button>
+              {accessPointPickerOpen && (
+                <div className="ep-sigur-access-picker">
+                  {availableAccessPointGroups.length === 0 ? (
+                    <div className="ep-sigur-placeholder">Нет доступных точек для добавления.</div>
+                  ) : (
+                    availableAccessPointGroups.map(group => (
+                      <div key={group.key} className="ep-sigur-access-group">
+                        <div className="ep-sigur-access-title">{group.title}</div>
+                        <div className="ep-sigur-access-list">
+                          {group.items.map(item => (
+                            <button
+                              key={item.id}
+                              className="ep-sigur-access-pick-btn"
+                              type="button"
+                              onClick={() => void handleAddAccessPoint(item.id)}
+                              disabled={accessPointSaving}
+                            >
+                              <Plus size={13} />
+                              <span>{item.label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1023,60 +1051,31 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                   Сохранено
                 </span>
               )}
-              <span className="ep-sigur-counter">{profile?.accessRules.length || 0}</span>
-              {canEdit && (
-                <button
-                  className="ep-sigur-head-btn primary"
-                  type="button"
-                  onClick={() => setAccessRuleEditMode(prev => !prev)}
-                >
-                  {accessRuleEditMode ? <X size={13} /> : <Pencil size={13} />}
-                  {accessRuleEditMode ? 'Закрыть' : 'Изменить'}
-                </button>
-              )}
+              <span className="ep-sigur-counter">{boundAccessRuleIds.length}</span>
             </div>
           </div>
           {!profile ? (
             <div className="ep-sigur-placeholder">Данные ещё не загружены.</div>
-          ) : accessRuleEditMode ? (
-            <>
-              <div className="ep-sigur-access-list selectable">
-                {profile.accessRuleOptions.map(rule => (
-                  <label key={rule.accessRuleId} className="ep-sigur-access-check">
-                    <input
-                      type="checkbox"
-                      checked={accessRuleDraftSet.has(rule.accessRuleId)}
-                      onChange={() => toggleAccessRuleDraft(rule.accessRuleId)}
-                      disabled={accessRuleSaving}
-                    />
-                    <span>{rule.accessRuleName || `Режим #${rule.accessRuleId}`}</span>
-                  </label>
-                ))}
-              </div>
-              <div className="ep-modal-footer">
-                <button className="ep-modal-btn secondary" type="button" onClick={() => setAccessRuleEditMode(false)}>
-                  Отмена
-                </button>
-                <button
-                  className="ep-modal-btn primary"
-                  type="button"
-                  onClick={() => void handleSaveAccessRules()}
-                  disabled={accessRuleSaving || !accessRuleHasChanges}
-                >
-                  <Save size={14} />
-                  {accessRuleSaving ? 'Сохранение...' : 'Сохранить'}
-                </button>
-              </div>
-            </>
-          ) : profile.accessRules.length === 0 ? (
-            <div className="ep-sigur-placeholder">Режимы доступа не назначены.</div>
+          ) : profile.accessRuleOptions.length === 0 ? (
+            <div className="ep-sigur-placeholder">Режимы доступа не настроены в Sigur.</div>
           ) : (
-            <div className="ep-sigur-simple-list">
-              {profile.accessRules.map(rule => (
-                <div key={rule.accessRuleId} className="ep-sigur-simple-row">
+            <div className="ep-sigur-access-list selectable">
+              {profile.accessRuleOptions.map(rule => (
+                <label
+                  key={rule.accessRuleId}
+                  className={`ep-sigur-access-check ${boundAccessRuleSet.has(rule.accessRuleId) ? 'checked' : ''}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={boundAccessRuleSet.has(rule.accessRuleId)}
+                    onChange={() => void handleToggleAccessRule(rule.accessRuleId)}
+                    disabled={!canEdit || savingRuleId !== null}
+                  />
                   <span>{rule.accessRuleName || `Режим #${rule.accessRuleId}`}</span>
-                  <strong>{rule.accessRuleId}</strong>
-                </div>
+                  {savingRuleId === rule.accessRuleId && (
+                    <RefreshCw size={13} className="ep-sigur-spin" />
+                  )}
+                </label>
               ))}
             </div>
           )}
