@@ -445,21 +445,30 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
             </div>
           )}
 
-          {!isAssignTo && !lookupLoading && lookupResult?.found && !lookupResult.employee && (
+          {!isAssignTo && !lookupLoading && lookupResult?.found && lookupResult.sigurEmployeeId != null && !lookupResult.employee && (
             <div className="scr-card scr-card--orphan">
               <p>
-                Карта привязана к сотруднику Sigur{lookupResult.sigurEmployeeId ? <> (id <strong>{lookupResult.sigurEmployeeId}</strong>)</> : ''},
+                Карта привязана к сотруднику Sigur (id <strong>{lookupResult.sigurEmployeeId}</strong>),
                 но получить его данные не удалось. Проверьте подключение к Sigur или сотрудника в Sigur Manager.
               </p>
               <DebugBlock debug={lookupResult.debug} />
             </div>
           )}
 
-          {!isAssignTo && !lookupLoading && lookupResult && !lookupResult.found && (
+          {!isAssignTo && !lookupLoading && lookupResult && (!lookupResult.found || lookupResult.sigurEmployeeId == null) && (
             <div className="scr-card scr-card--assign">
               <div className="scr-assign-head">
-                <h3>Карта не привязана</h3>
-                <p>Найдите сотрудника и привяжите этот пропуск.</p>
+                {lookupResult.found ? (
+                  <>
+                    <h3>Карта свободна</h3>
+                    <p>Карта зарегистрирована в Sigur, но не привязана к сотруднику. Найдите его и привяжите этот пропуск.</p>
+                  </>
+                ) : (
+                  <>
+                    <h3>Карта не найдена в Sigur</h3>
+                    <p>Карты нет в Sigur Manager — привязка не пройдёт. Сначала создайте карту в Sigur Manager, потом сканируйте снова.</p>
+                  </>
+                )}
               </div>
 
               <input
