@@ -28,7 +28,15 @@ export class SigurDataService extends SigurServiceBase {
   private cardListCache: { data: Record<string, unknown>[]; fetchedAt: number } | null = null;
   private cardListFetchPromise: Promise<Record<string, unknown>[]> | null = null;
   private readonly CARD_LIST_TTL = 60 * 1000; // 1 минута — карты в Sigur не меняются часто
+  // Базовый TTL для employees: 5 мин. Сотрудники добавляются часто; для остальных
+  // дифференцированные TTL ниже — структура (отделы, точки, правила) меняется редко,
+  // и Socket.IO push при admin CRUD инвалидирует кэш мгновенно.
   private readonly CACHE_TTL = 5 * 60 * 1000;
+  private readonly EMPLOYEE_COUNT_CACHE_TTL = 30 * 60 * 1000;
+  private readonly DEPARTMENT_CACHE_TTL = 60 * 60 * 1000;
+  private readonly ACCESS_POINT_CACHE_TTL = 60 * 60 * 1000;
+  private readonly ACCESS_RULE_CACHE_TTL = 4 * 60 * 60 * 1000;
+  private readonly POSITION_CACHE_TTL = 4 * 60 * 60 * 1000;
   private readonly EVENT_CHUNK_MS = SIGUR_EVENT_CHUNK_MS;
   private readonly EVENT_CHUNK_OVERLAP_MS = 60 * 1000;
   private static readonly SIGUR_TIMEZONE_OFFSET_MS = 3 * 60 * 60 * 1000;
@@ -163,7 +171,7 @@ export class SigurDataService extends SigurServiceBase {
   }
 
   async getEmployeeCountByDepartmentCached(connection?: ConnectionType): Promise<Map<number, number>> {
-    if (this.employeeCountCache && (Date.now() - this.employeeCountCache.fetchedAt) < this.CACHE_TTL) {
+    if (this.employeeCountCache && (Date.now() - this.employeeCountCache.fetchedAt) < this.EMPLOYEE_COUNT_CACHE_TTL) {
       return new Map(this.employeeCountCache.map);
     }
 
@@ -379,7 +387,7 @@ export class SigurDataService extends SigurServiceBase {
   }
 
   async getDepartmentMapCached(connection?: ConnectionType): Promise<Map<number, string>> {
-    if (this.departmentCache && (Date.now() - this.departmentCache.fetchedAt) < this.CACHE_TTL) {
+    if (this.departmentCache && (Date.now() - this.departmentCache.fetchedAt) < this.DEPARTMENT_CACHE_TTL) {
       return this.departmentCache.map;
     }
 
@@ -401,7 +409,7 @@ export class SigurDataService extends SigurServiceBase {
   }
 
   async getDepartmentsCached(connection?: ConnectionType): Promise<Record<string, unknown>[]> {
-    if (this.departmentListCache && (Date.now() - this.departmentListCache.fetchedAt) < this.CACHE_TTL) {
+    if (this.departmentListCache && (Date.now() - this.departmentListCache.fetchedAt) < this.DEPARTMENT_CACHE_TTL) {
       return this.departmentListCache.data;
     }
 
@@ -460,7 +468,7 @@ export class SigurDataService extends SigurServiceBase {
   }
 
   async getAccessPointMapCached(connection?: ConnectionType): Promise<Map<number, string>> {
-    if (this.accessPointCache && (Date.now() - this.accessPointCache.fetchedAt) < this.CACHE_TTL) {
+    if (this.accessPointCache && (Date.now() - this.accessPointCache.fetchedAt) < this.ACCESS_POINT_CACHE_TTL) {
       return this.accessPointCache.map;
     }
 
@@ -491,7 +499,7 @@ export class SigurDataService extends SigurServiceBase {
   }
 
   async getAccessRuleMapCached(connection?: ConnectionType): Promise<Map<number, string>> {
-    if (this.accessRuleCache && (Date.now() - this.accessRuleCache.fetchedAt) < this.CACHE_TTL) {
+    if (this.accessRuleCache && (Date.now() - this.accessRuleCache.fetchedAt) < this.ACCESS_RULE_CACHE_TTL) {
       return this.accessRuleCache.map;
     }
 
@@ -840,6 +848,33 @@ export class SigurDataService extends SigurServiceBase {
     return this.enrichRawEvents(rawEvents, connection);
   }
 
+  /**
+   * Incremental polling: запрашивает события строго с id > lastEventId.
+   * Sigur использует индексный seek по PK, без фильтра по timestamp — на пустых
+   * тиках возвращает [] за миллисекунды. Полная замена window-by-time для polling.
+   */
+  async getEventsByLastId(
+    lastEventId: number,
+    eventType?: string,
+    connection?: ConnectionType,
+    pageSize?: number,
+  ): Promise<Record<string, unknown>[]> {
+    const params: Record<string, any> = { lastId: lastEventId };
+    if (eventType) {
+      const typeId = SigurDataService.EVENT_TYPE_ID_MAP[eventType];
+      if (typeId) params.eventTypeId = typeId;
+    }
+    const effectivePageSize = pageSize ?? SIGUR_EVENT_PAGE_SIZE;
+    const rawEvents = await this.fetchAllByLastId<Record<string, unknown>>(
+      '/api/v1/events',
+      params,
+      connection,
+      effectivePageSize,
+    );
+    console.log(`[sigur] getEventsByLastId raw: ${rawEvents.length} events (since id=${lastEventId})`);
+    return this.enrichRawEvents(rawEvents, connection);
+  }
+
   async getEventsLimited(
     startTime?: string,
     endTime?: string,
@@ -870,7 +905,7 @@ export class SigurDataService extends SigurServiceBase {
   }
 
   async getPositionOptionsCached(connection?: ConnectionType): Promise<Array<{ id: number; name: string }>> {
-    if (this.positionCache && (Date.now() - this.positionCache.fetchedAt) < this.CACHE_TTL) {
+    if (this.positionCache && (Date.now() - this.positionCache.fetchedAt) < this.POSITION_CACHE_TTL) {
       return this.positionCache.data;
     }
 
@@ -907,7 +942,7 @@ export class SigurDataService extends SigurServiceBase {
       if (derived.length > 0) {
         console.log(`[sigur] positions derived from employees cache: ${derived.length} unique`);
         // Shorter TTL so a restored /api/v1/positions endpoint is picked up quickly
-        this.positionCache = { data: derived, fetchedAt: Date.now() - (this.CACHE_TTL - 60_000) };
+        this.positionCache = { data: derived, fetchedAt: Date.now() - (this.POSITION_CACHE_TTL - 60_000) };
         return derived;
       }
     } catch (error) {

@@ -42,6 +42,7 @@ const mockedState = vi.hoisted(() => ({
     isConfigured: vi.fn(() => true),
     getBackgroundConnectionType: vi.fn(() => 'external'),
     getEvents: vi.fn<(...args: unknown[]) => Promise<Array<Record<string, unknown>>>>(async () => []),
+    getEventsByLastId: vi.fn<(...args: unknown[]) => Promise<Array<Record<string, unknown>>>>(async () => []),
   },
   sigurMonitorMock: {
     markPresencePollingCycleStarted: vi.fn(),

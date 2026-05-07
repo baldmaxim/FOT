@@ -19,10 +19,12 @@ import type { ISyncContext } from './sigur-sync-shared.js';
 import { isSigurRuntimeAllowed, logSigurRuntimeGuardSkip } from './sigur-runtime-guard.service.js';
 
 const MIN_STRUCTURE_SYNC_INTERVAL = 60_000; // 1 минута — нижний предел против самой Sigur API
-// 30 минут — компромисс между свежестью данных и нагрузкой на Sigur REST API.
-// Socket.IO push после admin CRUD даёт мгновенный UX, поэтому scheduler нужен
-// только для подхвата внешних изменений в Sigur.
-const DEFAULT_STRUCTURE_SYNC_INTERVAL = 30 * 60_000;
+// 2 часа — структура (отделы/должности/сотрудники) меняется в основном через нашу
+// админку, при этом admin CRUD уже шлёт Socket.IO push structure_updated, и фронт
+// обновляется мгновенно. Scheduler нужен лишь чтобы подхватить редкие внешние
+// изменения непосредственно в Sigur — раз в 2 часа более чем достаточно, и это
+// освобождает слоты SigurRequestLimiter для polling.
+const DEFAULT_STRUCTURE_SYNC_INTERVAL = 2 * 60 * 60_000;
 
 function resolveStructureSyncInterval(): number {
   const parsed = Number.parseInt(env.SIGUR_STRUCTURE_SYNC_INTERVAL_MS, 10);

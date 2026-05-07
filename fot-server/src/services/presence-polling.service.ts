@@ -37,6 +37,8 @@ import type { ConnectionType } from './sigur.service.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const MIN_POLL_INTERVAL_MS = 5_000;
+const POLL_IDLE_INTERVAL_MS = 30_000;
+const POLL_IDLE_THRESHOLD = 5;
 const EMPLOYEE_CACHE_TTL = 10 * 60_000;
 const BATCH_SIZE = 200;
 const BATCH_DELAY_MS = 150;
@@ -52,7 +54,9 @@ const EXCLUSIVE_SYNC_ACQUIRE_TIMEOUT_MS = 45_000;
 const STRUCTURE_SYNC_WAIT_TIMEOUT_MS = 10 * 60_000;
 const EXCLUSIVE_SYNC_ACQUIRE_RETRY_MS = 1_000;
 
-let pollingTimer: ReturnType<typeof setInterval> | null = null;
+let pollingTimer: ReturnType<typeof setTimeout> | null = null;
+let pollingActive = false;
+let consecutiveEmptyTicks = 0;
 let startupTimeout: ReturnType<typeof setTimeout> | null = null;
 let manualSyncLocks = 0;
 let pollInFlight: Promise<void> | null = null;
@@ -86,9 +90,13 @@ interface EmployeeMaps {
 
 export { invalidatePresencePollingEmployeeCache };
 
-type PollCheckpointSource = 'runtime_state' | 'stored_events' | 'fallback';
+type PollCheckpointSource = 'runtime_state' | 'stored_events' | 'fallback' | 'last_event_id';
 
 interface PollingWindow {
+  // 'lastId': incremental polling по cursor (быстрый, default после первого тика).
+  // 'window': первый старт без lastEventId — fallback на окно по времени.
+  mode: 'lastId' | 'window';
+  lastEventId: number | null;
   startAt: Date;
   endAt: Date;
   startTime: string;
@@ -185,11 +193,38 @@ async function getLatestStoredEventTimestamp(): Promise<Date | null> {
   return parseStoredEventTimestamp(latest.event_date, latest.event_time);
 }
 
+function readLastEventIdFromMeta(meta: Record<string, unknown> | null | undefined): number | null {
+  const raw = meta?.lastEventId;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return null;
+  return Math.floor(raw);
+}
+
 export async function resolvePollingWindow(now = new Date()): Promise<PollingWindow> {
   let checkpointSource: PollCheckpointSource = 'fallback';
   let checkpoint: Date | null = null;
 
   const runtimeState = await getSigurRuntimeState(SIGUR_POLLING_STATE_KEY);
+
+  // Fast path: incremental polling через lastId. Sigur делает индексный seek
+  // `WHERE id > X` вместо тяжёлого `WHERE timestamp BETWEEN ?` — на пустых тиках
+  // ответ ~миллисекунды. lastEventId сохраняется в meta после каждого успешного цикла.
+  const metaLastEventId = readLastEventIdFromMeta(runtimeState?.meta);
+  if (metaLastEventId != null) {
+    const startTimeStr = formatLocalDateTime(now);
+    return {
+      mode: 'lastId',
+      lastEventId: metaLastEventId,
+      startAt: now,
+      endAt: now,
+      startTime: startTimeStr,
+      endTime: startTimeStr,
+      startDate: formatLocalDate(now),
+      endDate: formatLocalDate(now),
+      checkpointSource: 'last_event_id',
+      windowTruncated: false,
+    };
+  }
+
   if (runtimeState?.checkpoint_at) {
     const parsed = new Date(runtimeState.checkpoint_at);
     if (!Number.isNaN(parsed.getTime())) {
@@ -245,6 +280,8 @@ export async function resolvePollingWindow(now = new Date()): Promise<PollingWin
   }
 
   return {
+    mode: 'window',
+    lastEventId: null,
     startAt: start,
     endAt: end,
     startTime: formatLocalDateTime(start),
@@ -355,10 +392,12 @@ export function resetPresencePollingStateForTests(): void {
   }
 
   if (pollingTimer) {
-    clearInterval(pollingTimer);
+    clearTimeout(pollingTimer);
     pollingTimer = null;
   }
 
+  pollingActive = false;
+  consecutiveEmptyTicks = 0;
   manualSyncLocks = 0;
   eventsSyncLocks = 0;
   pollInFlight = null;
@@ -406,14 +445,27 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
 
     window = await resolvePollingWindow(now);
     console.log(
-      `[presence-polling] window source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime}`,
+      `[presence-polling] window mode=${window.mode} source=${window.checkpointSource} connection=${connectionType}` +
+      (window.mode === 'lastId'
+        ? ` lastEventId=${window.lastEventId}`
+        : ` start=${window.startTime} end=${window.endTime}`),
     );
 
     const tFetchStart = Date.now();
-    const rawEvents = await sigurService.getEvents(window.startTime, window.endTime, connectionType, 'PASS_DETECTED');
+    const rawEvents = window.mode === 'lastId' && window.lastEventId != null
+      ? await sigurService.getEventsByLastId(window.lastEventId, 'PASS_DETECTED', connectionType)
+      : await sigurService.getEvents(window.startTime, window.endTime, connectionType, 'PASS_DETECTED');
     const tFetch = Date.now() - tFetchStart;
+    // Adaptive interval: считаем пустые тики, чтобы планировщик переключался на
+    // idle-интервал (30с) после нескольких пустых подряд. Любая активность
+    // моментально возвращает к base-интервалу.
+    if (rawEvents.length === 0) {
+      consecutiveEmptyTicks++;
+    } else {
+      consecutiveEmptyTicks = 0;
+    }
     console.log(
-      `[presence-polling] fetched=${rawEvents.length} source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} tFetch=${tFetch}ms`,
+      `[presence-polling] fetched=${rawEvents.length} mode=${window.mode} source=${window.checkpointSource} connection=${connectionType} tFetch=${tFetch}ms`,
     );
 
     let tEmpRefresh = 0;
@@ -461,8 +513,15 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     const candidateSummaryKeys = new Set<string>();
     let storedUnmatched = 0;
     let latestObservedEventAt: Date | null = null;
+    let maxObservedEventId: number | null = null;
 
     for (const raw of rawEvents) {
+      const rawId = (raw as Record<string, unknown>).id;
+      if (typeof rawId === 'number' && Number.isFinite(rawId)) {
+        if (maxObservedEventId === null || rawId > maxObservedEventId) {
+          maxObservedEventId = rawId;
+        }
+      }
       const mapped = mapSigurEvent(raw as Record<string, unknown>);
       if (!mapped || !mapped.physicalPerson) continue;
       const eventAt = buildMoscowEventTimestamp(mapped.eventDate, mapped.eventTime);
@@ -654,6 +713,11 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       ? (lastSuccessfulEventAt ? new Date(lastSuccessfulEventAt.getTime() - 10_000) : null)
       : window.endAt;
 
+    // lastEventId двигаем только при полном успехе цикла. При partial failure
+    // следующий тик повторно запросит те же события — UNIQUE (dedup_hash, event_date)
+    // отсеет уже записанные дубли, не записанные попадут в БД.
+    const advanceLastEventId = !hadFailure && maxObservedEventId !== null;
+
     await mergeSigurRuntimeState({
       key: SIGUR_POLLING_STATE_KEY,
       owner: POLLING_LEASE_OWNER,
@@ -665,6 +729,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
           : { lastSuccessAt: monitorCheckedAt.toISOString(), lastError: null }),
         lastCycle: cycleMeta,
         ...(latestObservedEventAt ? { lastEventFlowAt: latestObservedEventAt.toISOString() } : {}),
+        ...(advanceLastEventId ? { lastEventId: maxObservedEventId } : {}),
       },
     });
     console.log(
@@ -947,8 +1012,29 @@ async function runPollCycle(): Promise<void> {
   return pollInFlight;
 }
 
+function computeNextPollDelay(): number {
+  const base = resolvePresencePollIntervalMs();
+  if (consecutiveEmptyTicks >= POLL_IDLE_THRESHOLD) {
+    return Math.max(base, POLL_IDLE_INTERVAL_MS);
+  }
+  return base;
+}
+
+function scheduleNextPollTick(): void {
+  if (!pollingActive) return;
+  if (pollingTimer) {
+    clearTimeout(pollingTimer);
+    pollingTimer = null;
+  }
+  const delayMs = computeNextPollDelay();
+  pollingTimer = setTimeout(() => {
+    pollingTimer = null;
+    void runPollCycle().finally(() => scheduleNextPollTick());
+  }, delayMs);
+}
+
 export async function startPresencePolling(): Promise<void> {
-  if (pollingTimer || startupTimeout) return;
+  if (pollingActive || pollingTimer || startupTimeout) return;
   if (!(await sigurService.isConfigured())) {
     console.log('[presence-polling] Sigur not configured, skipping');
     return;
@@ -962,23 +1048,25 @@ export async function startPresencePolling(): Promise<void> {
     return;
   }
   const pollIntervalMs = resolvePresencePollIntervalMs();
-  console.log(`[presence-polling] started (interval: ${Math.round(pollIntervalMs / 1000)}s)`);
+  console.log(
+    `[presence-polling] started (base interval: ${Math.round(pollIntervalMs / 1000)}s, idle: ${Math.round(POLL_IDLE_INTERVAL_MS / 1000)}s after ${POLL_IDLE_THRESHOLD} empty ticks)`,
+  );
+  pollingActive = true;
+  consecutiveEmptyTicks = 0;
   startupTimeout = setTimeout(() => {
     startupTimeout = null;
-    void runPollCycle();
+    void runPollCycle().finally(() => scheduleNextPollTick());
   }, 10_000);
-  pollingTimer = setInterval(() => {
-    void runPollCycle();
-  }, pollIntervalMs);
 }
 
 export function stopPresencePolling(): void {
+  pollingActive = false;
   if (startupTimeout) {
     clearTimeout(startupTimeout);
     startupTimeout = null;
   }
   if (pollingTimer) {
-    clearInterval(pollingTimer);
+    clearTimeout(pollingTimer);
     pollingTimer = null;
     console.log('[presence-polling] stopped');
   }
