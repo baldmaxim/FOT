@@ -238,6 +238,31 @@ const CorrectionsTab: FC = () => {
     return 'partial';
   };
 
+  const allItemIds = useMemo(() => {
+    const ids: number[] = [];
+    for (const g of groups) for (const it of g.items) ids.push(it.id);
+    return ids;
+  }, [groups]);
+
+  const totalEmployees = useMemo(() => {
+    const ids = new Set<number>();
+    for (const g of groups) for (const it of g.items) ids.add(it.employee_id);
+    return ids.size;
+  }, [groups]);
+
+  const allSelectionState: 'none' | 'partial' | 'all' = useMemo(() => {
+    if (allItemIds.length === 0) return 'none';
+    let count = 0;
+    for (const id of allItemIds) if (selectedIds.has(id)) count++;
+    if (count === 0) return 'none';
+    if (count === allItemIds.length) return 'all';
+    return 'partial';
+  }, [allItemIds, selectedIds]);
+
+  const toggleAll = (checked: boolean) => {
+    setSelectedIds(checked ? new Set(allItemIds) : new Set());
+  };
+
   const bulkPending = bulkApproveSelectedMutation.isPending || bulkRejectSelectedMutation.isPending;
 
   return (
@@ -253,7 +278,31 @@ const CorrectionsTab: FC = () => {
       ) : groups.length === 0 ? (
         <div className="approvals-empty">Нет выходных дней на согласовании за период</div>
       ) : (
-        <ul className="approvals-list">
+        <>
+          {canReview && (
+            <div className="cor-master-bar">
+              <GroupCheckbox
+                state={allSelectionState}
+                onChange={toggleAll}
+                ariaLabel="Выбрать все выходные дни во всех отделах"
+              />
+              <span className="cor-master-label">
+                Выбрать все · <b>{allItemIds.length}</b> в <b>{groups.length}</b> отд. · <b>{totalEmployees}</b> чел
+              </span>
+              <button
+                type="button"
+                className="cor-master-approve"
+                onClick={() => bulkApproveSelectedMutation.mutate(allItemIds)}
+                disabled={bulkPending || allItemIds.length === 0}
+                title={`Согласовать все (${allItemIds.length})`}
+              >
+                <Check size={14} />
+                <span className="cor-master-approve-text">Согласовать все</span>
+                <span className="cor-master-approve-count">{allItemIds.length}</span>
+              </button>
+            </div>
+          )}
+          <ul className="approvals-list">
           {groups.map(group => {
             const isOpen = !!expanded[group.department_id];
             return (
@@ -325,10 +374,13 @@ const CorrectionsTab: FC = () => {
                             <span className="cor-item-date-wd">{dateParts.weekday}</span>
                           </span>
                           <span className="cor-item-employee">{item.employee_name ?? `#${item.employee_id}`}</span>
-                          <span className={`cor-item-status cor-item-status--${item.status}`}>
-                            <span className="cor-item-status-icon" aria-hidden="true">{STATUS_ICONS[item.status] ?? '•'}</span>
-                            <span className="cor-item-status-label">{STATUS_LABELS[item.status] ?? item.status}</span>
-                          </span>
+                          <div className="cor-item-task">
+                            <span className="cor-item-task-caption">Задача</span>
+                            <span className={`cor-item-status cor-item-status--${item.status}`}>
+                              <span className="cor-item-status-icon" aria-hidden="true">{STATUS_ICONS[item.status] ?? '•'}</span>
+                              <span className="cor-item-status-label">{STATUS_LABELS[item.status] ?? item.status}</span>
+                            </span>
+                          </div>
                           <span className="cor-item-hours">{hours}</span>
                           <div
                             className={`cor-item-notes${noNotes ? ' cor-item-notes--empty' : ''}${isShort ? ' cor-item-notes--short' : ''}${notesExpanded ? ' cor-item-notes--expanded' : ''}`}
@@ -380,7 +432,8 @@ const CorrectionsTab: FC = () => {
               </li>
             );
           })}
-        </ul>
+          </ul>
+        </>
       )}
 
       {canReview && selectedIds.size > 0 && (
