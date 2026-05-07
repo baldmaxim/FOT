@@ -207,3 +207,124 @@ export async function fetchTimesheetDataForDepartment(
     showActualHours,
   };
 }
+
+/**
+ * Аналог fetchTimesheetDataForDepartment, но принимает явный список employee_ids
+ * вместо department_id. Используется для виртуальных «псевдо-ячеек» в overview
+ * (прямые подчинённые руководителя, сам руководитель — когда в БД нет реального
+ * org_department, объединяющего этих людей).
+ */
+export async function fetchTimesheetDataForEmployees(
+  month: string,
+  employeeIds: number[],
+  virtualName: string,
+  rangeArg: TimesheetExportRangeArg = 'FULL',
+  displayMode: 'actual' | 'capped_to_schedule' = 'actual',
+  showActualHours = false,
+): Promise<IDepartmentTimesheetData> {
+  const effectiveDisplayMode = showActualHours ? 'actual' : displayMode;
+  const periodRange = isExportRange(rangeArg)
+    ? resolveTimesheetDateRange(month, rangeArg.startDate, rangeArg.endDate)
+    : resolveTimesheetPeriodRange(month, rangeArg);
+  if (!periodRange) {
+    throw new Error('Invalid export month');
+  }
+  const { year, month: mon, daysInMonth, startDate, endDate } = periodRange;
+  const today = new Date();
+  const todayStr = today.toISOString().slice(0, 10);
+  const startDay = Number.parseInt(startDate.slice(-2), 10);
+  const endDay = Number.parseInt(endDate.slice(-2), 10);
+  const exportDays = Array.from({ length: endDay - startDay + 1 }, (_, i) => startDay + i);
+  const exportHalf: TimesheetExportHalf = isExportRange(rangeArg) ? 'FULL' : rangeArg;
+
+  const uniqueIds = [...new Set(employeeIds.filter(id => Number.isInteger(id) && id > 0))];
+  let employees: Array<Record<string, unknown>> = [];
+  if (uniqueIds.length > 0) {
+    const { data } = await supabase
+      .from('employees')
+      .select('id, full_name, position_id, org_department_id, sigur_employee_id')
+      .in('id', uniqueIds)
+      .eq('employment_status', 'active')
+      .eq('is_archived', false)
+      .eq('excluded_from_timesheet', false)
+      .order('full_name');
+    employees = (data || []) as Array<Record<string, unknown>>;
+  }
+  const empArr: IExportEmployee[] = employees.map(e => ({
+    id: e.id as number,
+    full_name: e.full_name as string,
+    position_id: (e.position_id as string | null),
+    org_department_id: (e.org_department_id as string | null),
+    sigur_employee_id: (e.sigur_employee_id as number | null),
+  }));
+
+  const empList = empArr.map(e => ({ id: e.id }));
+  const [dailySchedulesMap, calendarMonth] = await Promise.all([
+    resolveSchedulesForPeriod(empList, startDate, endDate),
+    loadCalendarMonth(year, mon),
+  ]);
+  const referenceDate = todayStr < startDate ? startDate : (todayStr > endDate ? endDate : todayStr);
+  const schedulesMap = new Map<number, IResolvedSchedule>();
+  for (const [employeeId, dailyMap] of dailySchedulesMap) {
+    const schedule = dailyMap.get(referenceDate) || dailyMap.get(startDate);
+    if (schedule) schedulesMap.set(employeeId, schedule);
+  }
+
+  const attendance = await buildAttendanceEntries({
+    employees: empArr.map(employee => ({
+      id: employee.id,
+      full_name: employee.full_name,
+    })),
+    startDate,
+    endDate,
+    dailySchedulesMap,
+    calendarMonth,
+    todayStr,
+    displayMode: effectiveDisplayMode,
+  });
+
+  const dataMap = new Map<number, Map<string, { status: string; hours: number; corrected?: boolean }>>();
+  for (const [employeeId, dateMap] of attendance.byEmployeeDate) {
+    dataMap.set(employeeId, new Map());
+    for (const [date, entry] of dateMap) {
+      const visibleHours = showActualHours
+        ? (typeof entry.hours_worked === 'number' ? entry.hours_worked : 0)
+        : (typeof entry.display_hours_worked === 'number'
+          ? entry.display_hours_worked
+          : (typeof entry.hours_worked === 'number' ? entry.hours_worked : 0));
+      dataMap.get(employeeId)!.set(date, {
+        status: entry.status,
+        hours: visibleHours,
+        corrected: entry.is_correction,
+      });
+    }
+  }
+
+  const positionIds = [...new Set(empArr.map(e => e.position_id).filter(Boolean))] as string[];
+  const posMap = new Map<string, string>();
+  if (positionIds.length > 0) {
+    const { data: positions } = await supabase.from('positions').select('id, name').in('id', positionIds);
+    (positions || []).forEach((p: { id: string; name: string }) => posMap.set(p.id, p.name));
+  }
+
+  return {
+    departmentName: virtualName,
+    departmentId: null,
+    isBrigade: false,
+    employees: empArr,
+    schedulesMap,
+    dailySchedulesMap,
+    calendarMonth,
+    entries: attendance.entries,
+    dataMap,
+    objectEntries: attendance.objectEntries,
+    skudMap: attendance.skudMap,
+    posMap,
+    year,
+    mon,
+    daysInMonth,
+    exportHalf,
+    exportDays,
+    showActualHours,
+  };
+}

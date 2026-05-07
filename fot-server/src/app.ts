@@ -32,6 +32,7 @@ import notificationRoutes from './routes/notification.routes.js';
 import adminDataApiRoutes from './routes/admin-data-api.routes.js';
 import patentReceiptsRoutes from './routes/patent-receipts.routes.js';
 import dailyTasksRoutes from './routes/daily-tasks.routes.js';
+import directReportsRoutes from './routes/direct-reports.routes.js';
 
 const app = express();
 
@@ -104,6 +105,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin/data-api', adminDataApiRoutes);
 app.use('/api/patent-receipts', patentReceiptsRoutes);
 app.use('/api/daily-tasks', dailyTasksRoutes);
+app.use('/api/direct-reports', directReportsRoutes);
 
 // 404 handler
 app.use((_req, res) => {

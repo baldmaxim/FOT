@@ -39,7 +39,8 @@ import {
   resolveTimesheetPeriodRange,
   type IDepartmentEmployeeMembership,
 } from '../services/timesheet-department-assignments.service.js';
-import { fetchTimesheetDataForDepartment } from '../services/timesheet-export.service.js';
+import { fetchTimesheetDataForDepartment, fetchTimesheetDataForEmployees } from '../services/timesheet-export.service.js';
+import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import {
   loadEmployeeFullName as loadEmployeeFullNameForAudit,
   loadEmployeeFullNamesMap,
@@ -260,6 +261,13 @@ interface IManagedDepartmentTimesheetSummary {
     status: TimesheetApprovalStatus;
   }>;
   is_primary: boolean;
+  /** Тип карточки: real — реальный отдел, virtual_direct — прямые подчинённые
+   * текущего руководителя (employee_direct_reports), virtual_self — сам
+   * руководитель в своей псевдо-ячейке. Поле опционально; отсутствие = 'real'. */
+  kind?: 'real' | 'virtual_direct' | 'virtual_self';
+  /** Только для virtual_direct: id сотрудников-подчинённых для построения
+   * списка ФИО на фронте без дополнительных запросов. */
+  direct_subordinate_employee_ids?: number[];
 }
 
 interface IApprovalLockInfo {
@@ -510,14 +518,24 @@ async function canAccessEmployeeForTimesheetPeriod(
   }
 
   const managedDepartmentIds = await resolveManagedDepartmentIds(req);
-  if (managedDepartmentIds.length === 0) {
-    return false;
+  if (managedDepartmentIds.length > 0) {
+    const employeeIdsByDepartment = await Promise.all(
+      managedDepartmentIds.map(departmentId => listEmployeeIdsAssignedToDepartmentPeriod(departmentId, startDate, endDate)),
+    );
+    if (employeeIdsByDepartment.flat().includes(employeeId)) {
+      return true;
+    }
   }
 
-  const employeeIdsByDepartment = await Promise.all(
-    managedDepartmentIds.map(departmentId => listEmployeeIdsAssignedToDepartmentPeriod(departmentId, startDate, endDate)),
-  );
-  return employeeIdsByDepartment.flat().includes(employeeId);
+  // Прямые подчинённые (employee_direct_reports) — псевдо-ячейка руководителя.
+  if (req.user.employee_id) {
+    const directSubs = await listDirectSubordinates(req.user.employee_id);
+    if (directSubs.includes(employeeId)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function formatHoursLabel(hours: number): string {
@@ -569,6 +587,14 @@ export async function resolveTimesheetScope(req: AuthenticatedRequest): Promise<
     if (managedDepartmentIds.length > 0) {
       return 'department';
     }
+    // Псевдо-ячейка: у руководителя нет управляемых отделов, но есть прямые
+    // подчинённые в employee_direct_reports — он всё ещё ведёт табель.
+    if (req.user.employee_id) {
+      const directSubs = await listDirectSubordinates(req.user.employee_id);
+      if (directSubs.length > 0) {
+        return 'department';
+      }
+    }
   }
 
   if (req.user.employee_id) {
@@ -617,26 +643,18 @@ function pickDominantApprovalStatus(
   ), approvals[0].status);
 }
 
-async function buildManagedDepartmentTimesheetSummary(params: {
-  departmentId: string;
-  month: string;
-  startDate: string;
-  endDate: string;
-  isPrimary: boolean;
-  showActualHours: boolean;
-}): Promise<IManagedDepartmentTimesheetSummary> {
-  const data = await fetchTimesheetDataForDepartment(
-    params.month,
-    params.departmentId,
-    { startDate: params.startDate, endDate: params.endDate },
-    'capped_to_schedule',
-    params.showActualHours,
-  );
-
+function computeStatsFromTimesheetData(
+  data: Awaited<ReturnType<typeof fetchTimesheetDataForDepartment>>,
+  month: string,
+): {
+  normHours: number;
+  actualHours: number;
+  deviations: { late: number; absent: number; sick: number };
+} {
   let normHours = 0;
   for (const employee of data.employees) {
     for (const day of data.exportDays) {
-      const dateStr = `${params.month}-${String(day).padStart(2, '0')}`;
+      const dateStr = `${month}-${String(day).padStart(2, '0')}`;
       const schedule = data.dailySchedulesMap.get(employee.id)?.get(dateStr);
       if (!schedule || !isWorkingDay(schedule, new Date(data.year, data.mon - 1, day), data.calendarMonth)) {
         continue;
@@ -664,6 +682,93 @@ async function buildManagedDepartmentTimesheetSummary(params: {
       deviations.late++;
     }
   }
+  return { normHours, actualHours, deviations };
+}
+
+const VIRTUAL_DIRECT_PREFIX = 'virtual:direct_reports:';
+const VIRTUAL_SELF_PREFIX = 'virtual:self:';
+
+async function buildVirtualDirectReportsTimesheetSummary(params: {
+  managerEmployeeId: number;
+  subordinateIds: number[];
+  month: string;
+  startDate: string;
+  endDate: string;
+  showActualHours: boolean;
+}): Promise<IManagedDepartmentTimesheetSummary> {
+  const data = await fetchTimesheetDataForEmployees(
+    params.month,
+    params.subordinateIds,
+    'Прямые подчинённые',
+    { startDate: params.startDate, endDate: params.endDate },
+    'capped_to_schedule',
+    params.showActualHours,
+  );
+  const { normHours, actualHours, deviations } = computeStatsFromTimesheetData(data, params.month);
+
+  return {
+    department_id: `${VIRTUAL_DIRECT_PREFIX}${params.managerEmployeeId}`,
+    department_name: 'Прямые подчинённые',
+    employee_count: data.employees.length,
+    norm_hours: normHours,
+    actual_hours: actualHours,
+    deviations,
+    approval_status: null,
+    approvals: [],
+    is_primary: false,
+    kind: 'virtual_direct',
+    direct_subordinate_employee_ids: data.employees.map(e => e.id),
+  };
+}
+
+async function buildVirtualSelfTimesheetSummary(params: {
+  managerEmployeeId: number;
+  month: string;
+  startDate: string;
+  endDate: string;
+  showActualHours: boolean;
+}): Promise<IManagedDepartmentTimesheetSummary> {
+  const data = await fetchTimesheetDataForEmployees(
+    params.month,
+    [params.managerEmployeeId],
+    'Я (руководитель)',
+    { startDate: params.startDate, endDate: params.endDate },
+    'capped_to_schedule',
+    params.showActualHours,
+  );
+  const { normHours, actualHours, deviations } = computeStatsFromTimesheetData(data, params.month);
+
+  return {
+    department_id: `${VIRTUAL_SELF_PREFIX}${params.managerEmployeeId}`,
+    department_name: 'Я (руководитель)',
+    employee_count: data.employees.length,
+    norm_hours: normHours,
+    actual_hours: actualHours,
+    deviations,
+    approval_status: null,
+    approvals: [],
+    is_primary: false,
+    kind: 'virtual_self',
+  };
+}
+
+async function buildManagedDepartmentTimesheetSummary(params: {
+  departmentId: string;
+  month: string;
+  startDate: string;
+  endDate: string;
+  isPrimary: boolean;
+  showActualHours: boolean;
+}): Promise<IManagedDepartmentTimesheetSummary> {
+  const data = await fetchTimesheetDataForDepartment(
+    params.month,
+    params.departmentId,
+    { startDate: params.startDate, endDate: params.endDate },
+    'capped_to_schedule',
+    params.showActualHours,
+  );
+
+  const { normHours, actualHours, deviations } = computeStatsFromTimesheetData(data, params.month);
 
   const { data: approvals, error: approvalsError } = await supabase
     .from('timesheet_approvals')
@@ -718,11 +823,16 @@ export const timesheetController = {
       }
 
       const managedDepartmentIds = await resolveManagedDepartmentIds(req);
-      if (managedDepartmentIds.length === 0) {
+      const managerEmployeeId = req.user.employee_id ?? null;
+      const directSubordinateIds = managerEmployeeId
+        ? await listDirectSubordinates(managerEmployeeId)
+        : [];
+
+      if (managedDepartmentIds.length === 0 && directSubordinateIds.length === 0) {
         return res.json({ success: true, data: [] });
       }
 
-      const summaries = await Promise.all(
+      const realSummaries = await Promise.all(
         managedDepartmentIds.map(departmentId => buildManagedDepartmentTimesheetSummary({
           departmentId,
           month,
@@ -733,14 +843,42 @@ export const timesheetController = {
         })),
       );
 
+      const virtualSummaries: IManagedDepartmentTimesheetSummary[] = [];
+      if (managerEmployeeId && directSubordinateIds.length > 0) {
+        virtualSummaries.push(await buildVirtualDirectReportsTimesheetSummary({
+          managerEmployeeId,
+          subordinateIds: directSubordinateIds,
+          month,
+          startDate: periodRange.startDate,
+          endDate: periodRange.endDate,
+          showActualHours: req.user.show_actual_hours,
+        }));
+      }
+      // Карточку «Я» добавляем только когда у руководителя есть хоть какие-то
+      // назначения — иначе обычный сотрудник видел бы пустую виртуальную карточку.
+      if (
+        managerEmployeeId
+        && (managedDepartmentIds.length > 0 || directSubordinateIds.length > 0)
+      ) {
+        virtualSummaries.push(await buildVirtualSelfTimesheetSummary({
+          managerEmployeeId,
+          month,
+          startDate: periodRange.startDate,
+          endDate: periodRange.endDate,
+          showActualHours: req.user.show_actual_hours,
+        }));
+      }
+
+      const sortedReal = realSummaries.sort((left, right) => {
+        if (left.is_primary !== right.is_primary) {
+          return left.is_primary ? -1 : 1;
+        }
+        return left.department_name.localeCompare(right.department_name, 'ru');
+      });
+
       res.json({
         success: true,
-        data: summaries.sort((left, right) => {
-          if (left.is_primary !== right.is_primary) {
-            return left.is_primary ? -1 : 1;
-          }
-          return left.department_name.localeCompare(right.department_name, 'ru');
-        }),
+        data: [...sortedReal, ...virtualSummaries],
       });
     } catch (err) {
       console.error('timesheet.getOverview error:', err);

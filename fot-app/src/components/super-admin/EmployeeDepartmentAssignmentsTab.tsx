@@ -8,6 +8,7 @@ import { useStructureTree } from '../../hooks/useStructure';
 import { useToast } from '../../contexts/ToastContext';
 import type { IUserFromApi } from './AllUsersTab';
 import { getTreeFlatDepartments } from '../../utils/departmentUtils';
+import { DirectReportsForEmployee } from './DirectReportsForEmployee';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
 
 interface IEmployeeDepartmentAssignmentsTabProps {
@@ -367,6 +368,11 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
                         </button>
                       </div>
                     </div>
+                    <DirectReportsForEmployee
+                      managerEmployeeId={employee.employee_id}
+                      managerFullName={employee.full_name}
+                      allEmployees={employees.map(e => ({ employee_id: e.employee_id, full_name: e.full_name }))}
+                    />
                   </div>
                 )}
               </div>
