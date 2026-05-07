@@ -532,6 +532,24 @@
   gap: 10px;
 }
 
+/* Компактные плашки дней произвольного цикла: клик переключает W/O */
+.cycleDaysCompact {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cycleDaysCompact button {
+  border: 1px solid transparent;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.cycleDaysCompact button:hover {
+  filter: brightness(1.15);
+}
+
 .actions {
   display: flex;
   gap: 8px;

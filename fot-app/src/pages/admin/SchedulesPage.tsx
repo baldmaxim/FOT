@@ -542,6 +542,12 @@ export const SchedulesPage: FC = () => {
     });
   };
 
+  /**
+   * Применяет новую длину цикла к массиву дней. Сохраняет существующие дни,
+   * обрезает или дополняет дефолтными «рабочими наследующими общее время».
+   * Вызывается только из onBlur input'а — иначе пользователь, набирающий «14»,
+   * на первой цифре «1» обрезал бы массив до 1 элемента.
+   */
   const setCustomCycleLength = (rawLength: number) => {
     const length = Math.max(2, Math.min(28, Math.floor(rawLength) || 2));
     setForm(f => {
@@ -559,6 +565,31 @@ export const SchedulesPage: FC = () => {
     });
   };
 
+  // Промежуточный draft для input «Длина цикла»: позволяет пользователю
+  // свободно набирать любое число (например «14»), не натыкаясь на clamp на каждом keystroke.
+  // Применение через setCustomCycleLength — на onBlur и при handleSave.
+  const [cycleLengthDraft, setCycleLengthDraft] = useState<string>('');
+  useEffect(() => {
+    if (form.is_custom_cycle && cycleLengthDraft === '') {
+      setCycleLengthDraft(String(form.custom_cycle_days.length));
+    }
+    if (!form.is_custom_cycle && cycleLengthDraft !== '') {
+      setCycleLengthDraft('');
+    }
+  }, [form.is_custom_cycle, form.custom_cycle_days.length, cycleLengthDraft]);
+
+  const commitCycleLengthDraft = () => {
+    const parsed = parseInt(cycleLengthDraft, 10);
+    if (Number.isNaN(parsed)) {
+      setCycleLengthDraft(String(form.custom_cycle_days.length));
+      return;
+    }
+    setCustomCycleLength(parsed);
+    // После clamp обновляем draft до фактического значения.
+    const clamped = Math.max(2, Math.min(28, parsed));
+    setCycleLengthDraft(String(clamped));
+  };
+
   const updateCustomDay = (index: number, patch: Partial<ICustomDay>) => {
     setForm(f => ({
       ...f,
@@ -568,15 +599,6 @@ export const SchedulesPage: FC = () => {
     }));
   };
 
-  const moveCustomDay = (index: number, direction: -1 | 1) => {
-    setForm(f => {
-      const next = [...f.custom_cycle_days];
-      const target = index + direction;
-      if (target < 0 || target >= next.length) return f;
-      [next[index], next[target]] = [next[target], next[index]];
-      return { ...f, custom_cycle_days: next };
-    });
-  };
 
   const handleSave = async () => {
     setError('');
@@ -893,14 +915,16 @@ export const SchedulesPage: FC = () => {
                     )}
 
                     {form.is_custom_cycle && (
-                      <label style={{ gridColumn: '1 / -1' }} title="Длина повторяющегося цикла. При увеличении новые дни добавляются как рабочие; при уменьшении — обрезаются с конца.">
+                      <label style={{ gridColumn: '1 / -1' }} title="Длина повторяющегося цикла. Применяется при потере фокуса (Tab/клик вне поля). При увеличении новые дни добавляются как рабочие; при уменьшении — обрезаются с конца.">
                         Длина цикла (дней)
                         <input
                           type="number"
                           min={2}
                           max={28}
-                          value={form.custom_cycle_days.length}
-                          onChange={e => setCustomCycleLength(parseInt(e.target.value) || 0)}
+                          value={cycleLengthDraft}
+                          onChange={e => setCycleLengthDraft(e.target.value)}
+                          onBlur={commitCycleLengthDraft}
+                          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
                           style={{ maxWidth: 120 }}
                         />
                       </label>
@@ -1038,64 +1062,65 @@ export const SchedulesPage: FC = () => {
                 </section>
               )}
 
-              {/* ─── Произвольный цикл: редактор каждого дня ─────────── */}
+              {/* ─── Произвольный цикл: компактный редактор каждого дня ─ */}
               {form.is_custom_cycle && (
                 <section className={styles.formSection}>
                   <div className={styles.sectionTitle}>
                     Дни цикла ({form.custom_cycle_days.length})
                   </div>
                   <div className={styles.patternHint}>
-                    Каждый день настраивается отдельно: рабочий или выходной, время смены. Стрелки ↑↓ переставляют дни в цикле.
-                    Подходит для нерегулярных раскладок типа 6/1 → 5/2.
+                    Клик на плашку — переключить «рабочий ↔ выходной». Под плашками настраивается «своё время» только для рабочих дней с особым графиком (по умолчанию все идут по общему времени выше).
                   </div>
-                  <div className={styles.slotsGrid}>
+
+                  {/* Компактная сетка плашек: 1..N с цветом-статусом, клик переключает W/O */}
+                  <div className={styles.cycleDaysCompact}>
                     {form.custom_cycle_days.map((day, idx) => {
-                      const useStart = day.inherits_base ? form.work_start : day.work_start;
-                      const useEnd = day.inherits_base ? form.work_end : day.work_end;
-                      const useLunch = day.inherits_base ? form.lunch_minutes : day.lunch_minutes;
-                      const shift = day.is_work ? computeShiftHours(useStart, useEnd) : 0;
-                      const net = day.is_work ? formatMinutes(shift * 60 - useLunch) : '0:00';
+                      const cls = day.is_work
+                        ? (day.inherits_base ? styles.previewDayWork : styles.previewDayOverride)
+                        : styles.previewDayOff;
+                      const title = day.is_work
+                        ? (day.inherits_base
+                          ? `День ${idx + 1}: рабочий (общее время ${form.work_start}-${form.work_end})`
+                          : `День ${idx + 1}: рабочий (своё время ${day.work_start}-${day.work_end})`)
+                        : `День ${idx + 1}: выходной`;
                       return (
-                        <div key={idx} className={styles.dayOverrideCard}>
-                          <div className={styles.dayOverrideHeader}>
-                            <div>
-                              <div className={styles.dayOverrideTitle}>День {idx + 1}</div>
-                              <div className={styles.dayOverrideMeta}>
-                                {day.is_work
-                                  ? (day.inherits_base ? `Общий: ${form.work_start}-${form.work_end}` : `Свой: ${day.work_start}-${day.work_end}`)
-                                  : 'Выходной'}
-                              </div>
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                              <button
-                                type="button"
-                                className={styles.dayBtn}
-                                style={{ padding: '4px 8px', fontSize: 12 }}
-                                onClick={() => moveCustomDay(idx, -1)}
-                                disabled={idx === 0}
-                                title="Вверх"
-                              >↑</button>
-                              <button
-                                type="button"
-                                className={styles.dayBtn}
-                                style={{ padding: '4px 8px', fontSize: 12 }}
-                                onClick={() => moveCustomDay(idx, 1)}
-                                disabled={idx === form.custom_cycle_days.length - 1}
-                                title="Вниз"
-                              >↓</button>
+                        <button
+                          key={idx}
+                          type="button"
+                          className={`${styles.previewDay} ${cls}`}
+                          style={{ cursor: 'pointer', minWidth: 40 }}
+                          onClick={() => updateCustomDay(idx, { is_work: !day.is_work })}
+                          title={title}
+                        >
+                          {idx + 1}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Опционально: настройка «своего времени» только для рабочих дней */}
+                  {form.custom_cycle_days.some(d => d.is_work) && (
+                    <details className={styles.formAdvanced} style={{ gridColumn: '1 / -1' }}>
+                      <summary>Особое время для отдельных рабочих дней</summary>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 8 }}>
+                        {form.custom_cycle_days.map((day, idx) => {
+                          if (!day.is_work) return null;
+                          return (
+                            <div
+                              key={idx}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8,
+                                flexWrap: 'wrap',
+                                padding: '6px 10px',
+                                border: '1px solid var(--border)',
+                                borderRadius: 6,
+                                background: 'var(--bg-secondary)',
+                              }}
+                            >
+                              <span style={{ fontWeight: 600, fontSize: 13, minWidth: 64 }}>День {idx + 1}</span>
                               <label className={styles.dayOverrideToggle}>
-                                <input
-                                  type="checkbox"
-                                  checked={day.is_work}
-                                  onChange={e => updateCustomDay(idx, { is_work: e.target.checked })}
-                                />
-                                Раб.
-                              </label>
-                            </div>
-                          </div>
-                          {day.is_work && (
-                            <>
-                              <label className={styles.dayOverrideToggle} style={{ alignSelf: 'flex-start' }}>
                                 <input
                                   type="checkbox"
                                   checked={!day.inherits_base}
@@ -1109,31 +1134,38 @@ export const SchedulesPage: FC = () => {
                                 Своё время
                               </label>
                               {!day.inherits_base && (
-                                <div className={styles.dayOverrideFields}>
-                                  <label>
-                                    Начало
-                                    <input type="time" value={day.work_start} onChange={e => updateCustomDay(idx, { work_start: e.target.value })} />
-                                  </label>
-                                  <label>
-                                    Конец
-                                    <input type="time" value={day.work_end} onChange={e => updateCustomDay(idx, { work_end: e.target.value })} />
-                                  </label>
-                                  <label>
-                                    Обед (мин)
-                                    <input type="number" min={0} max={240} value={day.lunch_minutes} onChange={e => updateCustomDay(idx, { lunch_minutes: parseInt(e.target.value) || 0 })} />
-                                  </label>
-                                </div>
+                                <>
+                                  <input
+                                    type="time"
+                                    value={day.work_start}
+                                    onChange={e => updateCustomDay(idx, { work_start: e.target.value })}
+                                    style={{ minWidth: 92 }}
+                                  />
+                                  <span style={{ color: 'var(--text-tertiary)' }}>–</span>
+                                  <input
+                                    type="time"
+                                    value={day.work_end}
+                                    onChange={e => updateCustomDay(idx, { work_end: e.target.value })}
+                                    style={{ minWidth: 92 }}
+                                  />
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    max={240}
+                                    value={day.lunch_minutes}
+                                    onChange={e => updateCustomDay(idx, { lunch_minutes: parseInt(e.target.value) || 0 })}
+                                    title="Обед в минутах"
+                                    style={{ minWidth: 56, maxWidth: 80 }}
+                                  />
+                                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>мин</span>
+                                </>
                               )}
-                            </>
-                          )}
-                          <div className={styles.dayOverrideSummary}>
-                            {day.is_work ? `${useStart}-${useEnd}, чистое: ` : 'Выходной: '}
-                            <strong>{net}</strong>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </details>
+                  )}
                 </section>
               )}
 
