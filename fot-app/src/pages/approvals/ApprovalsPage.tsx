@@ -452,7 +452,7 @@ const CorrectionsTab: FC = () => {
                           </span>
                           <span className="cor-item-employee">{item.employee_name ?? `#${item.employee_id}`}</span>
                           <div className="cor-item-task">
-                            <span className="cor-item-task-caption">Задача</span>
+                            <span className="cor-item-task-caption">Формат</span>
                             <span className={`cor-item-status cor-item-status--${item.status}`}>
                               <span className="cor-item-status-icon" aria-hidden="true">{STATUS_ICONS[item.status] ?? '•'}</span>
                               <span className="cor-item-status-label">{STATUS_LABELS[item.status] ?? item.status}</span>
@@ -466,6 +466,7 @@ const CorrectionsTab: FC = () => {
                             tabIndex={0}
                             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleNotes(item.id); } }}
                           >
+                            <span className="cor-item-notes-caption">Задача</span>
                             {noNotes ? (
                               <span className="cor-item-notes-placeholder">Без комментария</span>
                             ) : (

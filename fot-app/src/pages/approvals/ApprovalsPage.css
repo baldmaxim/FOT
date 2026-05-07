@@ -1119,6 +1119,15 @@
   font-size: 11px;
   color: var(--text-tertiary);
 }
+.cor-item-notes-caption {
+  font-size: 9.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
+  line-height: 1;
+}
+.cor-item-notes--empty .cor-item-notes-caption { opacity: 0.7; }
 .cor-item-actions {
   flex-shrink: 0;
   display: flex;
@@ -1450,6 +1459,7 @@
     overflow: visible;
   }
   .cor-item-notes-placeholder { font-size: 11.5px; }
+  .cor-item-notes-caption { display: none; }
 
   .cor-item-actions {
     grid-area: actions;
