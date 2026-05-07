@@ -3,6 +3,7 @@ import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import { getKnownArchiveDepartment, isProtectedArchiveDepartment } from '../services/employee-archive-department.service.js';
 import { invalidateDeptTreeCache } from '../services/skud-shared.service.js';
+import { resolveAccessibleDepartmentIds, resolveCompanyScope } from '../services/data-scope.service.js';
 import type {
   AuthenticatedRequest,
   OrgDepartment,
@@ -171,6 +172,43 @@ function validateParentMove(
   }
 }
 
+/**
+ * Загружает scope доступных department id'ов как Set | 'all'.
+ * Используется CRUD-эндпоинтами structure.controller для валидации target_node.
+ */
+async function loadAccessibleDeptSet(req: AuthenticatedRequest): Promise<Set<string> | 'all'> {
+  const accessible = await resolveAccessibleDepartmentIds(req);
+  return accessible === 'all' ? 'all' : new Set(accessible);
+}
+
+function assertInScope(scope: Set<string> | 'all', departmentId: string | null): void {
+  if (scope === 'all') return;
+  if (!departmentId) {
+    throw createHttpError(403, 'Создание корневых компаний доступно только системному администратору');
+  }
+  if (!scope.has(departmentId)) {
+    throw createHttpError(403, 'Отдел вне вашей зоны доступа');
+  }
+}
+
+/**
+ * Фильтрует дерево по company-scope. Возвращает корневой синтетический «Объект»
+ * только с детьми, входящими в scope. Если scope='all', возвращает дерево как есть.
+ */
+function filterTreeByScope(tree: OrgDepartmentNode[], scope: Set<string> | 'all'): OrgDepartmentNode[] {
+  if (scope === 'all') return tree;
+  return tree.map(node => {
+    if (node.parent_id === null) {
+      // Корневой узел («Объект»): сохраняем, но фильтруем детей по scope
+      return {
+        ...node,
+        children: node.children.filter(child => scope.has(child.id)),
+      };
+    }
+    return node;
+  });
+}
+
 function getStatus(error: unknown): number | null {
   if (!error || typeof error !== 'object') return null;
   const value = 'status' in error ? Number(error.status) : Number.NaN;
@@ -182,13 +220,15 @@ function getMessage(error: unknown, fallback: string): string {
 }
 
 export const structureController = {
-  async getTree(_req: AuthenticatedRequest, res: Response): Promise<void> {
+  async getTree(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const [departments, archiveDepartment] = await Promise.all([
+      const [departments, archiveDepartment, scope] = await Promise.all([
         loadAllActiveDepartments(),
         getKnownArchiveDepartment(),
+        loadAccessibleDeptSet(req),
       ]);
-      const departmentTree = buildDepartmentTree(departments, null);
+      const fullTree = buildDepartmentTree(departments, null);
+      const departmentTree = filterTreeByScope(fullTree, scope);
 
       res.setHeader('Cache-Control', 'private, max-age=120');
       res.json({
@@ -233,6 +273,9 @@ export const structureController = {
           return;
         }
       }
+
+      const scope = await loadAccessibleDeptSet(req);
+      assertInScope(scope, parentId);
 
       await ensureParentIsAllowed(parentId);
 
@@ -298,6 +341,9 @@ export const structureController = {
         return;
       }
 
+      const scope = await loadAccessibleDeptSet(req);
+      assertInScope(scope, id);
+
       await ensureDepartmentIsMutable(id);
 
       const name = hasName ? String(req.body.name || '').trim() : current.name;
@@ -323,6 +369,11 @@ export const structureController = {
       if (parentId && !departmentMap.has(parentId)) {
         res.status(400).json({ success: false, error: 'Родительский отдел не найден' });
         return;
+      }
+
+      // Перенос между разными «компаниями» запрещён для company-admin
+      if (parentId !== current.parent_id) {
+        assertInScope(scope, parentId);
       }
 
       await ensureParentIsAllowed(parentId);
@@ -399,6 +450,9 @@ export const structureController = {
         return;
       }
 
+      const scope = await loadAccessibleDeptSet(req);
+      assertInScope(scope, parentId);
+
       await ensureParentIsAllowed(parentId);
 
       const normalizedIds = selectedIds.filter(id => departmentMap.has(id));
@@ -409,6 +463,7 @@ export const structureController = {
 
       const topLevelIds = collapseSelectedDepartments(normalizedIds, departmentMap);
       for (const departmentId of topLevelIds) {
+        assertInScope(scope, departmentId);
         await ensureDepartmentIsMutable(departmentId);
         validateParentMove(departmentId, parentId, childrenByParent);
       }
@@ -477,6 +532,9 @@ export const structureController = {
         return;
       }
 
+      const scope = await loadAccessibleDeptSet(req);
+      assertInScope(scope, id);
+
       await ensureDepartmentIsMutable(id);
       await ensureDepartmentIsEmpty(id, departments);
 
@@ -522,6 +580,9 @@ export const structureController = {
         res.status(404).json({ success: false, error: 'Отдел не найден' });
         return;
       }
+
+      const scope = await loadAccessibleDeptSet(req);
+      assertInScope(scope, id);
 
       await ensureDepartmentIsMutable(id);
 
@@ -614,6 +675,12 @@ export const structureController = {
 
   async clearStructure(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      const companyScope = await resolveCompanyScope(req);
+      if (companyScope.roots !== 'all') {
+        res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
+        return;
+      }
+
       const { count: employeesDeleted, error: empError } = await supabase
         .from('employees')
         .delete({ count: 'exact' })

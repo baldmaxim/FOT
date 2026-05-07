@@ -31,6 +31,14 @@ export interface User {
   email: string;
 }
 
+// Скоуп компаний для админа.
+// roots='all' — системный админ, видит всё.
+// roots=[]   — обычный пользователь (не is_admin).
+// roots=[…] — админ компании, видит только перечисленные корни Sigur и их потомков.
+export interface CompanyScope {
+  roots: 'all' | string[];
+}
+
 export interface UserProfile {
   id: string;
   full_name: string | null;
@@ -52,6 +60,8 @@ export interface UserProfile {
   is_approved: boolean;
   two_factor_enabled: boolean;
   created_at: string;
+  /** undefined для не-admin или для старых сессий до миграции 083 */
+  company_scope?: CompanyScope;
 }
 
 export interface AuthState {

@@ -1,15 +1,47 @@
 import type { AuthenticatedRequest } from '../types/index.js';
+import { supabase } from '../config/database.js';
 import { listExplicitDepartmentIdsForUser, loadEmployeeAccessMap } from './department-access.service.js';
 
 export type DataScope = 'self' | 'department' | 'all';
 
 /**
- * Для совместимости со старым кодом: возвращает 'all' для админа,
- * 'department' если у пользователя есть назначенные отделы, иначе 'self'.
+ * Скоуп компаний для админа.
+ * - 'all'      — системный админ (нет записей в user_company_access).
+ * - []         — обычный (не is_admin) пользователь.
+ * - [id, ...]  — админ компании; видит только перечисленные корни и их потомков.
+ *
+ * Загружается lazy один раз на запрос и кешируется в req.user.company_scope.
+ */
+export async function resolveCompanyScope(req: AuthenticatedRequest): Promise<{ roots: 'all' | string[] }> {
+  if (req.user.company_scope) return req.user.company_scope;
+
+  if (!req.user.is_admin) {
+    req.user.company_scope = { roots: [] };
+    return req.user.company_scope;
+  }
+
+  const { data, error } = await supabase
+    .from('user_company_access')
+    .select('company_root_id')
+    .eq('user_id', req.user.id);
+
+  if (error) {
+    console.error('[resolveCompanyScope] failed to load user_company_access', error);
+    req.user.company_scope = { roots: 'all' };
+    return req.user.company_scope;
+  }
+
+  const roots = (data || []).map(row => row.company_root_id as string);
+  req.user.company_scope = { roots: roots.length === 0 ? 'all' : roots };
+  return req.user.company_scope;
+}
+
+/**
+ * Для совместимости со старым кодом: возвращает 'all' для админа без company-scope,
+ * 'department' если есть назначенные отделы, иначе 'self'.
  * В новом коде используйте resolveAccessibleDepartmentIds напрямую.
  */
 export async function resolveRequestDataScope(req: AuthenticatedRequest): Promise<DataScope> {
-  if (req.user.is_admin) return 'all';
   const accessible = await resolveAccessibleDepartmentIds(req);
   if (accessible === 'all') return 'all';
   return accessible.length > 0 ? 'department' : 'self';
@@ -17,15 +49,31 @@ export async function resolveRequestDataScope(req: AuthenticatedRequest): Promis
 
 /**
  * Возвращает id отделов, к которым пользователь имеет доступ.
- * - is_admin → 'all' (полный доступ, фильтр по отделам не применяется)
- * - иначе только явно назначенные через employee_department_access.
+ * - is_admin БЕЗ записей в user_company_access → 'all' (полный доступ).
+ * - is_admin С записями → плоский список потомков назначенных корней (включая сами корни).
+ * - manager → только явно назначенные через employee_department_access.
  *   Пустой массив → только свои /employee/*.
  */
 export async function resolveAccessibleDepartmentIds(
   req: AuthenticatedRequest,
 ): Promise<string[] | 'all'> {
   if (req.user.is_admin) {
-    return 'all';
+    const scope = await resolveCompanyScope(req);
+    if (scope.roots === 'all') return 'all';
+    if (scope.roots.length === 0) return [];
+    if (req.user.__company_subtree_ids) return req.user.__company_subtree_ids;
+
+    const { data, error } = await supabase
+      .rpc('get_descendant_department_ids', { p_root_ids: scope.roots });
+
+    if (error) {
+      console.error('[resolveAccessibleDepartmentIds] RPC failed', error);
+      return [];
+    }
+
+    const ids = ((data || []) as { id: string }[]).map(r => r.id);
+    req.user.__company_subtree_ids = ids;
+    return ids;
   }
 
   const assigned = await listExplicitDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null);
@@ -37,7 +85,6 @@ export async function canAccessEmployeeInScope(
   employeeId: number | null | undefined,
 ): Promise<boolean> {
   if (!employeeId) return false;
-  if (req.user.is_admin) return true;
   if (req.user.employee_id === employeeId) return true;
 
   const accessible = await resolveAccessibleDepartmentIds(req);
@@ -98,12 +145,14 @@ export async function resolveScopedDepartmentIds(
 
 /**
  * Совместимость со старыми вызовами: для не-админа отдаёт доступные отделы,
- * для админа — пустой массив (у админа фильтр не используется).
+ * для системного админа (scope='all') — пустой массив (фильтр не используется).
+ * Для админа компании отдаёт список id поддерева, чтобы вызывающий код мог
+ * применить фильтрацию вручную.
  */
 export async function resolveManagedDepartmentIds(req: AuthenticatedRequest): Promise<string[]> {
-  if (req.user.is_admin) return [];
   const accessible = await resolveAccessibleDepartmentIds(req);
-  return accessible === 'all' ? [] : accessible;
+  if (accessible === 'all') return [];
+  return accessible;
 }
 
 /**

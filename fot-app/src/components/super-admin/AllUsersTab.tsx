@@ -9,6 +9,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import type { ChatInboundMode, EmployeePositionType, SystemRole, TwoFactorData } from '../../types';
 import { getTreeFlatDepartments, type IFlatDepartmentOption } from '../../utils/departmentUtils';
 import { SearchInput } from '../ui/SearchInput';
+import { UserCompanyAccessSection } from './UserCompanyAccessSection';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
 
 export interface IUserFromApi {
@@ -60,6 +61,8 @@ interface IUserRowExpandedProps {
   flatDepts: IFlatDepartmentOption[];
   departmentMap: Map<string, IFlatDepartmentOption>;
   assignableRoles: IRoleOption[];
+  /** true, если viewer — системный админ. Только он может править companies. */
+  canManageCompanies: boolean;
   onUpdateName: (userId: string, name: string) => Promise<void>;
   onChangePosition: (userId: string, position: EmployeePositionType) => Promise<void>;
   onChangeChatMode: (userId: string, mode: ChatInboundMode) => Promise<void>;
@@ -76,6 +79,7 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   flatDepts,
   departmentMap,
   assignableRoles,
+  canManageCompanies,
   onUpdateName,
   onChangePosition,
   onChangeChatMode,
@@ -86,6 +90,11 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   onDisable2FA,
   onDelete,
 }) => {
+  const userRole = useMemo(
+    () => assignableRoles.find(role => role.code === user.position_type) ?? null,
+    [assignableRoles, user.position_type],
+  );
+  const isUserAdmin = !!userRole?.is_admin;
   const [editingName, setEditingName] = useState<string | null>(null);
   const [departmentSearchQuery, setDepartmentSearchQuery] = useState('');
   const [departmentDraft, setDepartmentDraft] = useState<string[] | null>(null);
@@ -395,6 +404,10 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
         </div>
       )}
 
+      {canManageCompanies && isUserAdmin && (
+        <UserCompanyAccessSection userId={user.id} isUserAdmin={isUserAdmin} />
+      )}
+
       <div className={styles.controlActions}>
         {!user.email_confirmed && (
           <button
@@ -464,6 +477,10 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAl
     () => new Map(flatDepts.map(department => [department.id, department])),
     [flatDepts],
   );
+
+  // Привязку компаний может править только системный админ (без скоупа).
+  const canManageCompanies = !!profile?.is_admin
+    && (profile?.company_scope?.roots === 'all' || profile?.company_scope === undefined);
 
   const roleOptions = useMemo(() => {
     const codeSet = new Set<string>([
@@ -741,6 +758,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAl
                   flatDepts={flatDepts}
                   departmentMap={departmentMap}
                   assignableRoles={buildAssignableRoles(user)}
+                  canManageCompanies={canManageCompanies}
                   onUpdateName={handleNameSave}
                   onChangePosition={handlePositionChange}
                   onChangeChatMode={handleChatInboundModeChange}

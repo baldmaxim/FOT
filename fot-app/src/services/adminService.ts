@@ -183,6 +183,27 @@ export const adminService = {
     return response.data;
   },
 
+  // ─── Привязка администраторов к «компаниям» (корневым узлам Sigur) ───
+  async listCompanies(): Promise<Array<{ id: string; name: string }>> {
+    const response = await apiClient.get<ApiResponse<Array<{ id: string; name: string }>>>('/admin/companies');
+    return response.data || [];
+  },
+
+  async getUserCompanies(userId: string): Promise<{ company_root_ids: string[]; is_system_admin: boolean }> {
+    const response = await apiClient.get<ApiResponse<{ company_root_ids: string[]; is_system_admin: boolean }>>(
+      `/admin/users/${userId}/companies`,
+    );
+    return response.data || { company_root_ids: [], is_system_admin: true };
+  },
+
+  async replaceUserCompanies(userId: string, companyRootIds: string[]): Promise<{ company_root_ids: string[]; is_system_admin: boolean }> {
+    const response = await apiClient.put<ApiResponse<{ company_root_ids: string[]; is_system_admin: boolean }>>(
+      `/admin/users/${userId}/companies`,
+      { company_root_ids: companyRootIds },
+    );
+    return response.data;
+  },
+
   async previewDepartmentAccessImport(file: File): Promise<ManagerDepartmentImportPreview> {
     const formData = new FormData();
     formData.append('file', file);

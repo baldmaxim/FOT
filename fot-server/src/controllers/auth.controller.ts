@@ -51,6 +51,23 @@ export async function resolveDepartmentId(employeeId: number | null): Promise<st
   return data?.org_department_id || null;
 }
 
+async function loadCompanyScopeForProfile(
+  profile: UserProfile,
+  isAdmin: boolean,
+): Promise<{ roots: 'all' | string[] }> {
+  if (!isAdmin) return { roots: [] };
+  const { data, error } = await supabase
+    .from('user_company_access')
+    .select('company_root_id')
+    .eq('user_id', profile.id);
+  if (error) {
+    console.error('[loadCompanyScopeForProfile] error:', error);
+    return { roots: 'all' };
+  }
+  const roots = (data || []).map(row => row.company_root_id as string);
+  return { roots: roots.length === 0 ? 'all' : roots };
+}
+
 async function buildProfileResponse(
   profile: UserProfile,
 ): Promise<{ role: SystemRole; response: UserProfileResponse; departmentId: string | null }> {
@@ -59,9 +76,10 @@ async function buildProfileResponse(
     throw new Error(`Role not found for user ${profile.id}: ${profile.system_role_id}`);
   }
 
-  const [page_access, departmentId] = await Promise.all([
+  const [page_access, departmentId, company_scope] = await Promise.all([
     getRolePageAccess(role.code),
     resolveDepartmentId(profile.employee_id),
+    loadCompanyScopeForProfile(profile, role.is_admin),
   ]);
 
   const managed_department_ids = await listManagedDepartmentIdsForUser(
@@ -93,6 +111,7 @@ async function buildProfileResponse(
     page_access,
     is_approved: profile.is_approved,
     two_factor_enabled: profile.two_factor_enabled,
+    company_scope,
   };
 
   return { role, response, departmentId };

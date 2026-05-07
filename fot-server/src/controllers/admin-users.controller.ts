@@ -10,6 +10,11 @@ import {
   loadEmployeeManagerAssignmentMap,
   loadExplicitManagerAssignmentMap,
 } from '../services/department-access.service.js';
+import {
+  canAccessEmployeeInScope,
+  resolveAccessibleDepartmentIds,
+  resolveCompanyScope,
+} from '../services/data-scope.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
 import { escapeLike } from '../utils/search.utils.js';
@@ -86,6 +91,83 @@ async function resolveActiveRoleAssignment(positionType: string): Promise<{ id: 
     id: role.id,
     code: role.code,
   };
+}
+
+/**
+ * Проверяет что все department_id из payload в зоне доступа админа компании.
+ * Системный админ (scope='all') пропускается без проверки.
+ */
+async function ensureDepartmentIdsInScope(
+  req: AuthenticatedRequest,
+  departmentIds: string[],
+): Promise<{ ok: true } | { ok: false; outOfScope: string[] }> {
+  const accessible = await resolveAccessibleDepartmentIds(req);
+  if (accessible === 'all') return { ok: true };
+  const accessibleSet = new Set(accessible);
+  const outOfScope = departmentIds.filter(id => !accessibleSet.has(id));
+  if (outOfScope.length > 0) return { ok: false, outOfScope };
+  return { ok: true };
+}
+
+/**
+ * Проверяет, что целевой пользователь портала находится в company-scope админа
+ * (по связанному employee.org_department_id). Системный админ (scope='all')
+ * пропускается.
+ * Возвращает 403 для company-admin, если: user не найден, не имеет employee_id
+ * или employee находится вне scope.
+ */
+async function assertTargetUserInScope(
+  req: AuthenticatedRequest,
+  targetUserId: string,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const accessible = await resolveAccessibleDepartmentIds(req);
+  if (accessible === 'all') return { ok: true };
+
+  const { data: profile } = await supabase
+    .from('user_profiles')
+    .select('employee_id')
+    .eq('id', targetUserId)
+    .maybeSingle();
+  if (!profile) return { ok: false, status: 404, error: 'Пользователь не найден' };
+  if (!profile.employee_id) {
+    return { ok: false, status: 403, error: 'Пользователь без сотрудника недоступен в вашем скоупе' };
+  }
+
+  const allowed = await canAccessEmployeeInScope(req, profile.employee_id as number);
+  if (!allowed) return { ok: false, status: 403, error: 'Пользователь вне вашей зоны доступа' };
+  return { ok: true };
+}
+
+/**
+ * Фильтрует список user_profiles по company-scope: оставляет только тех, чей
+ * employee.org_department_id попадает в scope. Системный админ (scope='all')
+ * получает исходный список как есть.
+ */
+async function filterUsersByCompanyScope<T extends { employee_id: number | null }>(
+  req: AuthenticatedRequest,
+  users: T[],
+): Promise<T[]> {
+  const accessible = await resolveAccessibleDepartmentIds(req);
+  if (accessible === 'all') return users;
+  const accessibleSet = new Set(accessible);
+
+  const employeeIds = [...new Set(users.map(u => u.employee_id).filter((id): id is number => typeof id === 'number'))];
+  if (employeeIds.length === 0) return [];
+
+  const { data } = await supabase
+    .from('employees')
+    .select('id, org_department_id')
+    .in('id', employeeIds);
+  const employeeDeptMap = new Map<number, string | null>();
+  for (const row of (data || []) as Array<{ id: number; org_department_id: string | null }>) {
+    employeeDeptMap.set(row.id, row.org_department_id);
+  }
+
+  return users.filter(user => {
+    if (user.employee_id == null) return false;
+    const deptId = employeeDeptMap.get(user.employee_id);
+    return deptId != null && accessibleSet.has(deptId);
+  });
 }
 
 async function validateDepartmentIds(departmentIds: string[]): Promise<{ missingIds: string[] }> {
@@ -219,9 +301,9 @@ async function upsertEmployeeDepartmentAccess(params: {
 }
 
 export const adminUsersController = {
-  async getAllUsers(_req: AuthenticatedRequest, res: Response): Promise<void> {
+  async getAllUsers(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { data: users, error: usersError } = await supabase
+      const { data: rawUsers, error: usersError } = await supabase
         .from('user_profiles')
         .select('*')
         .order('created_at', { ascending: false });
@@ -231,6 +313,8 @@ export const adminUsersController = {
         res.status(500).json({ success: false, error: 'Failed to fetch users' });
         return;
       }
+
+      const users = await filterUsersByCompanyScope(req, rawUsers as UserProfile[]);
 
       const assignedDepartmentMap = await loadExplicitManagerAssignmentMap(
         users.map((u: UserProfile) => ({
@@ -299,15 +383,27 @@ export const adminUsersController = {
     }
   },
 
-  async getEmployeeDepartmentAssignments(_req: AuthenticatedRequest, res: Response): Promise<void> {
+  async getEmployeeDepartmentAssignments(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { data: employees, error: employeesError } = await supabase
+      const accessible = await resolveAccessibleDepartmentIds(req);
+      if (accessible !== 'all' && accessible.length === 0) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+
+      let employeesQuery = supabase
         .from('employees')
         .select('id, full_name, position_id, org_department_id')
         .eq('employment_status', 'active')
         .eq('is_archived', false)
         .order('full_name', { ascending: true })
         .range(0, 9999);
+
+      if (accessible !== 'all') {
+        employeesQuery = employeesQuery.in('org_department_id', accessible);
+      }
+
+      const { data: employees, error: employeesError } = await employeesQuery;
 
       if (employeesError) {
         logSupabaseError('GetEmployeeDepartmentAssignments', employeesError);
@@ -362,9 +458,9 @@ export const adminUsersController = {
     }
   },
 
-  async getPendingUsers(_req: AuthenticatedRequest, res: Response): Promise<void> {
+  async getPendingUsers(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { data: users, error: usersError } = await supabase
+      const { data: rawUsers, error: usersError } = await supabase
         .from('user_profiles')
         .select('*')
         .eq('is_approved', false)
@@ -375,6 +471,17 @@ export const adminUsersController = {
         res.status(500).json({ success: false, error: 'Failed to fetch pending users' });
         return;
       }
+
+      // Pending-пользователи могут ещё не иметь employee_id — для company-admin
+      // не фильтруем их по employee, иначе вообще ничего не увидит. Pending-список
+      // показываем системному админу в полном виде, для company-admin — пустой.
+      // Альтернатива (на будущее): pending → company через явное pre-assign.
+      const companyScope = await resolveCompanyScope(req);
+      if (companyScope.roots !== 'all') {
+        res.json({ success: true, data: [] });
+        return;
+      }
+      const users = rawUsers as UserProfile[] | null;
 
       if (!users || users.length === 0) {
         res.json({ success: true, data: [] });
@@ -420,6 +527,11 @@ export const adminUsersController = {
 
   async previewDepartmentAccessImport(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      const companyScope = await resolveCompanyScope(req);
+      if (companyScope.roots !== 'all') {
+        res.status(403).json({ success: false, error: 'Импорт доступен только системному администратору' });
+        return;
+      }
       const uploadedFile = (req as AuthenticatedRequest & { file?: Express.Multer.File }).file;
       if (!uploadedFile) {
         res.status(400).json({ success: false, error: 'Файл не загружен' });
@@ -447,6 +559,11 @@ export const adminUsersController = {
 
   async applyDepartmentAccessImport(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      const companyScope = await resolveCompanyScope(req);
+      if (companyScope.roots !== 'all') {
+        res.status(403).json({ success: false, error: 'Импорт доступен только системному администратору' });
+        return;
+      }
       const { assignments, group_assignments, brigade_aliases } = applyDepartmentAccessImportSchema.parse(req.body);
       const normalizedAssignments = assignments
         .map(assignment => ({
@@ -599,6 +716,11 @@ export const adminUsersController = {
 
   async clearDepartmentAssignments(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      const companyScope = await resolveCompanyScope(req);
+      if (companyScope.roots !== 'all') {
+        res.status(403).json({ success: false, error: 'Очистка назначений доступна только системному администратору' });
+        return;
+      }
       const { error, count } = await supabase
         .from('employee_department_access')
         .delete({ count: 'exact' })
@@ -632,6 +754,32 @@ export const adminUsersController = {
 
       const employeeIds = [...new Set(dedupedTransfers.map(transfer => transfer.employee_id))];
       const departmentIds = [...new Set(dedupedTransfers.map(transfer => transfer.target_department_id))];
+
+      // Company-admin: все целевые отделы и сотрудники должны быть в его scope.
+      const accessible = await resolveAccessibleDepartmentIds(req);
+      if (accessible !== 'all') {
+        const accessibleSet = new Set(accessible);
+        const departmentsOutOfScope = departmentIds.filter(id => !accessibleSet.has(id));
+        if (departmentsOutOfScope.length > 0) {
+          res.status(403).json({
+            success: false,
+            error: 'Некоторые целевые отделы вне вашей зоны доступа',
+            details: { out_of_scope_department_ids: departmentsOutOfScope },
+          });
+          return;
+        }
+        for (const employeeId of employeeIds) {
+          const ok = await canAccessEmployeeInScope(req, employeeId);
+          if (!ok) {
+            res.status(403).json({
+              success: false,
+              error: 'Некоторые сотрудники вне вашей зоны доступа',
+              details: { out_of_scope_employee_id: employeeId },
+            });
+            return;
+          }
+        }
+      }
 
       const { data: employees, error: employeesError } = await supabase
         .from('employees')
@@ -766,6 +914,15 @@ export const adminUsersController = {
     try {
       const { id } = req.params;
       const { position_type, employee_id } = approveUserSchema.parse(req.body);
+
+      // Подтверждать новых пользователей может только системный админ:
+      // у pending обычно нет employee_id, scope-фильтр их не видит.
+      const companyScope = await resolveCompanyScope(req);
+      if (companyScope.roots !== 'all') {
+        res.status(403).json({ success: false, error: 'Подтверждение пользователей доступно только системному администратору' });
+        return;
+      }
+
       const roleAssignment = await resolveActiveRoleAssignment(position_type);
       if (!roleAssignment) {
         res.status(400).json({ success: false, error: 'Выбрана несуществующая или неактивная роль' });
@@ -865,6 +1022,12 @@ export const adminUsersController = {
     try {
       const { id } = req.params;
 
+      const companyScope = await resolveCompanyScope(req);
+      if (companyScope.roots !== 'all') {
+        res.status(403).json({ success: false, error: 'Отклонение заявок доступно только системному администратору' });
+        return;
+      }
+
       const { error: profileError } = await supabase
         .from('user_profiles')
         .delete()
@@ -897,6 +1060,11 @@ export const adminUsersController = {
   async deleteUser(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
+      const scopeCheck = await assertTargetUserInScope(req, id);
+      if (!scopeCheck.ok) {
+        res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
+        return;
+      }
       try {
         await ensureCriticalAdminAccess({
           removedUserIds: [id],
@@ -941,6 +1109,11 @@ export const adminUsersController = {
   async confirmUserEmail(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
+      const scopeCheck = await assertTargetUserInScope(req, id);
+      if (!scopeCheck.ok) {
+        res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
+        return;
+      }
 
       const { error } = await supabase.auth.admin.updateUserById(id, {
         email_confirm: true,
@@ -970,6 +1143,12 @@ export const adminUsersController = {
       const { position_type } = z.object({
         position_type: z.string().min(1)
       }).parse(req.body);
+
+      const scopeCheck = await assertTargetUserInScope(req, id);
+      if (!scopeCheck.ok) {
+        res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
+        return;
+      }
 
       const roleAssignment = await resolveActiveRoleAssignment(position_type);
       if (!roleAssignment) {
@@ -1040,6 +1219,12 @@ export const adminUsersController = {
       const { id } = req.params;
       const { full_name } = z.object({ full_name: z.string().min(2).max(255) }).parse(req.body);
 
+      const scopeCheck = await assertTargetUserInScope(req, id);
+      if (!scopeCheck.ok) {
+        res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
+        return;
+      }
+
       const { error } = await supabase
         .from('user_profiles')
         .update({ full_name: full_name.trim() })
@@ -1075,6 +1260,26 @@ export const adminUsersController = {
         employee_id: z.number().int().positive().nullable(),
       }).parse(req.body);
 
+      // Привязка карточки СКУД для company-admin: целевой employee_id (если задан)
+      // должен быть в его scope. Существующая привязка пользователя проверяется
+      // только если новая = null (отвязка); тогда scope-проверка не нужна.
+      const companyScope = await resolveCompanyScope(req);
+      if (companyScope.roots !== 'all') {
+        if (employee_id != null) {
+          const employeeAllowed = await canAccessEmployeeInScope(req, employee_id);
+          if (!employeeAllowed) {
+            res.status(403).json({ success: false, error: 'Сотрудник вне вашей зоны доступа' });
+            return;
+          }
+        } else {
+          const scopeCheck = await assertTargetUserInScope(req, id);
+          if (!scopeCheck.ok) {
+            res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
+            return;
+          }
+        }
+      }
+
       const { error } = await supabase
         .from('user_profiles')
         .update({ employee_id })
@@ -1102,6 +1307,12 @@ export const adminUsersController = {
       const { chat_inbound_mode } = z.object({
         chat_inbound_mode: z.enum(['open', 'requests_only', 'disabled']),
       }).parse(req.body);
+
+      const scopeCheck = await assertTargetUserInScope(req, id);
+      if (!scopeCheck.ok) {
+        res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
+        return;
+      }
 
       const { error } = await supabase
         .from('user_profiles')
@@ -1152,6 +1363,23 @@ export const adminUsersController = {
         res.status(400).json({
           success: false,
           error: 'Назначить отделы можно только пользователю с привязанной карточкой СКУД. Сначала выберите сотрудника на этой же странице и сохраните привязку.',
+        });
+        return;
+      }
+
+      // Company-admin: целевой сотрудник должен быть в его scope.
+      const employeeAllowed = await canAccessEmployeeInScope(req, profile.employee_id);
+      if (!employeeAllowed) {
+        res.status(403).json({ success: false, error: 'Сотрудник вне вашей зоны доступа' });
+        return;
+      }
+
+      const scopeCheck = await ensureDepartmentIdsInScope(req, normalizedDepartmentIds);
+      if (!scopeCheck.ok) {
+        res.status(403).json({
+          success: false,
+          error: 'Некоторые отделы вне вашей зоны доступа',
+          details: { out_of_scope_department_ids: scopeCheck.outOfScope },
         });
         return;
       }
@@ -1227,6 +1455,22 @@ export const adminUsersController = {
         return;
       }
 
+      const employeeAllowed = await canAccessEmployeeInScope(req, employeeId);
+      if (!employeeAllowed) {
+        res.status(403).json({ success: false, error: 'Сотрудник вне вашей зоны доступа' });
+        return;
+      }
+
+      const scopeCheck = await ensureDepartmentIdsInScope(req, normalizedDepartmentIds);
+      if (!scopeCheck.ok) {
+        res.status(403).json({
+          success: false,
+          error: 'Некоторые отделы вне вашей зоны доступа',
+          details: { out_of_scope_department_ids: scopeCheck.outOfScope },
+        });
+        return;
+      }
+
       const { missingIds } = await validateDepartmentIds(normalizedDepartmentIds);
       if (missingIds.length > 0) {
         res.status(400).json({
@@ -1294,6 +1538,12 @@ export const adminUsersController = {
         return;
       }
 
+      const accessible = await resolveAccessibleDepartmentIds(req);
+      if (accessible !== 'all' && accessible.length === 0) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+
       const { data: linkedProfiles } = await supabase
         .from('user_profiles')
         .select('employee_id')
@@ -1309,6 +1559,10 @@ export const adminUsersController = {
         .ilike('full_name', `%${escapeLike(q)}%`)
         .eq('employment_status', 'active')
         .limit(20);
+
+      if (accessible !== 'all') {
+        query = query.in('org_department_id', accessible);
+      }
 
       if (linkedIds.length > 0) {
         query = query.not('id', 'in', `(${linkedIds.join(',')})`);
@@ -1326,6 +1580,204 @@ export const adminUsersController = {
     } catch (error) {
       console.error('Search unlinked employees error:', error);
       res.status(500).json({ success: false, error: 'Failed to search employees' });
+    }
+  },
+
+  /**
+   * GET /api/admin/companies
+   * Возвращает список «компаний» = прямых детей корневого узла «Объект».
+   * Только системный админ.
+   */
+  async listCompanies(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const companyScope = await resolveCompanyScope(req);
+      if (companyScope.roots !== 'all') {
+        res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
+        return;
+      }
+
+      const { data: rootRow, error: rootError } = await supabase
+        .from('org_departments')
+        .select('id')
+        .is('parent_id', null)
+        .eq('name', 'Объект')
+        .maybeSingle();
+
+      if (rootError || !rootRow) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+
+      const { data: companies, error } = await supabase
+        .from('org_departments')
+        .select('id, name')
+        .eq('parent_id', rootRow.id)
+        .eq('is_active', true)
+        .order('name');
+
+      if (error) {
+        logSupabaseError('ListCompanies', error);
+        res.status(500).json({ success: false, error: 'Не удалось загрузить компании' });
+        return;
+      }
+
+      res.json({ success: true, data: companies || [] });
+    } catch (error) {
+      console.error('List companies error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить компании' });
+    }
+  },
+
+  /**
+   * GET /api/admin/users/:id/companies
+   * Возвращает список company_root_ids, привязанных к пользователю.
+   * Только системный админ.
+   */
+  async getUserCompanies(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const companyScope = await resolveCompanyScope(req);
+      if (companyScope.roots !== 'all') {
+        res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
+        return;
+      }
+
+      const { id } = req.params;
+      const { data: links, error } = await supabase
+        .from('user_company_access')
+        .select('company_root_id')
+        .eq('user_id', id);
+
+      if (error) {
+        logSupabaseError('GetUserCompanies', error);
+        res.status(500).json({ success: false, error: 'Не удалось загрузить привязки компаний' });
+        return;
+      }
+
+      const ids = (links || []).map(row => row.company_root_id as string);
+      res.json({
+        success: true,
+        data: {
+          company_root_ids: ids,
+          is_system_admin: ids.length === 0,
+        },
+      });
+    } catch (error) {
+      console.error('Get user companies error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить привязки компаний' });
+    }
+  },
+
+  /**
+   * PUT /api/admin/users/:id/companies
+   * Полная замена списка company_root_ids у пользователя. Пустой массив →
+   * пользователь становится системным админом (видит всё).
+   * Только системный админ.
+   */
+  async replaceUserCompanies(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const companyScope = await resolveCompanyScope(req);
+      if (companyScope.roots !== 'all') {
+        res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
+        return;
+      }
+
+      const { id } = req.params;
+      const { company_root_ids } = z.object({
+        company_root_ids: z.array(z.string().uuid()).default([]),
+      }).parse(req.body);
+
+      const desired = [...new Set(company_root_ids)];
+
+      const { data: profile, error: profileError } = await supabase
+        .from('user_profiles')
+        .select('id, system_role_id')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (profileError || !profile) {
+        res.status(404).json({ success: false, error: 'Пользователь не найден' });
+        return;
+      }
+
+      // Привязка к компаниям имеет смысл только для is_admin-ролей.
+      const allRoles = await getAllRoles();
+      const role = allRoles.find(r => r.id === profile.system_role_id);
+      if (!role || !role.is_admin) {
+        res.status(400).json({
+          success: false,
+          error: 'Привязка к компаниям доступна только пользователям с админской ролью',
+        });
+        return;
+      }
+
+      const { data: existing, error: existingError } = await supabase
+        .from('user_company_access')
+        .select('company_root_id')
+        .eq('user_id', id);
+
+      if (existingError) {
+        logSupabaseError('ReplaceUserCompanies-load', existingError);
+        res.status(500).json({ success: false, error: 'Не удалось обновить привязки компаний' });
+        return;
+      }
+
+      const existingIds = new Set((existing || []).map(row => row.company_root_id as string));
+      const desiredSet = new Set(desired);
+      const toAdd = desired.filter(rootId => !existingIds.has(rootId));
+      const toRemove = [...existingIds].filter(rootId => !desiredSet.has(rootId));
+
+      if (toAdd.length > 0) {
+        const rows = toAdd.map(rootId => ({
+          user_id: id,
+          company_root_id: rootId,
+          created_by: req.user.id,
+        }));
+        const { error: insertError } = await supabase.from('user_company_access').insert(rows);
+        if (insertError) {
+          logSupabaseError('ReplaceUserCompanies-insert', insertError);
+          res.status(400).json({ success: false, error: insertError.message });
+          return;
+        }
+      }
+
+      if (toRemove.length > 0) {
+        const { error: deleteError } = await supabase
+          .from('user_company_access')
+          .delete()
+          .eq('user_id', id)
+          .in('company_root_id', toRemove);
+        if (deleteError) {
+          logSupabaseError('ReplaceUserCompanies-delete', deleteError);
+          res.status(500).json({ success: false, error: 'Не удалось снять старые привязки' });
+          return;
+        }
+      }
+
+      await auditService.logFromRequest(req, req.user.id, 'USER_COMPANY_ACCESS_CHANGED', {
+        entityType: 'user',
+        entityId: id,
+        details: {
+          company_root_ids: desired,
+          is_system_admin: desired.length === 0,
+        },
+      });
+
+      emitDepartmentAccessChanged(id);
+
+      res.json({
+        success: true,
+        data: {
+          company_root_ids: desired,
+          is_system_admin: desired.length === 0,
+        },
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Replace user companies error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось обновить привязки компаний' });
     }
   },
 };

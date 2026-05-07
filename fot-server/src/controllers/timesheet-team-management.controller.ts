@@ -44,7 +44,19 @@ import {
   resolveTimesheetScope,
   resolveTimesheetScopedDepartmentId,
 } from './timesheet.controller.js';
+import { resolveCompanyScope } from '../services/data-scope.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
+
+/**
+ * Низкоуровневые ручки управления переводами/исключениями доступны только
+ * системному админу (без company-scope). Админу компании эти операции
+ * недоступны напрямую — он управляет назначениями через /admin/users.
+ */
+async function requireSystemAdmin(req: AuthenticatedRequest): Promise<boolean> {
+  if (!req.user.is_admin) return false;
+  const scope = await resolveCompanyScope(req);
+  return scope.roots === 'all';
+}
 
 const TIMESHEET_TEAM_MANAGEMENT_PAGE_KEY = 'timesheet-team-management';
 
@@ -403,8 +415,8 @@ export const timesheetTeamManagementController = {
   /** GET /api/timesheet/admin/transfers?from=&to=&department_id=&employee_query= */
   async listAdminTransfers(req: AuthenticatedRequest, res: Response) {
     try {
-      if (!req.user.is_admin) {
-        return res.status(403).json({ success: false, error: 'Доступно только администраторам' });
+      if (!(await requireSystemAdmin(req))) {
+        return res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
       }
       const parsed = adminTransfersListQuerySchema.parse(req.query);
       const data = await listAllTransfersAndExclusions(parsed);
@@ -421,8 +433,8 @@ export const timesheetTeamManagementController = {
   /** GET /api/timesheet/team-management/transfers?department_id=... */
   async listTransfers(req: AuthenticatedRequest, res: Response) {
     try {
-      if (!req.user.is_admin) {
-        return res.status(403).json({ success: false, error: 'Доступно только администраторам' });
+      if (!(await requireSystemAdmin(req))) {
+        return res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
       }
       const parsed = transfersListQuerySchema.parse(req.query);
       const data = await listDepartmentTransfers(parsed.department_id);
@@ -439,8 +451,8 @@ export const timesheetTeamManagementController = {
   /** PATCH /api/timesheet/team-management/transfers/:assignmentId */
   async patchTransfer(req: AuthenticatedRequest, res: Response) {
     try {
-      if (!req.user.is_admin) {
-        return res.status(403).json({ success: false, error: 'Доступно только администраторам' });
+      if (!(await requireSystemAdmin(req))) {
+        return res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
       }
       const assignmentId = uuidParamSchema.parse(req.params.assignmentId);
       const parsed = transferUpdateSchema.parse(req.body);
@@ -485,8 +497,8 @@ export const timesheetTeamManagementController = {
   /** DELETE /api/timesheet/team-management/transfers/:assignmentId */
   async deleteTransferEntry(req: AuthenticatedRequest, res: Response) {
     try {
-      if (!req.user.is_admin) {
-        return res.status(403).json({ success: false, error: 'Доступно только администраторам' });
+      if (!(await requireSystemAdmin(req))) {
+        return res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
       }
       const assignmentId = uuidParamSchema.parse(req.params.assignmentId);
       const employeeIdBefore = await loadAssignmentEmployeeId(assignmentId);
@@ -523,8 +535,8 @@ export const timesheetTeamManagementController = {
   /** PATCH /api/timesheet/team-management/exclusions/:employeeId */
   async patchExclusion(req: AuthenticatedRequest, res: Response) {
     try {
-      if (!req.user.is_admin) {
-        return res.status(403).json({ success: false, error: 'Доступно только администраторам' });
+      if (!(await requireSystemAdmin(req))) {
+        return res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
       }
       const employeeId = Number(req.params.employeeId);
       if (!Number.isFinite(employeeId) || employeeId <= 0) {
@@ -561,8 +573,8 @@ export const timesheetTeamManagementController = {
   /** DELETE /api/timesheet/team-management/exclusions/:employeeId */
   async deleteExclusionEntry(req: AuthenticatedRequest, res: Response) {
     try {
-      if (!req.user.is_admin) {
-        return res.status(403).json({ success: false, error: 'Доступно только администраторам' });
+      if (!(await requireSystemAdmin(req))) {
+        return res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
       }
       const employeeId = Number(req.params.employeeId);
       if (!Number.isFinite(employeeId) || employeeId <= 0) {

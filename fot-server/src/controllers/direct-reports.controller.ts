@@ -7,6 +7,8 @@ import {
   unassignDirectReportById,
 } from '../services/employee-direct-reports.service.js';
 import { AUDIT_ACTIONS, auditService } from '../services/audit.service.js';
+import { canAccessEmployeeInScope, resolveAccessibleDepartmentIds } from '../services/data-scope.service.js';
+import { supabase } from '../config/database.js';
 
 const assignSchema = z.object({
   manager_employee_id: z.number().int().positive(),
@@ -23,9 +25,17 @@ export const directReportsController = {
         : null;
       const includeInactive = req.query.include_inactive === '1';
 
+      const accessible = await resolveAccessibleDepartmentIds(req);
+
       let managerEmployeeId: number | undefined;
       if (req.user.is_admin) {
         if (managerParam && Number.isFinite(managerParam) && managerParam > 0) {
+          if (accessible !== 'all') {
+            const allowed = await canAccessEmployeeInScope(req, managerParam);
+            if (!allowed) {
+              return res.status(403).json({ success: false, error: 'Менеджер вне вашей зоны доступа' });
+            }
+          }
           managerEmployeeId = managerParam;
         }
       } else {
@@ -54,6 +64,18 @@ export const directReportsController = {
         return res.status(400).json({ success: false, error: 'Некорректные данные', details: parsed.error.flatten() });
       }
       const { manager_employee_id, subordinate_employee_id, note } = parsed.data;
+
+      const accessible = await resolveAccessibleDepartmentIds(req);
+      if (accessible !== 'all') {
+        const [managerOk, subordinateOk] = await Promise.all([
+          canAccessEmployeeInScope(req, manager_employee_id),
+          canAccessEmployeeInScope(req, subordinate_employee_id),
+        ]);
+        if (!managerOk || !subordinateOk) {
+          return res.status(403).json({ success: false, error: 'Сотрудники вне вашей зоны доступа' });
+        }
+      }
+
       const result = await assignDirectReport({
         managerEmployeeId: manager_employee_id,
         subordinateEmployeeId: subordinate_employee_id,
@@ -92,6 +114,26 @@ export const directReportsController = {
       if (!id) {
         return res.status(400).json({ success: false, error: 'id обязателен' });
       }
+
+      const accessible = await resolveAccessibleDepartmentIds(req);
+      if (accessible !== 'all') {
+        const { data: row } = await supabase
+          .from('employee_direct_reports')
+          .select('manager_employee_id, subordinate_employee_id')
+          .eq('id', id)
+          .maybeSingle();
+        if (!row) {
+          return res.status(404).json({ success: false, error: 'Назначение не найдено' });
+        }
+        const [managerOk, subordinateOk] = await Promise.all([
+          canAccessEmployeeInScope(req, row.manager_employee_id as number),
+          canAccessEmployeeInScope(req, row.subordinate_employee_id as number),
+        ]);
+        if (!managerOk || !subordinateOk) {
+          return res.status(403).json({ success: false, error: 'Назначение вне вашей зоны доступа' });
+        }
+      }
+
       const ok = await unassignDirectReportById(id);
       if (!ok) {
         return res.status(404).json({ success: false, error: 'Назначение не найдено или уже снято' });

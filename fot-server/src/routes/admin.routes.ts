@@ -101,6 +101,11 @@ router.patch('/users/:id/employee', requirePageAccess('/admin/users', 'edit'), a
 router.put('/users/:id/department-access', requirePageAccess('/admin/users', 'edit'), adminController.updateUserDepartmentAccess);
 router.put('/employees/:id/department-access', requirePageAccess('/admin/users', 'edit'), adminController.updateEmployeeDepartmentAccess);
 
+// Привязка администраторов к «компаниям» (корневым узлам Sigur). Только системный админ.
+router.get('/companies', requirePageAccess('/admin/users', 'view'), adminController.listCompanies);
+router.get('/users/:id/companies', requirePageAccess('/admin/users', 'view'), adminController.getUserCompanies);
+router.put('/users/:id/companies', requirePageAccess('/admin/users', 'edit'), adminController.replaceUserCompanies);
+
 // 2FA управление
 router.post('/users/:id/generate-2fa', requirePageAccess('/admin/users', 'edit'), adminController.generate2FA);
 router.post('/users/:id/disable-2fa', requirePageAccess('/admin/users', 'edit'), adminController.disable2FA);

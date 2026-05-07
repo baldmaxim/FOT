@@ -48,6 +48,7 @@ export interface UserProfileResponse {
   page_access: Record<string, { can_view: boolean; can_edit: boolean }>;
   is_approved: boolean;
   two_factor_enabled: boolean;
+  company_scope?: { roots: 'all' | string[] };
 }
 
 // Профиль пользователя в БД (включая секреты).
@@ -69,6 +70,14 @@ export interface UserProfile {
   updated_at: string;
 }
 
+// Скоуп компаний для администратора. Загружается lazy в data-scope.service.
+// roots='all' — системный админ (нет записей в user_company_access),
+// roots=[]   — обычный пользователь (не is_admin),
+// roots=[…] — админ компании (видит только перечисленные корни и их потомков).
+export interface CompanyScope {
+  roots: 'all' | string[];
+}
+
 // Расширенный Request с информацией о пользователе
 export interface AuthenticatedRequest extends Request {
   user: {
@@ -84,6 +93,8 @@ export interface AuthenticatedRequest extends Request {
     is_approved: boolean;
     two_factor_enabled: boolean;
     two_factor_verified: boolean;
+    company_scope?: CompanyScope;
+    __company_subtree_ids?: string[];
   };
 }
 

@@ -25,6 +25,11 @@ interface INavItem {
   icon: FC<{ className?: string }>;
   badge?: number;
   requiredPage?: string | string[];
+  /**
+   * Если true — пункт скрыт для админа компании (is_admin со скоупом).
+   * Системный админ (company_scope.roots === 'all') всегда видит пункт.
+   */
+  systemAdminOnly?: boolean;
 }
 
 interface INavGroup {
@@ -60,7 +65,7 @@ const navGroups: INavGroup[] = [
       { id: 'skud-hub', path: '/skud-settings', label: 'СКУД', icon: DatabaseIcon, requiredPage: '/skud-settings' },
       { id: 'sigur', path: '/sigur', label: 'SIGUR', icon: UsersIcon, requiredPage: '/skud-settings' },
       { id: 'card-reader', path: '/skud-card-reader', label: 'Считыватель пропусков', icon: KeyIcon, requiredPage: '/skud-card-reader' },
-      { id: 'system-hub', path: '/admin/system', label: 'Система', icon: ShieldIcon, requiredPage: ['/admin/users', '/admin/roles', '/admin/audit', '/admin/action-history', '/admin/settings', '/admin/data-api'] },
+      { id: 'system-hub', path: '/admin/system', label: 'Система', icon: ShieldIcon, requiredPage: ['/admin/users', '/admin/roles', '/admin/audit', '/admin/action-history', '/admin/settings', '/admin/data-api'], systemAdminOnly: true },
     ]
   }
 ];
@@ -135,6 +140,11 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose, is
     || 'Должность не указана';
   const displayName = formatFioShort(profile?.full_name) || 'Пользователь';
 
+  // Админ компании = is_admin со списком конкретных company_scope.roots.
+  // Если roots === 'all' (или поле отсутствует — старая сессия) — это системный админ.
+  const isCompanyAdmin = !!profile?.is_admin
+    && Array.isArray(profile?.company_scope?.roots);
+
   return (
     <aside className={`${styles.sidebar} ${isOpen ? styles.open : ''} ${isCollapsed ? styles.collapsed : ''}`}>
       <div className={styles.logo}>
@@ -170,6 +180,7 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose, is
       <nav className={styles.nav}>
         {navGroups.map(group => {
           const visibleItems = group.items.filter(item => {
+            if (item.systemAdminOnly && isCompanyAdmin) return false;
             const pages = item.requiredPage ?? item.path;
             const pageList = Array.isArray(pages) ? pages : [pages];
             return pageList.some(page => canViewPage(page));

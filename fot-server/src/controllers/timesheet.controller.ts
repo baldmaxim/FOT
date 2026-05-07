@@ -16,6 +16,7 @@ import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffe
 import {
   getMinSelfHistoryDate,
   isSelfEmployeeRequest,
+  resolveAccessibleDepartmentIds,
   resolveManagedDepartmentIds,
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
@@ -579,7 +580,10 @@ export async function hasManagedTimesheetAccess(
 
 export async function resolveTimesheetScope(req: AuthenticatedRequest): Promise<DataScope | null> {
   if (req.user.is_admin) {
-    return 'all';
+    const accessible = await resolveAccessibleDepartmentIds(req);
+    if (accessible === 'all') return 'all';
+    if (accessible.length > 0) return 'department';
+    // is_admin со scope=[] (теоретически не возникает: company_scope=[] только если не is_admin)
   }
 
   if (await hasManagedTimesheetAccess(req, 'view')) {
