@@ -418,8 +418,10 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
                                         checked={checked}
                                         onChange={e => setTableField(table.name, column.name, e.target.checked)}
                                       />
-                                      {column.name}
-                                      <span className={styles.muted}> · {column.data_type}</span>
+                                      <span className={styles.fieldText}>
+                                        <span className={styles.fieldName}>{column.name}</span>
+                                        <span className={styles.fieldType}>{column.data_type}</span>
+                                      </span>
                                     </label>
                                   );
                                 })}

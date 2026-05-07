@@ -317,16 +317,39 @@
 .fieldsGrid {
   margin-top: 10px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 6px 12px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px 12px;
+  align-items: start;
 }
 
 .fieldsGrid label {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  align-items: flex-start;
+  gap: 8px;
   font-size: 12px;
   color: var(--text-primary);
+  min-height: 34px;
+}
+
+.fieldsGrid label > input[type="checkbox"] {
+  margin-top: 2px;
+  flex: 0 0 auto;
+}
+
+.fieldText {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  min-width: 0;
+}
+
+.fieldName {
+  word-break: break-word;
+}
+
+.fieldType {
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 
 .tabs {

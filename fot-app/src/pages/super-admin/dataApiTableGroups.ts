@@ -12,12 +12,35 @@ export interface ITableGroup {
 export const TABLE_GROUPS: ITableGroup[] = [
   {
     id: 'people',
-    title: '👥 Сотрудники и доступы',
+    title: '👥 Сотрудники',
     tables: [
-      { name: 'user_department_access', label: 'Доступ пользователей к отделам' },
+      { name: 'employees', label: 'Сотрудники' },
+      { name: 'employee_assignments', label: 'Назначения сотрудников' },
+      { name: 'employee_department_access', label: 'Доступ сотрудников к отделам' },
+      { name: 'salary_history', label: 'История зарплат' },
+      { name: 'manager_department_import_brigade_aliases', label: 'Импорт: алиасы бригад' },
+      { name: 'manager_department_import_employee_aliases', label: 'Импорт: алиасы сотрудников' },
+    ],
+  },
+  {
+    id: 'org',
+    title: '🏢 Организация и структура',
+    tables: [
+      { name: 'org_departments', label: 'Отделы' },
+      { name: 'org_sites', label: 'Объекты (сайты)' },
+      { name: 'positions', label: 'Должности' },
+    ],
+  },
+  {
+    id: 'access',
+    title: '🔐 Доступы и роли',
+    tables: [
+      { name: 'user_profiles', label: 'Профили пользователей' },
+      { name: 'system_roles', label: 'Роли системы' },
       { name: 'access_pages', label: 'Страницы интерфейса' },
       { name: 'access_capability_catalog', label: 'Каталог разрешений' },
       { name: 'role_page_access', label: 'Доступ ролей к страницам' },
+      { name: 'user_department_access', label: 'Доступ пользователей к отделам' },
     ],
   },
   {
@@ -29,6 +52,7 @@ export const TABLE_GROUPS: ITableGroup[] = [
       { name: 'timesheet_responsibles', label: 'Ответственные за табели' },
       { name: 'timesheet_reminder_log', label: 'Напоминания о табелях' },
       { name: 'attendance_adjustments', label: 'Корректировки явки' },
+      { name: 'tender_timesheet', label: 'Табель тендеров' },
     ],
   },
   {
@@ -36,12 +60,9 @@ export const TABLE_GROUPS: ITableGroup[] = [
     title: '🗓 Графики работы',
     tables: [
       { name: 'work_schedules', label: 'Графики работы' },
-      { name: 'employee_schedules', label: 'Графики сотрудников' },
       { name: 'employee_schedule_assignments', label: 'Назначение графика сотруднику' },
-      { name: 'department_schedules', label: 'Графики отделов' },
-      { name: 'category_schedules', label: 'Графики категорий' },
       { name: 'object_schedule_assignments', label: 'Графики на объектах' },
-      { name: 'work_categories', label: 'Категории работ' },
+      { name: 'production_calendar', label: 'Производственный календарь' },
     ],
   },
   {
@@ -79,6 +100,9 @@ export const TABLE_GROUPS: ITableGroup[] = [
     id: 'chat',
     title: '💬 Чат',
     tables: [
+      { name: 'chat_conversations', label: 'Беседы' },
+      { name: 'chat_messages', label: 'Сообщения' },
+      { name: 'chat_participants', label: 'Участники бесед' },
       { name: 'chat_contact_grants', label: 'Разрешения на контакт' },
       { name: 'chat_contact_requests', label: 'Запросы на контакт' },
     ],
@@ -92,9 +116,16 @@ export const TABLE_GROUPS: ITableGroup[] = [
       { name: 'skud_object_map_points', label: 'Точки на карте' },
       { name: 'skud_object_routes', label: 'Маршруты между объектами' },
       { name: 'skud_travel_segments', label: 'Участки маршрутов' },
+      { name: 'skud_access_point_settings', label: 'Настройки точек прохода' },
+      { name: 'skud_daily_summary', label: 'Сводка по дням' },
+      { name: 'skud_events', label: 'События СКУД' },
+      { name: 'skud_sync_department_filter', label: 'Фильтр синхр. отделов' },
+      { name: 'skud_sync_employee_filter', label: 'Фильтр синхр. сотрудников' },
       { name: 'sigur_health_checks', label: 'Мониторинг Sigur' },
       { name: 'sigur_incidents', label: 'Инциденты Sigur' },
       { name: 'sigur_runtime_state', label: 'Состояние Sigur' },
+      { name: 'sync_commands', label: 'Команды синхронизации' },
+      { name: 'sync_status', label: 'Статусы синхронизации' },
     ],
   },
   {
@@ -102,6 +133,7 @@ export const TABLE_GROUPS: ITableGroup[] = [
     title: '⚙️ Системные настройки',
     tables: [
       { name: 'system_settings', label: 'Настройки системы' },
+      { name: 'notifications', label: 'Уведомления' },
     ],
   },
 ];

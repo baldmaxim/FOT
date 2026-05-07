@@ -15,6 +15,11 @@ const FORBIDDEN_TABLES = new Set<string>([
 
 const FORBIDDEN_TABLE_PREFIXES = ['pg_', 'sql_'];
 
+const FORBIDDEN_TABLE_PATTERNS: RegExp[] = [
+  /^skud_events_\d/i,
+  /_backup(_|$)/i,
+];
+
 const FORBIDDEN_FIELD_NAMES = new Set<string>([
   'totp_secret',
   'totp_secret_encrypted',
@@ -57,7 +62,8 @@ interface RpcRow {
 
 function isForbiddenTable(name: string): boolean {
   if (FORBIDDEN_TABLES.has(name)) return true;
-  return FORBIDDEN_TABLE_PREFIXES.some(prefix => name.startsWith(prefix));
+  if (FORBIDDEN_TABLE_PREFIXES.some(prefix => name.startsWith(prefix))) return true;
+  return FORBIDDEN_TABLE_PATTERNS.some(re => re.test(name));
 }
 
 function isForbiddenField(name: string): boolean {
