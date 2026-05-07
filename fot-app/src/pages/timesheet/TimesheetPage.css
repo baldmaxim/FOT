@@ -1555,7 +1555,10 @@
   color: var(--text-tertiary);
   padding: 10px 4px;
   position: sticky;
-  top: 0;
+  /* top: -1px перекрывает 1px-щель, возникающую между статичной .ts-table-header-bar
+     и sticky thead из-за border-collapse и rounding в Chrome/Firefox.
+     Без этого при прокрутке на ¼ строки виден просвет содержимого таблицы под легендой. */
+  top: -1px;
   z-index: 10;
 }
 
@@ -1586,7 +1589,7 @@
 /* Sticky top header for objects view */
 .ts-table--objects thead th {
   position: sticky;
-  top: 0;
+  top: -1px;
   z-index: 50;
   background: var(--bg-secondary);
   box-shadow: 0 1px 0 var(--border);
