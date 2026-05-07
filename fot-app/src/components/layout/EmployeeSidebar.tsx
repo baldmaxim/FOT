@@ -171,13 +171,25 @@ export const EmployeeSidebar: FC<IEmployeeSidebarProps> = ({ isOpen, onClose, th
   return (
     <aside className={`${styles.sidebar} ${isOpen ? styles.open : ''} ${isCollapsed ? styles.collapsed : ''}`}>
       <div className={styles.logo}>
-        <img src={logoSrc} alt="FOT" className={styles.logoImage} />
-        <img src="/fot-favicon-32.svg" alt="FOT" className={styles.logoMini} />
+        <a
+          href="/employee"
+          className={styles.logoLink}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.button === 1) return;
+            e.preventDefault();
+            navigate('/employee');
+            onClose?.();
+          }}
+          aria-label="На главную (Личный кабинет)"
+        >
+          <img src={logoSrc} alt="FOT" className={styles.logoImage} />
+          <img src="/fot-favicon-32.svg" alt="FOT" className={styles.logoMini} />
+        </a>
         {onToggleCollapse && (
           <button
             type="button"
             className={styles.collapseBtn}
-            onClick={onToggleCollapse}
+            onClick={(e) => { e.stopPropagation(); onToggleCollapse(); }}
             title={isCollapsed ? 'Развернуть меню' : 'Свернуть меню'}
             aria-label={isCollapsed ? 'Развернуть меню' : 'Свернуть меню'}
           >
