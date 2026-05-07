@@ -14,24 +14,44 @@
 
 .logo {
   position: relative;
-  padding: 20px;
+  height: var(--header-height);
+  padding: 0 20px;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   gap: 8px;
+  box-sizing: border-box;
+}
+
+.logoLink {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.logoLink:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 4px;
 }
 
 .logoImage {
   display: block;
-  width: 100%;
-  height: 48px;
-  max-width: none;
+  height: 28px;
+  width: auto;
+  max-width: 100%;
 }
 
 .logoMini {
   display: none;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
 }
 
 .collapseBtn {
@@ -226,7 +246,12 @@
   }
 
   .sidebar.collapsed .logo {
-    padding: 16px 8px;
+    padding: 0 8px;
+    justify-content: center;
+  }
+
+  .sidebar.collapsed .logoLink {
+    flex: 0 0 auto;
     justify-content: center;
   }
 
