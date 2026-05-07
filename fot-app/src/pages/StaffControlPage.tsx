@@ -1591,9 +1591,6 @@ export const StaffControlPage: FC = () => {
 
   const controlsBar = (
     <div className="sc-filters">
-      <div className="sc-filter-search">
-        <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
-      </div>
       {isSingleManagedDept ? (
         <div className="sc-dept-fixed" title="Вам назначен один отдел">
           {singleManagedDeptName ?? 'Мой отдел'}
@@ -1605,6 +1602,9 @@ export const StaffControlPage: FC = () => {
           onChange={handleDeptChange}
         />
       )}
+      <div className="sc-filter-search">
+        <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
+      </div>
       <select
         className={`sc-schedule-filter${isMobile ? ' sc-schedule-filter--mobile' : ''}`}
         value={scheduleFilter}
