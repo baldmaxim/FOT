@@ -681,6 +681,10 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       : (summaryError ? `[presence-polling] summary recalc error: ${summaryError}` : null);
     const cycleMeta = {
       connectionType,
+      mode: window.mode,
+      pollLastEventId: window.lastEventId,
+      maxObservedEventId,
+      consecutiveEmptyTicks,
       checkpointSource: window.checkpointSource,
       windowStart: window.startTime,
       windowEnd: window.endTime,
@@ -745,8 +749,20 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         isCritical ? 'presence-polling cycle critical slow' : 'presence-polling cycle slow',
         {
           level: isCritical ? 'error' : 'warning',
-          tags: { service: 'presence-polling', severity: isCritical ? 'critical' : 'slow' },
-          extra: { ...timings, pollIntervalMs, fetched: rawEvents.length, inserted: totalInserted },
+          tags: {
+            service: 'presence-polling',
+            severity: isCritical ? 'critical' : 'slow',
+            mode: window.mode,
+          },
+          extra: {
+            ...timings,
+            pollIntervalMs,
+            fetched: rawEvents.length,
+            inserted: totalInserted,
+            mode: window.mode,
+            pollLastEventId: window.lastEventId,
+            maxObservedEventId,
+          },
         },
       );
     }
