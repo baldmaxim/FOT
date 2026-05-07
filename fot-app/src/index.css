@@ -39,6 +39,8 @@
   --warning-muted: rgba(245, 158, 11, 0.1);
   --error: #ef4444;
   --error-muted: rgba(239, 68, 68, 0.1);
+  --purple: #a78bfa;
+  --purple-strong: #c084fc;
 
   /* Typography */
   --font-primary: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -103,6 +105,8 @@
   --warning-muted: rgba(217, 119, 6, 0.08);
   --error: #dc2626;
   --error-muted: rgba(220, 38, 38, 0.08);
+  --purple: #8b5cf6;
+  --purple-strong: #7e22ce;
 
   /* Shadows for light theme */
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);

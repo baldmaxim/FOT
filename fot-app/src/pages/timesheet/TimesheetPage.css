@@ -1113,7 +1113,7 @@
 }
 
 .ts-legend-dot--weekend {
-  background: var(--bg-tertiary));
+  background: var(--bg-tertiary);
   color: var(--text-tertiary);
 }
 
@@ -1563,12 +1563,12 @@
 }
 
 .ts-table thead th.ts-th--weekend {
-  background: var(--bg-tertiary));
+  background: var(--bg-tertiary);
   opacity: 1;
 }
 
 .ts-table thead th.ts-th--today {
-  background: #dcfce7;
+  background: var(--success-muted);
   color: var(--success);
 }
 
@@ -2365,7 +2365,7 @@
 
 .ts-day--vacation {
   background: rgba(139, 92, 246, 0.12);
-  color: #8b5cf6;
+  color: var(--purple);
 }
 
 .ts-day--absent {
@@ -2375,7 +2375,7 @@
 
 .ts-day--incomplete-skud {
   background: rgba(168, 85, 247, 0.18);
-  color: #7e22ce;
+  color: var(--purple-strong);
 }
 
 .ts-day--unpaid {
@@ -2385,7 +2385,7 @@
 
 .ts-day--educational {
   background: rgba(217, 70, 239, 0.12);
-  color: #a21caf;
+  color: var(--purple-strong);
 }
 
 .ts-day--corrected {
@@ -2393,15 +2393,23 @@
 }
 
 .ts-day--inactive {
-  background: var(--bg-elevated) !important;
+  background:
+    repeating-linear-gradient(135deg,
+      transparent 0, transparent 4px,
+      var(--border) 4px, var(--border) 5px),
+    var(--bg-secondary) !important;
   color: var(--text-tertiary) !important;
   text-decoration: line-through;
   cursor: not-allowed !important;
-  opacity: 0.6;
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .ts-day--inactive:hover {
-  background: var(--bg-elevated) !important;
+  background:
+    repeating-linear-gradient(135deg,
+      transparent 0, transparent 4px,
+      var(--border) 4px, var(--border) 5px),
+    var(--bg-secondary) !important;
 }
 
 .ts-day--problem-red {
@@ -2409,18 +2417,25 @@
 }
 
 .ts-day--problem-yellow {
-  box-shadow: inset 0 0 0 2px #f59e0b;
+  box-shadow: inset 0 0 0 2px var(--warning);
 }
 
 .ts-day--out-of-period {
-  background: var(--bg-elevated) !important;
+  background:
+    repeating-linear-gradient(135deg,
+      transparent 0, transparent 4px,
+      var(--border) 4px, var(--border) 5px),
+    var(--bg-secondary) !important;
   color: var(--text-tertiary) !important;
-  opacity: 0.6;
   box-shadow: inset 0 0 0 1px var(--success);
 }
 
 .ts-day--out-of-period:hover {
-  background: var(--bg-elevated) !important;
+  background:
+    repeating-linear-gradient(135deg,
+      transparent 0, transparent 4px,
+      var(--border) 4px, var(--border) 5px),
+    var(--bg-secondary) !important;
 }
 
 .ts-employee-badge {
@@ -2441,8 +2456,8 @@
 }
 
 .ts-employee-badge--excluded {
-  background: rgba(107, 114, 128, 0.18);
-  color: #6b7280;
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
 }
 
 /* ===== Exclude employee modal ===== */
@@ -2667,7 +2682,7 @@
 }
 
 .ts-day--weekend {
-  background: var(--bg-tertiary));
+  background: var(--bg-tertiary);
   color: var(--text-tertiary);
   cursor: default;
 }
@@ -2675,7 +2690,7 @@
 .ts-day--weekend:hover {
   transform: none;
   outline: none;
-  background: var(--bg-tertiary));
+  background: var(--bg-tertiary);
 }
 
 .ts-day--today {
