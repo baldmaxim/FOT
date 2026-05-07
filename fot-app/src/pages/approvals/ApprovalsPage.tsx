@@ -1,6 +1,7 @@
 import { type FC, useState, useMemo, useEffect, useRef, lazy, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Clock } from 'lucide-react';
+import { Check, X, RotateCcw, ChevronDown, ChevronUp, Clock } from 'lucide-react';
+import { PeriodPicker } from './PeriodPicker';
 import type { TimesheetEntry, TimesheetEmployee } from '../../types';
 import {
   timesheetApprovalService,
@@ -16,7 +17,6 @@ import {
 } from '../../services/correctionApprovalService';
 import { timesheetService } from '../../services/timesheetService';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
-import { DateInput } from '../../components/ui/DateInput';
 import { ApprovalCommentModal } from './ApprovalCommentModal';
 const TimesheetCorrectionModal = lazy(() => import('../../components/timesheet/TimesheetCorrectionModal').then(module => ({
   default: module.TimesheetCorrectionModal,
@@ -24,7 +24,6 @@ const TimesheetCorrectionModal = lazy(() => import('../../components/timesheet/T
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { getMonthBounds, listDatesInRange } from '../../utils/timesheetApprovalPeriod';
-import { getMonthLabel } from '../../utils/calendarUtils';
 import './ApprovalsPage.css';
 
 type Tab = 'corrections' | 'timesheets';
@@ -122,8 +121,6 @@ const CorrectionsTab: FC = () => {
   const toast = useToast();
 
   const now = useMemo(() => new Date(), []);
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
   const [period, setPeriod] = useState(() => monthRange(now.getFullYear(), now.getMonth() + 1));
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
@@ -140,22 +137,8 @@ const CorrectionsTab: FC = () => {
   };
 
   useEffect(() => {
-    setPeriod(monthRange(year, month));
-  }, [year, month]);
-
-  useEffect(() => {
     setSelectedIds(new Set());
   }, [period.startDate, period.endDate]);
-
-  const prevMonth = () => {
-    if (month === 1) { setMonth(12); setYear(y => y - 1); }
-    else setMonth(m => m - 1);
-  };
-
-  const nextMonth = () => {
-    if (month === 12) { setMonth(1); setYear(y => y + 1); }
-    else setMonth(m => m + 1);
-  };
 
   const query = useQuery({
     queryKey: ['correction-approvals', period.startDate, period.endDate],
@@ -251,29 +234,7 @@ const CorrectionsTab: FC = () => {
   return (
     <>
       <div className="approvals-toolbar">
-        <div className="approvals-month-nav">
-          <button type="button" className="approvals-month-btn" onClick={prevMonth} aria-label="Предыдущий месяц">
-            <ChevronLeft size={16} />
-          </button>
-          <span className="approvals-month-label">{getMonthLabel(year, month)}</span>
-          <button type="button" className="approvals-month-btn" onClick={nextMonth} aria-label="Следующий месяц">
-            <ChevronRight size={16} />
-          </button>
-        </div>
-        <label>
-          С
-          <DateInput
-            value={period.startDate}
-            onChange={v => setPeriod(p => ({ ...p, startDate: v }))}
-          />
-        </label>
-        <label>
-          По
-          <DateInput
-            value={period.endDate}
-            onChange={v => setPeriod(p => ({ ...p, endDate: v }))}
-          />
-        </label>
+        <PeriodPicker period={period} onChange={setPeriod} />
       </div>
 
       {query.isLoading ? (
@@ -300,21 +261,28 @@ const CorrectionsTab: FC = () => {
                     type="button"
                     className="cor-dept-toggle"
                     onClick={() => setExpanded(s => ({ ...s, [group.department_id]: !isOpen }))}
+                    aria-expanded={isOpen}
                   >
                     {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                    <span className="cor-dept-name">{group.department_name}</span>
-                    <span className="cor-dept-stats">
-                      Выходных дней: <b>{group.pending_count}</b> • Сотрудников: <b>{group.employees_count}</b>
-                    </span>
+                    <span className="cor-dept-name" title={group.department_name}>{group.department_name}</span>
                   </button>
+                  <span
+                    className="cor-dept-stats"
+                    title={`Выходных дней: ${group.pending_count} · Сотрудников: ${group.employees_count}`}
+                  >
+                    {group.pending_count} · {group.employees_count}&thinsp;чел
+                  </span>
                   {canReview && (
                     <button
                       type="button"
                       className="cor-dept-bulk"
                       onClick={() => bulkApproveSelectedMutation.mutate(group.items.map(item => item.id))}
                       disabled={bulkPending || group.items.length === 0}
+                      aria-label={`Утвердить все (${group.pending_count})`}
                     >
-                      <Check size={14} /> Утвердить все ({group.pending_count})
+                      <Check size={14} />
+                      <span className="cor-dept-bulk-text">Все</span>
+                      <span className="cor-dept-bulk-count">{group.pending_count}</span>
                     </button>
                   )}
                 </div>

@@ -310,4 +310,8 @@
     transform: translateX(0);
     box-shadow: var(--shadow-xl);
   }
+
+  .collapseBtn {
+    display: none;
+  }
 }

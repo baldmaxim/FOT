@@ -534,73 +534,250 @@
   gap: 8px;
   align-items: center;
   flex-shrink: 0;
-  padding-bottom: 8px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
-  margin-bottom: 4px;
+  margin-bottom: 8px;
 }
-.approvals-toolbar label {
-  font-size: 12px;
-  color: var(--text-tertiary);
+
+/* === PeriodPicker === */
+.period-picker {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  gap: 8px;
+  flex-wrap: wrap;
 }
-.approvals-toolbar .date-input-group {
-  height: 28px;
-  padding: 3px 8px;
-}
-.approvals-month-nav {
+.period-picker-nav {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-right: 4px;
+  align-items: stretch;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  overflow: hidden;
 }
-.approvals-month-btn {
-  width: 28px;
-  height: 28px;
-  display: flex;
+.period-picker-nav-btn {
+  width: 30px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
+  background: transparent;
+  border: none;
   color: var(--text-secondary);
   cursor: pointer;
   padding: 0;
-  transition: all var(--transition);
+  transition: background var(--transition), color var(--transition);
 }
-.approvals-month-btn:hover {
+.period-picker-nav-btn:hover {
   background: var(--surface-hover);
   color: var(--text-primary);
 }
-.approvals-month-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  background: var(--surface);
-  color: var(--text-tertiary);
-}
-.approvals-month-label {
+.period-picker-nav-label {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
   font-size: 13px;
   font-weight: 600;
-  min-width: 122px;
-  text-align: center;
-  text-transform: capitalize;
   color: var(--text-primary);
-  line-height: 1.2;
+  text-transform: capitalize;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  min-width: 122px;
+  justify-content: center;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
+.period-picker-range {
+  position: relative;
+}
+.period-picker-range-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.period-picker-range-btn:hover {
+  background: var(--surface-hover);
+}
+.period-picker-range-btn.is-open {
+  border-color: var(--primary);
+  background: var(--primary-light);
+  color: var(--primary);
+}
+.period-picker-range-btn svg {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+.period-picker-range-btn.is-open svg {
+  color: var(--primary);
+}
+.period-picker-range-text {
+  text-transform: lowercase;
+}
+.period-picker-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 240px;
+  padding: 12px;
+  background: var(--surface-elevated, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg, 0 12px 32px -10px rgba(0, 0, 0, 0.35));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.period-picker-popover-row {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.period-picker-popover-row .date-input-group {
+  height: 32px;
+}
+.period-picker-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.period-picker-popover-cancel,
+.period-picker-popover-apply {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition), filter var(--transition);
+}
+.period-picker-popover-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.period-picker-popover-cancel:hover {
+  background: var(--surface-hover);
+}
+.period-picker-popover-apply {
+  background: var(--primary);
+  border: 1px solid var(--primary);
+  color: #fff;
+}
+.period-picker-popover-apply:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+.period-picker-popover-apply:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.period-picker-presets {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+}
+.period-picker-preset {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 12px;
+  border: none;
+  background: transparent;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.period-picker-preset:hover {
+  color: var(--text-primary);
+}
+.period-picker-preset.is-active {
+  background: var(--primary-light);
+  color: var(--primary);
+  font-weight: 600;
+}
+.period-picker-presets-mobile {
+  position: relative;
+  display: none;
+}
+.period-picker-preset.is-mobile {
+  height: 32px;
+  padding: 0 10px 0 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  gap: 4px;
+  font-size: 13px;
+}
+.period-picker-presets-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 140px;
+  padding: 4px;
+  background: var(--surface-elevated, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg, 0 12px 32px -10px rgba(0, 0, 0, 0.35));
+  display: flex;
+  flex-direction: column;
+}
+.period-picker-presets-menu-item {
+  display: block;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background var(--transition);
+}
+.period-picker-presets-menu-item:hover {
+  background: var(--surface-hover);
+}
+.period-picker-presets-menu-item.is-active {
+  color: var(--primary);
+  font-weight: 600;
+}
+
 .cor-dept-card {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   overflow: hidden;
   background: var(--surface);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.04));
 }
 .cor-dept-header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
+  gap: 10px;
+  padding: 8px 12px;
+  min-height: 44px;
   background: var(--bg-secondary);
   border-bottom: 1px solid transparent;
 }
@@ -615,34 +792,75 @@
   align-items: center;
   gap: 8px;
   flex: 1;
+  min-width: 0;
   text-align: left;
   font-size: 14px;
   color: inherit;
   padding: 0;
 }
+.cor-dept-toggle svg {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
 .cor-dept-name {
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 .cor-dept-stats {
-  font-size: 12px;
-  color: var(--text-tertiary);
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
 .cor-dept-bulk {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
-  border-radius: 6px;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
   background: var(--success);
   color: #fff;
   border: none;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: filter var(--transition);
 }
-.cor-dept-bulk:hover { filter: brightness(1.05); }
+.cor-dept-bulk:hover:not(:disabled) { filter: brightness(1.06); }
 .cor-dept-bulk:disabled {
-  opacity: 0.6;
+  opacity: 0.55;
   cursor: not-allowed;
+}
+.cor-dept-bulk-text {
+  letter-spacing: 0.01em;
+}
+.cor-dept-bulk-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
 }
 .cor-items {
   list-style: none;
@@ -779,8 +997,78 @@
 }
 
 @media (max-width: 768px) {
+  .approvals-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 6;
+    padding: 8px 0 10px;
+    margin-bottom: 6px;
+    background: var(--bg, var(--surface));
+  }
+  .period-picker {
+    width: 100%;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .period-picker-nav {
+    height: 36px;
+  }
+  .period-picker-nav-btn {
+    width: 36px;
+  }
+  .period-picker-nav-label {
+    font-size: 13px;
+    min-width: 116px;
+    padding: 0 10px;
+  }
+  .period-picker-range {
+    flex: 1;
+    min-width: 0;
+  }
+  .period-picker-range-btn {
+    width: 100%;
+    height: 36px;
+    justify-content: center;
+  }
+  .period-picker-range-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .period-picker-popover {
+    left: auto;
+    right: 0;
+    min-width: 260px;
+  }
+  .period-picker-presets {
+    display: none;
+  }
+  .period-picker-presets-mobile {
+    display: inline-block;
+    flex-shrink: 0;
+  }
+
+  .cor-dept-header {
+    gap: 8px;
+    padding: 8px 10px;
+    min-height: 48px;
+  }
+  .cor-dept-stats {
+    font-size: 11px;
+    height: 22px;
+    padding: 0 7px;
+  }
+  .cor-dept-bulk {
+    height: 32px;
+    padding: 0 10px;
+    gap: 4px;
+  }
+  .cor-dept-bulk-text {
+    display: none;
+  }
+
   .cor-items {
-    gap: 10px;
+    gap: 8px;
     padding: 10px;
   }
   .cor-item {
@@ -792,8 +1080,8 @@
       "notes   notes"
       "actions actions";
     grid-template-columns: 1fr auto;
-    gap: 6px 8px;
-    padding: 12px 14px;
+    gap: 4px 8px;
+    padding: 10px 12px;
     border: 1px solid var(--border);
     border-left: 3px solid var(--border);
     border-top: 1px solid var(--border);
@@ -862,7 +1150,7 @@
     margin-top: 4px;
   }
   .cor-item-btn {
-    height: 44px;
+    height: 40px;
     justify-content: center;
     font-size: 14px;
     font-weight: 600;
