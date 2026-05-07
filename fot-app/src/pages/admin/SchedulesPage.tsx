@@ -27,6 +27,21 @@ interface ISlotOverride {
   lunch_minutes: number;
 }
 
+/**
+ * День произвольного цикла. Используется в режиме is_custom_cycle, где раскладка
+ * рабочих/выходных не сводится к простому «N подряд → M подряд»
+ * (например, двухнедельный цикл 6/1 → 5/2).
+ */
+interface ICustomDay {
+  is_work: boolean;
+  /** Если is_work=true и поле задано — слот переопределяет общее время. Иначе наследуется. */
+  work_start: string;
+  work_end: string;
+  lunch_minutes: number;
+  /** True = слот наследует общее время; false = у слота своё время. */
+  inherits_base: boolean;
+}
+
 interface IFormState {
   id: string | null;
   name: string;
@@ -35,9 +50,17 @@ interface IFormState {
   /** Тип расписания из БД. Сохраняется как есть, если is_remote не менялся явно. */
   loaded_schedule_type: ScheduleType | null;
   is_remote: boolean;
-  /** N: количество рабочих дней в цикле. */
+  /**
+   * Произвольный цикл: каждый день настраивается вручную (раб/вых + время).
+   * Подходит для нерегулярных раскладок типа 6/1 → 5/2 или с выходными в середине цикла.
+   * При false действует обычная модель «N через M».
+   */
+  is_custom_cycle: boolean;
+  /** Массив дней произвольного цикла. Длина = эффективная cycle_length при is_custom_cycle=true. */
+  custom_cycle_days: ICustomDay[];
+  /** N: количество рабочих дней в цикле (используется при is_custom_cycle=false). */
   work_days_count: number;
-  /** M: количество выходных дней в цикле. */
+  /** M: количество выходных дней в цикле (используется при is_custom_cycle=false). */
   off_days_count: number;
   /** Дата первого рабочего дня цикла (anchor). */
   anchor_date: string;
@@ -45,13 +68,45 @@ interface IFormState {
   work_start: string;
   work_end: string;
   lunch_minutes: number;
-  /** Особые рабочие дни цикла: ключ — индекс рабочего слота 0..N-1. */
+  /** Особые рабочие дни цикла (для простой N/M-модели): ключ — индекс рабочего слота 0..N-1. */
   slot_overrides: Partial<Record<number, ISlotOverride>>;
   respects_holidays: boolean;
   late_threshold_minutes: number;
   full_day_threshold: string;          // "HH:MM", "" = авто (чистое время)
   weekend_full_day_threshold: string;  // "HH:MM", "" = авто (= full_day_threshold)
 }
+
+/** Создаёт массив дней произвольного цикла из «префиксного» N/M-вида. */
+const buildCustomDaysFromPrefix = (
+  workCount: number,
+  offCount: number,
+  baseStart: string,
+  baseEnd: string,
+  lunch: number,
+  slotOverrides: Partial<Record<number, ISlotOverride>>,
+): ICustomDay[] => {
+  const out: ICustomDay[] = [];
+  for (let i = 0; i < workCount; i++) {
+    const ovr = slotOverrides[i];
+    out.push({
+      is_work: true,
+      work_start: ovr?.work_start ?? baseStart,
+      work_end: ovr?.work_end ?? baseEnd,
+      lunch_minutes: ovr?.lunch_minutes ?? lunch,
+      inherits_base: !ovr,
+    });
+  }
+  for (let i = 0; i < offCount; i++) {
+    out.push({
+      is_work: false,
+      work_start: baseStart,
+      work_end: baseEnd,
+      lunch_minutes: lunch,
+      inherits_base: true,
+    });
+  }
+  return out;
+};
 
 /** Ближайший понедельник (включая сегодня) к указанной дате. */
 const nearestMondayOnOrBefore = (iso: string): string => {
@@ -83,6 +138,8 @@ const EMPTY_FORM: IFormState = {
   loaded_pattern_type: null,
   loaded_schedule_type: null,
   is_remote: false,
+  is_custom_cycle: false,
+  custom_cycle_days: [],
   work_days_count: 5,
   off_days_count: 2,
   anchor_date: '',
@@ -99,6 +156,7 @@ const EMPTY_FORM: IFormState = {
 const createEmptyForm = (): IFormState => ({
   ...EMPTY_FORM,
   slot_overrides: {},
+  custom_cycle_days: [],
   anchor_date: nearestMondayOnOrBefore(getLocalISODate()),
 });
 
@@ -157,38 +215,84 @@ const tplToFormState = (tpl: IWorkSchedule, today: string): IFormState => {
   // 1) cycle
   if (tpl.pattern_type === 'cycle' && tpl.cycle_length && tpl.cycle_days) {
     const days = tpl.cycle_days;
-    let n = 0;
-    while (n < days.length && days[n].work_hours > 0) n++;
-    const m = days.length - n;
-    const slotOverrides: IFormState['slot_overrides'] = {};
-    for (let i = 0; i < n; i++) {
-      const slot = days[i];
-      if (
-        slot.work_start && slot.work_end
-        && (slot.work_start.slice(0, 5) !== baseStart
-          || slot.work_end.slice(0, 5) !== baseEnd
-          || (slot.lunch_minutes ?? lunch) !== lunch)
-      ) {
-        slotOverrides[i] = {
-          work_start: slot.work_start.slice(0, 5),
-          work_end: slot.work_end.slice(0, 5),
-          lunch_minutes: slot.lunch_minutes ?? lunch,
-        };
+
+    // Префиксная раскладка = работа..работа..выходной..выходной (без чередований внутри).
+    // Если она такая — открываем в простом N/M режиме. Иначе — в произвольном.
+    let prefixWork = 0;
+    while (prefixWork < days.length && days[prefixWork].work_hours > 0) prefixWork++;
+    const isPrefix = days.slice(prefixWork).every(d => d.work_hours <= 0);
+
+    if (isPrefix) {
+      const n = prefixWork;
+      const m = days.length - n;
+      const slotOverrides: IFormState['slot_overrides'] = {};
+      for (let i = 0; i < n; i++) {
+        const slot = days[i];
+        if (
+          slot.work_start && slot.work_end
+          && (slot.work_start.slice(0, 5) !== baseStart
+            || slot.work_end.slice(0, 5) !== baseEnd
+            || (slot.lunch_minutes ?? lunch) !== lunch)
+        ) {
+          slotOverrides[i] = {
+            work_start: slot.work_start.slice(0, 5),
+            work_end: slot.work_end.slice(0, 5),
+            lunch_minutes: slot.lunch_minutes ?? lunch,
+          };
+        }
       }
+      return {
+        id: tpl.id,
+        name: tpl.name,
+        loaded_pattern_type: tpl.pattern_type,
+        loaded_schedule_type: tpl.schedule_type,
+        is_remote: tpl.schedule_type === 'remote',
+        is_custom_cycle: false,
+        custom_cycle_days: [],
+        work_days_count: Math.max(1, n),
+        off_days_count: Math.max(0, m),
+        anchor_date: tpl.anchor_date ?? nearestMondayOnOrBefore(today),
+        work_start: baseStart,
+        work_end: baseEnd,
+        lunch_minutes: lunch,
+        slot_overrides: slotOverrides,
+        respects_holidays: tpl.respects_holidays,
+        late_threshold_minutes: tpl.late_threshold_minutes,
+        full_day_threshold: minutesToHM(tpl.full_day_threshold_minutes),
+        weekend_full_day_threshold: minutesToHM(tpl.weekend_full_day_threshold_minutes),
+      };
     }
+
+    // Непрефиксный (произвольный) цикл: переносим раскладку в custom_cycle_days.
+    const customDays: ICustomDay[] = days.map((slot) => {
+      const isWork = slot.work_hours > 0;
+      const start = (slot.work_start ?? baseStart).slice(0, 5);
+      const end = (slot.work_end ?? baseEnd).slice(0, 5);
+      const slotLunch = slot.lunch_minutes ?? lunch;
+      const inheritsBase = !isWork || (start === baseStart && end === baseEnd && slotLunch === lunch);
+      return {
+        is_work: isWork,
+        work_start: start,
+        work_end: end,
+        lunch_minutes: slotLunch,
+        inherits_base: inheritsBase,
+      };
+    });
     return {
       id: tpl.id,
       name: tpl.name,
       loaded_pattern_type: tpl.pattern_type,
       loaded_schedule_type: tpl.schedule_type,
       is_remote: tpl.schedule_type === 'remote',
-      work_days_count: Math.max(1, n),
-      off_days_count: Math.max(0, m),
+      is_custom_cycle: true,
+      custom_cycle_days: customDays,
+      work_days_count: customDays.filter(d => d.is_work).length,
+      off_days_count: customDays.filter(d => !d.is_work).length,
       anchor_date: tpl.anchor_date ?? nearestMondayOnOrBefore(today),
       work_start: baseStart,
       work_end: baseEnd,
       lunch_minutes: lunch,
-      slot_overrides: slotOverrides,
+      slot_overrides: {},
       respects_holidays: tpl.respects_holidays,
       late_threshold_minutes: tpl.late_threshold_minutes,
       full_day_threshold: minutesToHM(tpl.full_day_threshold_minutes),
@@ -224,6 +328,8 @@ const tplToFormState = (tpl: IWorkSchedule, today: string): IFormState => {
     loaded_pattern_type: tpl.pattern_type,
     loaded_schedule_type: tpl.schedule_type,
     is_remote: tpl.schedule_type === 'remote',
+    is_custom_cycle: false,
+    custom_cycle_days: [],
     work_days_count: n,
     off_days_count: m,
     anchor_date: anchor,
@@ -243,7 +349,11 @@ const formatRhythmSummary = (tpl: IWorkSchedule): string => {
   if (tpl.pattern_type === 'cycle' && tpl.cycle_length && tpl.cycle_days) {
     const work = tpl.cycle_days.filter(s => s.work_hours > 0).length;
     const off = tpl.cycle_length - work;
-    return `${work}/${off}`;
+    // Префиксная раскладка: первые work — рабочие, остальные — выходные.
+    let prefixWork = 0;
+    while (prefixWork < tpl.cycle_days.length && tpl.cycle_days[prefixWork].work_hours > 0) prefixWork++;
+    const isPrefix = tpl.cycle_days.slice(prefixWork).every(d => d.work_hours <= 0);
+    return isPrefix ? `${work}/${off}` : `${work}/${off} (произв., ${tpl.cycle_length}д)`;
   }
   if (tpl.pattern_type === '5+0') return '5/2';
   if (tpl.pattern_type === '5+2') return '5/2 + субботы';
@@ -371,6 +481,90 @@ export const SchedulesPage: FC = () => {
     return form.work_end <= form.work_start;
   }, [form.work_start, form.work_end]);
 
+  /** Включить/выключить расширенный режим. При выключении пытаемся вернуть к простому N/M. */
+  const toggleCustomCycle = (on: boolean) => {
+    setForm(f => {
+      if (on) {
+        // Инициализируем custom_cycle_days из текущего N/M-вида.
+        const days = buildCustomDaysFromPrefix(
+          f.work_days_count,
+          f.off_days_count,
+          f.work_start,
+          f.work_end,
+          f.lunch_minutes,
+          f.slot_overrides,
+        );
+        return { ...f, is_custom_cycle: true, custom_cycle_days: days };
+      }
+      // Выключение — пытаемся «свернуть» обратно в N/M, если раскладка префиксная.
+      const days = f.custom_cycle_days;
+      let prefixWork = 0;
+      while (prefixWork < days.length && days[prefixWork].is_work) prefixWork++;
+      const isPrefix = days.slice(prefixWork).every(d => !d.is_work);
+      if (!isPrefix) {
+        // Не префиксный — нельзя свернуть, остаёмся в custom-режиме.
+        return f;
+      }
+      const n = prefixWork;
+      const m = days.length - n;
+      const slotOverrides: IFormState['slot_overrides'] = {};
+      for (let i = 0; i < n; i++) {
+        const d = days[i];
+        if (!d.inherits_base) {
+          slotOverrides[i] = {
+            work_start: d.work_start,
+            work_end: d.work_end,
+            lunch_minutes: d.lunch_minutes,
+          };
+        }
+      }
+      return {
+        ...f,
+        is_custom_cycle: false,
+        custom_cycle_days: [],
+        work_days_count: Math.max(1, n),
+        off_days_count: m,
+        slot_overrides: slotOverrides,
+      };
+    });
+  };
+
+  const setCustomCycleLength = (rawLength: number) => {
+    const length = Math.max(2, Math.min(28, Math.floor(rawLength) || 2));
+    setForm(f => {
+      const next = f.custom_cycle_days.slice(0, length);
+      while (next.length < length) {
+        next.push({
+          is_work: true,
+          work_start: f.work_start,
+          work_end: f.work_end,
+          lunch_minutes: f.lunch_minutes,
+          inherits_base: true,
+        });
+      }
+      return { ...f, custom_cycle_days: next };
+    });
+  };
+
+  const updateCustomDay = (index: number, patch: Partial<ICustomDay>) => {
+    setForm(f => ({
+      ...f,
+      custom_cycle_days: f.custom_cycle_days.map((day, idx) =>
+        idx === index ? { ...day, ...patch } : day,
+      ),
+    }));
+  };
+
+  const moveCustomDay = (index: number, direction: -1 | 1) => {
+    setForm(f => {
+      const next = [...f.custom_cycle_days];
+      const target = index + direction;
+      if (target < 0 || target >= next.length) return f;
+      [next[index], next[target]] = [next[target], next[index]];
+      return { ...f, custom_cycle_days: next };
+    });
+  };
+
   const handleSave = async () => {
     setError('');
     try {
@@ -387,20 +581,6 @@ export const SchedulesPage: FC = () => {
         return;
       }
 
-      const n = form.work_days_count;
-      const m = form.off_days_count;
-      if (n < 1 || n > 28) {
-        setError('Количество рабочих дней — от 1 до 28');
-        return;
-      }
-      if (m < 0 || m > 28) {
-        setError('Количество выходных — от 0 до 28');
-        return;
-      }
-      if (n + m < 2 || n + m > 28) {
-        setError('Длина цикла (раб + вых) — от 2 до 28 дней');
-        return;
-      }
       if (!form.anchor_date || !/^\d{4}-\d{2}-\d{2}$/.test(form.anchor_date)) {
         setError('Укажите корректную дату первого рабочего дня (YYYY-MM-DD)');
         return;
@@ -413,34 +593,83 @@ export const SchedulesPage: FC = () => {
       }
       const baseNet = Math.max(0, baseShift - (form.lunch_minutes || 0) / 60);
 
-      // Собираем cycle_days: первые N — рабочие (с базовым временем или override),
-      // последние M — выходные (work_hours=0).
+      // Собираем cycle_days в зависимости от режима.
       const cycleDays: ICycleDay[] = [];
-      for (let i = 0; i < n; i++) {
-        const ovr = form.slot_overrides[i];
-        if (ovr) {
-          const ovrShift = computeShiftHours(ovr.work_start, ovr.work_end);
-          if (ovrShift <= 0) {
-            setError(`Некорректное время для рабочего дня № ${i + 1}`);
+
+      if (form.is_custom_cycle) {
+        const customDays = form.custom_cycle_days;
+        if (customDays.length < 2 || customDays.length > 28) {
+          setError('Длина произвольного цикла — от 2 до 28 дней');
+          return;
+        }
+        if (!customDays.some(d => d.is_work)) {
+          setError('В цикле должен быть хотя бы один рабочий день');
+          return;
+        }
+        for (let i = 0; i < customDays.length; i++) {
+          const day = customDays[i];
+          if (!day.is_work) {
+            cycleDays.push({ work_hours: 0 });
+            continue;
+          }
+          const useStart = day.inherits_base ? form.work_start : day.work_start;
+          const useEnd = day.inherits_base ? form.work_end : day.work_end;
+          const useLunch = day.inherits_base ? form.lunch_minutes : day.lunch_minutes;
+          const shift = computeShiftHours(useStart, useEnd);
+          if (shift <= 0) {
+            setError(`Некорректное время для дня № ${i + 1}`);
             return;
           }
-          const ovrNet = Math.max(0, ovrShift - (ovr.lunch_minutes || 0) / 60);
+          const net = Math.max(0, shift - (useLunch || 0) / 60);
           cycleDays.push({
-            work_hours: Number(ovrNet.toFixed(4)),
-            work_start: ovr.work_start,
-            work_end: ovr.work_end,
-            lunch_minutes: ovr.lunch_minutes,
-          });
-        } else {
-          cycleDays.push({
-            work_hours: Number(baseNet.toFixed(4)),
-            work_start: form.work_start,
-            work_end: form.work_end,
-            lunch_minutes: form.lunch_minutes,
+            work_hours: Number(net.toFixed(4)),
+            work_start: useStart,
+            work_end: useEnd,
+            lunch_minutes: useLunch,
           });
         }
+      } else {
+        // Простой N/M-режим: префиксная раскладка.
+        const n = form.work_days_count;
+        const m = form.off_days_count;
+        if (n < 1 || n > 28) {
+          setError('Количество рабочих дней — от 1 до 28');
+          return;
+        }
+        if (m < 0 || m > 28) {
+          setError('Количество выходных — от 0 до 28');
+          return;
+        }
+        if (n + m < 2 || n + m > 28) {
+          setError('Длина цикла (раб + вых) — от 2 до 28 дней');
+          return;
+        }
+        for (let i = 0; i < n; i++) {
+          const ovr = form.slot_overrides[i];
+          if (ovr) {
+            const ovrShift = computeShiftHours(ovr.work_start, ovr.work_end);
+            if (ovrShift <= 0) {
+              setError(`Некорректное время для рабочего дня № ${i + 1}`);
+              return;
+            }
+            const ovrNet = Math.max(0, ovrShift - (ovr.lunch_minutes || 0) / 60);
+            cycleDays.push({
+              work_hours: Number(ovrNet.toFixed(4)),
+              work_start: ovr.work_start,
+              work_end: ovr.work_end,
+              lunch_minutes: ovr.lunch_minutes,
+            });
+          } else {
+            cycleDays.push({
+              work_hours: Number(baseNet.toFixed(4)),
+              work_start: form.work_start,
+              work_end: form.work_end,
+              lunch_minutes: form.lunch_minutes,
+            });
+          }
+        }
+        for (let i = 0; i < m; i++) cycleDays.push({ work_hours: 0 });
       }
-      for (let i = 0; i < m; i++) cycleDays.push({ work_hours: 0 });
 
       // schedule_type: cycle всегда 'shift', либо 'remote' если is_remote.
       const computedScheduleType: ScheduleType = form.is_remote ? 'remote' : 'shift';
@@ -464,7 +693,7 @@ export const SchedulesPage: FC = () => {
         late_threshold_minutes: form.late_threshold_minutes,
         full_day_threshold_minutes: fullDayMin,
         weekend_full_day_threshold_minutes: weekendFullDayMin,
-        cycle_length: n + m,
+        cycle_length: cycleDays.length,
         cycle_days: cycleDays,
         anchor_date: form.anchor_date,
       };
@@ -590,55 +819,82 @@ export const SchedulesPage: FC = () => {
                       />
                     </label>
 
-                    <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 12, color: 'var(--text-secondary)', alignSelf: 'center', marginRight: 4 }}>Ритм:</span>
-                      {RHYTHM_PRESETS.map(preset => {
-                        const active = form.work_days_count === preset.work && form.off_days_count === preset.off;
-                        return (
-                          <button
-                            key={preset.label}
-                            type="button"
-                            className={`${styles.dayBtn} ${active ? styles.dayBtnActive : ''}`}
-                            onClick={() => applyRhythmPreset(preset.work, preset.off)}
-                          >
-                            {preset.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    <label>
-                      Рабочих (N)
+                    <label className={styles.checkboxRow} style={{ gridColumn: '1 / -1' }} title="Включи, если в цикле выходные расположены нерегулярно (например, 6/1 → 5/2 двухнедельный) или нужно тонкое управление каждым днём.">
                       <input
-                        type="number"
-                        min={1}
-                        max={28}
-                        value={form.work_days_count}
-                        onChange={e => {
-                          const v = Math.max(1, Math.min(28, parseInt(e.target.value) || 1));
-                          setForm(f => ({
-                            ...f,
-                            work_days_count: v,
-                            slot_overrides: Object.fromEntries(
-                              Object.entries(f.slot_overrides).filter(([k]) => Number(k) < v),
-                            ),
-                          }));
-                        }}
+                        type="checkbox"
+                        checked={form.is_custom_cycle}
+                        onChange={e => toggleCustomCycle(e.target.checked)}
                       />
-                    </label>
-                    <label>
-                      Выходных (M)
-                      <input
-                        type="number"
-                        min={0}
-                        max={28}
-                        value={form.off_days_count}
-                        onChange={e => setForm({ ...form, off_days_count: Math.max(0, Math.min(28, parseInt(e.target.value) || 0)) })}
-                      />
+                      Произвольный цикл (расширенный режим — каждый день настраивается вручную)
                     </label>
 
-                    <label style={{ gridColumn: '1 / -1' }} title="Дата первого рабочего дня в цикле.">
-                      Дата первого рабочего дня
+                    {!form.is_custom_cycle && (
+                      <>
+                        <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 12, color: 'var(--text-secondary)', alignSelf: 'center', marginRight: 4 }}>Ритм:</span>
+                          {RHYTHM_PRESETS.map(preset => {
+                            const active = form.work_days_count === preset.work && form.off_days_count === preset.off;
+                            return (
+                              <button
+                                key={preset.label}
+                                type="button"
+                                className={`${styles.dayBtn} ${active ? styles.dayBtnActive : ''}`}
+                                onClick={() => applyRhythmPreset(preset.work, preset.off)}
+                              >
+                                {preset.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <label>
+                          Рабочих (N)
+                          <input
+                            type="number"
+                            min={1}
+                            max={28}
+                            value={form.work_days_count}
+                            onChange={e => {
+                              const v = Math.max(1, Math.min(28, parseInt(e.target.value) || 1));
+                              setForm(f => ({
+                                ...f,
+                                work_days_count: v,
+                                slot_overrides: Object.fromEntries(
+                                  Object.entries(f.slot_overrides).filter(([k]) => Number(k) < v),
+                                ),
+                              }));
+                            }}
+                          />
+                        </label>
+                        <label>
+                          Выходных (M)
+                          <input
+                            type="number"
+                            min={0}
+                            max={28}
+                            value={form.off_days_count}
+                            onChange={e => setForm({ ...form, off_days_count: Math.max(0, Math.min(28, parseInt(e.target.value) || 0)) })}
+                          />
+                        </label>
+                      </>
+                    )}
+
+                    {form.is_custom_cycle && (
+                      <label style={{ gridColumn: '1 / -1' }} title="Длина повторяющегося цикла. При увеличении новые дни добавляются как рабочие; при уменьшении — обрезаются с конца.">
+                        Длина цикла (дней)
+                        <input
+                          type="number"
+                          min={2}
+                          max={28}
+                          value={form.custom_cycle_days.length}
+                          onChange={e => setCustomCycleLength(parseInt(e.target.value) || 0)}
+                          style={{ maxWidth: 120 }}
+                        />
+                      </label>
+                    )}
+
+                    <label style={{ gridColumn: '1 / -1' }} title="Дата первого дня цикла (день 1 — для произвольного цикла).">
+                      {form.is_custom_cycle ? 'Дата первого дня цикла' : 'Дата первого рабочего дня'}
                       <input
                         type="date"
                         value={form.anchor_date}
@@ -702,8 +958,8 @@ export const SchedulesPage: FC = () => {
                     </label>
                   </section>
 
-              {/* ─── Особые дни цикла (раб. слот с другим временем) ─── */}
-              {form.work_days_count > 0 && (
+              {/* ─── Особые рабочие дни (N/M-режим) ─────────────────────── */}
+              {!form.is_custom_cycle && form.work_days_count > 0 && (
                 <section className={styles.formSection}>
                   <div className={styles.sectionTitle}>
                     Особые рабочие дни цикла {Object.keys(form.slot_overrides).length > 0 ? `(${Object.keys(form.slot_overrides).length})` : ''}
@@ -769,13 +1025,116 @@ export const SchedulesPage: FC = () => {
                 </section>
               )}
 
+              {/* ─── Произвольный цикл: редактор каждого дня ─────────── */}
+              {form.is_custom_cycle && (
+                <section className={styles.formSection}>
+                  <div className={styles.sectionTitle}>
+                    Дни цикла ({form.custom_cycle_days.length})
+                  </div>
+                  <div className={styles.patternHint}>
+                    Каждый день настраивается отдельно: рабочий или выходной, время смены. Стрелки ↑↓ переставляют дни в цикле.
+                    Подходит для нерегулярных раскладок типа 6/1 → 5/2.
+                  </div>
+                  <div className={styles.slotsGrid}>
+                    {form.custom_cycle_days.map((day, idx) => {
+                      const useStart = day.inherits_base ? form.work_start : day.work_start;
+                      const useEnd = day.inherits_base ? form.work_end : day.work_end;
+                      const useLunch = day.inherits_base ? form.lunch_minutes : day.lunch_minutes;
+                      const shift = day.is_work ? computeShiftHours(useStart, useEnd) : 0;
+                      const net = day.is_work ? formatMinutes(shift * 60 - useLunch) : '0:00';
+                      return (
+                        <div key={idx} className={styles.dayOverrideCard}>
+                          <div className={styles.dayOverrideHeader}>
+                            <div>
+                              <div className={styles.dayOverrideTitle}>День {idx + 1}</div>
+                              <div className={styles.dayOverrideMeta}>
+                                {day.is_work
+                                  ? (day.inherits_base ? `Общий: ${form.work_start}-${form.work_end}` : `Свой: ${day.work_start}-${day.work_end}`)
+                                  : 'Выходной'}
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                              <button
+                                type="button"
+                                className={styles.dayBtn}
+                                style={{ padding: '4px 8px', fontSize: 12 }}
+                                onClick={() => moveCustomDay(idx, -1)}
+                                disabled={idx === 0}
+                                title="Вверх"
+                              >↑</button>
+                              <button
+                                type="button"
+                                className={styles.dayBtn}
+                                style={{ padding: '4px 8px', fontSize: 12 }}
+                                onClick={() => moveCustomDay(idx, 1)}
+                                disabled={idx === form.custom_cycle_days.length - 1}
+                                title="Вниз"
+                              >↓</button>
+                              <label className={styles.dayOverrideToggle}>
+                                <input
+                                  type="checkbox"
+                                  checked={day.is_work}
+                                  onChange={e => updateCustomDay(idx, { is_work: e.target.checked })}
+                                />
+                                Раб.
+                              </label>
+                            </div>
+                          </div>
+                          {day.is_work && (
+                            <>
+                              <label className={styles.dayOverrideToggle} style={{ alignSelf: 'flex-start' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={!day.inherits_base}
+                                  onChange={e => updateCustomDay(idx, {
+                                    inherits_base: !e.target.checked,
+                                    work_start: e.target.checked ? day.work_start : form.work_start,
+                                    work_end: e.target.checked ? day.work_end : form.work_end,
+                                    lunch_minutes: e.target.checked ? day.lunch_minutes : form.lunch_minutes,
+                                  })}
+                                />
+                                Своё время
+                              </label>
+                              {!day.inherits_base && (
+                                <div className={styles.dayOverrideFields}>
+                                  <label>
+                                    Начало
+                                    <input type="time" value={day.work_start} onChange={e => updateCustomDay(idx, { work_start: e.target.value })} />
+                                  </label>
+                                  <label>
+                                    Конец
+                                    <input type="time" value={day.work_end} onChange={e => updateCustomDay(idx, { work_end: e.target.value })} />
+                                  </label>
+                                  <label>
+                                    Обед (мин)
+                                    <input type="number" min={0} max={240} value={day.lunch_minutes} onChange={e => updateCustomDay(idx, { lunch_minutes: parseInt(e.target.value) || 0 })} />
+                                  </label>
+                                </div>
+                              )}
+                            </>
+                          )}
+                          <div className={styles.dayOverrideSummary}>
+                            {day.is_work ? `${useStart}-${useEnd}, чистое: ` : 'Выходной: '}
+                            <strong>{net}</strong>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+
               {/* ─── Превью на 14 дней ────────────────────────────────── */}
-              {form.anchor_date && /^\d{4}-\d{2}-\d{2}$/.test(form.anchor_date) && form.work_days_count > 0 && (
+              {form.anchor_date && /^\d{4}-\d{2}-\d{2}$/.test(form.anchor_date) && (
+                form.is_custom_cycle ? form.custom_cycle_days.length > 0 : form.work_days_count > 0
+              ) && (
                 <section className={styles.formSection}>
                   <div className={styles.sectionTitle}>Превью на 14 дней</div>
                   <div style={{ gridColumn: '1 / -1', display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                     {(() => {
-                      const cycleLen = form.work_days_count + form.off_days_count;
+                      const cycleLen = form.is_custom_cycle
+                        ? form.custom_cycle_days.length
+                        : form.work_days_count + form.off_days_count;
                       if (cycleLen < 1) return null;
                       const anchor = new Date(`${form.anchor_date}T00:00:00`);
                       if (isNaN(anchor.getTime())) return null;
@@ -783,23 +1142,36 @@ export const SchedulesPage: FC = () => {
                         const d = new Date(anchor.getTime());
                         d.setDate(d.getDate() + dayShift);
                         const idx = ((dayShift % cycleLen) + cycleLen) % cycleLen;
-                        const isWork = idx < form.work_days_count;
                         const dd = String(d.getDate()).padStart(2, '0');
                         const mm = String(d.getMonth() + 1).padStart(2, '0');
-                        const ovr = isWork ? form.slot_overrides[idx] : null;
+
+                        let isWork: boolean;
+                        let isOverride: boolean;
+                        let title: string;
+
+                        if (form.is_custom_cycle) {
+                          const day = form.custom_cycle_days[idx];
+                          isWork = day.is_work;
+                          isOverride = day.is_work && !day.inherits_base;
+                          title = day.is_work
+                            ? `Раб. ${day.inherits_base ? form.work_start : day.work_start}-${day.inherits_base ? form.work_end : day.work_end}${isOverride ? ' (особый)' : ''}`
+                            : 'Выходной';
+                        } else {
+                          isWork = idx < form.work_days_count;
+                          const ovr = isWork ? form.slot_overrides[idx] : null;
+                          isOverride = Boolean(ovr);
+                          title = isWork
+                            ? `Раб. ${ovr?.work_start ?? form.work_start}-${ovr?.work_end ?? form.work_end}${ovr ? ' (особый)' : ''}`
+                            : 'Выходной';
+                        }
+
                         const cls = !isWork
                           ? styles.previewDayOff
-                          : ovr
+                          : isOverride
                             ? styles.previewDayOverride
                             : styles.previewDayWork;
                         return (
-                          <span
-                            key={dayShift}
-                            className={`${styles.previewDay} ${cls}`}
-                            title={isWork
-                              ? `Рабочий ${ovr?.work_start ?? form.work_start}-${ovr?.work_end ?? form.work_end}${ovr ? ' (особый)' : ''}`
-                              : 'Выходной'}
-                          >
+                          <span key={dayShift} className={`${styles.previewDay} ${cls}`} title={title}>
                             {dd}.{mm}
                           </span>
                         );
