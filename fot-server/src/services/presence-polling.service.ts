@@ -263,8 +263,13 @@ function isActiveRuntimeLease(leaseExpiresAt: string | null | undefined): boolea
   return expiresAtMs > Date.now();
 }
 
-async function hasExclusiveSyncLease(): Promise<boolean> {
+export async function hasExclusiveSyncLease(): Promise<boolean> {
   const state = await getSigurRuntimeState(SIGUR_EXCLUSIVE_SYNC_STATE_KEY);
+  return !!state?.lease_owner && isActiveRuntimeLease(state.lease_expires_at);
+}
+
+export async function hasEventsSyncLease(): Promise<boolean> {
+  const state = await getSigurRuntimeState(SIGUR_EVENTS_SYNC_STATE_KEY);
   return !!state?.lease_owner && isActiveRuntimeLease(state.lease_expires_at);
 }
 
@@ -357,6 +362,7 @@ export function resetPresencePollingStateForTests(): void {
   manualSyncLocks = 0;
   eventsSyncLocks = 0;
   pollInFlight = null;
+  currentSkipStreak = null;
   if (manualSyncLeaseHeartbeatStop) {
     manualSyncLeaseHeartbeatStop();
     manualSyncLeaseHeartbeatStop = null;
@@ -664,16 +670,20 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     console.log(
       `[presence-polling] cycle done source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} fetched=${rawEvents.length} attempted=${inserts.length} inserted=${totalInserted} duplicates=${Math.max(0, inserts.length - totalInserted)} unmatched=${storedUnmatched} summaries=${insertedSummaryKeys.size} tFetch=${tFetch}ms tEmpRefresh=${tEmpRefresh}ms tInsert=${tInsert}ms tSummary=${tSummary}ms total=${totalMs}ms${hadFailure ? ` PARTIAL_FAILURE=${failureMessage}` : ''}`,
     );
-    if (totalMs > 5_000) {
+    if (totalMs > 3_000) {
       const pollIntervalMs = resolvePresencePollIntervalMs();
+      const isCritical = totalMs > 10_000;
       console.warn(
-        `[presence-polling] SLOW cycle ${totalMs}ms exceeds polling interval ${pollIntervalMs}ms`,
+        `[presence-polling] ${isCritical ? 'CRITICAL' : 'SLOW'} cycle ${totalMs}ms (tFetch=${tFetch}ms tInsert=${tInsert}ms tSummary=${tSummary}ms) exceeds polling interval ${pollIntervalMs}ms`,
       );
-      Sentry.captureMessage('presence-polling cycle slow', {
-        level: 'warning',
-        tags: { service: 'presence-polling' },
-        extra: { ...timings, pollIntervalMs, fetched: rawEvents.length, inserted: totalInserted },
-      });
+      Sentry.captureMessage(
+        isCritical ? 'presence-polling cycle critical slow' : 'presence-polling cycle slow',
+        {
+          level: isCritical ? 'error' : 'warning',
+          tags: { service: 'presence-polling', severity: isCritical ? 'critical' : 'slow' },
+          extra: { ...timings, pollIntervalMs, fetched: rawEvents.length, inserted: totalInserted },
+        },
+      );
     }
     if (hadFailure) {
       Sentry.captureMessage('presence-polling partial success', {
@@ -771,21 +781,72 @@ async function pollEvents(): Promise<void> {
   await pollEventsOnce(new Date());
 }
 
+interface IPollSkipStreak {
+  reason: string;
+  startedAt: string;
+  count: number;
+  lastAt: string;
+}
+
+let currentSkipStreak: IPollSkipStreak | null = null;
+
 function recordPollSkip(reason: string): void {
-  console.log(`[presence-polling] cycle skipped reason=${reason}`);
+  const nowIso = new Date().toISOString();
+  if (currentSkipStreak && currentSkipStreak.reason === reason) {
+    currentSkipStreak.count += 1;
+    currentSkipStreak.lastAt = nowIso;
+  } else {
+    if (currentSkipStreak) {
+      const streakDurationMs =
+        Date.parse(currentSkipStreak.lastAt) - Date.parse(currentSkipStreak.startedAt);
+      console.log(
+        `[presence-polling] skip streak ended reason=${currentSkipStreak.reason} count=${currentSkipStreak.count} durationMs=${streakDurationMs}`,
+      );
+      if (streakDurationMs >= 30_000) {
+        Sentry.captureMessage('presence-polling skip streak', {
+          level: 'warning',
+          tags: { service: 'presence-polling', reason: currentSkipStreak.reason },
+          extra: {
+            reason: currentSkipStreak.reason,
+            count: currentSkipStreak.count,
+            durationMs: streakDurationMs,
+            startedAt: currentSkipStreak.startedAt,
+            endedAt: currentSkipStreak.lastAt,
+          },
+        });
+      }
+    }
+    currentSkipStreak = { reason, startedAt: nowIso, count: 1, lastAt: nowIso };
+  }
+  console.log(
+    `[presence-polling] cycle skipped reason=${reason} streakCount=${currentSkipStreak.count} streakStartedAt=${currentSkipStreak.startedAt}`,
+  );
   void mergeSigurRuntimeState({
     key: SIGUR_POLLING_STATE_KEY,
     owner: POLLING_LEASE_OWNER,
     meta: {
       lastSkip: {
         reason,
-        at: new Date().toISOString(),
+        at: nowIso,
         leaseOwner: POLLING_LEASE_OWNER,
+        streakCount: currentSkipStreak.count,
+        streakStartedAt: currentSkipStreak.startedAt,
       },
     },
   }).catch(error => {
     console.error('[presence-polling] runtime skip hook error:', (error as Error).message);
   });
+}
+
+function clearPollSkipStreak(): void {
+  if (currentSkipStreak) {
+    const streakDurationMs =
+      Date.parse(currentSkipStreak.lastAt) - Date.parse(currentSkipStreak.startedAt);
+    console.log(
+      `[presence-polling] skip streak ended (cycle ran) reason=${currentSkipStreak.reason} count=${currentSkipStreak.count} durationMs=${streakDurationMs}`,
+    );
+    currentSkipStreak = null;
+  }
 }
 
 async function runPollCycle(): Promise<void> {
@@ -806,6 +867,7 @@ async function runPollCycle(): Promise<void> {
     return pollInFlight;
   }
 
+  clearPollSkipStreak();
   pollInFlight = (async () => {
     let leaseAcquired = false;
     let leaseStartedAt: Date | null = null;

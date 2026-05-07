@@ -40,6 +40,9 @@ const envSchema = z.object({
   SIGUR_EXTERNAL_USERNAME: optionalString,
   SIGUR_EXTERNAL_PASSWORD: optionalString,
   SIGUR_PRESENCE_POLL_INTERVAL_MS: z.string().regex(/^\d+$/).default('5000'),
+  SIGUR_EVENTS_DAILY_TARGET_HOUR_MSK: z.string().regex(/^\d+$/).default('3'),
+  SIGUR_EVENTS_DAILY_WINDOW_DAYS: z.string().regex(/^\d+$/).default('2'),
+  SIGUR_STRUCTURE_SYNC_INTERVAL_MS: z.string().regex(/^\d+$/).default('1800000'),
 
   // Web Push (VAPID)
   VAPID_PUBLIC_KEY: optionalString,

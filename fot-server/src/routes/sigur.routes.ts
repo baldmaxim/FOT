@@ -9,6 +9,7 @@ import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAcce
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { noStore } from '../middleware/noStore.js';
 import { serverTiming } from '../middleware/serverTiming.js';
+import { notifySigurStructureChanged } from '../services/skud-realtime.service.js';
 
 const router = Router();
 
@@ -58,12 +59,15 @@ const SIGUR_ADMIN_CACHES = [
   'sigur:admin:card-statuses',
 ];
 
-// Write-through invalidation: любой POST/PUT/DELETE/PATCH на /admin/* и /sync* сбрасывает кэши.
+// Write-through invalidation: любой POST/PUT/DELETE/PATCH на /admin/* и /sync* сбрасывает кэши
+// и пушит structure_updated через Socket.IO, чтобы все клиенты сразу инвалидировали React Query
+// без ожидания истечения staleTime.
 router.use((req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
         invalidateCaches(...SIGUR_ADMIN_CACHES);
+        notifySigurStructureChanged({ source: 'admin_crud' });
       }
     });
   }

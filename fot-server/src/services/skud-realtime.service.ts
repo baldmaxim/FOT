@@ -49,3 +49,23 @@ export function notifySkudRealtimeChanged(input: ISkudRealtimeNotification): voi
     console.error('[skud-realtime] socket emit error:', (socketError as Error).message);
   }
 }
+
+export type SigurStructureSource = 'scheduler' | 'admin_crud' | 'manual_sync';
+
+export interface ISigurStructureNotification {
+  source: SigurStructureSource;
+  scope?: 'departments' | 'positions' | 'employees' | 'all';
+  at?: string;
+}
+
+export function notifySigurStructureChanged(input: ISigurStructureNotification): void {
+  try {
+    getIo()?.emit('structure_updated', {
+      at: input.at || new Date().toISOString(),
+      source: input.source,
+      scope: input.scope ?? 'all',
+    });
+  } catch (socketError) {
+    console.error('[skud-realtime] structure socket emit error:', (socketError as Error).message);
+  }
+}

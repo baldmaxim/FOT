@@ -1,8 +1,7 @@
 import { sigurService } from './sigur.service.js';
 import {
-  acquireSigurEventsSyncLock,
-  releaseSigurEventsSyncLock,
-  ManualSyncInProgressError,
+  hasExclusiveSyncLease,
+  hasEventsSyncLease,
 } from './presence-polling.service.js';
 import { syncEventsLogic } from './sigur-sync-events.service.js';
 import type { ISyncContext } from './sigur-sync-shared.js';
@@ -12,10 +11,22 @@ import {
   mergeSigurRuntimeState,
 } from './sigur-runtime-state.service.js';
 import { isSigurRuntimeAllowed, logSigurRuntimeGuardSkip } from './sigur-runtime-guard.service.js';
+import { env } from '../config/env.js';
 
 const CHECK_INTERVAL_MS = 60_000;
-const TARGET_HOUR_MSK = 5;
 const DAILY_STATE_KEY = 'sigur_events_daily';
+
+function resolveTargetHourMsk(): number {
+  const parsed = Number.parseInt(env.SIGUR_EVENTS_DAILY_TARGET_HOUR_MSK, 10);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 23) return 3;
+  return parsed;
+}
+
+function resolveWindowDays(): number {
+  const parsed = Number.parseInt(env.SIGUR_EVENTS_DAILY_WINDOW_DAYS, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return 2;
+  return parsed;
+}
 
 let schedulerTimer: ReturnType<typeof setInterval> | null = null;
 let lastRunYmdMsk: string | null = null;
@@ -40,32 +51,57 @@ function getMoscowParts(now: Date): { ymd: string; hour: number } {
   return { ymd: `${year}-${month}-${day}`, hour };
 }
 
-function getMonthStartYmd(ymd: string): string {
-  return `${ymd.slice(0, 7)}-01`;
+// Окно catchup для daily-sync. Раньше было «весь текущий месяц», что давало
+// долгие тики (десятки минут на больших организациях). Polling сам ловит
+// 7-дневный catchup при рестарте, а backfillUnmatchedEvents добивает события,
+// прилетевшие до создания сотрудника. Поэтому 2 дней страховки достаточно.
+function getDailyWindowStartYmd(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split('-').map(n => Number.parseInt(n, 10));
+  const date = new Date(Date.UTC(y, m - 1, d));
+  date.setUTCDate(date.getUTCDate() - Math.max(0, days - 1));
+  const yy = date.getUTCFullYear();
+  const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(date.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
 }
 
 async function runDailySyncCycle(ymd: string): Promise<void> {
   if (runInFlight) return;
 
   runInFlight = (async () => {
-    let lockAcquired = false;
-    const startDate = getMonthStartYmd(ymd);
+    const startedAt = Date.now();
+    const startedAtIso = new Date(startedAt).toISOString();
+    const windowDays = resolveWindowDays();
+    const startDate = getDailyWindowStartYmd(ymd, windowDays);
     const endDate = ymd;
 
     try {
+      // Уступаем ручной полной синхронизации, не блокируя при этом фоновый
+      // presence-polling (он пишет идемпотентно через UPSERT и не конфликтует
+      // с daily). hasEventsSyncLease отсекает параллельный manual events sync.
+      if (await hasExclusiveSyncLease()) {
+        console.log('[events-daily-scheduler] skipped: exclusive sync in progress, will retry next tick');
+        lastRunYmdMsk = null;
+        return;
+      }
+      if (await hasEventsSyncLease()) {
+        console.log('[events-daily-scheduler] skipped: manual events sync in progress, will retry next tick');
+        lastRunYmdMsk = null;
+        return;
+      }
+
       const connection = await sigurService.getBackgroundConnectionType();
       console.log(
-        `[events-daily-scheduler] starting daily sync connection=${connection} range=${startDate}..${endDate}`,
+        `[events-daily-scheduler] starting daily sync connection=${connection} range=${startDate}..${endDate} startedAt=${startedAtIso} windowDays=${windowDays}`,
       );
-
-      await acquireSigurEventsSyncLock();
-      lockAcquired = true;
 
       const context: ISyncContext = {};
       const result = await syncEventsLogic(startDate, endDate, connection, () => {}, context);
 
+      const durationMs = Date.now() - startedAt;
+      const finishedAtIso = new Date().toISOString();
       console.log(
-        `[events-daily-scheduler] done: imported=${result.imported}, skipped=${result.skipped}, filteredByDept=${result.filteredByDept}, matched=${result.matched}, errors=${result.errors.length}`,
+        `[events-daily-scheduler] done durationMs=${durationMs} startedAt=${startedAtIso} finishedAt=${finishedAtIso} imported=${result.imported} skipped=${result.skipped} filteredByDept=${result.filteredByDept} matched=${result.matched} errors=${result.errors.length}`,
       );
 
       notifySkudRealtimeChanged({
@@ -76,14 +112,15 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
         recalculatedCount: result.matched,
       });
 
-      // Закрепляем успех в runtime_state, чтобы катчап после рестарта не запускал
-      // тот же цикл повторно в течение MSK-суток.
       lastRunYmdMsk = ymd;
       await mergeSigurRuntimeState({
         key: DAILY_STATE_KEY,
         meta: {
           lastRunYmdMsk: ymd,
-          lastSuccessAt: new Date().toISOString(),
+          lastSuccessAt: finishedAtIso,
+          lastStartedAt: startedAtIso,
+          lastDurationMs: durationMs,
+          lastWindow: { startDate, endDate, windowDays },
           lastResult: {
             imported: result.imported,
             skipped: result.skipped,
@@ -96,30 +133,18 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
         console.error('[events-daily-scheduler] mergeSigurRuntimeState success error:', (err as Error).message),
       );
     } catch (err) {
-      if (err instanceof ManualSyncInProgressError) {
-        console.log('[events-daily-scheduler] skipped: manual sync in progress, will retry next tick');
-        lastRunYmdMsk = null;
-      } else {
-        console.error('[events-daily-scheduler] error:', (err as Error).message);
-        lastRunYmdMsk = null;
-        await mergeSigurRuntimeState({
-          key: DAILY_STATE_KEY,
-          meta: {
-            lastFailureAt: new Date().toISOString(),
-            lastError: (err as Error).message,
-          },
-        }).catch(stateErr =>
-          console.error('[events-daily-scheduler] mergeSigurRuntimeState failure error:', (stateErr as Error).message),
-        );
-      }
+      console.error('[events-daily-scheduler] error:', (err as Error).message);
+      lastRunYmdMsk = null;
+      await mergeSigurRuntimeState({
+        key: DAILY_STATE_KEY,
+        meta: {
+          lastFailureAt: new Date().toISOString(),
+          lastError: (err as Error).message,
+        },
+      }).catch(stateErr =>
+        console.error('[events-daily-scheduler] mergeSigurRuntimeState failure error:', (stateErr as Error).message),
+      );
     } finally {
-      if (lockAcquired) {
-        try {
-          await releaseSigurEventsSyncLock();
-        } catch (releaseErr) {
-          console.error('[events-daily-scheduler] releaseSigurEventsSyncLock error:', releaseErr);
-        }
-      }
       runInFlight = null;
     }
   })();
@@ -128,11 +153,12 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
 }
 
 function onTick(): void {
+  const targetHour = resolveTargetHourMsk();
   const { ymd, hour } = getMoscowParts(new Date());
-  // Запускаем при первом тике в час ≥ 5:00 MSK, если сегодня ещё не был успех.
-  // Раньше окно было только 5:00–5:59: если сервер был офлайн, синхрон пропускался
-  // на сутки. Теперь катчап ловит ситуацию рестарта в течение дня.
-  if (hour < TARGET_HOUR_MSK) return;
+  // Запускаем при первом тике в час ≥ TARGET_HOUR_MSK, если сегодня ещё не был успех.
+  // Catchup ловит ситуацию рестарта в течение дня — если сервер был офлайн
+  // в TARGET_HOUR..TARGET_HOUR+1, daily всё равно отработает после старта.
+  if (hour < targetHour) return;
   if (lastRunYmdMsk === ymd) return;
   void runDailySyncCycle(ymd);
 }
@@ -161,9 +187,13 @@ export async function startSigurEventsDailyScheduler(): Promise<void> {
     return;
   }
   await loadLastRunFromRuntimeState();
-  console.log('[events-daily-scheduler] started (daily ≥05:00 MSK with catchup)');
+  const targetHour = resolveTargetHourMsk();
+  const windowDays = resolveWindowDays();
+  console.log(
+    `[events-daily-scheduler] started (daily ≥${String(targetHour).padStart(2, '0')}:00 MSK with catchup, windowDays=${windowDays})`,
+  );
   schedulerTimer = setInterval(onTick, CHECK_INTERVAL_MS);
-  // Первый тик сразу — на случай рестарта сервера после 5:00.
+  // Первый тик сразу — на случай рестарта сервера после TARGET_HOUR.
   onTick();
 }
 

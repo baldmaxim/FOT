@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
+import type { FC } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useSearchParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as Sentry from '@sentry/react';
@@ -8,11 +9,17 @@ import { ChatProvider } from './contexts/ChatContext';
 import { ProtectedRoute, PublicRoute } from './components/auth/ProtectedRoute';
 import { SigurHeaderBadges } from './components/skud/SigurHeaderBadges';
 import { useTheme } from './hooks/useTheme';
+import { useStructureRealtime } from './hooks/useStructureRealtime';
 import { PageLoader } from './components/ui/PageLoader';
 import { ChatPanelMount } from './components/chat/ChatPanelMount';
 import { ErrorFallback } from './components/ErrorFallback';
 import { clearStaleChunkReloadFlag, tryAutoReloadOnStaleChunk } from './utils/staleChunkReload';
 import './App.css';
+
+const StructureRealtimeMount: FC = () => {
+  useStructureRealtime();
+  return null;
+};
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -596,6 +603,7 @@ const App = () => {
             <ToastProvider>
               <ChatProvider>
                 <AppRoutes />
+                <StructureRealtimeMount />
                 <ChatPanelMount />
               </ChatProvider>
             </ToastProvider>

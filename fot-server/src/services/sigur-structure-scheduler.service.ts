@@ -1,6 +1,7 @@
 import * as Sentry from '@sentry/node';
 import { sigurService } from './sigur.service.js';
 import { IS_PRODUCTION } from '../config/features.js';
+import { env } from '../config/env.js';
 import {
   acquireStructureSyncSchedulerLock,
   releaseStructureSyncSchedulerLock,
@@ -13,10 +14,22 @@ import {
   syncEmployeesLogic,
 } from './sigur-sync.service.js';
 import { invalidateOrgStructureCaches } from './employee-mapper.service.js';
+import { notifySigurStructureChanged } from './skud-realtime.service.js';
 import type { ISyncContext } from './sigur-sync-shared.js';
 import { isSigurRuntimeAllowed, logSigurRuntimeGuardSkip } from './sigur-runtime-guard.service.js';
 
-const STRUCTURE_SYNC_INTERVAL = 60 * 60_000; // 1 час
+const MIN_STRUCTURE_SYNC_INTERVAL = 60_000; // 1 минута — нижний предел против самой Sigur API
+// 30 минут — компромисс между свежестью данных и нагрузкой на Sigur REST API.
+// Socket.IO push после admin CRUD даёт мгновенный UX, поэтому scheduler нужен
+// только для подхвата внешних изменений в Sigur.
+const DEFAULT_STRUCTURE_SYNC_INTERVAL = 30 * 60_000;
+
+function resolveStructureSyncInterval(): number {
+  const parsed = Number.parseInt(env.SIGUR_STRUCTURE_SYNC_INTERVAL_MS, 10);
+  if (!Number.isFinite(parsed) || parsed < MIN_STRUCTURE_SYNC_INTERVAL) return DEFAULT_STRUCTURE_SYNC_INTERVAL;
+  return parsed;
+}
+
 const STARTUP_DELAY = 30_000; // 30 секунд после старта
 const RUN_STARTUP_SYNC = process.env.SIGUR_STRUCTURE_SYNC_ON_STARTUP === 'true' || IS_PRODUCTION;
 
@@ -29,13 +42,14 @@ async function runStructureSyncCycle(): Promise<void> {
 
   syncInFlight = (async () => {
     let lockAcquired = false;
+    const startedAt = Date.now();
     try {
       await acquireStructureSyncSchedulerLock();
       lockAcquired = true;
 
       const connectionType = await sigurService.getBackgroundConnectionType();
       const context: ISyncContext = {};
-      console.log(`[structure-scheduler] starting hourly sync connection=${connectionType}: departments + positions + employees`);
+      console.log(`[structure-scheduler] starting sync connection=${connectionType}: departments + positions + employees`);
 
       await syncDepartmentsLogic(connectionType, context);
       await syncPositionsFromSigurLogic(connectionType, context);
@@ -44,10 +58,12 @@ async function runStructureSyncCycle(): Promise<void> {
 
       // Сбрасываем все кэши структуры, чтобы карточка сотрудника не мигала
       // между старыми и новыми именами отделов/должностей, а dept tree
-      // и sync filter не отдавали стейл данные ещё 5 минут после sync.
+      // и sync filter не отдавали стейл данные.
       invalidateOrgStructureCaches();
+      notifySigurStructureChanged({ source: 'scheduler', scope: 'all' });
 
-      console.log(`[structure-scheduler] hourly sync done connection=${connectionType}`);
+      const durationMs = Date.now() - startedAt;
+      console.log(`[structure-scheduler] sync done connection=${connectionType} durationMs=${durationMs}`);
     } catch (err) {
       if (err instanceof ManualSyncInProgressError) {
         console.log('[structure-scheduler] skipped: manual or concurrent sync in progress');
@@ -74,7 +90,8 @@ export async function startStructureSyncScheduler(): Promise<void> {
     logSigurRuntimeGuardSkip('structure-scheduler');
     return;
   }
-  console.log('[structure-scheduler] started (interval: 1h)');
+  const intervalMs = resolveStructureSyncInterval();
+  console.log(`[structure-scheduler] started (interval: ${Math.round(intervalMs / 1000)}s)`);
   if (RUN_STARTUP_SYNC) {
     startupTimeout = setTimeout(() => {
       startupTimeout = null;
@@ -83,7 +100,7 @@ export async function startStructureSyncScheduler(): Promise<void> {
   }
   schedulerTimer = setInterval(() => {
     void runStructureSyncCycle();
-  }, STRUCTURE_SYNC_INTERVAL);
+  }, intervalMs);
 }
 
 export function stopStructureSyncScheduler(): void {
