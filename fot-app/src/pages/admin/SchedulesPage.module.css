@@ -98,33 +98,83 @@
   color: var(--text-secondary);
 }
 
+/* ─── Modal overlay для формы шаблона ────────────────────────────── */
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  z-index: 1000;
+  padding: 32px 16px;
+  overflow-y: auto;
+}
+
+.modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  width: 100%;
+  max-width: 760px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+}
+
+.modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modalTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.modalClose {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--text-secondary);
+  padding: 0 6px;
+}
+
+.modalClose:hover {
+  color: var(--text-primary);
+}
+
 .form {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 16px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  margin-bottom: 16px;
+  gap: 10px;
+  padding: 16px 18px;
 }
 
 .form label {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   font-size: 12px;
   color: var(--text-secondary);
   font-weight: 500;
   margin: 0;
 }
 
-/* Группированная секция формы: заголовок + 2-колонная сетка полей */
+/* Группированная секция формы: заголовок + плотная сетка полей */
 .formSection {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  padding-top: 14px;
+  column-gap: 10px;
+  row-gap: 8px;
+  padding-top: 10px;
   border-top: 1px solid var(--border);
 }
 
@@ -136,6 +186,11 @@
 .formSection > .sectionTitle,
 .formSection > .checkboxRow {
   grid-column: 1 / -1;
+}
+
+/* Узкая 4-колоночная плотная сетка для секции «Время смены» */
+.formSectionTight {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .patternHint {
@@ -317,8 +372,10 @@
   display: flex;
   gap: 8px;
   justify-content: flex-end;
-  padding-top: 14px;
+  padding: 12px 18px;
   border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  border-radius: 0 0 10px 10px;
 }
 
 .hint {

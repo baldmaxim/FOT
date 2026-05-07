@@ -563,135 +563,141 @@ export const SchedulesPage: FC = () => {
           </div>
 
           {showForm && (
-            <div className={styles.form}>
-              {/* ─── Основное ─────────────────────────────────────────── */}
-              <section className={styles.formSection}>
-                <div className={styles.sectionTitle}>Основное</div>
-                <label>
-                  Название
-                  <input
-                    type="text"
-                    value={form.name}
-                    onChange={e => setForm({ ...form, name: e.target.value })}
-                    placeholder="например, ИТР 5/2"
-                  />
-                </label>
-                <label className={styles.checkboxRow} title="Сотрудник работает удалённо — СКУД-проверка отключена для этого графика.">
-                  <input
-                    type="checkbox"
-                    checked={form.is_remote}
-                    onChange={e => setForm({ ...form, is_remote: e.target.checked })}
-                  />
-                  Удалённая работа (без СКУД-контроля)
-                </label>
-                <label className={styles.checkboxRow}>
-                  <input
-                    type="checkbox"
-                    checked={form.respects_holidays}
-                    onChange={e => setForm({ ...form, respects_holidays: e.target.checked })}
-                  />
-                  Учитывать праздники РФ (из производственного календаря)
-                </label>
-              </section>
+            <div className={styles.modalOverlay} onClick={() => setShowForm(false)}>
+              <div className={styles.modal} onClick={e => e.stopPropagation()}>
+                <div className={styles.modalHeader}>
+                  <h3 className={styles.modalTitle}>
+                    {form.id ? 'Редактирование графика' : 'Новый график'}
+                  </h3>
+                  <button type="button" className={styles.modalClose} onClick={() => setShowForm(false)} aria-label="Закрыть">
+                    ✕
+                  </button>
+                </div>
 
-              {/* ─── Ритм смен ────────────────────────────────────────── */}
-              <section className={styles.formSection}>
-                <div className={styles.sectionTitle}>Ритм смен</div>
-                <div className={styles.patternHint}>
-                  График строится по правилу «N рабочих → M выходных», цикл повторяется бесконечно от даты первого рабочего дня.
-                </div>
-                <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {RHYTHM_PRESETS.map(preset => {
-                    const active = form.work_days_count === preset.work && form.off_days_count === preset.off;
-                    return (
-                      <button
-                        key={preset.label}
-                        type="button"
-                        className={`${styles.dayBtn} ${active ? styles.dayBtnActive : ''}`}
-                        onClick={() => applyRhythmPreset(preset.work, preset.off)}
-                      >
-                        {preset.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                <label>
-                  Рабочих дней (N)
-                  <input
-                    type="number"
-                    min={1}
-                    max={28}
-                    value={form.work_days_count}
-                    onChange={e => {
-                      const v = Math.max(1, Math.min(28, parseInt(e.target.value) || 1));
-                      setForm(f => ({
-                        ...f,
-                        work_days_count: v,
-                        slot_overrides: Object.fromEntries(
-                          Object.entries(f.slot_overrides).filter(([k]) => Number(k) < v),
-                        ),
-                      }));
-                    }}
-                  />
-                </label>
-                <label>
-                  Выходных (M)
-                  <input
-                    type="number"
-                    min={0}
-                    max={28}
-                    value={form.off_days_count}
-                    onChange={e => setForm({ ...form, off_days_count: Math.max(0, Math.min(28, parseInt(e.target.value) || 0)) })}
-                  />
-                </label>
-                <label title="Дата первого рабочего дня в цикле — от неё считается весь ритм.">
-                  Дата первого рабочего дня
-                  <input
-                    type="date"
-                    value={form.anchor_date}
-                    onChange={e => setForm({ ...form, anchor_date: e.target.value })}
-                  />
-                </label>
-              </section>
+                <div className={styles.form}>
+                  {/* ─── Основное + ритм + время в одной плотной секции ─ */}
+                  <section className={styles.formSection}>
+                    <label style={{ gridColumn: '1 / -1' }}>
+                      Название
+                      <input
+                        type="text"
+                        value={form.name}
+                        onChange={e => setForm({ ...form, name: e.target.value })}
+                        placeholder="например, ИТР 5/2"
+                      />
+                    </label>
 
-              {/* ─── Время смены ──────────────────────────────────────── */}
-              <section className={styles.formSection}>
-                <div className={styles.sectionTitle}>Время смены</div>
-                <label>
-                  Начало
-                  <input
-                    type="time"
-                    value={form.work_start}
-                    onChange={e => setForm({ ...form, work_start: e.target.value })}
-                  />
-                </label>
-                <label>
-                  Конец
-                  <input
-                    type="time"
-                    value={form.work_end}
-                    onChange={e => setForm({ ...form, work_end: e.target.value })}
-                  />
-                </label>
-                <label>
-                  Обед (минут)
-                  <input
-                    type="number"
-                    min={0}
-                    max={240}
-                    value={form.lunch_minutes}
-                    onChange={e => setForm({ ...form, lunch_minutes: parseInt(e.target.value) || 0 })}
-                  />
-                </label>
-                <label>
-                  Чистое время
-                  <input type="text" value={netHoursLabel} readOnly />
-                </label>
-                <div className={styles.patternHint}>
-                  Длина смены: {shiftLabel}{isNightShift ? ' 🌙 (через полночь — ночная)' : ''}.
-                  Чистое = смена − обед.
-                </div>
-              </section>
+                    <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 12, color: 'var(--text-secondary)', alignSelf: 'center', marginRight: 4 }}>Ритм:</span>
+                      {RHYTHM_PRESETS.map(preset => {
+                        const active = form.work_days_count === preset.work && form.off_days_count === preset.off;
+                        return (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            className={`${styles.dayBtn} ${active ? styles.dayBtnActive : ''}`}
+                            onClick={() => applyRhythmPreset(preset.work, preset.off)}
+                          >
+                            {preset.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <label>
+                      Рабочих (N)
+                      <input
+                        type="number"
+                        min={1}
+                        max={28}
+                        value={form.work_days_count}
+                        onChange={e => {
+                          const v = Math.max(1, Math.min(28, parseInt(e.target.value) || 1));
+                          setForm(f => ({
+                            ...f,
+                            work_days_count: v,
+                            slot_overrides: Object.fromEntries(
+                              Object.entries(f.slot_overrides).filter(([k]) => Number(k) < v),
+                            ),
+                          }));
+                        }}
+                      />
+                    </label>
+                    <label>
+                      Выходных (M)
+                      <input
+                        type="number"
+                        min={0}
+                        max={28}
+                        value={form.off_days_count}
+                        onChange={e => setForm({ ...form, off_days_count: Math.max(0, Math.min(28, parseInt(e.target.value) || 0)) })}
+                      />
+                    </label>
+
+                    <label style={{ gridColumn: '1 / -1' }} title="Дата первого рабочего дня в цикле.">
+                      Дата первого рабочего дня
+                      <input
+                        type="date"
+                        value={form.anchor_date}
+                        onChange={e => setForm({ ...form, anchor_date: e.target.value })}
+                      />
+                    </label>
+
+                    {/* Время смены — 4 поля в один ряд */}
+                    <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 8 }}>
+                      <label>
+                        Начало
+                        <input
+                          type="time"
+                          value={form.work_start}
+                          onChange={e => setForm({ ...form, work_start: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        Конец
+                        <input
+                          type="time"
+                          value={form.work_end}
+                          onChange={e => setForm({ ...form, work_end: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        Обед, мин
+                        <input
+                          type="number"
+                          min={0}
+                          max={240}
+                          value={form.lunch_minutes}
+                          onChange={e => setForm({ ...form, lunch_minutes: parseInt(e.target.value) || 0 })}
+                        />
+                      </label>
+                      <label>
+                        Чистое
+                        <input type="text" value={netHoursLabel} readOnly />
+                      </label>
+                    </div>
+                    <div className={styles.patternHint}>
+                      Смена: {shiftLabel}{isNightShift ? ' 🌙 (через полночь)' : ''}, чистое = смена − обед.
+                    </div>
+
+                    {/* Чекбоксы рядом */}
+                    <label className={styles.checkboxRow} style={{ gridColumn: '1 / -1' }} title="СКУД-проверка отключена для удалёнки.">
+                      <input
+                        type="checkbox"
+                        checked={form.is_remote}
+                        onChange={e => setForm({ ...form, is_remote: e.target.checked })}
+                      />
+                      Удалённая работа (без СКУД-контроля)
+                    </label>
+                    <label className={styles.checkboxRow} style={{ gridColumn: '1 / -1' }} title="Если включено — мандаторные праздники (1-8 января, 23 февраля и т.д.) не считаются рабочими, даже если по циклу выпадают на рабочий слот.">
+                      <input
+                        type="checkbox"
+                        checked={form.respects_holidays}
+                        onChange={e => setForm({ ...form, respects_holidays: e.target.checked })}
+                      />
+                      Учитывать праздники РФ
+                    </label>
+                  </section>
 
               {/* ─── Особые дни цикла (раб. слот с другим временем) ─── */}
               {form.work_days_count > 0 && (
@@ -843,14 +849,16 @@ export const SchedulesPage: FC = () => {
                   ℹ Шаблон был в legacy-формате <code>{form.loaded_pattern_type}</code>. После сохранения он будет переписан как «{form.work_days_count}/{form.off_days_count}» — все назначенные сотрудники продолжат работать без изменений.
                 </div>
               )}
+                </div>
 
-              <div className={styles.actions}>
-                <button className={`${styles.btn} ${styles.btnSecondary}`} onClick={() => setShowForm(false)}>
-                  Отмена
-                </button>
-                <button className={styles.btn} onClick={handleSave}>
-                  Сохранить
-                </button>
+                <div className={styles.actions}>
+                  <button className={`${styles.btn} ${styles.btnSecondary}`} onClick={() => setShowForm(false)}>
+                    Отмена
+                  </button>
+                  <button className={styles.btn} onClick={handleSave}>
+                    Сохранить
+                  </button>
+                </div>
               </div>
             </div>
           )}
