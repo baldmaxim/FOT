@@ -259,17 +259,61 @@
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg-primary);
+  background: var(--surface);
   color: var(--text-primary);
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.form input[type='text']:hover,
+.form input[type='number']:hover,
+.form input[type='time']:hover,
+.form input[type='date']:hover,
+.form select:hover {
+  border-color: var(--border-light);
+}
+
+.form input[type='text']:focus,
+.form input[type='number']:focus,
+.form input[type='time']:focus,
+.form input[type='date']:focus,
+.form select:focus {
+  outline: none;
+  border-color: var(--primary);
+  background: var(--surface-hover);
+}
+
+.form input[readonly] {
+  color: var(--text-secondary);
+  cursor: default;
 }
 
 .checkboxRow {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  padding: 8px 12px;
   font-size: 13px;
   color: var(--text-primary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.checkboxRow:hover {
+  border-color: var(--border-light);
+  background: var(--surface-hover);
+}
+
+.checkboxRow input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
+  margin: 0;
+  flex-shrink: 0;
 }
 
 .daysRow {
@@ -306,18 +350,23 @@
 .dayOverrideCard {
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--bg-primary);
-  padding: 12px;
+  background: var(--surface);
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+  transition: border-color 0.15s;
+}
+
+.dayOverrideCard:hover {
+  border-color: var(--border-light);
 }
 
 .dayOverrideHeader {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
 }
 
 .dayOverrideTitle {
@@ -337,8 +386,18 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.dayOverrideToggle input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--primary);
+  cursor: pointer;
+  margin: 0;
 }
 
 .dayOverrideFields {
@@ -353,19 +412,83 @@
 }
 
 .dayBtn {
-  padding: 6px 10px;
+  padding: 6px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg-primary);
+  background: var(--surface);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
   color: var(--text-primary);
+  transition: all 0.15s;
+}
+
+.dayBtn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 .dayBtnActive {
-  background: var(--accent);
+  background: var(--primary);
   color: #fff;
-  border-color: var(--accent);
+  border-color: var(--primary);
+}
+
+.dayBtnActive:hover {
+  background: var(--primary-hover);
+  color: #fff;
+}
+
+/* Превью на 14 дней — плашки */
+.previewDay {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+  user-select: none;
+}
+
+.previewDayWork {
+  background: rgba(59, 130, 246, 0.18);
+  color: var(--primary);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.previewDayOverride {
+  background: rgba(245, 158, 11, 0.18);
+  color: var(--warning);
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.previewDayOff {
+  background: var(--surface);
+  color: var(--text-tertiary);
+  border-color: var(--border);
+}
+
+.patternHint code {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-family: var(--font-primary);
+  font-size: 12px;
+}
+
+.legacyBanner {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--warning-muted);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .actions {

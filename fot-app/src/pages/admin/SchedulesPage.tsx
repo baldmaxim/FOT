@@ -563,8 +563,11 @@ export const SchedulesPage: FC = () => {
           </div>
 
           {showForm && (
-            <div className={styles.modalOverlay} onClick={() => setShowForm(false)}>
-              <div className={styles.modal} onClick={e => e.stopPropagation()}>
+            <div
+              className={styles.modalOverlay}
+              onMouseDown={e => { if (e.target === e.currentTarget) setShowForm(false); }}
+            >
+              <div className={styles.modal}>
                 <div className={styles.modalHeader}>
                   <h3 className={styles.modalTitle}>
                     {form.id ? 'Редактирование графика' : 'Новый график'}
@@ -784,18 +787,15 @@ export const SchedulesPage: FC = () => {
                         const dd = String(d.getDate()).padStart(2, '0');
                         const mm = String(d.getMonth() + 1).padStart(2, '0');
                         const ovr = isWork ? form.slot_overrides[idx] : null;
+                        const cls = !isWork
+                          ? styles.previewDayOff
+                          : ovr
+                            ? styles.previewDayOverride
+                            : styles.previewDayWork;
                         return (
                           <span
                             key={dayShift}
-                            style={{
-                              display: 'inline-block',
-                              padding: '4px 8px',
-                              borderRadius: 4,
-                              background: isWork ? (ovr ? 'var(--warning-muted, var(--primary-light))' : 'var(--primary-light)') : 'var(--surface-hover)',
-                              color: 'var(--text-primary)',
-                              fontSize: 12,
-                              fontWeight: 500,
-                            }}
+                            className={`${styles.previewDay} ${cls}`}
                             title={isWork
                               ? `Рабочий ${ovr?.work_start ?? form.work_start}-${ovr?.work_end ?? form.work_end}${ovr ? ' (особый)' : ''}`
                               : 'Выходной'}
@@ -845,7 +845,7 @@ export const SchedulesPage: FC = () => {
               </details>
 
               {form.loaded_pattern_type && form.loaded_pattern_type !== 'cycle' && (
-                <div className={styles.patternHint} style={{ color: 'var(--warning, var(--text-secondary))' }}>
+                <div className={styles.legacyBanner}>
                   ℹ Шаблон был в legacy-формате <code>{form.loaded_pattern_type}</code>. После сохранения он будет переписан как «{form.work_days_count}/{form.off_days_count}» — все назначенные сотрудники продолжат работать без изменений.
                 </div>
               )}
