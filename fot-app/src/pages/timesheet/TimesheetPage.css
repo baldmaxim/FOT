@@ -1563,7 +1563,8 @@
 }
 
 .ts-table thead th.ts-th--weekend {
-  background: var(--bg-tertiary);
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--error);
   opacity: 1;
 }
 
@@ -2395,20 +2396,19 @@
 .ts-day--inactive {
   background:
     repeating-linear-gradient(135deg,
-      transparent 0, transparent 4px,
-      var(--border) 4px, var(--border) 5px),
+      transparent 0, transparent 5px,
+      rgba(127, 127, 127, 0.22) 5px, rgba(127, 127, 127, 0.22) 6px),
     var(--bg-secondary) !important;
   color: var(--text-tertiary) !important;
   text-decoration: line-through;
   cursor: not-allowed !important;
-  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .ts-day--inactive:hover {
   background:
     repeating-linear-gradient(135deg,
-      transparent 0, transparent 4px,
-      var(--border) 4px, var(--border) 5px),
+      transparent 0, transparent 5px,
+      rgba(127, 127, 127, 0.22) 5px, rgba(127, 127, 127, 0.22) 6px),
     var(--bg-secondary) !important;
 }
 
@@ -2423,8 +2423,8 @@
 .ts-day--out-of-period {
   background:
     repeating-linear-gradient(135deg,
-      transparent 0, transparent 4px,
-      var(--border) 4px, var(--border) 5px),
+      transparent 0, transparent 5px,
+      rgba(127, 127, 127, 0.22) 5px, rgba(127, 127, 127, 0.22) 6px),
     var(--bg-secondary) !important;
   color: var(--text-tertiary) !important;
   box-shadow: inset 0 0 0 1px var(--success);
@@ -2433,8 +2433,8 @@
 .ts-day--out-of-period:hover {
   background:
     repeating-linear-gradient(135deg,
-      transparent 0, transparent 4px,
-      var(--border) 4px, var(--border) 5px),
+      transparent 0, transparent 5px,
+      rgba(127, 127, 127, 0.22) 5px, rgba(127, 127, 127, 0.22) 6px),
     var(--bg-secondary) !important;
 }
 
@@ -2682,15 +2682,16 @@
 }
 
 .ts-day--weekend {
-  background: var(--bg-tertiary);
-  color: var(--text-tertiary);
+  background: rgba(239, 68, 68, 0.05);
+  color: var(--error);
+  opacity: 0.85;
   cursor: default;
 }
 
 .ts-day--weekend:hover {
   transform: none;
   outline: none;
-  background: var(--bg-tertiary);
+  background: rgba(239, 68, 68, 0.05);
 }
 
 .ts-day--today {
