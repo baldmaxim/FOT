@@ -530,19 +530,25 @@ export async function buildAttendanceEntries(params: {
     } else if (schedule) {
       const [yearPart, monthPart, dayPart] = summary.date.split('-').map(Number);
       const dateObject = new Date(yearPart, monthPart - 1, dayPart);
-      // Предпраздничный день — смена сокращена на 1ч, span должен сравниваться с укороченной длительностью.
-      const baseShiftHours = getShiftDurationHours(getScheduleForDate(schedule, dateObject));
-      const shiftDurationHours = Math.max(0, baseShiftHours - (isPreHoliday(dateObject, schedule, calendarMonth) ? 1 : 0));
-      presenceCoversShift = computePresenceCoversShift({
-        firstEntry: summary.first_entry,
-        lastExit: summary.last_exit,
-        totalMinutes: getSummaryMinutes(summary),
-        shiftDurationHours,
-        lunchMinutes: schedule.lunch_minutes || 0,
-        workDate: summary.date,
-        todayStr,
-        nowHMS,
-      });
+      if (!isWorkingDay(schedule, dateObject, calendarMonth)) {
+        // Выходной/праздник: смены нет, любое присутствие по определению покрывает «нулевую» смену.
+        // Иначе для выхода в выходной span<work_start..work_end даст false и день покрасится underwork.
+        presenceCoversShift = true;
+      } else {
+        // Предпраздничный день — смена сокращена на 1ч, span должен сравниваться с укороченной длительностью.
+        const baseShiftHours = getShiftDurationHours(getScheduleForDate(schedule, dateObject));
+        const shiftDurationHours = Math.max(0, baseShiftHours - (isPreHoliday(dateObject, schedule, calendarMonth) ? 1 : 0));
+        presenceCoversShift = computePresenceCoversShift({
+          firstEntry: summary.first_entry,
+          lastExit: summary.last_exit,
+          totalMinutes: getSummaryMinutes(summary),
+          shiftDurationHours,
+          lunchMinutes: schedule.lunch_minutes || 0,
+          workDate: summary.date,
+          todayStr,
+          nowHMS,
+        });
+      }
     }
 
     pushEntry({

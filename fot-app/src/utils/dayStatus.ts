@@ -61,10 +61,11 @@ export const getDayStatus = (
     case 'manual': {
       if (incompleteSkud) return 'incomplete_skud';
       const hoursOk = visibleHours != null && visibleHours >= fullDayThresholdHours;
-      // Корректировка от руководителя — авторитетна, span смены не валидируем.
-      // Для обычных work-записей: если присутствие не покрыло смену (open-entry без exit
-      // и shiftDuration > totalMinutes) — день недоработан.
-      const spanOk = entry.is_correction || entry.presence_covers_shift !== false;
+      // На выходном/праздничном дне ожидаемой смены нет — span смены не валидируем.
+      // Корректировка от руководителя — авторитетна. Для обычных work-записей в рабочий
+      // день: если присутствие не покрыло смену (open-entry без exit и shiftDuration > totalMinutes) —
+      // день недоработан.
+      const spanOk = isScheduledDayOff || entry.is_correction || entry.presence_covers_shift !== false;
       return hoursOk && spanOk ? 'present' : 'underwork';
     }
     case 'remote':

@@ -1198,7 +1198,7 @@ export const TimesheetPage: FC = () => {
     try {
       const result = await timesheetService.refresh(
         { start_date: rangeStart, end_date: rangeEnd },
-        { signal: controller.signal, sync_mode: 'quick' },
+        { signal: controller.signal, sync_mode: 'full' },
       );
       setRefreshState({ phase: 'invalidating', message: 'Обновление данных табеля…' });
       // Полное обновление: данные табеля + резолв расписаний + согласования.
