@@ -1230,25 +1230,17 @@ export class SigurDataService extends SigurServiceBase {
     accessPointIds: number[],
     connection?: ConnectionType,
   ): Promise<void> {
-    // Sigur 1.6.3.14: формат body — одиночный объект { employeeId, accessPointId } camelCase singular,
-    // ровно как в ответе GET /bindings/employees-accesspoints (поле accessPointId, большая 'P').
-    // Прежние варианты — cross-product { employeeIds[], accessPointIds[] }, массив объектов
-    // [{ employeeId, accessPointId }] и одиночный с lowercase { employeeId, accesspointId } —
-    // все валят 400 invalid.request. N отдельных POST через Promise.all для каждой пары.
-    const pairs: Array<{ employeeId: number; accessPointId: number }> = [];
-    for (const employeeId of employeeIds) {
-      for (const accessPointId of accessPointIds) {
-        pairs.push({ employeeId, accessPointId });
-      }
-    }
-    if (pairs.length === 0) return;
-    await Promise.all(pairs.map(pair => this.mutate<void>(
+    // Sigur 1.6.3.14 (по Swagger схеме): body — массив с одним cross-product объектом:
+    // [{ employeeIds: [...], accessPointIds: [...] }]. Не cross-product объект сам по себе,
+    // не массив пар, не одиночный singular. Все прочие варианты валят 400 invalid.request.
+    if (employeeIds.length === 0 || accessPointIds.length === 0) return;
+    await this.mutate<void>(
       'post',
       '/api/v1/bindings/employees-accesspoints',
-      pair,
+      [{ employeeIds, accessPointIds }],
       undefined,
       connection,
-    )));
+    );
   }
 
   async deleteEmployeeAccessPointBindings(
@@ -1256,21 +1248,15 @@ export class SigurDataService extends SigurServiceBase {
     accessPointIds: number[],
     connection?: ConnectionType,
   ): Promise<void> {
-    // См. createEmployeeAccessPointBindings — тот же формат camelCase singular.
-    const pairs: Array<{ employeeId: number; accessPointId: number }> = [];
-    for (const employeeId of employeeIds) {
-      for (const accessPointId of accessPointIds) {
-        pairs.push({ employeeId, accessPointId });
-      }
-    }
-    if (pairs.length === 0) return;
-    await Promise.all(pairs.map(pair => this.mutate<void>(
+    // См. createEmployeeAccessPointBindings — тот же формат: массив с одним cross-product объектом.
+    if (employeeIds.length === 0 || accessPointIds.length === 0) return;
+    await this.mutate<void>(
       'post',
       '/api/v1/bindings/employees-accesspoints/delete',
-      pair,
+      [{ employeeIds, accessPointIds }],
       undefined,
       connection,
-    )));
+    );
   }
 
   async updateEmployeeCardBindingExpiration(
