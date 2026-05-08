@@ -771,11 +771,6 @@ export const sigurAdminController = {
       }
 
       const connection = parseConnection(req.body.connection);
-      console.log('[Sigur access-points] incoming PUT', {
-        sigurEmployeeId,
-        accessPointIds,
-        connection: connection || 'default',
-      });
       const data = await replaceSigurEmployeeAccessPoints(sigurEmployeeId, accessPointIds as number[], connection);
 
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
@@ -793,24 +788,6 @@ export const sigurAdminController = {
     } catch (error) {
       const status = getErrorStatus(error);
       console.error('Sigur admin saveEmployeeAccessPoints error:', error);
-      console.error('[Sigur access-points] context:', {
-        sigurEmployeeId: req.params.sigurEmployeeId,
-        accessPointIds: (req.body as { accessPointIds?: unknown })?.accessPointIds,
-      });
-      const debug: Record<string, unknown> = {};
-      const sigurEmployeeIdParsed = parseInteger(req.params.sigurEmployeeId);
-      if (sigurEmployeeIdParsed) {
-        try {
-          const sample = await sigurService.getEmployeeAccessPointBindings(
-            { employeeId: sigurEmployeeIdParsed },
-            parseConnection(req.body?.connection),
-          );
-          debug.currentBindingSample = Array.isArray(sample) && sample.length > 0 ? sample[0] : null;
-          debug.currentBindingsCount = Array.isArray(sample) ? sample.length : 0;
-        } catch (sampleError) {
-          debug.currentBindingSampleError = sampleError instanceof Error ? sampleError.message : String(sampleError);
-        }
-      }
       if (error instanceof AxiosError) {
         const data = error.response?.data as Record<string, unknown> | undefined;
         console.error('[Sigur access-points] method=', error.config?.method, 'url=', error.config?.url);
@@ -818,24 +795,8 @@ export const sigurAdminController = {
         console.error('[Sigur access-points] request body=', error.config?.data);
         console.error('[Sigur access-points] errors=', JSON.stringify(data?.errors));
         console.error('[Sigur access-points] errorsKeys=', JSON.stringify(data?.errorsKeys));
-        console.error('[Sigur access-points] full data=', JSON.stringify(data));
-        debug.sigurMethod = error.config?.method;
-        debug.sigurUrl = error.config?.url;
-        debug.sigurStatus = error.response?.status;
-        debug.sigurRequestBody = (() => {
-          try {
-            return typeof error.config?.data === 'string' ? JSON.parse(error.config.data) : error.config?.data;
-          } catch {
-            return error.config?.data;
-          }
-        })();
-        debug.sigurResponse = data;
       }
-      res.status(status).json({
-        success: false,
-        error: getErrorMessage(error, 'Ошибка сохранения точек доступа Sigur'),
-        ...(Object.keys(debug).length > 0 ? { debug } : {}),
-      });
+      res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка сохранения точек доступа Sigur') });
     }
   },
 
