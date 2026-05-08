@@ -867,7 +867,10 @@ export class SigurDataService extends SigurServiceBase {
       // (через isRawPassEvent) PASS_DENY ошибочно попадал в pass-ветку и затем
       // в skud_events как успешный проход, влияя на расчёты табеля. Теперь только
       // eventTypeId === 6 → pass; всё остальное (включая null/undefined) → failure.
-      const rawTypeId = typeof raw.eventTypeId === 'number' ? raw.eventTypeId : null;
+      const rawTypeId =
+        typeof raw.eventTypeId === 'number'
+          ? raw.eventTypeId
+          : (typeof raw.type === 'number' ? raw.type : null);
       const isPass = rawTypeId === PASS_TYPE_ID
         // sanity-check: для pass нужны direction и accessObjectId — иначе мы не сможем
         // построить корректный SkudEvent. Если их нет — отправляем в failures как
