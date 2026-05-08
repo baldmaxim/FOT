@@ -211,21 +211,6 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
           void runAutoAssign(lastCard);
           return;
         }
-        // mode === 'lookup' и сотрудник найден — авто-открытие через 800ms (чтобы пользователь увидел кого нашли).
-        if (mode.kind === 'lookup' && result.found && result.sigurEmployeeId) {
-          const sigurId = result.sigurEmployeeId;
-          const fullName = result.employee?.full_name || `Сотрудник Sigur #${sigurId}`;
-          const fotId = result.employee?.source === 'fot' ? result.employee.id : null;
-          setTimeout(() => {
-            if (seq !== lookupSeqRef.current) return;
-            // Приоритет: inline-открытие в SigurEmployeesTab, иначе переход на /employees/{id}.
-            if (mode.onSigurEmployeeFound) {
-              mode.onSigurEmployeeFound(sigurId, fullName);
-            } else if (fotId != null && mode.onEmployeeFound) {
-              mode.onEmployeeFound(fotId);
-            }
-          }, 800);
-        }
       })
       .catch((err: unknown) => {
         if (seq !== lookupSeqRef.current) return;
