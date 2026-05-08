@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import * as Sentry from '@sentry/node';
 import { z } from 'zod';
 import { supabase } from '../config/database.js';
 import { sigurService } from '../services/sigur.service.js';
@@ -718,7 +719,6 @@ const skudReadController = {
         .from('skud_event_failures')
         .select(
           'id, employee_id, physical_person, card_number, event_date, event_time, event_at, access_point, direction, failure_type, failure_type_id, reason',
-          { count: 'exact' },
         )
         .order('event_date', { ascending: false })
         .order('event_time', { ascending: false })
@@ -745,9 +745,10 @@ const skudReadController = {
         }
       }
 
-      const { data, error, count } = await query;
+      const { data, error } = await query;
       if (error) {
         console.error('getEventFailures error:', error);
+        Sentry.captureException(error, { tags: { route: 'GET /api/skud/event-failures' } });
         res.status(500).json({ success: false, error: 'Failed to fetch event failures' });
         return;
       }
@@ -771,9 +772,10 @@ const skudReadController = {
         ? rows.filter(r => (r.physical_person || '').toLowerCase().includes(searchStr))
         : rows;
 
-      res.json({ success: true, data: filtered, total: count ?? filtered.length });
+      res.json({ success: true, data: filtered, total: filtered.length });
     } catch (error) {
       console.error('getEventFailures error:', error);
+      Sentry.captureException(error, { tags: { route: 'GET /api/skud/event-failures' } });
       res.status(500).json({ success: false, error: 'Failed to fetch event failures' });
     }
   },

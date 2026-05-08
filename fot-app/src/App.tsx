@@ -67,7 +67,6 @@ const TimesheetTransfersAdminPage = lazy(() => import('./pages/admin/TimesheetTr
 const EmployeeCardPage = lazy(() => import('./pages/employees/EmployeeCardPage').then(m => ({ default: m.EmployeeCardPage })));
 const SigurSettingsPage = lazy(() => import('./pages/skud/SigurSettingsPage').then(m => ({ default: m.SigurSettingsPage })));
 const SigurPage = lazy(() => import('./pages/skud/SigurPage').then(m => ({ default: m.SigurPage })));
-const SigurRawDataPage = lazy(() => import('./pages/skud/SigurRawDataPage').then(m => ({ default: m.SigurRawDataPage })));
 const SkudSupabasePage = lazy(() => import('./pages/skud/SkudSupabasePage').then(m => ({ default: m.SkudSupabasePage })));
 const SkudCardReaderPage = lazy(() => import('./pages/skud/SkudCardReaderPage').then(m => ({ default: m.SkudCardReaderPage })));
 
@@ -382,18 +381,7 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage="/skud-raw" />}>
-          <Route
-            path="/skud-raw"
-            element={
-              <Layout title="Просмотр СКУД" theme={theme} onToggleTheme={toggleTheme}>
-                <SigurRawDataPage />
-              </Layout>
-            }
-          />
-        </Route>
-
-        <Route element={<ProtectedRoute requiredPage="/skud-db" />}>
+<Route element={<ProtectedRoute requiredPage="/skud-db" />}>
           <Route
             path="/skud-db"
             element={
