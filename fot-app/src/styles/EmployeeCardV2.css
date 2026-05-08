@@ -1722,6 +1722,38 @@
   opacity: 0.5;
 }
 
+/* Failure-row на вкладке «Посещаемость» — приглушённый красный фон, не учитывается в расчётах */
+.ec-event-row.ec-event-row--failure {
+  background: rgba(229, 62, 62, 0.06);
+  border-left: 3px solid #e53e3e;
+  padding-left: 6px;
+}
+.ec-event-row--failure .ec-event-time {
+  text-decoration: line-through;
+  text-decoration-color: rgba(197, 48, 48, 0.5);
+  color: var(--text-tertiary);
+}
+.ec-event-failure-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #fed7d7;
+  color: #c53030;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.ec-event-failure-reason {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-style: italic;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ec-pair-duration-inline {
   margin-left: auto;
   padding: 2px 8px;

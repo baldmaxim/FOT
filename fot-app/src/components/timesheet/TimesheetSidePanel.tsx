@@ -1,6 +1,6 @@
 import { type FC, useMemo, useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { X, ChevronDown, ChevronRight, LogIn, LogOut, Timer, AlertCircle } from 'lucide-react';
+import { X, ChevronDown, ChevronRight, LogIn, LogOut, Timer, Check, XCircle } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee, SkudEvent, SkudEventFailure, IProductionCalendarMonth } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
 import { useAuth } from '../../contexts/AuthContext';
@@ -327,8 +327,8 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                                   className="ts-day-event-row ts-day-event-row--failure"
                                   title={f.reason || ''}
                                 >
-                                  <span className="ts-day-event-icon ts-day-event-failure-icon">
-                                    <AlertCircle size={13} />
+                                  <span className="event-status-mark event-status-mark--failure" aria-label="Не учитывается">
+                                    <XCircle size={13} />
                                   </span>
                                   <span className="ts-day-event-time">{formatTime(f.event_time)}</span>
                                   <span className="ts-day-event-failure-badge">{f.failure_type}</span>
@@ -352,6 +352,11 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                               key={ev.id}
                               className={`ts-day-event-row ${ev.direction || ''} ${isInternal ? 'internal' : ''}`}
                             >
+                              {!isInternal && (
+                                <span className="event-status-mark event-status-mark--success" aria-label="Учтено">
+                                  <Check size={12} />
+                                </span>
+                              )}
                               <span className="ts-day-event-icon">
                                 {ev.direction === 'entry' ? <LogIn size={13} /> : <LogOut size={13} />}
                               </span>

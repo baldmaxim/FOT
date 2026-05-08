@@ -1,6 +1,6 @@
 import { useMemo, type FC } from 'react';
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- AlertCircle используется в JSX (failures), но react-compiler-плагин не видит usage
-import { AlertCircle, Clock, LogIn, LogOut } from 'lucide-react';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- Check/XCircle используются в JSX (статус-маркер), но react-compiler-плагин не видит usage
+import { Check, Clock, LogIn, LogOut, XCircle } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
 import type { Employee, EmployeeInput, SkudEvent, SkudEventFailure } from '../../types';
@@ -152,8 +152,8 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
                       className="ec-event-row ec-event-row--failure"
                       title={f.reason || ''}
                     >
-                      <span className="ec-event-icon ec-event-failure-icon">
-                        <AlertCircle size={14} />
+                      <span className="event-status-mark event-status-mark--failure" aria-label="Не учитывается">
+                        <XCircle size={14} />
                       </span>
                       <span className="ec-event-time">{f.event_time.slice(0, 5)}</span>
                       <span className="ec-event-failure-badge">{f.failure_type}</span>
@@ -175,6 +175,11 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
                     key={event.id}
                     className={`ec-event-row ${isInternal ? 'ec-event-row--internal' : ''}`}
                   >
+                    {!isInternal && (
+                      <span className="event-status-mark event-status-mark--success" aria-label="Учтено">
+                        <Check size={12} />
+                      </span>
+                    )}
                     <span className={`ec-event-icon ${event.direction === 'entry' ? 'ec-event-entry' : 'ec-event-exit'}`}>
                       {event.direction === 'entry' ? '→' : '←'}
                     </span>

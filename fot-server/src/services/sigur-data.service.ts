@@ -854,15 +854,26 @@ export class SigurDataService extends SigurServiceBase {
     const pass: Record<string, unknown>[] = [];
     const failures: Record<string, unknown>[] = [];
 
+    const PASS_TYPE_ID = SigurDataService.EVENT_TYPE_ID_MAP.PASS_DETECTED; // 6
+
     for (const raw of rawEvents) {
-      const isPass = this.isRawPassEvent(raw);
       const accessObjectId = typeof raw.accessObjectId === 'number' ? raw.accessObjectId : null;
       const employee = accessObjectId != null ? employeeById.get(accessObjectId) : undefined;
       const accessPointId = typeof raw.accessPointId === 'number' ? raw.accessPointId : null;
       const employeeName = typeof employee?.name === 'string' ? employee.name : '';
 
-      // Имя типа: для известных id — каноническое имя; иначе TYPE_<id> (или null).
+      // КЛАССИФИКАЦИЯ строго по eventTypeId. PASS_DENY обычно приходит с теми же
+      // direction/accessObjectId/timestamp что и PASS_DETECTED — поэтому раньше
+      // (через isRawPassEvent) PASS_DENY ошибочно попадал в pass-ветку и затем
+      // в skud_events как успешный проход, влияя на расчёты табеля. Теперь только
+      // eventTypeId === 6 → pass; всё остальное (включая null/undefined) → failure.
       const rawTypeId = typeof raw.eventTypeId === 'number' ? raw.eventTypeId : null;
+      const isPass = rawTypeId === PASS_TYPE_ID
+        // sanity-check: для pass нужны direction и accessObjectId — иначе мы не сможем
+        // построить корректный SkudEvent. Если их нет — отправляем в failures как
+        // «битое» событие.
+        && (raw.direction === 'IN' || raw.direction === 'OUT')
+        && accessObjectId != null;
       const knownName = rawTypeId != null ? SigurDataService.EVENT_NAME_BY_ID[rawTypeId] : undefined;
       const eventType = isPass ? 'PASS_DETECTED' : (knownName ?? (rawTypeId != null ? `TYPE_${rawTypeId}` : 'UNKNOWN'));
 

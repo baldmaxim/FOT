@@ -1,6 +1,6 @@
 import { type FC, type ReactNode, useState, useEffect, useCallback, useRef } from 'react';
-import { X, LogIn, LogOut, Timer, Pencil, Trash2 } from 'lucide-react';
-import type { TimesheetEntry, TimesheetStatus, SkudEvent } from '../../types';
+import { X, LogIn, LogOut, Timer, Pencil, Trash2, Check, XCircle } from 'lucide-react';
+import type { TimesheetEntry, TimesheetStatus, SkudEvent, SkudEventFailure } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
 import { skudService } from '../../services/skudService';
@@ -10,6 +10,7 @@ import {
   calculateWorkSeconds,
   findFirstExternalEntry,
   findLastExternalExit,
+  mergeFailuresIntoDisplay,
   sumBreakSeconds,
 } from '../../utils/skudDisplay';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
@@ -100,6 +101,7 @@ const EventsTab: FC<{
     accessPointMapModal,
   } = useAccessPointMapViewer(allowAccessPointMap && canViewPage('/skud-settings'));
   const [events, setEvents] = useState<SkudEvent[]>([]);
+  const [failures, setFailures] = useState<SkudEventFailure[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [internalPoints, setInternalPoints] = useState<Set<string>>(new Set());
@@ -114,11 +116,16 @@ const EventsTab: FC<{
     setLoading(true);
     setError(null);
     try {
-      const data = await skudService.getEmployeeEvents(employeeId, workDate, workDate);
+      const { events: data, failures: dayFailures } = await skudService.getEmployeeEventsWithFailures(
+        employeeId, workDate, workDate,
+      );
       data.sort((a, b) => a.event_time.localeCompare(b.event_time));
+      dayFailures.sort((a, b) => a.event_time.localeCompare(b.event_time));
       setEvents(data);
+      setFailures(dayFailures);
     } catch (err) {
       setEvents([]);
+      setFailures([]);
       setError(err instanceof Error ? err.message : 'Не удалось загрузить события СКУД');
     } finally {
       setLoading(false);
@@ -127,7 +134,12 @@ const EventsTab: FC<{
 
   useEffect(() => { loadEvents(); }, [loadEvents]);
 
-  const displayItems = buildDisplayItems(events, internalPoints, workDate);
+  // failures вставляются в timeline, но в расчёт totalSec/firstEntry/lastExit/breakSec
+  // не идут — они работают только на success-событиях (events).
+  const displayItems = mergeFailuresIntoDisplay(
+    buildDisplayItems(events, internalPoints, workDate),
+    failures,
+  );
   const fallbackTotalSec = calculateWorkSeconds(events, internalPoints, workDate);
   const fallbackFirstEntry = findFirstExternalEntry(events, internalPoints);
   const fallbackLastExit = findLastExternalExit(events, internalPoints);
@@ -141,7 +153,7 @@ const EventsTab: FC<{
 
   if (loading) return <div className="ts-modal-events-empty">Загрузка...</div>;
   if (error) return <div className="ts-modal-events-empty">{error}</div>;
-  if (events.length === 0) return <div className="ts-modal-events-empty">Нет событий СКУД за этот день</div>;
+  if (events.length === 0 && failures.length === 0) return <div className="ts-modal-events-empty">Нет событий СКУД за этот день</div>;
 
   return (
     <div className="ts-modal-events">
@@ -156,14 +168,44 @@ const EventsTab: FC<{
               </div>
             );
           }
-          // В корректировке табеля показываются только успешные проходы.
-          if (item.kind === 'failure') return null;
+          if (item.kind === 'failure') {
+            const f = item.failure;
+            return (
+              <div
+                key={`failure-${f.id}`}
+                className="ts-modal-event-row ts-modal-event-row--failure"
+                title={f.reason || ''}
+              >
+                <span className="event-status-mark event-status-mark--failure" aria-label="Не учитывается">
+                  <XCircle size={14} />
+                </span>
+                <span className="ts-modal-event-time">{formatTime(f.event_time)}</span>
+                <span className="ts-modal-event-failure-badge">{f.failure_type}</span>
+                {f.access_point ? (
+                  <AccessPointTrigger
+                    accessPointName={f.access_point}
+                    className="ts-modal-event-point"
+                    canOpen={canOpenAccessPointMap}
+                    onOpen={openAccessPointMap}
+                  />
+                ) : (
+                  <span className="ts-modal-event-point">—</span>
+                )}
+                {f.reason && <span className="ts-modal-event-failure-reason">{f.reason}</span>}
+              </div>
+            );
+          }
           const { event: ev, pairDurationSeconds, isInternal } = item;
           return (
             <div
               key={ev.id}
               className={`ts-modal-event-row ${ev.direction || ''} ${isInternal ? 'internal' : ''}`}
             >
+              {!isInternal && (
+                <span className="event-status-mark event-status-mark--success" aria-label="Учтено">
+                  <Check size={12} />
+                </span>
+              )}
               <span className="ts-modal-event-icon">
                 {ev.direction === 'entry' ? <LogIn size={14} /> : <LogOut size={14} />}
               </span>

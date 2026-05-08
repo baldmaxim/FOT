@@ -3256,11 +3256,37 @@
   font-size: 12px;
 }
 
+/* Универсальный статус-маркер: ✓ зелёный — событие учтено, ✗ красный — failure (не учитывается).
+   Внутренние точки маркер не получают (см. условие !isInternal в JSX). */
+.event-status-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+.event-status-mark--success {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.12);
+}
+.event-status-mark--failure {
+  color: #e53e3e;
+  background: rgba(229, 62, 62, 0.12);
+}
+
 /* Ошибочное событие Sigur (PASS_DENY и т.п.) — лог, не учитывается в расчётах */
 .ts-day-event-row--failure {
-  background: rgba(229, 62, 62, 0.08);
+  background: rgba(229, 62, 62, 0.06);
   border-left: 3px solid #e53e3e;
   padding-left: 6px;
+}
+.ts-day-event-row--failure .ts-day-event-time {
+  text-decoration: line-through;
+  text-decoration-color: rgba(197, 48, 48, 0.5);
+  color: var(--text-tertiary);
 }
 .ts-day-event-failure-icon {
   color: #e53e3e;
@@ -3507,6 +3533,38 @@
   color: var(--text-tertiary);
   font-style: italic;
   font-size: 12px;
+}
+
+/* Failure-row в модалке корректировки табеля */
+.ts-modal-event-row.ts-modal-event-row--failure {
+  background: rgba(229, 62, 62, 0.06);
+  border-left: 3px solid #e53e3e;
+  padding-left: 6px;
+}
+.ts-modal-event-row--failure .ts-modal-event-time {
+  text-decoration: line-through;
+  text-decoration-color: rgba(197, 48, 48, 0.5);
+  color: var(--text-tertiary);
+}
+.ts-modal-event-failure-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #fed7d7;
+  color: #c53030;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.ts-modal-event-failure-reason {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-style: italic;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ts-modal-event-pair-duration {

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, type FC } from 'react';
 import {
   LogIn, LogOut, ChevronDown, ChevronRight, ChevronLeft,
-  Clock, Timer, Download, AlertCircle,
+  Clock, Timer, Download, Check, XCircle,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
@@ -440,8 +440,8 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
                 <div key={`failure-${f.id}`} className="skud-table-row skud-event-failure" title={f.reason || ''}>
                   <div className="skud-table-time">{formatTimeShort(f.event_time)}</div>
                   <div className="skud-table-event">
-                    <span className="skud-table-event-icon failure">
-                      <AlertCircle size={14} />
+                    <span className="event-status-mark event-status-mark--failure" aria-label="Не учитывается">
+                      <XCircle size={14} />
                     </span>
                     <span className="skud-failure-badge">{f.failure_type}</span>
                     {f.reason && <span className="skud-failure-reason">{f.reason}</span>}
@@ -467,6 +467,11 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
               >
                 <div className="skud-table-time">{formatTimeShort(ev.event_time)}</div>
                 <div className="skud-table-event">
+                  {!isInternal && (
+                    <span className="event-status-mark event-status-mark--success" aria-label="Учтено">
+                      <Check size={12} />
+                    </span>
+                  )}
                   <span className={`skud-table-event-icon ${ev.direction === 'entry' ? 'in' : 'out'}`}>
                     {ev.direction === 'entry' ? <LogIn size={14} /> : <LogOut size={14} />}
                   </span>
@@ -620,8 +625,8 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
                             className="skud-event-row skud-event-failure"
                             title={f.reason || ''}
                           >
-                            <span className="skud-event-icon failure">
-                              <AlertCircle size={14} />
+                            <span className="event-status-mark event-status-mark--failure" aria-label="Не учитывается">
+                              <XCircle size={14} />
                             </span>
                             <span className="skud-event-time">
                               <Clock size={12} /> {formatTime(f.event_time)}
@@ -645,6 +650,11 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
                           key={ev.id}
                           className={`skud-event-row ${ev.direction || ''} ${isInternal ? 'internal' : ''}`}
                         >
+                          {!isInternal && (
+                            <span className="event-status-mark event-status-mark--success" aria-label="Учтено">
+                              <Check size={12} />
+                            </span>
+                          )}
                           <span className="skud-event-icon">
                             {ev.direction === 'entry' ? <LogIn size={14} /> : <LogOut size={14} />}
                           </span>
