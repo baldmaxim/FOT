@@ -357,6 +357,11 @@ export async function buildObjectAttendanceData(params: {
   endDate: string;
   todayStr?: string;
   adjustments: IObjectAdjustmentSource[];
+  // Если false — пропускаем object-агрегацию (intervals, object adjustments, serialization),
+  // но rawFallbackSummaries всё равно строим: они нужны табелю для дней без skud_daily_summary
+  // в обоих режимах отображения. До фикса fallback гасился вместе с object-блоком, и день с
+  // событиями, но без summary, показывался как «Н» (см. attendance.service.test 'employees view').
+  includeObjectDetails?: boolean;
 }): Promise<{
   objectEntries: IAttendanceObjectEntry[];
   objectEntriesByEmployeeDate: Map<number, Map<string, IAttendanceObjectEntry[]>>;
@@ -366,6 +371,7 @@ export async function buildObjectAttendanceData(params: {
 }> {
   const { employeeIds, startDate, endDate, adjustments } = params;
   const todayStr = params.todayStr ?? formatDateToISO(new Date());
+  const includeObjectDetails = params.includeObjectDetails ?? true;
   if (employeeIds.length === 0) {
     return {
       objectEntries: [],
@@ -378,7 +384,9 @@ export async function buildObjectAttendanceData(params: {
 
   const [internalPoints, objectMappings, rawEvents] = await Promise.all([
     getNormalizedInternalPoints(),
-    fetchObjectMappings(),
+    includeObjectDetails
+      ? fetchObjectMappings()
+      : Promise.resolve({ accessPointToObjectId: new Map<string, string>(), objectNameById: new Map<string, string>() }),
     fetchRawEvents({ employeeIds, startDate, endDate }),
   ]);
 
@@ -407,6 +415,8 @@ export async function buildObjectAttendanceData(params: {
       }
       rawFallbackSummaries.get(employeeId)!.set(workDate, rawSummary);
     }
+
+    if (!includeObjectDetails) continue;
 
     const intervals = buildObjectIntervals({
       events,
@@ -444,6 +454,17 @@ export async function buildObjectAttendanceData(params: {
       });
     }
     baseDistinctObjectKeys.set(key, dayObjects);
+  }
+
+  if (!includeObjectDetails) {
+    // Режим «По сотрудникам» / fallback-only: object-структуры не нужны, отдаём только summary.
+    return {
+      objectEntries: [],
+      objectEntriesByEmployeeDate: new Map(),
+      employeeDistinctObjectKeys: new Map(),
+      legacyBlockedDays: new Map(),
+      rawFallbackSummaries,
+    };
   }
 
   const objectAdjustments = adjustments

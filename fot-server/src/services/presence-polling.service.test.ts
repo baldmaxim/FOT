@@ -640,13 +640,25 @@ describe('presence-polling.service', () => {
 
     await pollEventsOnce(now);
 
-    expect(mockedState.supabaseMock.rpc).not.toHaveBeenCalled();
+    // Realtime НЕ должен срабатывать, если все события — дубликаты (presenceChanged=false,
+    // totalInserted=0). Клиентам refetch-ить нечего: ни одного нового прохода в БД.
     expect(mockedState.ioMock.emit).not.toHaveBeenCalled();
+
+    // Recalc RPC при этом вызывается — это страховка от Bug A: если предыдущий тик упал
+    // на recalc после успешного upsert, текущий тик увидит события дубликатами и должен
+    // повторить пересчёт. RPC идемпотентна, лишний вызов безопасен.
+    expect(mockedState.supabaseMock.rpc).toHaveBeenCalledWith(
+      'batch_recalculate_skud_daily_summary',
+      expect.objectContaining({
+        p_pairs: expect.arrayContaining([
+          expect.objectContaining({ emp_id: 1, date: '2026-03-27' }),
+        ]),
+      }),
+    );
     expect(mockedState.sigurMonitorMock.recordSigurMonitorSuccess).toHaveBeenCalledWith(expect.objectContaining({
       meta: expect.objectContaining({
         inserted: 0,
         duplicates: 1,
-        summaries: 0,
       }),
     }));
   });

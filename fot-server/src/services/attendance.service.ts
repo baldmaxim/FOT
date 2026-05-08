@@ -410,13 +410,18 @@ export async function buildAttendanceEntries(params: {
     getTravelHoursSummaryForRange({ employeeIds, startDate, endDate }),
   ]);
 
-  const objectAttendanceData = includeObjectDetails
+  // Всегда строим rawFallbackSummaries — они нужны fallback-пути для дней без skud_daily_summary
+  // (см. цикл по employees ниже, ветка needsSkudCheck → rawSummary). Object-агрегация выполняется
+  // только в режиме «По объектам». До фикса fallback гасился вместе с object-блоком, и день с
+  // событиями, но без summary, рендерился как «Н».
+  const objectAttendanceData = employeeIds.length > 0
     ? await buildObjectAttendanceData({
       employeeIds,
       startDate,
       endDate,
       todayStr,
       adjustments,
+      includeObjectDetails,
     })
     : createEmptyObjectAttendanceData();
   const objectAdjustmentTotals = includeObjectDetails

@@ -350,6 +350,63 @@ describe('attendance.service', () => {
     expect(result.skudMap.get(1)?.get('2026-04-01')).toEqual({ hours: 8, corrected: false });
   });
 
+  it('builds a work entry from raw skud events even when includeObjectDetails is false (employees view)', async () => {
+    // Bug B: на фронте «По сотрудникам» (TimesheetPage.tsx:236) передаётся include_objects=0,
+    // что в timesheet.controller.ts:907 даёт includeObjectDetails=false. До фикса это полностью
+    // отключало rawFallbackSummaries (createEmptyObjectAttendanceData возвращал пустой Map),
+    // и день без skud_daily_summary рендерился как «Н» даже при наличии событий в skud_events.
+    // Кейс из прода: Фетисова А.А. (id=2502), 2026-05-04, summary отсутствует из-за пропуска
+    // recalc-RPC в presence-polling после транзиентного фейла.
+    mockedState.needsSkudCheck = true;
+
+    mockedState.resolver = (query) => {
+      if (
+        query.table === 'skud_daily_summary'
+        || query.table === 'attendance_adjustments'
+        || query.table === 'user_profiles'
+        || query.table === 'employees'
+      ) {
+        return { data: [], error: null };
+      }
+
+      throw new Error(`Unexpected query for table ${query.table}`);
+    };
+
+    mockedState.objectAttendanceData.rawFallbackSummaries = new Map([
+      [2502, new Map([['2026-05-04', {
+        employee_id: 2502,
+        date: '2026-05-04',
+        first_entry: '08:25:44',
+        last_exit: '17:42:27',
+        total_hours: 9.28,
+        total_minutes: 557,
+      }]])],
+    ]);
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 2502, full_name: 'Фетисова Александра Александровна' }],
+      startDate: '2026-05-04',
+      endDate: '2026-05-04',
+      dailySchedulesMap: new Map([
+        [2502, new Map([['2026-05-04', { lunch_minutes: 70, work_hours: 7.83 } as IResolvedSchedule]])],
+      ]),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 19 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-05-08',
+      includeObjectDetails: false,
+    });
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      employee_id: 2502,
+      work_date: '2026-05-04',
+      status: 'work',
+      first_entry: '08:25:44',
+      last_exit: '17:42:27',
+      is_correction: false,
+    });
+    expect(result.entries[0].hours_worked).toBeGreaterThan(0);
+  });
+
   it('marks a scheduled skud day as absent when both summary and raw events are missing', async () => {
     mockedState.needsSkudCheck = true;
 

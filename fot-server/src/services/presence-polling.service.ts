@@ -41,9 +41,15 @@ const POLL_IDLE_INTERVAL_MS = 30_000;
 const POLL_IDLE_THRESHOLD = 5;
 const EMPLOYEE_CACHE_TTL = 10 * 60_000;
 const BATCH_SIZE = 200;
-const BATCH_DELAY_MS = 150;
+const BATCH_DELAY_MS = 75;
 const SUMMARY_BATCH = 100;
-const SUMMARY_DELAY_MS = 200;
+const SUMMARY_DELAY_MS = 100;
+const BATCH_CONCURRENCY = 2;
+// Останавливаем обработку батчей в цикле, если он перешёл этот порог: дальнейшие
+// UPSERT-вызовы продолжают занимать connection slots Supabase и блокируют UI-запросы
+// (selector отделов на /timesheet, /api/skud/presence). Partial checkpoint логика
+// уже умеет завершить цикл с lastSuccessfulEventAt и доделать остаток на следующем тике.
+const CYCLE_TIME_BUDGET_MS = 8_000;
 const RETRY_BACKOFF_MS = [400, 1200];
 export const POLL_OVERLAP_MS = 2 * 60_000;
 const POLL_MAX_WINDOW_MS = 10 * 60_000;
@@ -590,13 +596,18 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     const insertedEmployeeIds = new Set<number>();
     const persistenceErrors: string[] = [];
     let lastSuccessfulEventAt: Date | null = null;
+    let cycleBudgetExceeded = false;
+    let insertGroupCount = 0;
     const tInsertStart = Date.now();
-    for (let i = 0; i < inserts.length; i += BATCH_SIZE) {
-      const batch = inserts.slice(i, i + BATCH_SIZE);
-      let batchError: string | null = null;
+    type BatchOutcome = {
+      insertedCount: number;
+      batchError: string | null;
+    };
+    // Первичная попытка + повторы при transient-ошибках Supabase (statement timeout / 502 / 504).
+    // Без retry единичный таймаут блокировал весь цикл и не давал двигать checkpoint.
+    const upsertBatchWithRetry = async (batch: typeof inserts): Promise<BatchOutcome> => {
       let attempt = 0;
-      // Первичная попытка + повторы при transient-ошибках Supabase (statement timeout / 502 / 504).
-      // Без retry единичный таймаут блокировал весь цикл и не давал двигать checkpoint.
+      let lastError: string | null = null;
       while (attempt <= RETRY_BACKOFF_MS.length) {
         const { data: insertedRows, error } = await supabase
           .from('skud_events')
@@ -604,73 +615,148 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
           .select('employee_id,event_date');
         if (!error) {
           const rows = Array.isArray(insertedRows) ? insertedRows : [];
-          totalInserted += rows.length;
-          for (const row of rows as Array<{ employee_id: number | null; event_date: string | null }>) {
-            if (row.employee_id == null || !row.event_date) continue;
-            insertedSummaryKeys.add(`${row.employee_id}:${row.event_date}`);
-            insertedEmployeeIds.add(Number(row.employee_id));
-          }
-          for (const row of batch) {
-            const t = Date.parse(row.event_at);
-            if (!Number.isNaN(t) && (!lastSuccessfulEventAt || t > lastSuccessfulEventAt.getTime())) {
-              lastSuccessfulEventAt = new Date(t);
-            }
-          }
-          batchError = null;
-          break;
+          return { insertedCount: rows.length, batchError: null };
         }
-        batchError = error.message;
+        lastError = error.message;
         if (!isTransientDbError(error.message) || attempt === RETRY_BACKOFF_MS.length) break;
         const jitter = Math.floor(Math.random() * 200);
         await wait(RETRY_BACKOFF_MS[attempt] + jitter);
         attempt++;
       }
-      if (batchError) {
-        console.error(`[presence-polling] insert error (batch ${i}/${inserts.length}):`, batchError);
-        persistenceErrors.push(batchError);
+      return { insertedCount: 0, batchError: lastError ?? 'unknown error' };
+    };
+    outer: for (let i = 0; i < inserts.length; i += BATCH_SIZE * BATCH_CONCURRENCY) {
+      const groupBatches: Array<typeof inserts> = [];
+      for (let j = 0; j < BATCH_CONCURRENCY; j++) {
+        const start = i + j * BATCH_SIZE;
+        if (start >= inserts.length) break;
+        groupBatches.push(inserts.slice(start, start + BATCH_SIZE));
+      }
+      insertGroupCount++;
+      // Параллельный запуск пары UPSERT-батчей: вместо последовательной цепочки
+      // (6 батчей × tInsertOne) занимаем 2 connection slots на длительность одной
+      // пары — wall-time цикла снижается ~2×, UI-запросы (selector отделов на
+      // /timesheet, /api/skud/presence) перестают повисать в очереди connection pool.
+      const settled = await Promise.allSettled(groupBatches.map(upsertBatchWithRetry));
+      let groupHadError = false;
+      for (let k = 0; k < settled.length; k++) {
+        const result = settled[k];
+        const startIdx = i + k * BATCH_SIZE;
+        const batch = groupBatches[k];
+        if (result.status === 'rejected') {
+          const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+          console.error(`[presence-polling] insert rejected (batch ${startIdx}/${inserts.length}):`, reason);
+          persistenceErrors.push(reason);
+          groupHadError = true;
+          continue;
+        }
+        const { insertedCount, batchError } = result.value;
+        if (batchError) {
+          console.error(`[presence-polling] insert error (batch ${startIdx}/${inserts.length}):`, batchError);
+          persistenceErrors.push(batchError);
+          groupHadError = true;
+          continue;
+        }
+        totalInserted += insertedCount;
+        // Recalc-ключи берём из ИСХОДНОГО batch, а не из insertedRows: при ignoreDuplicates=true
+        // Supabase возвращает только новые строки, и если предыдущий тик упал на recalc-RPC после
+        // успешного upsert — повторный тик увидит события дубликатами и пересчёт summary никогда
+        // больше не запустится. RPC batch_recalculate_skud_daily_summary идемпотентна (full
+        // recompute из событий + ON CONFLICT UPDATE), лишний пересчёт безопасен.
+        for (const row of batch) {
+          const empId = (row as { employee_id?: number | null }).employee_id;
+          const date = (row as { event_date?: string | null }).event_date;
+          if (empId != null && date) {
+            insertedSummaryKeys.add(`${empId}:${date}`);
+            insertedEmployeeIds.add(Number(empId));
+          }
+
+          // checkpoint двигаем по ВСЕМ строкам успешного batch (включая unmatched/без employee_id),
+          // иначе после fail-ed tail-batch checkpoint не уйдёт вперёд и polling зациклится.
+          const t = Date.parse(row.event_at);
+          if (!Number.isNaN(t) && (!lastSuccessfulEventAt || t > lastSuccessfulEventAt.getTime())) {
+            lastSuccessfulEventAt = new Date(t);
+          }
+        }
+      }
+      if (groupHadError) {
         // Останавливаем цикл вставок: следующие батчи скорее всего тоже упадут, лучше
         // финализировать с partial checkpoint и попробовать на следующем тике.
-        break;
+        break outer;
       }
-      if (i + BATCH_SIZE < inserts.length) await wait(BATCH_DELAY_MS);
+      if (Date.now() - cycleStartedAt > CYCLE_TIME_BUDGET_MS) {
+        cycleBudgetExceeded = true;
+        persistenceErrors.push('cycle time budget exceeded during inserts');
+        break outer;
+      }
+      if (i + BATCH_SIZE * BATCH_CONCURRENCY < inserts.length) await wait(BATCH_DELAY_MS);
     }
     const tInsert = Date.now() - tInsertStart;
 
     let tSummary = 0;
     let summaryError: string | null = null;
+    let summaryGroupCount = 0;
     if (insertedSummaryKeys.size > 0) {
       const tSummaryStart = Date.now();
       const allPairs = [...insertedSummaryKeys].map(key => {
         const [empId, date] = key.split(':');
         return { emp_id: parseInt(empId, 10), date };
       });
-      for (let i = 0; i < allPairs.length; i += SUMMARY_BATCH) {
-        const chunk = allPairs.slice(i, i + SUMMARY_BATCH);
-        let chunkError: string | null = null;
+      const recalcChunkWithRetry = async (chunk: typeof allPairs): Promise<string | null> => {
         let attempt = 0;
+        let lastError: string | null = null;
         while (attempt <= RETRY_BACKOFF_MS.length) {
           const { error } = await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: chunk });
-          if (!error) {
-            chunkError = null;
-            break;
-          }
-          chunkError = error.message;
+          if (!error) return null;
+          lastError = error.message;
           if (!isTransientDbError(error.message) || attempt === RETRY_BACKOFF_MS.length) break;
           await wait(RETRY_BACKOFF_MS[attempt] + Math.floor(Math.random() * 200));
           attempt++;
         }
-        if (chunkError) {
-          console.error(`[presence-polling] summary recalc error (chunk ${i}/${allPairs.length}):`, chunkError);
-          summaryError = chunkError;
-          break;
+        return lastError ?? 'unknown error';
+      };
+      summaryOuter: for (let i = 0; i < allPairs.length; i += SUMMARY_BATCH * BATCH_CONCURRENCY) {
+        const groupChunks: Array<typeof allPairs> = [];
+        for (let j = 0; j < BATCH_CONCURRENCY; j++) {
+          const start = i + j * SUMMARY_BATCH;
+          if (start >= allPairs.length) break;
+          groupChunks.push(allPairs.slice(start, start + SUMMARY_BATCH));
         }
-        if (i + SUMMARY_BATCH < allPairs.length) await wait(SUMMARY_DELAY_MS);
+        summaryGroupCount++;
+        // Параллельный запуск пары RPC summary-recalc: пары (emp_id, date) независимы,
+        // RPC идемпотентна. Снижает wall-time summary stage примерно в 2 раза.
+        const settled = await Promise.allSettled(groupChunks.map(recalcChunkWithRetry));
+        for (let k = 0; k < settled.length; k++) {
+          const result = settled[k];
+          const startIdx = i + k * SUMMARY_BATCH;
+          if (result.status === 'rejected') {
+            const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+            console.error(`[presence-polling] summary recalc rejected (chunk ${startIdx}/${allPairs.length}):`, reason);
+            summaryError = reason;
+            break summaryOuter;
+          }
+          if (result.value) {
+            console.error(`[presence-polling] summary recalc error (chunk ${startIdx}/${allPairs.length}):`, result.value);
+            summaryError = result.value;
+            break summaryOuter;
+          }
+        }
+        if (Date.now() - cycleStartedAt > CYCLE_TIME_BUDGET_MS) {
+          cycleBudgetExceeded = true;
+          summaryError = summaryError ?? 'cycle time budget exceeded during summary';
+          break summaryOuter;
+        }
+        if (i + SUMMARY_BATCH * BATCH_CONCURRENCY < allPairs.length) await wait(SUMMARY_DELAY_MS);
       }
       tSummary = Date.now() - tSummaryStart;
     }
 
     const hadFailure = persistenceErrors.length > 0 || summaryError !== null;
-    const presenceChanged = totalInserted > 0 || insertedSummaryKeys.size > 0;
+    // Realtime-уведомление шлём только при РЕАЛЬНЫХ вставках (totalInserted из rows). Если все
+    // события — дубликаты, recalc summary мы всё равно прогнали (страхует от потери summary при
+    // упавшем recalc предыдущего тика, см. комментарий выше у insertedSummaryKeys), но клиентам
+    // refetch-ить нечего: ни одного нового прохода в БД не появилось.
+    const presenceChanged = totalInserted > 0;
     const cycleFinishedAt = new Date();
 
     // После успешного цикла сбрасываем кэши presence/dashboard, чтобы пользователи
@@ -721,6 +807,10 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       checkpointLagMs: Math.max(0, now.getTime() - window.endAt.getTime()),
       persistenceErrors: persistenceErrors.length,
       summaryError,
+      cycleBudgetExceeded,
+      insertGroupCount,
+      summaryGroupCount,
+      batchConcurrency: BATCH_CONCURRENCY,
       timings,
     };
 

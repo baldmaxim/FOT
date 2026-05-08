@@ -9,6 +9,7 @@ import { startPresencePolling } from './services/presence-polling.service.js';
 import { startSigurMonitor } from './services/sigur-monitor.service.js';
 import { startStructureSyncScheduler } from './services/sigur-structure-scheduler.service.js';
 import { startSigurEventsDailyScheduler } from './services/sigur-events-daily-scheduler.service.js';
+import { startSkudSummaryReconcileScheduler } from './services/skud-summary-reconcile.service.js';
 import { startTimesheetReminderScheduler } from './services/timesheet-reminder.service.js';
 import { startPatentExpiryReminderScheduler } from './services/patent-expiry-reminder.service.js';
 import { startDailyTasksReminderScheduler } from './services/daily-tasks-reminder.service.js';
@@ -43,6 +44,7 @@ httpServer.listen(PORT, HOST, () => {
   void startSigurMonitor();
   void startStructureSyncScheduler();
   void startSigurEventsDailyScheduler();
+  startSkudSummaryReconcileScheduler();
   startTimesheetReminderScheduler();
   startPatentExpiryReminderScheduler();
   startDailyTasksReminderScheduler();

@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Архитектура
 
-Монорепо с двумя частями:
+Репо с тремя подпроектами:
 
 - **fot-app/** — React 19 + Vite + TypeScript (фронтенд)
 - **fot-server/** — Express + TypeScript (бэкенд, порт 3001)
+- **fot-data-api/** — Python/FastAPI, read-only API на порту 4001 для внешних интеграций (1С). Авторизация — Bearer-токены `fot_<prefix>_<secret>`, выдаются через админ-вкладку «API-доступ». Whitelist таблиц/полей в БД, slowapi rate-limit per-key. Детали в [API_1C.md](API_1C.md) и [fot-data-api/README.md](fot-data-api/README.md).
 
 БД: Supabase Cloud (PostgreSQL). Связь: фронтенд → REST API (`/api/...`) с JWT Bearer → бэкенд → Supabase Cloud (service role key, без RLS). Реалтайм через Socket.IO (чат, присутствие).
 
@@ -45,6 +46,15 @@ cd fot-app && npm run preview
 
 # Загрузка sourcemap бэка в Sentry (требует SENTRY_AUTH_TOKEN)
 cd fot-server && npm run sentry:sourcemaps
+
+# Аудит защиты роутов (бэкенд)
+cd fot-server && npm run audit:routes
+
+# Генерация PWA-иконок (фронтенд)
+cd fot-app && npm run icons:generate
+
+# Data API (отдельный подпроект, Python)
+cd fot-data-api && uvicorn app.main:app --reload --port 4001
 ```
 
 При изменении файлов в `fot-server/src/` — перезапустить сервер. Фронтенд перезапускать не нужно.
@@ -52,9 +62,10 @@ cd fot-server && npm run sentry:sourcemaps
 ## Ключевые паттерны
 
 - **Авторизация**: JWT + 2FA (TOTP). Роли через `position_type` + `system_role_id` (таблица `system_roles`). Проверка в middleware (`auth.ts`), на фронте — `<ProtectedRoute>`. Иерархия ролей через `level` из `system_roles`.
+- **Скоуп админа**: `system_admin` видит все компании; `admin` (компанийный) — только корни Sigur, привязанные через таблицу `user_company_access` (миграция 083). Резолвинг скоупа в `data-scope.service.ts` + RPC `get_descendant_department_ids(uuid[])`.
 - **ФИО сотрудников**: хранятся plain-text (`full_name`, `last_name`, `first_name`, `middle_name`). `encryption.service.ts` используется только для TOTP и чата, не для ФИО.
 - **Supabase**: используется service role key (RLS отключён), авторизация проверяется в middleware бэкенда. Фронтенд к PostgREST напрямую не обращается.
-- **API роуты**: все под префиксом `/api/` — auth, employees, admin, skud, sigur, structure, timesheet, audit, chat, push, leave-requests, documents, payslips, payments, production-calendar, timesheet-approvals, schedules, roles, salary-raise, settings, notifications, work-categories, official-memos, admin-data-api, correction-approval, patent-receipts.
+- **API роуты**: все под префиксом `/api/` — auth, employees, admin, skud, sigur, structure, timesheet, audit, chat, push, leave-requests, documents, payslips, payments, production-calendar, timesheet-approvals, schedules, roles, salary-raise, settings, notifications, work-categories, official-memos, admin-data-api, correction-approvals, patent-receipts, daily-tasks, direct-reports.
 - **Фронтенд роуты**: по ролям — `worker` видит `/employee/*`, `header`+ видит `/dashboard`, `admin`+ видит `/employees`, `super_admin` видит `/skud-settings`, `/admin/*`.
 
 ## Структура бэкенда
@@ -63,19 +74,20 @@ cd fot-server && npm run sentry:sourcemaps
 - **Сервисы** (`fot-server/src/services/`): `sigur-sync-*` (employees, events, structure, shared), `skud-*` (backfill, dashboard, discipline, import, presence, shared), `employee-mapper.service.ts` (кэш структуры + маппинг полей).
 - **Конфиг** (`fot-server/src/config/`): `database.ts` (Supabase service-role клиент), `env.ts`, `features.ts` (`LOGIN_2FA_ENABLED`, `CRITICAL_2FA_ENABLED`, `IS_PRODUCTION`), `access-control.ts`.
 - **Типы Express**: `fot-server/src/types/express.d.ts` — расширение `req.user` с типизацией.
-- **Middleware**: `auth.ts`, `rateLimit.ts` (`apiLimiter` 500/15мин, `authLimiter` 10/15мин, `twoFactorLimiter` 5/5мин, `importLimiter` 5/1ч; в dev лимиты выше), `cacheResponse.ts` — LRU-кеш JSON-ответов (max 200, настраиваемый TTL/key).
+- **Middleware**: `auth.ts`, `rateLimit.ts` (`apiLimiter` 500/15мин, `authLimiter` 10/15мин, `twoFactorLimiter` 5/5мин, `importLimiter` 5/1ч; в dev лимиты выше), `cacheResponse.ts` — LRU-кеш JSON-ответов (max 200, настраиваемый TTL/key), `noStore` (отключение кэша на чувствительных эндпоинтах), `skipCacheForToday` (инвалидация дневного кэша), `serverTiming` (Server-Timing header).
 - **Загрузка файлов**: multer в `memoryStorage` (используется в `admin.routes.ts`, `employees.routes.ts`).
 - **Утилитные скрипты** (`fot-server/scripts/`): миграционные/back-fill таски (backfill-dedup-hash, backfill-employee-ids и т.п.), запуск через `npx tsx`.
 
 ## Фоновые сервисы
 
-Запускаются в `src/index.ts` при старте сервера (lines 36–44):
-- **presence-polling**: опрос СКУД-событий каждые 60 сек, кэш сотрудников с TTL 10 мин, дедупликация, lock для синхронизации.
+Запускаются в `src/index.ts` при старте сервера:
+- **presence-polling**: incremental polling СКУД-событий по `lastId` (cursor-based seek), adaptive interval — 60 сек при активности, 30 сек idle после 5 пустых тиков подряд. Дифференцированные TTL кэшей (employees 5 мин, departments 60 мин, access points/rules 1–4 ч). Дедупликация по UNIQUE `(dedup_hash, event_date)`. См. коммит 895a196.
 - **sigur-monitor**: непрерывный мониторинг изменений структуры Sigur.
-- **sigur-structure-scheduler**: синхронизация отделов/должностей/сотрудников из Sigur каждый час, задержка 30 сек при старте.
+- **sigur-structure-scheduler**: синхронизация отделов/должностей/сотрудников из Sigur (по умолчанию каждые 2 ч), задержка 30 сек при старте.
 - **sigur-events-daily-scheduler**: ежедневная подгрузка СКУД-событий.
 - **timesheet-reminder**: напоминания о незакрытых табелях.
 - **patent-expiry-reminder**: уведомления об истечении патентов.
+- **daily-tasks-reminder**: напоминания о суточных задачах. Тик каждые 5 мин, активная отправка 16:50–17:00 МСК.
 - **ai-receipt-recognition**: возобновление очереди распознавания чеков при старте.
 
 ## Socket.IO
@@ -111,7 +123,7 @@ cd fot-server && npm run sentry:sourcemaps
 
 ## Валидация
 
-- **Zod** используется и на фронте (v4.x), и на бэкенде (v3.x) — API разный, учитывать при написании схем.
+- **Zod** используется только на бэкенде (v3.x). На фронте zod не подключён — валидация выполняется в API-слое сервера.
 
 ## Общие правила
 
@@ -168,9 +180,10 @@ CSS media queries для всех целевых устройств.
 ## Документация
 
 - `DEPLOY.md` — инструкции по деплою на прод (PM2, nginx, Ubuntu)
+- `API_1C.md` — публичный read-only API для 1С (Bearer-токены, whitelist таблиц/полей)
 - `docs/` — 2FA, шифрование, миграции БД, Sigur API, бэклог
 - `docs/migrations/` — SQL-миграции (нумерованы 001–...), применяются вручную через `psql` на сервере (авто-миграций нет)
-- `scripts/deploy-frontend.sh` — атомарный деплой фронта (билд локально + tar-pipe в `/var/www/fot/fot-app/dist`)
+- `scripts/` — `deploy-frontend.sh`, `deploy-backend.sh`, `deploy-both.sh` (атомарные деплои на прод; билд локально + tar-pipe)
 
 ## КРАТКОСТЬ
 
