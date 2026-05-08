@@ -1,6 +1,6 @@
 import { type FC, Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRightLeft, ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, UserPlus, Mail } from 'lucide-react';
+import { AlertTriangle, ArrowRightLeft, ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, UserPlus, Mail } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { TimesheetCorrectionsList } from '../../components/timesheet/TimesheetCorrectionsList';
@@ -1328,6 +1328,9 @@ export const TimesheetPage: FC = () => {
         <>
           <button type="button" className="ts-dept-btn" onClick={() => setDeptOpen(!deptOpen)}>
             {selectedDeptName}
+            {structureQuery.isError && filteredDepts.length > 0 && (
+              <AlertTriangle size={12} aria-label="Данные могут быть устаревшими" />
+            )}
             <ChevronDown size={16} />
           </button>
           {deptOpen && (
@@ -1339,6 +1342,18 @@ export const TimesheetPage: FC = () => {
                 onChange={e => setDeptSearch(e.target.value)}
                 autoFocus
               />
+              {structureQuery.isError && filteredDepts.length > 0 && (
+                <div className="ts-dept-item ts-dept-item--muted">
+                  Показаны последние данные.
+                  <button
+                    type="button"
+                    className="ts-dept-retry"
+                    onClick={() => { void structureQuery.refetch(); }}
+                  >
+                    Обновить
+                  </button>
+                </div>
+              )}
               {!isTimesheetDepartmentScope && (
                 <div
                   className={`ts-dept-item ${!selectedDeptId ? 'ts-dept-item--active' : ''}`}
@@ -1362,6 +1377,21 @@ export const TimesheetPage: FC = () => {
                     {d.name}
                   </div>
                 )
+              )}
+              {structureQuery.isPending && filteredDepts.length === 0 && (
+                <div className="ts-dept-item ts-dept-item--muted">Загрузка отделов...</div>
+              )}
+              {structureQuery.isError && filteredDepts.length === 0 && (
+                <div className="ts-dept-item ts-dept-item--muted">
+                  Не удалось загрузить.
+                  <button
+                    type="button"
+                    className="ts-dept-retry"
+                    onClick={() => { void structureQuery.refetch(); }}
+                  >
+                    Повторить
+                  </button>
+                </div>
               )}
             </div>
           )}

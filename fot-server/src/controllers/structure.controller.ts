@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import * as Sentry from '@sentry/node';
 import { supabase } from '../config/database.js';
 import { auditService } from '../services/audit.service.js';
 import { getKnownArchiveDepartment, isProtectedArchiveDepartment } from '../services/employee-archive-department.service.js';
@@ -50,13 +51,19 @@ function buildDepartmentTree(
   allDepts: OrgDepartment[],
   parentId: string | null,
 ): OrgDepartmentNode[] {
-  return allDepts
-    .filter(department => department.parent_id === parentId)
-    .sort((left, right) => left.sort_order - right.sort_order)
-    .map(department => ({
-      ...department,
-      children: buildDepartmentTree(allDepts, department.id),
-    }));
+  // O(N) построение через индекс parent_id → children. Раньше .filter() на каждом узле
+  // давал O(N²) и заметно тяжелел при ~1000+ отделов под пиковой нагрузкой.
+  const childrenByParent = buildChildrenMap(allDepts);
+  const recurse = (currentParentId: string | null): OrgDepartmentNode[] => {
+    const direct = childrenByParent.get(currentParentId) ?? [];
+    return [...direct]
+      .sort((left, right) => left.sort_order - right.sort_order)
+      .map(department => ({
+        ...department,
+        children: recurse(department.id),
+      }));
+  };
+  return recurse(parentId);
 }
 
 async function loadAllActiveDepartments(): Promise<OrgDepartment[]> {
@@ -219,28 +226,50 @@ function getMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-export const structureController = {
-  async getTree(req: AuthenticatedRequest, res: Response): Promise<void> {
-    try {
-      const [departments, archiveDepartment, scope] = await Promise.all([
-        loadAllActiveDepartments(),
-        getKnownArchiveDepartment(),
-        loadAccessibleDeptSet(req),
-      ]);
-      const fullTree = buildDepartmentTree(departments, null);
-      const departmentTree = filterTreeByScope(fullTree, scope);
+/**
+ * Загрузка тела ответа /api/structure без res. Используется как:
+ * 1) основной путь в getTree;
+ * 2) refresh-функция для SWR-кеша structureTreeCache (отдаёт stale, в фоне обновляет).
+ */
+async function loadTreeForCache(req: AuthenticatedRequest): Promise<object> {
+  const [departments, archiveDepartment, scope] = await Promise.all([
+    loadAllActiveDepartments(),
+    getKnownArchiveDepartment(),
+    loadAccessibleDeptSet(req),
+  ]);
+  const fullTree = buildDepartmentTree(departments, null);
+  const departmentTree = filterTreeByScope(fullTree, scope);
 
+  return {
+    success: true,
+    data: {
+      departments: departmentTree,
+      stats: {
+        departments: departments.length,
+        archive_department_id: archiveDepartment?.id || null,
+      },
+    },
+  };
+}
+
+export const structureController = {
+  loadTreeForCache,
+
+  async getTree(req: AuthenticatedRequest, res: Response): Promise<void> {
+    const tStart = Date.now();
+    try {
+      const body = await loadTreeForCache(req);
+      const totalMs = Date.now() - tStart;
+      if (totalMs > 2000) {
+        Sentry.captureMessage('slow_endpoint', {
+          level: 'warning',
+          tags: { endpoint: 'structure' },
+          extra: { totalMs },
+        });
+      }
       res.setHeader('Cache-Control', 'private, max-age=120');
-      res.json({
-        success: true,
-        data: {
-          departments: departmentTree,
-          stats: {
-            departments: departments.length,
-            archive_department_id: archiveDepartment?.id || null,
-          },
-        },
-      });
+      res.setHeader('Server-Timing', `structure_load;dur=${totalMs}`);
+      res.json(body);
     } catch (error) {
       console.error('Get structure error:', error);
       res.status(500).json({ success: false, error: 'Ошибка получения структуры' });

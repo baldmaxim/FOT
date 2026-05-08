@@ -156,7 +156,7 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
   const [error, setError] = useState<string | null>(null);
 
   const { profile } = useAuth();
-  const { data: structure, isLoading } = useStructureTree();
+  const { data: structure, isLoading, isError, refetch } = useStructureTree();
   const departments = structure?.departments ?? EMPTY_DEPARTMENTS;
   const { data: approvedList } = useTimesheetApprovalReviewList('approved');
   const approvedDeptIds = useMemo(() => {
@@ -378,8 +378,31 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
       </div>
 
       <div className="mte-tree-container">
-        {isLoading ? (
+        {isError && filteredDepts.length > 0 && (
+          <div className="mte-loading">
+            Показаны последние данные.{' '}
+            <button
+              type="button"
+              onClick={() => { void refetch(); }}
+              style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+            >
+              Обновить
+            </button>
+          </div>
+        )}
+        {isLoading && departments.length === 0 ? (
           <div className="mte-loading">Загрузка отделов...</div>
+        ) : isError && departments.length === 0 ? (
+          <div className="mte-empty">
+            Не удалось загрузить отделы.{' '}
+            <button
+              type="button"
+              onClick={() => { void refetch(); }}
+              style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+            >
+              Повторить
+            </button>
+          </div>
         ) : filteredDepts.length === 0 ? (
           <div className="mte-empty">Отделы не найдены</div>
         ) : (

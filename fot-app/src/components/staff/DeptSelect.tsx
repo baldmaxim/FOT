@@ -1,14 +1,17 @@
 import { useState, useEffect, useMemo, useRef, useCallback, memo, type FC } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { AlertTriangle, ChevronDown } from 'lucide-react';
 import type { IFlatDepartmentOption } from '../../utils/departmentUtils';
 
 interface IDeptSelectProps {
   departments: IFlatDepartmentOption[];
   value: string;
   onChange: (id: string) => void;
+  isLoading?: boolean;
+  isError?: boolean;
+  onRetry?: () => void;
 }
 
-export const DeptSelect: FC<IDeptSelectProps> = memo(({ departments, value, onChange }) => {
+export const DeptSelect: FC<IDeptSelectProps> = memo(({ departments, value, onChange, isLoading = false, isError = false, onRetry }) => {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const ref = useRef<HTMLDivElement>(null);
@@ -41,10 +44,17 @@ export const DeptSelect: FC<IDeptSelectProps> = memo(({ departments, value, onCh
     setQ('');
   }, []);
 
+  const showStaleBadge = isError && departments.length > 0;
+  const showLoadingState = isLoading && departments.length === 0;
+  const showErrorState = isError && departments.length === 0;
+
   return (
     <div className="sc-dept-select" ref={ref}>
       <button className="sc-dept-trigger" onClick={toggle}>
         <span className="sc-dept-trigger-text">{selected ? selected.name : 'Все отделы'}</span>
+        {showStaleBadge && (
+          <AlertTriangle size={12} aria-label="Данные могут быть устаревшими" />
+        )}
         <ChevronDown size={14} />
       </button>
       {open && (
@@ -57,6 +67,16 @@ export const DeptSelect: FC<IDeptSelectProps> = memo(({ departments, value, onCh
             autoFocus
           />
           <div className="sc-dept-list">
+            {showStaleBadge && (
+              <div className="sc-dept-stale-banner">
+                Показаны последние данные.
+                {onRetry && (
+                  <button type="button" className="sc-dept-retry" onClick={onRetry}>
+                    Обновить
+                  </button>
+                )}
+              </div>
+            )}
             <div className={`sc-dept-option ${!value ? 'active' : ''}`} onClick={() => pick('')}>
               Все отделы
             </div>
@@ -76,7 +96,20 @@ export const DeptSelect: FC<IDeptSelectProps> = memo(({ departments, value, onCh
                 </div>
               )
             ))}
-            {filtered.length === 0 && <div className="sc-dept-empty">Не найдено</div>}
+            {showLoadingState && <div className="sc-dept-empty">Загрузка отделов...</div>}
+            {showErrorState && (
+              <div className="sc-dept-empty">
+                Не удалось загрузить.
+                {onRetry && (
+                  <button type="button" className="sc-dept-retry" onClick={onRetry}>
+                    Повторить
+                  </button>
+                )}
+              </div>
+            )}
+            {!showLoadingState && !showErrorState && filtered.length === 0 && (
+              <div className="sc-dept-empty">Не найдено</div>
+            )}
           </div>
         </div>
       )}

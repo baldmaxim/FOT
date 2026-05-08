@@ -33,6 +33,12 @@ const queryClient = new QueryClient({
   },
 });
 
+if (import.meta.env.DEV) {
+  // DEV-only хук для отладки кеша React Query из консоли:
+  // window.__qc__.removeQueries({ queryKey: ['structure', 'tree'] }) — симулировать cold cache miss.
+  (window as Window & { __qc__?: QueryClient }).__qc__ = queryClient;
+}
+
 // Auth pages
 const LoginPage = lazy(() => import('./pages/auth/LoginPage').then(m => ({ default: m.LoginPage })));
 const RegisterPage = lazy(() => import('./pages/auth/RegisterPage').then(m => ({ default: m.RegisterPage })));

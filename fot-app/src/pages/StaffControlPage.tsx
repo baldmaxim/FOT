@@ -1600,6 +1600,9 @@ export const StaffControlPage: FC = () => {
           departments={allDepts}
           value={deptId}
           onChange={handleDeptChange}
+          isLoading={structureTree.isPending}
+          isError={structureTree.isError}
+          onRetry={() => { void structureTree.refetch(); }}
         />
       )}
       <div className="sc-filter-search">

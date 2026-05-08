@@ -71,7 +71,7 @@ vi.mock('./department-access.service.js', () => ({
   loadEmployeeAccessMap: vi.fn().mockResolvedValue(new Map()),
 }));
 
-import { resolveAccessibleDepartmentIds, resolveCompanyScope } from './data-scope.service.js';
+import { invalidateAccessibleScopeCache, resolveAccessibleDepartmentIds, resolveCompanyScope } from './data-scope.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 function buildReq(overrides: Partial<AuthenticatedRequest['user']> = {}): AuthenticatedRequest {
@@ -97,6 +97,7 @@ function buildReq(overrides: Partial<AuthenticatedRequest['user']> = {}): Authen
 beforeEach(() => {
   mockState.userCompanyAccess = [];
   mockState.rpcSubtree = new Map();
+  invalidateAccessibleScopeCache();
 });
 
 describe('resolveCompanyScope', () => {

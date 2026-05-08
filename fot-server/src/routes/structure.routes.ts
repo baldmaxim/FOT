@@ -1,12 +1,26 @@
 import { Router } from 'express';
+import type { Request } from 'express';
 import { structureController } from '../controllers/structure.controller.js';
 import { authenticate, requireAdmin, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { invalidateStructureCache } from '../services/employee-mapper.service.js';
+import { invalidateAccessibleScopeCache } from '../services/data-scope.service.js';
+import type { AuthenticatedRequest } from '../types/index.js';
 
 const router = Router();
 
-const structureTreeCache = registerCache('structure:tree', () => 'structure:tree', 15 * 60_000);
+// SWR-окно 60 мин при TTL 15 мин: при истечении TTL запрос отдаёт STALE мгновенно,
+// в фоне дёргается loadTreeForCache. При сбое refresh окно продлевается на 5 мин.
+// Это ключевое лечение «бэк не успевает обрабатывать»: пользователь не ждёт Supabase.
+const structureTreeCache = registerCache(
+  'structure:tree',
+  () => 'structure:tree',
+  15 * 60_000,
+  {
+    staleMs: 60 * 60_000,
+    refresh: (req: Request) => structureController.loadTreeForCache(req as AuthenticatedRequest),
+  },
+);
 const structurePositionsCache = registerCache('structure:positions', () => 'structure:positions', 15 * 60_000);
 
 // Все роуты требуют аутентификации
@@ -20,6 +34,7 @@ router.use((req, res, next) => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
         invalidateCaches('structure:tree', 'structure:positions');
         invalidateStructureCache();
+        invalidateAccessibleScopeCache();
       }
     });
   }

@@ -578,6 +578,21 @@
   color: var(--text-tertiary);
 }
 
+.ts-dept-retry {
+  margin-left: 6px;
+  background: none;
+  border: none;
+  color: var(--primary);
+  cursor: pointer;
+  padding: 0;
+  font-size: inherit;
+  text-decoration: underline;
+}
+
+.ts-dept-retry:hover {
+  opacity: 0.8;
+}
+
 .ts-dept-item--header {
   padding: 6px 10px;
   font-size: 11px;
@@ -3239,6 +3254,71 @@
   color: var(--text-tertiary);
   font-style: italic;
   font-size: 12px;
+}
+
+/* Ошибочное событие Sigur (PASS_DENY и т.п.) — лог, не учитывается в расчётах */
+.ts-day-event-row--failure {
+  background: rgba(229, 62, 62, 0.08);
+  border-left: 3px solid #e53e3e;
+  padding-left: 6px;
+}
+.ts-day-event-failure-icon {
+  color: #e53e3e;
+}
+.ts-day-event-failure-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #fed7d7;
+  color: #c53030;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.ts-day-event-failure-reason {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-style: italic;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Те же стили в админ-таблице EmployeeSkudSection и в карточке сотрудника */
+.skud-table-row.skud-event-failure,
+.skud-event-row.skud-event-failure,
+.ec-event-row--failure {
+  background: rgba(229, 62, 62, 0.08);
+  border-left: 3px solid #e53e3e;
+}
+.skud-table-event-icon.failure,
+.skud-event-icon.failure,
+.ec-event-failure-icon {
+  color: #e53e3e;
+}
+.skud-failure-badge,
+.ec-event-failure-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #fed7d7;
+  color: #c53030;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.skud-failure-reason,
+.ec-event-failure-reason {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-style: italic;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ts-day-event-pair-duration {

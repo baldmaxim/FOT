@@ -61,4 +61,27 @@ export const useStructureRealtime = ({
       }
     };
   }, [debounceMs, enabled, queryClient]);
+
+  // Страховка от silent WS-drop: invalidate раз в 5 мин + при возврате на вкладку.
+  // Если staleTime (15 мин) ещё не истёк — invalidateQueries не делает сетевой запрос;
+  // если истёк — refetch проходит фоном с placeholderData, UI не моргает.
+  useEffect(() => {
+    if (!enabled) {
+      return undefined;
+    }
+
+    const invalidate = () => {
+      for (const queryKey of STRUCTURE_QUERY_KEYS) {
+        void queryClient.invalidateQueries({ queryKey: [...queryKey] });
+      }
+    };
+
+    const interval = setInterval(invalidate, 5 * 60_000);
+    window.addEventListener('focus', invalidate);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', invalidate);
+    };
+  }, [enabled, queryClient]);
 };

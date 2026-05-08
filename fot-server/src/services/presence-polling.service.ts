@@ -1,9 +1,10 @@
 import * as Sentry from '@sentry/node';
 import { sigurService } from './sigur.service.js';
 import { supabase } from '../config/database.js';
+import { getSupabaseInflight, withSupabaseSlot } from '../config/supabase-instrumentation.js';
 import { env } from '../config/env.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
-import { computeDedupHash } from '../utils/dedup.utils.js';
+import { computeDedupHash, computeFailureDedupHash } from '../utils/dedup.utils.js';
 import { buildMoscowEventTimestamp } from '../utils/date.utils.js';
 import { backfillUnmatchedEvents } from './skud-backfill.service.js';
 import { normalizePersonName } from './sigur-sync-shared.js';
@@ -45,6 +46,12 @@ const BATCH_DELAY_MS = 75;
 const SUMMARY_BATCH = 100;
 const SUMMARY_DELAY_MS = 100;
 const BATCH_CONCURRENCY = 2;
+// Backpressure-пороги: сравнение с инструментированным счётчиком inflight Supabase-запросов.
+// При SOFT — занижаем concurrency до 1 и ждём 200мс перед следующим батчем (даём UI пройти).
+// При HARD — ранний break outer-цикла; partial checkpoint подберёт остаток на следующем тике.
+// Поднято после инцидента «отделы пропадают на /timesheet, бэк не успевает обрабатывать».
+const SLOT_SOFT_LIMIT = 8;
+const SLOT_HARD_LIMIT = 13;
 // Останавливаем обработку батчей в цикле, если он перешёл этот порог: дальнейшие
 // UPSERT-вызовы продолжают занимать connection slots Supabase и блокируют UI-запросы
 // (selector отделов на /timesheet, /api/skud/presence). Partial checkpoint логика
@@ -458,20 +465,22 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     );
 
     const tFetchStart = Date.now();
-    const rawEvents = window.mode === 'lastId' && window.lastEventId != null
-      ? await sigurService.getEventsByLastId(window.lastEventId, 'PASS_DETECTED', connectionType)
-      : await sigurService.getEvents(window.startTime, window.endTime, connectionType, 'PASS_DETECTED');
+    const fetched = window.mode === 'lastId' && window.lastEventId != null
+      ? await sigurService.getEventsByLastIdWithFailures(window.lastEventId, connectionType)
+      : await sigurService.getEventsWithFailures(window.startTime, window.endTime, connectionType);
+    const rawEvents = fetched.pass;
+    const rawFailures = fetched.failures;
     const tFetch = Date.now() - tFetchStart;
     // Adaptive interval: считаем пустые тики, чтобы планировщик переключался на
     // idle-интервал (30с) после нескольких пустых подряд. Любая активность
-    // моментально возвращает к base-интервалу.
-    if (rawEvents.length === 0) {
+    // (включая ошибочные события) моментально возвращает к base-интервалу.
+    if (rawEvents.length === 0 && rawFailures.length === 0) {
       consecutiveEmptyTicks++;
     } else {
       consecutiveEmptyTicks = 0;
     }
     console.log(
-      `[presence-polling] fetched=${rawEvents.length} mode=${window.mode} source=${window.checkpointSource} connection=${connectionType} tFetch=${tFetch}ms`,
+      `[presence-polling] fetched=${rawEvents.length} failures=${rawFailures.length} mode=${window.mode} source=${window.checkpointSource} connection=${connectionType} tFetch=${tFetch}ms`,
     );
 
     let tEmpRefresh = 0;
@@ -538,7 +547,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         }
       }
       const mapped = mapSigurEvent(raw as Record<string, unknown>);
-      if (!mapped || !mapped.physicalPerson) continue;
+      if (!mapped || mapped.kind !== 'pass' || !mapped.physicalPerson) continue;
       const eventAt = buildMoscowEventTimestamp(mapped.eventDate, mapped.eventTime);
       const observedAt = new Date(eventAt);
       const observedMs = observedAt.getTime();
@@ -591,6 +600,82 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       }
     }
 
+    // ─── Ошибочные события Sigur (PASS_DENY и т.п.) ───
+    // Курсор lastEventId двигаем по объединённому потоку (включая failures), иначе
+    // на следующем тике мы заново выкачаем уже обработанные failures. UPSERT в
+    // отдельную таблицу: recalc-RPC и realtime-нотификации не дёргаются.
+    const failureInserts: Array<{
+      physical_person: string | null;
+      card_number: string | null;
+      event_date: string;
+      event_time: string;
+      event_at: string;
+      access_point: string | null;
+      direction: 'entry' | 'exit' | null;
+      employee_id: number | null;
+      failure_type: string;
+      failure_type_id: number | null;
+      reason: string | null;
+      raw_event_id: number | null;
+      dedup_hash: string;
+    }> = [];
+    const existingFailureSet = new Set<string>();
+    let failuresQuarantinedByDate = 0;
+    for (const raw of rawFailures) {
+      const rawId = (raw as Record<string, unknown>).id;
+      if (typeof rawId === 'number' && Number.isFinite(rawId)) {
+        if (maxObservedEventId === null || rawId > maxObservedEventId) {
+          maxObservedEventId = rawId;
+        }
+      }
+      const mapped = mapSigurEvent(raw as Record<string, unknown>);
+      if (!mapped || mapped.kind !== 'failure') continue;
+
+      const eventAt = buildMoscowEventTimestamp(mapped.eventDate, mapped.eventTime);
+      const observedAt = new Date(eventAt);
+      const observedMs = observedAt.getTime();
+      if (Number.isNaN(observedMs) || observedMs < dateGuardFloorMs || observedMs > dateGuardCeilMs) {
+        failuresQuarantinedByDate++;
+        continue;
+      }
+
+      const failureHash = computeFailureDedupHash(
+        mapped.physicalPerson,
+        mapped.cardNumber,
+        mapped.eventDate,
+        mapped.eventTime,
+        mapped.accessPoint,
+        mapped.direction,
+        mapped.failureType,
+        mapped.rawId,
+      );
+      if (existingFailureSet.has(failureHash)) continue;
+      existingFailureSet.add(failureHash);
+
+      let failureEmp: { id: number } | undefined;
+      if (mapped.employeeId != null) failureEmp = bySigurId.get(mapped.employeeId);
+      if (!failureEmp && mapped.physicalPerson) {
+        const nameKey = normalizePersonName(mapped.physicalPerson);
+        failureEmp = byUniqueName.get(nameKey) || byName.get(nameKey);
+      }
+
+      failureInserts.push({
+        physical_person: mapped.physicalPerson,
+        card_number: mapped.cardNumber,
+        event_date: mapped.eventDate,
+        event_time: mapped.eventTime,
+        event_at: eventAt,
+        access_point: mapped.accessPoint,
+        direction: mapped.direction,
+        employee_id: failureEmp?.id || null,
+        failure_type: mapped.failureType,
+        failure_type_id: mapped.failureTypeId,
+        reason: mapped.reason,
+        raw_event_id: mapped.rawId,
+        dedup_hash: failureHash,
+      });
+    }
+
     let totalInserted = 0;
     const insertedSummaryKeys = new Set<string>();
     const insertedEmployeeIds = new Set<number>();
@@ -609,10 +694,12 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       let attempt = 0;
       let lastError: string | null = null;
       while (attempt <= RETRY_BACKOFF_MS.length) {
-        const { data: insertedRows, error } = await supabase
-          .from('skud_events')
-          .upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true })
-          .select('employee_id,event_date');
+        const { data: insertedRows, error } = await withSupabaseSlot('presence_polling_upsert', async () => {
+          return await supabase
+            .from('skud_events')
+            .upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true })
+            .select('employee_id,event_date');
+        });
         if (!error) {
           const rows = Array.isArray(insertedRows) ? insertedRows : [];
           return { insertedCount: rows.length, batchError: null };
@@ -626,6 +713,18 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       return { insertedCount: 0, batchError: lastError ?? 'unknown error' };
     };
     outer: for (let i = 0; i < inserts.length; i += BATCH_SIZE * BATCH_CONCURRENCY) {
+      // Backpressure: при насыщении пула ранний break, чтобы освободить slots для UI-запросов.
+      // Шаг цикла фиксированный → не меняем concurrency на лету (иначе пропустим батчи);
+      // вместо этого тормозим следующую итерацию задержкой 200мс при SOFT.
+      const inflight = getSupabaseInflight();
+      if (inflight >= SLOT_HARD_LIMIT) {
+        cycleBudgetExceeded = true;
+        persistenceErrors.push(`backpressure: inflight=${inflight} >= hard limit ${SLOT_HARD_LIMIT}`);
+        break outer;
+      }
+      if (inflight >= SLOT_SOFT_LIMIT) {
+        await wait(200);
+      }
       const groupBatches: Array<typeof inserts> = [];
       for (let j = 0; j < BATCH_CONCURRENCY; j++) {
         const start = i + j * BATCH_SIZE;
@@ -693,6 +792,30 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     }
     const tInsert = Date.now() - tInsertStart;
 
+    // ─── UPSERT ошибочных событий ───
+    // Не двигает курсор, не вызывает recalc-RPC, не отправляет realtime-нотификации.
+    // Ошибки тут НЕ блокируют advance lastEventId: следующий тик повторно увидит
+    // те же id, UNIQUE-индекс отсеет дубли, не записанные попадут в БД.
+    let totalFailuresInserted = 0;
+    let failuresPersistenceError: string | null = null;
+    if (failureInserts.length > 0) {
+      for (let i = 0; i < failureInserts.length; i += BATCH_SIZE) {
+        const batch = failureInserts.slice(i, i + BATCH_SIZE);
+        const { error } = await withSupabaseSlot('presence_polling_upsert_failures', async () => {
+          return await supabase
+            .from('skud_event_failures')
+            .upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true });
+        });
+        if (error) {
+          failuresPersistenceError = error.message;
+          console.error(`[presence-polling] failure-upsert error (batch ${i}/${failureInserts.length}):`, error.message);
+          break;
+        }
+        totalFailuresInserted += batch.length;
+        if (i + BATCH_SIZE < failureInserts.length) await wait(BATCH_DELAY_MS);
+      }
+    }
+
     let tSummary = 0;
     let summaryError: string | null = null;
     let summaryGroupCount = 0;
@@ -706,7 +829,9 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         let attempt = 0;
         let lastError: string | null = null;
         while (attempt <= RETRY_BACKOFF_MS.length) {
-          const { error } = await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: chunk });
+          const { error } = await withSupabaseSlot('rpc_recalc_summary', async () => {
+            return await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: chunk });
+          });
           if (!error) return null;
           lastError = error.message;
           if (!isTransientDbError(error.message) || attempt === RETRY_BACKOFF_MS.length) break;
@@ -716,6 +841,16 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         return lastError ?? 'unknown error';
       };
       summaryOuter: for (let i = 0; i < allPairs.length; i += SUMMARY_BATCH * BATCH_CONCURRENCY) {
+        // Backpressure: симметрично upsert-циклу.
+        const inflight = getSupabaseInflight();
+        if (inflight >= SLOT_HARD_LIMIT) {
+          cycleBudgetExceeded = true;
+          summaryError = summaryError ?? `backpressure: inflight=${inflight} >= hard limit ${SLOT_HARD_LIMIT}`;
+          break summaryOuter;
+        }
+        if (inflight >= SLOT_SOFT_LIMIT) {
+          await wait(200);
+        }
         const groupChunks: Array<typeof allPairs> = [];
         for (let j = 0; j < BATCH_CONCURRENCY; j++) {
           const start = i + j * SUMMARY_BATCH;
@@ -796,6 +931,10 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       cycleFinishedAt: cycleFinishedAt.toISOString(),
       leaseOwner: POLLING_LEASE_OWNER,
       fetched: rawEvents.length,
+      failuresFetched: rawFailures.length,
+      failuresInserted: totalFailuresInserted,
+      failuresQuarantinedByDate,
+      failuresPersistenceError,
       attemptedInserts: inserts.length,
       inserted: totalInserted,
       duplicates: Math.max(0, inserts.length - totalInserted),
@@ -842,7 +981,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       },
     });
     console.log(
-      `[presence-polling] cycle done source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} fetched=${rawEvents.length} quarantinedByDate=${quarantinedByDate} attempted=${inserts.length} inserted=${totalInserted} duplicates=${Math.max(0, inserts.length - totalInserted)} unmatched=${storedUnmatched} summaries=${insertedSummaryKeys.size} tFetch=${tFetch}ms tEmpRefresh=${tEmpRefresh}ms tInsert=${tInsert}ms tSummary=${tSummary}ms total=${totalMs}ms${hadFailure ? ` PARTIAL_FAILURE=${failureMessage}` : ''}`,
+      `[presence-polling] cycle done source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} fetched=${rawEvents.length} failuresFetched=${rawFailures.length} failuresInserted=${totalFailuresInserted} quarantinedByDate=${quarantinedByDate} attempted=${inserts.length} inserted=${totalInserted} duplicates=${Math.max(0, inserts.length - totalInserted)} unmatched=${storedUnmatched} summaries=${insertedSummaryKeys.size} tFetch=${tFetch}ms tEmpRefresh=${tEmpRefresh}ms tInsert=${tInsert}ms tSummary=${tSummary}ms total=${totalMs}ms${hadFailure ? ` PARTIAL_FAILURE=${failureMessage}` : ''}${failuresPersistenceError ? ` FAILURES_ERROR=${failuresPersistenceError}` : ''}`,
     );
     if (quarantinedByDate > 0) {
       Sentry.captureMessage('presence-polling events quarantined by date', {

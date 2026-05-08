@@ -1,8 +1,22 @@
+import * as Sentry from '@sentry/node';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { supabase } from '../config/database.js';
+import { withSupabaseSlot } from '../config/supabase-instrumentation.js';
 import { listExplicitDepartmentIdsForUser, loadEmployeeAccessMap } from './department-access.service.js';
 
 export type DataScope = 'self' | 'department' | 'all';
+
+const SCOPE_RPC_TIMEOUT_MS = 5000;
+const SCOPE_CACHE_TTL_MS = 10 * 60_000;
+const subtreeCache = new Map<string, { ids: string[]; expiresAt: number }>();
+
+/**
+ * Сбрасывает module-кеш resolveAccessibleDepartmentIds после CRUD структуры.
+ * Вызывается из write-through хука в structure.routes.ts.
+ */
+export function invalidateAccessibleScopeCache(): void {
+  subtreeCache.clear();
+}
 
 /**
  * Скоуп компаний для админа.
@@ -63,15 +77,43 @@ export async function resolveAccessibleDepartmentIds(
     if (scope.roots.length === 0) return [];
     if (req.user.__company_subtree_ids) return req.user.__company_subtree_ids;
 
-    const { data, error } = await supabase
-      .rpc('get_descendant_department_ids', { p_root_ids: scope.roots });
+    const cacheKey = scope.roots.slice().sort().join(',');
+    const cached = subtreeCache.get(cacheKey);
+    if (cached && Date.now() <= cached.expiresAt) {
+      req.user.__company_subtree_ids = cached.ids;
+      return cached.ids;
+    }
 
-    if (error) {
-      console.error('[resolveAccessibleDepartmentIds] RPC failed', error);
+    type RpcResult = { data: { id: string }[] | null; error: { message: string } | null };
+    const rpcPromise: Promise<RpcResult> = withSupabaseSlot('get_descendant_department_ids', async () => {
+      const { data, error } = await supabase.rpc('get_descendant_department_ids', { p_root_ids: scope.roots });
+      return { data: (data ?? null) as { id: string }[] | null, error: error ? { message: error.message } : null };
+    });
+    const timeoutPromise = new Promise<RpcResult>((resolve) => {
+      setTimeout(() => resolve({ data: null, error: { message: 'rpc_timeout' } }), SCOPE_RPC_TIMEOUT_MS);
+    });
+    const result = await Promise.race([rpcPromise, timeoutPromise]);
+
+    if (result.error || !result.data) {
+      Sentry.captureMessage('rpc_timeout', {
+        level: 'warning',
+        tags: { rpc: 'get_descendant_department_ids' },
+        extra: {
+          error: result.error?.message ?? 'unknown',
+          roots: scope.roots,
+          fallback: cached ? 'stale_cache' : 'empty',
+        },
+      });
+      if (cached) {
+        // Stale-fallback: лучше отдать чуть устаревший scope, чем отрубить пользователю доступ.
+        req.user.__company_subtree_ids = cached.ids;
+        return cached.ids;
+      }
       return [];
     }
 
-    const ids = ((data || []) as { id: string }[]).map(r => r.id);
+    const ids = (result.data || []).map((r) => r.id);
+    subtreeCache.set(cacheKey, { ids, expiresAt: Date.now() + SCOPE_CACHE_TTL_MS });
     req.user.__company_subtree_ids = ids;
     return ids;
   }
