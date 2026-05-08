@@ -13,7 +13,7 @@ import { exportTimesheet } from './timesheet-export.controller.js';
 import { exportTimesheetMass } from './timesheet-mass-export.controller.js';
 import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned } from './timesheet-assigned-export.controller.js';
 import { generateWeekendMemo } from './timesheet-weekend-memo.controller.js';
-import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, getShiftDurationHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
+import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, computeCappedFactHours, getShiftDurationHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
 import {
   getMinSelfHistoryDate,
   isSelfEmployeeRequest,
@@ -1134,7 +1134,8 @@ export const timesheetController = {
       const deviations = { late: 0, absent: 0, sick: 0 };
 
       for (const entry of entries) {
-        const empCutoff = cutoffByEmployeeId.get(entry.employee_id as number) ?? null;
+        const empId = entry.employee_id as number;
+        const empCutoff = cutoffByEmployeeId.get(empId) ?? null;
         if (empCutoff && (entry.work_date as string) >= empCutoff) continue;
 
         if (NON_WORKING_STATUSES.has(entry.status as string)) {
@@ -1142,23 +1143,36 @@ export const timesheetController = {
           continue;
         }
 
-        const visibleHours = req.user.show_actual_hours
-          ? entry.hours_worked
-          : (entry.display_hours_worked ?? entry.hours_worked);
-        if (typeof visibleHours === 'number') {
-          actualHours += visibleHours;
-          const empStats = employeeStatsMap.get(entry.employee_id as number);
-          if (empStats) empStats.fact_hours += visibleHours;
-        }
-        if (entry.status === 'absent') deviations.absent++;
-
-        // Проверка опоздания по времени прихода
         const workDate = entry.work_date as string;
         const entryDate = new Date(`${workDate}T00:00:00`);
-        const empSched = dailySchedulesMap.get(entry.employee_id as number)?.get(workDate) || schedulesMap.get(entry.employee_id as number);
+        const dailySched = dailySchedulesMap.get(empId)?.get(workDate);
+        const empSched = dailySched || schedulesMap.get(empId);
+
+        // Опоздание считается по приходу и статусу 'work' независимо от того,
+        // рабочий день по графику или нет (бригадир может пометить выход в субботу).
         const lateThreshold = empSched ? getEffectiveLateThreshold(empSched, entryDate) : '09:00:00';
         if (entry.status === 'work' && entry.first_entry && entry.first_entry > lateThreshold) {
           deviations.late++;
+        }
+
+        if (entry.status === 'absent') deviations.absent++;
+
+        // Факт: только рабочие по графику дни, не более плановой смены.
+        // Часы свыше плана и работа в выходные/праздники — «переработка», в fact не идут.
+        const visibleHours = req.user.show_actual_hours
+          ? entry.hours_worked
+          : (entry.display_hours_worked ?? entry.hours_worked);
+        const cappedHours = computeCappedFactHours(
+          dailySched,
+          entryDate,
+          calendarMonth,
+          typeof visibleHours === 'number' ? visibleHours : null,
+          entry.status as string,
+        );
+        if (cappedHours > 0) {
+          actualHours += cappedHours;
+          const empStats = employeeStatsMap.get(empId);
+          if (empStats) empStats.fact_hours += cappedHours;
         }
       }
 

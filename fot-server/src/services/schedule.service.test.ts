@@ -63,6 +63,7 @@ vi.mock('../config/database.js', () => ({
 }));
 
 import {
+  computeCappedFactHours,
   countNormHoursForSchedule,
   getCycleSlot,
   getDayNormHours,
@@ -505,5 +506,136 @@ describe('schedule.service NON_WORKING_STATUSES', () => {
 
   it('состоит ровно из 4 статусов (защита от случайного расширения)', () => {
     expect(NON_WORKING_STATUSES.size).toBe(4);
+  });
+});
+
+describe('schedule.service computeCappedFactHours', () => {
+  const sched52: IResolvedSchedule = {
+    schedule_id: 's-52',
+    schedule_type: 'office',
+    work_start: '09:00:00',
+    work_end: '18:00:00',
+    work_hours: 8,
+    work_days: [1, 2, 3, 4, 5],
+    office_days: null,
+    late_threshold_minutes: 0,
+    day_overrides: null,
+    lunch_minutes: 60,
+    respects_holidays: true,
+    pattern_type: 'custom',
+    expected_saturdays_per_month: 0,
+    full_day_threshold_minutes: null,
+    weekend_full_day_threshold_minutes: null,
+    cycle_length: null,
+    cycle_days: null,
+    anchor_date: null,
+    assignment_anchor_date: null,
+    source: 'default',
+  };
+
+  const calMay: IProductionCalendarMonth = {
+    year: 2026,
+    month: 5,
+    norm_days: 0,
+    norm_hours: 0,
+    holidays: [],
+    mandatory_holidays: [],
+    pre_holidays: [],
+  };
+
+  const cycle22: IResolvedSchedule = {
+    schedule_id: 'sched-2-2',
+    schedule_type: 'shift',
+    work_start: '08:00:00',
+    work_end: '20:00:00',
+    work_hours: 11,
+    work_days: [],
+    office_days: null,
+    late_threshold_minutes: 0,
+    day_overrides: null,
+    lunch_minutes: 60,
+    respects_holidays: false,
+    pattern_type: 'cycle',
+    expected_saturdays_per_month: 0,
+    full_day_threshold_minutes: null,
+    weekend_full_day_threshold_minutes: null,
+    cycle_length: 4,
+    cycle_days: [
+      { work_hours: 11, work_start: '08:00:00', work_end: '20:00:00', lunch_minutes: 60 },
+      { work_hours: 11, work_start: '08:00:00', work_end: '20:00:00', lunch_minutes: 60 },
+      { work_hours: 0 },
+      { work_hours: 0 },
+    ],
+    anchor_date: '2026-05-04',
+    assignment_anchor_date: null,
+    source: 'employee',
+  };
+
+  // 2026-05-05 — вторник (рабочий 5/2), 2026-05-09 — суббота (выходной 5/2)
+
+  it('будний 5/2, факт < нормы → возвращает фактические часы', () => {
+    expect(computeCappedFactHours(sched52, new Date(2026, 4, 5), calMay, 6, 'work')).toBe(6);
+  });
+
+  it('будний 5/2, факт = норме → возвращает норму', () => {
+    expect(computeCappedFactHours(sched52, new Date(2026, 4, 5), calMay, 8, 'work')).toBe(8);
+  });
+
+  it('будний 5/2, факт > нормы → cap до плановой смены', () => {
+    expect(computeCappedFactHours(sched52, new Date(2026, 4, 5), calMay, 10, 'work')).toBe(8);
+  });
+
+  it('суббота при графике 5/2, status=work, 4ч → 0 (выходной по графику)', () => {
+    expect(computeCappedFactHours(sched52, new Date(2026, 4, 9), calMay, 4, 'work')).toBe(0);
+  });
+
+  it('праздник из production_calendar при respects_holidays=true, 8ч → 0', () => {
+    const cal = { ...calMay, holidays: ['2026-05-05'] };
+    expect(computeCappedFactHours(sched52, new Date(2026, 4, 5), cal, 8, 'work')).toBe(0);
+  });
+
+  it('отпуск (vacation) в будний день → 0', () => {
+    expect(computeCappedFactHours(sched52, new Date(2026, 4, 5), calMay, 8, 'vacation')).toBe(0);
+  });
+
+  it('больничный (sick) в будний день → 0', () => {
+    expect(computeCappedFactHours(sched52, new Date(2026, 4, 5), calMay, 8, 'sick')).toBe(0);
+  });
+
+  it('предпраздничный будень: cap = work_hours − 1', () => {
+    const cal = { ...calMay, pre_holidays: ['2026-05-05'] };
+    expect(computeCappedFactHours(sched52, new Date(2026, 4, 5), cal, 8, 'work')).toBe(7);
+  });
+
+  it('absent в рабочий день: cap применяется (обычно hours_worked=0 → 0)', () => {
+    expect(computeCappedFactHours(sched52, new Date(2026, 4, 5), calMay, 0, 'absent')).toBe(0);
+  });
+
+  it('dayoff с hours_worked=5 в будний день — мусор в БД, явно отбрасываем', () => {
+    expect(computeCappedFactHours(sched52, new Date(2026, 4, 5), calMay, 5, 'dayoff')).toBe(0);
+  });
+
+  it('отсутствующий schedule → 0', () => {
+    expect(computeCappedFactHours(null, new Date(2026, 4, 5), calMay, 8, 'work')).toBe(0);
+    expect(computeCappedFactHours(undefined, new Date(2026, 4, 5), calMay, 8, 'work')).toBe(0);
+  });
+
+  it('hours_worked=null/undefined → 0', () => {
+    expect(computeCappedFactHours(sched52, new Date(2026, 4, 5), calMay, null, 'work')).toBe(0);
+    expect(computeCappedFactHours(sched52, new Date(2026, 4, 5), calMay, undefined, 'work')).toBe(0);
+  });
+
+  it('cycle 2/2: рабочий слот 11ч, факт 12ч → 11 (cap)', () => {
+    // 2026-05-04 (Пн) = idx 0 → рабочий 11ч
+    expect(computeCappedFactHours(cycle22, new Date(2026, 4, 4), null, 12, 'work')).toBe(11);
+  });
+
+  it('cycle 2/2: выходной слот, факт 8ч → 0', () => {
+    // 2026-05-06 (Ср) = idx 2 → выходной
+    expect(computeCappedFactHours(cycle22, new Date(2026, 4, 6), null, 8, 'work')).toBe(0);
+  });
+
+  it('remote-работа в будний день обрабатывается как work (cap по норме)', () => {
+    expect(computeCappedFactHours(sched52, new Date(2026, 4, 5), calMay, 9, 'remote')).toBe(8);
   });
 });

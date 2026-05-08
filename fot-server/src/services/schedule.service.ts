@@ -246,6 +246,29 @@ export const NON_WORKING_STATUSES: ReadonlySet<string> = new Set([
   'unpaid',
 ]);
 
+/**
+ * Часы, идущие в фактический показатель табеля для одной записи дня.
+ * База: только рабочие по графику дни (включая production_calendar) и не более
+ * плановой смены минус перерыв (через getDayNormHours, учитывает предпраздничный −1ч).
+ * Часы свыше нормы и работа в выходные/праздники по графику — это «переработка»,
+ * она в fact не идёт. Симметрично norm-расчёту → корректный deviation = norm − fact.
+ */
+export const computeCappedFactHours = (
+  schedule: IResolvedSchedule | null | undefined,
+  date: Date,
+  calendar: IProductionCalendarMonth | null,
+  hoursWorked: number | null | undefined,
+  status: string,
+): number => {
+  if (!schedule) return 0;
+  if (NON_WORKING_STATUSES.has(status)) return 0;
+  if (status === 'dayoff') return 0;
+  if (!isWorkingDay(schedule, date, calendar)) return 0;
+  if (typeof hoursWorked !== 'number') return 0;
+  const cap = getDayNormHours(schedule, date, calendar);
+  return Math.max(0, Math.min(hoursWorked, cap));
+};
+
 /** Считает рабочие дни (будни по графику + minus праздники) */
 export const countWorkingDaysForSchedule = (
   year: number,
