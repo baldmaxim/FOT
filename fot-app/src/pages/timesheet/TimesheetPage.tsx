@@ -2,7 +2,6 @@ import { type FC, Suspense, lazy, useState, useEffect, useCallback, useMemo, use
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRightLeft, ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, UserPlus, Mail } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
-import { TimesheetStats } from '../../components/timesheet/TimesheetStats';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { TimesheetCorrectionsList } from '../../components/timesheet/TimesheetCorrectionsList';
 import { TimesheetTeamManagementModal } from '../../components/timesheet/TimesheetTeamManagementModal';
@@ -36,6 +35,7 @@ import {
 } from '../../utils/timesheetApprovalPeriod';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
 import { type IFlatDepartmentOption, getTreeFlatDepartments, filterDepartmentTreeByIds } from '../../utils/departmentUtils';
+import { useHeaderAddon } from '../../components/layout/HeaderAddonContext';
 import './TimesheetPage.css';
 
 const TimesheetSidePanel = lazy(() => import('../../components/timesheet/TimesheetSidePanel').then(module => ({
@@ -1464,6 +1464,18 @@ export const TimesheetPage: FC = () => {
   const selectorControl = timesheetMode === 'assigned' ? assigneeControl : departmentControl;
   const isAssignedMode = timesheetMode === 'assigned';
 
+  const headerEmployeeCounter = useMemo(() => {
+    if (isAssignedMode) return null;
+    if (!effectiveSelectedDeptId) return null;
+    if (!stats.employeeCount) return null;
+    return (
+      <span className="ts-header-counter">
+        {stats.employeeCount} <span className="ts-header-counter-label">сотр.</span>
+      </span>
+    );
+  }, [isAssignedMode, effectiveSelectedDeptId, stats.employeeCount]);
+  useHeaderAddon(headerEmployeeCounter);
+
   const segmentControl = (isAssignedMode ? selectedAssigneeId : effectiveSelectedDeptId) ? (
     <section className="ts-half-toggle" aria-label="Период табеля">
       <button
@@ -1614,7 +1626,6 @@ export const TimesheetPage: FC = () => {
               {isAssignedMode && brigadeControl}
             </div>
             {modeControl}
-            {!isAssignedMode && <TimesheetStats stats={stats} compact />}
             {mobileApprovalVisible && !isAssignedMode && (
               <div className="ts-mobile-approval-panel">
                 <TimesheetApprovalBar
@@ -1656,9 +1667,6 @@ export const TimesheetPage: FC = () => {
                 {viewControlPrimary}
               </div>
               <div className="ts-header-toolbar-right">
-                <TimesheetStats stats={stats} />
-                {correctionsChip}
-                {transfersChip}
                 <button
                   type="button"
                   className="ts-btn"
@@ -1709,6 +1717,8 @@ export const TimesheetPage: FC = () => {
                     Режим корректировок
                   </button>
                 )}
+                {correctionsChip}
+                {transfersChip}
               </div>
             </div>
           </section>

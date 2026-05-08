@@ -194,6 +194,7 @@
 
 .ts-header-cell--center {
   justify-self: center;
+  flex-direction: column;
 }
 
 .ts-header-cell--right {
@@ -223,7 +224,19 @@
 }
 
 .ts-header-cell--center {
-  gap: 12px;
+  gap: 6px;
+}
+
+.ts-header-counter {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.ts-header-counter-label {
+  color: var(--text-tertiary);
+  font-weight: 500;
 }
 
 .ts-header-cell--center .ts-half-toggle {
