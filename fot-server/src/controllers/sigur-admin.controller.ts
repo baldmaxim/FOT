@@ -771,6 +771,11 @@ export const sigurAdminController = {
       }
 
       const connection = parseConnection(req.body.connection);
+      console.log('[Sigur access-points] incoming PUT', {
+        sigurEmployeeId,
+        accessPointIds,
+        connection: connection || 'default',
+      });
       const data = await replaceSigurEmployeeAccessPoints(sigurEmployeeId, accessPointIds as number[], connection);
 
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
@@ -788,6 +793,10 @@ export const sigurAdminController = {
     } catch (error) {
       const status = getErrorStatus(error);
       console.error('Sigur admin saveEmployeeAccessPoints error:', error);
+      console.error('[Sigur access-points] context:', {
+        sigurEmployeeId: req.params.sigurEmployeeId,
+        accessPointIds: (req.body as { accessPointIds?: unknown })?.accessPointIds,
+      });
       if (error instanceof AxiosError) {
         const data = error.response?.data as Record<string, unknown> | undefined;
         console.error('[Sigur access-points] method=', error.config?.method, 'url=', error.config?.url);

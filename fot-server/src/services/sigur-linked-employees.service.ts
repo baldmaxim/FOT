@@ -409,7 +409,11 @@ export async function replaceEmployeeAccessPointBindings(
   removedIds: number[];
   bindings: Array<{ accessPointId: number; accessPointName: string | null }>;
 }> {
-  const currentBindings = await getEmployeeAccessPointBindings(employeeId, connection);
+  // refresh=true: читаем актуальное состояние Sigur, не из 5-мин кэша. Иначе при устаревшем
+  // кэше POST add может уйти на уже существующую привязку (Sigur → 400 invalid.request),
+  // либо POST delete — на уже удалённую.
+  invalidateEmployeeAccessPointBindingsCache(employeeId);
+  const currentBindings = await getEmployeeAccessPointBindings(employeeId, connection, true);
   const currentIds = new Set(currentBindings.map(binding => binding.accessPointId));
   const nextIds = new Set(accessPointIds.filter(id => Number.isFinite(id)));
 
