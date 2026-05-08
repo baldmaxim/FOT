@@ -1572,7 +1572,6 @@
 
 .ts-table thead th {
   background: var(--bg-secondary);
-  background-clip: padding-box;
   font-size: 11px;
   font-weight: 600;
   color: var(--text-tertiary);
@@ -1583,6 +1582,7 @@
      Без этого при прокрутке на ¼ строки виден просвет содержимого таблицы под легендой. */
   top: -1px;
   z-index: 10;
+  box-shadow: 0 1px 0 var(--border);
 }
 
 .ts-table thead th.ts-th--weekend {
