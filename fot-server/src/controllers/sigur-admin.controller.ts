@@ -797,6 +797,7 @@ export const sigurAdminController = {
         sigurEmployeeId: req.params.sigurEmployeeId,
         accessPointIds: (req.body as { accessPointIds?: unknown })?.accessPointIds,
       });
+      const debug: Record<string, unknown> = {};
       if (error instanceof AxiosError) {
         const data = error.response?.data as Record<string, unknown> | undefined;
         console.error('[Sigur access-points] method=', error.config?.method, 'url=', error.config?.url);
@@ -805,8 +806,23 @@ export const sigurAdminController = {
         console.error('[Sigur access-points] errors=', JSON.stringify(data?.errors));
         console.error('[Sigur access-points] errorsKeys=', JSON.stringify(data?.errorsKeys));
         console.error('[Sigur access-points] full data=', JSON.stringify(data));
+        debug.sigurMethod = error.config?.method;
+        debug.sigurUrl = error.config?.url;
+        debug.sigurStatus = error.response?.status;
+        debug.sigurRequestBody = (() => {
+          try {
+            return typeof error.config?.data === 'string' ? JSON.parse(error.config.data) : error.config?.data;
+          } catch {
+            return error.config?.data;
+          }
+        })();
+        debug.sigurResponse = data;
       }
-      res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка сохранения точек доступа Sigur') });
+      res.status(status).json({
+        success: false,
+        error: getErrorMessage(error, 'Ошибка сохранения точек доступа Sigur'),
+        ...(Object.keys(debug).length > 0 ? { debug } : {}),
+      });
     }
   },
 
