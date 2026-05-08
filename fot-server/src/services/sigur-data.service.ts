@@ -1230,16 +1230,15 @@ export class SigurDataService extends SigurServiceBase {
     accessPointIds: number[],
     connection?: ConnectionType,
   ): Promise<void> {
-    // Sigur 1.6.3.14: оба прежних формата валят 400 invalid.request:
-    //   { employeeIds: [...], accessPointIds: [...] }     — cross-product объект (как в доке)
-    //   [{ employeeId, accessPointId }, ...]              — массив объектов (как у cards)
-    // Рабочий вариант — по аналогии с addEmployeeAccessRuleBinding (который работает):
-    // одиночный объект { employeeId, accesspointId } (singular, lowercase 'p' в 'point'),
-    // N отдельных POST для каждой пары.
-    const pairs: Array<{ employeeId: number; accesspointId: number }> = [];
+    // Sigur 1.6.3.14: формат body — одиночный объект { employeeId, accessPointId } camelCase singular,
+    // ровно как в ответе GET /bindings/employees-accesspoints (поле accessPointId, большая 'P').
+    // Прежние варианты — cross-product { employeeIds[], accessPointIds[] }, массив объектов
+    // [{ employeeId, accessPointId }] и одиночный с lowercase { employeeId, accesspointId } —
+    // все валят 400 invalid.request. N отдельных POST через Promise.all для каждой пары.
+    const pairs: Array<{ employeeId: number; accessPointId: number }> = [];
     for (const employeeId of employeeIds) {
-      for (const accesspointId of accessPointIds) {
-        pairs.push({ employeeId, accesspointId });
+      for (const accessPointId of accessPointIds) {
+        pairs.push({ employeeId, accessPointId });
       }
     }
     if (pairs.length === 0) return;
@@ -1257,11 +1256,11 @@ export class SigurDataService extends SigurServiceBase {
     accessPointIds: number[],
     connection?: ConnectionType,
   ): Promise<void> {
-    // См. createEmployeeAccessPointBindings — тот же формат: одиночный объект, lowercase singular.
-    const pairs: Array<{ employeeId: number; accesspointId: number }> = [];
+    // См. createEmployeeAccessPointBindings — тот же формат camelCase singular.
+    const pairs: Array<{ employeeId: number; accessPointId: number }> = [];
     for (const employeeId of employeeIds) {
-      for (const accesspointId of accessPointIds) {
-        pairs.push({ employeeId, accesspointId });
+      for (const accessPointId of accessPointIds) {
+        pairs.push({ employeeId, accessPointId });
       }
     }
     if (pairs.length === 0) return;
