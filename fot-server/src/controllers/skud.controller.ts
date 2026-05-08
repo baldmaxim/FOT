@@ -715,6 +715,33 @@ const skudReadController = {
       const limit = Math.min(2000, Math.max(1, parseInt(String(req.query.limit ?? 500), 10) || 500));
       const offset = Math.max(0, parseInt(String(req.query.offset ?? 0), 10) || 0);
 
+      // Проверяем whitelist scope ДО построения запроса. Если employeeId задан
+      // и он не входит в allowed — сразу пусто. Если allowed пуст — сразу пусто.
+      // Большой `.in('employee_id', [...тысячи_id])` НЕ передаём в PostgREST:
+      // на большом каталоге это даёт UND_ERR_HEADERS_OVERFLOW (URL/headers > 16KB
+      // у undici) и валит запрос с TypeError: fetch failed.
+      const empIdNum = typeof employeeId === 'string' && employeeId ? parseInt(employeeId, 10) : NaN;
+      const hasEmpIdFilter = !isNaN(empIdNum);
+
+      const syncFilter = await getSyncFilteredEmployees();
+      if (syncFilter) {
+        const { empIds: allowedIds } = syncFilter;
+        if (allowedIds.size === 0) {
+          res.json({ success: true, data: [], total: 0 });
+          return;
+        }
+        if (hasEmpIdFilter && !allowedIds.has(empIdNum)) {
+          res.json({ success: true, data: [], total: 0 });
+          return;
+        }
+        if (!hasEmpIdFilter) {
+          // Без выбранного сотрудника не возвращаем глобальный лог: UI требует
+          // сначала выбрать сотрудника, иначе .in(...) с тысячами id ломает PostgREST.
+          res.json({ success: true, data: [], total: 0 });
+          return;
+        }
+      }
+
       let query = supabase
         .from('skud_event_failures')
         .select(
@@ -726,23 +753,9 @@ const skudReadController = {
 
       if (typeof startDate === 'string' && startDate) query = query.gte('event_date', startDate);
       if (typeof endDate === 'string' && endDate) query = query.lte('event_date', endDate);
-      if (typeof employeeId === 'string' && employeeId) {
-        const empIdNum = parseInt(employeeId, 10);
-        if (!isNaN(empIdNum)) query = query.eq('employee_id', empIdNum);
-      }
+      if (hasEmpIdFilter) query = query.eq('employee_id', empIdNum);
       if (typeof failureType === 'string' && failureType) {
         query = query.eq('failure_type', failureType);
-      }
-
-      const syncFilter = await getSyncFilteredEmployees();
-      if (syncFilter) {
-        const { empIds: allowedIds } = syncFilter;
-        if (allowedIds.size > 0) {
-          query = query.in('employee_id', [...allowedIds]);
-        } else {
-          res.json({ success: true, data: [], total: 0 });
-          return;
-        }
       }
 
       const { data, error } = await query;
