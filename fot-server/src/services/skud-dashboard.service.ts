@@ -223,15 +223,17 @@ async function fetchTodayEventPages(
 export async function getDashboardStats(
   params: IDashboardStatsParams,
 ): Promise<IDashboardStatsResult> {
-  const { departmentId, period, month, showActualHours } = params;
+  const { departmentId, period, month, showActualHours, force } = params;
 
   // showActualHours зашит в кэш-ключ: ответы для «факт» и «урезанные» — разные,
   // и без отдельного бакета пользователи с разными ролями могли бы видеть чужие
   // цифры в окне TTL=60с.
   const cacheKey = `${departmentId ?? 'all'}|${period ?? 'default'}|${month ?? 'current'}|${showActualHours ? 'actual' : 'capped'}`;
-  const cached = dashboardCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.data;
+  if (!force) {
+    const cached = dashboardCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data;
+    }
   }
 
   const deptIds = await collectDeptIds(departmentId);
@@ -252,7 +254,7 @@ export async function getDashboardStats(
     const empty: IDashboardStatsResult = {
       lateToday: 0, lateYesterday: 0,
       punctuality: { onTime: 0, slightlyLate: 0, veryLate: 0, absent: 0 },
-      avgArrivalByDay: [], risks: [], hourlyActivity: [],
+      avgArrivalByDay: [], risks: [],
       weekComparison: null, topLate: [], periodStats: null,
       earlyLeaveToday: 0, recentEvents: [],
       todayEntriesCount: 0, todayExitsCount: 0,
@@ -520,33 +522,6 @@ export async function getDashboardStats(
   }
   risks.sort((a, b) => (a.severity === 'high' ? -1 : 1) - (b.severity === 'high' ? -1 : 1));
 
-  // Hourly activity
-  const hourlyMap = new Map<number, number>();
-  for (let h = 7; h <= 19; h++) hourlyMap.set(h, 0);
-
-  if (period === 'today') {
-    for (const evt of todayEvents || []) {
-      if (!evt.event_time) continue;
-      const hour = parseInt(evt.event_time.split(':')[0], 10);
-      if (hour >= 7 && hour <= 19) {
-        hourlyMap.set(hour, (hourlyMap.get(hour) || 0) + 1);
-      }
-    }
-  } else {
-    for (const evt of periodEvents || []) {
-      if (!evt.event_time) continue;
-      const hour = parseInt(evt.event_time.split(':')[0], 10);
-      if (hour >= 7 && hour <= 19) {
-        hourlyMap.set(hour, (hourlyMap.get(hour) || 0) + 1);
-      }
-    }
-    const workDaysCount = actualWorkDays || 1;
-    for (const [h, count] of hourlyMap) {
-      hourlyMap.set(h, Math.round(count / workDaysCount));
-    }
-  }
-  const hourlyActivity = [...hourlyMap.entries()].map(([hour, count]) => ({ hour, count }));
-
   // Period comparison
   const calcWeekMetrics = (weekData: typeof periodSummaries, expectedRecords: number): IDashboardWeekMetrics => {
     const withEntry = weekData.filter(s => s.first_entry && !remoteEmpIds.has(s.employee_id));
@@ -688,7 +663,7 @@ export async function getDashboardStats(
 
   const result: IDashboardStatsResult = {
     lateToday, lateYesterday, punctuality, avgArrivalByDay, risks,
-    hourlyActivity, weekComparison, topLate, periodStats,
+    weekComparison, topLate, periodStats,
     earlyLeaveToday, recentEvents,
     todayEntriesCount, todayExitsCount,
   };

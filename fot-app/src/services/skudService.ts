@@ -270,9 +270,16 @@ export const skudService = {
     return response.data;
   },
 
-  async getDashboardStats(departmentId: string, period = 'today', signal?: AbortSignal, month?: string): Promise<IDashboardStats> {
+  async getDashboardStats(
+    departmentId: string,
+    period = 'today',
+    signal?: AbortSignal,
+    month?: string,
+    force?: boolean,
+  ): Promise<IDashboardStats> {
     let url = `/skud/dashboard-stats?department_id=${departmentId}&period=${period}`;
     if (month) url += `&month=${month}`;
+    if (force) url += '&force=1';
     const response = await apiClient.get<ApiResponse<IDashboardStats>>(url, { signal });
     return response.data;
   },

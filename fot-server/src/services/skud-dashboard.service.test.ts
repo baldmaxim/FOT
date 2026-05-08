@@ -367,8 +367,6 @@ describe('skud-dashboard.service', () => {
       attendanceRate: 100,
     });
     expect(stats.avgArrivalByDay.find(item => item.day === 'Пт')?.avgTime).toBe('09:20');
-    expect(stats.hourlyActivity.find(item => item.hour === 9)?.count).toBe(738);
-    expect(stats.hourlyActivity.find(item => item.hour === 10)?.count).toBe(62);
 
     const pagedEventQueries = mockedState.queryLog.filter(query =>
       query.table === 'skud_events'
@@ -458,8 +456,6 @@ describe('skud-dashboard.service', () => {
       veryLate: 50,
       absent: 0,
     });
-    expect(stats.hourlyActivity.find(item => item.hour === 8)?.count).toBe(1);
-    expect(stats.hourlyActivity.find(item => item.hour === 9)?.count).toBe(1);
   });
 
   it('returns all late employees instead of truncating the late list to five items', async () => {

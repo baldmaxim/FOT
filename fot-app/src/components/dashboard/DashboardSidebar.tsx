@@ -18,36 +18,6 @@ const getInitials = (name: string): string => {
 const getPeriodLabel = (period: DashboardPeriod): string =>
   period === 'today' ? 'сегодня' : period === 'week' ? 'неделю' : 'месяц';
 
-const HourlyActivityCardImpl: FC<{ data: IDashboardStats['hourlyActivity']; period: DashboardPeriod }> = ({ data, period }) => {
-  const maxCount = Math.max(...data.map(d => d.count), 1);
-
-  return (
-    <div className={styles.card}>
-      <div className={styles.cardTitle}>
-        Активность по часам
-        {period !== 'today' && <span className={styles.cardSubtitle}>(ср. за день)</span>}
-      </div>
-      <div className={styles.hourlyBars}>
-        {data.map(item => (
-          <div
-            key={item.hour}
-            className={`${styles.hourlyBar} ${item.count === maxCount && item.count > 0 ? styles.peak : ''}`}
-            style={{ height: `${Math.max(4, (item.count / maxCount) * 100)}%` }}
-            title={`${item.hour}:00 — ${item.count} чел.`}
-          />
-        ))}
-      </div>
-      <div className={styles.hourlyLabels}>
-        {data.map(item => (
-          <span key={item.hour} className={styles.hourlyLabel}>
-            {item.hour}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-};
-
 interface IComparisonItem {
   label: string;
   current: string;
@@ -175,13 +145,11 @@ function formatMinutesDelta(minutes: number): string {
   return m > 0 ? `${sign}${h}ч ${m}м` : `${sign}${h}ч`;
 }
 
-export const HourlyActivityCard = memo(HourlyActivityCardImpl);
 export const ComparisonCard = memo(ComparisonCardImpl);
 export const TopLateCard = memo(TopLateCardImpl);
 
 export const DashboardSidebar: FC<IDashboardSidebarProps> = ({ stats, period }) => (
   <div className={styles.sidebar}>
-    <HourlyActivityCard data={stats.hourlyActivity} period={period} />
     <ComparisonCard comparison={stats.weekComparison} period={period} />
     <TopLateCard data={stats.topLate} period={period} />
   </div>

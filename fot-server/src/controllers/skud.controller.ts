@@ -390,6 +390,7 @@ const dashboardStatsQuerySchema = z.object({
   department_id: z.string().optional(),
   period: z.enum(['today', 'week', 'month']).default('today'),
   month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  force: z.enum(['1', 'true']).optional(),
 });
 
 const skudReadController = {
@@ -403,7 +404,7 @@ const skudReadController = {
         res.status(400).json({ success: false, error: 'Некорректные параметры запроса', details: parsed.error.flatten() });
         return;
       }
-      const { period, month } = parsed.data;
+      const { period, month, force } = parsed.data;
 
       const requestedDepartmentId = parsed.data.department_id ?? null;
       const departmentId = await resolveScopedDepartmentId(req, requestedDepartmentId);
@@ -426,6 +427,7 @@ const skudReadController = {
         period,
         month,
         showActualHours: !!req.user.show_actual_hours,
+        force: !!force,
       });
       res.json({ success: true, data });
     } catch (error) {

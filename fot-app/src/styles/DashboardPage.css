@@ -421,6 +421,42 @@
 [data-theme="dark"] .hms-orange { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
 [data-theme="dark"] .hms-red { background: rgba(239, 68, 68, 0.15); color: #f87171; }
 
+.dash-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-left: 2px;
+  padding: 0;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.dash-refresh-btn:hover:not(:disabled) {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-color: var(--border-strong, var(--border));
+}
+
+.dash-refresh-btn:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.dash-refresh-spin {
+  animation: dash-refresh-rotate 0.6s linear;
+}
+
+@keyframes dash-refresh-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* Period mini cards — 4 in a row */
 .period-mini-cards {
   display: grid;

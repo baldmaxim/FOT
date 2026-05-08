@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { ChevronDown, ChevronLeft, ChevronRight, Search, Building2, LogOut, Users, Clock, ArrowDownRight, ArrowUpRight, X } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Search, Building2, LogOut, Users, Clock, ArrowDownRight, ArrowUpRight, X, RefreshCw } from 'lucide-react';
 import { usePresence } from '../hooks/usePresence';
 import { useDashboardStats } from '../hooks/useDashboardStats';
 import { usePresenceRealtime } from '../hooks/usePresenceRealtime';
@@ -12,7 +12,6 @@ import '../styles/DashboardPage.css';
 const ActivityList = lazy(() => import('../components/dashboard/ActivityList').then(m => ({ default: m.ActivityList })));
 const PunctualityCard = lazy(() => import('../components/dashboard/AnalyticsRow').then(m => ({ default: m.PunctualityCard })));
 const AvgArrivalCard = lazy(() => import('../components/dashboard/AnalyticsRow').then(m => ({ default: m.AvgArrivalCard })));
-const HourlyActivityCard = lazy(() => import('../components/dashboard/DashboardSidebar').then(m => ({ default: m.HourlyActivityCard })));
 const ComparisonCard = lazy(() => import('../components/dashboard/DashboardSidebar').then(m => ({ default: m.ComparisonCard })));
 const LiveEventsCard = lazy(() => import('../components/dashboard/stats/LiveEventsCard').then(m => ({ default: m.LiveEventsCard })));
 
@@ -198,6 +197,15 @@ export const DashboardPage: React.FC = () => {
     refreshStats();
   }, [refreshPresence, refreshStats]);
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const handleManualRefresh = useCallback(() => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    refreshPresence();
+    refreshStats(true);
+    window.setTimeout(() => setIsRefreshing(false), 600);
+  }, [isRefreshing, refreshPresence, refreshStats]);
+
   // Подписка не должна зависеть от выбора отдела: для админа без выбранного
   // отдела effectiveSelectedDeptId = null, но дашборд всё равно показывает
   // данные по всему порталу и должен оживать на presence_updated.
@@ -340,6 +348,16 @@ export const DashboardPage: React.FC = () => {
                   <ArrowUpRight size={13} />
                   {stats?.todayExitsCount ?? 0}
                 </span>
+                <button
+                  type="button"
+                  className="dash-refresh-btn"
+                  onClick={handleManualRefresh}
+                  disabled={isRefreshing}
+                  title="Обновить данные дашборда"
+                  aria-label="Обновить"
+                >
+                  <RefreshCw size={13} className={isRefreshing ? 'dash-refresh-spin' : undefined} />
+                </button>
               </div>
             </div>
             {deptSelector}
@@ -467,7 +485,6 @@ export const DashboardPage: React.FC = () => {
                 <Suspense fallback={<DashboardSectionFallback />}>
                   <PunctualityCard punctuality={stats.punctuality} period={period} />
                   <AvgArrivalCard data={stats.avgArrivalByDay} period={period} />
-                  <HourlyActivityCard data={stats.hourlyActivity} period={period} />
                   <ComparisonCard comparison={stats.weekComparison} period={period} />
                 </Suspense>
               )}

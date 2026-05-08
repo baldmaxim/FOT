@@ -514,6 +514,15 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     let storedUnmatched = 0;
     let latestObservedEventAt: Date | null = null;
     let maxObservedEventId: number | null = null;
+    let quarantinedByDate = 0;
+
+    // Защита от мусорных дат от Sigur (например event_date=2000-01-01).
+    // Без этого guard'а одна такая запись валит весь UPSERT batch с ошибкой
+    // `no partition of relation "skud_events" found for row`, и lastEventId
+    // не двигается. Партицирование skud_events идёт по диапазонам, поэтому
+    // отбрасываем всё за пределами [now-30d, now+1d] — это заведомо мусор.
+    const dateGuardFloorMs = now.getTime() - 30 * 24 * 60 * 60 * 1000;
+    const dateGuardCeilMs = now.getTime() + 24 * 60 * 60 * 1000;
 
     for (const raw of rawEvents) {
       const rawId = (raw as Record<string, unknown>).id;
@@ -526,7 +535,12 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       if (!mapped || !mapped.physicalPerson) continue;
       const eventAt = buildMoscowEventTimestamp(mapped.eventDate, mapped.eventTime);
       const observedAt = new Date(eventAt);
-      if (!Number.isNaN(observedAt.getTime()) && (!latestObservedEventAt || observedAt.getTime() > latestObservedEventAt.getTime())) {
+      const observedMs = observedAt.getTime();
+      if (Number.isNaN(observedMs) || observedMs < dateGuardFloorMs || observedMs > dateGuardCeilMs) {
+        quarantinedByDate++;
+        continue;
+      }
+      if (!latestObservedEventAt || observedMs > latestObservedEventAt.getTime()) {
         latestObservedEventAt = observedAt;
       }
 
@@ -685,6 +699,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       pollLastEventId: window.lastEventId,
       maxObservedEventId,
       consecutiveEmptyTicks,
+      quarantinedByDate,
       checkpointSource: window.checkpointSource,
       windowStart: window.startTime,
       windowEnd: window.endTime,
@@ -737,8 +752,21 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       },
     });
     console.log(
-      `[presence-polling] cycle done source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} fetched=${rawEvents.length} attempted=${inserts.length} inserted=${totalInserted} duplicates=${Math.max(0, inserts.length - totalInserted)} unmatched=${storedUnmatched} summaries=${insertedSummaryKeys.size} tFetch=${tFetch}ms tEmpRefresh=${tEmpRefresh}ms tInsert=${tInsert}ms tSummary=${tSummary}ms total=${totalMs}ms${hadFailure ? ` PARTIAL_FAILURE=${failureMessage}` : ''}`,
+      `[presence-polling] cycle done source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} fetched=${rawEvents.length} quarantinedByDate=${quarantinedByDate} attempted=${inserts.length} inserted=${totalInserted} duplicates=${Math.max(0, inserts.length - totalInserted)} unmatched=${storedUnmatched} summaries=${insertedSummaryKeys.size} tFetch=${tFetch}ms tEmpRefresh=${tEmpRefresh}ms tInsert=${tInsert}ms tSummary=${tSummary}ms total=${totalMs}ms${hadFailure ? ` PARTIAL_FAILURE=${failureMessage}` : ''}`,
     );
+    if (quarantinedByDate > 0) {
+      Sentry.captureMessage('presence-polling events quarantined by date', {
+        level: 'warning',
+        tags: { service: 'presence-polling', reason: 'date_out_of_range' },
+        extra: {
+          quarantinedByDate,
+          fetched: rawEvents.length,
+          mode: window.mode,
+          pollLastEventId: window.lastEventId,
+          maxObservedEventId,
+        },
+      });
+    }
     if (totalMs > 3_000) {
       const pollIntervalMs = resolvePresencePollIntervalMs();
       const isCritical = totalMs > 10_000;

@@ -68,7 +68,6 @@ export interface IDashboardStats {
   punctuality: { onTime: number; slightlyLate: number; veryLate: number; absent: number };
   avgArrivalByDay: Array<{ day: string; avgTime: string | null; date: string; isToday?: boolean }>;
   risks: Array<{ employee_id: number; full_name: string; reason: string; severity: 'high' | 'medium' }>;
-  hourlyActivity: Array<{ hour: number; count: number }>;
   weekComparison: {
     thisWeek: { attendanceRate: number; avgArrival: string; avgHours: number; lateCount: number };
     lastWeek: { attendanceRate: number; avgArrival: string; avgHours: number; lateCount: number };

@@ -31,6 +31,8 @@ export interface IDashboardStatsParams {
   // (cap по длине смены через attendance.service). Совпадает с логикой
   // /api/timesheet, чтобы цифры на дашборде и в табеле не расходились.
   showActualHours: boolean;
+  // Bypass server-side dashboardCache при ручном refresh с фронта.
+  force?: boolean;
 }
 
 export interface IDashboardRecentEvent {
@@ -77,7 +79,6 @@ export interface IDashboardStatsResult {
   punctuality: { onTime: number; slightlyLate: number; veryLate: number; absent: number };
   avgArrivalByDay: { day: string; avgTime: string | null; date: string; isToday: boolean }[];
   risks: IDashboardRisk[];
-  hourlyActivity: { hour: number; count: number }[];
   weekComparison: { thisWeek: IDashboardWeekMetrics; lastWeek: IDashboardWeekMetrics } | null;
   topLate: IDashboardTopLate[];
   periodStats: IDashboardPeriodStats | null;
