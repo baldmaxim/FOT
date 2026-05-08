@@ -151,7 +151,7 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selected
       {canManage && (
         <td className="sc-td-salary">
           <span className="sc-cell-with-btn">
-            <button className="sc-inline-btn" title="Изменить реальный оклад" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'salary'); }}>
+            <button className="sc-inline-btn" title="Изменить оклад+премию" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'salary'); }}>
               <Pencil size={12} />
             </button>
             {fmt(emp.salary_calculated)}
@@ -274,7 +274,7 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   };
 
   if (modalType === 'salary' || modalType === 'salary_actual') {
-    const title = modalType === 'salary' ? 'Изменить реальный оклад' : 'Изменить оклад (договор)';
+    const title = modalType === 'salary' ? 'Изменить оклад+премию' : 'Изменить оклад (договор)';
     const placeholder = modalType === 'salary' ? 'Повышение, пересмотр...' : 'Изменение договора...';
     return (
       <div className="sc-overlay" onClick={onClose}>
@@ -519,7 +519,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
             <th>Должность</th>
             <th>График</th>
             {canManage && <th>Оклад (договор)</th>}
-            {canManage && <th>Реальный оклад</th>}
+            {canManage && <th>Оклад+премия</th>}
             <th className="sc-th-hist"></th>
           </tr>
         </thead>
