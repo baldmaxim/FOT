@@ -788,6 +788,15 @@ export const sigurAdminController = {
     } catch (error) {
       const status = getErrorStatus(error);
       console.error('Sigur admin saveEmployeeAccessPoints error:', error);
+      if (error instanceof AxiosError) {
+        const data = error.response?.data as Record<string, unknown> | undefined;
+        console.error('[Sigur access-points] method=', error.config?.method, 'url=', error.config?.url);
+        console.error('[Sigur access-points] status=', error.response?.status);
+        console.error('[Sigur access-points] request body=', error.config?.data);
+        console.error('[Sigur access-points] errors=', JSON.stringify(data?.errors));
+        console.error('[Sigur access-points] errorsKeys=', JSON.stringify(data?.errorsKeys));
+        console.error('[Sigur access-points] full data=', JSON.stringify(data));
+      }
       res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка сохранения точек доступа Sigur') });
     }
   },

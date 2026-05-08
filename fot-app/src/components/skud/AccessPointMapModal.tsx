@@ -1,4 +1,4 @@
-import { type FC } from 'react';
+import { type FC, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { IAccessPointMapView } from '../../types';
 import '../../styles/AccessPointMap.css';
@@ -7,9 +7,11 @@ interface IAccessPointMapModalProps {
   open: boolean;
   data: IAccessPointMapView | null;
   onClose: () => void;
+  onImageError?: () => void;
 }
 
-export const AccessPointMapModal: FC<IAccessPointMapModalProps> = ({ open, data, onClose }) => {
+export const AccessPointMapModal: FC<IAccessPointMapModalProps> = ({ open, data, onClose, onImageError }) => {
+  const failedUrlsRef = useRef<Set<string>>(new Set());
   if (!open || !data || typeof document === 'undefined') return null;
 
   return createPortal(
@@ -33,6 +35,12 @@ export const AccessPointMapModal: FC<IAccessPointMapModalProps> = ({ open, data,
               src={data.image_url}
               alt={`Карта объекта ${data.object_name}`}
               className="skud-map-modal-image"
+              onError={() => {
+                if (!onImageError) return;
+                if (failedUrlsRef.current.has(data.image_url)) return;
+                failedUrlsRef.current.add(data.image_url);
+                onImageError();
+              }}
             />
             <div
               className="skud-map-marker skud-map-marker--active"

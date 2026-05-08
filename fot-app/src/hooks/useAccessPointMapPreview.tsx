@@ -15,28 +15,50 @@ const POPOVER_GAP_PX = 8;
 const POPOVER_DEFAULT_WIDTH_PX = 220;
 const POPOVER_DEFAULT_HEIGHT_PX = 196;
 const CLOSE_DELAY_MS = 120;
+// Серверный signed URL живёт 3600 с. Запас в 10 мин страхует от просрочки в момент показа.
+const PREVIEW_TTL_MS = 50 * 60 * 1000;
 
-const previewCache = new Map<string, IAccessPointMapView | null>();
+interface IPreviewCacheEntry {
+  data: IAccessPointMapView | null;
+  expiresAt: number;
+}
+
+const previewCache = new Map<string, IPreviewCacheEntry>();
 const previewRequests = new Map<string, Promise<IAccessPointMapView | null>>();
+
+const readFreshCache = (cacheKey: string): IPreviewCacheEntry | null => {
+  const entry = previewCache.get(cacheKey);
+  if (!entry) return null;
+  if (Date.now() >= entry.expiresAt) {
+    previewCache.delete(cacheKey);
+    return null;
+  }
+  return entry;
+};
+
+export const invalidateAccessPointPreview = (accessPointName: string): void => {
+  const cacheKey = accessPointName.trim();
+  if (!cacheKey) return;
+  previewCache.delete(cacheKey);
+};
 
 async function loadAccessPointPreview(accessPointName: string): Promise<IAccessPointMapView | null> {
   const cacheKey = accessPointName.trim();
   if (!cacheKey) return null;
 
-  if (previewCache.has(cacheKey)) {
-    return previewCache.get(cacheKey) ?? null;
-  }
+  const fresh = readFreshCache(cacheKey);
+  if (fresh) return fresh.data;
 
   const inFlight = previewRequests.get(cacheKey);
   if (inFlight) return inFlight;
 
   const request = travelTimeService.getAccessPointMap(cacheKey)
     .then(data => {
-      previewCache.set(cacheKey, data);
+      previewCache.set(cacheKey, { data, expiresAt: Date.now() + PREVIEW_TTL_MS });
       return data;
     })
     .catch(() => {
-      previewCache.set(cacheKey, null);
+      previewCache.set(cacheKey, { data: null, expiresAt: Date.now() + PREVIEW_TTL_MS });
       return null;
     })
     .finally(() => {
@@ -56,6 +78,7 @@ export interface IAccessPointMapPreviewState<T extends HTMLElement = HTMLElement
   popoverRef: RefObject<HTMLDivElement | null>;
   openPreview: () => void;
   scheduleClose: () => void;
+  reloadPreview: () => void;
 }
 
 export const useAccessPointMapPreview = <T extends HTMLElement = HTMLElement>(
@@ -64,12 +87,13 @@ export const useAccessPointMapPreview = <T extends HTMLElement = HTMLElement>(
 ): IAccessPointMapPreviewState<T> => {
   const normalizedName = accessPointName.trim();
   const cachedPreview = useMemo(
-    () => (normalizedName ? previewCache.get(normalizedName) ?? null : null),
+    () => (normalizedName ? readFreshCache(normalizedName)?.data ?? null : null),
     [normalizedName],
   );
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState<IAccessPointMapView | null>(cachedPreview);
+  const [reloadTick, setReloadTick] = useState(0);
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties | null>(null);
   const wrapperRef = useRef<T | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
@@ -88,6 +112,13 @@ export const useAccessPointMapPreview = <T extends HTMLElement = HTMLElement>(
     clearCloseTimeout();
     setOpen(true);
   }, [clearCloseTimeout, enabled, normalizedName]);
+
+  const reloadPreview = useCallback(() => {
+    if (!normalizedName) return;
+    invalidateAccessPointPreview(normalizedName);
+    setPreview(null);
+    setReloadTick(tick => tick + 1);
+  }, [normalizedName]);
 
   const scheduleClose = useCallback(() => {
     if (typeof window === 'undefined') {
@@ -138,8 +169,9 @@ export const useAccessPointMapPreview = <T extends HTMLElement = HTMLElement>(
 
   useEffect(() => {
     if (!enabled || !open || !normalizedName) return;
-    if (previewCache.has(normalizedName)) {
-      setPreview(previewCache.get(normalizedName) ?? null);
+    const fresh = readFreshCache(normalizedName);
+    if (fresh) {
+      setPreview(fresh.data);
       return;
     }
 
@@ -156,7 +188,7 @@ export const useAccessPointMapPreview = <T extends HTMLElement = HTMLElement>(
     return () => {
       cancelled = true;
     };
-  }, [enabled, normalizedName, open]);
+  }, [enabled, normalizedName, open, reloadTick]);
 
   useEffect(() => {
     if (!open) {
@@ -190,5 +222,6 @@ export const useAccessPointMapPreview = <T extends HTMLElement = HTMLElement>(
     popoverRef,
     openPreview,
     scheduleClose,
+    reloadPreview,
   };
 };

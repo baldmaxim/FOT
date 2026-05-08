@@ -57,6 +57,7 @@ export const TravelObjectMapSection: FC<ITravelObjectMapSectionProps> = ({
   const [editorOpen, setEditorOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const failedMapUrlsRef = useRef<Set<string>>(new Set());
 
   const resolveSelectedAccessPoint = useCallback((points: ITravelObjectMapPoint[], current: string | null): string | null => {
     if (current && object.access_points.includes(current)) return current;
@@ -292,7 +293,17 @@ export const TravelObjectMapSection: FC<ITravelObjectMapSectionProps> = ({
 
           <div className="travel-map-preview">
             <div className="travel-map-preview-stage">
-              <img src={objectMap.image_url} alt={`Карта объекта ${object.name}`} className="travel-map-preview-image" />
+              <img
+                src={objectMap.image_url}
+                alt={`Карта объекта ${object.name}`}
+                className="travel-map-preview-image"
+                onError={() => {
+                  const url = objectMap.image_url;
+                  if (failedMapUrlsRef.current.has(url)) return;
+                  failedMapUrlsRef.current.add(url);
+                  void loadMap();
+                }}
+              />
               {draftPoints.map(point => (
                 <div
                   key={point.access_point_name}
@@ -377,6 +388,12 @@ export const TravelObjectMapSection: FC<ITravelObjectMapSectionProps> = ({
                         src={objectMap.image_url}
                         alt={`Разметка карты объекта ${object.name}`}
                         className="travel-map-canvas-image"
+                        onError={() => {
+                          const url = objectMap.image_url;
+                          if (failedMapUrlsRef.current.has(url)) return;
+                          failedMapUrlsRef.current.add(url);
+                          void loadMap();
+                        }}
                       />
                       {draftPoints.map(point => (
                         <button

@@ -86,6 +86,7 @@ export interface SigurEmployeeCardSummary {
   format: string | null;
   startDate: string | null;
   expirationDate: string | null;
+  issued: boolean | null;
 }
 
 export interface SigurEmployeeAccessRuleSummary {

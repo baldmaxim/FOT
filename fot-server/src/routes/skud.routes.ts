@@ -160,8 +160,10 @@ router.put(
 );
 
 // GET /api/skud/travel-objects/:id/map - карта объекта (header+)
+// noStore: image_url — signed URL с TTL 1 ч; нельзя кэшировать в браузере, иначе протухнет.
 router.get(
   '/travel-objects/:id/map',
+  noStore,
   requirePageAccess('/skud-settings', 'view'),
   skudController.getTravelObjectMap
 );
@@ -202,8 +204,10 @@ router.delete(
 );
 
 // GET /api/skud/access-point-map - карта конкретной точки доступа (HR/Admin)
+// noStore: image_url — signed URL с TTL 1 ч; нельзя кэшировать в браузере, иначе протухнет.
 router.get(
   '/access-point-map',
+  noStore,
   requirePageAccess('/skud-settings', 'view'),
   skudController.getAccessPointMap
 );

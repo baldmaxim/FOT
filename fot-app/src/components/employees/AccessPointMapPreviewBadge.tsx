@@ -1,4 +1,4 @@
-import { type FC } from 'react';
+import { type FC, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { LoaderCircle, MapPinned } from 'lucide-react';
 import { useAccessPointMapPreview } from '../../hooks/useAccessPointMapPreview';
@@ -22,7 +22,9 @@ export const AccessPointMapPreviewBadge: FC<IAccessPointMapPreviewBadgeProps> = 
     popoverRef,
     openPreview,
     scheduleClose,
+    reloadPreview,
   } = useAccessPointMapPreview<HTMLDivElement>(normalizedName, enabled);
+  const failedUrlsRef = useRef<Set<string>>(new Set());
 
   if (!enabled || !normalizedName) {
     return null;
@@ -68,6 +70,11 @@ export const AccessPointMapPreviewBadge: FC<IAccessPointMapPreviewBadgeProps> = 
                   src={preview.image_url}
                   alt={`Карта объекта ${preview.object_name}`}
                   className="ep-sigur-map-image"
+                  onError={() => {
+                    if (failedUrlsRef.current.has(preview.image_url)) return;
+                    failedUrlsRef.current.add(preview.image_url);
+                    reloadPreview();
+                  }}
                 />
                 <div
                   className="ep-sigur-map-marker"

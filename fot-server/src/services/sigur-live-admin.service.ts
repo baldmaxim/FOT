@@ -100,7 +100,9 @@ export interface ISigurEmployeeProfile {
     cardId: number;
     cardNumber: string | null;
     status: string | null;
+    startDate: string | null;
     expirationDate: string | null;
+    issued: boolean | null;
   }>;
   accessRules: Array<{ accessRuleId: number; accessRuleName: string | null }>;
   accessRuleOptions: Array<{ accessRuleId: number; accessRuleName: string | null }>;
@@ -191,6 +193,7 @@ export function toCardSummary(raw: Record<string, unknown>): {
   format: string | null;
   startDate: string | null;
   expirationDate: string | null;
+  issued: boolean | null;
 } | null {
   const cardId = normalizeInt(resolveField(raw, 'cardId', 'card_id', 'cardID', 'cardid', 'id', 'ID', 'Id'));
   if (!cardId) return null;
@@ -211,6 +214,7 @@ export function toCardSummary(raw: Record<string, unknown>): {
       resolveField<string>(raw, 'expirationDate', 'expiration_date', 'expiresAt', 'expiryDate', 'validTo')
       || '',
     ).trim() || null,
+    issued: normalizeBoolean(resolveField(raw, 'issued', 'Issued', 'is_issued', 'isIssued')),
   };
 }
 
@@ -796,6 +800,7 @@ export async function getSigurEmployeeProfile(
     cardBindingsResult,
     accessRuleBindingsResult,
     accessPoints,
+    cardsCatalog,
   ] = await Promise.all([
     cachedRemoteEmployee
       ? Promise.resolve(cachedRemoteEmployee)
@@ -821,6 +826,10 @@ export async function getSigurEmployeeProfile(
     getEmployeeAccessPointBindings(sigurEmployeeId, connection, true)
       .then(value => ({ status: 'fulfilled', value }) as const)
       .catch(reason => ({ status: 'rejected', reason }) as const),
+    sigurService.getCardsCached(connection).catch(error => {
+      console.warn('Sigur live admin cards catalog warning:', error);
+      return [] as Record<string, unknown>[];
+    }),
   ]);
 
   const employee = normalizeSigurEmployeeSummary(remoteEmployeeRaw, departmentMap);
@@ -835,10 +844,22 @@ export async function getSigurEmployeeProfile(
     || '',
   ).trim() || null;
 
+  const cardsCatalogById = new Map<number, Record<string, unknown>>();
+  for (const rawCard of cardsCatalog) {
+    const cardId = normalizeInt(resolveField(rawCard, 'cardId', 'card_id', 'cardID', 'cardid', 'id', 'ID', 'Id'));
+    if (cardId) cardsCatalogById.set(cardId, rawCard);
+  }
+
   const cards = cardBindingsResult.status === 'fulfilled'
     ? (cardBindingsResult.value as Record<string, unknown>[])
       .map(raw => toCardSummary(raw))
       .filter((card): card is NonNullable<ReturnType<typeof toCardSummary>> => !!card)
+      .map(card => {
+        const catalogEntry = cardsCatalogById.get(card.cardId);
+        if (!catalogEntry) return card;
+        const issuedFromCatalog = normalizeBoolean(resolveField(catalogEntry, 'issued', 'Issued', 'is_issued', 'isIssued'));
+        return issuedFromCatalog === null ? card : { ...card, issued: issuedFromCatalog };
+      })
       .sort((left, right) => (left.cardNumber || '').localeCompare(right.cardNumber || '', 'ru'))
     : [];
 

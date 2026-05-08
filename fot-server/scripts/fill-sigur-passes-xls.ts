@@ -38,11 +38,13 @@ interface IRowToFill {
 }
 
 interface IResult extends IRowToFill {
-  status: 'filled' | 'no-employee' | 'no-active-card' | 'ambiguous-name';
+  status: 'filled' | 'filled-perpetual' | 'no-employee' | 'no-active-card' | 'ambiguous-name';
   cardNumber: string | null;
   startDate: string | null;
   expirationDate: string | null;
 }
+
+const PERPETUAL = 'бессрочно';
 
 const cleanCell = (raw: unknown): string => {
   if (raw === null || raw === undefined) return '';
@@ -94,9 +96,11 @@ const pickActiveCard = (cards: ReturnType<typeof toCardSummary>[]): NonNullable<
 
   const now = Date.now();
   const isActive = (c: NonNullable<ReturnType<typeof toCardSummary>>): boolean => {
-    if (!c.expirationDate) return false;
-    const exp = new Date(c.expirationDate).getTime();
-    if (Number.isNaN(exp) || exp < now) return false;
+    // Бессрочная привязка (expirationDate=null) считается активной — типично для офисного персонала.
+    if (c.expirationDate) {
+      const exp = new Date(c.expirationDate).getTime();
+      if (Number.isNaN(exp) || exp < now) return false;
+    }
     if (c.startDate) {
       const start = new Date(c.startDate).getTime();
       if (!Number.isNaN(start) && start > now) return false;
@@ -107,9 +111,10 @@ const pickActiveCard = (cards: ReturnType<typeof toCardSummary>[]): NonNullable<
   const active = valid.filter(isActive);
   if (active.length === 0) return null;
 
+  // Сортируем: бессрочные (null exp) — на первом месте, дальше по убыванию expirationDate.
   active.sort((a, b) => {
-    const ea = new Date(a.expirationDate || 0).getTime();
-    const eb = new Date(b.expirationDate || 0).getTime();
+    const ea = a.expirationDate ? new Date(a.expirationDate).getTime() : Number.POSITIVE_INFINITY;
+    const eb = b.expirationDate ? new Date(b.expirationDate).getTime() : Number.POSITIVE_INFINITY;
     return eb - ea;
   });
   return active[0];
@@ -219,9 +224,10 @@ async function main(): Promise<void> {
       return { ...row, status: 'no-active-card', cardNumber: null, startDate: null, expirationDate: null };
     }
     const cardNumber = card.cardNumber || cardNumberById.get(card.cardId) || null;
+    const isPerpetual = !card.startDate && !card.expirationDate;
     return {
       ...row,
-      status: 'filled',
+      status: isPerpetual ? 'filled-perpetual' : 'filled',
       cardNumber,
       startDate: card.startDate,
       expirationDate: card.expirationDate,
@@ -234,6 +240,8 @@ async function main(): Promise<void> {
     const r = results[i];
     const cardInfo = r.status === 'filled'
       ? `${r.cardNumber || DASH} (${formatDateRu(r.startDate)} → ${formatDateRu(r.expirationDate)})`
+      : r.status === 'filled-perpetual'
+      ? `${r.cardNumber || DASH} (${PERPETUAL})`
       : '';
     console.log(
       `${String(i + 1).padStart(3, ' ')}  ${r.status.padEnd(17, ' ')} ${r.tabNumber.padEnd(10, ' ')} ${r.fullName} ${cardInfo}`,
@@ -241,11 +249,12 @@ async function main(): Promise<void> {
   }
   const summary = {
     filled: results.filter(r => r.status === 'filled').length,
+    perpetual: results.filter(r => r.status === 'filled-perpetual').length,
     noEmployee: results.filter(r => r.status === 'no-employee').length,
     noCard: results.filter(r => r.status === 'no-active-card').length,
     ambiguous: results.filter(r => r.status === 'ambiguous-name').length,
   };
-  console.log(`\n[fill-passes] summary: filled=${summary.filled}, no-employee=${summary.noEmployee}, no-active-card=${summary.noCard}, ambiguous=${summary.ambiguous}`);
+  console.log(`\n[fill-passes] summary: filled=${summary.filled}, perpetual=${summary.perpetual}, no-employee=${summary.noEmployee}, no-active-card=${summary.noCard}, ambiguous=${summary.ambiguous}`);
 
   const outputPath = path.join(path.dirname(inputPath), `${path.basename(inputPath, path.extname(inputPath))}.xlsx`);
   const tempPath = path.join(path.dirname(inputPath), `.tmp-${Date.now()}-${path.basename(inputPath, path.extname(inputPath))}.xlsx`);
@@ -259,9 +268,22 @@ async function main(): Promise<void> {
   if (!wsFinal) throw new Error('[fill-passes] Не удалось открыть лист в сконвертированном .xlsx');
 
   for (const r of results) {
-    const passCellValue = r.status === 'filled' ? (r.cardNumber || DASH) : DASH;
-    const issueCellValue = r.status === 'filled' ? (formatDateRu(r.startDate) || DASH) : DASH;
-    const validCellValue = r.status === 'filled' ? (formatDateRu(r.expirationDate) || DASH) : DASH;
+    let passCellValue: string;
+    let issueCellValue: string;
+    let validCellValue: string;
+    if (r.status === 'filled') {
+      passCellValue = r.cardNumber || DASH;
+      issueCellValue = formatDateRu(r.startDate) || DASH;
+      validCellValue = formatDateRu(r.expirationDate) || DASH;
+    } else if (r.status === 'filled-perpetual') {
+      passCellValue = r.cardNumber || DASH;
+      issueCellValue = PERPETUAL;
+      validCellValue = PERPETUAL;
+    } else {
+      passCellValue = DASH;
+      issueCellValue = DASH;
+      validCellValue = DASH;
+    }
     wsFinal.getCell(r.rowIdx, cols.pass + 1).value = passCellValue;
     wsFinal.getCell(r.rowIdx, cols.issue + 1).value = issueCellValue;
     wsFinal.getCell(r.rowIdx, cols.valid + 1).value = validCellValue;

@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { ApiError } from '../api/client';
 import { useToast } from '../contexts/ToastContext';
+import { invalidateAccessPointPreview } from './useAccessPointMapPreview';
 import { travelTimeService } from '../services/travelTimeService';
 import type { IAccessPointMapView } from '../types';
 import { AccessPointMapModal } from '../components/skud/AccessPointMapModal';
@@ -29,13 +30,26 @@ export const useAccessPointMapViewer = (canOpen: boolean) => {
     }
   }, [canOpen, toast]);
 
+  const refreshMapData = useCallback(async () => {
+    const currentName = mapData?.access_point_name?.trim();
+    if (!currentName) return;
+    invalidateAccessPointPreview(currentName);
+    try {
+      const fresh = await travelTimeService.getAccessPointMap(currentName);
+      if (fresh) setMapData(fresh);
+    } catch {
+      // Тихо игнорируем — модалка останется с прежней data, alt-текст будет видно вместо картинки.
+    }
+  }, [mapData?.access_point_name]);
+
   const accessPointMapModal = useMemo(() => (
     <AccessPointMapModal
       open={!!mapData}
       data={mapData}
       onClose={() => setMapData(null)}
+      onImageError={refreshMapData}
     />
-  ), [mapData]);
+  ), [mapData, refreshMapData]);
 
   return {
     canOpenAccessPointMap: canOpen,

@@ -1,4 +1,4 @@
-import { type FC } from 'react';
+import { type FC, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { LoaderCircle } from 'lucide-react';
 import { useAccessPointMapPreview } from '../../hooks/useAccessPointMapPreview';
@@ -26,7 +26,9 @@ export const AccessPointTrigger: FC<IAccessPointTriggerProps> = ({
     popoverRef,
     openPreview,
     scheduleClose,
+    reloadPreview,
   } = useAccessPointMapPreview<HTMLButtonElement>(accessPointName, canOpen);
+  const failedUrlsRef = useRef<Set<string>>(new Set());
 
   if (!canOpen) {
     return <span className={className}>{accessPointName}</span>;
@@ -73,6 +75,11 @@ export const AccessPointTrigger: FC<IAccessPointTriggerProps> = ({
                   src={preview.image_url}
                   alt={`Карта объекта ${preview.object_name}`}
                   className="skud-map-preview-image"
+                  onError={() => {
+                    if (failedUrlsRef.current.has(preview.image_url)) return;
+                    failedUrlsRef.current.add(preview.image_url);
+                    reloadPreview();
+                  }}
                 />
                 <div
                   className="skud-map-preview-marker"

@@ -1122,6 +1122,14 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                       <div className={`ep-sigur-card-state ${isExpired(card.expirationDate) ? 'expired' : ''}`}>
                         {card.status || 'Активна'}
                         <span>{formatDisplayDate(card.expirationDate)}</span>
+                        {card.issued !== null && (
+                          <span
+                            className={`ep-sigur-pill ${card.issued ? 'ep-sigur-pill--success' : 'ep-sigur-pill--danger'}`}
+                            title={card.issued ? 'Карта выдана и активна в Sigur' : 'Карта в резерве — Sigur не пропустит на точках'}
+                          >
+                            {card.issued ? 'Выдана' : 'В резерве'}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div className="ep-sigur-card-edit">
