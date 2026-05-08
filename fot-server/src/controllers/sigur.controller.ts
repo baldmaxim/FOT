@@ -1045,11 +1045,13 @@ export const sigurController = {
           mapped = mapped.filter(evt => evt.employeeId != null && allowedIds.has(evt.employeeId));
           console.log('[sigur preview] after dept filter:', mapped.length);
 
-          // Ставим department name
+          // Ставим department name (только для pass-событий — у failure поля department нет)
           const deptMap = await sigurService.getDepartmentMapCached(connection);
           const deptName = deptMap.get(filterDeptId) || null;
           for (const evt of mapped) {
-            evt.department = deptName;
+            if (evt.kind === 'pass') {
+              evt.department = deptName;
+            }
           }
         }
       } catch (e) {

@@ -43,6 +43,31 @@ const mockedState = vi.hoisted(() => ({
     getBackgroundConnectionType: vi.fn(() => 'external'),
     getEvents: vi.fn<(...args: unknown[]) => Promise<Array<Record<string, unknown>>>>(async () => []),
     getEventsByLastId: vi.fn<(...args: unknown[]) => Promise<Array<Record<string, unknown>>>>(async () => []),
+    // Тесты мокают getEvents/getEventsByLastId — новые методы делегируют на них и
+    // упаковывают результат в { pass, failures: [] }. Так старые ожидания тестов на
+    // getEvents.toHaveBeenCalledWith(...) продолжают работать, но прод-код видит
+    // новый API.
+    getEventsWithFailures: vi.fn(async (
+      startTime?: string,
+      endTime?: string,
+      connection?: 'internal' | 'external',
+      extraParams?: Record<string, unknown>,
+    ) => {
+      const args: unknown[] = [startTime, endTime, connection, 'PASS_DETECTED'];
+      if (extraParams !== undefined) args.push(extraParams);
+      const pass = await (mockedState.sigurServiceMock.getEvents as (...a: unknown[]) => Promise<Array<Record<string, unknown>>>)(...args);
+      return { pass, failures: [] as Array<Record<string, unknown>> };
+    }),
+    getEventsByLastIdWithFailures: vi.fn(async (
+      lastEventId: number,
+      connection?: 'internal' | 'external',
+      pageSize?: number,
+    ) => {
+      const args: unknown[] = [lastEventId, 'PASS_DETECTED', connection];
+      if (pageSize !== undefined) args.push(pageSize);
+      const pass = await (mockedState.sigurServiceMock.getEventsByLastId as (...a: unknown[]) => Promise<Array<Record<string, unknown>>>)(...args);
+      return { pass, failures: [] as Array<Record<string, unknown>> };
+    }),
   },
   sigurMonitorMock: {
     markPresencePollingCycleStarted: vi.fn(),

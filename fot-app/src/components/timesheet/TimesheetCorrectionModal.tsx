@@ -156,6 +156,8 @@ const EventsTab: FC<{
               </div>
             );
           }
+          // В корректировке табеля показываются только успешные проходы.
+          if (item.kind === 'failure') return null;
           const { event: ev, pairDurationSeconds, isInternal } = item;
           return (
             <div

@@ -1,9 +1,10 @@
 /**
- * Маппер событий Sigur REST API → формат skud_events.
+ * Маппер событий Sigur REST API → формат skud_events / skud_event_failures.
  *
  * Реальный формат Sigur /api/v1/events/parsed:
  * {
- *   eventType: "PASS_DETECTED",
+ *   eventType: "PASS_DETECTED" | "PASS_DENY" | ...,
+ *   eventTypeId: 6 | 12 | ...,
  *   timestamp: "2026-02-02T10:23:23+03:00",
  *   data: { direction: "IN", cardKey: "18CB7ECE00000000", ... },
  *   additionalData: {
@@ -11,9 +12,14 @@
  *     accessPoint: { name: "Примавера Штаб" },
  *   }
  * }
+ *
+ * Маппер возвращает тегированный union: успешный проход (`kind: 'pass'`) идёт в
+ * skud_events и участвует в расчётах табеля; всё остальное (`kind: 'failure'`)
+ * пишется в skud_event_failures и из расчётов исключено.
  */
 
-export interface IMappedSigurEvent {
+export interface IMappedSigurPassEvent {
+  kind: 'pass';
   physicalPerson: string | null;
   cardNumber: string | null;
   eventDate: string;     // YYYY-MM-DD
@@ -25,62 +31,110 @@ export interface IMappedSigurEvent {
   department: string | null;
 }
 
+export interface IMappedSigurFailureEvent {
+  kind: 'failure';
+  failureType: string;          // строкой из raw.eventType ('PASS_DENY' и т.п.)
+  failureTypeId: number | null; // из raw.eventTypeId, если присутствует
+  physicalPerson: string | null;
+  cardNumber: string | null;
+  eventDate: string;
+  eventTime: string;
+  accessPoint: string | null;
+  direction: 'entry' | 'exit' | null;
+  employeeId: number | null;
+  reason: string | null;        // raw.description / raw.data?.reason / raw.data?.failureReason
+  rawId: number | null;
+}
+
+export type IMappedSigurEvent = IMappedSigurPassEvent | IMappedSigurFailureEvent;
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+const parseDirection = (dir: unknown): 'entry' | 'exit' | null => {
+  if (dir === 'IN' || dir === 'entry') return 'entry';
+  if (dir === 'OUT' || dir === 'exit') return 'exit';
+  return null;
+};
+
+const extractEmployeeId = (raw: unknown): number | null => {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string' && /^\d+$/.test(raw)) return parseInt(raw, 10);
+  return null;
+};
+
 export const mapSigurEvent = (raw: Record<string, unknown>): IMappedSigurEvent | null => {
-  // Только события прохода
-  if (raw.eventType !== 'PASS_DETECTED') return null;
+  // Дата и время из timestamp — обязательны для любого типа события
+  const ts = raw.timestamp as string | undefined;
+  if (!ts) return null;
+  const { date, time } = parseTimestamp(ts);
+  if (!date || !time) return null;
 
   const data = raw.data as Record<string, any> | undefined;
   const additional = raw.additionalData as Record<string, any> | undefined;
 
-  // Данные сотрудника
+  // Имя сотрудника (если есть)
   const personData = additional?.accessObject?.data;
   const personName = personData?.name;
   const hasName = typeof personName === 'string' && personName.trim().length > 0;
 
-  // Дата и время из timestamp
-  const ts = raw.timestamp as string | undefined;
-  if (!ts) return null;
-
-  const { date, time } = parseTimestamp(ts);
-  if (!date || !time) return null;
-
-  // Направление
-  const dir = data?.direction;
-  const direction: 'entry' | 'exit' | null =
-    dir === 'IN' ? 'entry' :
-    dir === 'OUT' ? 'exit' :
-    null;
-
-  // Номер карты
+  // Номер карты (если есть)
   const cardKey = data?.cardKey;
   const cardNumber = typeof cardKey === 'string' && cardKey.trim() ? cardKey.trim() : null;
-
-  // Без имени и без карты — бесполезное событие
-  if (!hasName && !cardNumber) return null;
 
   // Точка доступа
   const apName = additional?.accessPoint?.name;
   const accessPoint = typeof apName === 'string' && apName.trim() ? apName.trim() : null;
 
-  // ID сотрудника в Sigur (для обогащения данными)
-  const employeeId = data?.employeeId ?? personData?.id ?? null;
+  // Направление
+  const direction = parseDirection(data?.direction);
+
+  // employeeId в Sigur: data.employeeId или accessObject.data.id
+  const employeeId =
+    extractEmployeeId(data?.employeeId) ?? extractEmployeeId(personData?.id);
+
+  const eventType = typeof raw.eventType === 'string' ? raw.eventType : null;
+  const rawId = typeof raw.id === 'number' && Number.isFinite(raw.id) ? raw.id : null;
+
+  if (eventType === 'PASS_DETECTED') {
+    // Без имени и без карты PASS_DETECTED считаем мусором (как и раньше)
+    if (!hasName && !cardNumber) return null;
+    return {
+      kind: 'pass',
+      physicalPerson: hasName ? personName!.trim() : null,
+      cardNumber,
+      eventDate: date,
+      eventTime: time,
+      accessPoint,
+      direction,
+      employeeId,
+      blocked: null,
+      department: null,
+    };
+  }
+
+  // Всё остальное — failure-событие. Имя/карта могут отсутствовать (часто так
+  // и происходит при PASS_DENY на чужой карте или таймауте).
+  const failureType = eventType || 'UNKNOWN';
+  const failureTypeId = typeof raw.eventTypeId === 'number' ? raw.eventTypeId : null;
+  const reason =
+    (typeof raw.description === 'string' && raw.description.trim()) ||
+    (typeof data?.reason === 'string' && data.reason.trim()) ||
+    (typeof data?.failureReason === 'string' && data.failureReason.trim()) ||
+    null;
 
   return {
+    kind: 'failure',
+    failureType,
+    failureTypeId,
     physicalPerson: hasName ? personName!.trim() : null,
     cardNumber,
     eventDate: date,
     eventTime: time,
     accessPoint,
     direction,
-    employeeId: typeof employeeId === 'number'
-      ? employeeId
-      : (typeof employeeId === 'string' && /^\d+$/.test(employeeId)
-        ? parseInt(employeeId, 10)
-        : null),
-    blocked: null, // обогащается из кэша сотрудников (поле isBlocked)
-    department: null,
+    employeeId,
+    reason,
+    rawId,
   };
 };
 

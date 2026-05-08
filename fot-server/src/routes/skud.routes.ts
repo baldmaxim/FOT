@@ -110,6 +110,13 @@ router.get(
   skudController.getEvents
 );
 
+// GET /api/skud/event-failures - ошибочные события Sigur (PASS_DENY и т.п.) (header+)
+router.get(
+  '/event-failures',
+  requirePageAccess('/skud-db', 'view'),
+  skudController.getEventFailures
+);
+
 // GET /api/skud/access-points - точки доступа (header+)
 router.get(
   '/access-points',

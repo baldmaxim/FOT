@@ -1,19 +1,20 @@
 import { useState, useEffect, useRef, type FC } from 'react';
 import {
   LogIn, LogOut, ChevronDown, ChevronRight, ChevronLeft,
-  Clock, Timer, Download,
+  Clock, Timer, Download, AlertCircle,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
 import { skudService } from '../../services/skudService';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 import { DateInput } from '../ui/DateInput';
-import type { SkudEvent } from '../../types';
+import type { SkudEvent, SkudEventFailure } from '../../types';
 import { triggerBlobDownload } from '../../utils/download';
 import {
   buildDisplayItems,
   calculateWorkSeconds,
   isToday,
+  mergeFailuresIntoDisplay,
   nowSeconds,
   timeToSeconds,
   toLocalISO,
@@ -49,6 +50,7 @@ const MONTH_NAMES = [
 interface IDayGroup {
   date: string;
   events: SkudEvent[];
+  failures: SkudEventFailure[];
   firstEntry: string | null;
   lastExit: string | null;
   totalSeconds: number;
@@ -96,17 +98,29 @@ const formatDuration = (seconds: number): string => {
   return `${h}ч ${m}м ${s}с`;
 };
 
-const groupByDay = (events: SkudEvent[], internalPoints: Set<string>): IDayGroup[] => {
+const groupByDay = (
+  events: SkudEvent[],
+  failures: SkudEventFailure[],
+  internalPoints: Set<string>,
+): IDayGroup[] => {
   const map = new Map<string, SkudEvent[]>();
   for (const ev of events) {
     const key = ev.event_date;
     if (!map.has(key)) map.set(key, []);
     map.get(key)!.push(ev);
   }
+  const failureMap = new Map<string, SkudEventFailure[]>();
+  for (const f of failures) {
+    const key = f.event_date;
+    if (!failureMap.has(key)) failureMap.set(key, []);
+    failureMap.get(key)!.push(f);
+  }
 
+  const allDates = new Set<string>([...map.keys(), ...failureMap.keys()]);
   const groups: IDayGroup[] = [];
-  for (const [date, dayEvents] of map) {
-    dayEvents.sort((a, b) => a.event_time.localeCompare(b.event_time));
+  for (const date of allDates) {
+    const dayEvents = (map.get(date) || []).slice().sort((a, b) => a.event_time.localeCompare(b.event_time));
+    const dayFailures = (failureMap.get(date) || []).slice().sort((a, b) => a.event_time.localeCompare(b.event_time));
     const extEvents = dayEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point));
     const entries = extEvents.filter(e => e.direction === 'entry');
     const exits = extEvents.filter(e => e.direction === 'exit');
@@ -125,6 +139,7 @@ const groupByDay = (events: SkudEvent[], internalPoints: Set<string>): IDayGroup
     groups.push({
       date,
       events: dayEvents,
+      failures: dayFailures,
       firstEntry: entries.length > 0 ? entries[0].event_time : null,
       lastExit: stillOnSite ? null : (exits.length > 0 ? exits[exits.length - 1].event_time : null),
       totalSeconds: calculateWorkSeconds(dayEvents, internalPoints, date),
@@ -268,10 +283,10 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
     setLoading(true);
     setError('');
 
-    skudService.getEmployeeEvents(employeeId, effStart, effEnd)
-      .then(events => {
+    skudService.getEmployeeEventsWithFailures(employeeId, effStart, effEnd)
+      .then(({ events, failures }) => {
         if (requestIdRef.current !== currentReqId) return; // stale — игнорируем
-        const grouped = groupByDay(events, internalPointsRef.current);
+        const grouped = groupByDay(events, failures, internalPointsRef.current);
         setGroups(grouped);
         if (viewMode === 'day' && grouped.length > 0) {
           setExpandedDays(new Set([grouped[0].date]));
@@ -296,10 +311,10 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
       return; // skip initial
     }
     const currentReqId = ++requestIdRef.current;
-    skudService.getEmployeeEvents(employeeId, effStart, effEnd)
-      .then(events => {
+    skudService.getEmployeeEventsWithFailures(employeeId, effStart, effEnd)
+      .then(({ events, failures }) => {
         if (requestIdRef.current !== currentReqId) return;
-        setGroups(groupByDay(events, internalPointsRef.current));
+        setGroups(groupByDay(events, failures, internalPointsRef.current));
       })
       .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -325,6 +340,7 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
   });
 
   const allEvents = groups.flatMap(g => g.events).sort((a, b) => a.event_time.localeCompare(b.event_time));
+  const allFailures = groups.flatMap(g => g.failures).sort((a, b) => a.event_time.localeCompare(b.event_time));
 
   const handleExport = async () => {
     const { startDate, endDate } = getEffectiveRange();
@@ -403,7 +419,10 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
             <div>Событие</div>
             <div className="skud-col-point">Точка прохода</div>
           </div>
-          {buildDisplayItems(allEvents, internalPoints, groups[0]?.date).map((item, idx) => {
+          {mergeFailuresIntoDisplay(
+            buildDisplayItems(allEvents, internalPoints, groups[0]?.date),
+            allFailures,
+          ).map((item, idx) => {
             if (item.kind === 'break') {
               return (
                 <div key={`break-${idx}`} className="skud-table-row skud-pair-break">
@@ -412,6 +431,31 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
                     Перерыв: {formatDurationCompact(item.breakSeconds)}
                   </div>
                   <div className="skud-col-point" />
+                </div>
+              );
+            }
+            if (item.kind === 'failure') {
+              const f = item.failure;
+              return (
+                <div key={`failure-${f.id}`} className="skud-table-row skud-event-failure" title={f.reason || ''}>
+                  <div className="skud-table-time">{formatTimeShort(f.event_time)}</div>
+                  <div className="skud-table-event">
+                    <span className="skud-table-event-icon failure">
+                      <AlertCircle size={14} />
+                    </span>
+                    <span className="skud-failure-badge">{f.failure_type}</span>
+                    {f.reason && <span className="skud-failure-reason">{f.reason}</span>}
+                  </div>
+                  <div className="skud-col-point">
+                    {f.access_point ? (
+                      <AccessPointTrigger
+                        accessPointName={f.access_point}
+                        className="skud-table-point"
+                        canOpen={canOpenAccessPointMap}
+                        onOpen={openAccessPointMap}
+                      />
+                    ) : '—'}
+                  </div>
                 </div>
               );
             }
@@ -555,13 +599,43 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
                         </span>
                       )}
                     </div>
-                    {buildDisplayItems(group.events, internalPoints, group.date).map((item, idx) => {
+                    {mergeFailuresIntoDisplay(
+                      buildDisplayItems(group.events, internalPoints, group.date),
+                      group.failures,
+                    ).map((item, idx) => {
                       if (item.kind === 'break') {
                         return (
                           <div key={`break-${idx}`} className="skud-event-row skud-pair-break">
                             <span className="skud-pair-break-label">
                               Перерыв: {formatDurationCompact(item.breakSeconds)}
                             </span>
+                          </div>
+                        );
+                      }
+                      if (item.kind === 'failure') {
+                        const f = item.failure;
+                        return (
+                          <div
+                            key={`failure-${f.id}`}
+                            className="skud-event-row skud-event-failure"
+                            title={f.reason || ''}
+                          >
+                            <span className="skud-event-icon failure">
+                              <AlertCircle size={14} />
+                            </span>
+                            <span className="skud-event-time">
+                              <Clock size={12} /> {formatTime(f.event_time)}
+                            </span>
+                            <span className="skud-failure-badge">{f.failure_type}</span>
+                            {f.access_point && (
+                              <AccessPointTrigger
+                                accessPointName={f.access_point}
+                                className="skud-event-point"
+                                canOpen={canOpenAccessPointMap}
+                                onOpen={openAccessPointMap}
+                              />
+                            )}
+                            {f.reason && <span className="skud-failure-reason">{f.reason}</span>}
                           </div>
                         );
                       }

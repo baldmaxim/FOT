@@ -1,7 +1,7 @@
 import { type FC, useMemo, useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { X, ChevronDown, ChevronRight, LogIn, LogOut, Timer } from 'lucide-react';
-import type { TimesheetEntry, TimesheetEmployee, SkudEvent, IProductionCalendarMonth } from '../../types';
+import { X, ChevronDown, ChevronRight, LogIn, LogOut, Timer, AlertCircle } from 'lucide-react';
+import type { TimesheetEntry, TimesheetEmployee, SkudEvent, SkudEventFailure, IProductionCalendarMonth } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
@@ -9,6 +9,7 @@ import { skudService } from '../../services/skudService';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 import {
   buildDisplayItems,
+  mergeFailuresIntoDisplay,
 } from '../../utils/skudDisplay';
 import {
   getDaysInMonth,
@@ -42,6 +43,7 @@ interface ISidePanelProps {
 interface IDayEvents {
   date: string;
   events: SkudEvent[];
+  failures: SkudEventFailure[];
 }
 
 const getInitials = (name: string): string => {
@@ -61,20 +63,27 @@ const formatTravelMinutes = (minutes: number): string => {
   return `${hours}ч ${mins}м`;
 };
 
-const groupEventsByDay = (events: SkudEvent[]): Map<string, IDayEvents> => {
-  const map = new Map<string, SkudEvent[]>();
+const groupEventsByDay = (events: SkudEvent[], failures: SkudEventFailure[]): Map<string, IDayEvents> => {
+  const eventMap = new Map<string, SkudEvent[]>();
   for (const ev of events) {
     const key = ev.event_date;
-    if (!map.has(key)) map.set(key, []);
-    map.get(key)!.push(ev);
+    if (!eventMap.has(key)) eventMap.set(key, []);
+    eventMap.get(key)!.push(ev);
+  }
+  const failureMap = new Map<string, SkudEventFailure[]>();
+  for (const f of failures) {
+    const key = f.event_date;
+    if (!failureMap.has(key)) failureMap.set(key, []);
+    failureMap.get(key)!.push(f);
   }
 
+  const allDates = new Set<string>([...eventMap.keys(), ...failureMap.keys()]);
   const result = new Map<string, IDayEvents>();
-  for (const [date, dayEvents] of map) {
-    dayEvents.sort((a, b) => a.event_time.localeCompare(b.event_time));
-    result.set(date, { date, events: dayEvents });
+  for (const date of allDates) {
+    const dayEvents = (eventMap.get(date) || []).slice().sort((a, b) => a.event_time.localeCompare(b.event_time));
+    const dayFailures = (failureMap.get(date) || []).slice().sort((a, b) => a.event_time.localeCompare(b.event_time));
+    result.set(date, { date, events: dayEvents, failures: dayFailures });
   }
-
   return result;
 };
 
@@ -117,8 +126,8 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
       const lastVisibleDay = visibleDays?.[visibleDays.length - 1] || getDaysInMonth(year, month);
       const startDate = `${year}-${String(month).padStart(2, '0')}-${String(firstVisibleDay).padStart(2, '0')}`;
       const endDate = `${year}-${String(month).padStart(2, '0')}-${String(lastVisibleDay).padStart(2, '0')}`;
-      const events = await skudService.getEmployeeEvents(employee.id, startDate, endDate);
-      setSkudEvents(groupEventsByDay(events));
+      const { events, failures } = await skudService.getEmployeeEventsWithFailures(employee.id, startDate, endDate);
+      setSkudEvents(groupEventsByDay(events, failures));
     } catch {
       setSkudEvents(new Map());
     } finally {
@@ -233,7 +242,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
               const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
               const dayEventsData = skudEvents.get(dateStr);
               const expanded = expandedDays.has(day);
-              const hasEvents = dayEventsData && dayEventsData.events.length > 0;
+              const hasEvents = dayEventsData && (dayEventsData.events.length > 0 || dayEventsData.failures.length > 0);
               // Источник суммарного времени и пограничных меток — табельная запись
               // (entry). Бэк уже замыкает open-entry для today по now() и применяет
               // cap по длине смены / show_actual_hours. Раньше здесь был fallback
@@ -297,13 +306,43 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                         <div className="ts-day-events-empty">Нет событий СКУД</div>
                       ) : (
                         <>
-                          {buildDisplayItems(dayEventsData.events, internalPoints, dateStr).map((item, idx) => {
+                          {mergeFailuresIntoDisplay(
+                            buildDisplayItems(dayEventsData.events, internalPoints, dateStr),
+                            dayEventsData.failures,
+                          ).map((item, idx) => {
                             if (item.kind === 'break') {
                               return (
                                 <div key={`break-${idx}`} className="ts-day-event-row ts-day-event-row--break">
                                   <span className="ts-day-event-break-label">
                                     Перерыв: {formatSecondsLabel(item.breakSeconds)}
                                   </span>
+                                </div>
+                              );
+                            }
+                            if (item.kind === 'failure') {
+                              const f = item.failure;
+                              return (
+                                <div
+                                  key={`failure-${f.id}`}
+                                  className="ts-day-event-row ts-day-event-row--failure"
+                                  title={f.reason || ''}
+                                >
+                                  <span className="ts-day-event-icon ts-day-event-failure-icon">
+                                    <AlertCircle size={13} />
+                                  </span>
+                                  <span className="ts-day-event-time">{formatTime(f.event_time)}</span>
+                                  <span className="ts-day-event-failure-badge">{f.failure_type}</span>
+                                  {f.access_point && (
+                                    <AccessPointTrigger
+                                      accessPointName={f.access_point}
+                                      className="ts-day-event-point"
+                                      canOpen={canOpenAccessPointMap}
+                                      onOpen={openAccessPointMap}
+                                    />
+                                  )}
+                                  {f.reason && (
+                                    <span className="ts-day-event-failure-reason">{f.reason}</span>
+                                  )}
                                 </div>
                               );
                             }

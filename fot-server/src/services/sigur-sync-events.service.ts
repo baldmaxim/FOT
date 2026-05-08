@@ -1,7 +1,7 @@
 import { sigurService } from './sigur.service.js';
 import { supabase } from '../config/database.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
-import { computeDedupHash } from '../utils/dedup.utils.js';
+import { computeDedupHash, computeFailureDedupHash } from '../utils/dedup.utils.js';
 import { buildInclusiveDateRange, buildMoscowEventTimestamp } from '../utils/date.utils.js';
 import {
   buildWhitelistedEmployeesCache,
@@ -34,6 +34,11 @@ export interface ISyncEventsResult {
   noNameSamples?: unknown[];
   matchedBySigurId?: number;
   matchedByName?: number;
+  // Ошибочные события Sigur (PASS_DENY и т.п.) — отдельная таблица skud_event_failures.
+  failuresFetched?: number;
+  failuresImported?: number;
+  failuresSkipped?: number;
+  failuresByType?: Record<string, number>;
 }
 
 // ─── Чистая функция синхронизации ───
@@ -110,6 +115,10 @@ export async function syncEventsLogic(
   let matchedByName = 0;
   let matchedEvents = 0;
   let unmatchedEvents = 0;
+  let totalFailuresFetched = 0;
+  let totalFailuresInserted = 0;
+  let totalFailuresSkipped = 0;
+  const failuresByType = new Map<string, number>();
   const noNameSamples: unknown[] = [];
   const filteredNames = new Map<string, number>();
   const unmatchedNames = new Map<string, number>();
@@ -139,6 +148,29 @@ export async function syncEventsLogic(
     console.log(`[syncEvents] preloaded ${existingSet.size} existing hashes`);
   }
 
+  // ─── Предзагрузка хэшей failures (skud_event_failures) ───
+  const existingFailureSet = new Set<string>();
+  {
+    const HASH_PAGE = 10000;
+    let hashOffset = 0;
+    while (true) {
+      const { data: hashPage } = await supabase
+        .from('skud_event_failures')
+        .select('dedup_hash')
+        .gte('event_date', days[0])
+        .lte('event_date', days[days.length - 1])
+        .not('dedup_hash', 'is', null)
+        .range(hashOffset, hashOffset + HASH_PAGE - 1);
+      if (!hashPage || hashPage.length === 0) break;
+      for (const evt of hashPage) {
+        if (evt.dedup_hash) existingFailureSet.add(evt.dedup_hash);
+      }
+      if (hashPage.length < HASH_PAGE) break;
+      hashOffset += HASH_PAGE;
+    }
+    console.log(`[syncEvents] preloaded ${existingFailureSet.size} existing failure hashes`);
+  }
+
   // ─── Последовательная обработка с прогрессом на каждый день ───
   const BATCH_SIZE = 300;
   const BATCH_DELAY_MS = 200;
@@ -159,8 +191,14 @@ export async function syncEventsLogic(
 
     const dayStart = `${day}T00:00:00`;
     const dayEnd = `${day}T23:59:59`;
-    const rawEvents = await sigurService.getEvents(dayStart, dayEnd, connection, 'PASS_DETECTED', { pageSize: 3000 });
+    const { pass: rawEvents, failures: rawFailures } = await sigurService.getEventsWithFailures(
+      dayStart,
+      dayEnd,
+      connection,
+      { pageSize: 3000 },
+    );
     totalSigur += rawEvents.length;
+    totalFailuresFetched += rawFailures.length;
 
     if (rawEvents.length > 3000) {
       console.log(`[syncEvents] day ${day}: ${rawEvents.length} events (pagination worked, ${Math.ceil(rawEvents.length / 3000)} pages)`);
@@ -182,9 +220,10 @@ export async function syncEventsLogic(
       console.log(`[syncEvents] day=${day} events=${rawEvents.length} first=${firstTs} last=${lastTs} hourly=${JSON.stringify(hourly)}`);
     }
 
-    if (rawEvents.length === 0) continue;
+    if (rawEvents.length === 0 && rawFailures.length === 0) continue;
 
     const dayInserts: Record<string, unknown>[] = [];
+    const dayFailureInserts: Record<string, unknown>[] = [];
 
     for (const raw of rawEvents) {
       const mapped = mapSigurEvent(raw as Record<string, unknown>);
@@ -204,6 +243,9 @@ export async function syncEventsLogic(
         }
         continue;
       }
+
+      // На pass-ветке всегда `kind: 'pass'`. Failure-ветка идёт отдельным циклом ниже.
+      if (mapped.kind !== 'pass') continue;
 
       const personName = mapped.physicalPerson;
       if (!personName) {
@@ -258,6 +300,64 @@ export async function syncEventsLogic(
       if (emp) summariesToUpdate.add(`${emp.id}:${mapped.eventDate}`);
     }
 
+    // ─── Обработка ошибочных событий (PASS_DENY и т.п.) ───
+    for (const raw of rawFailures) {
+      const mapped = mapSigurEvent(raw as Record<string, unknown>);
+      if (!mapped || mapped.kind !== 'failure') continue;
+
+      // Whitelist: если у события есть имя/sigurId, режем чужие отделы. Если нет
+      // (карта не распознана) — пропускаем сквозь whitelist, событие может быть
+      // важным с точки зрения наблюдения.
+      if (allowedNames && mapped.physicalPerson) {
+        const nameKey = normalizePersonName(mapped.physicalPerson);
+        const sigurEmpId = mapped.employeeId;
+        if (!allowedNames.has(nameKey) && !(sigurEmpId && allowedSigurIds?.has(sigurEmpId))) {
+          continue;
+        }
+      }
+
+      const failureHash = computeFailureDedupHash(
+        mapped.physicalPerson,
+        mapped.cardNumber,
+        mapped.eventDate,
+        mapped.eventTime,
+        mapped.accessPoint,
+        mapped.direction,
+        mapped.failureType,
+        mapped.rawId,
+      );
+      if (existingFailureSet.has(failureHash)) { totalFailuresSkipped++; continue; }
+      existingFailureSet.add(failureHash);
+
+      // Match employee — best-effort, по имени или sigur id (если они есть).
+      let failureEmp: { id: number } | undefined;
+      if (mapped.physicalPerson) {
+        const nameKey = normalizePersonName(mapped.physicalPerson);
+        failureEmp = mapped.employeeId != null ? sigurIdMap.get(mapped.employeeId) : undefined;
+        if (!failureEmp) failureEmp = employeeByName.get(nameKey);
+      } else if (mapped.employeeId != null) {
+        failureEmp = sigurIdMap.get(mapped.employeeId);
+      }
+
+      failuresByType.set(mapped.failureType, (failuresByType.get(mapped.failureType) || 0) + 1);
+
+      dayFailureInserts.push({
+        physical_person: mapped.physicalPerson,
+        card_number: mapped.cardNumber,
+        event_date: mapped.eventDate,
+        event_time: mapped.eventTime,
+        event_at: buildMoscowEventTimestamp(mapped.eventDate, mapped.eventTime),
+        access_point: mapped.accessPoint,
+        direction: mapped.direction,
+        employee_id: failureEmp?.id || null,
+        failure_type: mapped.failureType,
+        failure_type_id: mapped.failureTypeId,
+        reason: mapped.reason,
+        raw_event_id: mapped.rawId,
+        dedup_hash: failureHash,
+      });
+    }
+
     // Вставка батчами с паузами (защита от 502 на облачном Supabase)
     for (let i = 0; i < dayInserts.length; i += BATCH_SIZE) {
       const batch = dayInserts.slice(i, i + BATCH_SIZE);
@@ -270,12 +370,30 @@ export async function syncEventsLogic(
       if (i + BATCH_SIZE < dayInserts.length) await sleep(BATCH_DELAY_MS);
     }
 
+    // Вставка ошибочных событий — отдельной таблицей, без recalc-RPC.
+    let dayFailuresInserted = 0;
+    for (let i = 0; i < dayFailureInserts.length; i += BATCH_SIZE) {
+      const batch = dayFailureInserts.slice(i, i + BATCH_SIZE);
+      const { error: insertError } = await supabase
+        .from('skud_event_failures')
+        .upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true });
+      if (insertError) {
+        errors.push(`[${day}][failures] ${insertError.message}`);
+      } else {
+        dayFailuresInserted += batch.length;
+      }
+      if (i + BATCH_SIZE < dayFailureInserts.length) await sleep(BATCH_DELAY_MS);
+    }
+    totalFailuresInserted += dayFailuresInserted;
+
     // Детальный SSE-отчёт по дню
     send({
       type: 'events_day_done',
       day,
       sigurCount: rawEvents.length,
       insertedCount: dayInserts.length,
+      failuresFetched: rawFailures.length,
+      failuresInserted: dayFailuresInserted,
     });
 
     if (dayIdx < days.length - 1) await sleep(DAY_DELAY_MS);
@@ -307,7 +425,10 @@ export async function syncEventsLogic(
     console.warn(`[syncEvents] не сопоставлены с сотрудниками (top 10): ${top}`);
   }
 
-  console.log(`[syncEvents] done: ${totalInserted} imported, ${totalSkipped} skipped, ${totalFilteredDept} filtered`);
+  console.log(
+    `[syncEvents] done: ${totalInserted} imported, ${totalSkipped} skipped, ${totalFilteredDept} filtered, ` +
+    `${totalFailuresInserted} failures imported (${totalFailuresSkipped} skipped) of ${totalFailuresFetched} fetched`,
+  );
   return {
     sigurTotal: totalSigur,
     imported: totalInserted,
@@ -327,5 +448,9 @@ export async function syncEventsLogic(
     noNameSamples: noNameSamples.length > 0 ? noNameSamples : undefined,
     matchedBySigurId,
     matchedByName,
+    failuresFetched: totalFailuresFetched,
+    failuresImported: totalFailuresInserted,
+    failuresSkipped: totalFailuresSkipped,
+    failuresByType: Object.fromEntries(failuresByType),
   };
 }

@@ -813,6 +813,103 @@ export class SigurDataService extends SigurServiceBase {
     PASS_DENY: 12,
   };
 
+  // Обратная карта id → имя для известных типов. Для незнакомых id маппер
+  // использует строку 'TYPE_<id>' — такие события всё равно попадают в
+  // skud_event_failures, и оператор увидит реальный тип после ручной классификации.
+  private static readonly EVENT_NAME_BY_ID: Record<number, string> = (() => {
+    const map: Record<number, string> = {};
+    for (const [name, id] of Object.entries(SigurDataService.EVENT_TYPE_ID_MAP)) {
+      map[id] = name;
+    }
+    return map;
+  })();
+
+  /**
+   * Обогащает raw-события Sigur и делит их на success (PASS_DETECTED) и failures
+   * (всё остальное). В отличие от `enrichRawEvents`, не отбрасывает события с
+   * `direction not in ('IN','OUT')` или с отсутствующим `accessObjectId` — для
+   * PASS_DENY и таймаутов эти поля часто пустые.
+   *
+   * Возвращаемые объекты имеют тот же формат, что и enrichRawEvents (eventType,
+   * timestamp, data, additionalData), и совместимы с `mapSigurEvent`.
+   */
+  private async enrichAllRawEvents(
+    rawEvents: Record<string, unknown>[],
+    connection?: ConnectionType,
+  ): Promise<{ pass: Record<string, unknown>[]; failures: Record<string, unknown>[] }> {
+    if (rawEvents.length === 0) return { pass: [], failures: [] };
+
+    const [employees, accessPointMap] = await Promise.all([
+      this.getEmployeesCached(connection),
+      this.getAccessPointMapCached(connection),
+    ]);
+
+    const employeeById = new Map<number, Record<string, unknown>>();
+    for (const employee of employees) {
+      if (typeof employee.id === 'number') {
+        employeeById.set(employee.id, employee);
+      }
+    }
+
+    const pass: Record<string, unknown>[] = [];
+    const failures: Record<string, unknown>[] = [];
+
+    for (const raw of rawEvents) {
+      const isPass = this.isRawPassEvent(raw);
+      const accessObjectId = typeof raw.accessObjectId === 'number' ? raw.accessObjectId : null;
+      const employee = accessObjectId != null ? employeeById.get(accessObjectId) : undefined;
+      const accessPointId = typeof raw.accessPointId === 'number' ? raw.accessPointId : null;
+      const employeeName = typeof employee?.name === 'string' ? employee.name : '';
+
+      // Имя типа: для известных id — каноническое имя; иначе TYPE_<id> (или null).
+      const rawTypeId = typeof raw.eventTypeId === 'number' ? raw.eventTypeId : null;
+      const knownName = rawTypeId != null ? SigurDataService.EVENT_NAME_BY_ID[rawTypeId] : undefined;
+      const eventType = isPass ? 'PASS_DETECTED' : (knownName ?? (rawTypeId != null ? `TYPE_${rawTypeId}` : 'UNKNOWN'));
+
+      const enriched: Record<string, unknown> = {
+        id: raw.id,
+        eventType,
+        eventTypeId: rawTypeId,
+        timestamp: raw.timestamp,
+        description: typeof raw.description === 'string' ? raw.description : null,
+        data: {
+          direction: raw.direction,
+          employeeId: accessObjectId,
+          accessPointId,
+          cardKey: typeof raw.cardKey === 'string' ? raw.cardKey : null,
+          reason: typeof (raw as Record<string, any>).reason === 'string' ? (raw as Record<string, any>).reason : null,
+          failureReason: typeof (raw as Record<string, any>).failureReason === 'string' ? (raw as Record<string, any>).failureReason : null,
+        },
+        additionalData: {
+          accessObject: accessObjectId != null
+            ? {
+                type: 'EMPLOYEE',
+                data: {
+                  id: accessObjectId,
+                  name: employeeName,
+                  position: typeof employee?.position === 'string' ? employee.position : undefined,
+                },
+              }
+            : undefined,
+          accessPoint: accessPointId != null
+            ? {
+                id: accessPointId,
+                name: accessPointMap.get(accessPointId) || null,
+              }
+            : undefined,
+        },
+      };
+
+      if (isPass) pass.push(enriched);
+      else failures.push(enriched);
+    }
+
+    console.log(
+      `[enrichAllRawEvents] raw=${rawEvents.length} -> pass=${pass.length} failures=${failures.length}`,
+    );
+    return { pass, failures };
+  }
+
   async getEvents(
     startTime?: string,
     endTime?: string,
@@ -873,6 +970,64 @@ export class SigurDataService extends SigurServiceBase {
     );
     console.log(`[sigur] getEventsByLastId raw: ${rawEvents.length} events (since id=${lastEventId})`);
     return this.enrichRawEvents(rawEvents, connection);
+  }
+
+  /**
+   * Получает все события Sigur за период (без фильтра по eventType) и делит их
+   * на pass / failures. Используется sync-events и presence-polling, когда мы
+   * хотим параллельно собрать и успешные проходы, и ошибочные события.
+   */
+  async getEventsWithFailures(
+    startTime?: string,
+    endTime?: string,
+    connection?: ConnectionType,
+    extraParams?: Record<string, any>,
+  ): Promise<{ pass: Record<string, unknown>[]; failures: Record<string, unknown>[] }> {
+    const pageSize = extraParams?.pageSize || SIGUR_EVENT_PAGE_SIZE;
+    const params: Record<string, any> = {};
+
+    if (startTime) params.startTime = this.ensureTimezone(startTime);
+    if (endTime) params.endTime = this.ensureTimezone(endTime);
+
+    if (extraParams) {
+      const { pageSize: _pageSize, ...rest } = extraParams;
+      if (Object.keys(rest).length > 0) Object.assign(params, rest);
+    }
+
+    const rawEvents = await this.fetchEventsByChunks<Record<string, unknown>>(
+      startTime,
+      endTime,
+      params,
+      connection,
+      pageSize,
+    );
+
+    console.log(`[sigur] getEventsWithFailures raw: ${rawEvents.length} events`);
+    return this.enrichAllRawEvents(rawEvents, connection);
+  }
+
+  /**
+   * Incremental polling: запрашивает события строго с id > lastEventId, без
+   * фильтра по eventType. Делит на pass / failures. Полная замена
+   * `getEventsByLastId` для сценария, где нужны и успешные, и ошибочные события.
+   */
+  async getEventsByLastIdWithFailures(
+    lastEventId: number,
+    connection?: ConnectionType,
+    pageSize?: number,
+  ): Promise<{ pass: Record<string, unknown>[]; failures: Record<string, unknown>[] }> {
+    const params: Record<string, any> = { lastId: lastEventId };
+    const effectivePageSize = pageSize ?? SIGUR_EVENT_PAGE_SIZE;
+    const rawEvents = await this.fetchAllByLastId<Record<string, unknown>>(
+      '/api/v1/events',
+      params,
+      connection,
+      effectivePageSize,
+    );
+    console.log(
+      `[sigur] getEventsByLastIdWithFailures raw: ${rawEvents.length} events (since id=${lastEventId})`,
+    );
+    return this.enrichAllRawEvents(rawEvents, connection);
   }
 
   async getEventsLimited(

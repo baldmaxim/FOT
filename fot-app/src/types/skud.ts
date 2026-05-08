@@ -9,6 +9,26 @@ export interface SkudEvent {
   direction: string | null;
 }
 
+/**
+ * Ошибочное событие Sigur (PASS_DENY, READER_ERROR, таймаут и т.п.).
+ * Не участвует в расчётах табеля — отображается как «лог» с маркером в модалке
+ * табеля, карточке сотрудника и админ-вкладке «Ошибочные события».
+ */
+export interface SkudEventFailure {
+  id: number;
+  employee_id: number | null;
+  physical_person: string | null;
+  card_number: string | null;
+  event_date: string;
+  event_time: string;
+  event_at?: string | null;
+  access_point: string | null;
+  direction: string | null;
+  failure_type: string;
+  failure_type_id: number | null;
+  reason: string | null;
+}
+
 export interface IEmployeePresence {
   employee_id: number;
   full_name: string;

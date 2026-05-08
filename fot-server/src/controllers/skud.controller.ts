@@ -112,6 +112,57 @@ function buildAccessPointOptionsFromNames(names: string[]): IAccessPointOption[]
   );
 }
 
+interface ISkudEventFailureResponse {
+  id: number;
+  employee_id: number | null;
+  physical_person: string | null;
+  card_number: string | null;
+  event_date: string;
+  event_time: string;
+  event_at: string | null;
+  access_point: string | null;
+  direction: 'entry' | 'exit' | null;
+  failure_type: string;
+  failure_type_id: number | null;
+  reason: string | null;
+}
+
+async function loadEmployeeEventFailuresForRequest(
+  employeeId: number,
+  startDate: unknown,
+  endDate: unknown,
+): Promise<ISkudEventFailureResponse[]> {
+  let query = supabase
+    .from('skud_event_failures')
+    .select('id, employee_id, physical_person, card_number, event_date, event_time, event_at, access_point, direction, failure_type, failure_type_id, reason')
+    .eq('employee_id', employeeId)
+    .order('event_date', { ascending: true })
+    .order('event_time', { ascending: true });
+
+  if (typeof startDate === 'string' && startDate) query = query.gte('event_date', startDate);
+  if (typeof endDate === 'string' && endDate) query = query.lte('event_date', endDate);
+
+  const { data, error } = await query;
+  if (error) {
+    console.warn('[skud] loadEmployeeEventFailuresForRequest error:', error.message);
+    return [];
+  }
+  return (data || []).map((row: Record<string, unknown>) => ({
+    id: Number(row.id),
+    employee_id: (row.employee_id as number | null) ?? null,
+    physical_person: (row.physical_person as string | null) ?? null,
+    card_number: (row.card_number as string | null) ?? null,
+    event_date: String(row.event_date),
+    event_time: String(row.event_time),
+    event_at: (row.event_at as string | null) ?? null,
+    access_point: (row.access_point as string | null) ?? null,
+    direction: (row.direction as 'entry' | 'exit' | null) ?? null,
+    failure_type: String(row.failure_type),
+    failure_type_id: (row.failure_type_id as number | null) ?? null,
+    reason: (row.reason as string | null) ?? null,
+  }));
+}
+
 async function loadEmployeeEventsForRequest(
   employeeId: number,
   startDate: unknown,
@@ -511,12 +562,15 @@ const skudReadController = {
         return;
       }
 
-      const { events } = await loadEmployeeEventsForRequest(employeeId, startDate, endDate, {
-        includeEmployeeName: false,
-        preferFastSingleDay: true,
-        useCache: true,
-      });
-      res.json({ success: true, data: events });
+      const [{ events }, failures] = await Promise.all([
+        loadEmployeeEventsForRequest(employeeId, startDate, endDate, {
+          includeEmployeeName: false,
+          preferFastSingleDay: true,
+          useCache: true,
+        }),
+        loadEmployeeEventFailuresForRequest(employeeId, startDate, endDate),
+      ]);
+      res.json({ success: true, data: events, failures });
     } catch (error) {
       console.error('Get employee events error:', error);
       res.status(500).json({ success: false, error: 'Failed to fetch employee events' });
@@ -645,6 +699,82 @@ const skudReadController = {
     } catch (error) {
       console.error('Get events error:', error);
       res.status(500).json({ success: false, error: 'Failed to fetch events' });
+    }
+  },
+
+  /**
+   * GET /api/skud/event-failures
+   * Ошибочные события Sigur (PASS_DENY, READER_ERROR, ...). Не участвуют
+   * в расчётах табеля — только лог для UI и аудита.
+   */
+  async getEventFailures(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { startDate, endDate, employeeId, failureType, search } = req.query;
+      const searchStr = typeof search === 'string' ? search.trim().toLowerCase() : '';
+      const limit = Math.min(2000, Math.max(1, parseInt(String(req.query.limit ?? 500), 10) || 500));
+      const offset = Math.max(0, parseInt(String(req.query.offset ?? 0), 10) || 0);
+
+      let query = supabase
+        .from('skud_event_failures')
+        .select(
+          'id, employee_id, physical_person, card_number, event_date, event_time, event_at, access_point, direction, failure_type, failure_type_id, reason',
+          { count: 'exact' },
+        )
+        .order('event_date', { ascending: false })
+        .order('event_time', { ascending: false })
+        .range(offset, offset + limit - 1);
+
+      if (typeof startDate === 'string' && startDate) query = query.gte('event_date', startDate);
+      if (typeof endDate === 'string' && endDate) query = query.lte('event_date', endDate);
+      if (typeof employeeId === 'string' && employeeId) {
+        const empIdNum = parseInt(employeeId, 10);
+        if (!isNaN(empIdNum)) query = query.eq('employee_id', empIdNum);
+      }
+      if (typeof failureType === 'string' && failureType) {
+        query = query.eq('failure_type', failureType);
+      }
+
+      const syncFilter = await getSyncFilteredEmployees();
+      if (syncFilter) {
+        const { empIds: allowedIds } = syncFilter;
+        if (allowedIds.size > 0) {
+          query = query.in('employee_id', [...allowedIds]);
+        } else {
+          res.json({ success: true, data: [], total: 0 });
+          return;
+        }
+      }
+
+      const { data, error, count } = await query;
+      if (error) {
+        console.error('getEventFailures error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch event failures' });
+        return;
+      }
+
+      const rows = (data || []).map((row: Record<string, unknown>) => ({
+        id: Number(row.id),
+        employee_id: (row.employee_id as number | null) ?? null,
+        physical_person: (row.physical_person as string | null) ?? null,
+        card_number: (row.card_number as string | null) ?? null,
+        event_date: String(row.event_date),
+        event_time: String(row.event_time),
+        event_at: (row.event_at as string | null) ?? null,
+        access_point: (row.access_point as string | null) ?? null,
+        direction: (row.direction as 'entry' | 'exit' | null) ?? null,
+        failure_type: String(row.failure_type),
+        failure_type_id: (row.failure_type_id as number | null) ?? null,
+        reason: (row.reason as string | null) ?? null,
+      }));
+
+      const filtered = searchStr
+        ? rows.filter(r => (r.physical_person || '').toLowerCase().includes(searchStr))
+        : rows;
+
+      res.json({ success: true, data: filtered, total: count ?? filtered.length });
+    } catch (error) {
+      console.error('getEventFailures error:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch event failures' });
     }
   },
 

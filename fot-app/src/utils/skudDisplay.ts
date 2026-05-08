@@ -1,8 +1,9 @@
-import type { SkudEvent } from '../types';
+import type { SkudEvent, SkudEventFailure } from '../types';
 
 export type DisplayItem =
   | { kind: 'event'; event: SkudEvent; pairDurationSeconds: number | null; isInternal: boolean }
-  | { kind: 'break'; breakSeconds: number };
+  | { kind: 'break'; breakSeconds: number }
+  | { kind: 'failure'; failure: SkudEventFailure };
 
 export const timeToSeconds = (time: string): number => {
   const [h, m, s = 0] = time.split(':').map(Number);
@@ -121,3 +122,58 @@ export const findLastExternalExit = (events: SkudEvent[], internalPoints: Set<st
 /** Суммарная длительность строк «Перерыв» в списке items. */
 export const sumBreakSeconds = (items: DisplayItem[]): number =>
   items.reduce((sum, item) => (item.kind === 'break' ? sum + item.breakSeconds : sum), 0);
+
+/**
+ * Вставляет ошибочные события Sigur в список display-элементов на правильное
+ * место по `event_time`. Не группирует с PASS_DETECTED в пары вход/выход —
+ * failures отображаются отдельной строкой с маркером.
+ */
+export const mergeFailuresIntoDisplay = (
+  items: DisplayItem[],
+  failures: SkudEventFailure[],
+): DisplayItem[] => {
+  if (failures.length === 0) return items;
+  const failureItems: DisplayItem[] = failures
+    .slice()
+    .sort((a, b) => a.event_time.localeCompare(b.event_time))
+    .map(f => ({ kind: 'failure', failure: f }));
+
+  const getItemTime = (item: DisplayItem): number => {
+    if (item.kind === 'event') return timeToSeconds(item.event.event_time);
+    if (item.kind === 'failure') return timeToSeconds(item.failure.event_time);
+    // break-строки наследуют позицию у предшествующего exit — оставляем их где стоят.
+    return Number.MAX_SAFE_INTEGER;
+  };
+
+  // Простая стабильная сортировка: events/failures по времени, breaks остаются между ними.
+  const eventItems = items.filter(i => i.kind !== 'break');
+  const breakItems = items.filter(i => i.kind === 'break');
+  const merged = [...eventItems, ...failureItems].sort((a, b) => getItemTime(a) - getItemTime(b));
+  // breaks были сгенерированы между парами в buildDisplayItems — вернём их обратно
+  // на исходные позиции (после соответствующих exit). Берём индексы из исходного items.
+  if (breakItems.length === 0) return merged;
+  const result: DisplayItem[] = [];
+  let breakCursor = 0;
+  let originalCursor = 0;
+  for (const m of merged) {
+    result.push(m);
+    // если в исходном списке после текущего event/failure был break — вставляем его
+    if (m.kind === 'event') {
+      // ищем оригинальную позицию этого event в items
+      const origIdx = items.indexOf(m, originalCursor);
+      if (origIdx !== -1) {
+        originalCursor = origIdx + 1;
+        if (items[origIdx + 1]?.kind === 'break' && breakCursor < breakItems.length) {
+          result.push(breakItems[breakCursor]);
+          breakCursor++;
+        }
+      }
+    }
+  }
+  // если остались неприкреплённые breaks — добавим в конец, чтобы не потерять
+  while (breakCursor < breakItems.length) {
+    result.push(breakItems[breakCursor]);
+    breakCursor++;
+  }
+  return result;
+};

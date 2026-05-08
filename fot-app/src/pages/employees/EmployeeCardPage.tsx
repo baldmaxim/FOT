@@ -404,6 +404,17 @@ export const EmployeeCardPage: FC = () => {
     enabled: !!empIdNum && !Number.isNaN(empIdNum) && !!selectedCalDay && activeTab === 'attendance',
     staleTime: selectedCalDay ? getDayEventsStaleTime(selectedCalDay) : 30_000,
   });
+  // Ошибочные события Sigur (PASS_DENY и т.п.) за выбранный день — отдельный лёгкий
+  // запрос. Не блокирует загрузку основных событий: failures показываются с маркером.
+  const selectedDayFailuresQuery = useQuery({
+    queryKey: ['skud-employee-failures-day', empIdNum, selectedCalDay],
+    queryFn: () => skudService
+      .getEventFailures({ employeeId: empIdNum, startDate: selectedCalDay!, endDate: selectedCalDay! })
+      .then(r => r.data)
+      .catch(() => []),
+    enabled: !!empIdNum && !Number.isNaN(empIdNum) && !!selectedCalDay && activeTab === 'attendance',
+    staleTime: selectedCalDay ? getDayEventsStaleTime(selectedCalDay) : 30_000,
+  });
   const prefetchDayEvents = useCallback((day: number) => {
     if (!empIdNum || Number.isNaN(empIdNum)) return;
     const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -528,6 +539,7 @@ export const EmployeeCardPage: FC = () => {
     const showEvents = selectedCalDay
       ? selectedDayEventsFast
       : [...todayEvents].sort((a, b) => a.event_time.localeCompare(b.event_time));
+    const showFailures = selectedCalDay ? (selectedDayFailuresQuery.data ?? []) : [];
     const showEventsLoading = selectedCalDay
       ? selectedDayEventsQuery.isLoading && selectedDayEventsFast.length === 0
       : todayEventsQuery.isLoading && todayEvents.length === 0;
@@ -538,6 +550,7 @@ export const EmployeeCardPage: FC = () => {
     return {
       showDate,
       showEvents,
+      showFailures,
       showEventsLoading,
       dayLabel,
     };
@@ -700,6 +713,7 @@ export const EmployeeCardPage: FC = () => {
             dayLabel={attendanceViewModel.dayLabel}
             showDate={attendanceViewModel.showDate}
             showEvents={attendanceViewModel.showEvents}
+            showFailures={attendanceViewModel.showFailures}
             showEventsLoading={attendanceViewModel.showEventsLoading}
             alerts={attendance?.alerts ?? []}
             internalPoints={internalPoints}

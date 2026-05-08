@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Search, X, Database, RefreshCw, AlertCircle } from 'lucide-react';
 import { buildApiUrl, buildAuthHeaders } from '../../api/client';
+import { skudService } from '../../services/skudService';
 import '../../styles/SigurRawDataPage.css';
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 минут
@@ -14,6 +15,7 @@ const TABS: ITab[] = [
   { id: 'employees', label: 'Сотрудники' },
   { id: 'departments', label: 'Отделы' },
   { id: 'events', label: 'События' },
+  { id: 'failures', label: 'Ошибочные события' },
   { id: 'access-points', label: 'Точки доступа' },
   { id: 'cards', label: 'Карты' },
   { id: 'zones', label: 'Зоны' },
@@ -52,7 +54,7 @@ export const SigurRawDataPage: React.FC = () => {
   const [fromCache, setFromCache] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Фильтры для events
+  // Фильтры для events / failures
   const [employeeIdInput, setEmployeeIdInput] = useState('');
   const [eventStartDate, setEventStartDate] = useState(() => {
     const d = new Date();
@@ -62,6 +64,7 @@ export const SigurRawDataPage: React.FC = () => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   });
+  const [failureTypeFilter, setFailureTypeFilter] = useState('');
 
   const loadData = useCallback(async (tabId: string, skipCache = false) => {
     // Проверяем кэш
@@ -89,6 +92,20 @@ export const SigurRawDataPage: React.FC = () => {
     setFromCache(false);
 
     try {
+      // Failures читаются из БД (таблица skud_event_failures), а не из live Sigur API.
+      if (tabId === 'failures') {
+        const result = await skudService.getEventFailures({
+          ...(employeeIdInput.trim() ? { employeeId: employeeIdInput.trim() } : {}),
+          ...(eventStartDate ? { startDate: eventStartDate } : {}),
+          ...(eventEndDate ? { endDate: eventEndDate } : {}),
+          ...(failureTypeFilter.trim() ? { failureType: failureTypeFilter.trim() } : {}),
+          limit: 2000,
+        }, controller.signal);
+        const rows = result.data as unknown as Record<string, unknown>[];
+        setData(rows);
+        setCache(tabId, rows);
+        return;
+      }
       const params = new URLSearchParams({ type: tabId });
       if (tabId === 'events') {
         if (employeeIdInput.trim()) params.append('employeeId', employeeIdInput.trim());
@@ -148,10 +165,11 @@ export const SigurRawDataPage: React.FC = () => {
       setLoading(false);
       setProgress(null);
     }
-  }, [employeeIdInput, eventEndDate, eventStartDate]);
+  }, [employeeIdInput, eventEndDate, eventStartDate, failureTypeFilter]);
 
   useEffect(() => {
-    if (activeTab !== 'events') loadData(activeTab);
+    // events и failures загружаются вручную по кнопке (там есть обязательные фильтры).
+    if (activeTab !== 'events' && activeTab !== 'failures') loadData(activeTab);
     return () => abortRef.current?.abort();
   }, [activeTab, loadData]);
 
@@ -213,7 +231,7 @@ export const SigurRawDataPage: React.FC = () => {
         ))}
       </div>
 
-      {activeTab === 'events' && (
+      {(activeTab === 'events' || activeTab === 'failures') && (
         <div className="sigur-raw-events-filters">
           <div className="sigur-raw-events-dates">
             <label>
@@ -240,6 +258,23 @@ export const SigurRawDataPage: React.FC = () => {
               </button>
             )}
           </label>
+          {activeTab === 'failures' && (
+            <label className="sigur-raw-employee-label">
+              Тип ошибки:
+              <input
+                type="text"
+                placeholder="PASS_DENY, READER_ERROR..."
+                value={failureTypeFilter}
+                onChange={e => setFailureTypeFilter(e.target.value)}
+                className="sigur-raw-employee-input"
+              />
+              {failureTypeFilter && (
+                <button className="sigur-raw-employee-clear" onClick={() => setFailureTypeFilter('')}>
+                  <X size={14} />
+                </button>
+              )}
+            </label>
+          )}
           <button
             className="sigur-raw-refresh"
             onClick={() => loadData(activeTab, true)}

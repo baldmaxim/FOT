@@ -1,5 +1,13 @@
 import { apiClient, buildApiUrl, buildAuthHeaders } from '../api/client';
-import type { SkudEvent, SkudDailySummary, IEmployeePresence, IAccessPointSetting, IDashboardStats, AccessPointOption } from '../types';
+import type {
+  SkudEvent,
+  SkudEventFailure,
+  SkudDailySummary,
+  IEmployeePresence,
+  IAccessPointSetting,
+  IDashboardStats,
+  AccessPointOption,
+} from '../types';
 import { readSseResponse } from '../components/skud/sigur-settings.utils';
 
 interface ApiResponse<T> {
@@ -162,6 +170,61 @@ export const skudService = {
       `/skud/employee-events/${employeeId}${query ? `?${query}` : ''}`
     );
     return response.data || [];
+  },
+
+  /**
+   * Возвращает успешные события и ошибочные события Sigur (PASS_DENY и т.п.) одним
+   * запросом. Используется в модалке табеля и карточке сотрудника, чтобы пометить
+   * «неудачные» проходы — расчёты табеля их игнорируют.
+   */
+  async getEmployeeEventsWithFailures(
+    employeeId: number,
+    startDate?: string,
+    endDate?: string,
+  ): Promise<{ events: SkudEvent[]; failures: SkudEventFailure[] }> {
+    const params = new URLSearchParams();
+    if (startDate) params.append('startDate', startDate);
+    if (endDate) params.append('endDate', endDate);
+    const query = params.toString();
+    const response = await apiClient.get<ApiResponse<SkudEvent[]> & { failures?: SkudEventFailure[] }>(
+      `/skud/employee-events/${employeeId}${query ? `?${query}` : ''}`,
+    );
+    return {
+      events: response.data || [],
+      failures: response.failures || [],
+    };
+  },
+
+  /**
+   * Список ошибочных событий Sigur с фильтрами. Для админ-вкладки «Ошибочные
+   * события» в SigurRawDataPage.
+   */
+  async getEventFailures(filters?: {
+    startDate?: string;
+    endDate?: string;
+    employeeId?: string | number;
+    failureType?: string;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }, signal?: AbortSignal): Promise<{ data: SkudEventFailure[]; total: number }> {
+    const params = new URLSearchParams();
+    if (filters?.startDate) params.append('startDate', filters.startDate);
+    if (filters?.endDate) params.append('endDate', filters.endDate);
+    if (filters?.employeeId != null) params.append('employeeId', String(filters.employeeId));
+    if (filters?.failureType) params.append('failureType', filters.failureType);
+    if (filters?.search) params.append('search', filters.search);
+    if (filters?.limit != null) params.append('limit', String(filters.limit));
+    if (filters?.offset != null) params.append('offset', String(filters.offset));
+    const query = params.toString();
+    const response = await apiClient.get<ApiResponse<SkudEventFailure[]> & { total?: number }>(
+      `/skud/event-failures${query ? `?${query}` : ''}`,
+      { signal },
+    );
+    return {
+      data: response.data || [],
+      total: response.total ?? (response.data?.length ?? 0),
+    };
   },
 
   async getDailySummary(date: string, signal?: AbortSignal): Promise<SkudDailySummary[]> {
