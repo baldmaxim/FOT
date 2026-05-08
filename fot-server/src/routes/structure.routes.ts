@@ -12,9 +12,16 @@ const router = Router();
 // SWR-окно 60 мин при TTL 15 мин: при истечении TTL запрос отдаёт STALE мгновенно,
 // в фоне дёргается loadTreeForCache. При сбое refresh окно продлевается на 5 мин.
 // Это ключевое лечение «бэк не успевает обрабатывать»: пользователь не ждёт Supabase.
+//
+// Ключ кеша обязан включать user_id: loadTreeForCache фильтрует дерево по
+// req.user.company_scope / __company_subtree_ids и для manager-пользователя без
+// employee_department_access возвращает { departments: [] }. С общим ключом
+// 'structure:tree' такой пустой ответ закэшировался бы для ВСЕХ пользователей
+// на 15-60 мин — отсюда симптом «после рестарта показывается, потом со временем
+// перестаёт». Per-user ключ изолирует эти кэши друг от друга.
 const structureTreeCache = registerCache(
   'structure:tree',
-  () => 'structure:tree',
+  (req: Request) => `structure:tree:${(req as AuthenticatedRequest).user?.id ?? 'anon'}`,
   15 * 60_000,
   {
     staleMs: 60 * 60_000,
