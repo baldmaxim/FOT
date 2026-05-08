@@ -8,6 +8,8 @@ interface IProps {
   userId: string;
   /** true, если у пользователя is_admin (по выбранной роли). Иначе секция не рендерится. */
   isUserAdmin: boolean;
+  /** Компактный режим — меньше padding/font, ограниченный max-height списка. */
+  compact?: boolean;
 }
 
 const arraysEqual = (left: string[], right: string[]): boolean => {
@@ -17,7 +19,7 @@ const arraysEqual = (left: string[], right: string[]): boolean => {
   return a.every((v, i) => v === b[i]);
 };
 
-export const UserCompanyAccessSection: FC<IProps> = ({ userId, isUserAdmin }) => {
+export const UserCompanyAccessSection: FC<IProps> = ({ userId, isUserAdmin, compact = false }) => {
   const toast = useToast();
   const [draft, setDraft] = useState<string[] | null>(null);
   const [saving, setSaving] = useState(false);
@@ -81,7 +83,7 @@ export const UserCompanyAccessSection: FC<IProps> = ({ userId, isUserAdmin }) =>
   const isSystemAdmin = current.length === 0;
 
   return (
-    <div className={styles.departmentAccessSection}>
+    <div className={`${styles.departmentAccessSection} ${compact ? styles.departmentAccessSectionCompact : ''}`}>
       <div className={styles.departmentAccessHeader}>
         <div>
           <div className={styles.departmentAccessTitle}>Компании администратора</div>

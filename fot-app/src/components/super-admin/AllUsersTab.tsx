@@ -1,13 +1,14 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FC } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { adminService } from '../../services/adminService';
 import { rolesService } from '../../services/rolesService';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
 import type { ChatInboundMode, EmployeePositionType, SystemRole, TwoFactorData } from '../../types';
-import { getTreeFlatDepartments, type IFlatDepartmentOption } from '../../utils/departmentUtils';
+import type { OrgDepartmentNode } from '../../types/organization';
+import { collectDescendantIds, getTreeFlatDepartments, type IFlatDepartmentOption } from '../../utils/departmentUtils';
 import { SearchInput } from '../ui/SearchInput';
 import { UserCompanyAccessSection } from './UserCompanyAccessSection';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
@@ -60,6 +61,7 @@ interface IUserRowExpandedProps {
   user: IUserFromApi;
   flatDepts: IFlatDepartmentOption[];
   departmentMap: Map<string, IFlatDepartmentOption>;
+  departmentTree: OrgDepartmentNode[];
   assignableRoles: IRoleOption[];
   /** true, если viewer — системный админ. Только он может править companies. */
   canManageCompanies: boolean;
@@ -78,6 +80,7 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   user,
   flatDepts,
   departmentMap,
+  departmentTree,
   assignableRoles,
   canManageCompanies,
   onUpdateName,
@@ -95,6 +98,7 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
     [assignableRoles, user.position_type],
   );
   const isUserAdmin = !!userRole?.is_admin;
+  const showCompanySection = canManageCompanies && isUserAdmin;
   const [editingName, setEditingName] = useState<string | null>(null);
   const [departmentSearchQuery, setDepartmentSearchQuery] = useState('');
   const [departmentDraft, setDepartmentDraft] = useState<string[] | null>(null);
@@ -103,6 +107,20 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   const [empSearchLoading, setEmpSearchLoading] = useState(false);
   const [empSearchResults, setEmpSearchResults] = useState<{ id: number; full_name: string; org_department_id: string | null }[]>([]);
   const empSearchSeqRef = useRef(0);
+  const skudSearchWrapRef = useRef<HTMLDivElement | null>(null);
+
+  // Тот же queryKey, что в UserCompanyAccessSection — react-query дедуплицирует
+  // запрос. Используем результат для фильтра отделов по выбранным компаниям.
+  const userCompaniesQuery = useQuery({
+    queryKey: ['admin-user-companies', user.id],
+    queryFn: () => adminService.getUserCompanies(user.id),
+    enabled: showCompanySection,
+    staleTime: 30_000,
+  });
+  const companyRootIds = useMemo(
+    () => userCompaniesQuery.data?.company_root_ids ?? [],
+    [userCompaniesQuery.data?.company_root_ids],
+  );
 
   const assignedDepartmentIds = useMemo(
     () => normalizeAssignedDepartmentIds(departmentDraft ?? user.assigned_department_ids ?? []),
@@ -124,11 +142,26 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
     [departmentSearchQuery],
   );
 
+  // Если у админ-пользователя выбраны конкретные компании — показываем только
+  // их потомков. Если ничего не выбрано (системный админ) или секция компаний
+  // не применима — показываем всё дерево.
+  const allowedDepartmentSet = useMemo<Set<string> | null>(() => {
+    if (!showCompanySection) return null;
+    if (companyRootIds.length === 0) return null;
+    return collectDescendantIds(departmentTree, new Set(companyRootIds));
+  }, [showCompanySection, companyRootIds, departmentTree]);
+
+  const scopedFlatDepts = useMemo(() => (
+    allowedDepartmentSet
+      ? flatDepts.filter(d => allowedDepartmentSet.has(d.id))
+      : flatDepts
+  ), [flatDepts, allowedDepartmentSet]);
+
   const filteredDepartments = useMemo(() => (
     !normalizedSearch
-      ? flatDepts
-      : flatDepts.filter(d => d.name.toLowerCase().includes(normalizedSearch))
-  ), [flatDepts, normalizedSearch]);
+      ? scopedFlatDepts
+      : scopedFlatDepts.filter(d => d.name.toLowerCase().includes(normalizedSearch))
+  ), [scopedFlatDepts, normalizedSearch]);
 
   const selectedDepartments = useMemo(() => (
     assignedDepartmentIds.map(id => departmentMap.get(id) || {
@@ -166,6 +199,24 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
     }, 250);
     return () => clearTimeout(timer);
   }, [empSearchQuery]);
+
+  // Закрытие popover-а результатов СКУД-поиска по клику/тапу вне.
+  useEffect(() => {
+    if (empSearchResults.length === 0 && !empSearchLoading) return;
+    const handler = (event: MouseEvent | TouchEvent) => {
+      const node = skudSearchWrapRef.current;
+      if (!node) return;
+      const target = event.target as Node | null;
+      if (target && node.contains(target)) return;
+      setEmpSearchResults([]);
+    };
+    document.addEventListener('mousedown', handler);
+    document.addEventListener('touchstart', handler);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('touchstart', handler);
+    };
+  }, [empSearchResults.length, empSearchLoading]);
 
   const handleNameSave = async () => {
     if (editingName === null || !editingName.trim()) return;
@@ -268,47 +319,56 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
         </select>
       </div>
 
-      <div className={styles.controlGroup}>
+      <div className={`${styles.controlGroup} ${styles.skudControlGroup}`}>
         <label>Сотрудник СКУД:</label>
-        {user.employee_id ? (
-          <div className={styles.skudLinked}>
-            <span className={styles.skudLinkedText}>
-              ID {user.employee_id}
-            </span>
-            <button
-              className={styles.skudUnlinkBtn}
-              onClick={() => onLinkEmployee(user.id, null)}
-            >
-              Отвязать
-            </button>
-          </div>
-        ) : (
-          <span className={styles.skudNotLinked}>Не привязан</span>
-        )}
-        <input
-          type="text"
-          placeholder="Поиск по ФИО..."
-          value={empSearchQuery}
-          onChange={(e) => setEmpSearchQuery(e.target.value)}
-          className={`${styles.nameInput} ${styles.skudSearchInput}`}
-        />
-        {empSearchLoading && (
-          <div className={styles.skudSearchLoading}>Поиск...</div>
-        )}
-        {empSearchResults.length > 0 && (
-          <div className={styles.skudSearchResults}>
-            {empSearchResults.map(emp => (
-              <div
-                key={emp.id}
-                className={styles.skudSearchItem}
-                onClick={() => handleEmpPick(emp.id, emp.full_name)}
+        <div className={styles.skudColumn}>
+          {user.employee_id ? (
+            <div className={styles.skudLinked}>
+              <span className={styles.skudLinkedText}>
+                ID {user.employee_id}
+              </span>
+              <button
+                className={styles.skudUnlinkBtn}
+                onClick={() => onLinkEmployee(user.id, null)}
               >
-                {emp.full_name}
+                Отвязать
+              </button>
+            </div>
+          ) : (
+            <span className={styles.skudNotLinked}>Не привязан</span>
+          )}
+          <div className={styles.skudSearchWrap} ref={skudSearchWrapRef}>
+            <input
+              type="text"
+              placeholder="Поиск по ФИО..."
+              value={empSearchQuery}
+              onChange={(e) => setEmpSearchQuery(e.target.value)}
+              className={`${styles.nameInput} ${styles.skudSearchInput}`}
+            />
+            {empSearchLoading && (
+              <div className={styles.skudSearchLoading}>Поиск...</div>
+            )}
+            {empSearchResults.length > 0 && (
+              <div className={styles.skudSearchResults}>
+                {empSearchResults.map(emp => (
+                  <div
+                    key={emp.id}
+                    className={styles.skudSearchItem}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => handleEmpPick(emp.id, emp.full_name)}
+                  >
+                    {emp.full_name}
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
-        )}
+        </div>
       </div>
+
+      {showCompanySection && (
+        <UserCompanyAccessSection userId={user.id} isUserAdmin={isUserAdmin} compact />
+      )}
 
       {!user.employee_id ? (
         <div className={styles.departmentAccessSection}>
@@ -323,6 +383,7 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
               <div className={styles.departmentAccessTitle}>Назначенные отделы и бригады</div>
               <div className={styles.departmentAccessHint}>
                 Выберите все отделы и бригады, за которые отвечает пользователь. Все назначения равноправны.
+                {allowedDepartmentSet && ' Список ограничен компаниями администратора.'}
               </div>
             </div>
             <div className={styles.departmentAccessCount}>
@@ -378,7 +439,11 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
               })
             ) : (
               <div className={styles.departmentAccessEmpty}>
-                {normalizedSearch ? 'По запросу ничего не найдено' : 'Нет доступных подразделений'}
+                {normalizedSearch
+                  ? 'По запросу ничего не найдено'
+                  : allowedDepartmentSet
+                    ? 'В выбранных компаниях нет подразделений'
+                    : 'Нет доступных подразделений'}
               </div>
             )}
           </div>
@@ -402,10 +467,6 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
             </button>
           </div>
         </div>
-      )}
-
-      {canManageCompanies && isUserAdmin && (
-        <UserCompanyAccessSection userId={user.id} isUserAdmin={isUserAdmin} />
       )}
 
       <div className={styles.controlActions}>
@@ -449,6 +510,7 @@ UserRowExpanded.displayName = 'UserRowExpanded';
 
 export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAllUsersCache }) => {
   const toast = useToast();
+  const queryClient = useQueryClient();
   const { getRoleLabel, profile, refreshProfile } = useAuth();
   // Полный список ролей нужен админу для approval-формы (employee_variant,
   // is_active и т.п.). Endpoint /roles защищён requireAnyPageAccess(/admin/users,
@@ -469,9 +531,13 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAl
     data: null,
     loading: false,
   });
-  const flatDepts = useMemo(
-    () => getTreeFlatDepartments(structureQuery.data?.departments || []),
+  const departmentTree = useMemo<OrgDepartmentNode[]>(
+    () => structureQuery.data?.departments ?? [],
     [structureQuery.data?.departments],
+  );
+  const flatDepts = useMemo(
+    () => getTreeFlatDepartments(departmentTree),
+    [departmentTree],
   );
   const departmentMap = useMemo(
     () => new Map(flatDepts.map(department => [department.id, department])),
@@ -528,13 +594,17 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAl
   const handleEmpLink = useCallback(async (userId: string, employeeId: number | null, empName?: string) => {
     try {
       await adminService.updateUserEmployee(userId, employeeId);
-      toast.success(employeeId ? `Привязан: ${empName ?? ''}` : 'Сотрудник отвязан');
+      // Сначала оптимистичный патч — UI обновляется мгновенно. Затем фоновая
+      // инвалидация связанных кешей, чтобы подтянулись производные поля
+      // (email/2FA из auth, employee-department-access).
       patchAllUsersCache((prev) => prev.map((u) => u.id === userId ? { ...u, employee_id: employeeId } : u));
-      await onReload();
+      toast.success(employeeId ? `Привязан: ${empName ?? ''}` : 'Сотрудник отвязан');
+      void queryClient.invalidateQueries({ queryKey: ['admin-users', 'all'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-employees', 'department-access'] });
     } catch {
       toast.error('Ошибка привязки сотрудника');
     }
-  }, [onReload, patchAllUsersCache, toast]);
+  }, [patchAllUsersCache, queryClient, toast]);
 
   const handleNameSave = useCallback(async (userId: string, name: string) => {
     try {
@@ -757,6 +827,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAl
                   user={user}
                   flatDepts={flatDepts}
                   departmentMap={departmentMap}
+                  departmentTree={departmentTree}
                   assignableRoles={buildAssignableRoles(user)}
                   canManageCompanies={canManageCompanies}
                   onUpdateName={handleNameSave}

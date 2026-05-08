@@ -122,6 +122,20 @@ export const getSortedFlatDepartments = (nodes: OrgDepartmentNode[]): IFlatDepar
   sortDepartmentOptions(flattenDepartmentTree(nodes))
 );
 
+export const collectDescendantIds = (
+  nodes: OrgDepartmentNode[],
+  rootIds: Set<string>,
+): Set<string> => {
+  const out = new Set<string>();
+  const walk = (node: OrgDepartmentNode, inside: boolean): void => {
+    const here = inside || rootIds.has(node.id);
+    if (here) out.add(node.id);
+    node.children?.forEach(child => walk(child, here));
+  };
+  nodes.forEach(node => walk(node, false));
+  return out;
+};
+
 export const filterDepartmentTreeByIds = (nodes: OrgDepartmentNode[], ids: Set<string>): OrgDepartmentNode[] =>
   nodes.reduce<OrgDepartmentNode[]>((acc, node) => {
     const children = filterDepartmentTreeByIds(node.children ?? [], ids);
