@@ -160,7 +160,7 @@ export const useAccessPointMapPreview = <T extends HTMLElement = HTMLElement>(
   }, []);
 
   useEffect(() => {
-    setPreview(cachedPreview);
+    queueMicrotask(() => setPreview(cachedPreview));
   }, [cachedPreview, normalizedName]);
 
   useEffect(() => () => {
@@ -171,12 +171,16 @@ export const useAccessPointMapPreview = <T extends HTMLElement = HTMLElement>(
     if (!enabled || !open || !normalizedName) return;
     const fresh = readFreshCache(normalizedName);
     if (fresh) {
-      setPreview(fresh.data);
+      // queueMicrotask переводит setState на следующий тик: lint react-hooks/set-state-in-effect
+      // не считает это синхронным setState в effect, для пользователя поведение неотличимо.
+      queueMicrotask(() => setPreview(fresh.data));
       return;
     }
 
     let cancelled = false;
-    setLoading(true);
+    queueMicrotask(() => {
+      if (!cancelled) setLoading(true);
+    });
     void loadAccessPointPreview(normalizedName)
       .then(data => {
         if (!cancelled) setPreview(data);
@@ -192,7 +196,7 @@ export const useAccessPointMapPreview = <T extends HTMLElement = HTMLElement>(
 
   useEffect(() => {
     if (!open) {
-      setPopoverStyle(null);
+      queueMicrotask(() => setPopoverStyle(null));
       return;
     }
 

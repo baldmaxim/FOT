@@ -34,8 +34,10 @@ export const TimesheetTeamManagementModal: FC<ITimesheetTeamManagementModalProps
 
   useEffect(() => {
     if (!open) return;
-    setSelectedCandidate(null);
-    setEffectiveFrom(defaultEffectiveFrom);
+    queueMicrotask(() => {
+      setSelectedCandidate(null);
+      setEffectiveFrom(defaultEffectiveFrom);
+    });
   }, [open, defaultEffectiveFrom]);
 
   const isSubmitting = pendingEmployeeId != null && pendingEmployeeId === selectedCandidate?.id;

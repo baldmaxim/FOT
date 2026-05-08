@@ -1,3 +1,6 @@
+/* eslint-disable react-refresh/only-export-components */
+// Файл совмещает компоненты (AttendanceCard, DayEvents) и пары форматтеров (formatHM, formatDateLong),
+// которые используются обеими — split в отдельный formatters-файл создаст лишний import-водопад.
 import { type FC, useMemo, useState } from 'react';
 import type { SkudEvent } from '../../types';
 import type { TimesheetStatus } from '../../types';

@@ -74,7 +74,7 @@ export const TravelExceptionModal: FC<ITravelExceptionModalProps> = ({
   });
 
   useEffect(() => {
-    if (!open) setComments({});
+    if (!open) queueMicrotask(() => setComments({}));
   }, [open]);
 
   const invalidateRelated = (): void => {

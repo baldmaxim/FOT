@@ -1,14 +1,16 @@
 import { useMemo, type FC } from 'react';
-import { Clock, LogIn, LogOut } from 'lucide-react';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- AlertCircle используется в JSX (failures), но react-compiler-плагин не видит usage
+import { AlertCircle, Clock, LogIn, LogOut } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
-import type { Employee, EmployeeInput, SkudEvent } from '../../types';
+import type { Employee, EmployeeInput, SkudEvent, SkudEventFailure } from '../../types';
 import type { IAlert, IDayAttendance } from '../../utils/attendanceCalc';
 import { formatSecondsLabel } from '../../utils/hoursDisplay';
 import {
   buildDisplayItems,
   findFirstExternalEntry,
   findLastExternalExit,
+  mergeFailuresIntoDisplay,
   sumBreakSeconds,
 } from '../../utils/skudDisplay';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
@@ -31,6 +33,7 @@ interface IEmployeeAttendanceSectionProps {
   dayLabel: string;
   showDate: string;
   showEvents: SkudEvent[];
+  showFailures?: SkudEventFailure[];
   showEventsLoading: boolean;
   alerts: IAlert[];
   internalPoints: Set<string>;
@@ -70,6 +73,7 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
   dayLabel,
   showDate,
   showEvents,
+  showFailures = [],
   showEventsLoading,
   alerts,
   internalPoints,
@@ -89,7 +93,11 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
 
   const { items, firstEntry, lastExit, breakSec } = useMemo(() => {
     const sortedEvents = [...showEvents].sort((a, b) => a.event_time.localeCompare(b.event_time));
-    const displayItems = buildDisplayItems(sortedEvents, internalPoints, showDate);
+    const sortedFailures = [...showFailures].sort((a, b) => a.event_time.localeCompare(b.event_time));
+    const displayItems = mergeFailuresIntoDisplay(
+      buildDisplayItems(sortedEvents, internalPoints, showDate),
+      sortedFailures,
+    );
     const firstExt = findFirstExternalEntry(sortedEvents, internalPoints);
     const lastExt = findLastExternalExit(sortedEvents, internalPoints);
     return {
@@ -98,7 +106,7 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
       lastExit: lastExt?.event_time.slice(0, 5) || null,
       breakSec: sumBreakSeconds(displayItems),
     };
-  }, [showDate, showEvents, internalPoints]);
+  }, [showDate, showEvents, showFailures, internalPoints]);
 
   // Источник времени за выбранный день — табельные данные (selectVisibleHours).
   // Та же цифра, что и в календаре, табеле и боковой панели — единая для всех точек.
@@ -133,6 +141,31 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
                   return (
                     <div key={`break-${index}`} className="ec-event-row ec-pair-break">
                       <span className="ec-pair-break-label">Перерыв: {formatTimelineSegment(item.breakSeconds)}</span>
+                    </div>
+                  );
+                }
+                if (item.kind === 'failure') {
+                  const f = item.failure;
+                  return (
+                    <div
+                      key={`failure-${f.id}`}
+                      className="ec-event-row ec-event-row--failure"
+                      title={f.reason || ''}
+                    >
+                      <span className="ec-event-icon ec-event-failure-icon">
+                        <AlertCircle size={14} />
+                      </span>
+                      <span className="ec-event-time">{f.event_time.slice(0, 5)}</span>
+                      <span className="ec-event-failure-badge">{f.failure_type}</span>
+                      {f.access_point && (
+                        <AccessPointTrigger
+                          accessPointName={f.access_point}
+                          className="ec-event-point"
+                          canOpen={canOpenAccessPointMap}
+                          onOpen={openAccessPointMap}
+                        />
+                      )}
+                      {f.reason && <span className="ec-event-failure-reason">{f.reason}</span>}
                     </div>
                   );
                 }

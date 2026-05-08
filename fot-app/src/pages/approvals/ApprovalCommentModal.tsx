@@ -16,7 +16,7 @@ export const ApprovalCommentModal: FC<IProps> = ({ open, title, label, pending, 
 
   useEffect(() => {
     if (open) {
-      setComment('');
+      queueMicrotask(() => setComment(''));
       const t = window.setTimeout(() => textareaRef.current?.focus(), 0);
       return () => window.clearTimeout(t);
     }

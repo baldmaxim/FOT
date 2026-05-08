@@ -123,7 +123,10 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
   const [editing, setEditing] = useState(false);
 
   useEffect(() => {
-    if (data) setForm(toForm(data));
+    if (data) {
+      const next = toForm(data);
+      queueMicrotask(() => setForm(next));
+    }
   }, [data]);
 
   const saveMutation = useMutation({

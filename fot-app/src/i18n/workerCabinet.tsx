@@ -1,3 +1,6 @@
+/* eslint-disable react-refresh/only-export-components */
+// Файл совмещает константы (WORKER_LOCALES, useT) и Provider-компонент исторически —
+// отдельный split добавил бы import-водопад без выгоды; HMR прогревается на dev-перезагрузке.
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type FC, type ReactNode } from 'react';
 
 export type WorkerLocale = 'ru' | 'tg' | 'uz';

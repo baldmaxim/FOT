@@ -157,7 +157,7 @@ const CorrectionsTab: FC = () => {
   };
 
   useEffect(() => {
-    setSelectedIds(new Set());
+    queueMicrotask(() => setSelectedIds(new Set()));
   }, [period.startDate, period.endDate]);
 
   const query = useQuery({

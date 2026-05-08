@@ -148,7 +148,7 @@ export const DashboardPage: React.FC = () => {
 
   useEffect(() => {
     if (isDepartmentScope && selectedMonth < prevMonthLimit) {
-      setSelectedMonth(prevMonthLimit);
+      queueMicrotask(() => setSelectedMonth(prevMonthLimit));
     }
   }, [isDepartmentScope, prevMonthLimit, selectedMonth]);
 

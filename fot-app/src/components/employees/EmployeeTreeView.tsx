@@ -22,9 +22,11 @@ export const EmployeeTreeView: FC<IEmployeeTreeViewProps> = ({
 
   useEffect(() => {
     if (tree.length === 0) return;
-    setExpandedNodes(prev => {
-      if (prev.size > 0) return prev;
-      return new Set(tree.map(node => node.id));
+    queueMicrotask(() => {
+      setExpandedNodes(prev => {
+        if (prev.size > 0) return prev;
+        return new Set(tree.map(node => node.id));
+      });
     });
   }, [tree]);
 

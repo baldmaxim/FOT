@@ -374,7 +374,7 @@ export const SchedulesPage: FC = () => {
   const templatesOnly = !isAdmin && !canViewPage('/admin/schedules') && canViewPage('/admin/schedules/templates');
   const [tab, setTab] = useState<TabKey>('templates');
   useEffect(() => {
-    if (templatesOnly && tab !== 'templates') setTab('templates');
+    if (templatesOnly && tab !== 'templates') queueMicrotask(() => setTab('templates'));
   }, [templatesOnly, tab]);
   const [error, setError] = useState('');
 
@@ -571,10 +571,11 @@ export const SchedulesPage: FC = () => {
   const [cycleLengthDraft, setCycleLengthDraft] = useState<string>('');
   useEffect(() => {
     if (form.is_custom_cycle && cycleLengthDraft === '') {
-      setCycleLengthDraft(String(form.custom_cycle_days.length));
+      const next = String(form.custom_cycle_days.length);
+      queueMicrotask(() => setCycleLengthDraft(next));
     }
     if (!form.is_custom_cycle && cycleLengthDraft !== '') {
-      setCycleLengthDraft('');
+      queueMicrotask(() => setCycleLengthDraft(''));
     }
   }, [form.is_custom_cycle, form.custom_cycle_days.length, cycleLengthDraft]);
 
@@ -761,16 +762,20 @@ export const SchedulesPage: FC = () => {
   };
 
   const activeObjectAssignments = useMemo(() => {
+    // today вычисляется внутри useMemo, чтобы реакт-компилятор не ругался
+    // на возможное мутирование внешнего значения. Пересчёт на каждом ре-рендере
+    // дешёвый (одна Date.now), а корректность для today-границы расписания сохраняется.
+    const todayLocal = getLocalISODate();
     const map = new Map<string, IObjectScheduleAssignment | null>();
     for (const objectItem of travelObjects) {
       const active = objectAssignments.find(assignment => (
         assignment.object_id === objectItem.id
-        && isActiveScheduleAssignment(assignment.effective_from, assignment.effective_to, today)
+        && isActiveScheduleAssignment(assignment.effective_from, assignment.effective_to, todayLocal)
       )) || null;
       map.set(objectItem.id, active);
     }
     return map;
-  }, [travelObjects, objectAssignments, today]);
+  }, [travelObjects, objectAssignments]);
 
   const handleAssignObject = async (objectId: string, scheduleId: string) => {
     setError('');

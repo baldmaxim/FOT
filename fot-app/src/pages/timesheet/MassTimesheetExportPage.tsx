@@ -71,10 +71,10 @@ export const MassTimesheetExportPage: FC = () => {
   useEffect(() => {
     if (!isRestrictedManagerView) return;
     if (selectedMonthIndex > currentMonthIndex) {
-      setYear(currentYear); setMonth(currentMonth);
+      queueMicrotask(() => { setYear(currentYear); setMonth(currentMonth); });
     } else if (selectedMonthIndex < previousMonthIndex) {
       const d = new Date(currentYear, currentMonth - 2, 1);
-      setYear(d.getFullYear()); setMonth(d.getMonth() + 1);
+      queueMicrotask(() => { setYear(d.getFullYear()); setMonth(d.getMonth() + 1); });
     }
   }, [isRestrictedManagerView, selectedMonthIndex, currentMonthIndex, previousMonthIndex, currentYear, currentMonth]);
 

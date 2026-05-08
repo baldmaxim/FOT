@@ -22,6 +22,7 @@ const normalizeAdditionalDepartmentIds = (departmentIds: string[]): string[] => 
 
 const normalizeText = (value: string | null | undefined): string => (
   String(value || '')
+    // eslint-disable-next-line no-irregular-whitespace -- regex намеренно ловит NBSP / narrow no-break space
     .replace(/ /g, ' ')
     .replace(/ё/giu, 'е')
     .replace(/\s+/g, ' ')

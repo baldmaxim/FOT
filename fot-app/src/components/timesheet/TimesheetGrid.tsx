@@ -333,9 +333,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   const { showActualHours } = useAuth();
   // Синхронизируем module-level flag, к которому обращаются helper-функции
   // верхнего уровня (getVisibleHours/getObjectVisibleHours и зависящие от них
-  // getDayCellClass/Text/Title). useLayoutEffect, чтобы flag успел переключиться
-  // до commit-фазы рендера, иначе на смене роли первый рендер покажет старые часы.
+  // getDayCellClass/Text/Title). Flag намеренно живёт вне компонента, чтобы
+  // pure-helper функции из этого же файла могли его читать без пропов.
   if (showActualHoursFlag !== showActualHours) {
+    // eslint-disable-next-line react-hooks/globals -- module-level flag читается helper'ами вне компонента
     showActualHoursFlag = showActualHours;
   }
   const daysCount = getDaysInMonth(year, month);
