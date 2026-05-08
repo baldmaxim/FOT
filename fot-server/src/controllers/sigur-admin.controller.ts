@@ -798,6 +798,19 @@ export const sigurAdminController = {
         accessPointIds: (req.body as { accessPointIds?: unknown })?.accessPointIds,
       });
       const debug: Record<string, unknown> = {};
+      const sigurEmployeeIdParsed = parseInteger(req.params.sigurEmployeeId);
+      if (sigurEmployeeIdParsed) {
+        try {
+          const sample = await sigurService.getEmployeeAccessPointBindings(
+            { employeeId: sigurEmployeeIdParsed },
+            parseConnection(req.body?.connection),
+          );
+          debug.currentBindingSample = Array.isArray(sample) && sample.length > 0 ? sample[0] : null;
+          debug.currentBindingsCount = Array.isArray(sample) ? sample.length : 0;
+        } catch (sampleError) {
+          debug.currentBindingSampleError = sampleError instanceof Error ? sampleError.message : String(sampleError);
+        }
+      }
       if (error instanceof AxiosError) {
         const data = error.response?.data as Record<string, unknown> | undefined;
         console.error('[Sigur access-points] method=', error.config?.method, 'url=', error.config?.url);
