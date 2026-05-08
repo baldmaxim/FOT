@@ -1230,10 +1230,21 @@ export class SigurDataService extends SigurServiceBase {
     accessPointIds: number[],
     connection?: ConnectionType,
   ): Promise<void> {
+    // Sigur ожидает массив объектов вида [{ employeeId, accessPointId }]
+    // (как у /bindings/employees-cards). Прежний формат
+    // { employeeIds: [...], accessPointIds: [...] } валит API с
+    // 400 invalid.request. GET по тому же endpoint возвращает singular-поля.
+    const items: Array<{ employeeId: number; accessPointId: number }> = [];
+    for (const employeeId of employeeIds) {
+      for (const accessPointId of accessPointIds) {
+        items.push({ employeeId, accessPointId });
+      }
+    }
+    if (items.length === 0) return;
     await this.mutate<void>(
       'post',
       '/api/v1/bindings/employees-accesspoints',
-      { employeeIds, accessPointIds },
+      items,
       undefined,
       connection,
     );
@@ -1244,10 +1255,17 @@ export class SigurDataService extends SigurServiceBase {
     accessPointIds: number[],
     connection?: ConnectionType,
   ): Promise<void> {
+    const items: Array<{ employeeId: number; accessPointId: number }> = [];
+    for (const employeeId of employeeIds) {
+      for (const accessPointId of accessPointIds) {
+        items.push({ employeeId, accessPointId });
+      }
+    }
+    if (items.length === 0) return;
     await this.mutate<void>(
       'post',
       '/api/v1/bindings/employees-accesspoints/delete',
-      { employeeIds, accessPointIds },
+      items,
       undefined,
       connection,
     );
