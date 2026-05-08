@@ -1489,7 +1489,9 @@ export const TimesheetPage: FC = () => {
       </button>
     </section>
   ) : null;
-  const viewControl = (isAssignedMode ? selectedAssigneeId : effectiveSelectedDeptId) ? (
+  const hasActiveScope = (isAssignedMode ? selectedAssigneeId : effectiveSelectedDeptId);
+
+  const viewControl = hasActiveScope ? (
     <section className="ts-view-switch">
       <button
         type="button"
@@ -1522,6 +1524,45 @@ export const TimesheetPage: FC = () => {
         </button>
       )}
     </section>
+  ) : null;
+
+  const viewControlPrimary = hasActiveScope ? (
+    <section className="ts-view-switch">
+      <button
+        type="button"
+        className={`ts-view-chip ${viewMode === 'employees' ? ' ts-view-chip--active' : ''}`}
+        onClick={() => handleViewModeChange('employees')}
+      >
+        По сотрудникам
+      </button>
+      <button
+        type="button"
+        className={`ts-view-chip ${viewMode === 'objects' ? ' ts-view-chip--active' : ''}`}
+        onClick={() => handleViewModeChange('objects')}
+      >
+        По объектам
+      </button>
+    </section>
+  ) : null;
+
+  const correctionsChip = hasActiveScope ? (
+    <button
+      type="button"
+      className={`ts-view-chip ${viewMode === 'corrections' ? ' ts-view-chip--active' : ''}`}
+      onClick={() => handleViewModeChange('corrections')}
+    >
+      Корректировки
+    </button>
+  ) : null;
+
+  const transfersChip = hasActiveScope && isSuperAdmin && !isAssignedMode ? (
+    <button
+      type="button"
+      className={`ts-view-chip ${viewMode === 'transfers' ? ' ts-view-chip--active' : ''}`}
+      onClick={() => handleViewModeChange('transfers')}
+    >
+      <ArrowRightLeft size={14} /> Переводы
+    </button>
   ) : null;
 
   const modalWorkDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
@@ -1591,11 +1632,13 @@ export const TimesheetPage: FC = () => {
           <section className="ts-top-panel">
             <div className="ts-header-grid">
               <div className="ts-header-cell ts-header-cell--left">
+                {modeControl}
                 {selectorControl}
                 {isAssignedMode && brigadeControl}
               </div>
               <div className="ts-header-cell ts-header-cell--center">
                 {monthNavigation}
+                {segmentControl}
               </div>
               <div className="ts-header-cell ts-header-cell--right">
                 <TimesheetApprovalBar
@@ -1610,10 +1653,12 @@ export const TimesheetPage: FC = () => {
 
             <div className="ts-header-toolbar">
               <div className="ts-header-toolbar-left">
-                {modeControl}
+                {viewControlPrimary}
               </div>
               <div className="ts-header-toolbar-right">
                 <TimesheetStats stats={stats} />
+                {correctionsChip}
+                {transfersChip}
                 <button
                   type="button"
                   className="ts-btn"
@@ -1669,8 +1714,8 @@ export const TimesheetPage: FC = () => {
           </section>
         )}
 
-        {segmentControl}
-        {viewControl}
+        {isMobile && segmentControl}
+        {isMobile && viewControl}
       </div>
 
       {!isMobile && bulkModeEnabled && activeGridDeptId && (
