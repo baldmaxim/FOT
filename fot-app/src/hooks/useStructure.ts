@@ -18,7 +18,7 @@ export const useStructureTree = (enabled = true) => {
       };
     },
     enabled,
-    staleTime: 5 * 60_000,
+    staleTime: 15 * 60_000,
   });
 };
 

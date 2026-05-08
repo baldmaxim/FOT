@@ -6,7 +6,7 @@ import { invalidateStructureCache } from '../services/employee-mapper.service.js
 
 const router = Router();
 
-const structureTreeCache = registerCache('structure:tree', () => 'structure:tree', 5 * 60_000);
+const structureTreeCache = registerCache('structure:tree', () => 'structure:tree', 15 * 60_000);
 const structurePositionsCache = registerCache('structure:positions', () => 'structure:positions', 15 * 60_000);
 
 // Все роуты требуют аутентификации
@@ -26,7 +26,7 @@ router.use((req, res, next) => {
   next();
 });
 
-// GET /api/structure - получение дерева (worker+, кэш 5мин)
+// GET /api/structure - получение дерева (worker+, кэш 15мин)
 router.get(
   '/',
   requireAnyPageAccess(['/employee', '/dashboard', '/staff-control', '/admin/users', '/admin/payslips', '/skud-settings'], 'view'),
