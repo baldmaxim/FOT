@@ -56,7 +56,10 @@ const SLOT_HARD_LIMIT = 13;
 // UPSERT-вызовы продолжают занимать connection slots Supabase и блокируют UI-запросы
 // (selector отделов на /timesheet, /api/skud/presence). Partial checkpoint логика
 // уже умеет завершить цикл с lastSuccessfulEventAt и доделать остаток на следующем тике.
-const CYCLE_TIME_BUDGET_MS = 8_000;
+// Бюджет на ВЕСЬ цикл (fetch + insert + summary). Реальный tFetch от Sigur
+// 5-10s даже на 5 событий (lastId-mode) — это вне нашего кода. 25s оставляет
+// нам ~15s на запись/recalc и не превращает каждый Sigur-тормоз в partial.
+const CYCLE_TIME_BUDGET_MS = 25_000;
 const RETRY_BACKOFF_MS = [400, 1200];
 export const POLL_OVERLAP_MS = 2 * 60_000;
 const POLL_MAX_WINDOW_MS = 10 * 60_000;
@@ -70,6 +73,11 @@ const EXCLUSIVE_SYNC_ACQUIRE_RETRY_MS = 1_000;
 let pollingTimer: ReturnType<typeof setTimeout> | null = null;
 let pollingActive = false;
 let consecutiveEmptyTicks = 0;
+// Sigur стабильно отдаёт ~3 мусорных события на 1000 (event_date='2000-01-01' и т.п.).
+// Без rate-limit Sentry получает warning на каждом активном тике — заглушает
+// видимость реальных проблем. Раз в час достаточно, чтобы заметить «стало хуже».
+let lastQuarantineSentryAt = 0;
+const QUARANTINE_SENTRY_INTERVAL_MS = 60 * 60_000;
 let startupTimeout: ReturnType<typeof setTimeout> | null = null;
 let manualSyncLocks = 0;
 let pollInFlight: Promise<void> | null = null;
@@ -411,6 +419,7 @@ export function resetPresencePollingStateForTests(): void {
 
   pollingActive = false;
   consecutiveEmptyTicks = 0;
+  lastQuarantineSentryAt = 0;
   manualSyncLocks = 0;
   eventsSyncLocks = 0;
   pollInFlight = null;
@@ -784,8 +793,10 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         break outer;
       }
       if (Date.now() - cycleStartedAt > CYCLE_TIME_BUDGET_MS) {
+        // Это backpressure-сигнал, а не ошибка БД: следующий тик подберёт остаток
+        // через UNIQUE-индекс. НЕ пушим в persistenceErrors → hadFailure остаётся false
+        // → lastEventId двигается → polling не зацикливается на одном окне.
         cycleBudgetExceeded = true;
-        persistenceErrors.push('cycle time budget exceeded during inserts');
         break outer;
       }
       if (i + BATCH_SIZE * BATCH_CONCURRENCY < inserts.length) await wait(BATCH_DELAY_MS);
@@ -877,8 +888,10 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
           }
         }
         if (Date.now() - cycleStartedAt > CYCLE_TIME_BUDGET_MS) {
+          // backpressure-сигнал, не ошибка: skud-summary-reconcile.service подхватит
+          // orphan-пары через 15 мин, а на следующем тике наши вставленные ключи
+          // снова попадут в insertedSummaryKeys.
           cycleBudgetExceeded = true;
-          summaryError = summaryError ?? 'cycle time budget exceeded during summary';
           break summaryOuter;
         }
         if (i + SUMMARY_BATCH * BATCH_CONCURRENCY < allPairs.length) await wait(SUMMARY_DELAY_MS);
@@ -953,17 +966,19 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       timings,
     };
 
-    // При partial failure двигаем checkpoint только до последнего успешно записанного
-    // event_at (минус 10 сек overlap), чтобы при следующем тике переиграть только
-    // непрошедшую часть окна. При полном провале без единого успешного батча
-    // checkpoint не двигаем — пусть следующий цикл попробует то же окно заново.
+    // При partial failure (реальные DB-ошибки) двигаем checkpoint только до последнего
+    // успешно записанного event_at (минус 10 сек overlap). При полном провале без единого
+    // успешного батча checkpoint не двигаем — пусть следующий цикл попробует то же окно.
+    // При cycleBudgetExceeded checkpoint двигается в window.endAt: budget — это
+    // backpressure от Sigur-тормоза, не ошибка БД. UNIQUE отсеет дубли, если что
+    // не успело записаться — следующий тик подберёт остаток через lastEventId.
     const nextCheckpoint: Date | null = hadFailure
       ? (lastSuccessfulEventAt ? new Date(lastSuccessfulEventAt.getTime() - 10_000) : null)
       : window.endAt;
 
-    // lastEventId двигаем только при полном успехе цикла. При partial failure
-    // следующий тик повторно запросит те же события — UNIQUE (dedup_hash, event_date)
-    // отсеет уже записанные дубли, не записанные попадут в БД.
+    // lastEventId двигаем при чистом успехе И при чистом budget-exceeded (без ошибок БД).
+    // При реальной partial failure следующий тик повторно запросит те же события —
+    // UNIQUE (dedup_hash, event_date) отсеет уже записанные.
     const advanceLastEventId = !hadFailure && maxObservedEventId !== null;
 
     await mergeSigurRuntimeState({
@@ -984,21 +999,29 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       `[presence-polling] cycle done source=${window.checkpointSource} connection=${connectionType} start=${window.startTime} end=${window.endTime} fetched=${rawEvents.length} failuresFetched=${rawFailures.length} failuresInserted=${totalFailuresInserted} quarantinedByDate=${quarantinedByDate} attempted=${inserts.length} inserted=${totalInserted} duplicates=${Math.max(0, inserts.length - totalInserted)} unmatched=${storedUnmatched} summaries=${insertedSummaryKeys.size} tFetch=${tFetch}ms tEmpRefresh=${tEmpRefresh}ms tInsert=${tInsert}ms tSummary=${tSummary}ms total=${totalMs}ms${hadFailure ? ` PARTIAL_FAILURE=${failureMessage}` : ''}${failuresPersistenceError ? ` FAILURES_ERROR=${failuresPersistenceError}` : ''}`,
     );
     if (quarantinedByDate > 0) {
-      Sentry.captureMessage('presence-polling events quarantined by date', {
-        level: 'warning',
-        tags: { service: 'presence-polling', reason: 'date_out_of_range' },
-        extra: {
-          quarantinedByDate,
-          fetched: rawEvents.length,
-          mode: window.mode,
-          pollLastEventId: window.lastEventId,
-          maxObservedEventId,
-        },
-      });
+      const sinceLast = Date.now() - lastQuarantineSentryAt;
+      if (sinceLast > QUARANTINE_SENTRY_INTERVAL_MS) {
+        lastQuarantineSentryAt = Date.now();
+        Sentry.captureMessage('presence-polling events quarantined by date', {
+          level: 'warning',
+          tags: { service: 'presence-polling', reason: 'date_out_of_range' },
+          extra: {
+            quarantinedByDate,
+            fetched: rawEvents.length,
+            mode: window.mode,
+            pollLastEventId: window.lastEventId,
+            maxObservedEventId,
+            sentryRateLimitedMs: QUARANTINE_SENTRY_INTERVAL_MS,
+          },
+        });
+      }
     }
-    if (totalMs > 3_000) {
+    // Threshold'ы выше типичного tFetch=5-10s от Sigur, иначе каждый активный
+    // тик орёт «slow». Реальный сигнал — когда наш код прибавил ещё 5-10s
+    // поверх Sigur (CRITICAL >20s ≈ Sigur+наша логика отжали два бюджета).
+    if (totalMs > 12_000) {
       const pollIntervalMs = resolvePresencePollIntervalMs();
-      const isCritical = totalMs > 10_000;
+      const isCritical = totalMs > 20_000;
       console.warn(
         `[presence-polling] ${isCritical ? 'CRITICAL' : 'SLOW'} cycle ${totalMs}ms (tFetch=${tFetch}ms tInsert=${tInsert}ms tSummary=${tSummary}ms) exceeds polling interval ${pollIntervalMs}ms`,
       );
@@ -1050,6 +1073,15 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         console.error('[presence-polling] monitor failure hook error:', (error as Error).message);
       });
     } else {
+      // Чистый budget-exceeded — это backpressure, а не ошибка. В Sentry не шумим
+      // (видимость и так есть в console.warn ниже + cycleMeta.cycleBudgetExceeded
+      // в runtime_state.meta.lastCycle), в monitor-таблицу пишем как success: мы
+      // реально записали часть, lastEventId двинется, следующий тик подберёт остаток.
+      if (cycleBudgetExceeded) {
+        console.warn(
+          `[presence-polling] cycle budget exceeded (totalMs=${totalMs}ms tFetch=${tFetch}ms tInsert=${tInsert}ms tSummary=${tSummary}ms inserted=${totalInserted}/${inserts.length}); next tick will resume.`,
+        );
+      }
       void recordSigurMonitorSuccess({
         source: 'presence_polling',
         checkedAt: monitorCheckedAt,

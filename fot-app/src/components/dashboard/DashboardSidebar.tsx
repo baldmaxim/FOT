@@ -95,14 +95,15 @@ const TopLateCardImpl: FC<{ data: IDashboardStats['topLate']; period: DashboardP
     label: 'Обзор',
     from: `${location.pathname}${location.search}${location.hash}`,
   };
+  const safeData = data ?? [];
 
   return (
     <div className={styles.card}>
       <div className={styles.cardTitle}>Топ опаздывающих</div>
-      {data.length === 0 ? (
+      {safeData.length === 0 ? (
         <div className={styles.empty}>Нет опозданий за {getPeriodLabel(period)}</div>
       ) : (
-        data.map((item, i) => (
+        safeData.map((item, i) => (
           <div
             key={item.employee_id}
             className={`${styles.lateItem} ${styles.clickable}`}
