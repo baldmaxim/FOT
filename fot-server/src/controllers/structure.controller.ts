@@ -272,6 +272,16 @@ export const structureController = {
       res.json(body);
     } catch (error) {
       console.error('Get structure error:', error);
+      Sentry.captureException(error, {
+        tags: { route: 'GET /api/structure/tree' },
+        extra: {
+          userId: req.user?.id,
+          isAdmin: req.user?.is_admin,
+          companyScopeRoots: Array.isArray(req.user?.company_scope?.roots)
+            ? req.user.company_scope.roots
+            : req.user?.company_scope?.roots ?? null,
+        },
+      });
       res.status(500).json({ success: false, error: 'Ошибка получения структуры' });
     }
   },
