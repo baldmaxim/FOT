@@ -110,10 +110,11 @@ router.get(
   skudController.getEvents
 );
 
-// GET /api/skud/event-failures - ошибочные события Sigur (PASS_DENY и т.п.) (header+)
+// GET /api/skud/event-failures - ошибочные события Sigur (PASS_DENY и т.п.) (admin+)
+// Доступ под /skud-settings: вкладка «Ошибочные события» живёт на этой странице.
 router.get(
   '/event-failures',
-  requirePageAccess('/skud-db', 'view'),
+  requirePageAccess('/skud-settings', 'view'),
   skudController.getEventFailures
 );
 

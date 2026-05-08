@@ -1,5 +1,5 @@
 import { Suspense, lazy, useState, useEffect, useCallback } from 'react';
-import { Settings, MapPin, Filter, Database } from 'lucide-react';
+import { Settings, MapPin, Filter, Database, AlertCircle } from 'lucide-react';
 import { Navigate, useSearchParams } from 'react-router-dom';
 import { sigurService } from '../../services/sigurService';
 import { useAuth } from '../../contexts/AuthContext';
@@ -21,6 +21,9 @@ const TravelObjectsTab = lazy(() => import('../../components/skud/TravelObjectsT
 const TravelConfigTab = lazy(() => import('../../components/skud/TravelConfigTab').then(module => ({
   default: module.TravelConfigTab,
 })));
+const SkudFailuresTab = lazy(() => import('../../components/skud/SkudFailuresTab').then(module => ({
+  default: module.SkudFailuresTab,
+})));
 
 const SETTINGS_TABS: SettingsTab[] = [
   'settings',
@@ -28,6 +31,7 @@ const SETTINGS_TABS: SettingsTab[] = [
   'access-points',
   'objects',
   'travel-config',
+  'failures',
 ];
 
 const resolveSettingsTab = (value: string | null): SettingsTab => (
@@ -172,6 +176,13 @@ export const SigurSettingsPage = () => {
           <MapPin size={14} />
           Лимит передвижения
         </button>
+        <button
+          className={`sigur-tab ${activeTab === 'failures' ? 'active' : ''}`}
+          onClick={() => setActiveTab('failures')}
+        >
+          <AlertCircle size={14} />
+          Ошибочные события
+        </button>
       </div>
 
       {error && (
@@ -234,6 +245,12 @@ export const SigurSettingsPage = () => {
             canEdit={canEdit}
             setError={setError}
           />
+        </Suspense>
+      )}
+
+      {activeTab === 'failures' && (
+        <Suspense fallback={tabFallback}>
+          <SkudFailuresTab />
         </Suspense>
       )}
     </div>
