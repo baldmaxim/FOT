@@ -39,7 +39,16 @@ export const useStructureTree = (enabled = true) => {
     refetchOnMount: 'always',
     retry: 3,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
-    placeholderData: (previousData) => previousData,
+    // Игнорируем previousData с пустым departments: если бэк хоть раз отдал 200 OK
+    // с empty (например, scope-fallback при rpc_timeout вернул []), placeholderData
+    // залипает на empty и UI не показывает loading — селектор остаётся пустым до
+    // явного invalidate. Лучше показать пустое состояние/loading, чем зафиксировать
+    // плохое значение как "хорошее".
+    placeholderData: (previousData) => (
+      previousData && previousData.departments && previousData.departments.length > 0
+        ? previousData
+        : undefined
+    ),
   });
 };
 

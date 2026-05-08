@@ -19,6 +19,21 @@ export function invalidateAccessibleScopeCache(): void {
 }
 
 /**
+ * Нормализует UUID-параметр из query/body: фронт иногда сериализует null/undefined
+ * как строку "null"/"undefined" в URL (?department_id=null), и попадание такой
+ * строки в supabase.eq('department_id', value) даёт PG ошибку
+ * `invalid input syntax for type uuid: "null"`. Возвращает null для всех таких
+ * мусорных значений.
+ */
+export function normalizeUuidParam(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (trimmed === '' || trimmed === 'null' || trimmed === 'undefined') return null;
+  return trimmed;
+}
+
+/**
  * Скоуп компаний для админа.
  * - 'all'      — системный админ (нет записей в user_company_access).
  * - []         — обычный (не is_admin) пользователь.
@@ -101,7 +116,7 @@ export async function resolveAccessibleDepartmentIds(
         extra: {
           error: result.error?.message ?? 'unknown',
           roots: scope.roots,
-          fallback: cached ? 'stale_cache' : 'empty',
+          fallback: cached ? 'stale_cache' : 'throw',
         },
       });
       if (cached) {
@@ -109,11 +124,20 @@ export async function resolveAccessibleDepartmentIds(
         req.user.__company_subtree_ids = cached.ids;
         return cached.ids;
       }
-      return [];
+      // Без cached'а возвращать [] нельзя: filterTreeByScope обрежет всё дерево,
+      // controller вернёт 200 OK с empty departments, cacheResponse это закеширует
+      // на 15 мин и все пользователи получат пустой селектор. Бросаем — controller
+      // вернёт 500, кеш не пишется, фронт делает retry.
+      throw new Error(`get_descendant_department_ids ${result.error?.message ?? 'failed'}`);
     }
 
     const ids = (result.data || []).map((r) => r.id);
-    subtreeCache.set(cacheKey, { ids, expiresAt: Date.now() + SCOPE_CACHE_TTL_MS });
+    if (ids.length > 0) {
+      // Не кешируем подозрительный пустой результат: при scope.roots.length > 0
+      // RPC должен был включить хотя бы сами roots. Empty ids = аномалия (RPC баг,
+      // удалённые отделы и т.п.) — пусть следующий запрос попробует заново.
+      subtreeCache.set(cacheKey, { ids, expiresAt: Date.now() + SCOPE_CACHE_TTL_MS });
+    }
     req.user.__company_subtree_ids = ids;
     return ids;
   }
@@ -145,22 +169,24 @@ export async function canAccessDepartmentInScope(
   req: AuthenticatedRequest,
   departmentId: string | null | undefined,
 ): Promise<boolean> {
-  if (!departmentId) return false;
+  const normalized = normalizeUuidParam(departmentId);
+  if (!normalized) return false;
   const accessible = await resolveAccessibleDepartmentIds(req);
   if (accessible === 'all') return true;
-  return accessible.includes(departmentId);
+  return accessible.includes(normalized);
 }
 
 export async function resolveScopedDepartmentId(
   req: AuthenticatedRequest,
   requestedDepartmentId?: string | null,
 ): Promise<string | null> {
+  const requested = normalizeUuidParam(requestedDepartmentId);
   const accessible = await resolveAccessibleDepartmentIds(req);
-  if (accessible === 'all') return requestedDepartmentId ?? null;
+  if (accessible === 'all') return requested;
   if (accessible.length === 0) return null;
 
-  if (requestedDepartmentId) {
-    return accessible.includes(requestedDepartmentId) ? requestedDepartmentId : null;
+  if (requested) {
+    return accessible.includes(requested) ? requested : null;
   }
 
   if (req.user.department_id && accessible.includes(req.user.department_id)) {
@@ -174,15 +200,18 @@ export async function resolveScopedDepartmentIds(
   requestedDepartmentIds?: string[] | null,
 ): Promise<string[]> {
   const accessible = await resolveAccessibleDepartmentIds(req);
+  const normalized = (requestedDepartmentIds || [])
+    .map(normalizeUuidParam)
+    .filter((id): id is string => id !== null);
 
   if (accessible === 'all') {
-    return [...new Set((requestedDepartmentIds || []).filter(Boolean))];
+    return [...new Set(normalized)];
   }
 
-  if (!requestedDepartmentIds?.length) {
+  if (normalized.length === 0) {
     return accessible;
   }
-  return requestedDepartmentIds.filter(id => accessible.includes(id));
+  return normalized.filter(id => accessible.includes(id));
 }
 
 /**
