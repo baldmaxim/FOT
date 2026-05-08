@@ -1230,24 +1230,26 @@ export class SigurDataService extends SigurServiceBase {
     accessPointIds: number[],
     connection?: ConnectionType,
   ): Promise<void> {
-    // Sigur ожидает массив объектов вида [{ employeeId, accessPointId }]
-    // (как у /bindings/employees-cards). Прежний формат
-    // { employeeIds: [...], accessPointIds: [...] } валит API с
-    // 400 invalid.request. GET по тому же endpoint возвращает singular-поля.
-    const items: Array<{ employeeId: number; accessPointId: number }> = [];
+    // Sigur 1.6.3.14: оба прежних формата валят 400 invalid.request:
+    //   { employeeIds: [...], accessPointIds: [...] }     — cross-product объект (как в доке)
+    //   [{ employeeId, accessPointId }, ...]              — массив объектов (как у cards)
+    // Рабочий вариант — по аналогии с addEmployeeAccessRuleBinding (который работает):
+    // одиночный объект { employeeId, accesspointId } (singular, lowercase 'p' в 'point'),
+    // N отдельных POST для каждой пары.
+    const pairs: Array<{ employeeId: number; accesspointId: number }> = [];
     for (const employeeId of employeeIds) {
-      for (const accessPointId of accessPointIds) {
-        items.push({ employeeId, accessPointId });
+      for (const accesspointId of accessPointIds) {
+        pairs.push({ employeeId, accesspointId });
       }
     }
-    if (items.length === 0) return;
-    await this.mutate<void>(
+    if (pairs.length === 0) return;
+    await Promise.all(pairs.map(pair => this.mutate<void>(
       'post',
       '/api/v1/bindings/employees-accesspoints',
-      items,
+      pair,
       undefined,
       connection,
-    );
+    )));
   }
 
   async deleteEmployeeAccessPointBindings(
@@ -1255,20 +1257,21 @@ export class SigurDataService extends SigurServiceBase {
     accessPointIds: number[],
     connection?: ConnectionType,
   ): Promise<void> {
-    const items: Array<{ employeeId: number; accessPointId: number }> = [];
+    // См. createEmployeeAccessPointBindings — тот же формат: одиночный объект, lowercase singular.
+    const pairs: Array<{ employeeId: number; accesspointId: number }> = [];
     for (const employeeId of employeeIds) {
-      for (const accessPointId of accessPointIds) {
-        items.push({ employeeId, accessPointId });
+      for (const accesspointId of accessPointIds) {
+        pairs.push({ employeeId, accesspointId });
       }
     }
-    if (items.length === 0) return;
-    await this.mutate<void>(
+    if (pairs.length === 0) return;
+    await Promise.all(pairs.map(pair => this.mutate<void>(
       'post',
       '/api/v1/bindings/employees-accesspoints/delete',
-      items,
+      pair,
       undefined,
       connection,
-    );
+    )));
   }
 
   async updateEmployeeCardBindingExpiration(
