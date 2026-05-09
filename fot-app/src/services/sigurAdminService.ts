@@ -1,6 +1,7 @@
 import { apiClient, buildApiUrl, buildAuthHeaders } from '../api/client';
 import { readSseResponse } from '../components/skud/sigur-settings.utils';
 import type {
+  AccessPointOption,
   SigurConnectionScope,
   SigurDepartmentNode,
   SigurEmployeeCardAccessStatus,
@@ -212,6 +213,7 @@ export const sigurAdminService = {
     params?: {
       connection?: SigurConnectionScope;
       includeAccessPointCatalog?: boolean;
+      refresh?: boolean;
     },
   ): Promise<SigurLiveEmployeeProfile> {
     const searchParams = new URLSearchParams();
@@ -219,9 +221,20 @@ export const sigurAdminService = {
     if (params?.includeAccessPointCatalog !== undefined) {
       searchParams.set('includeAccessPointCatalog', String(params.includeAccessPointCatalog));
     }
+    if (params?.refresh) searchParams.set('refresh', '1');
     const query = searchParams.toString();
     const response = await apiClient.get<ApiResponse<SigurLiveEmployeeProfile>>(
       `/sigur/admin/employees/${sigurEmployeeId}/profile${query ? `?${query}` : ''}`,
+    );
+    return response.data;
+  },
+
+  async getAccessPointOptions(connection?: SigurConnectionScope): Promise<AccessPointOption[]> {
+    const searchParams = new URLSearchParams();
+    if (connection) searchParams.set('connection', connection);
+    const query = searchParams.toString();
+    const response = await apiClient.get<ApiResponse<AccessPointOption[]>>(
+      `/sigur/admin/access-points/options${query ? `?${query}` : ''}`,
     );
     return response.data;
   },

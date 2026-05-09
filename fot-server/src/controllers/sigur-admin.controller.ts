@@ -4,6 +4,7 @@ import { auditService } from '../services/audit.service.js';
 import {
   getSigurEmployeeProfile,
   getSigurEmployeeCardStatuses,
+  listSigurAccessPointOptions,
   listSigurDepartmentCounts,
   listSigurDepartmentsTree,
   listSigurEmployees,
@@ -428,6 +429,18 @@ export const sigurAdminController = {
       const status = getErrorStatus(error);
       console.error('Sigur admin deletePosition error:', error);
       res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка удаления должности Sigur') });
+    }
+  },
+
+  async listAccessPointOptions(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const connection = parseConnection(req.query.connection);
+      const options = await listSigurAccessPointOptions(connection);
+      res.json({ success: true, data: options });
+    } catch (error) {
+      const status = getErrorStatus(error);
+      console.error('Sigur admin listAccessPointOptions error:', error);
+      res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка загрузки каталога точек доступа Sigur') });
     }
   },
 

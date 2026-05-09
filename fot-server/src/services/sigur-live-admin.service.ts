@@ -21,7 +21,7 @@ export interface IAccessPointBinding {
   hasMapPreview: boolean;
 }
 
-interface IAccessPointOption {
+export interface IAccessPointOption {
   id: number;
   name: string;
   objectId: string | null;
@@ -780,6 +780,27 @@ export async function listSigurEmployees(
     page: safePage,
     pageSize: safePageSize,
   };
+}
+
+export async function listSigurAccessPointOptions(
+  connection?: ConnectionType,
+): Promise<IAccessPointOption[]> {
+  const [accessPointPairs, accessPointObjectMeta] = await Promise.all([
+    sigurService.getAccessPointOptionsCached(connection),
+    loadAccessPointObjectMetaMap(),
+  ]);
+  return accessPointPairs
+    .map(({ id, name }) => {
+      const meta = accessPointObjectMeta.get(normalizeAccessPointKey(name));
+      return {
+        id,
+        name,
+        objectId: meta?.objectId || null,
+        objectName: meta?.objectName || null,
+        hasMapPreview: meta?.hasMapPreview === true,
+      } satisfies IAccessPointOption;
+    })
+    .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
 }
 
 export async function getSigurEmployeeProfile(

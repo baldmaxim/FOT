@@ -197,7 +197,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
       pageSize: EMPLOYEES_PAGE_SIZE,
     }),
     staleTime: 60_000,
-    placeholderData: previousData => previousData,
   });
 
   const departments = departmentsQuery.data || [];
@@ -212,7 +211,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
     queryFn: () => sigurAdminService.getEmployeeCardStatuses(visibleEmployeeIds),
     enabled: visibleEmployeeIds.length > 0,
     staleTime: 5 * 60 * 1000,
-    placeholderData: previousData => previousData,
   });
   const employeeCardStatusMap = useMemo(() => new Map(
     (employeeCardStatusesQuery.data || []).map(status => [status.employeeId, status]),
@@ -366,9 +364,10 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
   const refreshData = async () => {
     setError('');
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'departments-tree'] }),
-      queryClient.invalidateQueries({ queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'employees'] }),
-      queryClient.invalidateQueries({ queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'positions'] }),
+      queryClient.refetchQueries({ queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'departments-tree'] }),
+      queryClient.refetchQueries({ queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'employees'] }),
+      queryClient.refetchQueries({ queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'positions'] }),
+      queryClient.refetchQueries({ queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'employee-card-statuses'] }),
     ]);
   };
 
@@ -922,6 +921,13 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
                       event.dataTransfer.setData(EMPLOYEE_DRAG_TYPE, JSON.stringify({ employeeIds }));
                     }}
                     onClick={() => handleOpenEmployee(employeeItem)}
+                    onMouseEnter={() => {
+                      void queryClient.prefetchQuery({
+                        queryKey: ['sigur-employee-profile', employeeItem.id],
+                        queryFn: () => sigurAdminService.getEmployeeProfile(employeeItem.id, { includeAccessPointCatalog: false }),
+                        staleTime: 60_000,
+                      });
+                    }}
                   >
                     {canEdit && (
                       <td className="ep-col-check" onClick={event => event.stopPropagation()}>

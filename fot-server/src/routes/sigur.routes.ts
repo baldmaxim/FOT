@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { sigurController } from '../controllers/sigur.controller.js';
 import { sigurMonitorController } from '../controllers/sigur-monitor.controller.js';
 import { sigurSyncController } from '../controllers/sigur-sync.controller.js';
@@ -50,6 +50,31 @@ const sigurAdminCardStatusesCache = registerCache(
   5 * 60_000,
 );
 
+const sigurAdminEmployeeProfileKey = (req: Request): string =>
+  `saep:${req.query.connection ?? ''}:${req.params.sigurEmployeeId ?? ''}:${req.query.includeAccessPointCatalog ?? ''}`;
+
+const sigurAdminEmployeeProfileCache = registerCache(
+  'sigur:admin:employee-profile',
+  sigurAdminEmployeeProfileKey,
+  45_000,
+  500,
+);
+
+const sigurAdminEmployeeProfileMiddleware = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.query.refresh === '1') {
+    sigurAdminEmployeeProfileCache.invalidateKey(sigurAdminEmployeeProfileKey(req));
+    next();
+    return;
+  }
+  sigurAdminEmployeeProfileCache(req, res, next);
+};
+
+const sigurAdminAccessPointOptionsCache = registerCache(
+  'sigur:admin:access-point-options',
+  (req) => `saapo:${req.query.connection ?? ''}`,
+  5 * 60_000,
+);
+
 const SIGUR_ADMIN_CACHES = [
   'sigur:admin:departments',
   'sigur:admin:departments-tree',
@@ -57,6 +82,8 @@ const SIGUR_ADMIN_CACHES = [
   'sigur:admin:positions',
   'sigur:admin:employees',
   'sigur:admin:card-statuses',
+  'sigur:admin:employee-profile',
+  'sigur:admin:access-point-options',
 ];
 
 // Write-through invalidation: любой POST/PUT/DELETE/PATCH на /admin/* и /sync* сбрасывает кэши
@@ -88,7 +115,8 @@ router.get('/admin/departments/counts', requirePageAccess('/skud-settings', 'vie
 router.get('/admin/positions', requirePageAccess('/skud-settings', 'view'), sigurAdminPositionsCache, sigurAdminController.listPositions);
 router.get('/admin/employees', requirePageAccess('/skud-settings', 'view'), sigurAdminEmployeesCache, sigurAdminController.listEmployees);
 router.get('/admin/employees/card-statuses', requirePageAccess('/skud-settings', 'view'), sigurAdminCardStatusesCache, sigurAdminController.getEmployeeCardStatuses);
-router.get('/admin/employees/:sigurEmployeeId/profile', requirePageAccess('/skud-settings', 'view'), sigurAdminController.getEmployeeProfile);
+router.get('/admin/access-points/options', requirePageAccess('/skud-settings', 'view'), sigurAdminAccessPointOptionsCache, sigurAdminController.listAccessPointOptions);
+router.get('/admin/employees/:sigurEmployeeId/profile', requirePageAccess('/skud-settings', 'view'), sigurAdminEmployeeProfileMiddleware, sigurAdminController.getEmployeeProfile);
 
 router.post(
   '/admin/departments',

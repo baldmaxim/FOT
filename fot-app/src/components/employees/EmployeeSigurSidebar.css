@@ -49,6 +49,10 @@
   gap: 10px;
 }
 
+.ep-sigur-header-top--end {
+  justify-content: flex-end;
+}
+
 .ep-sigur-panel-heading {
   min-width: 0;
 }
@@ -251,6 +255,24 @@
   background: var(--error-muted);
   border-color: rgba(220, 38, 38, 0.18);
   color: var(--error);
+}
+
+button.ep-sigur-pill--toggle {
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+}
+button.ep-sigur-pill--toggle:hover:not(:disabled) {
+  filter: brightness(1.05);
+  box-shadow: 0 0 0 3px var(--surface-hover, rgba(0, 0, 0, 0.04));
+  transform: translateY(-1px);
+}
+button.ep-sigur-pill--toggle:active:not(:disabled) {
+  transform: translateY(0);
+}
+button.ep-sigur-pill--toggle:disabled {
+  cursor: progress;
+  opacity: 0.7;
 }
 
 .ep-sigur-field-stack {

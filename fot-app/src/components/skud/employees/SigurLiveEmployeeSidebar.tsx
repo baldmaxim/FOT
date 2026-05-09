@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FC, type ReactNode } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CalendarDays,
   Check,
@@ -13,11 +14,9 @@ import {
   Search,
   ShieldCheck,
   Trash2,
-  UserLock,
-  UserRoundCheck,
   X,
 } from 'lucide-react';
-import { sigurAdminService } from '../../../services/sigurAdminService';
+import { sigurAdminService, type SigurEmployeesResult } from '../../../services/sigurAdminService';
 import type {
   AccessPointOption,
   SigurDepartmentNode,
@@ -367,8 +366,43 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   onPositionsChanged,
   onDeleted,
 }) => {
-  const [profile, setProfile] = useState<SigurLiveEmployeeProfile | null>(null);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
+  const profileQueryKey = useMemo(
+    () => ['sigur-employee-profile', sigurEmployeeId] as const,
+    [sigurEmployeeId],
+  );
+  const profileQuery = useQuery<SigurLiveEmployeeProfile>({
+    queryKey: profileQueryKey,
+    queryFn: () => sigurAdminService.getEmployeeProfile(sigurEmployeeId as number, { includeAccessPointCatalog: false }),
+    enabled: sigurEmployeeId != null,
+    staleTime: 60_000,
+    gcTime: 5 * 60_000,
+    placeholderData: (prev) => prev,
+  });
+  const profile = profileQuery.data ?? null;
+  const setProfile = useCallback(
+    (
+      updater: SigurLiveEmployeeProfile | null | ((prev: SigurLiveEmployeeProfile | null) => SigurLiveEmployeeProfile | null),
+    ) => {
+      queryClient.setQueryData<SigurLiveEmployeeProfile | null>(
+        profileQueryKey,
+        (prev) => {
+          const previous = prev ?? null;
+          const next = typeof updater === 'function'
+            ? (updater as (p: SigurLiveEmployeeProfile | null) => SigurLiveEmployeeProfile | null)(previous)
+            : updater;
+          return next ?? undefined;
+        },
+      );
+    },
+    [queryClient, profileQueryKey],
+  );
+  const loading = profileQuery.isFetching;
+  const queryErrorMessage = profileQuery.error instanceof Error
+    ? profileQuery.error.message
+    : profileQuery.error
+      ? 'Не удалось загрузить профиль Sigur'
+      : '';
   const [profileError, setProfileError] = useState('');
   const [fieldDrafts, setFieldDrafts] = useState<IEmployeeDraft>(profileToDraft(null));
   const [savingField, setSavingField] = useState<keyof IEmployeeDraft | null>(null);
@@ -423,49 +457,48 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
     };
   }, [actionsMenuOpen]);
 
-  const loadProfile = async (refresh = false, includeAccessPointCatalog = false) => {
+  const reloadProfile = useCallback(async (refresh = false): Promise<void> => {
     if (!sigurEmployeeId) return;
-
-    try {
-      setLoading(true);
-      setProfileError('');
-      const data = await sigurAdminService.getEmployeeProfile(sigurEmployeeId, { includeAccessPointCatalog });
-      if (!refresh || data.sigurEmployeeId === sigurEmployeeId) {
-        setProfile(data);
-        setFieldDrafts(profileToDraft(data));
-        const nextCardDrafts = Object.fromEntries(
-          data.cards.map(card => [card.cardId, toDateInputValue(card.expirationDate)]),
-        );
-        setCardDrafts(nextCardDrafts);
-        const nextStartDateDrafts = Object.fromEntries(
-          data.cards.map(card => [card.cardId, toDateInputValue(card.startDate)]),
-        );
-        setStartDateDrafts(nextStartDateDrafts);
-      }
-    } catch (error) {
-      setProfileError(error instanceof Error ? error.message : 'Не удалось загрузить профиль Sigur');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!sigurEmployeeId) {
-      setProfile(null);
-      setFieldDrafts(profileToDraft(null));
-      setCardDrafts({});
-      setStartDateDrafts({});
-      setSavingField(null);
-      setSavedFieldFlash(null);
-      setAccessPointPickerOpen(false);
-      setAccessPointSearchQuery('');
-      setAccessRulesPickerOpen(false);
-      setEditingField(null);
-      setNewPositionName('');
+    setProfileError('');
+    if (refresh) {
+      const fresh = await sigurAdminService.getEmployeeProfile(sigurEmployeeId, {
+        includeAccessPointCatalog: false,
+        refresh: true,
+      });
+      queryClient.setQueryData<SigurLiveEmployeeProfile>(profileQueryKey, fresh);
       return;
     }
-    void loadProfile(false, true);
+    await profileQuery.refetch();
+  }, [sigurEmployeeId, profileQuery, queryClient, profileQueryKey]);
+
+  useEffect(() => {
+    if (sigurEmployeeId) return;
+    setFieldDrafts(profileToDraft(null));
+    setCardDrafts({});
+    setStartDateDrafts({});
+    setSavingField(null);
+    setSavedFieldFlash(null);
+    setAccessPointPickerOpen(false);
+    setAccessPointSearchQuery('');
+    setAccessRulesPickerOpen(false);
+    setEditingField(null);
+    setNewPositionName('');
+    setProfileError('');
   }, [sigurEmployeeId]);
+
+  useEffect(() => {
+    if (!profile) return;
+    if (editingField || savingField) return;
+    setFieldDrafts(profileToDraft(profile));
+    if (savingCardId == null) {
+      setCardDrafts(Object.fromEntries(
+        profile.cards.map(card => [card.cardId, toDateInputValue(card.expirationDate)]),
+      ));
+      setStartDateDrafts(Object.fromEntries(
+        profile.cards.map(card => [card.cardId, toDateInputValue(card.startDate)]),
+      ));
+    }
+  }, [profile, editingField, savingField, savingCardId]);
 
   useEffect(() => {
     if (!accessPointPickerOpen) {
@@ -528,19 +561,30 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
     () => groupAccessPoints((profile?.accessPoints || []).map(bindingToViewItem)),
     [profile?.accessPoints],
   );
+  const accessPointOptionsQuery = useQuery<AccessPointOption[]>({
+    queryKey: ['sigur-access-point-options'],
+    queryFn: () => sigurAdminService.getAccessPointOptions(),
+    enabled: accessPointPickerOpen,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+  });
+  const accessPointCatalog = useMemo(
+    () => accessPointOptionsQuery.data ?? profile?.accessPointOptions ?? [],
+    [accessPointOptionsQuery.data, profile?.accessPointOptions],
+  );
   const availableAccessPointGroups = useMemo(
     () => groupAccessPoints(
-      (profile?.accessPointOptions || [])
+      accessPointCatalog
         .map(optionToViewItem)
         .filter((point): point is IAccessPointViewItem => !!point && !boundAccessPointSet.has(point.id)),
     ),
-    [profile?.accessPointOptions, boundAccessPointSet],
+    [accessPointCatalog, boundAccessPointSet],
   );
 
   const profileBaseline = useMemo<IEmployeeDraft>(() => profileToDraft(profile), [profile]);
 
-  const positionDisplay = profile?.profile.positionName || '—';
-  const departmentDisplay = profile?.profile.departmentName || '—';
+  const positionDisplay = profile?.profile.positionName || employee?.positionName || '—';
+  const departmentDisplay = profile?.profile.departmentName || employee?.departmentName || '—';
 
   const positionOptions = useMemo<ISearchableOption[]>(
     () => positions.map(position => ({ id: String(position.id), label: position.name })),
@@ -597,6 +641,33 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
     setProfileError('');
   };
 
+  const mergeProfileIntoEmployeesQueries = useCallback((nextProfile: SigurLiveEmployeeProfile) => {
+    if (!sigurEmployeeId) return;
+    queryClient.setQueriesData<SigurEmployeesResult>(
+      { queryKey: ['sigur-admin', 'employees'] },
+      (prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          items: prev.items.map(item => (
+            item.id === sigurEmployeeId
+              ? {
+                ...item,
+                name: nextProfile.profile.fullName,
+                tabId: nextProfile.profile.tabNumber,
+                departmentId: nextProfile.profile.departmentId,
+                departmentName: nextProfile.profile.departmentName,
+                positionId: nextProfile.profile.positionId,
+                positionName: nextProfile.profile.positionName,
+                blocked: nextProfile.profile.blocked,
+              }
+              : item
+          )),
+        };
+      },
+    );
+  }, [queryClient, sigurEmployeeId]);
+
   const handleSaveField = async (field: keyof IEmployeeDraft) => {
     if (!sigurEmployeeId) return;
 
@@ -619,6 +690,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
       }
       const nextProfile = await sigurAdminService.updateEmployee(sigurEmployeeId, payload);
       setProfile(nextProfile);
+      mergeProfileIntoEmployeesQueries(nextProfile);
       setFieldDrafts(profileToDraft(nextProfile));
       setEditingField(null);
       setSavedFieldFlash(field);
@@ -656,6 +728,10 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
 
   const handleToggleBlocked = async () => {
     if (!sigurEmployeeId) return;
+    const message = isBlocked
+      ? `Разблокировать сотрудника "${fullName}" в Sigur?`
+      : `Заблокировать сотрудника "${fullName}" в Sigur?`;
+    if (!window.confirm(message)) return;
 
     try {
       setRunningAction(isBlocked ? 'unblock' : 'block');
@@ -664,6 +740,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
         ? await sigurAdminService.unblockEmployee(sigurEmployeeId)
         : await sigurAdminService.blockEmployee(sigurEmployeeId);
       setProfile(nextProfile);
+      mergeProfileIntoEmployeesQueries(nextProfile);
       await onDirectoryChanged();
     } catch (error) {
       setProfileError(error instanceof Error ? error.message : 'Не удалось изменить статус блокировки');
@@ -788,7 +865,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
 
   const handleCardAssigned = () => {
     setCardReaderOpen(false);
-    void loadProfile(true);
+    void reloadProfile(true);
   };
 
   const persistAccessPointIds = async (nextIds: number[]) => {
@@ -868,12 +945,12 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   return (
     <aside className="ep-sigur-panel">
       <div className="ep-sigur-panel-header">
-        <div className="ep-sigur-header-top">
+        <div className="ep-sigur-header-top ep-sigur-header-top--end">
           <div className="ep-sigur-header-actions">
             <button
               className="ep-sigur-tool"
               type="button"
-              onClick={() => void loadProfile(true, true)}
+              onClick={() => void reloadProfile(true)}
               disabled={loading}
             >
               <RefreshCw size={14} />
@@ -893,23 +970,6 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                 </button>
                 {actionsMenuOpen && (
                   <div className="ep-sigur-kebab-menu" role="menu">
-                    <button
-                      className="ep-sigur-kebab-item"
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setActionsMenuOpen(false);
-                        void handleToggleBlocked();
-                      }}
-                      disabled={runningAction === 'block' || runningAction === 'unblock'}
-                    >
-                      {isBlocked ? <UserRoundCheck size={14} /> : <UserLock size={14} />}
-                      <span>
-                        {runningAction === 'block' || runningAction === 'unblock'
-                          ? 'Сохранение...'
-                          : isBlocked ? 'Разблокировать' : 'Заблокировать'}
-                      </span>
-                    </button>
                     <button
                       className="ep-sigur-kebab-item danger"
                       type="button"
@@ -940,10 +1000,25 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
           <div className="ep-sigur-summary-main">
             <div className="ep-sigur-summary-name">{fullName}</div>
             <div className="ep-sigur-pill-row">
-              <span className={`ep-sigur-pill ${isBlocked ? 'ep-sigur-pill--danger' : 'ep-sigur-pill--success'}`}>
-                <ShieldCheck size={12} />
-                {isBlocked ? 'Заблокирован' : 'Активен'}
-              </span>
+              {canEdit ? (
+                <button
+                  type="button"
+                  className={`ep-sigur-pill ep-sigur-pill--toggle ${isBlocked ? 'ep-sigur-pill--danger' : 'ep-sigur-pill--success'}`}
+                  onClick={() => void handleToggleBlocked()}
+                  disabled={runningAction === 'block' || runningAction === 'unblock'}
+                  title={isBlocked ? 'Кликните, чтобы разблокировать' : 'Кликните, чтобы заблокировать'}
+                >
+                  <ShieldCheck size={12} />
+                  {runningAction === 'block' || runningAction === 'unblock'
+                    ? 'Сохранение...'
+                    : isBlocked ? 'Заблокирован' : 'Активен'}
+                </button>
+              ) : (
+                <span className={`ep-sigur-pill ${isBlocked ? 'ep-sigur-pill--danger' : 'ep-sigur-pill--success'}`}>
+                  <ShieldCheck size={12} />
+                  {isBlocked ? 'Заблокирован' : 'Активен'}
+                </span>
+              )}
               <span className="ep-sigur-pill">
                 <span className="ep-sigur-pill-key">ID</span>
                 <span className="ep-sigur-pill-value">{sigurEmployeeId}</span>
@@ -956,10 +1031,9 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
           </div>
         </div>
 
-        {loading && !profile && (
-          <div className="ep-sigur-placeholder">Загрузка данных Sigur...</div>
+        {(profileError || queryErrorMessage) && (
+          <div className="ep-sigur-inline-error">{profileError || queryErrorMessage}</div>
         )}
-        {profileError && <div className="ep-sigur-inline-error">{profileError}</div>}
 
         <section className="ep-sigur-section">
           <div className="ep-sigur-section-head">
@@ -1103,7 +1177,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
           </div>
 
           {!profile ? (
-            <div className="ep-sigur-placeholder">Данные ещё не загружены.</div>
+            <div className="ep-sigur-placeholder">Загрузка...</div>
           ) : profile.cards.length === 0 ? (
             <div className="ep-sigur-placeholder">Карты не найдены.</div>
           ) : (
@@ -1201,7 +1275,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
           </div>
 
           {!profile ? (
-            <div className="ep-sigur-placeholder">Данные ещё не загружены.</div>
+            <div className="ep-sigur-placeholder">Загрузка...</div>
           ) : boundAccessPointGroups.length === 0 ? (
             <div className="ep-sigur-placeholder">Прямые точки доступа не назначены.</div>
           ) : (
@@ -1314,7 +1388,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
             </div>
           </div>
           {!profile ? (
-            <div className="ep-sigur-placeholder">Данные ещё не загружены.</div>
+            <div className="ep-sigur-placeholder">Загрузка...</div>
           ) : profile.accessRuleOptions.length === 0 ? (
             <div className="ep-sigur-placeholder">Режимы доступа не настроены в Sigur.</div>
           ) : profile.accessRules.length === 0 ? (
