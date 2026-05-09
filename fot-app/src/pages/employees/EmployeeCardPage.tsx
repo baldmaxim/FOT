@@ -22,9 +22,6 @@ import '../../styles/EmployeeCardV2.css';
 const EmployeeAttendanceSection = lazy(() => import('../../components/employees/EmployeeAttendanceSection').then(module => ({
   default: module.EmployeeAttendanceSection,
 })));
-const EmployeeHistorySection = lazy(() => import('../../components/employees/EmployeeHistorySection').then(module => ({
-  default: module.EmployeeHistorySection,
-})));
 const EmployeeSkudControls = lazy(() => import('../../components/employees/EmployeeSkudControls').then(module => ({
   default: module.EmployeeSkudControls,
 })));
@@ -32,13 +29,12 @@ const EmployeeSkudSection = lazy(() => import('../../components/employees/Employ
   default: module.EmployeeSkudSection,
 })));
 
-type Tab = 'attendance' | 'skud' | 'history';
+type Tab = 'attendance' | 'skud';
 type SkudViewMode = 'day' | 'week' | 'month' | 'range';
-const TABS_BASE: { key: Tab; label: string }[] = [
+const TABS: { key: Tab; label: string }[] = [
   { key: 'attendance', label: 'Посещаемость' },
   { key: 'skud', label: 'СКУД' },
 ];
-const HISTORY_TAB: { key: Tab; label: string } = { key: 'history', label: 'История' };
 
 const getInitials = (name: string) => {
   const parts = name.split(' ').filter(Boolean);
@@ -158,24 +154,19 @@ export const EmployeeCardPage: FC = () => {
     }
     navigate('/employees', { replace: true });
   };
-  const { canEditPage, isAdmin, showActualHours } = useAuth();
+  const { canEditPage, showActualHours } = useAuth();
   const canEdit = canEditPage('/employees') || canEditPage('/staff-control');
-  const TABS = useMemo<{ key: Tab; label: string }[]>(
-    () => (isAdmin ? [...TABS_BASE, HISTORY_TAB] : TABS_BASE),
-    [isAdmin],
-  );
 
   // Deep-link: ?tab=skud&date=2026-03-18
-  const urlTab = searchParams.get('tab') as Tab | null;
+  const urlTab = searchParams.get('tab') as string | null;
   const urlDate = searchParams.get('date');
 
   const queryClient = useQueryClient();
   const empIdNum = Number(id);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<Tab>(() => {
-    if (!urlTab) return 'attendance';
-    if (urlTab === 'history' && !isAdmin) return 'attendance';
-    return ['attendance', 'skud', 'history'].includes(urlTab) ? urlTab : 'attendance';
+    if (urlTab === 'skud') return 'skud';
+    return 'attendance';
   });
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<Partial<EmployeeInput>>({});
@@ -211,15 +202,6 @@ export const EmployeeCardPage: FC = () => {
   });
   const employee = employeeQuery.data ?? null;
   const loading = employeeQuery.isLoading;
-
-  // История сотрудника — только для admin-роли
-  const historyQuery = useQuery({
-    queryKey: ['employee-history', empIdNum],
-    queryFn: () => employeeService.getHistory(empIdNum).catch(() => []),
-    enabled: !!empIdNum && !Number.isNaN(empIdNum) && activeTab === 'history' && isAdmin,
-    staleTime: 60_000,
-  });
-  const history = historyQuery.data ?? [];
 
   // Структура (для редактирования отделов и модалки восстановления) — общий query key
   const structureQuery = useStructureTree(true);
@@ -295,7 +277,6 @@ export const EmployeeCardPage: FC = () => {
 
   const reloadEmployee = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['employee', empIdNum] });
-    queryClient.invalidateQueries({ queryKey: ['employee-history', empIdNum] });
     queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', empIdNum] });
   }, [queryClient, empIdNum]);
 
@@ -565,100 +546,110 @@ export const EmployeeCardPage: FC = () => {
         </div>
       )}
 
-      {/* ===== Profile Card ===== */}
-      <div className="ec-profile-card">
-        <button className="ec-back-btn" onClick={handleBack}>
-          <ArrowLeft size={16} />
-          {backLabel}
+      {/* ===== Back button (отдельной зоной, слева над шапкой) ===== */}
+      <div className="ec-back-row">
+        <button
+          className="ec-back-btn"
+          onClick={handleBack}
+          aria-label={`Назад: ${backLabel}`}
+        >
+          <ArrowLeft size={18} />
+          <span className="ec-back-btn-label">{backLabel}</span>
         </button>
-        <div className="ec-profile">
-          <div className="ec-avatar">
-            {getInitials(employee.full_name)}
-            <div className={`ec-avatar-status ${onSite ? 'online' : 'offline'}`} />
-          </div>
-          <div className="ec-profile-info">
-            <h1 className="ec-profile-name">
-              {employee.full_name}
-              {employee.is_archived && <span className="ec-badge-archived">Архив</span>}
-              {employee.employment_status === 'fired' && <span className="ec-badge-fired">Уволен</span>}
-            </h1>
-            <div className="ec-profile-badges">
-              {employee.position_name && (
-                <span className="ec-badge"><Briefcase size={14} />{employee.position_name}</span>
-              )}
-              {employee.department && (
-                <span className="ec-badge accent"><FolderOpen size={14} />{employee.department}</span>
-              )}
-              {employee.employment_status === 'active' && !employee.is_archived && (
-                <span className="ec-badge accent"><CheckCircle size={14} />Активен</span>
-              )}
-            </div>
-            <div className="ec-profile-meta">
-              <div className="ec-meta-item">
-                <CalendarDays size={16} />
-                В компании с {formatHireDate(employee.hire_date)}
-              </div>
-              {employee.email && (
-                <div className="ec-meta-item">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-                  {employee.email}
-                </div>
-              )}
-              <span className="ec-profile-id">ID: {employee.id}</span>
-              {employee.sigur_employee_id != null && (
-                <span className="ec-profile-id">Sigur ID: {employee.sigur_employee_id}</span>
-              )}
-            </div>
-          </div>
-          {canEdit && (
-            <div className="ec-profile-actions">
-              <button className="ec-action-btn" onClick={startEditing}>
-                <Edit3 size={16} /> {employee.sigur_employee_id != null ? 'Изменить ФИО' : 'Редактировать'}
-              </button>
-              {employee.employment_status === 'fired' && (
-                <button className="ec-action-btn" onClick={openRehireModal}>
-                  <ShieldCheck size={16} /> Восстановить из уволенных
-                </button>
-              )}
-              {employee.is_archived ? (
-                <button className="ec-action-btn" onClick={handleRestore}>
-                  <RotateCcw size={16} /> Восстановить
-                </button>
-              ) : (
-                <button className="ec-action-btn" onClick={handleArchive}>
-                  <Archive size={16} /> В архив
-                </button>
-              )}
-              <button className="ec-action-btn danger" onClick={handleDelete}>
-                <Trash2 size={16} /> Удалить
-              </button>
-            </div>
-          )}
-        </div>
-
-        <div className="ec-stats-row">
-          <div className="ec-stat-card">
-            <div className="ec-stat-icon green"><CheckCircle size={12} /></div>
-            <span className="ec-stat-label-inline">Посещаемость</span>
-            <div className="ec-stat-value">{attendanceLoading ? '—' : `${pStats.attendancePercent}%`}</div>
-          </div>
-          <div className="ec-stat-card">
-            <div className="ec-stat-icon orange"><Clock size={12} /></div>
-            <span className="ec-stat-label-inline">Опозданий</span>
-            <div className="ec-stat-value">{attendanceLoading ? '—' : pStats.lateCount}</div>
-          </div>
-          <div className="ec-stat-card">
-            <div className="ec-stat-icon blue"><DollarSign size={12} /></div>
-            <span className="ec-stat-label-inline">Часов</span>
-            <div className="ec-stat-value">{attendanceLoading ? '—' : `${pStats.hoursWorked}/${pStats.hoursPlanned}`}</div>
-          </div>
-          <div className="ec-stat-card">
-            <div className="ec-stat-icon purple"><BarChart3 size={12} /></div>
-            <span className="ec-stat-label-inline">Приход</span>
-            <div className="ec-stat-value">{attendanceLoading ? '—' : (pStats.avgArrivalTime || '—')}</div>
-          </div>
-        </div>
       </div>
+
+      {/* ===== Hero (полноширинная шапка) ===== */}
+      <header className="ec-hero">
+        <div className="ec-hero-inner">
+          <div className="ec-profile">
+            <div className="ec-avatar">
+              {getInitials(employee.full_name)}
+              <div className={`ec-avatar-status ${onSite ? 'online' : 'offline'}`} />
+            </div>
+            <div className="ec-profile-info">
+              <h1 className="ec-profile-name">
+                {employee.full_name}
+                {employee.is_archived && <span className="ec-badge-archived">Архив</span>}
+                {employee.employment_status === 'fired' && <span className="ec-badge-fired">Уволен</span>}
+              </h1>
+              <div className="ec-profile-badges">
+                {employee.position_name && (
+                  <span className="ec-badge"><Briefcase size={14} />{employee.position_name}</span>
+                )}
+                {employee.department && (
+                  <span className="ec-badge accent"><FolderOpen size={14} />{employee.department}</span>
+                )}
+                {employee.employment_status === 'active' && !employee.is_archived && (
+                  <span className="ec-badge accent"><CheckCircle size={14} />Активен</span>
+                )}
+              </div>
+              <div className="ec-profile-meta">
+                <div className="ec-meta-item">
+                  <CalendarDays size={16} />
+                  В компании с {formatHireDate(employee.hire_date)}
+                </div>
+                {employee.email && (
+                  <div className="ec-meta-item">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                    {employee.email}
+                  </div>
+                )}
+                <span className="ec-profile-id">ID: {employee.id}</span>
+                {employee.sigur_employee_id != null && (
+                  <span className="ec-profile-id">Sigur ID: {employee.sigur_employee_id}</span>
+                )}
+              </div>
+            </div>
+            {canEdit && (
+              <div className="ec-profile-actions">
+                <button className="ec-action-btn" onClick={startEditing}>
+                  <Edit3 size={16} /> {employee.sigur_employee_id != null ? 'Изменить ФИО' : 'Редактировать'}
+                </button>
+                {employee.employment_status === 'fired' && (
+                  <button className="ec-action-btn" onClick={openRehireModal}>
+                    <ShieldCheck size={16} /> Восстановить из уволенных
+                  </button>
+                )}
+                {employee.is_archived ? (
+                  <button className="ec-action-btn" onClick={handleRestore}>
+                    <RotateCcw size={16} /> Восстановить
+                  </button>
+                ) : (
+                  <button className="ec-action-btn" onClick={handleArchive}>
+                    <Archive size={16} /> В архив
+                  </button>
+                )}
+                <button className="ec-action-btn danger" onClick={handleDelete}>
+                  <Trash2 size={16} /> Удалить
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="ec-stats-row">
+            <div className="ec-stat-card">
+              <div className="ec-stat-icon green"><CheckCircle size={12} /></div>
+              <span className="ec-stat-label-inline">Посещаемость</span>
+              <div className="ec-stat-value">{attendanceLoading ? '—' : `${pStats.attendancePercent}%`}</div>
+            </div>
+            <div className="ec-stat-card">
+              <div className="ec-stat-icon orange"><Clock size={12} /></div>
+              <span className="ec-stat-label-inline">Опозданий</span>
+              <div className="ec-stat-value">{attendanceLoading ? '—' : pStats.lateCount}</div>
+            </div>
+            <div className="ec-stat-card">
+              <div className="ec-stat-icon blue"><DollarSign size={12} /></div>
+              <span className="ec-stat-label-inline">Часов</span>
+              <div className="ec-stat-value">{attendanceLoading ? '—' : `${pStats.hoursWorked}/${pStats.hoursPlanned}`}</div>
+            </div>
+            <div className="ec-stat-card">
+              <div className="ec-stat-icon purple"><BarChart3 size={12} /></div>
+              <span className="ec-stat-label-inline">Приход</span>
+              <div className="ec-stat-value">{attendanceLoading ? '—' : (pStats.avgArrivalTime || '—')}</div>
+            </div>
+          </div>
+        </div>
+      </header>
 
       {/* ===== Period + Tabs ===== */}
       <div className="ec-controls-bar">
@@ -725,22 +716,6 @@ export const EmployeeCardPage: FC = () => {
             onCancel={() => { setIsEditing(false); setEditData({}); }}
           />
         </Suspense>
-      )}
-
-      {activeTab === 'history' && isAdmin && employee && (
-        <div className="ec-tab-content-full">
-          <Suspense fallback={<div className="ec-loading">Загрузка истории...</div>}>
-            <EmployeeHistorySection
-              employeeId={employee.id}
-              history={history}
-              loading={historyQuery.isLoading}
-              onRefresh={() => {
-                historyQuery.refetch();
-                queryClient.invalidateQueries({ queryKey: ['employee', empIdNum] });
-              }}
-            />
-          </Suspense>
-        </div>
       )}
 
       {activeTab === 'skud' && (

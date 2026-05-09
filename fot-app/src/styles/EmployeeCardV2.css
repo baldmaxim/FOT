@@ -8,48 +8,79 @@
   overflow-x: hidden;
 }
 
-/* Back button */
+/* ==================== Back Row (отдельный блок над шапкой) ==================== */
+.ec-back-row {
+  margin-bottom: 14px;
+}
+
+/* Back button — заметная отдельно стоящая кнопка */
 .ec-back-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  margin-bottom: 10px;
-  background: var(--bg-tertiary);
+  gap: 8px;
+  padding: 9px 14px;
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .ec-back-btn:hover {
   background: var(--surface-hover);
   border-color: var(--text-tertiary);
   color: var(--text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 2px 6px rgba(0, 0, 0, 0.04);
+}
+
+.ec-back-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 .ec-back-btn svg {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
 }
 
-/* ==================== Profile Card ==================== */
-.ec-profile-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 16px 20px;
-  margin-bottom: 16px;
+.ec-back-btn-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
 }
 
-.ec-profile-card .ec-stats-period-selector {
+/* ==================== Hero (полноширинная шапка) ==================== */
+.ec-hero {
+  /* Растягиваем за пределы padding контейнеров (Layout .content 24px + .ec-content 28px) */
+  margin: 0 -52px 18px;
+  padding: 24px clamp(20px, 4vw, 56px);
+  background: linear-gradient(135deg,
+    color-mix(in oklab, var(--surface) 90%, var(--primary) 10%) 0%,
+    var(--surface) 60%,
+    var(--bg-secondary) 100%);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.ec-hero-inner {
+  max-width: 1320px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.ec-hero .ec-stats-period-selector {
   margin-top: 12px;
 }
 
-.ec-profile-card .ec-stats-row {
+.ec-hero .ec-stats-row {
   margin-bottom: 0;
   padding-top: 0;
   border-top: none;
@@ -96,13 +127,15 @@
   width: 72px;
   height: 72px;
   border-radius: 16px;
-  background: linear-gradient(135deg, var(--primary), #a855f7);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 26px;
-  font-weight: 700;
-  color: white;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--text-primary);
   flex-shrink: 0;
   position: relative;
 }
@@ -1782,9 +1815,25 @@
   .ec-content {
     padding: 16px;
   }
-  .ec-profile-card {
-    padding: 16px;
-    border-radius: 12px;
+  .ec-back-row {
+    margin-bottom: 12px;
+  }
+  .ec-back-btn {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+  .ec-back-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+  .ec-hero {
+    /* Layout .content padX = 16, .ec-content padX = 16 → нужно -32 для полноширинности */
+    margin: 0 -32px 14px;
+    padding: 20px 16px;
+    border-radius: 0;
+  }
+  .ec-hero-inner {
+    gap: 14px;
   }
   .ec-profile {
     flex-wrap: wrap;
@@ -1792,7 +1841,7 @@
   .ec-avatar {
     width: 64px;
     height: 64px;
-    font-size: 24px;
+    font-size: 22px;
     border-radius: 14px;
   }
   .ec-profile-name {
@@ -1866,28 +1915,42 @@
   .ec-content {
     padding: 6px 8px;
   }
+  .ec-back-row {
+    margin-bottom: 10px;
+  }
   .ec-back-btn {
-    margin-bottom: 6px;
-    padding: 5px 10px;
-    font-size: 12px;
+    padding: 7px 12px;
+    font-size: 13px;
+    border-radius: 9px;
+    gap: 6px;
+  }
+  .ec-back-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+  .ec-back-btn-label {
+    max-width: 160px;
   }
 
-  /* Profile Card */
-  .ec-profile-card {
-    padding: 10px;
-    border-radius: 10px;
-    margin-bottom: 8px;
+  /* Hero — полноширинный (Layout .content padX = 12, .ec-content padX = 8 → -20) */
+  .ec-hero {
+    margin: 0 -20px 10px;
+    padding: 14px 14px;
+    border-radius: 0;
   }
-  .ec-profile-card .ec-stats-period-selector {
+  .ec-hero-inner {
+    gap: 12px;
+  }
+  .ec-hero .ec-stats-period-selector {
     margin-top: 12px;
   }
   .ec-profile {
-    gap: 8px;
+    gap: 10px;
     flex-wrap: wrap;
   }
   .ec-avatar {
-    width: 48px;
-    height: 48px;
+    width: 52px;
+    height: 52px;
     font-size: 18px;
     border-radius: 12px;
   }
@@ -1987,36 +2050,33 @@
     justify-content: center;
   }
 
-  /* Stats Row — 3 top + 1 centered */
+  /* Stats Row — 2×2 для лучшей читаемости на узких экранах */
   .ec-stats-row {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 4px;
-    justify-items: center;
-  }
-  .ec-stat-card:nth-child(4) {
-    grid-column: 2;
-    justify-self: center;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+    justify-items: stretch;
   }
   .ec-stat-card {
-    padding: 3px 6px;
-    gap: 4px;
-    justify-content: center;
+    padding: 6px 8px;
+    gap: 6px;
+    justify-content: flex-start;
+    width: 100%;
   }
   .ec-stat-label-inline {
-    font-size: 9px;
+    font-size: 10px;
   }
   .ec-stat-icon {
-    width: 16px;
-    height: 16px;
-    border-radius: 4px;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
   }
   .ec-stat-icon svg {
-    width: 10px;
-    height: 10px;
+    width: 11px;
+    height: 11px;
   }
   .ec-stat-value {
-    font-size: 12px;
+    font-size: 13px;
   }
   .ec-stat-trend {
     font-size: 9px;
