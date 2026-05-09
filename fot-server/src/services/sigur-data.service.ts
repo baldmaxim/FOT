@@ -808,21 +808,106 @@ export class SigurDataService extends SigurServiceBase {
     return this.fetchEventsByChunks(startTime, endTime, params, connection, pageSize);
   }
 
-  private static readonly EVENT_TYPE_ID_MAP: Record<string, number> = {
+  // Минимальный hardcoded fallback — используется только если Sigur API недоступен
+  // при первом запросе типов. Реальный справочник тянется из GET /api/v1/events/types
+  // и кешируется на 24 часа.
+  private static readonly EVENT_TYPE_ID_FALLBACK: Record<string, number> = {
     PASS_DETECTED: 6,
     PASS_DENY: 12,
   };
 
-  // Обратная карта id → имя для известных типов. Для незнакомых id маппер
-  // использует строку 'TYPE_<id>' — такие события всё равно попадают в
-  // skud_event_failures, и оператор увидит реальный тип после ручной классификации.
-  private static readonly EVENT_NAME_BY_ID: Record<number, string> = (() => {
-    const map: Record<number, string> = {};
-    for (const [name, id] of Object.entries(SigurDataService.EVENT_TYPE_ID_MAP)) {
-      map[id] = name;
+  private eventTypeCache: {
+    byId: Map<number, string>;
+    byName: Map<string, number>;
+    fetchedAt: number;
+  } | null = null;
+  private eventTypeFetchPromise: Promise<void> | null = null;
+  private readonly EVENT_TYPE_CACHE_TTL = 24 * 60 * 60 * 1000;
+
+  private buildFallbackEventTypeCache(): { byId: Map<number, string>; byName: Map<string, number> } {
+    const byId = new Map<number, string>();
+    const byName = new Map<string, number>();
+    for (const [name, id] of Object.entries(SigurDataService.EVENT_TYPE_ID_FALLBACK)) {
+      byId.set(id, name);
+      byName.set(name, id);
     }
-    return map;
-  })();
+    return { byId, byName };
+  }
+
+  /**
+   * Загружает справочник типов событий Sigur (`GET /api/v1/events/types`) и
+   * наполняет инстансный кеш. Вызывается при старте сервера и при истечении TTL.
+   * При ошибке Sigur оставляет в кеше hardcoded fallback (PASS_DETECTED, PASS_DENY).
+   */
+  async loadEventTypes(connection?: ConnectionType): Promise<void> {
+    if (this.eventTypeFetchPromise) return this.eventTypeFetchPromise;
+    this.eventTypeFetchPromise = (async () => {
+      try {
+        const response = await this.getEventTypes(connection);
+        const items: Array<Record<string, unknown>> = Array.isArray(response)
+          ? (response as Array<Record<string, unknown>>)
+          : Array.isArray((response as Record<string, unknown> | null)?.data)
+            ? ((response as Record<string, unknown>).data as Array<Record<string, unknown>>)
+            : [];
+
+        const byId = new Map<number, string>();
+        const byName = new Map<string, number>();
+        for (const item of items) {
+          const id = typeof item.id === 'number' ? item.id : null;
+          const name = typeof item.name === 'string' ? item.name : null;
+          if (id == null || !name) continue;
+          byId.set(id, name);
+          byName.set(name, id);
+        }
+
+        // На случай, если Sigur не вернул базовые типы — гарантируем их наличие
+        for (const [name, id] of Object.entries(SigurDataService.EVENT_TYPE_ID_FALLBACK)) {
+          if (!byId.has(id)) byId.set(id, name);
+          if (!byName.has(name)) byName.set(name, id);
+        }
+
+        this.eventTypeCache = { byId, byName, fetchedAt: Date.now() };
+        console.log(`[sigur] event types loaded: ${byId.size} items`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[sigur] не удалось загрузить справочник типов: ${message} — использую fallback`);
+        if (!this.eventTypeCache) {
+          const fb = this.buildFallbackEventTypeCache();
+          this.eventTypeCache = { ...fb, fetchedAt: Date.now() };
+        }
+      } finally {
+        this.eventTypeFetchPromise = null;
+      }
+    })();
+    return this.eventTypeFetchPromise;
+  }
+
+  private async ensureEventTypesLoaded(connection?: ConnectionType): Promise<void> {
+    const isStale = !this.eventTypeCache
+      || (Date.now() - this.eventTypeCache.fetchedAt) > this.EVENT_TYPE_CACHE_TTL;
+    if (isStale) await this.loadEventTypes(connection);
+  }
+
+  private getEventTypeNameById(id: number): string | undefined {
+    if (!this.eventTypeCache) {
+      const fb = this.buildFallbackEventTypeCache();
+      return fb.byId.get(id);
+    }
+    return this.eventTypeCache.byId.get(id);
+  }
+
+  private getEventTypeIdByName(name: string): number | undefined {
+    if (!this.eventTypeCache) {
+      const fb = this.buildFallbackEventTypeCache();
+      return fb.byName.get(name);
+    }
+    return this.eventTypeCache.byName.get(name);
+  }
+
+  private getPassDetectedTypeId(): number {
+    return this.getEventTypeIdByName('PASS_DETECTED')
+      ?? SigurDataService.EVENT_TYPE_ID_FALLBACK.PASS_DETECTED;
+  }
 
   /**
    * Обогащает raw-события Sigur и делит их на success (PASS_DETECTED) и failures
@@ -842,6 +927,7 @@ export class SigurDataService extends SigurServiceBase {
     const [employees, accessPointMap] = await Promise.all([
       this.getEmployeesCached(connection),
       this.getAccessPointMapCached(connection),
+      this.ensureEventTypesLoaded(connection),
     ]);
 
     const employeeById = new Map<number, Record<string, unknown>>();
@@ -853,8 +939,9 @@ export class SigurDataService extends SigurServiceBase {
 
     const pass: Record<string, unknown>[] = [];
     const failures: Record<string, unknown>[] = [];
+    const unknownTypeIds = new Set<number>();
 
-    const PASS_TYPE_ID = SigurDataService.EVENT_TYPE_ID_MAP.PASS_DETECTED; // 6
+    const PASS_TYPE_ID = this.getPassDetectedTypeId();
 
     for (const raw of rawEvents) {
       const accessObjectId = typeof raw.accessObjectId === 'number' ? raw.accessObjectId : null;
@@ -877,7 +964,8 @@ export class SigurDataService extends SigurServiceBase {
         // «битое» событие.
         && (raw.direction === 'IN' || raw.direction === 'OUT')
         && accessObjectId != null;
-      const knownName = rawTypeId != null ? SigurDataService.EVENT_NAME_BY_ID[rawTypeId] : undefined;
+      const knownName = rawTypeId != null ? this.getEventTypeNameById(rawTypeId) : undefined;
+      if (rawTypeId != null && !knownName) unknownTypeIds.add(rawTypeId);
       const eventType = isPass ? 'PASS_DETECTED' : (knownName ?? (rawTypeId != null ? `TYPE_${rawTypeId}` : 'UNKNOWN'));
 
       const enriched: Record<string, unknown> = {
@@ -921,6 +1009,11 @@ export class SigurDataService extends SigurServiceBase {
     console.log(
       `[enrichAllRawEvents] raw=${rawEvents.length} -> pass=${pass.length} failures=${failures.length}`,
     );
+    if (unknownTypeIds.size > 0) {
+      console.warn(
+        `[sigur] неизвестные eventTypeId: [${Array.from(unknownTypeIds).sort((a, b) => a - b).join(', ')}] — обновите справочник через loadEventTypes()`,
+      );
+    }
     return { pass, failures };
   }
 
@@ -938,7 +1031,8 @@ export class SigurDataService extends SigurServiceBase {
     if (endTime) params.endTime = this.ensureTimezone(endTime);
 
     if (eventType) {
-      const typeId = SigurDataService.EVENT_TYPE_ID_MAP[eventType];
+      await this.ensureEventTypesLoaded(connection);
+      const typeId = this.getEventTypeIdByName(eventType);
       if (typeId) params.eventTypeId = typeId;
     }
 
@@ -972,7 +1066,8 @@ export class SigurDataService extends SigurServiceBase {
   ): Promise<Record<string, unknown>[]> {
     const params: Record<string, any> = { lastId: lastEventId };
     if (eventType) {
-      const typeId = SigurDataService.EVENT_TYPE_ID_MAP[eventType];
+      await this.ensureEventTypesLoaded(connection);
+      const typeId = this.getEventTypeIdByName(eventType);
       if (typeId) params.eventTypeId = typeId;
     }
     const effectivePageSize = pageSize ?? SIGUR_EVENT_PAGE_SIZE;

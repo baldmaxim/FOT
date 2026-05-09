@@ -14,6 +14,7 @@ import { startTimesheetReminderScheduler } from './services/timesheet-reminder.s
 import { startPatentExpiryReminderScheduler } from './services/patent-expiry-reminder.service.js';
 import { startDailyTasksReminderScheduler } from './services/daily-tasks-reminder.service.js';
 import { aiReceiptRecognitionService } from './services/ai-receipt-recognition.service.js';
+import { sigurService } from './services/sigur.service.js';
 import { setupChatSocket } from './socket/chatHandler.js';
 import { setIo } from './socket/io-instance.js';
 
@@ -40,6 +41,11 @@ httpServer.listen(PORT, HOST, () => {
   if (!IS_PRODUCTION && env.NODE_ENV !== 'test') {
     console.warn('[WARN] IS_PRODUCTION=false — rate limits отключены через skipInDev. Если это прод, проверьте NODE_ENV в PM2 ecosystem.');
   }
+  void sigurService.loadEventTypes().catch(err => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[sigur] не удалось загрузить справочник типов при старте: ${message} — использую fallback`);
+    Sentry.captureException(err);
+  });
   void startPresencePolling();
   void startSigurMonitor();
   void startStructureSyncScheduler();

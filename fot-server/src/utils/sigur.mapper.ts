@@ -50,6 +50,31 @@ export type IMappedSigurEvent = IMappedSigurPassEvent | IMappedSigurFailureEvent
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+// Расшифровка denyReasonCode из Sigur (см. docs/sigur-rest-api.md, раздел 15).
+// Sigur при PASS_DENY обычно отдаёт только числовой код в data.denyReasonCode;
+// строковое описание data.denyReason приходит не всегда.
+const DENY_REASON_BY_CODE: Record<number, string> = {
+  0: 'Неверный PIN',
+  1: 'Ключ просрочен',
+  3: 'Неизвестный ключ',
+  4: 'По временным зонам',
+  5: 'Нет доступа к этой двери',
+  6: 'Нет доступа в это время',
+  7: 'Антипассбэк',
+  11: 'Дверь заблокирована',
+  14: 'Лимит вместимости зоны',
+  16: 'Превышение алкоголя',
+  28: 'Лицо не идентифицировано',
+  35: 'Проверка температуры не пройдена',
+  37: 'Маска отсутствует',
+};
+
+const pickString = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
 const parseDirection = (dir: unknown): 'entry' | 'exit' | null => {
   if (dir === 'IN' || dir === 'entry') return 'entry';
   if (dir === 'OUT' || dir === 'exit') return 'exit';
@@ -116,11 +141,20 @@ export const mapSigurEvent = (raw: Record<string, unknown>): IMappedSigurEvent |
   // и происходит при PASS_DENY на чужой карте или таймауте).
   const failureType = eventType || 'UNKNOWN';
   const failureTypeId = typeof raw.eventTypeId === 'number' ? raw.eventTypeId : null;
+
+  // Приоритет источников причины:
+  //   1. data.denyReason — строковое описание от Sigur (если он его прислал)
+  //   2. DENY_REASON_BY_CODE[data.denyReasonCode] — расшифровка числового кода
+  //   3. data.passReason — для информативных не-failure типов (BIO, температура и т.п.)
+  //   4. raw.description / data.reason / data.failureReason — старые fallback-поля
+  const denyReasonCode = typeof data?.denyReasonCode === 'number' ? data.denyReasonCode : null;
   const reason =
-    (typeof raw.description === 'string' && raw.description.trim()) ||
-    (typeof data?.reason === 'string' && data.reason.trim()) ||
-    (typeof data?.failureReason === 'string' && data.failureReason.trim()) ||
-    null;
+    pickString(data?.denyReason)
+    ?? (denyReasonCode != null ? DENY_REASON_BY_CODE[denyReasonCode] ?? null : null)
+    ?? pickString(data?.passReason)
+    ?? pickString(raw.description)
+    ?? pickString(data?.reason)
+    ?? pickString(data?.failureReason);
 
   return {
     kind: 'failure',

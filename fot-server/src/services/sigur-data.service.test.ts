@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SigurDataService } from './sigur-data.service.js';
 
 describe('SigurDataService.buildCardNumberVariants', () => {
@@ -150,5 +150,64 @@ describe('SigurDataService.collectCardSearchableValues', () => {
     const values = SigurDataService.collectCardSearchableValues(card);
     expect(values).toContain('44009');
     expect(values).toContain('ABE9');
+  });
+});
+
+describe('SigurDataService.loadEventTypes', () => {
+  type CacheShape = { byId: Map<number, string>; byName: Map<string, number>; fetchedAt: number } | null;
+
+  it('загружает справочник из массива {id, name}, наполняет byId/byName', async () => {
+    const service = new SigurDataService();
+    vi.spyOn(service, 'getEventTypes').mockResolvedValue([
+      { id: 6, name: 'PASS_DETECTED' },
+      { id: 7, name: 'BIO_VERIFICATION' },
+      { id: 12, name: 'PASS_DENY' },
+      { id: 24, name: 'ACCESS_ABORTED' },
+    ] as unknown as Awaited<ReturnType<SigurDataService['getEventTypes']>>);
+
+    await service.loadEventTypes();
+
+    const cache = (service as unknown as { eventTypeCache: CacheShape }).eventTypeCache;
+    expect(cache).not.toBeNull();
+    expect(cache!.byId.get(7)).toBe('BIO_VERIFICATION');
+    expect(cache!.byId.get(24)).toBe('ACCESS_ABORTED');
+    expect(cache!.byName.get('PASS_DENY')).toBe(12);
+  });
+
+  it('парсит ответ-обёртку {data: [...]}', async () => {
+    const service = new SigurDataService();
+    vi.spyOn(service, 'getEventTypes').mockResolvedValue({
+      data: [{ id: 36, name: 'TEMPERATURE_VERIFICATION_FAILED' }],
+    } as unknown as Awaited<ReturnType<SigurDataService['getEventTypes']>>);
+
+    await service.loadEventTypes();
+
+    const cache = (service as unknown as { eventTypeCache: CacheShape }).eventTypeCache;
+    expect(cache!.byId.get(36)).toBe('TEMPERATURE_VERIFICATION_FAILED');
+  });
+
+  it('гарантирует наличие fallback-типов даже если Sigur их не вернул', async () => {
+    const service = new SigurDataService();
+    vi.spyOn(service, 'getEventTypes').mockResolvedValue([
+      { id: 7, name: 'BIO_VERIFICATION' },
+    ] as unknown as Awaited<ReturnType<SigurDataService['getEventTypes']>>);
+
+    await service.loadEventTypes();
+
+    const cache = (service as unknown as { eventTypeCache: CacheShape }).eventTypeCache;
+    expect(cache!.byId.get(6)).toBe('PASS_DETECTED');
+    expect(cache!.byId.get(12)).toBe('PASS_DENY');
+  });
+
+  it('при ошибке Sigur — fallback в кеше, не выбрасывает', async () => {
+    const service = new SigurDataService();
+    vi.spyOn(service, 'getEventTypes').mockRejectedValue(new Error('Sigur unreachable'));
+
+    await expect(service.loadEventTypes()).resolves.toBeUndefined();
+
+    const cache = (service as unknown as { eventTypeCache: CacheShape }).eventTypeCache;
+    expect(cache).not.toBeNull();
+    expect(cache!.byId.get(6)).toBe('PASS_DETECTED');
+    expect(cache!.byId.get(12)).toBe('PASS_DENY');
   });
 });

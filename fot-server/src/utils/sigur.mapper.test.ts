@@ -119,4 +119,55 @@ describe('mapSigurEvent', () => {
       expect(result.eventTime).toBe('10:00:00');
     }
   });
+
+  it('расшифровывает denyReasonCode=7 в "Антипассбэк" если denyReason пуст', () => {
+    const result = mapSigurEvent(buildFailureRaw({
+      description: undefined,
+      data: { direction: 'IN', denyReasonCode: 7 },
+    }));
+    expect(result?.kind).toBe('failure');
+    if (result?.kind === 'failure') {
+      expect(result.reason).toBe('Антипассбэк');
+    }
+  });
+
+  it('приоритет: data.denyReason (строка) над denyReasonCode', () => {
+    const result = mapSigurEvent(buildFailureRaw({
+      description: undefined,
+      data: { direction: 'IN', denyReason: 'Custom Sigur text', denyReasonCode: 7 },
+    }));
+    expect(result?.kind).toBe('failure');
+    if (result?.kind === 'failure') {
+      expect(result.reason).toBe('Custom Sigur text');
+    }
+  });
+
+  it('расшифровывает denyReasonCode=1 в "Ключ просрочен"', () => {
+    const result = mapSigurEvent(buildFailureRaw({
+      description: undefined,
+      data: { direction: 'IN', denyReasonCode: 1 },
+    }));
+    expect((result as { reason: string | null } | null)?.reason).toBe('Ключ просрочен');
+  });
+
+  it('неизвестный denyReasonCode не падает, fallback на старые поля', () => {
+    const result = mapSigurEvent(buildFailureRaw({
+      description: 'Текст из description',
+      data: { direction: 'IN', denyReasonCode: 999 },
+    }));
+    expect((result as { reason: string | null } | null)?.reason).toBe('Текст из description');
+  });
+
+  it('passReason используется для не-failure-типов (BIO/temperature и т. п.)', () => {
+    const result = mapSigurEvent(buildFailureRaw({
+      eventType: 'BIO_VERIFICATION',
+      eventTypeId: 7,
+      description: undefined,
+      data: { direction: 'IN', passReason: 'Распознавание лица: успех' },
+    }));
+    expect(result?.kind).toBe('failure');
+    if (result?.kind === 'failure') {
+      expect(result.reason).toBe('Распознавание лица: успех');
+    }
+  });
 });
