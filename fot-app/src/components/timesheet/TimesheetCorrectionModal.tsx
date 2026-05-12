@@ -14,6 +14,7 @@ import {
   sumBreakSeconds,
 } from '../../utils/skudDisplay';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
+import { getDayStatus, STATUS_LABEL_RU, STATUS_TO_DETAIL_HOURS_CLASS } from '../../utils/dayStatus';
 
 interface ICorrectionModalProps {
   open: boolean;
@@ -37,13 +38,22 @@ interface ICorrectionModalProps {
   allowedStatuses?: TimesheetStatus[];
   customContent?: ReactNode;
   customContentFooterLabel?: string;
-  timesheetEntry?: Pick<TimesheetEntry, 'first_entry' | 'last_exit' | 'hours_worked' | 'display_hours_worked'> | null;
+  timesheetEntry?: TimesheetEntry | null;
   maxHours?: number | null;
   correctionInfo?: {
     is_correction: boolean;
     corrected_at?: string | null;
     corrected_by_name?: string | null;
   } | null;
+  // Контекст дня для рендера чипа со статусом в шапке. Если не передан — чип не рисуется.
+  // Прокидывает родитель: те же значения, что считают TimesheetGrid и TimesheetSidePanel
+  // через scheduleUtils, чтобы цвет/подпись совпадали с табелем и боковой панелью.
+  dayStatusContext?: {
+    isScheduledDayOff: boolean;
+    isPreHoliday: boolean;
+    fullDayThresholdHours: number;
+    showActualHours: boolean;
+  };
 }
 
 interface ITypeOption {
@@ -496,6 +506,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   initialNotes,
   deleteLabel,
   maxHours,
+  dayStatusContext,
 }) => {
   const showEventsTab = !hideSkudTab;
   const showCorrectionTab = !hideCorrectionTab;
@@ -508,12 +519,31 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   const headerTitle = title || dayLabel || 'День';
   const headerSubtitle = subtitle || shortName;
 
+  // Чип со статусом дня — рисуется только если родитель передал dayStatusContext.
+  // Логика и палитра общие с табелем и боковой панелью (см. utils/dayStatus.ts).
+  const statusChip = dayStatusContext ? (() => {
+    const status = getDayStatus(timesheetEntry ?? null, {
+      showActualHours: dayStatusContext.showActualHours,
+      fullDayThresholdHours: dayStatusContext.fullDayThresholdHours,
+      isScheduledDayOff: dayStatusContext.isScheduledDayOff,
+    });
+    return (
+      <span className={`ts-modal-status-chip ${STATUS_TO_DETAIL_HOURS_CLASS[status]}`}>
+        {STATUS_LABEL_RU[status]}
+        {dayStatusContext.isPreHoliday && (
+          <span className="ts-modal-status-chip__pre">• −1ч</span>
+        )}
+      </span>
+    );
+  })() : null;
+
   if (customContent) {
     return (
       <div className="ts-modal" onClick={e => e.stopPropagation()}>
         <div className="ts-modal-header">
           <h3 className="ts-modal-title">
             {headerTitle}
+            {statusChip}
             {headerSubtitle && (
               <div className="ts-modal-subtitle">{headerSubtitle}</div>
             )}
@@ -539,6 +569,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
       <div className="ts-modal-header">
         <h3 className="ts-modal-title">
           {headerTitle}
+          {statusChip}
           {headerSubtitle && <div className="ts-modal-subtitle">{headerSubtitle}</div>}
         </h3>
         <button className="ts-panel-close" onClick={onClose}>

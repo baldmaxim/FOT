@@ -257,7 +257,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
               return (
                 <div key={day} className="ts-day-detail-wrap">
                   <div
-                    className={`ts-day-detail ts-day-detail--clickable ${entry?.status === 'absent' ? 'ts-day-detail--absent' : ''}`}
+                    className={`ts-day-detail ts-day-detail--clickable${entry?.status === 'absent' ? ' ts-day-detail--absent' : ''}${isPreHoliday ? ' ts-day-detail--pre-holiday' : ''}`}
                     onClick={() => toggleDay(day)}
                   >
                     <div className="ts-day-detail-left">

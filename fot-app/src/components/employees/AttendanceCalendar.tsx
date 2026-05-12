@@ -2,6 +2,7 @@ import { useMemo, type FC } from 'react';
 import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 import { getFirstDayOffset, getDaysInMonth, type IDayAttendance } from '../../utils/attendanceCalc';
 import { formatSecondsLabel } from '../../utils/hoursDisplay';
+import { STATUS_TO_CALENDAR_CLASS, type DayStatus } from '../../utils/dayStatus';
 
 const MONTH_NAMES = [
   'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
@@ -39,12 +40,12 @@ export const AttendanceCalendar: FC<IAttendanceCalendarProps> = ({
   }, [days]);
 
   const emptyCells = Array.from({ length: offset }, (_, i) => (
-    <div key={`e-${i}`} className="ec-cal-day empty" />
+    <div key={`e-${i}`} className="ec-cal-day ec-cal-day--empty" />
   ));
 
   const trailingEmpty = (7 - ((offset + daysInMonth) % 7)) % 7;
   const trailingCells = Array.from({ length: trailingEmpty }, (_, i) => (
-    <div key={`t-${i}`} className="ec-cal-day empty" />
+    <div key={`t-${i}`} className="ec-cal-day ec-cal-day--empty" />
   ));
 
   return (
@@ -67,14 +68,15 @@ export const AttendanceCalendar: FC<IAttendanceCalendarProps> = ({
             </button>
           </div>
           <div className="ec-cal-legend">
-            <div className="ec-legend-item"><span className="ec-legend-dot present" /> Норма</div>
-            <div className="ec-legend-item"><span className="ec-legend-dot underwork" /> Недобор</div>
-            <div className="ec-legend-item"><span className="ec-legend-dot absent" /> Прогул</div>
-            <div className="ec-legend-item"><span className="ec-legend-dot sick" /> Б/л</div>
-            <div className="ec-legend-item"><span className="ec-legend-dot vacation" /> Отпуск</div>
-            <div className="ec-legend-item"><span className="ec-legend-dot remote" /> Удал.</div>
-            <div className="ec-legend-item"><span className="ec-legend-dot incomplete_skud" /> СКУД 0ч</div>
-            <div className="ec-legend-item"><span className="ec-legend-dot weekend" /> Вых.</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot ec-cal-day--full" /> Норма</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot ec-cal-day--partial" /> Недобор</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot ec-cal-day--absent" /> Прогул</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot ec-cal-day--sick" /> Б/л</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot ec-cal-day--vacation" /> Отпуск</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot ec-cal-day--remote" /> Удал.</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot ec-cal-day--incomplete-skud" /> СКУД 0ч</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot ec-cal-day--weekend" /> Вых.</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot ec-cal-day--pre-holiday" /> Предпразд. (−1ч)</div>
           </div>
         </div>
 
@@ -89,12 +91,13 @@ export const AttendanceCalendar: FC<IAttendanceCalendarProps> = ({
             {Array.from({ length: daysInMonth }, (_, i) => {
               const day = i + 1;
               const data = dayMap.get(day);
-              const status = data?.status || '';
+              const status: DayStatus = data?.status ?? 'empty';
               const classes = [
                 'ec-cal-day',
-                status,
-                isToday(day) ? 'today' : '',
-                selectedDay === day ? 'selected' : '',
+                STATUS_TO_CALENDAR_CLASS[status],
+                isToday(day) ? 'ec-cal-day--today' : '',
+                selectedDay === day ? 'ec-cal-day--selected' : '',
+                data?.isPreHoliday ? 'ec-cal-day--pre-holiday' : '',
               ].filter(Boolean).join(' ');
 
               const clickable = data && data.status !== 'future' && data.status !== 'weekend';

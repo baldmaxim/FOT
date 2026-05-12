@@ -24,7 +24,14 @@ import type {
 } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
 import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
-import { getScheduleForTimesheetDay, getShiftDurationForDay, getWorkHoursForDay } from '../../utils/scheduleUtils';
+import {
+  getFullDayThresholdHoursForDay,
+  getScheduleForTimesheetDay,
+  getShiftDurationForDay,
+  getWorkHoursForDay,
+  isPreHolidayForSchedule,
+  isScheduleDayOff,
+} from '../../utils/scheduleUtils';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import {
   getHalfRange,
@@ -77,7 +84,7 @@ import {
 } from './timesheetPage.helpers';
 
 export const TimesheetPage: FC = () => {
-  const { hasPermission, profile, canEditPage, canViewPage } = useAuth();
+  const { hasPermission, profile, canEditPage, canViewPage, showActualHours } = useAuth();
   const toast = useToast();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -2007,6 +2014,15 @@ export const TimesheetPage: FC = () => {
               corrected_at: modalEntry.corrected_at,
               corrected_by_name: modalEntry.corrected_by_name,
             } : null}
+            dayStatusContext={modalMode === 'day' && modalEmployee && modalDay ? (() => {
+              const sched = getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay);
+              return {
+                isScheduledDayOff: isScheduleDayOff(sched, calendar, year, month, modalDay),
+                isPreHoliday: isPreHolidayForSchedule(sched, calendar, year, month, modalDay),
+                fullDayThresholdHours: getFullDayThresholdHoursForDay(sched, calendar, year, month, modalDay),
+                showActualHours,
+              };
+            })() : undefined}
           />
         </Suspense>
       )}

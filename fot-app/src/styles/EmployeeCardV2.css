@@ -704,7 +704,7 @@
   min-height: 44px;
 }
 
-.ec-cal-day:hover:not(.empty) {
+.ec-cal-day:hover:not(.ec-cal-day--empty) {
   transform: scale(1.05);
 }
 
@@ -712,82 +712,87 @@
   box-shadow: 0 0 0 2px var(--primary);
 }
 
-.ec-cal-day.empty {
+.ec-cal-day--empty {
   pointer-events: none;
 }
 
-.ec-cal-day.weekend {
-  background: var(--bg-tertiary);
-  color: var(--text-tertiary);
+/* Палитра по статусу — мапится через STATUS_TO_CALENDAR_CLASS (utils/dayStatus.ts).
+   Один статус = один селектор; цвета зеркалят TimesheetGrid и TimesheetSidePanel. */
+.ec-cal-day--weekend {
+  background: rgba(239, 68, 68, 0.05);
+  color: var(--error);
+  opacity: 0.85;
+  border-color: rgba(239, 68, 68, 0.15);
 }
 
-.ec-cal-day.present {
+.ec-cal-day--full {
   background: var(--success-muted);
   color: var(--success);
   border-color: rgba(34, 197, 94, 0.3);
 }
 
-.ec-cal-day.underwork,
-.ec-cal-day.late {
+.ec-cal-day--partial {
   background: var(--warning-muted);
   color: var(--warning);
   border-color: rgba(245, 158, 11, 0.3);
 }
 
-.ec-cal-day.absent {
+.ec-cal-day--absent {
   background: var(--error-muted);
   color: var(--error);
   border-color: rgba(239, 68, 68, 0.3);
 }
 
-.ec-cal-day.sick {
+.ec-cal-day--sick {
   background: rgba(59, 130, 246, 0.12);
   color: var(--primary);
   border-color: rgba(59, 130, 246, 0.3);
 }
 
-.ec-cal-day.vacation {
+.ec-cal-day--vacation {
   background: rgba(139, 92, 246, 0.12);
   color: #8b5cf6;
   border-color: rgba(139, 92, 246, 0.3);
 }
 
-.ec-cal-day.remote {
+.ec-cal-day--remote {
   background: rgba(34, 197, 94, 0.18);
   color: var(--success);
   border-color: rgba(34, 197, 94, 0.35);
 }
 
-.ec-cal-day.incomplete_skud {
+.ec-cal-day--incomplete-skud {
   background: rgba(168, 85, 247, 0.18);
   color: #7e22ce;
   border-color: rgba(168, 85, 247, 0.35);
 }
 
-/* Зеркала классов основной таблицы (ts-day--unpaid / ts-day--educational) —
-   единые цвета по статусу обеспечивают совпадение окраски в табеле, боковой
-   панели и календаре карточки. */
-.ec-cal-day.unpaid {
+.ec-cal-day--unpaid {
   background: rgba(234, 179, 8, 0.14);
   color: var(--warning);
   border-color: rgba(234, 179, 8, 0.35);
 }
 
-.ec-cal-day.educational_leave {
+.ec-cal-day--educational {
   background: rgba(217, 70, 239, 0.12);
   color: #a21caf;
   border-color: rgba(217, 70, 239, 0.35);
 }
 
-.ec-cal-day.future {
-  pointer-events: none;
+/* Предпраздничный день: золотистая полоса сверху поверх любого статуса. */
+.ec-cal-day--pre-holiday {
+  box-shadow: inset 0 3px 0 rgba(234, 179, 8, 0.7);
 }
 
-.ec-cal-day.today {
+.ec-cal-day--today {
   box-shadow: 0 0 0 2px var(--primary);
 }
 
-.ec-cal-day.selected {
+.ec-cal-day--pre-holiday.ec-cal-day--today {
+  box-shadow: 0 0 0 2px var(--primary), inset 0 3px 0 rgba(234, 179, 8, 0.7);
+}
+
+.ec-cal-day--selected {
   box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.9);
   transform: scale(1.03);
 }

@@ -115,7 +115,40 @@ export const STATUS_TO_DETAIL_HOURS_CLASS: Record<DayStatus, string> = {
   remote: 'ts-day-detail-hours--remote',
   unpaid: 'ts-day-detail-hours--unpaid',
   educational_leave: 'ts-day-detail-hours--educational',
-  weekend: 'ts-day-detail-hours--absent',
-  future: 'ts-day-detail-hours--absent',
-  empty: 'ts-day-detail-hours--absent',
+  weekend: 'ts-day-detail-hours--weekend',
+  future: 'ts-day-detail-hours--empty',
+  empty: 'ts-day-detail-hours--empty',
+};
+
+// Маппинг статуса в CSS-класс ячейки календаря карточки сотрудника (AttendanceCalendar).
+// Зеркалит другие маппинги: одно изменение DayStatus = одно место правки.
+export const STATUS_TO_CALENDAR_CLASS: Record<DayStatus, string> = {
+  present: 'ec-cal-day--full',
+  underwork: 'ec-cal-day--partial',
+  absent: 'ec-cal-day--absent',
+  incomplete_skud: 'ec-cal-day--incomplete-skud',
+  sick: 'ec-cal-day--sick',
+  vacation: 'ec-cal-day--vacation',
+  remote: 'ec-cal-day--remote',
+  unpaid: 'ec-cal-day--unpaid',
+  educational_leave: 'ec-cal-day--educational',
+  weekend: 'ec-cal-day--weekend',
+  future: 'ec-cal-day--empty',
+  empty: 'ec-cal-day--empty',
+};
+
+// Человекочитаемые подписи статусов (для чипа в модалке корректировки и др.).
+export const STATUS_LABEL_RU: Record<DayStatus, string> = {
+  present: 'Полный день',
+  underwork: 'Недобор',
+  absent: 'Прогул',
+  incomplete_skud: 'СКУД без часов',
+  sick: 'Больничный',
+  vacation: 'Отпуск',
+  remote: 'Удалёнка',
+  unpaid: 'За свой счёт',
+  educational_leave: 'Учебный отпуск',
+  weekend: 'Выходной',
+  future: 'Будущий день',
+  empty: '—',
 };

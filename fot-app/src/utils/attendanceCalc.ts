@@ -6,6 +6,7 @@ import {
   getScheduleForTimesheetDay,
   getShiftDurationForDay,
   getWorkHoursForDay,
+  isPreHolidayForSchedule,
   isScheduleDayOff,
   parseHMToMinutes,
 } from './scheduleUtils';
@@ -36,6 +37,9 @@ export interface IDayAttendance {
   plannedHours?: number;
   scheduledStartMinutes?: number | null;
   shiftDurationSeconds?: number;
+  // Предпраздничный рабочий день (-1ч к полному дню). Используется UI для отдельной
+  // подсветки и совпадает с тем, что показывает таблица табеля.
+  isPreHoliday?: boolean;
 }
 
 export interface IMonthStats {
@@ -484,17 +488,18 @@ export const calculateAttendanceFromTimesheet = (params: {
     const shiftDurationSeconds = schedule
       ? Math.round(getShiftDurationForDay(schedule, year, month + 1, day) * 3600)
       : undefined;
+    const isPreHoliday = isPreHolidayForSchedule(schedule, calendar ?? null, year, month + 1, day);
     const entry = entryByDay.get(day);
     const isScheduledDayOff = plannedHours <= 0;
     const shouldUseLiveTodayEvents = isCurrentMonth && day === todayDate && liveTodayAttendanceEvents.length > 0;
 
     if (isCurrentMonth && day > todayDate) {
-      days.push({ day, status: 'future', totalSeconds: 0, plannedHours, scheduledStartMinutes, shiftDurationSeconds });
+      days.push({ day, status: 'future', totalSeconds: 0, plannedHours, scheduledStartMinutes, shiftDurationSeconds, isPreHoliday });
       continue;
     }
 
     if (isScheduledDayOff && !entry && !shouldUseLiveTodayEvents) {
-      days.push({ day, status: 'weekend', totalSeconds: 0, plannedHours: 0, scheduledStartMinutes, shiftDurationSeconds });
+      days.push({ day, status: 'weekend', totalSeconds: 0, plannedHours: 0, scheduledStartMinutes, shiftDurationSeconds, isPreHoliday });
       continue;
     }
 
@@ -508,7 +513,7 @@ export const calculateAttendanceFromTimesheet = (params: {
       const fallbackStatus: IDayAttendance['status'] = hasExternalSkud && !isScheduledDayOff
         ? 'incomplete_skud'
         : 'absent';
-      days.push({ day, status: fallbackStatus, totalSeconds: 0, plannedHours, scheduledStartMinutes, shiftDurationSeconds });
+      days.push({ day, status: fallbackStatus, totalSeconds: 0, plannedHours, scheduledStartMinutes, shiftDurationSeconds, isPreHoliday });
       continue;
     }
     const liveTodayExternalEvents = shouldUseLiveTodayEvents
@@ -596,6 +601,7 @@ export const calculateAttendanceFromTimesheet = (params: {
       plannedHours,
       scheduledStartMinutes,
       shiftDurationSeconds,
+      isPreHoliday,
     });
   }
 
