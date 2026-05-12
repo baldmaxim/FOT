@@ -8,8 +8,16 @@ interface ApiResponse<T> {
 
 interface UserFromApi {
   id: string;
+  email?: string;
+  email_confirmed?: boolean;
   full_name: string | null;
   assigned_department_ids: string[];
+  assigned_employee_ids: number[];
+  assigned_employees: Array<{
+    id: number;
+    full_name: string;
+  }>;
+  is_site_supervisor: boolean;
   position_type: EmployeePositionType;
   imported_position: string | null;
   employee_id: number | null;
