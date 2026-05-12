@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { AxiosError } from 'axios';
-import { supabase } from '../config/database.js';
+import { queryOne } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
 import {
@@ -266,13 +266,18 @@ async function buildEmployeeProfileData(
   connection?: 'external' | 'internal',
   refresh = false,
 ): Promise<IEmployeeProfileResponse> {
-  const { data: employee, error: employeeError } = await supabase
-    .from('employees')
-    .select('id, full_name, position_id, sigur_employee_id, tab_number')
-    .eq('id', employeeId)
-    .maybeSingle();
+  const employee = await queryOne<{
+    id: number;
+    full_name: string | null;
+    position_id: string | null;
+    sigur_employee_id: number | null;
+    tab_number: string | null;
+  }>(
+    `SELECT id, full_name, position_id, sigur_employee_id, tab_number
+     FROM employees WHERE id = $1 LIMIT 1`,
+    [employeeId],
+  );
 
-  if (employeeError) throw employeeError;
   if (!employee) {
     const error = new Error('Сотрудник не найден');
     (error as Error & { status?: number }).status = 404;
@@ -1090,13 +1095,10 @@ export const sigurController = {
 
       const connection = (req.query.connection as 'external' | 'internal') || undefined;
       const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
-      const { data: employee, error: employeeError } = await supabase
-        .from('employees')
-        .select('id, sigur_employee_id')
-        .eq('id', employeeId)
-        .maybeSingle();
-
-      if (employeeError) throw employeeError;
+      const employee = await queryOne<{ id: number; sigur_employee_id: number | null }>(
+        'SELECT id, sigur_employee_id FROM employees WHERE id = $1 LIMIT 1',
+        [employeeId],
+      );
       if (!employee) {
         res.status(404).json({ success: false, error: 'Сотрудник не найден' });
         return;
@@ -1234,13 +1236,10 @@ export const sigurController = {
       }
 
       const connection = (req.body.connection as 'external' | 'internal') || undefined;
-      const { data: employee, error: employeeError } = await supabase
-        .from('employees')
-        .select('id, sigur_employee_id')
-        .eq('id', employeeId)
-        .maybeSingle();
-
-      if (employeeError) throw employeeError;
+      const employee = await queryOne<{ id: number; sigur_employee_id: number | null }>(
+        'SELECT id, sigur_employee_id FROM employees WHERE id = $1 LIMIT 1',
+        [employeeId],
+      );
       if (!employee) {
         res.status(404).json({ success: false, error: 'Сотрудник не найден' });
         return;
@@ -1346,13 +1345,10 @@ export const sigurController = {
 
       const connection = (req.body.connection as 'external' | 'internal') || undefined;
       const format = typeof req.body.format === 'string' && req.body.format ? req.body.format as string : undefined;
-      const { data: employee, error: employeeError } = await supabase
-        .from('employees')
-        .select('id, sigur_employee_id')
-        .eq('id', employeeId)
-        .maybeSingle();
-
-      if (employeeError) throw employeeError;
+      const employee = await queryOne<{ id: number; sigur_employee_id: number | null }>(
+        'SELECT id, sigur_employee_id FROM employees WHERE id = $1 LIMIT 1',
+        [employeeId],
+      );
       if (!employee) {
         res.status(404).json({ success: false, error: 'Сотрудник не найден' });
         return;
@@ -1440,13 +1436,10 @@ export const sigurController = {
       }
 
       const connection = (req.body.connection as 'external' | 'internal') || undefined;
-      const { data: employee, error: employeeError } = await supabase
-        .from('employees')
-        .select('id, sigur_employee_id')
-        .eq('id', employeeId)
-        .maybeSingle();
-
-      if (employeeError) throw employeeError;
+      const employee = await queryOne<{ id: number; sigur_employee_id: number | null }>(
+        'SELECT id, sigur_employee_id FROM employees WHERE id = $1 LIMIT 1',
+        [employeeId],
+      );
       if (!employee) {
         res.status(404).json({ success: false, error: 'Сотрудник не найден' });
         return;

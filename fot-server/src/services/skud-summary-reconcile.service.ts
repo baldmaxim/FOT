@@ -1,5 +1,5 @@
 import * as Sentry from '@sentry/node';
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 
 /**
  * Фоновая страховка от «осиротевших» событий — записей в skud_events,
@@ -32,22 +32,20 @@ let runInFlight: Promise<void> | null = null;
 async function collectOrphanPairs(cutoff: string): Promise<Array<{ emp_id: number; date: string }>> {
   const eventPairs = new Set<string>();
   let from = 0;
-  // Пагинация по skud_events: SDK не отдаёт DISTINCT, тянем сырой select и уникализуем в памяти.
+  // Пагинация по skud_events: тянем сырой select и уникализуем в памяти.
   /* eslint-disable no-await-in-loop */
   while (true) {
-    const { data, error } = await supabase
-      .from('skud_events')
-      .select('employee_id, event_date')
-      .gte('event_date', cutoff)
-      .not('employee_id', 'is', null)
-      .order('id', { ascending: true })
-      .range(from, from + PAGE_SIZE - 1);
-    if (error) throw error;
-    const rows = data || [];
+    const rows = await query<{ employee_id: number | null; event_date: string | null }>(
+      `SELECT employee_id, event_date FROM skud_events
+       WHERE event_date >= $1 AND employee_id IS NOT NULL
+       ORDER BY id ASC
+       LIMIT ${PAGE_SIZE} OFFSET ${from}`,
+      [cutoff],
+    );
     if (rows.length === 0) break;
     for (const row of rows) {
-      const empId = (row as { employee_id: number | null }).employee_id;
-      const date = (row as { event_date: string | null }).event_date;
+      const empId = row.employee_id;
+      const date = row.event_date;
       if (empId == null || !date) continue;
       eventPairs.add(`${empId}:${date}`);
     }
@@ -58,18 +56,17 @@ async function collectOrphanPairs(cutoff: string): Promise<Array<{ emp_id: numbe
   const summaryPairs = new Set<string>();
   let sFrom = 0;
   while (true) {
-    const { data, error } = await supabase
-      .from('skud_daily_summary')
-      .select('employee_id, date')
-      .gte('date', cutoff)
-      .order('date', { ascending: true })
-      .range(sFrom, sFrom + PAGE_SIZE - 1);
-    if (error) throw error;
-    const rows = data || [];
+    const rows = await query<{ employee_id: number | null; date: string | null }>(
+      `SELECT employee_id, date FROM skud_daily_summary
+       WHERE date >= $1
+       ORDER BY date ASC
+       LIMIT ${PAGE_SIZE} OFFSET ${sFrom}`,
+      [cutoff],
+    );
     if (rows.length === 0) break;
     for (const row of rows) {
-      const empId = (row as { employee_id: number | null }).employee_id;
-      const date = (row as { date: string | null }).date;
+      const empId = row.employee_id;
+      const date = row.date;
       if (empId == null || !date) continue;
       summaryPairs.add(`${empId}:${date}`);
     }
@@ -105,13 +102,18 @@ async function runReconcileCycle(): Promise<void> {
       let failedChunks = 0;
       for (let i = 0; i < pairs.length; i += RPC_BATCH) {
         const chunk = pairs.slice(i, i + RPC_BATCH);
-        const { error } = await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: chunk });
-        if (error) {
+        try {
+          await query(
+            'SELECT public.batch_recalculate_skud_daily_summary($1::jsonb)',
+            [JSON.stringify(chunk)],
+          );
+          processed += chunk.length;
+        } catch (err) {
           failedChunks += 1;
-          console.error(`[skud-summary-reconcile] чанк ${i}-${i + chunk.length} упал:`, error.message);
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`[skud-summary-reconcile] чанк ${i}-${i + chunk.length} упал:`, message);
           continue;
         }
-        processed += chunk.length;
       }
 
       const durationMs = Date.now() - startedAt;

@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { queryOne, execute } from '../config/postgres.js';
 import { parseFIO } from '../utils/fio.utils.js';
 import { employeeCache } from './employee-cache.service.js';
 import { invalidateStructureCache } from './employee-mapper.service.js';
@@ -61,34 +61,25 @@ const buildEmployeeAccessPointBindingsCacheKey = (
 ): string => `${employeeId}:${connection || 'default'}`;
 
 async function getRootDepartmentId(): Promise<string | null> {
-  const { data: namedRoot } = await supabase
-    .from('org_departments')
-    .select('id')
-    .eq('name', 'Объект')
-    .limit(1)
-    .maybeSingle();
+  const namedRoot = await queryOne<{ id: string }>(
+    "SELECT id FROM org_departments WHERE name = 'Объект' LIMIT 1",
+  );
 
   if (namedRoot?.id) return namedRoot.id;
 
-  const { data: anyRoot } = await supabase
-    .from('org_departments')
-    .select('id')
-    .is('parent_id', null)
-    .limit(1)
-    .maybeSingle();
+  const anyRoot = await queryOne<{ id: string }>(
+    'SELECT id FROM org_departments WHERE parent_id IS NULL LIMIT 1',
+  );
 
   return anyRoot?.id || null;
 }
 
 async function getLinkedEmployeeRow(employeeId: number): Promise<ILinkedEmployeeRow | null> {
-  const { data, error } = await supabase
-    .from('employees')
-    .select(LINKED_EMPLOYEE_COLUMNS)
-    .eq('id', employeeId)
-    .maybeSingle();
-
-  if (error) throw error;
-  return (data as ILinkedEmployeeRow | null) ?? null;
+  const data = await queryOne<ILinkedEmployeeRow>(
+    `SELECT ${LINKED_EMPLOYEE_COLUMNS} FROM employees WHERE id = $1 LIMIT 1`,
+    [employeeId],
+  );
+  return data;
 }
 
 export async function ensureLocalSigurDepartment(
@@ -97,13 +88,11 @@ export async function ensureLocalSigurDepartment(
 ): Promise<string | null> {
   if (!sigurDepartmentId || !Number.isFinite(sigurDepartmentId)) return null;
 
-  const { data: existing, error: existingError } = await supabase
-    .from('org_departments')
-    .select('id, name')
-    .eq('sigur_department_id', sigurDepartmentId)
-    .maybeSingle();
+  const existing = await queryOne<{ id: string; name: string | null }>(
+    'SELECT id, name FROM org_departments WHERE sigur_department_id = $1 LIMIT 1',
+    [sigurDepartmentId],
+  );
 
-  if (existingError) throw existingError;
   if (existing?.id) return existing.id;
 
   const remoteDepartment = normalizeDepartment(
@@ -114,17 +103,17 @@ export async function ensureLocalSigurDepartment(
     ? await ensureLocalSigurDepartment(remoteDepartment.parentId, connection)
     : await getRootDepartmentId();
 
-  const { data: created, error: insertError } = await supabase
-    .from('org_departments')
-    .insert({
-      name: remoteDepartment.name || `Sigur отдел ${sigurDepartmentId}`,
-      parent_id: parentId,
-      sigur_department_id: sigurDepartmentId,
-    })
-    .select('id')
-    .single();
-
-  if (insertError) throw insertError;
+  const created = await queryOne<{ id: string }>(
+    `INSERT INTO org_departments (name, parent_id, sigur_department_id)
+     VALUES ($1, $2, $3)
+     RETURNING id`,
+    [
+      remoteDepartment.name || `Sigur отдел ${sigurDepartmentId}`,
+      parentId,
+      sigurDepartmentId,
+    ],
+  );
+  if (!created) throw new Error('Не удалось создать локальный отдел');
 
   invalidateStructureCache();
   return created.id;
@@ -138,32 +127,25 @@ export async function ensureLocalSigurPosition(
   const normalizedPositionName = (positionName || '').trim();
 
   if (sigurPositionId && Number.isFinite(sigurPositionId)) {
-    const { data: bySigurId, error: bySigurIdError } = await supabase
-      .from('positions')
-      .select('id, name')
-      .eq('sigur_position_id', sigurPositionId)
-      .maybeSingle();
-
-    if (bySigurIdError) throw bySigurIdError;
+    const bySigurId = await queryOne<{ id: string; name: string | null }>(
+      'SELECT id, name FROM positions WHERE sigur_position_id = $1 LIMIT 1',
+      [sigurPositionId],
+    );
     if (bySigurId?.id) return bySigurId.id;
   }
 
   if (normalizedPositionName) {
-    const { data: byNameRows, error: byNameError } = await supabase
-      .from('positions')
-      .select('id, name, sigur_position_id')
-      .ilike('name', normalizedPositionName)
-      .limit(1);
+    const byName = await queryOne<{ id: string; name: string | null; sigur_position_id: number | null }>(
+      'SELECT id, name, sigur_position_id FROM positions WHERE name ILIKE $1 LIMIT 1',
+      [normalizedPositionName],
+    );
 
-    if (byNameError) throw byNameError;
-
-    const byName = byNameRows?.[0];
     if (byName?.id) {
       if (sigurPositionId && !byName.sigur_position_id) {
-        await supabase
-          .from('positions')
-          .update({ sigur_position_id: sigurPositionId })
-          .eq('id', byName.id);
+        await execute(
+          'UPDATE positions SET sigur_position_id = $1 WHERE id = $2',
+          [sigurPositionId, byName.id],
+        );
       }
       return byName.id;
     }
@@ -178,18 +160,13 @@ export async function ensureLocalSigurPosition(
 
   if (!resolvedName) return null;
 
-  const { data: created, error: insertError } = await supabase
-    .from('positions')
-    .insert({
-      name: resolvedName,
-      sigur_position_id: sigurPositionId || null,
-      is_active: true,
-      sort_order: 0,
-    })
-    .select('id')
-    .single();
-
-  if (insertError) throw insertError;
+  const created = await queryOne<{ id: string }>(
+    `INSERT INTO positions (name, sigur_position_id, is_active, sort_order)
+     VALUES ($1, $2, true, 0)
+     RETURNING id`,
+    [resolvedName, sigurPositionId || null],
+  );
+  if (!created) throw new Error('Не удалось создать должность');
 
   invalidateStructureCache();
   return created.id;
@@ -241,12 +218,21 @@ export async function syncLinkedEmployeeFromSigur(
     updateData.department_locked = false;
   }
 
-  const { error: updateError } = await supabase
-    .from('employees')
-    .update(updateData)
-    .eq('id', employeeId);
-
-  if (updateError) throw updateError;
+  // Динамический UPDATE по ключам updateData
+  const updateKeys = Object.keys(updateData);
+  if (updateKeys.length > 0) {
+    const setParts: string[] = [];
+    const params: unknown[] = [];
+    for (const key of updateKeys) {
+      params.push(updateData[key]);
+      setParts.push(`${key} = $${params.length}`);
+    }
+    params.push(employeeId);
+    await execute(
+      `UPDATE employees SET ${setParts.join(', ')} WHERE id = $${params.length}`,
+      params,
+    );
+  }
 
   employeeCache.invalidate(employeeId);
 

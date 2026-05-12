@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import { supabase } from '../config/database.js';
+import { query, execute } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { sigurService } from '../services/sigur.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -40,11 +40,9 @@ export const skudWriteController = {
       let targetDeptId = department_id || null;
 
       if (!targetDeptId) {
-        const { data: rootDepts } = await supabase
-          .from('org_departments')
-          .select('id')
-          .is('parent_id', null)
-          .limit(1);
+        const rootDepts = await query<{ id: string }>(
+          'SELECT id FROM org_departments WHERE parent_id IS NULL LIMIT 1',
+        );
         if (!rootDepts || rootDepts.length === 0) {
           res.status(400).json({ success: false, error: 'Корневой отдел не найден' });
           return;
@@ -60,30 +58,31 @@ export const skudWriteController = {
       }
       const uniqueInternalNames = [...internalMap.keys()];
 
-      const { error: deleteError } = await supabase
-        .from('skud_access_point_settings')
-        .delete()
-        .eq('department_id', targetDeptId)
-        .select('id');
-
-      if (deleteError) {
+      try {
+        await execute(
+          'DELETE FROM skud_access_point_settings WHERE department_id = $1',
+          [targetDeptId],
+        );
+      } catch (deleteError) {
         console.error('Delete access point settings error:', deleteError);
         res.status(500).json({ success: false, error: 'Ошибка удаления старых настроек' });
         return;
       }
 
       if (uniqueInternalNames.length > 0) {
-        const rows = uniqueInternalNames.map(name => ({
-          department_id: targetDeptId,
-          access_point_name: name,
-          is_internal: true,
-        }));
-
-        const { error } = await supabase
-          .from('skud_access_point_settings')
-          .insert(rows);
-
-        if (error) {
+        const params: unknown[] = [];
+        const placeholders: string[] = [];
+        for (const name of uniqueInternalNames) {
+          params.push(targetDeptId, name, true);
+          placeholders.push(`($${params.length - 2}, $${params.length - 1}, $${params.length})`);
+        }
+        try {
+          await execute(
+            `INSERT INTO skud_access_point_settings (department_id, access_point_name, is_internal)
+             VALUES ${placeholders.join(', ')}`,
+            params,
+          );
+        } catch (error) {
           console.error('Save access point settings error:', error);
           res.status(500).json({ success: false, error: 'Ошибка сохранения настроек' });
           return;
@@ -119,19 +118,19 @@ export const skudWriteController = {
           .filter(Boolean)
       )].sort();
 
-      const { data: currentSettings } = await supabase
-        .from('skud_access_point_settings')
-        .select('id, access_point_name');
+      const currentSettings = await query<{ id: string; access_point_name: string }>(
+        'SELECT id, access_point_name FROM skud_access_point_settings',
+      );
 
       const freshSet = new Set(freshNames);
-      const toDelete = (currentSettings || []).filter(s => !freshSet.has(s.access_point_name));
+      const toDelete = currentSettings.filter(s => !freshSet.has(s.access_point_name));
       const removed = toDelete.map(r => r.access_point_name);
 
       if (toDelete.length > 0) {
-        await supabase
-          .from('skud_access_point_settings')
-          .delete()
-          .in('id', toDelete.map(r => r.id));
+        await execute(
+          'DELETE FROM skud_access_point_settings WHERE id = ANY($1::uuid[])',
+          [toDelete.map(r => r.id)],
+        );
       }
 
       setAccessPointCacheEntry('__all__', freshNames);

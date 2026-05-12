@@ -1,5 +1,5 @@
 import { sigurService } from './sigur.service.js';
-import { supabase } from '../config/database.js';
+import { query, execute } from '../config/postgres.js';
 import { invalidateSyncFilterCache } from './skud-shared.service.js';
 
 /** Системные папки Sigur — больше не фильтруем, синхронизируем все */
@@ -262,18 +262,18 @@ async function loadSyncFilterRows(context?: ISyncContext): Promise<ISyncFilterDe
     return context.syncFilterRows ?? [];
   }
 
-  const { data, error } = await supabase
-    .from('skud_sync_department_filter')
-    .select('id, sigur_department_id, sigur_department_name')
-    .order('sigur_department_name', { ascending: true });
-
-  if (error) {
-    throw new Error(`Failed to load sync filter: ${error.message}`);
+  let data: ISyncFilterDepartmentRow[];
+  try {
+    data = await query<ISyncFilterDepartmentRow>(
+      `SELECT id, sigur_department_id, sigur_department_name
+       FROM skud_sync_department_filter
+       ORDER BY sigur_department_name ASC`,
+    );
+  } catch (error) {
+    throw new Error(`Failed to load sync filter: ${(error as Error).message}`);
   }
 
-  const rows = ((data || []) as ISyncFilterDepartmentRow[]).filter(
-    row => typeof row.sigur_department_id === 'number',
-  );
+  const rows = data.filter(row => typeof row.sigur_department_id === 'number');
 
   if (context) {
     context.syncFilterRows = rows;
@@ -286,22 +286,28 @@ async function persistSyncFilterRows(
   rows: Array<{ sigur_department_id: number; sigur_department_name: string | null }>,
   context?: ISyncContext,
 ): Promise<void> {
-  const { error: deleteError } = await supabase
-    .from('skud_sync_department_filter')
-    .delete()
-    .neq('id', '00000000-0000-0000-0000-000000000000');
-
-  if (deleteError) {
-    throw new Error(`Failed to rewrite sync filter: ${deleteError.message}`);
+  try {
+    await execute(
+      "DELETE FROM skud_sync_department_filter WHERE id <> '00000000-0000-0000-0000-000000000000'::uuid",
+    );
+  } catch (deleteError) {
+    throw new Error(`Failed to rewrite sync filter: ${(deleteError as Error).message}`);
   }
 
   if (rows.length > 0) {
-    const { error: insertError } = await supabase
-      .from('skud_sync_department_filter')
-      .insert(rows);
-
-    if (insertError) {
-      throw new Error(`Failed to save reconciled sync filter: ${insertError.message}`);
+    const params: unknown[] = [];
+    const placeholders: string[] = [];
+    for (const row of rows) {
+      params.push(row.sigur_department_id, row.sigur_department_name);
+      placeholders.push(`($${params.length - 1}, $${params.length})`);
+    }
+    try {
+      await execute(
+        `INSERT INTO skud_sync_department_filter (sigur_department_id, sigur_department_name) VALUES ${placeholders.join(', ')}`,
+        params,
+      );
+    } catch (insertError) {
+      throw new Error(`Failed to save reconciled sync filter: ${(insertError as Error).message}`);
     }
   }
 
@@ -490,49 +496,32 @@ export function buildWhitelistedEmployeesCache(data: Record<string, unknown>[]):
 export async function getWhitelistedDbEmployeeSets(
   whitelist: Set<number>,
 ): Promise<{ allowedNames: Set<string>; allowedSigurIds: Set<number> } | null> {
-  const { data: dbDepartments } = await supabase
-    .from('org_departments')
-    .select('id, sigur_department_id')
-    .in('sigur_department_id', [...whitelist]);
+  const dbDepartments = await query<{ id: string; sigur_department_id: number | null }>(
+    'SELECT id, sigur_department_id FROM org_departments WHERE sigur_department_id = ANY($1::bigint[])',
+    [[...whitelist]],
+  );
 
-  const allowedDepartmentIds = (dbDepartments || []).map(dept => dept.id);
+  const allowedDepartmentIds = dbDepartments.map(dept => dept.id);
   if (allowedDepartmentIds.length === 0) {
     return null;
   }
 
-  // Пагинация для обхода лимита Supabase (1000 строк)
-  const PAGE = 1000;
-  const allEmployees: Array<{ full_name: string; sigur_employee_id: number | null }> = [];
+  const allEmployees: Array<{ full_name: string | null; sigur_employee_id: number | null }> = [];
 
   // Сотрудники в разрешённых отделах
-  let from = 0;
-  while (true) {
-    const { data } = await supabase
-      .from('employees')
-      .select('full_name, sigur_employee_id')
-      .eq('is_archived', false)
-      .in('org_department_id', allowedDepartmentIds)
-      .range(from, from + PAGE - 1);
-    if (!data || data.length === 0) break;
-    allEmployees.push(...data);
-    if (data.length < PAGE) break;
-    from += PAGE;
-  }
+  const inDeptRows = await query<{ full_name: string | null; sigur_employee_id: number | null }>(
+    `SELECT full_name, sigur_employee_id FROM employees
+     WHERE is_archived = false AND org_department_id = ANY($1::uuid[])`,
+    [allowedDepartmentIds],
+  );
+  allEmployees.push(...inDeptRows);
 
   // Также включаем сотрудников без отдела — они не должны отсекаться whitelist'ом
-  from = 0;
-  while (true) {
-    const { data } = await supabase
-      .from('employees')
-      .select('full_name, sigur_employee_id')
-      .eq('is_archived', false)
-      .is('org_department_id', null)
-      .range(from, from + PAGE - 1);
-    if (!data || data.length === 0) break;
-    allEmployees.push(...data);
-    if (data.length < PAGE) break;
-    from += PAGE;
-  }
+  const noDeptRows = await query<{ full_name: string | null; sigur_employee_id: number | null }>(
+    `SELECT full_name, sigur_employee_id FROM employees
+     WHERE is_archived = false AND org_department_id IS NULL`,
+  );
+  allEmployees.push(...noDeptRows);
 
   const allowedNames = new Set<string>();
   const allowedSigurIds = new Set<number>();

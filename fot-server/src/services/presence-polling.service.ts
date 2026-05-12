@@ -1,6 +1,6 @@
 import * as Sentry from '@sentry/node';
 import { sigurService } from './sigur.service.js';
-import { supabase } from '../config/database.js';
+import { query, queryOne, execute } from '../config/postgres.js';
 import { getSupabaseInflight, withSupabaseSlot } from '../config/supabase-instrumentation.js';
 import { env } from '../config/env.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
@@ -163,10 +163,9 @@ async function getEmployeeMaps(): Promise<EmployeeMaps> {
     return existing;
   }
 
-  const { data } = await supabase
-    .from('employees')
-    .select('id, full_name, sigur_employee_id')
-    .eq('is_archived', false);
+  const data = await query<{ id: number; full_name: string | null; sigur_employee_id: number | null }>(
+    'SELECT id, full_name, sigur_employee_id FROM employees WHERE is_archived = false',
+  );
 
   const byName = new Map<string, { id: number }>();
   const bySigurId = new Map<number, { id: number }>();
@@ -195,18 +194,16 @@ async function getEmployeeMaps(): Promise<EmployeeMaps> {
 }
 
 async function getLatestStoredEventTimestamp(): Promise<Date | null> {
-  const { data, error } = await supabase
-    .from('skud_events')
-    .select('event_date, event_time')
-    .order('event_date', { ascending: false })
-    .order('event_time', { ascending: false })
-    .limit(1);
-
-  if (error) {
-    throw new Error(`[presence-polling] failed to read latest stored event: ${error.message}`);
+  let latest: { event_date: string | null; event_time: string | null } | null;
+  try {
+    latest = await queryOne<{ event_date: string | null; event_time: string | null }>(
+      `SELECT event_date, event_time FROM skud_events
+       ORDER BY event_date DESC, event_time DESC LIMIT 1`,
+    );
+  } catch (error) {
+    throw new Error(`[presence-polling] failed to read latest stored event: ${(error as Error).message}`);
   }
 
-  const latest = data?.[0];
   if (!latest?.event_date || !latest?.event_time) {
     return null;
   }
@@ -699,22 +696,43 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     };
     // Первичная попытка + повторы при transient-ошибках Supabase (statement timeout / 502 / 504).
     // Без retry единичный таймаут блокировал весь цикл и не давал двигать checkpoint.
+    const EVENT_COLUMNS = [
+      'physical_person', 'card_number', 'event_date', 'event_time',
+      'event_at', 'access_point', 'direction', 'employee_id', 'dedup_hash',
+    ];
     const upsertBatchWithRetry = async (batch: typeof inserts): Promise<BatchOutcome> => {
       let attempt = 0;
       let lastError: string | null = null;
       while (attempt <= RETRY_BACKOFF_MS.length) {
-        const { data: insertedRows, error } = await withSupabaseSlot('presence_polling_upsert', async () => {
-          return await supabase
-            .from('skud_events')
-            .upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true })
-            .select('employee_id,event_date');
+        const result = await withSupabaseSlot('presence_polling_upsert', async () => {
+          try {
+            const params: unknown[] = [];
+            const placeholders: string[] = [];
+            for (const row of batch) {
+              const group: string[] = [];
+              for (const col of EVENT_COLUMNS) {
+                params.push((row as Record<string, unknown>)[col]);
+                group.push(`$${params.length}`);
+              }
+              placeholders.push(`(${group.join(', ')})`);
+            }
+            const insertedRows = await query<{ employee_id: number | null; event_date: string | null }>(
+              `INSERT INTO skud_events (${EVENT_COLUMNS.join(', ')})
+               VALUES ${placeholders.join(', ')}
+               ON CONFLICT (dedup_hash, event_date) DO NOTHING
+               RETURNING employee_id, event_date`,
+              params,
+            );
+            return { ok: true as const, rows: insertedRows };
+          } catch (err) {
+            return { ok: false as const, error: err as Error };
+          }
         });
-        if (!error) {
-          const rows = Array.isArray(insertedRows) ? insertedRows : [];
-          return { insertedCount: rows.length, batchError: null };
+        if (result.ok) {
+          return { insertedCount: result.rows.length, batchError: null };
         }
-        lastError = error.message;
-        if (!isTransientDbError(error.message) || attempt === RETRY_BACKOFF_MS.length) break;
+        lastError = result.error.message;
+        if (!isTransientDbError(result.error.message) || attempt === RETRY_BACKOFF_MS.length) break;
         const jitter = Math.floor(Math.random() * 200);
         await wait(RETRY_BACKOFF_MS[attempt] + jitter);
         attempt++;
@@ -810,16 +828,39 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     let totalFailuresInserted = 0;
     let failuresPersistenceError: string | null = null;
     if (failureInserts.length > 0) {
+      const FAILURE_COLUMNS = [
+        'physical_person', 'card_number', 'event_date', 'event_time',
+        'event_at', 'access_point', 'direction', 'employee_id',
+        'failure_type', 'failure_type_id', 'reason', 'raw_event_id', 'dedup_hash',
+      ];
       for (let i = 0; i < failureInserts.length; i += BATCH_SIZE) {
         const batch = failureInserts.slice(i, i + BATCH_SIZE);
-        const { error } = await withSupabaseSlot('presence_polling_upsert_failures', async () => {
-          return await supabase
-            .from('skud_event_failures')
-            .upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true });
+        const result = await withSupabaseSlot('presence_polling_upsert_failures', async () => {
+          try {
+            const params: unknown[] = [];
+            const placeholders: string[] = [];
+            for (const row of batch) {
+              const group: string[] = [];
+              for (const col of FAILURE_COLUMNS) {
+                params.push((row as Record<string, unknown>)[col]);
+                group.push(`$${params.length}`);
+              }
+              placeholders.push(`(${group.join(', ')})`);
+            }
+            await execute(
+              `INSERT INTO skud_event_failures (${FAILURE_COLUMNS.join(', ')})
+               VALUES ${placeholders.join(', ')}
+               ON CONFLICT (dedup_hash, event_date) DO NOTHING`,
+              params,
+            );
+            return { ok: true as const };
+          } catch (err) {
+            return { ok: false as const, error: err as Error };
+          }
         });
-        if (error) {
-          failuresPersistenceError = error.message;
-          console.error(`[presence-polling] failure-upsert error (batch ${i}/${failureInserts.length}):`, error.message);
+        if (!result.ok) {
+          failuresPersistenceError = result.error.message;
+          console.error(`[presence-polling] failure-upsert error (batch ${i}/${failureInserts.length}):`, result.error.message);
           break;
         }
         totalFailuresInserted += batch.length;
@@ -840,12 +881,20 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         let attempt = 0;
         let lastError: string | null = null;
         while (attempt <= RETRY_BACKOFF_MS.length) {
-          const { error } = await withSupabaseSlot('rpc_recalc_summary', async () => {
-            return await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: chunk });
+          const result = await withSupabaseSlot('rpc_recalc_summary', async () => {
+            try {
+              await query(
+                'SELECT public.batch_recalculate_skud_daily_summary($1::jsonb)',
+                [JSON.stringify(chunk)],
+              );
+              return { ok: true as const };
+            } catch (err) {
+              return { ok: false as const, error: err as Error };
+            }
           });
-          if (!error) return null;
-          lastError = error.message;
-          if (!isTransientDbError(error.message) || attempt === RETRY_BACKOFF_MS.length) break;
+          if (result.ok) return null;
+          lastError = result.error.message;
+          if (!isTransientDbError(result.error.message) || attempt === RETRY_BACKOFF_MS.length) break;
           await wait(RETRY_BACKOFF_MS[attempt] + Math.floor(Math.random() * 200));
           attempt++;
         }

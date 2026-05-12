@@ -1,7 +1,7 @@
 /**
  * СКУД: логика дашборда руководителя (GET /api/skud/dashboard-stats).
  */
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import { collectDeptIds, DAY_NAMES, countWorkingDays, getInternalAccessPoints } from './skud-shared.service.js';
 import { resolveSchedulesBulk, resolveSchedulesForPeriod, loadCalendarMonth, getEffectiveLateThreshold, getScheduleForDate, needsSkudCheck } from './schedule.service.js';
@@ -39,9 +39,6 @@ type DashboardTodayEventRow = {
   employee_id: number;
 };
 
-// In-memory кэш по ключу (deptId, period, month).
-// TTL 60с — фронт опрашивает раз в 120с, так что реальный egress падает в разы при
-// множественных пользователях смотрящих один отдел.
 const dashboardCache = new Map<string, { data: IDashboardStatsResult; expiresAt: number }>();
 const DASHBOARD_TTL_MS = 60_000;
 
@@ -49,13 +46,6 @@ export function invalidateDashboardCache(): void {
   dashboardCache.clear();
 }
 
-// Считает часы по той же логике, что и табель: показ «фактических» (hours_worked)
-// или «урезанных по длине смены» (display_hours_worked) определяется параметром
-// showActualHours — он же приходит из system_roles.show_actual_hours и используется
-// /api/timesheet. Учитываются attendance_adjustments.hours_override, замыкание open
-// entry по now() для «сегодня» и cap длиной смены (внутри attendance.service).
-// buildAttendanceEntries работает по одному календарному месяцу, поэтому диапазон
-// режется помесячно.
 async function loadAttendanceHoursMap(params: {
   employees: IAttendanceEmployee[];
   startDate: string;
@@ -127,21 +117,16 @@ async function fetchSummaryPages(
   let offset = 0;
 
   while (true) {
-    const { data, error } = await supabase
-      .from('skud_daily_summary')
-      .select('employee_id, date, first_entry, last_exit, total_hours, is_present')
-      .in('employee_id', employeeIds)
-      .gte('date', startDate)
-      .lte('date', endDate)
-      .order('date', { ascending: true })
-      .order('employee_id', { ascending: true })
-      .range(offset, offset + DASHBOARD_PAGE_SIZE - 1);
+    const page = await query<DashboardSummaryRow>(
+      `SELECT employee_id, date, first_entry, last_exit, total_hours, is_present
+       FROM skud_daily_summary
+       WHERE employee_id = ANY($1::bigint[]) AND date >= $2 AND date <= $3
+       ORDER BY date ASC, employee_id ASC
+       LIMIT ${DASHBOARD_PAGE_SIZE} OFFSET ${offset}`,
+      [employeeIds, startDate, endDate],
+    );
 
-    if (error) throw error;
-
-    const page = (data || []) as DashboardSummaryRow[];
     if (page.length === 0) break;
-
     rows.push(...page);
     if (page.length < DASHBOARD_PAGE_SIZE) break;
     offset += DASHBOARD_PAGE_SIZE;
@@ -161,23 +146,16 @@ async function fetchEntryEventPages(
   let offset = 0;
 
   while (true) {
-    const { data, error } = await supabase
-      .from('skud_events')
-      .select('event_date, event_time, employee_id')
-      .eq('direction', 'entry')
-      .in('employee_id', employeeIds)
-      .gte('event_date', startDate)
-      .lte('event_date', endDate)
-      .order('event_date', { ascending: true })
-      .order('employee_id', { ascending: true })
-      .order('event_time', { ascending: true })
-      .range(offset, offset + DASHBOARD_PAGE_SIZE - 1);
+    const page = await query<DashboardEventRow>(
+      `SELECT event_date, event_time, employee_id FROM skud_events
+       WHERE direction = 'entry' AND employee_id = ANY($1::bigint[])
+         AND event_date >= $2 AND event_date <= $3
+       ORDER BY event_date ASC, employee_id ASC, event_time ASC
+       LIMIT ${DASHBOARD_PAGE_SIZE} OFFSET ${offset}`,
+      [employeeIds, startDate, endDate],
+    );
 
-    if (error) throw error;
-
-    const page = (data || []) as DashboardEventRow[];
     if (page.length === 0) break;
-
     rows.push(...page);
     if (page.length < DASHBOARD_PAGE_SIZE) break;
     offset += DASHBOARD_PAGE_SIZE;
@@ -197,21 +175,15 @@ async function fetchTodayEventPages(
   let offset = 0;
 
   while (true) {
-    const { data, error } = await supabase
-      .from('skud_events')
-      .select('event_time, employee_id')
-      .eq('event_date', date)
-      .eq('direction', direction)
-      .in('employee_id', employeeIds)
-      .order('employee_id', { ascending: true })
-      .order('event_time', { ascending: true })
-      .range(offset, offset + DASHBOARD_PAGE_SIZE - 1);
+    const page = await query<DashboardTodayEventRow>(
+      `SELECT event_time, employee_id FROM skud_events
+       WHERE event_date = $1 AND direction = $2 AND employee_id = ANY($3::bigint[])
+       ORDER BY employee_id ASC, event_time ASC
+       LIMIT ${DASHBOARD_PAGE_SIZE} OFFSET ${offset}`,
+      [date, direction, employeeIds],
+    );
 
-    if (error) throw error;
-
-    const page = (data || []) as DashboardTodayEventRow[];
     if (page.length === 0) break;
-
     rows.push(...page);
     if (page.length < DASHBOARD_PAGE_SIZE) break;
     offset += DASHBOARD_PAGE_SIZE;
@@ -225,9 +197,6 @@ export async function getDashboardStats(
 ): Promise<IDashboardStatsResult> {
   const { departmentId, period, month, showActualHours, force } = params;
 
-  // showActualHours зашит в кэш-ключ: ответы для «факт» и «урезанные» — разные,
-  // и без отдельного бакета пользователи с разными ролями могли бы видеть чужие
-  // цифры в окне TTL=60с.
   const cacheKey = `${departmentId ?? 'all'}|${period ?? 'default'}|${month ?? 'current'}|${showActualHours ? 'actual' : 'capped'}`;
   if (!force) {
     const cached = dashboardCache.get(cacheKey);
@@ -238,18 +207,16 @@ export async function getDashboardStats(
 
   const deptIds = await collectDeptIds(departmentId);
 
-  // Загрузить сотрудников отдела (с org_department_id для графиков)
-  const [empResult, internalPoints] = await Promise.all([
-    supabase
-      .from('employees')
-      .select('id, full_name, org_department_id')
-      .eq('is_archived', false)
-      .eq('employment_status', 'active')
-      .in('org_department_id', deptIds),
+  const [employees, internalPoints] = await Promise.all([
+    query<{ id: number; full_name: string | null; org_department_id: string | null }>(
+      `SELECT id, full_name, org_department_id FROM employees
+       WHERE is_archived = false AND employment_status = 'active'
+         AND org_department_id = ANY($1::uuid[])`,
+      [deptIds],
+    ),
     getInternalAccessPoints(),
   ]);
 
-  const employees = empResult.data;
   if (!employees || employees.length === 0) {
     const empty: IDashboardStatsResult = {
       lateToday: 0, lateYesterday: 0,
@@ -269,24 +236,18 @@ export async function getDashboardStats(
     empNameMap.set(e.id, e.full_name || '');
   }
 
-  // Resolve графики — нужны для пороговых значений и исключения remote
   const empListForSched = employees.map(e => ({ id: e.id as number }));
   const schedulesMap = await resolveSchedulesBulk(empListForSched, formatDateToISO(new Date()));
 
-  // Множество сотрудников, которым не нужен СКУД-контроль сегодня
   const remoteEmpIds = new Set<number>();
   for (const [empId, sched] of schedulesMap) {
     if (!needsSkudCheck(sched, new Date())) remoteEmpIds.add(empId);
   }
 
-  // Фильтрация: офисные сотрудники (для подсчёта опозданий/присутствия)
   const officeEmpIds = empIds.filter(id => !remoteEmpIds.has(id));
 
-  // Даты
   const today = new Date();
   const todayStr = formatDateToISO(today);
-  // Rolling 7-day окно недели: симметричные current/previous — сравнение и усреднения
-  // считаются на одинаковом количестве дней вне зависимости от текущего дня недели.
   const weekEnd = new Date(today);
   const weekStart = new Date(today);
   weekStart.setDate(weekStart.getDate() - 6);
@@ -300,7 +261,6 @@ export async function getDashboardStats(
   const prevWeekStartStr = formatDateToISO(prevWeekStart);
   const prevWeekEndStr = formatDateToISO(prevWeekEnd);
 
-  // Месяц: если передан month=YYYY-MM, используем его; иначе текущий
   let targetMonthYear = today.getFullYear();
   let targetMonthIdx = today.getMonth();
   if (period === 'month' && month && /^\d{4}-\d{2}$/.test(month)) {
@@ -309,9 +269,8 @@ export async function getDashboardStats(
     targetMonthIdx = m - 1;
   }
   const monthStart = new Date(targetMonthYear, targetMonthIdx, 1);
-  const monthEnd = new Date(targetMonthYear, targetMonthIdx + 1, 0); // последний день месяца
+  const monthEnd = new Date(targetMonthYear, targetMonthIdx + 1, 0);
   const monthStartStr = formatDateToISO(monthStart);
-  // Если выбранный месяц — текущий, конец = сегодня; иначе = конец месяца
   const isCurrentMonth = targetMonthYear === today.getFullYear() && targetMonthIdx === today.getMonth();
   const monthEndStr = isCurrentMonth ? todayStr : formatDateToISO(monthEnd);
   const prevMonthStart = new Date(targetMonthYear, targetMonthIdx - 1, 1);
@@ -319,7 +278,6 @@ export async function getDashboardStats(
   const prevMonthStartStr = formatDateToISO(prevMonthStart);
   const prevMonthEndStr = formatDateToISO(prevMonthEnd);
 
-  // Вчера (рабочий день)
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
   while (yesterday.getDay() === 0 || yesterday.getDay() === 6) {
@@ -327,7 +285,6 @@ export async function getDashboardStats(
   }
   const yesterdayStr = formatDateToISO(yesterday);
 
-  // Period-aware диапазоны
   let periodStartStr: string;
   let periodEndStr: string;
   let prevPeriodStartStr: string;
@@ -353,7 +310,6 @@ export async function getDashboardStats(
   const summaryStartDate = period === 'month' ? prevPeriodStartStr : period === 'week' ? prevWeekStartStr : yesterdayStr;
   const summaryEndDate = period === 'month' && !isCurrentMonth ? periodEndStr : todayStr;
 
-  // 4 недели назад (rolling 28 дней) — для графика «средний приход по дням недели» на week-вкладке.
   const fourWeeksAgo = new Date(today);
   fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 27);
   const fourWeeksAgoStr = formatDateToISO(fourWeeksAgo);
@@ -365,7 +321,7 @@ export async function getDashboardStats(
     && arrivalRangeEnd === periodEndStr;
   const periodEventsPromise = shouldFetchPeriodEvents
     ? fetchEntryEventPages(empIds, periodStartStr, periodEndStr)
-    : Promise.resolve([]);
+    : Promise.resolve([] as DashboardEventRow[]);
   const arrivalEventsPromise = canReusePeriodEventsForArrival
     ? periodEventsPromise
     : fetchEntryEventPages(empIds, arrivalRangeStart, arrivalRangeEnd);
@@ -375,18 +331,24 @@ export async function getDashboardStats(
     full_name: (e.full_name as string | null) || null,
   }));
 
-  // Параллельные запросы: daily_summary + 3 типа событий + часы по логике табеля
-  const [summaries, todayEvents, todayExitEvents, recentEventsRes, periodEvents, arrivalEvents, attendanceHoursMap] = await Promise.all([
+  const [summaries, todayEvents, todayExitEvents, recentEventsRaw, periodEvents, arrivalEvents, attendanceHoursMap] = await Promise.all([
     fetchSummaryPages(empIds, summaryStartDate, summaryEndDate),
     fetchTodayEventPages(empIds, todayStr, 'entry'),
     fetchTodayEventPages(empIds, todayStr, 'exit'),
-    supabase
-      .from('skud_events')
-      .select('event_time, employee_id, physical_person, access_point, direction')
-      .eq('event_date', todayStr)
-      .in('employee_id', empIds)
-      .order('event_time', { ascending: false })
-      .limit(50),
+    query<{
+      event_time: string;
+      employee_id: number | null;
+      physical_person: string | null;
+      access_point: string | null;
+      direction: 'entry' | 'exit' | null;
+    }>(
+      `SELECT event_time, employee_id, physical_person, access_point, direction
+       FROM skud_events
+       WHERE event_date = $1 AND employee_id = ANY($2::bigint[])
+       ORDER BY event_time DESC
+       LIMIT 50`,
+      [todayStr, empIds],
+    ),
     periodEventsPromise,
     arrivalEventsPromise,
     loadAttendanceHoursMap({
@@ -398,12 +360,7 @@ export async function getDashboardStats(
     }),
   ]);
 
-  const recentEventsRaw = recentEventsRes.data;
 
-
-  // --- Агрегация ---
-
-  // Хелпер: получить порог опоздания для сотрудника на конкретную дату
   const getLateThresholdFor = (empId: number, dateStr: string): string => {
     const sched = schedulesMap.get(empId);
     if (!sched) return LATE_THRESHOLD_DEFAULT;
@@ -421,7 +378,6 @@ export async function getDashboardStats(
     return `${String(Math.floor(totalMin / 60)).padStart(2, '0')}:${String(totalMin % 60).padStart(2, '0')}:00`;
   };
 
-  // Late today / yesterday
   let lateToday = 0;
   let lateYesterday = 0;
   for (const s of summaries || []) {
@@ -432,11 +388,9 @@ export async function getDashboardStats(
     if (s.date === yesterdayStr && s.first_entry > threshold) lateYesterday++;
   }
 
-  // Period summaries
   const periodSummaries = (summaries || []).filter(s => s.date >= periodStartStr && s.date <= periodEndStr);
   const prevPeriodSummaries = (summaries || []).filter(s => s.date >= prevPeriodStartStr && s.date <= prevPeriodEndStr);
 
-  // Punctuality (только офисные сотрудники)
   const periodWithEntry = periodSummaries.filter(s => s.first_entry && !remoteEmpIds.has(s.employee_id));
   let onTimeCount = 0;
   let slightlyLateCount = 0;
@@ -451,8 +405,6 @@ export async function getDashboardStats(
   const calendarWorkDays = countWorkingDays(periodStartStr, periodEndStr);
   const actualWorkDays = calendarWorkDays || 1;
 
-  // 100% = пришедшие сотрудники, absent не считаем
-  // Для week/month — средняя пунктуальность за все дни периода
   const totalArrived = periodWithEntry.length || 1;
   const punctuality = {
     onTime: Math.round((onTimeCount / totalArrived) * 100),
@@ -461,7 +413,6 @@ export async function getDashboardStats(
     absent: 0,
   };
 
-  // Average arrival by weekday
   const firstEntryMap = new Map<string, string>();
   for (const ev of arrivalEvents || []) {
     const key = `${ev.employee_id}:${ev.event_date}`;
@@ -490,7 +441,6 @@ export async function getDashboardStats(
     return { day: name, avgTime: `${avgH}:${avgM}`, date: '', isToday: period === 'today' && i === todayDowIdx };
   });
 
-  // Risks
   const periodLabel = period === 'today' ? 'сегодня' : period === 'week' ? 'неделю' : 'месяц';
   const lateCountByEmp = new Map<number, number>();
   const earlyLeaveByEmp = new Map<number, number>();
@@ -522,7 +472,6 @@ export async function getDashboardStats(
   }
   risks.sort((a, b) => (a.severity === 'high' ? -1 : 1) - (b.severity === 'high' ? -1 : 1));
 
-  // Period comparison
   const calcWeekMetrics = (weekData: typeof periodSummaries, expectedRecords: number): IDashboardWeekMetrics => {
     const withEntry = weekData.filter(s => s.first_entry && !remoteEmpIds.has(s.employee_id));
     const total = expectedRecords > 0 ? expectedRecords : 1;
@@ -540,10 +489,6 @@ export async function getDashboardStats(
       ? `${String(Math.floor(avgArrivalMin / 60)).padStart(2, '0')}:${String(avgArrivalMin % 60).padStart(2, '0')}`
       : '--:--';
 
-    // Часы берём из карты, посчитанной по логике табеля (showActualHours из роли
-    // определяет actual vs capped_to_schedule): attendance_adjustments.hours_override →
-    // skud_daily_summary → пересчёт по объектам с лимитом длительности смены и
-    // замыканием open entry на now() для «сегодня».
     const hoursArr = weekData
       .map(s => attendanceHoursMap.get(s.employee_id)?.get(s.date) ?? 0)
       .filter(h => h > 0);
@@ -564,7 +509,6 @@ export async function getDashboardStats(
     lastWeek: calcWeekMetrics(prevPeriodSummaries, officeEmpIds.length * prevWorkDays),
   };
 
-  // Top late
   const topLateCountByEmp = new Map<number, number>();
   const avgArrivalByEmp = new Map<number, number>();
   const arrivalCountByEmp = new Map<number, number>();
@@ -600,12 +544,10 @@ export async function getDashboardStats(
       };
     });
 
-  // Period stats
   let periodStats: IDashboardStatsResult['periodStats'] = null;
   if (period === 'week' || period === 'month') {
-    const pWorkDays = actualWorkDays; // календарные рабочие дни (countWorkingDays)
+    const pWorkDays = actualWorkDays;
 
-    // Считаем уникальных сотрудников за каждый день (пришёл до 18:00 = присутствовал)
     const dailyPresent = new Map<string, Set<number>>();
     for (const s of periodSummaries) {
       if (s.first_entry && s.first_entry <= WORK_END && !remoteEmpIds.has(s.employee_id)) {
@@ -644,15 +586,12 @@ export async function getDashboardStats(
     periodStats = { avgPresent, avgAbsent, attendanceRate, lateCount: pLateCount, prevLateCount };
   }
 
-  // Exited today — уникальные сотрудники, у которых зафиксирован выход
   const exitedEmployees = new Set((todayExitEvents || []).map(e => e.employee_id));
   const earlyLeaveToday = exitedEmployees.size;
 
-  // Today entries/exits count
   const todayEntriesCount = (todayEvents || []).length;
   const todayExitsCount = (todayExitEvents || []).length;
 
-  // Recent events
   const recentEvents = (recentEventsRaw || []).map(ev => ({
     time: ev.event_time ? ev.event_time.slice(0, 5) : '',
     name: ev.employee_id ? (empNameMap.get(ev.employee_id) || ev.physical_person || 'Неизвестный') : (ev.physical_person || 'Неизвестный'),

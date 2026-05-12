@@ -1,7 +1,7 @@
 /**
  * СКУД: аналитика дисциплины (GET /api/skud/discipline).
  */
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import type { IDisciplineParams, IDisciplineResult, IDisciplineViolation, IDailySummaryRow } from '../types/skud.types.js';
 import { resolveSchedulesBulk, getEffectiveLateThreshold, getScheduleForDate, needsSkudCheck } from './schedule.service.js';
@@ -32,8 +32,7 @@ export async function getDisciplineViolations(
   const normalizedStartMonth = startMonth <= endMonth ? startMonth : endMonth;
   const normalizedEndMonth = startMonth <= endMonth ? endMonth : startMonth;
 
-  // --- Параллельные запросы ---
-  // Запрашиваем помесячно, чтобы не упереться в Supabase max_rows (10000)
+  // Запрашиваем помесячно
   const fetchSummaryPages = async (): Promise<IDailySummaryRow[]> => {
     const PAGE_SIZE = 1000;
     const rows: IDailySummaryRow[] = [];
@@ -46,19 +45,16 @@ export async function getDisciplineViolations(
       let off = 0;
 
       while (true) {
-        let q = supabase
-          .from('skud_daily_summary')
-          .select('employee_id, date, first_entry, last_exit, total_hours, is_present')
-          .eq('is_present', true)
-          .gte('date', monthStart)
-          .lte('date', monthEnd)
-          .or('first_entry.gt.09:00:00,total_hours.lt.8')
-          .order('date', { ascending: true })
-          .range(off, off + PAGE_SIZE - 1);
-        const { data: page, error } = await q;
-        if (error) throw error;
+        const sql = `SELECT employee_id, date, first_entry, last_exit, total_hours, is_present
+          FROM skud_daily_summary
+          WHERE is_present = true
+            AND date >= $1 AND date <= $2
+            AND (first_entry > $3 OR total_hours < $4)
+          ORDER BY date ASC
+          LIMIT ${PAGE_SIZE} OFFSET ${off}`;
+        const page = await query<IDailySummaryRow>(sql, [monthStart, monthEnd, '09:00:00', 8]);
         if (!page || page.length === 0) break;
-        rows.push(...(page as IDailySummaryRow[]));
+        rows.push(...page);
         if (page.length < PAGE_SIZE) break;
         off += PAGE_SIZE;
       }
@@ -69,36 +65,40 @@ export async function getDisciplineViolations(
     return rows;
   };
 
-  const empQuery = supabase
-    .from('employees')
-    .select('id, full_name, position_id, org_department_id')
-    .eq('is_archived', false)
-    .eq('employment_status', 'active');
+  const empPromise = query<{
+    id: number;
+    full_name: string | null;
+    position_id: string | null;
+    org_department_id: string | null;
+  }>(
+    `SELECT id, full_name, position_id, org_department_id FROM employees
+     WHERE is_archived = false AND employment_status = 'active'`,
+  );
 
-  const deptQuery = supabase.from('org_departments').select('id, name');
+  const deptPromise = query<{ id: string; name: string }>(
+    'SELECT id, name FROM org_departments',
+  );
 
-  const [empResult, deptResult, allSummaryRows] = await Promise.all([
-    empQuery,
-    deptQuery,
+  const [employees, departments, allSummaryRows] = await Promise.all([
+    empPromise,
+    deptPromise,
     fetchSummaryPages(),
   ]);
-
-  const employees = empResult.data;
-  const departments = deptResult.data;
 
   if (!employees || employees.length === 0) {
     return { violations: [], employees: {}, departments: {} };
   }
 
-  // Фильтрация summary по активным сотрудникам
   const empIdSet = new Set(employees.map(e => e.id));
   const summaries = allSummaryRows.filter(s => empIdSet.has(s.employee_id));
 
-  // Позиции
-  const posIdSet = new Set(employees.map(e => e.position_id).filter(Boolean));
-  const posMap = new Map<number, string>();
+  const posIdSet = new Set(employees.map(e => e.position_id).filter((v): v is string => !!v));
+  const posMap = new Map<string, string>();
   if (posIdSet.size > 0) {
-    const { data: positions } = await supabase.from('positions').select('id, name').in('id', [...posIdSet]);
+    const positions = await query<{ id: string; name: string }>(
+      'SELECT id, name FROM positions WHERE id = ANY($1::uuid[])',
+      [[...posIdSet]],
+    );
     for (const p of positions || []) posMap.set(p.id, p.name);
   }
 
@@ -116,7 +116,6 @@ export async function getDisciplineViolations(
     deptMap[d.id] = d.name;
   }
 
-  // Resolve графики для всех сотрудников
   const empListForSched = employees.map(e => ({ id: e.id as number }));
   const schedulesMap = await resolveSchedulesBulk(empListForSched, normalizedStartMonth + '-01');
 
@@ -127,16 +126,13 @@ export async function getDisciplineViolations(
     if (!s.is_present) continue;
     const isToday = s.date === todayISO;
 
-    // Получаем график сотрудника
     const sched = schedulesMap.get(s.employee_id);
 
-    // Пропускаем дисциплинарные проверки для remote и hybrid-remote дней
     if (sched) {
       const dateObj = new Date(s.date + 'T00:00:00');
       if (!needsSkudCheck(sched, dateObj)) continue;
     }
 
-    // Пороги с учётом графика (day_overrides)
     const dateObj2 = new Date(s.date + 'T00:00:00');
     const dayParams = sched ? getScheduleForDate(sched, dateObj2) : null;
     const lateThreshold = sched ? getEffectiveLateThreshold(sched, dateObj2) : LATE_THRESHOLD_DEFAULT;
@@ -161,7 +157,6 @@ export async function getDisciplineViolations(
       });
     }
 
-    // Span (от первого входа до последнего выхода)
     let spanHours: number | null = null;
     if (s.first_entry && s.last_exit) {
       const [eh, em] = s.first_entry.split(':').map(Number);
@@ -169,7 +164,7 @@ export async function getDisciplineViolations(
       spanHours = (lh * 60 + lm - eh * 60 - em) / 60;
     }
 
-    // 2. Недоработка (не для сегодня — день ещё не завершён)
+    // 2. Недоработка
     if (!isToday && s.total_hours !== null && s.total_hours < workPresenceHours) {
       const diffMin = Math.round((workPresenceHours - s.total_hours) * 60);
       violations.push({
@@ -183,7 +178,7 @@ export async function getDisciplineViolations(
       });
     }
 
-    // 3. Ранний уход (не для сегодня — день ещё не завершён)
+    // 3. Ранний уход
     if (!isToday && s.first_entry && s.last_exit) {
       const [eh, em] = s.first_entry.split(':').map(Number);
       const expectedLeave = eh * 60 + em + workNormHours * 60;
@@ -204,7 +199,7 @@ export async function getDisciplineViolations(
       }
     }
 
-    // 4. Отсутствие >3ч (не для сегодня — день ещё не завершён)
+    // 4. Отсутствие >3ч
     if (!isToday && s.total_hours !== null && spanHours !== null) {
       const absenceHours = spanHours - s.total_hours;
       if (absenceHours > ABSENCE_THRESHOLD_HOURS) {
@@ -222,7 +217,6 @@ export async function getDisciplineViolations(
     }
   }
 
-  // Сортировка: новые даты сверху
   violations.sort((a, b) => b.date.localeCompare(a.date));
 
   return { violations, employees: empMap, departments: deptMap };

@@ -1,7 +1,7 @@
 /**
  * СКУД: логика присутствия сотрудников (GET /api/skud/presence).
  */
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import type { IPresenceParams, IPresenceItem } from '../types/skud.types.js';
 import { getAllDepartmentsTree, getInternalAccessPoints } from './skud-shared.service.js';
@@ -24,10 +24,8 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
     return cached.data;
   }
 
-  // Загружаем все отделы (из кэша)
   const allDepts = await getAllDepartmentsTree();
 
-  // Собираем ID отдела + все дочерние
   let deptIds: string[] | null = null;
   if (departmentId) {
     deptIds = [departmentId];
@@ -43,19 +41,23 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
     }
   }
 
-  // Загружаем сотрудников
-  let empQuery = supabase
-    .from('employees')
-    .select('id, full_name, org_department_id, position_id')
-    .eq('is_archived', false)
-    .eq('employment_status', 'active');
-
-  // Если есть departmentId — фильтруем по отделам (org_department_id)
+  const empConditions: string[] = ['is_archived = false', "employment_status = 'active'"];
+  const empParams: unknown[] = [];
   if (deptIds) {
-    empQuery = empQuery.in('org_department_id', deptIds);
+    empParams.push(deptIds);
+    empConditions.push(`org_department_id = ANY($${empParams.length}::uuid[])`);
   }
+  const employees = await query<{
+    id: number;
+    full_name: string | null;
+    org_department_id: string | null;
+    position_id: string | null;
+  }>(
+    `SELECT id, full_name, org_department_id, position_id FROM employees
+     WHERE ${empConditions.join(' AND ')}`,
+    empParams,
+  );
 
-  const { data: employees } = await empQuery;
   if (!employees || employees.length === 0) {
     presenceCache.set(cacheKey, { data: [], expiresAt: Date.now() + PRESENCE_TTL_MS });
     return [];
@@ -63,40 +65,48 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
 
   const empIds = employees.map(e => e.id);
 
-  // Загружаем справочники
-  const deptIdSet = new Set(employees.map(e => e.org_department_id).filter(Boolean));
-  const posIdSet = new Set(employees.map(e => e.position_id).filter(Boolean));
+  const deptIdSet = new Set(employees.map(e => e.org_department_id).filter((v): v is string => !!v));
+  const posIdSet = new Set(employees.map(e => e.position_id).filter((v): v is string => !!v));
 
-  const [deptResult, posResult] = await Promise.all([
+  const [deptRows, posRows] = await Promise.all([
     deptIdSet.size > 0
-      ? supabase.from('org_departments').select('id, name').in('id', [...deptIdSet])
-      : { data: [] },
+      ? query<{ id: string; name: string | null }>(
+          'SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])',
+          [[...deptIdSet]],
+        )
+      : Promise.resolve([] as { id: string; name: string | null }[]),
     posIdSet.size > 0
-      ? supabase.from('positions').select('id, name').in('id', [...posIdSet])
-      : { data: [] },
+      ? query<{ id: string; name: string | null }>(
+          'SELECT id, name FROM positions WHERE id = ANY($1::uuid[])',
+          [[...posIdSet]],
+        )
+      : Promise.resolve([] as { id: string; name: string | null }[]),
   ]);
 
   const deptMap = new Map<string, string>();
-  for (const d of deptResult.data || []) {
+  for (const d of deptRows) {
     deptMap.set(d.id, d.name || '');
   }
   const posMap = new Map<string, string>();
-  for (const p of posResult.data || []) {
+  for (const p of posRows) {
     posMap.set(p.id, p.name || '');
   }
 
-  // Загружаем все внутренние точки доступа (из кэша)
   const orgInternalPoints = await getInternalAccessPoints();
 
   const today = formatDateToISO(new Date());
 
-  // Запрос событий по employee_id (backfill выполняется отдельно в polling-цикле)
-  const { data: eventsByEmpId } = await supabase
-    .from('skud_events')
-    .select('employee_id, event_time, direction, access_point')
-    .eq('event_date', today)
-    .in('employee_id', empIds)
-    .order('event_time', { ascending: false });
+  const eventsByEmpId = await query<{
+    employee_id: number | null;
+    event_time: string;
+    direction: string | null;
+    access_point: string | null;
+  }>(
+    `SELECT employee_id, event_time, direction, access_point FROM skud_events
+     WHERE event_date = $1 AND employee_id = ANY($2::bigint[])
+     ORDER BY event_time DESC`,
+    [today, empIds],
+  );
 
   const latestEvent = new Map<number, { event_time: string; direction: string | null; access_point: string | null }>();
   const allExternalEvents = new Map<number, Array<{ event_time: string; direction: string | null }>>();
@@ -119,22 +129,22 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
     events.reverse();
   }
 
-  // Загружаем daily summary за сегодня
-  const { data: dailySummaries } = await supabase
-    .from('skud_daily_summary')
-    .select('employee_id, first_entry, total_hours')
-    .eq('date', today)
-    .in('employee_id', empIds);
+  const dailySummaries = await query<{
+    employee_id: number;
+    first_entry: string | null;
+    total_hours: number | null;
+  }>(
+    `SELECT employee_id, first_entry, total_hours FROM skud_daily_summary
+     WHERE date = $1 AND employee_id = ANY($2::bigint[])`,
+    [today, empIds],
+  );
 
-  // Загружаем пунктуальность за текущий месяц
   const monthStart = today.slice(0, 7) + '-01';
-  const { data: monthSummaries } = await supabase
-    .from('skud_daily_summary')
-    .select('employee_id, first_entry')
-    .gte('date', monthStart)
-    .lte('date', today)
-    .eq('is_present', true)
-    .in('employee_id', empIds);
+  const monthSummaries = await query<{ employee_id: number; first_entry: string | null }>(
+    `SELECT employee_id, first_entry FROM skud_daily_summary
+     WHERE date >= $1 AND date <= $2 AND is_present = true AND employee_id = ANY($3::bigint[])`,
+    [monthStart, today, empIds],
+  );
 
   const punctualityMap = new Map<number, number>();
   if (monthSummaries && monthSummaries.length > 0) {
@@ -155,7 +165,6 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
     summaryMap.set(s.employee_id, { first_entry: s.first_entry, total_hours: s.total_hours });
   }
 
-  // Хелпер: подсчёт выходов и времени вне офиса
   const computeExitMetrics = (events: Array<{ event_time: string; direction: string | null }>) => {
     let exitCount = 0;
     let timeOutsideMs = 0;
@@ -179,7 +188,6 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
     return { exit_count: exitCount, time_outside_minutes: Math.round(timeOutsideMs / 60_000) };
   };
 
-  // Формируем ответ
   const result: IPresenceItem[] = employees.map(emp => {
     const last = latestEvent.get(emp.id);
     let status: 'online' | 'offline' | 'unknown' = 'unknown';
@@ -194,11 +202,9 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
     const empEvents = allExternalEvents.get(emp.id) || [];
     const { exit_count, time_outside_minutes } = computeExitMetrics(empEvents);
 
-    // first_entry: приоритет — из событий напрямую, fallback на summary
     const firstEntryEvent = empEvents.find(e => e.direction === 'entry');
     const firstEntry = firstEntryEvent?.event_time || summary?.first_entry || null;
 
-    // Считаем total_hours из пар entry/exit событий
     let totalHours = summary?.total_hours || null;
     if (!totalHours || totalHours === 0) {
       let pairMs = 0;
@@ -216,7 +222,6 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
           entryTime = null;
         }
       }
-      // Если сотрудник на месте — открытая пара до сейчас
       if (entryTime !== null && status === 'online') {
         const msk = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
         const nowMs = (msk.getHours() * 3600 + msk.getMinutes() * 60 + msk.getSeconds()) * 1000;
@@ -243,7 +248,6 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
     };
   });
 
-  // Сортировка: online первыми, затем offline, unknown последние
   const statusOrder: Record<string, number> = { online: 0, offline: 1, unknown: 2 };
   result.sort((a, b) => statusOrder[a.status] - statusOrder[b.status]);
 

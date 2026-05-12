@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { AxiosError } from 'axios';
-import { supabase } from '../config/database.js';
+import { queryOne } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { sigurService } from '../services/sigur.service.js';
 import { resolveField } from '../services/sigur-sync-shared.js';
@@ -124,12 +124,21 @@ const flattenCardForDebug = (raw: Record<string, unknown>): Record<string, strin
 };
 
 const fetchEmployeeBySigurId = async (sigurEmployeeId: number): Promise<IEmployeeBrief | null> => {
-  const { data, error } = await supabase
-    .from('employees')
-    .select('id, full_name, position_id, org_department_id, tab_number, sigur_employee_id, is_archived')
-    .eq('sigur_employee_id', sigurEmployeeId)
-    .maybeSingle();
-  if (error) throw error;
+  const data = await queryOne<{
+    id: number;
+    full_name: string | null;
+    position_id: string | null;
+    org_department_id: string | null;
+    tab_number: string | null;
+    sigur_employee_id: number | null;
+    is_archived: boolean;
+  }>(
+    `SELECT id, full_name, position_id, org_department_id, tab_number, sigur_employee_id, is_archived
+     FROM employees
+     WHERE sigur_employee_id = $1
+     LIMIT 1`,
+    [sigurEmployeeId],
+  );
   if (!data) return null;
   const cache = await loadStructureCache();
   return {
@@ -305,12 +314,18 @@ export const sigurCardReaderController = {
       const expirationDate = body.expirationDate;
       if (!(await ensureSigurReady(res))) return;
 
-      const { data: emp, error: empErr } = await supabase
-        .from('employees')
-        .select('id, full_name, sigur_employee_id, is_archived')
-        .eq('id', fotEmployeeId)
-        .maybeSingle();
-      if (empErr) throw empErr;
+      const emp = await queryOne<{
+        id: number;
+        full_name: string | null;
+        sigur_employee_id: number | null;
+        is_archived: boolean;
+      }>(
+        `SELECT id, full_name, sigur_employee_id, is_archived
+         FROM employees
+         WHERE id = $1
+         LIMIT 1`,
+        [fotEmployeeId],
+      );
       if (!emp) {
         res.status(404).json({ success: false, error: 'Сотрудник не найден' });
         return;

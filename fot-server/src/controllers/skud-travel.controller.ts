@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import { supabase } from '../config/database.js';
+import { queryOne } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import {
   approveTravelSegment as approveTravelSegmentService,
@@ -101,12 +101,16 @@ async function ensureSegmentDepartmentAccess(
 ): Promise<boolean> {
   const accessible = await resolveAccessibleDepartmentIds(req);
   if (accessible === 'all') return true;
-  const { data, error } = await supabase
-    .from('employees')
-    .select('org_department_id')
-    .eq('id', employeeId)
-    .maybeSingle();
-  if (error || !data) return false;
+  let data: { org_department_id: string | null } | null;
+  try {
+    data = await queryOne<{ org_department_id: string | null }>(
+      'SELECT org_department_id FROM employees WHERE id = $1',
+      [employeeId],
+    );
+  } catch {
+    return false;
+  }
+  if (!data) return false;
   const deptId = data.org_department_id ? String(data.org_department_id) : null;
   return deptId !== null && accessible.includes(deptId);
 }

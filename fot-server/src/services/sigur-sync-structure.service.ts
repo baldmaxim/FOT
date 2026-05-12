@@ -1,5 +1,5 @@
 import { sigurService } from './sigur.service.js';
-import { supabase } from '../config/database.js';
+import { query, queryOne, execute } from '../config/postgres.js';
 import {
   expandDepartmentIdsToAncestors,
   getDepartmentsRaw,
@@ -80,11 +80,11 @@ export async function syncDepartmentsLogic(
   const currentSigurDepartmentIds = new Set<number>(departments.map(dept => dept.id));
   const ROOT_DEPT_NAME = 'Объект';
 
-  const { data: existingDepts } = await supabase
-    .from('org_departments')
-    .select('id, sigur_department_id, name');
+  const existingDepts = await query<IExistingDepartmentRow>(
+    'SELECT id, sigur_department_id, name FROM org_departments',
+  );
 
-  const typedExistingDepts = (existingDepts || []) as IExistingDepartmentRow[];
+  const typedExistingDepts = existingDepts;
 
   const sigurIdToDbId = new Map<number, string>();
   for (const d of typedExistingDepts) {
@@ -114,22 +114,22 @@ export async function syncDepartmentsLogic(
   if (existingRoot) {
     rootDeptId = existingRoot.id;
   } else {
-    const { data: createdRoot, error: rootError } = await supabase
-      .from('org_departments')
-      .insert({
-        name: ROOT_DEPT_NAME,
-        parent_id: null,
-        kind: 'object',
-      })
-      .select('id')
-      .single();
-
-    if (rootError) {
-      errors.push(`create root «${ROOT_DEPT_NAME}»: ${rootError.message}`);
-    } else {
-      rootDeptId = createdRoot.id;
-      imported++;
-      console.log(`[syncDepartments] created root department «${ROOT_DEPT_NAME}» id=${rootDeptId}`);
+    try {
+      const createdRoot = await queryOne<{ id: string }>(
+        `INSERT INTO org_departments (name, parent_id, kind)
+         VALUES ($1, NULL, 'object')
+         RETURNING id`,
+        [ROOT_DEPT_NAME],
+      );
+      if (createdRoot) {
+        rootDeptId = createdRoot.id;
+        imported++;
+        console.log(`[syncDepartments] created root department «${ROOT_DEPT_NAME}» id=${rootDeptId}`);
+      } else {
+        errors.push(`create root «${ROOT_DEPT_NAME}»: no rows returned`);
+      }
+    } catch (rootError) {
+      errors.push(`create root «${ROOT_DEPT_NAME}»: ${(rootError as Error).message}`);
     }
   }
 
@@ -186,15 +186,11 @@ export async function syncDepartmentsLogic(
 
     if (sigurIdToDbId.has(dept.id)) {
       const dbId = sigurIdToDbId.get(dept.id)!;
-      const { error: updateError } = await supabase
-        .from('org_departments')
-        .update({ name: dept.name })
-        .eq('id', dbId);
-
-      if (updateError) {
-        errors.push(`update ${dept.name}: ${updateError.message}`);
-      } else {
+      try {
+        await execute('UPDATE org_departments SET name = $1 WHERE id = $2', [dept.name, dbId]);
         updated++;
+      } catch (updateError) {
+        errors.push(`update ${dept.name}: ${(updateError as Error).message}`);
       }
       sigurToDbMap.set(dept.id, dbId);
     } else {
@@ -203,40 +199,34 @@ export async function syncDepartmentsLogic(
 
       if (reusableCandidates.length === 1) {
         const reusableDepartment = reusableCandidates[0];
-        const { error: reuseError } = await supabase
-          .from('org_departments')
-          .update({
-            name: dept.name,
-            sigur_department_id: dept.id,
-          })
-          .eq('id', reusableDepartment.id);
-
-        if (reuseError) {
-          errors.push(`rebind ${dept.name}: ${reuseError.message}`);
-        } else {
+        try {
+          await execute(
+            'UPDATE org_departments SET name = $1, sigur_department_id = $2 WHERE id = $3',
+            [dept.name, dept.id, reusableDepartment.id],
+          );
           updated++;
           sigurIdToDbId.set(dept.id, reusableDepartment.id);
           sigurToDbMap.set(dept.id, reusableDepartment.id);
           reusableDepartmentsByName.delete(reusableKey);
+        } catch (reuseError) {
+          errors.push(`rebind ${dept.name}: ${(reuseError as Error).message}`);
         }
         continue;
       }
 
-      const { data: created, error: insertError } = await supabase
-        .from('org_departments')
-        .insert({
-          name: dept.name,
-          sigur_department_id: dept.id,
-          kind: detectDepartmentKindFromName(dept.name),
-        })
-        .select('id')
-        .single();
-
-      if (insertError) {
-        errors.push(`insert ${dept.name}: ${insertError.message}`);
-      } else {
-        imported++;
-        sigurToDbMap.set(dept.id, created.id);
+      try {
+        const created = await queryOne<{ id: string }>(
+          `INSERT INTO org_departments (name, sigur_department_id, kind)
+           VALUES ($1, $2, $3)
+           RETURNING id`,
+          [dept.name, dept.id, detectDepartmentKindFromName(dept.name)],
+        );
+        if (created) {
+          imported++;
+          sigurToDbMap.set(dept.id, created.id);
+        }
+      } catch (insertError) {
+        errors.push(`insert ${dept.name}: ${(insertError as Error).message}`);
       }
     }
   }
@@ -257,12 +247,12 @@ export async function syncDepartmentsLogic(
       parentDbId = sigurToDbMap.get(dept.parentId) || null;
     }
 
-    const { error: linkError } = await supabase
-      .from('org_departments')
-      .update({ parent_id: parentDbId })
-      .eq('id', dbId);
-
-    if (!linkError) parentLinksSet++;
+    try {
+      await execute('UPDATE org_departments SET parent_id = $1 WHERE id = $2', [parentDbId, dbId]);
+      parentLinksSet++;
+    } catch {
+      // игнорируем ошибки связывания parent_id — суммируем только успешные
+    }
   }
 
   console.log(`[syncDepartments] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${filtered} filtered, ${parentLinksSet} parent links`);

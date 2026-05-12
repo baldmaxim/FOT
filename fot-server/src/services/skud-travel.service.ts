@@ -1,8 +1,8 @@
-import { supabase } from '../config/database.js';
+import { query, queryOne, execute } from '../config/postgres.js';
 import { getInternalAccessPoints } from './skud-shared.service.js';
 import { settingsService } from './settings.service.js';
 import { createCache } from '../utils/cache.js';
-import { SKUD_OBJECT_MAPS_BUCKET, supabaseStorageService } from './supabase-storage.service.js';
+import { SKUD_OBJECT_MAPS_BUCKET, objectMapStorageService } from './object-map-storage.service.js';
 
 const BATCH_SIZE = 500;
 const TRAVEL_SEGMENTS_CACHE_TTL_MS = 60_000;
@@ -290,16 +290,14 @@ const isMissingTableError = (error: unknown): boolean => {
 export const formatTravelFeatureError = (error: unknown): Error => {
   if (isMissingTravelObjectMapsSchemaError(error)) {
     return new Error(
-      'Карты объектов СКУД не видны через Supabase API. '
-      + 'Примените миграцию 026_skud_object_maps.sql в текущую базу. '
-      + 'Если миграция уже применена, обновите schema cache Supabase или перезапустите API.',
+      'Карты объектов СКУД не видны через API. '
+      + 'Примените миграцию 026_skud_object_maps.sql в текущую базу.',
     );
   }
   if (isMissingTableError(error)) {
     return new Error(
-      'Таблицы передвижений не видны через Supabase API. '
-      + 'Примените миграцию 013_skud_travel_segments.sql в текущую базу. '
-      + 'Если миграция уже применена, обновите schema cache Supabase или перезапустите API.',
+      'Таблицы передвижений не видны через API. '
+      + 'Примените миграцию 013_skud_travel_segments.sql в текущую базу.',
     );
   }
   if (error instanceof Error) return error;
@@ -442,76 +440,56 @@ export const invalidateTravelSegmentsCache = (): void => {
   travelSegmentsInFlight.clear();
 };
 
-export const fetchTravelObjectsRaw = async (): Promise<ITravelObjectRow[]> => {
-  const { data, error } = await supabase
-    .from('skud_objects')
-    .select([
-      'id',
-      'name',
-      'is_active',
-      'map_storage_path',
-      'map_file_name',
-      'map_mime_type',
-      'map_file_size',
-      'map_uploaded_at',
-      'created_at',
-      'updated_at',
-    ].join(', '))
-    .order('name');
+const TRAVEL_OBJECT_COLUMNS = 'id, name, is_active, map_storage_path, map_file_name, map_mime_type, map_file_size, map_uploaded_at, created_at, updated_at';
+const TRAVEL_SEGMENT_COLUMNS = 'id, employee_id, work_date, from_object_id, to_object_id, from_access_point_name, to_access_point_name, exit_time, entry_time, actual_minutes, norm_minutes, max_credit_minutes, credited_minutes, delay_minutes, status, approved_by, approved_at, approval_comment, created_at, updated_at';
 
-  if (error) throw formatTravelFeatureError(error);
-  return (data || []) as unknown as ITravelObjectRow[];
+export const fetchTravelObjectsRaw = async (): Promise<ITravelObjectRow[]> => {
+  try {
+    return await query<ITravelObjectRow>(
+      `SELECT ${TRAVEL_OBJECT_COLUMNS} FROM skud_objects ORDER BY name`,
+    );
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 };
 
 const fetchTravelMappingsRaw = async (): Promise<ITravelObjectMappingRow[]> => {
-  const { data, error } = await supabase
-    .from('skud_object_access_points')
-    .select('object_id, access_point_name');
-
-  if (error) throw formatTravelFeatureError(error);
-  return (data || []) as ITravelObjectMappingRow[];
+  try {
+    return await query<ITravelObjectMappingRow>(
+      'SELECT object_id, access_point_name FROM skud_object_access_points',
+    );
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 };
 
 const fetchTravelObjectByIdRaw = async (objectId: string): Promise<ITravelObjectRow | null> => {
-  const { data, error } = await supabase
-    .from('skud_objects')
-    .select([
-      'id',
-      'name',
-      'is_active',
-      'map_storage_path',
-      'map_file_name',
-      'map_mime_type',
-      'map_file_size',
-      'map_uploaded_at',
-      'created_at',
-      'updated_at',
-    ].join(', '))
-    .eq('id', objectId)
-    .single();
-
-  if (error) {
-    const message = error.message.toLowerCase();
-    if (message.includes('0 rows') || message.includes('no rows')) return null;
+  try {
+    return await queryOne<ITravelObjectRow>(
+      `SELECT ${TRAVEL_OBJECT_COLUMNS} FROM skud_objects WHERE id = $1`,
+      [objectId],
+    );
+  } catch (error) {
     throw formatTravelFeatureError(error);
   }
-
-  return data as unknown as ITravelObjectRow;
 };
 
 const fetchTravelObjectMapPointsRaw = async (objectId?: string): Promise<ITravelObjectMapPointRow[]> => {
-  let query = supabase
-    .from('skud_object_map_points')
-    .select('object_id, access_point_name, x_ratio, y_ratio, created_at, updated_at');
-
-  if (objectId) {
-    query = query.eq('object_id', objectId);
+  try {
+    if (objectId) {
+      return await query<ITravelObjectMapPointRow>(
+        `SELECT object_id, access_point_name, x_ratio, y_ratio, created_at, updated_at
+         FROM skud_object_map_points WHERE object_id = $1`,
+        [objectId],
+      );
+    }
+    return await query<ITravelObjectMapPointRow>(
+      `SELECT object_id, access_point_name, x_ratio, y_ratio, created_at, updated_at
+       FROM skud_object_map_points`,
+    );
+  } catch (error) {
+    throw formatTravelFeatureError(error);
   }
-
-  const { data, error } = await query;
-
-  if (error) throw formatTravelFeatureError(error);
-  return (data || []) as ITravelObjectMapPointRow[];
 };
 
 const fetchEmployeeScope = async ({
@@ -521,34 +499,35 @@ const fetchEmployeeScope = async ({
   departmentId?: string | null;
   employeeId?: number | null;
 }): Promise<ITravelEmployeeRow[]> => {
-  let query = supabase
-    .from('employees')
-    .select('id, full_name, org_department_id, position_id')
-    .eq('employment_status', 'active')
-    .eq('is_archived', false)
-    .order('full_name');
-
-  if (departmentId) query = query.eq('org_department_id', departmentId);
-  if (employeeId) query = query.eq('id', employeeId);
-
-  const { data, error } = await query;
-  if (error) throw error;
-  return (data || []) as ITravelEmployeeRow[];
+  const conditions: string[] = ["employment_status = 'active'", 'is_archived = false'];
+  const params: unknown[] = [];
+  if (departmentId) {
+    params.push(departmentId);
+    conditions.push(`org_department_id = $${params.length}`);
+  }
+  if (employeeId) {
+    params.push(employeeId);
+    conditions.push(`id = $${params.length}`);
+  }
+  return query<ITravelEmployeeRow>(
+    `SELECT id, full_name, org_department_id, position_id FROM employees
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY full_name`,
+    params,
+  );
 };
 
 const fetchDepartmentsMap = async (departmentIds: string[]): Promise<Map<string, string>> => {
   const uniqueIds = [...new Set(departmentIds.filter(Boolean))];
   if (uniqueIds.length === 0) return new Map();
 
-  const { data, error } = await supabase
-    .from('org_departments')
-    .select('id, name')
-    .in('id', uniqueIds);
-
-  if (error) throw error;
+  const data = await query<ITravelDepartmentRow>(
+    'SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])',
+    [uniqueIds],
+  );
 
   const result = new Map<string, string>();
-  for (const row of (data || []) as ITravelDepartmentRow[]) {
+  for (const row of data || []) {
     result.set(row.id, row.name);
   }
   return result;
@@ -556,26 +535,31 @@ const fetchDepartmentsMap = async (departmentIds: string[]): Promise<Map<string,
 
 const fetchEmployeeRowsByIds = async (employeeIds: number[]): Promise<ITravelEmployeeRow[]> => {
   if (employeeIds.length === 0) return [];
-  const { data, error } = await supabase
-    .from('employees')
-    .select('id, full_name, org_department_id, position_id')
-    .in('id', employeeIds);
-  if (error) throw formatTravelFeatureError(error);
-  return (data || []) as ITravelEmployeeRow[];
+  try {
+    return await query<ITravelEmployeeRow>(
+      'SELECT id, full_name, org_department_id, position_id FROM employees WHERE id = ANY($1::bigint[])',
+      [employeeIds],
+    );
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 };
 
 const fetchApproverNames = async (userIds: string[]): Promise<Map<string, string>> => {
   if (userIds.length === 0) return new Map();
-  const { data, error } = await supabase
-    .from('user_profiles')
-    .select('id, full_name')
-    .in('id', userIds);
-  if (error) throw formatTravelFeatureError(error);
-  const result = new Map<string, string>();
-  for (const row of (data || []) as { id: string; full_name: string | null }[]) {
-    if (row.full_name) result.set(row.id, row.full_name);
+  try {
+    const data = await query<{ id: string; full_name: string | null }>(
+      'SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])',
+      [userIds],
+    );
+    const result = new Map<string, string>();
+    for (const row of data || []) {
+      if (row.full_name) result.set(row.id, row.full_name);
+    }
+    return result;
+  } catch (error) {
+    throw formatTravelFeatureError(error);
   }
-  return result;
 };
 
 const fetchEventsForEmployees = async ({
@@ -588,18 +572,13 @@ const fetchEventsForEmployees = async ({
   const events: ITravelEventRow[] = [];
   for (let index = 0; index < employeeIds.length; index += BATCH_SIZE) {
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
-    const { data, error } = await supabase
-      .from('skud_events')
-      .select('employee_id, event_date, event_time, access_point, direction')
-      .in('employee_id', batch)
-      .gte('event_date', startDate)
-      .lte('event_date', endDate)
-      .order('employee_id', { ascending: true })
-      .order('event_date', { ascending: true })
-      .order('event_time', { ascending: true });
-
-    if (error) throw error;
-    events.push(...((data || []) as ITravelEventRow[]));
+    const data = await query<ITravelEventRow>(
+      `SELECT employee_id, event_date, event_time, access_point, direction FROM skud_events
+       WHERE employee_id = ANY($1::bigint[]) AND event_date >= $2 AND event_date <= $3
+       ORDER BY employee_id ASC, event_date ASC, event_time ASC`,
+      [batch, startDate, endDate],
+    );
+    events.push(...data);
   }
 
   return events;
@@ -616,45 +595,27 @@ const fetchStoredTravelSegments = async ({
   const segments: ITravelSegmentRow[] = [];
   for (let index = 0; index < employeeIds.length; index += BATCH_SIZE) {
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
-    let query = supabase
-      .from('skud_travel_segments')
-      .select([
-        'id',
-        'employee_id',
-        'work_date',
-        'from_object_id',
-        'to_object_id',
-        'from_access_point_name',
-        'to_access_point_name',
-        'exit_time',
-        'entry_time',
-        'actual_minutes',
-        'norm_minutes',
-        'max_credit_minutes',
-        'credited_minutes',
-        'delay_minutes',
-        'status',
-        'approved_by',
-        'approved_at',
-        'approval_comment',
-        'created_at',
-        'updated_at',
-      ].join(', '))
-      .in('employee_id', batch)
-      .gte('work_date', startDate)
-      .lte('work_date', endDate)
-      .order('work_date', { ascending: false })
-      .order('exit_time', { ascending: true })
-      .order('employee_id', { ascending: true });
-
+    const conditions: string[] = [
+      'employee_id = ANY($1::bigint[])',
+      'work_date >= $2',
+      'work_date <= $3',
+    ];
+    const params: unknown[] = [batch, startDate, endDate];
     if (status && status !== 'problem') {
-      query = query.eq('status', status);
+      params.push(status);
+      conditions.push(`status = $${params.length}`);
     }
-
-    const { data, error } = await query;
-    if (error) throw formatTravelFeatureError(error);
-
-    segments.push(...((data || []) as unknown as ITravelSegmentRow[]));
+    try {
+      const data = await query<ITravelSegmentRow>(
+        `SELECT ${TRAVEL_SEGMENT_COLUMNS} FROM skud_travel_segments
+         WHERE ${conditions.join(' AND ')}
+         ORDER BY work_date DESC, exit_time ASC, employee_id ASC`,
+        params,
+      );
+      segments.push(...data);
+    } catch (error) {
+      throw formatTravelFeatureError(error);
+    }
   }
 
   if (status === 'problem') {
@@ -706,10 +667,6 @@ const buildTravelSegments = ({
   for (const dayEvents of grouped.values()) {
     dayEvents.sort((left, right) => left.event_time.localeCompare(right.event_time));
 
-    // Очередь незакрытых exit'ов в порядке поступления. На каждый entry ищем
-    // ближайший по времени exit на ДРУГОМ объекте — так корректно обрабатываются
-    // ошибочные «двойные» прикладывания (например, случайный выход на турникете
-    // вместо входа), которые иначе ломают парный поиск exit→entry-пар.
     let pendingExits: ITravelEventRow[] = [];
 
     for (const event of dayEvents) {
@@ -729,7 +686,6 @@ const buildTravelSegments = ({
 
       const toObjectId = accessPointToObjectId.get(toAccessPoint) || null;
 
-      // Ищем последний по времени exit, который не на том же объекте, что entry.
       let matchedIndex = -1;
       for (let k = pendingExits.length - 1; k >= 0; k -= 1) {
         const candidate = pendingExits[k];
@@ -751,8 +707,6 @@ const buildTravelSegments = ({
       const fromObjectId = accessPointToObjectId.get(fromAccessPoint) || null;
       const toEvent = event;
 
-      // Все накопленные exit'ы (в т.ч. стрелочные дубли между fromEvent и entry)
-      // считаем «исчерпанными» — следующий travel-сегмент строится с нуля.
       pendingExits = [];
 
       const actualMinutes = timeToMinutes(toEvent.event_time) - timeToMinutes(fromEvent.event_time);
@@ -771,11 +725,9 @@ const buildTravelSegments = ({
         maxCreditMinutes = limitMinutes;
         delayMinutes = Math.max(actualMinutes - limitMinutes, 0);
         if (delayMinutes > 0) {
-          // Превышение лимита: до решения руководителя засчитываем только лимитную часть.
           status = 'pending';
           creditedMinutes = limitMinutes;
         } else {
-          // В пределах лимита: время автоматически идёт в рабочее.
           status = 'auto_approved';
           creditedMinutes = actualMinutes;
         }
@@ -816,37 +768,18 @@ const fetchExistingDecidedSegments = async ({
   const rows: ITravelSegmentRow[] = [];
   for (let index = 0; index < employeeIds.length; index += BATCH_SIZE) {
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
-    const { data, error } = await supabase
-      .from('skud_travel_segments')
-      .select([
-        'id',
-        'employee_id',
-        'work_date',
-        'from_object_id',
-        'to_object_id',
-        'from_access_point_name',
-        'to_access_point_name',
-        'exit_time',
-        'entry_time',
-        'actual_minutes',
-        'norm_minutes',
-        'max_credit_minutes',
-        'credited_minutes',
-        'delay_minutes',
-        'status',
-        'approved_by',
-        'approved_at',
-        'approval_comment',
-        'created_at',
-        'updated_at',
-      ].join(', '))
-      .in('employee_id', batch)
-      .gte('work_date', startDate)
-      .lte('work_date', endDate)
-      .in('status', ['approved', 'rejected']);
-
-    if (error) throw formatTravelFeatureError(error);
-    rows.push(...((data || []) as unknown as ITravelSegmentRow[]));
+    try {
+      const data = await query<ITravelSegmentRow>(
+        `SELECT ${TRAVEL_SEGMENT_COLUMNS} FROM skud_travel_segments
+         WHERE employee_id = ANY($1::bigint[])
+           AND work_date >= $2 AND work_date <= $3
+           AND status = ANY($4::text[])`,
+        [batch, startDate, endDate, ['approved', 'rejected']],
+      );
+      rows.push(...data);
+    } catch (error) {
+      throw formatTravelFeatureError(error);
+    }
   }
   return rows;
 };
@@ -866,14 +799,10 @@ const mergeDecidedIntoSegments = (
     const existing = decidedByKey.get(segmentKey(segment));
     if (!existing) continue;
 
-    // Если решение по сегменту уже принято руководителем — переносим его в свежий расчёт,
-    // чтобы DELETE+INSERT не сбросил approve/reject.
     if (existing.status === 'approved') {
-      // Approved: всё фактическое время засчитывается как рабочее.
       segment.status = 'approved';
       segment.credited_minutes = segment.actual_minutes;
     } else if (existing.status === 'rejected') {
-      // Rejected: засчитывается только лимитная часть, превышение отбрасывается.
       segment.status = 'rejected';
       segment.credited_minutes = segment.norm_minutes ?? 0;
     }
@@ -884,6 +813,27 @@ const mergeDecidedIntoSegments = (
   }
 };
 
+const TRAVEL_SEGMENT_INSERT_COLUMNS = [
+  'employee_id',
+  'work_date',
+  'from_object_id',
+  'to_object_id',
+  'from_access_point_name',
+  'to_access_point_name',
+  'exit_time',
+  'entry_time',
+  'actual_minutes',
+  'norm_minutes',
+  'max_credit_minutes',
+  'credited_minutes',
+  'delay_minutes',
+  'status',
+  'approved_by',
+  'approved_at',
+  'approval_comment',
+  'updated_at',
+] as const;
+
 const syncSegmentsToDatabase = async ({
   employeeIds,
   startDate,
@@ -892,32 +842,50 @@ const syncSegmentsToDatabase = async ({
 }: IRebuildTravelParams & { segments: ICalculatedTravelSegment[] }): Promise<string> => {
   for (let index = 0; index < employeeIds.length; index += BATCH_SIZE) {
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
-    const { error } = await supabase
-      .from('skud_travel_segments')
-      .delete()
-      .in('employee_id', batch)
-      .gte('work_date', startDate)
-      .lte('work_date', endDate);
-
-    if (error) throw formatTravelFeatureError(error);
+    try {
+      await execute(
+        `DELETE FROM skud_travel_segments
+         WHERE employee_id = ANY($1::bigint[]) AND work_date >= $2 AND work_date <= $3`,
+        [batch, startDate, endDate],
+      );
+    } catch (error) {
+      throw formatTravelFeatureError(error);
+    }
   }
 
   const syncedAt = new Date().toISOString();
   if (segments.length === 0) return syncedAt;
 
   for (let index = 0; index < segments.length; index += BATCH_SIZE) {
-    const batch = segments.slice(index, index + BATCH_SIZE).map(segment => ({
-      ...segment,
-      updated_at: syncedAt,
-    }));
+    const batch = segments.slice(index, index + BATCH_SIZE);
+    const params: unknown[] = [];
+    const valueGroups: string[] = [];
+    for (const segment of batch) {
+      const row: Record<string, unknown> = { ...segment, updated_at: syncedAt };
+      const placeholders: string[] = [];
+      for (const col of TRAVEL_SEGMENT_INSERT_COLUMNS) {
+        params.push(row[col]);
+        placeholders.push(`$${params.length}`);
+      }
+      valueGroups.push(`(${placeholders.join(', ')})`);
+    }
+    const updateAssignments = TRAVEL_SEGMENT_INSERT_COLUMNS
+      .filter(c => c !== 'employee_id' && c !== 'work_date' && c !== 'exit_time'
+        && c !== 'entry_time' && c !== 'from_access_point_name' && c !== 'to_access_point_name')
+      .map(col => `${col} = EXCLUDED.${col}`)
+      .join(', ');
 
-    const { error } = await supabase
-      .from('skud_travel_segments')
-      .upsert(batch, {
-        onConflict: 'employee_id,work_date,exit_time,entry_time,from_access_point_name,to_access_point_name',
-      });
-
-    if (error) throw formatTravelFeatureError(error);
+    try {
+      await execute(
+        `INSERT INTO skud_travel_segments (${TRAVEL_SEGMENT_INSERT_COLUMNS.join(', ')})
+         VALUES ${valueGroups.join(', ')}
+         ON CONFLICT (employee_id, work_date, exit_time, entry_time, from_access_point_name, to_access_point_name)
+         DO UPDATE SET ${updateAssignments}`,
+        params,
+      );
+    } catch (error) {
+      throw formatTravelFeatureError(error);
+    }
   }
 
   return syncedAt;
@@ -940,9 +908,6 @@ const summarizeSegmentsByDay = (segments: ICalculatedTravelSegment[]): Map<strin
     current.creditedMinutes += segment.credited_minutes;
     current.delayMinutes += segment.delay_minutes;
     current.segmentsCount += 1;
-    // Проблемным считаем всё, что не auto_approved и не approved — то есть pending,
-    // rejected, needs_object, needs_route. По таким дням руководитель всё ещё видит
-    // оранжевую плашку (pending — нужно решение, rejected — превышение отброшено).
     if (segment.status !== 'auto_approved' && segment.status !== 'approved') {
       current.problematicSegmentsCount += 1;
     }
@@ -989,7 +954,6 @@ export const calculateAndSyncTravelSegments = async ({
     limitMinutes: travelLimitMinutes,
   });
 
-  // Сохраняем ранее принятые руководителем решения approve/reject через пересчёт.
   mergeDecidedIntoSegments(segments, decidedSegments);
 
   const syncedAt = await syncSegmentsToDatabase({ employeeIds, startDate, endDate, segments });
@@ -1031,18 +995,20 @@ export const listTravelObjects = async (): Promise<ITravelObject[]> => {
 
 export const createTravelObject = async (name: string): Promise<ITravelObject> => {
   const normalizedName = name.trim();
-  const { data, error } = await supabase
-    .from('skud_objects')
-    .insert({
-      name: normalizedName,
-      is_active: true,
-    })
-    .select('id, name, is_active, created_at, updated_at')
-    .single();
+  let object: ITravelObjectRow;
+  try {
+    const inserted = await queryOne<ITravelObjectRow>(
+      `INSERT INTO skud_objects (name, is_active) VALUES ($1, true)
+       RETURNING id, name, is_active, created_at, updated_at,
+                 map_storage_path, map_file_name, map_mime_type, map_file_size, map_uploaded_at`,
+      [normalizedName],
+    );
+    if (!inserted) throw new Error('Не удалось создать объект');
+    object = inserted;
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 
-  if (error) throw formatTravelFeatureError(error);
-
-  const object = data as ITravelObjectRow;
   invalidateTravelSegmentsCache();
   return {
     ...object,
@@ -1066,32 +1032,35 @@ export const updateTravelObject = async ({
   const normalizedAccessPoints = dedupeAccessPoints(accessPoints);
   const updatedAt = new Date().toISOString();
 
-  const { error: updateError } = await supabase
-    .from('skud_objects')
-    .update({
-      name: normalizedName,
-      updated_at: updatedAt,
-    })
-    .eq('id', objectId);
-
-  if (updateError) throw formatTravelFeatureError(updateError);
+  try {
+    await execute(
+      'UPDATE skud_objects SET name = $1, updated_at = $2 WHERE id = $3',
+      [normalizedName, updatedAt, objectId],
+    );
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 
   if (normalizedAccessPoints.length > 0) {
-    const { error: clearCrossBindingsError } = await supabase
-      .from('skud_object_access_points')
-      .delete()
-      .in('access_point_name', normalizedAccessPoints)
-      .neq('object_id', objectId);
+    try {
+      await execute(
+        `DELETE FROM skud_object_access_points
+         WHERE access_point_name = ANY($1::text[]) AND object_id <> $2`,
+        [normalizedAccessPoints, objectId],
+      );
+    } catch (error) {
+      throw formatTravelFeatureError(error);
+    }
 
-    if (clearCrossBindingsError) throw formatTravelFeatureError(clearCrossBindingsError);
-
-    const { error: clearCrossPointMappingsError } = await supabase
-      .from('skud_object_map_points')
-      .delete()
-      .in('access_point_name', normalizedAccessPoints)
-      .neq('object_id', objectId);
-
-    if (clearCrossPointMappingsError) throw formatTravelFeatureError(clearCrossPointMappingsError);
+    try {
+      await execute(
+        `DELETE FROM skud_object_map_points
+         WHERE access_point_name = ANY($1::text[]) AND object_id <> $2`,
+        [normalizedAccessPoints, objectId],
+      );
+    } catch (error) {
+      throw formatTravelFeatureError(error);
+    }
   }
 
   const currentOwnAccessPoints = currentMappings
@@ -1100,32 +1069,43 @@ export const updateTravelObject = async ({
     .filter((value): value is string => !!value);
   const removedAccessPoints = currentOwnAccessPoints.filter(accessPoint => !normalizedAccessPoints.includes(accessPoint));
 
-  const { error: deleteOwnMappingsError } = await supabase
-    .from('skud_object_access_points')
-    .delete()
-    .eq('object_id', objectId);
-
-  if (deleteOwnMappingsError) throw formatTravelFeatureError(deleteOwnMappingsError);
+  try {
+    await execute(
+      'DELETE FROM skud_object_access_points WHERE object_id = $1',
+      [objectId],
+    );
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 
   if (normalizedAccessPoints.length > 0) {
-    const { error: insertMappingsError } = await supabase
-      .from('skud_object_access_points')
-      .insert(normalizedAccessPoints.map(accessPointName => ({
-        object_id: objectId,
-        access_point_name: accessPointName,
-      })));
-
-    if (insertMappingsError) throw formatTravelFeatureError(insertMappingsError);
+    const params: unknown[] = [];
+    const groups: string[] = [];
+    for (const accessPointName of normalizedAccessPoints) {
+      params.push(objectId);
+      params.push(accessPointName);
+      groups.push(`($${params.length - 1}, $${params.length})`);
+    }
+    try {
+      await execute(
+        `INSERT INTO skud_object_access_points (object_id, access_point_name) VALUES ${groups.join(', ')}`,
+        params,
+      );
+    } catch (error) {
+      throw formatTravelFeatureError(error);
+    }
   }
 
   if (removedAccessPoints.length > 0) {
-    const { error: deleteRemovedPointMappingsError } = await supabase
-      .from('skud_object_map_points')
-      .delete()
-      .eq('object_id', objectId)
-      .in('access_point_name', removedAccessPoints);
-
-    if (deleteRemovedPointMappingsError) throw formatTravelFeatureError(deleteRemovedPointMappingsError);
+    try {
+      await execute(
+        `DELETE FROM skud_object_map_points
+         WHERE object_id = $1 AND access_point_name = ANY($2::text[])`,
+        [objectId, removedAccessPoints],
+      );
+    } catch (error) {
+      throw formatTravelFeatureError(error);
+    }
   }
 
   const objects = await listTravelObjects();
@@ -1139,15 +1119,15 @@ export const deleteTravelObject = async (objectId: string): Promise<void> => {
   const currentObject = await fetchTravelObjectByIdRaw(objectId);
   const currentStoragePath = normalizeTravelObjectMapPath(currentObject?.map_storage_path);
   if (currentStoragePath) {
-    await supabaseStorageService.removeObject(SKUD_OBJECT_MAPS_BUCKET, currentStoragePath);
+    await objectMapStorageService.removeObject(SKUD_OBJECT_MAPS_BUCKET, currentStoragePath);
   }
 
-  const { error } = await supabase
-    .from('skud_objects')
-    .delete()
-    .eq('id', objectId);
+  try {
+    await execute('DELETE FROM skud_objects WHERE id = $1', [objectId]);
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 
-  if (error) throw formatTravelFeatureError(error);
   invalidateTravelSegmentsCache();
 };
 
@@ -1174,7 +1154,7 @@ export const getTravelObjectMap = async (objectId: string): Promise<ITravelObjec
 
   const [points, imageUrl] = await Promise.all([
     fetchTravelObjectMapPointsRaw(objectId),
-    supabaseStorageService.createSignedDownloadUrl(SKUD_OBJECT_MAPS_BUCKET, storagePath),
+    objectMapStorageService.createSignedDownloadUrl(SKUD_OBJECT_MAPS_BUCKET, storagePath),
   ]);
 
   return {
@@ -1207,8 +1187,8 @@ export const createTravelObjectMapUploadUrl = async ({
     throw new Error('Объект не найден');
   }
 
-  const storagePath = supabaseStorageService.buildObjectMapPath(objectId, fileName);
-  const { signedUrl } = await supabaseStorageService.createSignedUploadUrl(SKUD_OBJECT_MAPS_BUCKET, storagePath);
+  const storagePath = objectMapStorageService.buildObjectMapPath(objectId, fileName);
+  const { signedUrl } = await objectMapStorageService.createSignedUploadUrl(SKUD_OBJECT_MAPS_BUCKET, storagePath);
 
   return {
     upload_url: signedUrl,
@@ -1241,34 +1221,34 @@ export const confirmTravelObjectMapUpload = async ({
     throw new Error('Некорректный путь файла карты');
   }
 
-  await supabaseStorageService.ensureObjectExists(SKUD_OBJECT_MAPS_BUCKET, normalizedStoragePath);
+  await objectMapStorageService.ensureObjectExists(SKUD_OBJECT_MAPS_BUCKET, normalizedStoragePath);
 
   const previousStoragePath = normalizeTravelObjectMapPath(object.map_storage_path);
   const uploadedAt = new Date().toISOString();
 
-  const { error: updateError } = await supabase
-    .from('skud_objects')
-    .update({
-      map_storage_path: normalizedStoragePath,
-      map_file_name: fileName.trim(),
-      map_mime_type: contentType,
-      map_file_size: fileSize,
-      map_uploaded_at: uploadedAt,
-      updated_at: uploadedAt,
-    })
-    .eq('id', objectId);
+  try {
+    await execute(
+      `UPDATE skud_objects
+       SET map_storage_path = $1, map_file_name = $2, map_mime_type = $3,
+           map_file_size = $4, map_uploaded_at = $5, updated_at = $6
+       WHERE id = $7`,
+      [normalizedStoragePath, fileName.trim(), contentType, fileSize, uploadedAt, uploadedAt, objectId],
+    );
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 
-  if (updateError) throw formatTravelFeatureError(updateError);
-
-  const { error: clearPointsError } = await supabase
-    .from('skud_object_map_points')
-    .delete()
-    .eq('object_id', objectId);
-
-  if (clearPointsError) throw formatTravelFeatureError(clearPointsError);
+  try {
+    await execute(
+      'DELETE FROM skud_object_map_points WHERE object_id = $1',
+      [objectId],
+    );
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 
   if (previousStoragePath && previousStoragePath !== normalizedStoragePath) {
-    await supabaseStorageService.removeObject(SKUD_OBJECT_MAPS_BUCKET, previousStoragePath);
+    await objectMapStorageService.removeObject(SKUD_OBJECT_MAPS_BUCKET, previousStoragePath);
   }
 
   const map = await getTravelObjectMap(objectId);
@@ -1329,33 +1309,44 @@ export const saveTravelObjectMapPoints = async ({
   }
 
   if (normalizedPoints.length > 0) {
-    const { error: clearCrossObjectPointsError } = await supabase
-      .from('skud_object_map_points')
-      .delete()
-      .in('access_point_name', normalizedPoints.map(point => point.access_point_name))
-      .neq('object_id', objectId);
-
-    if (clearCrossObjectPointsError) throw formatTravelFeatureError(clearCrossObjectPointsError);
+    try {
+      await execute(
+        `DELETE FROM skud_object_map_points
+         WHERE access_point_name = ANY($1::text[]) AND object_id <> $2`,
+        [normalizedPoints.map(point => point.access_point_name), objectId],
+      );
+    } catch (error) {
+      throw formatTravelFeatureError(error);
+    }
   }
 
-  const { error: deleteOwnPointsError } = await supabase
-    .from('skud_object_map_points')
-    .delete()
-    .eq('object_id', objectId);
-
-  if (deleteOwnPointsError) throw formatTravelFeatureError(deleteOwnPointsError);
+  try {
+    await execute(
+      'DELETE FROM skud_object_map_points WHERE object_id = $1',
+      [objectId],
+    );
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 
   if (normalizedPoints.length > 0) {
-    const { error: insertPointsError } = await supabase
-      .from('skud_object_map_points')
-      .insert(normalizedPoints.map(point => ({
-        object_id: objectId,
-        access_point_name: point.access_point_name,
-        x_ratio: point.x_ratio,
-        y_ratio: point.y_ratio,
-      })));
-
-    if (insertPointsError) throw formatTravelFeatureError(insertPointsError);
+    const params: unknown[] = [];
+    const groups: string[] = [];
+    for (const point of normalizedPoints) {
+      params.push(objectId);
+      params.push(point.access_point_name);
+      params.push(point.x_ratio);
+      params.push(point.y_ratio);
+      groups.push(`($${params.length - 3}, $${params.length - 2}, $${params.length - 1}, $${params.length})`);
+    }
+    try {
+      await execute(
+        `INSERT INTO skud_object_map_points (object_id, access_point_name, x_ratio, y_ratio) VALUES ${groups.join(', ')}`,
+        params,
+      );
+    } catch (error) {
+      throw formatTravelFeatureError(error);
+    }
   }
 
   const map = await getTravelObjectMap(objectId);
@@ -1374,29 +1365,29 @@ export const deleteTravelObjectMap = async (objectId: string): Promise<void> => 
 
   const storagePath = normalizeTravelObjectMapPath(object.map_storage_path);
   if (storagePath) {
-    await supabaseStorageService.removeObject(SKUD_OBJECT_MAPS_BUCKET, storagePath);
+    await objectMapStorageService.removeObject(SKUD_OBJECT_MAPS_BUCKET, storagePath);
   }
 
-  const { error: clearPointsError } = await supabase
-    .from('skud_object_map_points')
-    .delete()
-    .eq('object_id', objectId);
+  try {
+    await execute(
+      'DELETE FROM skud_object_map_points WHERE object_id = $1',
+      [objectId],
+    );
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 
-  if (clearPointsError) throw formatTravelFeatureError(clearPointsError);
-
-  const { error: updateError } = await supabase
-    .from('skud_objects')
-    .update({
-      map_storage_path: null,
-      map_file_name: null,
-      map_mime_type: null,
-      map_file_size: null,
-      map_uploaded_at: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', objectId);
-
-  if (updateError) throw formatTravelFeatureError(updateError);
+  try {
+    await execute(
+      `UPDATE skud_objects
+       SET map_storage_path = NULL, map_file_name = NULL, map_mime_type = NULL,
+           map_file_size = NULL, map_uploaded_at = NULL, updated_at = $1
+       WHERE id = $2`,
+      [new Date().toISOString(), objectId],
+    );
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 };
 
 export const getAccessPointMapView = async (accessPointName: string): Promise<IAccessPointMapView | null> => {
@@ -1405,21 +1396,22 @@ export const getAccessPointMapView = async (accessPointName: string): Promise<IA
     throw new Error('Не указана точка доступа');
   }
 
-  const { data, error } = await supabase
-    .from('skud_object_map_points')
-    .select('object_id, access_point_name, x_ratio, y_ratio')
-    .eq('access_point_name', normalizedAccessPointName)
-    .maybeSingle();
-
-  if (error) {
+  let point: Pick<ITravelObjectMapPointRow, 'object_id' | 'access_point_name' | 'x_ratio' | 'y_ratio'> | null;
+  try {
+    point = await queryOne<Pick<ITravelObjectMapPointRow, 'object_id' | 'access_point_name' | 'x_ratio' | 'y_ratio'>>(
+      `SELECT object_id, access_point_name, x_ratio, y_ratio FROM skud_object_map_points
+       WHERE access_point_name = $1
+       LIMIT 1`,
+      [normalizedAccessPointName],
+    );
+  } catch (error) {
     throw formatTravelFeatureError(error);
   }
 
-  if (!data) {
+  if (!point) {
     return null;
   }
 
-  const point = data as Pick<ITravelObjectMapPointRow, 'object_id' | 'access_point_name' | 'x_ratio' | 'y_ratio'>;
   const object = await fetchTravelObjectByIdRaw(point.object_id);
   if (!object) {
     return null;
@@ -1430,7 +1422,7 @@ export const getAccessPointMapView = async (accessPointName: string): Promise<IA
     return null;
   }
 
-  const imageUrl = await supabaseStorageService.createSignedDownloadUrl(SKUD_OBJECT_MAPS_BUCKET, storagePath);
+  const imageUrl = await objectMapStorageService.createSignedDownloadUrl(SKUD_OBJECT_MAPS_BUCKET, storagePath);
 
   return {
     object_id: object.id,
@@ -1593,36 +1585,14 @@ export const getTravelHoursSummaryForRange = async ({
 export const travelMinutesToHours = (minutes: number): number => roundHours(minutes);
 
 const fetchSegmentRowById = async (segmentId: string): Promise<ITravelSegmentRow | null> => {
-  const { data, error } = await supabase
-    .from('skud_travel_segments')
-    .select([
-      'id',
-      'employee_id',
-      'work_date',
-      'from_object_id',
-      'to_object_id',
-      'from_access_point_name',
-      'to_access_point_name',
-      'exit_time',
-      'entry_time',
-      'actual_minutes',
-      'norm_minutes',
-      'max_credit_minutes',
-      'credited_minutes',
-      'delay_minutes',
-      'status',
-      'approved_by',
-      'approved_at',
-      'approval_comment',
-      'created_at',
-      'updated_at',
-    ].join(', '))
-    .eq('id', segmentId)
-    .maybeSingle();
-
-  if (error) throw formatTravelFeatureError(error);
-  if (!data) return null;
-  return data as unknown as ITravelSegmentRow;
+  try {
+    return await queryOne<ITravelSegmentRow>(
+      `SELECT ${TRAVEL_SEGMENT_COLUMNS} FROM skud_travel_segments WHERE id = $1`,
+      [segmentId],
+    );
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 };
 
 const decorateSegmentRow = async (
@@ -1677,37 +1647,18 @@ export const listTravelSegmentsForEmployeeDay = async ({
 }): Promise<ITravelSegmentListItem[]> => {
   await loadConfiguredTravelLimitMinutes();
 
-  const { data, error } = await supabase
-    .from('skud_travel_segments')
-    .select([
-      'id',
-      'employee_id',
-      'work_date',
-      'from_object_id',
-      'to_object_id',
-      'from_access_point_name',
-      'to_access_point_name',
-      'exit_time',
-      'entry_time',
-      'actual_minutes',
-      'norm_minutes',
-      'max_credit_minutes',
-      'credited_minutes',
-      'delay_minutes',
-      'status',
-      'approved_by',
-      'approved_at',
-      'approval_comment',
-      'created_at',
-      'updated_at',
-    ].join(', '))
-    .eq('employee_id', employeeId)
-    .eq('work_date', workDate)
-    .order('exit_time', { ascending: true });
+  let rows: ITravelSegmentRow[];
+  try {
+    rows = await query<ITravelSegmentRow>(
+      `SELECT ${TRAVEL_SEGMENT_COLUMNS} FROM skud_travel_segments
+       WHERE employee_id = $1 AND work_date = $2
+       ORDER BY exit_time ASC`,
+      [employeeId, workDate],
+    );
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 
-  if (error) throw formatTravelFeatureError(error);
-
-  const rows = (data || []) as unknown as ITravelSegmentRow[];
   if (rows.length === 0) return [];
 
   const employees = await fetchEmployeeRowsByIds([employeeId]);
@@ -1771,20 +1722,22 @@ export const approveTravelSegment = async ({
   }
 
   const now = new Date().toISOString();
-  const { error } = await supabase
-    .from('skud_travel_segments')
-    .update({
-      status: 'approved',
-      // При approve вся фактическая поездка становится рабочим временем (включая превышение).
-      credited_minutes: existing.actual_minutes,
-      approved_by: userId,
-      approved_at: now,
-      approval_comment: comment ?? null,
-      updated_at: now,
-    })
-    .eq('id', segmentId);
+  try {
+    await execute(
+      `UPDATE skud_travel_segments
+       SET status = 'approved',
+           credited_minutes = $1,
+           approved_by = $2,
+           approved_at = $3,
+           approval_comment = $4,
+           updated_at = $5
+       WHERE id = $6`,
+      [existing.actual_minutes, userId, now, comment ?? null, now, segmentId],
+    );
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 
-  if (error) throw formatTravelFeatureError(error);
   invalidateTravelSegmentsCache();
 
   const updated = await fetchSegmentRowById(segmentId);
@@ -1808,20 +1761,22 @@ export const rejectTravelSegment = async ({
   }
 
   const now = new Date().toISOString();
-  const { error } = await supabase
-    .from('skud_travel_segments')
-    .update({
-      status: 'rejected',
-      // При reject в зачёт идёт только лимитная часть, превышение отбрасывается.
-      credited_minutes: existing.norm_minutes ?? 0,
-      approved_by: userId,
-      approved_at: now,
-      approval_comment: comment ?? null,
-      updated_at: now,
-    })
-    .eq('id', segmentId);
+  try {
+    await execute(
+      `UPDATE skud_travel_segments
+       SET status = 'rejected',
+           credited_minutes = $1,
+           approved_by = $2,
+           approved_at = $3,
+           approval_comment = $4,
+           updated_at = $5
+       WHERE id = $6`,
+      [existing.norm_minutes ?? 0, userId, now, comment ?? null, now, segmentId],
+    );
+  } catch (error) {
+    throw formatTravelFeatureError(error);
+  }
 
-  if (error) throw formatTravelFeatureError(error);
   invalidateTravelSegmentsCache();
 
   const updated = await fetchSegmentRowById(segmentId);

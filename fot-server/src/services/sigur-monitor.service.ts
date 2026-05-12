@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query, queryOne } from '../config/postgres.js';
 import { sigurService } from './sigur.service.js';
 import { settingsService, type ISigurMonitorSettings } from './settings.service.js';
 import {
@@ -249,67 +249,50 @@ function ensureMonitorStorageAvailableOrThrow(): void {
 }
 
 async function getOpenIncident(): Promise<ISigurIncident | null> {
-  const { data, error } = await supabase
-    .from('sigur_incidents')
-    .select('*')
-    .eq('status', 'open')
-    .order('started_at', { ascending: false })
-    .limit(1);
-
-  if (error) {
-    throw new Error(`Failed to load active Sigur incident: ${error.message}`);
+  try {
+    const row = await queryOne<ISigurIncident>(
+      `SELECT * FROM sigur_incidents WHERE status = 'open' ORDER BY started_at DESC LIMIT 1`,
+    );
+    return row;
+  } catch (error) {
+    throw new Error(`Failed to load active Sigur incident: ${(error as Error).message}`);
   }
-
-  return ((data || [])[0] || null) as ISigurIncident | null;
 }
 
 async function getLatestSuccessCheck(): Promise<ISigurHealthCheck | null> {
-  const { data, error } = await supabase
-    .from('sigur_health_checks')
-    .select('*')
-    .eq('status', 'success')
-    .order('checked_at', { ascending: false })
-    .limit(1);
-
-  if (error) {
-    throw new Error(`Failed to load latest Sigur success check: ${error.message}`);
+  try {
+    const row = await queryOne<ISigurHealthCheck>(
+      `SELECT * FROM sigur_health_checks WHERE status = 'success' ORDER BY checked_at DESC LIMIT 1`,
+    );
+    return row;
+  } catch (error) {
+    throw new Error(`Failed to load latest Sigur success check: ${(error as Error).message}`);
   }
-
-  return ((data || [])[0] || null) as ISigurHealthCheck | null;
 }
 
 async function getRecentChecks(limit: number): Promise<ISigurHealthCheck[]> {
-  const { data, error } = await supabase
-    .from('sigur_health_checks')
-    .select('*')
-    .order('checked_at', { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    throw new Error(`Failed to load recent Sigur health checks: ${error.message}`);
+  try {
+    const rows = await query<ISigurHealthCheck>(
+      `SELECT * FROM sigur_health_checks ORDER BY checked_at DESC LIMIT $1`,
+      [limit],
+    );
+    return rows;
+  } catch (error) {
+    throw new Error(`Failed to load recent Sigur health checks: ${(error as Error).message}`);
   }
-
-  return (data || []) as ISigurHealthCheck[];
 }
 
 async function getLatestEventFlowAt(timezone: string): Promise<Date | null> {
-  const { data, error } = await supabase
-    .from('skud_events')
-    .select('event_date, event_time')
-    .order('event_date', { ascending: false })
-    .order('event_time', { ascending: false })
-    .limit(1);
-
-  if (error) {
-    throw new Error(`Failed to load latest Sigur event timestamp: ${error.message}`);
+  try {
+    const latest = await queryOne<{ event_date: string; event_time: string }>(
+      `SELECT event_date, event_time FROM skud_events
+       ORDER BY event_date DESC, event_time DESC LIMIT 1`,
+    );
+    if (!latest?.event_date || !latest?.event_time) return null;
+    return parseStoredEventTimestamp(latest.event_date, latest.event_time, timezone);
+  } catch (error) {
+    throw new Error(`Failed to load latest Sigur event timestamp: ${(error as Error).message}`);
   }
-
-  const latest = data?.[0];
-  if (!latest?.event_date || !latest?.event_time) {
-    return null;
-  }
-
-  return parseStoredEventTimestamp(latest.event_date, latest.event_time, timezone);
 }
 
 async function ensureRuntimeStateLoaded(): Promise<void> {
@@ -409,48 +392,63 @@ async function refreshRuntimeStateFromPollingState(now = new Date(), timezone?: 
 }
 
 async function insertHealthCheck(row: Omit<ISigurHealthCheck, 'id' | 'checked_at'> & { checked_at?: string }): Promise<ISigurHealthCheck> {
-  const payload = {
-    checked_at: row.checked_at || new Date().toISOString(),
-    source: row.source,
-    status: row.status,
-    connection_type: row.connection_type,
-    response_ms: row.response_ms ?? null,
-    events_last_window: row.events_last_window ?? null,
-    baseline_events: row.baseline_events ?? null,
-    consecutive_failures: row.consecutive_failures,
-    error_message: row.error_message ?? null,
-    meta: row.meta ?? {},
-  };
-
-  const { data, error } = await supabase
-    .from('sigur_health_checks')
-    .insert(payload)
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to insert Sigur health check: ${error.message}`);
+  try {
+    const data = await queryOne<ISigurHealthCheck>(
+      `INSERT INTO sigur_health_checks
+       (checked_at, source, status, connection_type, response_ms, events_last_window,
+        baseline_events, consecutive_failures, error_message, meta)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+       RETURNING *`,
+      [
+        row.checked_at || new Date().toISOString(),
+        row.source,
+        row.status,
+        row.connection_type,
+        row.response_ms ?? null,
+        row.events_last_window ?? null,
+        row.baseline_events ?? null,
+        row.consecutive_failures,
+        row.error_message ?? null,
+        JSON.stringify(row.meta ?? {}),
+      ],
+    );
+    if (!data) throw new Error('No row returned after insert');
+    return data;
+  } catch (error) {
+    throw new Error(`Failed to insert Sigur health check: ${(error as Error).message}`);
   }
-
-  return data as ISigurHealthCheck;
 }
 
 async function updateIncident(id: number, patch: Partial<ISigurIncident>): Promise<ISigurIncident> {
-  const { data, error } = await supabase
-    .from('sigur_incidents')
-    .update({
-      ...patch,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', id)
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to update Sigur incident: ${error.message}`);
+  try {
+    const fullPatch = { ...patch, updated_at: new Date().toISOString() };
+    const keys = Object.keys(fullPatch);
+    if (keys.length === 0) {
+      const existing = await queryOne<ISigurIncident>(
+        'SELECT * FROM sigur_incidents WHERE id = $1',
+        [id],
+      );
+      if (!existing) throw new Error('Incident not found');
+      return existing;
+    }
+    const setParts: string[] = [];
+    const params: unknown[] = [];
+    for (const key of keys) {
+      const value = (fullPatch as Record<string, unknown>)[key];
+      params.push(key === 'meta' ? JSON.stringify(value ?? {}) : value);
+      const cast = key === 'meta' ? '::jsonb' : '';
+      setParts.push(`${key} = $${params.length}${cast}`);
+    }
+    params.push(id);
+    const data = await queryOne<ISigurIncident>(
+      `UPDATE sigur_incidents SET ${setParts.join(', ')} WHERE id = $${params.length} RETURNING *`,
+      params,
+    );
+    if (!data) throw new Error('Incident not found after update');
+    return data;
+  } catch (error) {
+    throw new Error(`Failed to update Sigur incident: ${(error as Error).message}`);
   }
-
-  return data as ISigurIncident;
 }
 
 async function openIncident(params: {
@@ -476,18 +474,33 @@ async function openIncident(params: {
     meta: params.meta || {},
   };
 
-  const { data, error } = await supabase
-    .from('sigur_incidents')
-    .insert(payload)
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to open Sigur incident: ${error.message}`);
+  try {
+    const data = await queryOne<ISigurIncident>(
+      `INSERT INTO sigur_incidents
+       (status, severity, detected_by, started_at, resolved_at, last_success_at,
+        affected_from, affected_to, connection_type, error_message, meta)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+       RETURNING *`,
+      [
+        payload.status,
+        payload.severity,
+        payload.detected_by,
+        payload.started_at,
+        payload.resolved_at,
+        payload.last_success_at,
+        payload.affected_from,
+        payload.affected_to,
+        payload.connection_type,
+        payload.error_message,
+        JSON.stringify(payload.meta ?? {}),
+      ],
+    );
+    if (!data) throw new Error('No row returned after insert');
+    runtimeState.activeIncident = data;
+    return runtimeState.activeIncident;
+  } catch (error) {
+    throw new Error(`Failed to open Sigur incident: ${(error as Error).message}`);
   }
-
-  runtimeState.activeIncident = data as ISigurIncident;
-  return runtimeState.activeIncident;
 }
 
 async function resolveIncident(incident: ISigurIncident, checkedAt: Date): Promise<ISigurIncident> {
@@ -590,15 +603,15 @@ async function computeSilenceBaseline(now: Date, settings: ISigurMonitorSettings
     return { baselineEvents: 0, sampleCount: 0, slotStart, slotEnd };
   }
 
-  const { data, error } = await supabase
-    .from('skud_events')
-    .select('event_date')
-    .in('event_date', lookbackDates)
-    .gte('event_time', slotStart)
-    .lt('event_time', slotEnd);
-
-  if (error) {
-    throw new Error(`Failed to compute Sigur silence baseline: ${error.message}`);
+  let data: { event_date: string | null }[];
+  try {
+    data = await query<{ event_date: string | null }>(
+      `SELECT event_date FROM skud_events
+       WHERE event_date = ANY($1::date[]) AND event_time >= $2 AND event_time < $3`,
+      [lookbackDates, slotStart, slotEnd],
+    );
+  } catch (error) {
+    throw new Error(`Failed to compute Sigur silence baseline: ${(error as Error).message}`);
   }
 
   const counts = new Map<string, number>();
@@ -859,104 +872,127 @@ export async function getSigurMonitorStatus(): Promise<{
 export async function listSigurIncidents(params: IListParams): Promise<{ data: ISigurIncident[]; count: number }> {
   ensureMonitorStorageAvailableOrThrow();
 
-  let query = supabase
-    .from('sigur_incidents')
-    .select('*', { count: 'exact' })
-    .order('started_at', { ascending: false })
-    .range(params.offset, params.offset + params.limit - 1);
+  const conditions: string[] = [];
+  const qParams: unknown[] = [];
 
   if (params.status && params.status !== 'all') {
-    query = query.eq('status', params.status);
+    qParams.push(params.status);
+    conditions.push(`status = $${qParams.length}`);
   }
   if (params.source) {
-    query = query.eq('detected_by', params.source);
+    qParams.push(params.source);
+    conditions.push(`detected_by = $${qParams.length}`);
   }
   if (params.startDate) {
-    query = query.gte('started_at', params.startDate);
+    qParams.push(params.startDate);
+    conditions.push(`started_at >= $${qParams.length}`);
   }
   if (params.endDate) {
-    query = query.lte('started_at', params.endDate);
+    qParams.push(params.endDate);
+    conditions.push(`started_at <= $${qParams.length}`);
   }
 
-  const { data, error, count } = await query;
-  if (error) {
-    throw new Error(`Failed to list Sigur incidents: ${error.message}`);
-  }
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-  return {
-    data: (data || []) as ISigurIncident[],
-    count: count || 0,
-  };
+  try {
+    const rows = await query<ISigurIncident & { full_count: number }>(
+      `SELECT *, count(*) OVER ()::int AS full_count
+       FROM sigur_incidents
+       ${whereClause}
+       ORDER BY started_at DESC
+       LIMIT ${params.limit} OFFSET ${params.offset}`,
+      qParams,
+    );
+    const count = rows[0]?.full_count ?? 0;
+    return {
+      data: rows.map(({ full_count: _omit, ...rest }) => rest as unknown as ISigurIncident),
+      count,
+    };
+  } catch (error) {
+    throw new Error(`Failed to list Sigur incidents: ${(error as Error).message}`);
+  }
 }
 
 export async function getSigurIncidentDetails(id: number): Promise<{ incident: ISigurIncident; checks: ISigurHealthCheck[] }> {
   ensureMonitorStorageAvailableOrThrow();
 
-  const { data, error } = await supabase
-    .from('sigur_incidents')
-    .select('*')
-    .eq('id', id)
-    .single();
-
-  if (error || !data) {
-    throw new Error(error?.message || 'Sigur incident not found');
+  let incident: ISigurIncident | null;
+  try {
+    incident = await queryOne<ISigurIncident>(
+      'SELECT * FROM sigur_incidents WHERE id = $1',
+      [id],
+    );
+  } catch (error) {
+    throw new Error((error as Error).message || 'Sigur incident not found');
   }
+  if (!incident) throw new Error('Sigur incident not found');
 
-  const incident = data as ISigurIncident;
   const startWindow = new Date(incident.started_at);
   startWindow.setMinutes(startWindow.getMinutes() - 30);
   const endWindow = incident.resolved_at ? new Date(incident.resolved_at) : new Date();
   endWindow.setMinutes(endWindow.getMinutes() + 30);
 
-  const { data: checks, error: checksError } = await supabase
-    .from('sigur_health_checks')
-    .select('*')
-    .gte('checked_at', startWindow.toISOString())
-    .lte('checked_at', endWindow.toISOString())
-    .order('checked_at', { ascending: false })
-    .limit(200);
-
-  if (checksError) {
-    throw new Error(`Failed to load Sigur incident checks: ${checksError.message}`);
+  let checks: ISigurHealthCheck[];
+  try {
+    checks = await query<ISigurHealthCheck>(
+      `SELECT * FROM sigur_health_checks
+       WHERE checked_at >= $1 AND checked_at <= $2
+       ORDER BY checked_at DESC
+       LIMIT 200`,
+      [startWindow.toISOString(), endWindow.toISOString()],
+    );
+  } catch (checksError) {
+    throw new Error(`Failed to load Sigur incident checks: ${(checksError as Error).message}`);
   }
 
   return {
     incident,
-    checks: (checks || []) as ISigurHealthCheck[],
+    checks,
   };
 }
 
 export async function listSigurHealthChecks(params: IListParams): Promise<{ data: ISigurHealthCheck[]; count: number }> {
   ensureMonitorStorageAvailableOrThrow();
 
-  let query = supabase
-    .from('sigur_health_checks')
-    .select('*', { count: 'exact' })
-    .order('checked_at', { ascending: false })
-    .range(params.offset, params.offset + params.limit - 1);
+  const conditions: string[] = [];
+  const qParams: unknown[] = [];
 
   if (params.status && params.status !== 'all') {
-    query = query.eq('status', params.status);
+    qParams.push(params.status);
+    conditions.push(`status = $${qParams.length}`);
   }
   if (params.source) {
-    query = query.eq('source', params.source);
+    qParams.push(params.source);
+    conditions.push(`source = $${qParams.length}`);
   }
   if (params.startDate) {
-    query = query.gte('checked_at', params.startDate);
+    qParams.push(params.startDate);
+    conditions.push(`checked_at >= $${qParams.length}`);
   }
   if (params.endDate) {
-    query = query.lte('checked_at', params.endDate);
+    qParams.push(params.endDate);
+    conditions.push(`checked_at <= $${qParams.length}`);
   }
 
-  const { data, error, count } = await query;
-  if (error) {
-    throw new Error(`Failed to list Sigur health checks: ${error.message}`);
-  }
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-  return {
-    data: (data || []) as ISigurHealthCheck[],
-    count: count || 0,
-  };
+  try {
+    const rows = await query<ISigurHealthCheck & { full_count: number }>(
+      `SELECT *, count(*) OVER ()::int AS full_count
+       FROM sigur_health_checks
+       ${whereClause}
+       ORDER BY checked_at DESC
+       LIMIT ${params.limit} OFFSET ${params.offset}`,
+      qParams,
+    );
+    const count = rows[0]?.full_count ?? 0;
+    return {
+      data: rows.map(({ full_count: _omit, ...rest }) => rest as unknown as ISigurHealthCheck),
+      count,
+    };
+  } catch (error) {
+    throw new Error(`Failed to list Sigur health checks: ${(error as Error).message}`);
+  }
 }
 
 export async function runSigurMonitorCycleNow(now = new Date()): Promise<void> {

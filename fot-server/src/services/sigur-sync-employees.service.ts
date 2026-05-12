@@ -1,5 +1,5 @@
 import { sigurService } from './sigur.service.js';
-import { supabase } from '../config/database.js';
+import { query, queryOne, execute } from '../config/postgres.js';
 import { parseFIO, normalizeFullName } from '../utils/fio.utils.js';
 import {
   getPositionsRaw,
@@ -115,9 +115,9 @@ export async function syncPositionsFromSigurLogic(
 
   console.log(`[syncPositionsFromSigur] got ${sigurPositions.length} positions from Sigur`);
 
-  const { data: existingPositions } = await supabase
-    .from('positions')
-    .select('id, sigur_position_id, name');
+  const existingPositions = await query<{ id: string; sigur_position_id: number | null; name: string | null }>(
+    'SELECT id, sigur_position_id, name FROM positions',
+  );
 
   const sigurIdToDbId = new Map<number, string>();
   for (const p of existingPositions || []) {
@@ -139,29 +139,24 @@ export async function syncPositionsFromSigurLogic(
 
     if (sigurIdToDbId.has(sigurId)) {
       const dbId = sigurIdToDbId.get(sigurId)!;
-      const { error: updateError } = await supabase
-        .from('positions')
-        .update({ name: name.trim() })
-        .eq('id', dbId);
-
-      if (updateError) {
-        errors.push(`update ${name}: ${updateError.message}`);
-      } else {
+      try {
+        await execute(
+          'UPDATE positions SET name = $1 WHERE id = $2',
+          [name.trim(), dbId],
+        );
         updated++;
+      } catch (updateError) {
+        errors.push(`update ${name}: ${(updateError as Error).message}`);
       }
     } else {
-      const { error: insertError } = await supabase
-        .from('positions')
-        .insert({
-          name: name.trim(),
-          sigur_position_id: sigurId,
-          category: 'other',
-        });
-
-      if (insertError) {
-        errors.push(`insert ${name}: ${insertError.message}`);
-      } else {
+      try {
+        await execute(
+          `INSERT INTO positions (name, sigur_position_id, category) VALUES ($1, $2, 'other')`,
+          [name.trim(), sigurId],
+        );
         imported++;
+      } catch (insertError) {
+        errors.push(`insert ${name}: ${(insertError as Error).message}`);
       }
     }
   }
@@ -181,9 +176,9 @@ export async function seedPositionsLogic(): Promise<ISeedPositionsResult> {
     { name: 'Сотрудник', category: 'other', grade: 5, sort_order: 7 },
   ];
 
-  const { data: existing } = await supabase
-    .from('positions')
-    .select('id, name');
+  const existing = await query<{ id: string; name: string | null }>(
+    'SELECT id, name FROM positions',
+  );
 
   const existingNames = new Set<string>();
   for (const pos of existing || []) {
@@ -201,19 +196,14 @@ export async function seedPositionsLogic(): Promise<ISeedPositionsResult> {
       continue;
     }
 
-    const { error } = await supabase
-      .from('positions')
-      .insert({
-        name: pos.name,
-        category: pos.category,
-        grade: pos.grade,
-        sort_order: pos.sort_order,
-      });
-
-    if (error) {
-      console.error(`[seedPositions] error for "${pos.name}":`, error.message);
-    } else {
+    try {
+      await execute(
+        `INSERT INTO positions (name, category, grade, sort_order) VALUES ($1, $2, $3, $4)`,
+        [pos.name, pos.category, pos.grade, pos.sort_order],
+      );
       created++;
+    } catch (error) {
+      console.error(`[seedPositions] error for "${pos.name}":`, (error as Error).message);
     }
   }
 
@@ -276,11 +266,13 @@ export async function syncEmployeesLogic(
   const EMP_PAGE = 1000;
   let empOffset = 0;
   while (true) {
-    const { data: existingEmpsPage } = await supabase
-      .from('employees')
-      .select('id, sigur_employee_id, employment_status, department_locked, name_locked, org_department_id, position_id, tab_number, full_name, last_name, first_name, middle_name')
-      .not('sigur_employee_id', 'is', null)
-      .range(empOffset, empOffset + EMP_PAGE - 1);
+    const existingEmpsPage = await query<typeof existingEmps[number]>(
+      `SELECT id, sigur_employee_id, employment_status, department_locked, name_locked,
+              org_department_id, position_id, tab_number, full_name, last_name, first_name, middle_name
+       FROM employees
+       WHERE sigur_employee_id IS NOT NULL
+       LIMIT ${EMP_PAGE} OFFSET ${empOffset}`,
+    );
     if (!existingEmpsPage || existingEmpsPage.length === 0) break;
     existingEmps.push(...existingEmpsPage);
     if (existingEmpsPage.length < EMP_PAGE) break;
@@ -340,14 +332,14 @@ export async function syncEmployeesLogic(
   const portalOnlyEmps: IPortalOnlyRow[] = [];
   let portalOffset = 0;
   while (true) {
-    const { data: page } = await supabase
-      .from('employees')
-      .select('id, full_name, last_name, first_name, middle_name, org_department_id, position_id, tab_number, department_locked, name_locked')
-      .is('sigur_employee_id', null)
-      .eq('employment_status', 'active')
-      .range(portalOffset, portalOffset + EMP_PAGE - 1);
+    const page = await query<IPortalOnlyRow>(
+      `SELECT id, full_name, last_name, first_name, middle_name, org_department_id, position_id, tab_number, department_locked, name_locked
+       FROM employees
+       WHERE sigur_employee_id IS NULL AND employment_status = 'active'
+       LIMIT ${EMP_PAGE} OFFSET ${portalOffset}`,
+    );
     if (!page || page.length === 0) break;
-    portalOnlyEmps.push(...(page as IPortalOnlyRow[]));
+    portalOnlyEmps.push(...page);
     if (page.length < EMP_PAGE) break;
     portalOffset += EMP_PAGE;
   }
@@ -361,10 +353,9 @@ export async function syncEmployeesLogic(
     else portalOnlyByName.set(key, [e]);
   }
 
-  const { data: dbDepartments } = await supabase
-    .from('org_departments')
-    .select('id, sigur_department_id, name')
-    .not('sigur_department_id', 'is', null);
+  const dbDepartments = await query<{ id: string; sigur_department_id: number | null; name: string | null }>(
+    'SELECT id, sigur_department_id, name FROM org_departments WHERE sigur_department_id IS NOT NULL',
+  );
 
   const sigurDeptToDbId = new Map<number, string>();
   const sigurDeptToName = new Map<number, string>();
@@ -375,10 +366,9 @@ export async function syncEmployeesLogic(
     }
   }
 
-  const { data: dbPositions } = await supabase
-    .from('positions')
-    .select('id, sigur_position_id')
-    .not('sigur_position_id', 'is', null);
+  const dbPositions = await query<{ id: string; sigur_position_id: number | null }>(
+    'SELECT id, sigur_position_id FROM positions WHERE sigur_position_id IS NOT NULL',
+  );
 
   const sigurPosToDbId = new Map<number, string>();
   for (const p of dbPositions || []) {
@@ -388,9 +378,9 @@ export async function syncEmployeesLogic(
   }
 
   // Карта имя должности → DB id (для текстового резолва)
-  const { data: allDbPositions } = await supabase
-    .from('positions')
-    .select('id, name');
+  const allDbPositions = await query<{ id: string; name: string | null }>(
+    'SELECT id, name FROM positions',
+  );
 
   const posNameToDbId = new Map<string, string>();
   for (const p of allDbPositions || []) {
@@ -433,7 +423,18 @@ export async function syncEmployeesLogic(
     const POS_BATCH = 100;
     for (let i = 0; i < posInserts.length; i += POS_BATCH) {
       const batch = posInserts.slice(i, i + POS_BATCH);
-      const { data: created } = await supabase.from('positions').upsert(batch, { onConflict: 'name', ignoreDuplicates: true }).select('id, name');
+      const params: unknown[] = [];
+      const placeholders: string[] = [];
+      for (const row of batch) {
+        params.push(row.name, row.category);
+        placeholders.push(`($${params.length - 1}, $${params.length})`);
+      }
+      const created = await query<{ id: string; name: string | null }>(
+        `INSERT INTO positions (name, category) VALUES ${placeholders.join(', ')}
+         ON CONFLICT (name) DO NOTHING
+         RETURNING id, name`,
+        params,
+      );
       for (const p of created || []) {
         if (p.name) posNameToDbId.set(p.name.toLowerCase(), p.id);
       }
@@ -645,43 +646,40 @@ export async function syncEmployeesLogic(
             // (effective_to=NULL), а не создаём новую запись задним числом today().
             // Иначе после случайного обрыва пары (например, удалённого нового
             // назначения через UI «История») каждый цикл sync порождал бы gap.
-            const { count: openCount } = await supabase
-              .from('employee_assignments')
-              .select('id', { count: 'exact', head: true })
-              .eq('employee_id', u.id)
-              .is('effective_to', null);
+            const openCountRow = await queryOne<{ count: number }>(
+              `SELECT count(*)::int AS count FROM employee_assignments
+               WHERE employee_id = $1 AND effective_to IS NULL`,
+              [u.id],
+            );
+            const openCount = openCountRow?.count ?? 0;
 
             let reopened = false;
-            if ((openCount ?? 0) === 0) {
-              const { data: lastClosed } = await supabase
-                .from('employee_assignments')
-                .select('id, position_id, effective_to')
-                .eq('employee_id', u.id)
-                .eq('org_department_id', nextDeptId)
-                .not('effective_to', 'is', null)
-                .order('effective_to', { ascending: false })
-                .limit(1)
-                .maybeSingle();
+            if (openCount === 0) {
+              const lastClosed = await queryOne<{ id: string; position_id: string | null; effective_to: string | null }>(
+                `SELECT id, position_id, effective_to FROM employee_assignments
+                 WHERE employee_id = $1 AND org_department_id = $2 AND effective_to IS NOT NULL
+                 ORDER BY effective_to DESC
+                 LIMIT 1`,
+                [u.id, nextDeptId],
+              );
               if (lastClosed) {
                 const nowIso = new Date().toISOString();
-                const { error: reopenErr } = await supabase
-                  .from('employee_assignments')
-                  .update({ effective_to: null, updated_at: nowIso })
-                  .eq('id', lastClosed.id);
-                if (!reopenErr) {
-                  await supabase
-                    .from('employees')
-                    .update({
-                      org_department_id: nextDeptId,
-                      position_id: lastClosed.position_id || null,
-                      updated_at: nowIso,
-                    })
-                    .eq('id', u.id);
+                try {
+                  await execute(
+                    'UPDATE employee_assignments SET effective_to = NULL, updated_at = $1 WHERE id = $2',
+                    [nowIso, lastClosed.id],
+                  );
+                  await execute(
+                    `UPDATE employees SET org_department_id = $1, position_id = $2, updated_at = $3 WHERE id = $4`,
+                    [nextDeptId, lastClosed.position_id || null, nowIso, u.id],
+                  );
                   console.log('[syncEmployees] reopened orphaned assignment', {
                     employeeId: u.id, assignmentId: lastClosed.id, deptId: nextDeptId,
                     previousEffectiveTo: lastClosed.effective_to,
                   });
                   reopened = true;
+                } catch {
+                  reopened = false;
                 }
               }
             }
@@ -702,9 +700,23 @@ export async function syncEmployeesLogic(
             delete u.fields.position_id;
           }
           // Остальные поля — прямой update
-          if (Object.keys(u.fields).length > 0) {
-            const { error } = await supabase.from('employees').update(u.fields).eq('id', u.id);
-            if (error) return { error };
+          const keys = Object.keys(u.fields);
+          if (keys.length > 0) {
+            try {
+              const setParts: string[] = [];
+              const params: unknown[] = [];
+              for (const key of keys) {
+                params.push(u.fields[key]);
+                setParts.push(`${key} = $${params.length}`);
+              }
+              params.push(u.id);
+              await execute(
+                `UPDATE employees SET ${setParts.join(', ')} WHERE id = $${params.length}`,
+                params,
+              );
+            } catch (err) {
+              return { error: { message: err instanceof Error ? err.message : 'Unknown' } };
+            }
           }
           employeeCache.invalidate(u.id);
           return { error: null };
@@ -723,34 +735,59 @@ export async function syncEmployeesLogic(
 
   const BATCH_SIZE = 100;
   const insertedAccessSeeds: Array<{ id: number; org_department_id: string }> = [];
+
+  const INSERT_COLUMNS = [
+    'full_name', 'last_name', 'first_name', 'middle_name', 'hire_date',
+    'employment_status', 'is_archived', 'sigur_employee_id',
+    'org_department_id', 'position_id', 'tab_number',
+  ];
+
+  const insertOneRow = async (row: Record<string, unknown>) => {
+    const params: unknown[] = INSERT_COLUMNS.map(col => row[col] ?? null);
+    const placeholders = INSERT_COLUMNS.map((_, idx) => `$${idx + 1}`).join(', ');
+    return queryOne<{ id: number; org_department_id: string | null }>(
+      `INSERT INTO employees (${INSERT_COLUMNS.join(', ')}) VALUES (${placeholders})
+       RETURNING id, org_department_id`,
+      params,
+    );
+  };
+
   for (let i = 0; i < inserts.length; i += BATCH_SIZE) {
     const batch = inserts.slice(i, i + BATCH_SIZE);
-    const { data: insertedRows, error: insertError } = await supabase
-      .from('employees')
-      .insert(batch)
-      .select('id, org_department_id');
-    if (insertError) {
-      console.warn(`[syncEmployees] batch ${i / BATCH_SIZE + 1} failed: ${insertError.message}. Fallback to individual inserts.`);
+    // Пытаемся вставить пачкой одним запросом
+    try {
+      const allParams: unknown[] = [];
+      const groups: string[] = [];
       for (const row of batch) {
-        const { data: singleRow, error: singleErr } = await supabase
-          .from('employees')
-          .insert(row)
-          .select('id, org_department_id')
-          .single();
-        if (singleErr) {
-          errors.push(`${(row as Record<string, unknown>).full_name}: ${singleErr.message}`);
-        } else {
-          imported++;
-          if (singleRow?.id && singleRow.org_department_id) {
-            insertedAccessSeeds.push({ id: singleRow.id as number, org_department_id: singleRow.org_department_id as string });
-          }
+        const group: string[] = [];
+        for (const col of INSERT_COLUMNS) {
+          allParams.push(row[col] ?? null);
+          group.push(`$${allParams.length}`);
         }
+        groups.push(`(${group.join(', ')})`);
       }
-    } else {
+      const insertedRows = await query<{ id: number; org_department_id: string | null }>(
+        `INSERT INTO employees (${INSERT_COLUMNS.join(', ')}) VALUES ${groups.join(', ')}
+         RETURNING id, org_department_id`,
+        allParams,
+      );
       imported += batch.length;
       for (const row of insertedRows || []) {
         if (row.id && row.org_department_id) {
-          insertedAccessSeeds.push({ id: row.id as number, org_department_id: row.org_department_id as string });
+          insertedAccessSeeds.push({ id: row.id, org_department_id: row.org_department_id });
+        }
+      }
+    } catch (insertError) {
+      console.warn(`[syncEmployees] batch ${i / BATCH_SIZE + 1} failed: ${(insertError as Error).message}. Fallback to individual inserts.`);
+      for (const row of batch) {
+        try {
+          const singleRow = await insertOneRow(row);
+          imported++;
+          if (singleRow?.id && singleRow.org_department_id) {
+            insertedAccessSeeds.push({ id: singleRow.id, org_department_id: singleRow.org_department_id });
+          }
+        } catch (singleErr) {
+          errors.push(`${(row as Record<string, unknown>).full_name}: ${(singleErr as Error).message}`);
         }
       }
     }
@@ -790,16 +827,16 @@ export async function syncEmployeesLogic(
     errors.push(safety.reason!);
   } else {
     for (const emp of toAutoFire) {
-      const { error: fireErr } = await supabase
-        .from('employees')
-        .update({ employment_status: 'fired', updated_at: new Date().toISOString() })
-        .eq('id', emp.id);
-      if (fireErr) {
-        errors.push(`auto-fire ${emp.id}: ${fireErr.message}`);
-        continue;
+      try {
+        await execute(
+          "UPDATE employees SET employment_status = 'fired', updated_at = $1 WHERE id = $2",
+          [new Date().toISOString(), emp.id],
+        );
+        autoFired++;
+        autoFiredIds.push(emp.id);
+      } catch (fireErr) {
+        errors.push(`auto-fire ${emp.id}: ${(fireErr as Error).message}`);
       }
-      autoFired++;
-      autoFiredIds.push(emp.id);
     }
 
     if (autoFiredIds.length > 0) {
@@ -829,15 +866,18 @@ export async function syncEmployeesLogic(
         if (emp.id != null) sigurDeptById.set(emp.id, emp.departmentId ?? null);
       }
 
-      const { data: firedRows, error: firedErr } = await supabase
-        .from('employees')
-        .select('id, sigur_employee_id')
-        .eq('employment_status', 'fired')
-        .not('sigur_employee_id', 'is', null);
+      let firedRows: { id: number; sigur_employee_id: number | null }[];
+      try {
+        firedRows = await query<{ id: number; sigur_employee_id: number | null }>(
+          `SELECT id, sigur_employee_id FROM employees
+           WHERE employment_status = 'fired' AND sigur_employee_id IS NOT NULL`,
+        );
+      } catch (firedErr) {
+        errors.push(`fired->archive select: ${(firedErr as Error).message}`);
+        firedRows = [];
+      }
 
-      if (firedErr) {
-        errors.push(`fired->archive select: ${firedErr.message}`);
-      } else {
+      {
         const toMove: number[] = [];
         let skippedNotInSigur = 0;
         let skippedAlreadyArchived = 0;

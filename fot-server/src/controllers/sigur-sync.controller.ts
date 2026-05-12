@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { sigurService } from '../services/sigur.service.js';
-import { supabase } from '../config/database.js';
+import { execute } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { buildInclusiveDateRange } from '../utils/date.utils.js';
 import { parseFIO } from '../utils/fio.utils.js';
@@ -340,23 +340,21 @@ export const sigurSyncController = {
       const errors: string[] = [];
 
       for (const day of days) {
-        const { count, error: deleteError } = await supabase
-          .from('skud_events')
-          .delete({ count: 'exact' })
-          .eq('event_date', day);
-
-        if (deleteError) {
-          errors.push(`[${day}] ${deleteError.message}`);
-        } else {
+        try {
+          const count = await execute(
+            'DELETE FROM skud_events WHERE event_date = $1',
+            [day],
+          );
           totalDeleted += count || 0;
+        } catch (deleteError) {
+          errors.push(`[${day}] ${(deleteError as Error).message}`);
         }
       }
 
-      await supabase
-        .from('skud_daily_summary')
-        .delete()
-        .gte('date', startDate)
-        .lte('date', endDate);
+      await execute(
+        'DELETE FROM skud_daily_summary WHERE date >= $1 AND date <= $2',
+        [startDate, endDate],
+      );
 
       await auditService.logFromRequest(req, req.user.id, 'CLEAR_SKUD', {
         details: { startDate, endDate, deletedCount: totalDeleted, errors },
@@ -600,15 +598,14 @@ export const sigurSyncController = {
       // Привязка существующих сотрудников к Sigur ID
       if (matches && matches.length > 0) {
         for (const m of matches) {
-          const { error } = await supabase
-            .from('employees')
-            .update({ sigur_employee_id: m.sigurId })
-            .eq('id', m.employeeId);
-
-          if (error) {
-            errors.push(`Привязка #${m.employeeId}: ${error.message}`);
-          } else {
+          try {
+            await execute(
+              'UPDATE employees SET sigur_employee_id = $1 WHERE id = $2',
+              [m.sigurId, m.employeeId],
+            );
             linked++;
+          } catch (error) {
+            errors.push(`Привязка #${m.employeeId}: ${(error as Error).message}`);
           }
         }
       }
@@ -617,21 +614,26 @@ export const sigurSyncController = {
       if (createNew && createNew.length > 0) {
         for (const emp of createNew) {
           const fio = parseFIO(emp.name);
-          const { error } = await supabase.from('employees').insert({
-            full_name: emp.name.trim(),
-            last_name: fio.lastName,
-            first_name: fio.firstName || null,
-            middle_name: fio.middleName || null,
-            hire_date: new Date().toISOString().slice(0, 10),
-            sigur_employee_id: emp.sigurId || null,
-            org_department_id: emp.orgDepartmentId || null,
-            position_id: emp.positionId || null,
-          });
-
-          if (error) {
-            errors.push(`Создание ${emp.name}: ${error.message}`);
-          } else {
+          try {
+            await execute(
+              `INSERT INTO employees
+               (full_name, last_name, first_name, middle_name, hire_date,
+                sigur_employee_id, org_department_id, position_id)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+              [
+                emp.name.trim(),
+                fio.lastName,
+                fio.firstName || null,
+                fio.middleName || null,
+                new Date().toISOString().slice(0, 10),
+                emp.sigurId || null,
+                emp.orgDepartmentId || null,
+                emp.positionId || null,
+              ],
+            );
             created++;
+          } catch (error) {
+            errors.push(`Создание ${emp.name}: ${(error as Error).message}`);
           }
         }
       }

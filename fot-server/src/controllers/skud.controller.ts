@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import * as Sentry from '@sentry/node';
 import { z } from 'zod';
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import { sigurService } from '../services/sigur.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -133,19 +133,29 @@ async function loadEmployeeEventFailuresForRequest(
   startDate: unknown,
   endDate: unknown,
 ): Promise<ISkudEventFailureResponse[]> {
-  let query = supabase
-    .from('skud_event_failures')
-    .select('id, employee_id, physical_person, card_number, event_date, event_time, event_at, access_point, direction, failure_type, failure_type_id, reason')
-    .eq('employee_id', employeeId)
-    .order('event_date', { ascending: true })
-    .order('event_time', { ascending: true });
+  const conditions: string[] = ['employee_id = $1'];
+  const params: unknown[] = [employeeId];
+  if (typeof startDate === 'string' && startDate) {
+    params.push(startDate);
+    conditions.push(`event_date >= $${params.length}`);
+  }
+  if (typeof endDate === 'string' && endDate) {
+    params.push(endDate);
+    conditions.push(`event_date <= $${params.length}`);
+  }
 
-  if (typeof startDate === 'string' && startDate) query = query.gte('event_date', startDate);
-  if (typeof endDate === 'string' && endDate) query = query.lte('event_date', endDate);
-
-  const { data, error } = await query;
-  if (error) {
-    console.warn('[skud] loadEmployeeEventFailuresForRequest error:', error.message);
+  let data: Record<string, unknown>[] = [];
+  try {
+    data = await query<Record<string, unknown>>(
+      `SELECT id, employee_id, physical_person, card_number, event_date, event_time, event_at, access_point, direction, failure_type, failure_type_id, reason
+       FROM skud_event_failures
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY event_date ASC, event_time ASC`,
+      params,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn('[skud] loadEmployeeEventFailuresForRequest error:', message);
     return [];
   }
   return (data || []).map((row: Record<string, unknown>) => ({
@@ -234,11 +244,11 @@ async function loadEmployeeEventsForRequest(
   let employeeFullName: string | null = null;
 
   if (includeEmployeeName || byId.length === 0 || !preferFastSingleDay) {
-    const { data: employeeData } = await supabase
-      .from('employees')
-      .select('full_name')
-      .eq('id', employeeId)
-      .single();
+    const employeeRows = await query<{ full_name: string | null }>(
+      'SELECT full_name FROM employees WHERE id = $1 LIMIT 1',
+      [employeeId],
+    );
+    const employeeData = employeeRows[0];
 
     if (employeeData?.full_name) {
       employeeName = employeeData.full_name;
@@ -259,12 +269,11 @@ async function loadEmployeeEventsForRequest(
       try {
         let resolvedFullName = employeeFullName;
         if (!resolvedFullName) {
-          const { data: employeeData } = await supabase
-            .from('employees')
-            .select('full_name')
-            .eq('id', employeeId)
-            .single();
-          resolvedFullName = employeeData?.full_name || null;
+          const employeeRows = await query<{ full_name: string | null }>(
+            'SELECT full_name FROM employees WHERE id = $1 LIMIT 1',
+            [employeeId],
+          );
+          resolvedFullName = employeeRows[0]?.full_name || null;
         }
         if (!resolvedFullName) return;
 
@@ -313,20 +322,23 @@ async function loadEmployeeEventsForRequest(
 
 async function getInternalAccessPointsForRequest(req: AuthenticatedRequest): Promise<Set<string>> {
   const scope = await resolveRequestDataScope(req);
-  let query = supabase
-    .from('skud_access_point_settings')
-    .select('access_point_name, is_internal');
+  const conditions: string[] = [];
+  const params: unknown[] = [];
 
   if (scope === 'department') {
     const managedDepartmentIds = await resolveManagedDepartmentIds(req);
     if (managedDepartmentIds.length === 0) {
       return new Set();
     }
-    query = query.in('department_id', managedDepartmentIds);
+    params.push(managedDepartmentIds);
+    conditions.push(`department_id = ANY($${params.length}::uuid[])`);
   }
 
-  const { data, error } = await query;
-  if (error) throw error;
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const data = await query<{ access_point_name: string; is_internal: boolean }>(
+    `SELECT access_point_name, is_internal FROM skud_access_point_settings ${whereClause}`,
+    params,
+  );
 
   return new Set(
     (data || [])
@@ -505,26 +517,31 @@ const skudReadController = {
       const startStr = formatDateToISO(startDate);
       const endStr = formatDateToISO(endDate);
 
-      let query = supabase
-        .from('skud_daily_summary')
-        .select('employee_id, date, first_entry, last_exit, total_hours, is_present')
-        .gte('date', startStr)
-        .lte('date', endStr)
-        .order('date');
+      const conditions: string[] = ['date >= $1', 'date <= $2'];
+      const params: unknown[] = [startStr, endStr];
 
       const syncFilter = await getSyncFilteredEmployees();
       if (syncFilter) {
         const { empIds: allowedIds } = syncFilter;
         if (allowedIds.size > 0) {
-          query = query.in('employee_id', [...allowedIds]);
+          params.push([...allowedIds]);
+          conditions.push(`employee_id = ANY($${params.length}::bigint[])`);
         } else {
           res.json({ success: true, data: [] });
           return;
         }
       }
 
-      const { data, error } = await query;
-      if (error) {
+      let data: unknown[];
+      try {
+        data = await query(
+          `SELECT employee_id, date, first_entry, last_exit, total_hours, is_present
+           FROM skud_daily_summary
+           WHERE ${conditions.join(' AND ')}
+           ORDER BY date`,
+          params,
+        );
+      } catch (error) {
         console.error('Get daily summary error:', error);
         res.status(500).json({ success: false, error: 'Failed to fetch daily summary' });
         return;
@@ -641,32 +658,60 @@ const skudReadController = {
       const { startDate, endDate, accessPoint, employeeId, search } = req.query;
       const searchStr = typeof search === 'string' ? search.trim().toLowerCase() : '';
 
-      let query = supabase
-        .from('skud_events')
-        .select('id, physical_person, card_number, event_date, event_time, access_point, direction, employee_id')
-        .order('event_date', { ascending: false })
-        .order('event_time', { ascending: false });
+      const limit = searchStr ? 10000 : 1000;
+      const conditions: string[] = [];
+      const params: unknown[] = [];
 
-      query = query.limit(searchStr ? 10000 : 1000);
-
-      if (startDate && typeof startDate === 'string') query = query.gte('event_date', startDate);
-      if (endDate && typeof endDate === 'string') query = query.lte('event_date', endDate);
-      if (accessPoint && typeof accessPoint === 'string') query = query.eq('access_point', accessPoint);
-      if (employeeId && typeof employeeId === 'string') query = query.eq('employee_id', parseInt(employeeId, 10));
+      if (startDate && typeof startDate === 'string') {
+        params.push(startDate);
+        conditions.push(`event_date >= $${params.length}`);
+      }
+      if (endDate && typeof endDate === 'string') {
+        params.push(endDate);
+        conditions.push(`event_date <= $${params.length}`);
+      }
+      if (accessPoint && typeof accessPoint === 'string') {
+        params.push(accessPoint);
+        conditions.push(`access_point = $${params.length}`);
+      }
+      if (employeeId && typeof employeeId === 'string') {
+        params.push(parseInt(employeeId, 10));
+        conditions.push(`employee_id = $${params.length}`);
+      }
 
       const syncFilter = await getSyncFilteredEmployees();
       if (syncFilter) {
         const { empIds: allowedIds } = syncFilter;
         if (allowedIds.size > 0) {
-          query = query.in('employee_id', [...allowedIds]);
+          params.push([...allowedIds]);
+          conditions.push(`employee_id = ANY($${params.length}::bigint[])`);
         } else {
           res.json({ success: true, data: [] });
           return;
         }
       }
 
-      const { data, error } = await query;
-      if (error) {
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+      let data: Array<{
+        id: number;
+        physical_person: string;
+        card_number: string | null;
+        event_date: string;
+        event_time: string;
+        access_point: string | null;
+        direction: string | null;
+        employee_id: number | null;
+      }> = [];
+      try {
+        data = await query(
+          `SELECT id, physical_person, card_number, event_date, event_time, access_point, direction, employee_id
+           FROM skud_events
+           ${whereClause}
+           ORDER BY event_date DESC, event_time DESC
+           LIMIT ${limit}`,
+          params,
+        );
+      } catch (error) {
         console.error('Get events error:', error);
         res.status(500).json({ success: false, error: 'Failed to fetch events' });
         return;
@@ -742,24 +787,38 @@ const skudReadController = {
         }
       }
 
-      let query = supabase
-        .from('skud_event_failures')
-        .select(
-          'id, employee_id, physical_person, card_number, event_date, event_time, event_at, access_point, direction, failure_type, failure_type_id, reason',
-        )
-        .order('event_date', { ascending: false })
-        .order('event_time', { ascending: false })
-        .range(offset, offset + limit - 1);
+      const conditions: string[] = [];
+      const params: unknown[] = [];
 
-      if (typeof startDate === 'string' && startDate) query = query.gte('event_date', startDate);
-      if (typeof endDate === 'string' && endDate) query = query.lte('event_date', endDate);
-      if (hasEmpIdFilter) query = query.eq('employee_id', empIdNum);
+      if (typeof startDate === 'string' && startDate) {
+        params.push(startDate);
+        conditions.push(`event_date >= $${params.length}`);
+      }
+      if (typeof endDate === 'string' && endDate) {
+        params.push(endDate);
+        conditions.push(`event_date <= $${params.length}`);
+      }
+      if (hasEmpIdFilter) {
+        params.push(empIdNum);
+        conditions.push(`employee_id = $${params.length}`);
+      }
       if (typeof failureType === 'string' && failureType) {
-        query = query.eq('failure_type', failureType);
+        params.push(failureType);
+        conditions.push(`failure_type = $${params.length}`);
       }
 
-      const { data, error } = await query;
-      if (error) {
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+      let data: Record<string, unknown>[] = [];
+      try {
+        data = await query<Record<string, unknown>>(
+          `SELECT id, employee_id, physical_person, card_number, event_date, event_time, event_at, access_point, direction, failure_type, failure_type_id, reason
+           FROM skud_event_failures
+           ${whereClause}
+           ORDER BY event_date DESC, event_time DESC
+           LIMIT ${limit} OFFSET ${offset}`,
+          params,
+        );
+      } catch (error) {
         console.error('getEventFailures error:', error);
         Sentry.captureException(error, { tags: { route: 'GET /api/skud/event-failures' } });
         res.status(500).json({ success: false, error: 'Failed to fetch event failures' });
@@ -818,14 +877,12 @@ const skudReadController = {
         return;
       }
 
-      const query = supabase
-        .from('skud_events')
-        .select('access_point')
-        .not('access_point', 'is', null)
-        .limit(5000);
-
-      const { data, error } = await query;
-      if (error) {
+      let data: { access_point: string | null }[] = [];
+      try {
+        data = await query<{ access_point: string | null }>(
+          `SELECT access_point FROM skud_events WHERE access_point IS NOT NULL LIMIT 5000`,
+        );
+      } catch (error) {
         console.error('Get access points error:', error);
         res.status(500).json({ success: false, error: 'Failed to fetch access points' });
         return;
@@ -834,7 +891,7 @@ const skudReadController = {
       const unique = sortAccessPointNames(
         new Set(
           (data || [])
-            .map((row: { access_point: string | null }) => normalizeAccessPointName(row.access_point))
+            .map(row => normalizeAccessPointName(row.access_point))
             .filter((name): name is string => !!name),
         ),
       );
@@ -863,11 +920,12 @@ const skudReadController = {
         : null;
 
       if (!requestedDepartmentId) {
-        const { data, error } = await supabase
-          .from('skud_access_point_settings')
-          .select('access_point_name, is_internal');
-
-        if (error) {
+        let data: { access_point_name: string; is_internal: boolean }[] = [];
+        try {
+          data = await query<{ access_point_name: string; is_internal: boolean }>(
+            'SELECT access_point_name, is_internal FROM skud_access_point_settings',
+          );
+        } catch (error) {
           console.error('Get access point settings error:', error);
           res.status(500).json({ success: false, error: 'Ошибка получения настроек' });
           return;
@@ -875,7 +933,7 @@ const skudReadController = {
 
         const aggregated = new Map<string, boolean>();
         for (const row of data || []) {
-          const name = (row.access_point_name as string).trim();
+          const name = row.access_point_name.trim();
           const current = aggregated.get(name) ?? false;
           aggregated.set(name, current || Boolean(row.is_internal));
         }
@@ -898,13 +956,13 @@ const skudReadController = {
         return;
       }
 
-      const query = supabase
-        .from('skud_access_point_settings')
-        .select('access_point_name, is_internal')
-        .eq('department_id', departmentId);
-
-      const { data, error } = await query;
-      if (error) {
+      let data: { access_point_name: string; is_internal: boolean }[] = [];
+      try {
+        data = await query<{ access_point_name: string; is_internal: boolean }>(
+          'SELECT access_point_name, is_internal FROM skud_access_point_settings WHERE department_id = $1',
+          [departmentId],
+        );
+      } catch (error) {
         console.error('Get access point settings error:', error);
         res.status(500).json({ success: false, error: 'Ошибка получения настроек' });
         return;

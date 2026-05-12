@@ -6,7 +6,7 @@
  * (кэш ещё не прогрет, structure-sync ещё не прошёл, Sigur был в outage).
  * Batch 500 событий за цикл — rolling catch-up, не перегружает БД одним тиком.
  */
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import { normalizePersonName } from './sigur-sync-shared.js';
 
@@ -22,10 +22,9 @@ export async function backfillUnmatchedEvents(): Promise<void> {
   // Все незаархивированные сотрудники (не фильтруем по employment_status —
   // новые хайры могут быть в 'pending', уволенные без архивирования — валидны
   // для их исторических событий до увольнения).
-  const { data: employees } = await supabase
-    .from('employees')
-    .select('id, full_name')
-    .eq('is_archived', false);
+  const employees = await query<{ id: number; full_name: string | null }>(
+    'SELECT id, full_name FROM employees WHERE is_archived = false',
+  );
 
   if (!employees || employees.length === 0) return;
 
@@ -45,14 +44,13 @@ export async function backfillUnmatchedEvents(): Promise<void> {
   }
 
   // Выбираем старые unmatched события первыми — чтобы не копились хвосты.
-  const { data: unmatchedEvents } = await supabase
-    .from('skud_events')
-    .select('id, physical_person, event_date')
-    .gte('event_date', fromDate)
-    .lte('event_date', today)
-    .is('employee_id', null)
-    .order('event_date', { ascending: true })
-    .limit(BACKFILL_BATCH_LIMIT);
+  const unmatchedEvents = await query<{ id: number; physical_person: string | null; event_date: string }>(
+    `SELECT id, physical_person, event_date FROM skud_events
+     WHERE event_date >= $1 AND event_date <= $2 AND employee_id IS NULL
+     ORDER BY event_date ASC
+     LIMIT ${BACKFILL_BATCH_LIMIT}`,
+    [fromDate, today],
+  );
 
   if (!unmatchedEvents || unmatchedEvents.length === 0) return;
 
@@ -83,10 +81,10 @@ export async function backfillUnmatchedEvents(): Promise<void> {
     `[backfill] window ${fromDate}..${today}: matched ${backfillEventIds.length}/${unmatchedEvents.length} events${unmatchedEvents.length === BACKFILL_BATCH_LIMIT ? ' (batch capped, will continue next tick)' : ''}`,
   );
 
-  await supabase.rpc('bulk_update_employee_ids', {
-    p_event_ids: backfillEventIds,
-    p_employee_ids: backfillEmpIds,
-  });
+  await query(
+    'SELECT public.bulk_update_employee_ids($1::bigint[], $2::bigint[])',
+    [backfillEventIds, backfillEmpIds],
+  );
 
   // Пересчитываем daily_summary по реальной дате каждого связанного события.
   const pairs = [...pairsSet].map(key => {
@@ -95,7 +93,10 @@ export async function backfillUnmatchedEvents(): Promise<void> {
   });
 
   if (pairs.length > 0) {
-    await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: pairs });
+    await query(
+      'SELECT public.batch_recalculate_skud_daily_summary($1::jsonb)',
+      [JSON.stringify(pairs)],
+    );
   }
 
   console.log(`[backfill] recalculated daily summary for ${pairs.length} employee-days`);

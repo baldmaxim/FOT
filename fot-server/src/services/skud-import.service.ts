@@ -2,7 +2,7 @@
  * СКУД: импорт событий из Excel, синхронизация из Sigur, очистка дублей.
  */
 import { readExcelRows } from '../utils/excel-reader.js';
-import { supabase } from '../config/database.js';
+import { query, execute } from '../config/postgres.js';
 import { auditService } from './audit.service.js';
 import { sigurService } from './sigur.service.js';
 import { mapSigurEvent, type IMappedSigurEvent } from '../utils/sigur.mapper.js';
@@ -20,16 +20,47 @@ import type {
   IClearParams,
 } from '../types/skud.types.js';
 
+const SKUD_EVENT_COLUMNS = [
+  'physical_person',
+  'card_number',
+  'event_date',
+  'event_time',
+  'event_at',
+  'access_point',
+  'direction',
+  'employee_id',
+  'dedup_hash',
+] as const;
+
+/**
+ * Bulk INSERT с ON CONFLICT DO NOTHING на дедуп-хэше.
+ */
+async function bulkInsertSkudEvents(rows: ISkudEventRow[]): Promise<number> {
+  if (rows.length === 0) return 0;
+  const params: unknown[] = [];
+  const placeholders: string[] = [];
+  for (const row of rows) {
+    const groupPlaceholders: string[] = [];
+    for (const col of SKUD_EVENT_COLUMNS) {
+      params.push(row[col as keyof ISkudEventRow]);
+      groupPlaceholders.push(`$${params.length}`);
+    }
+    placeholders.push(`(${groupPlaceholders.join(', ')})`);
+  }
+  const sql = `INSERT INTO skud_events (${SKUD_EVENT_COLUMNS.join(', ')})
+    VALUES ${placeholders.join(', ')}
+    ON CONFLICT (dedup_hash, event_date) DO NOTHING`;
+  return execute(sql, params);
+}
+
 // ─── Import from Excel ───
 
 export async function importFromExcel(params: IImportParams): Promise<IImportResult> {
   const { fileBuffer } = params;
 
-  // Загружаем сотрудников для сопоставления по ФИО
-  const { data: employeesData } = await supabase
-    .from('employees')
-    .select('id, full_name')
-    .eq('is_archived', false);
+  const employeesData = await query<{ id: number; full_name: string | null }>(
+    'SELECT id, full_name FROM employees WHERE is_archived = false',
+  );
 
   const employeeMap = new Map<string, number>();
   for (const emp of employeesData || []) {
@@ -37,7 +68,6 @@ export async function importFromExcel(params: IImportParams): Promise<IImportRes
     employeeMap.set(name, emp.id);
   }
 
-  // Парсим Excel
   const rows = await readExcelRows(fileBuffer);
 
   if (rows.length === 0) {
@@ -112,27 +142,27 @@ export async function importFromExcel(params: IImportParams): Promise<IImportRes
     throw Object.assign(new Error('Нет данных для импорта'), { errors });
   }
 
-  // Вставляем события
-  const { error: insertError } = await supabase
-    .from('skud_events')
-    .upsert(eventsToInsert, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true });
-
-  if (insertError) {
+  const INSERT_BATCH = 500;
+  try {
+    for (let i = 0; i < eventsToInsert.length; i += INSERT_BATCH) {
+      const batch = eventsToInsert.slice(i, i + INSERT_BATCH);
+      await bulkInsertSkudEvents(batch);
+    }
+  } catch (insertError) {
     console.error('Import insert error:', insertError);
     throw new Error('Ошибка сохранения данных');
   }
 
-  // Пересчитываем дневные сводки
   if (summariesToUpdate.size > 0) {
     const pairs = [...summariesToUpdate].map(key => {
       const [empId, date] = key.split(':');
       return { emp_id: parseInt(empId, 10), date };
     });
-    await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: pairs });
+    await query(
+      'SELECT public.batch_recalculate_skud_daily_summary($1::jsonb)',
+      [JSON.stringify(pairs)],
+    );
   }
-
-  // Аудит (userId нужен как параметр, но logFromRequest ожидает req)
-  // Аудит будет вызван в контроллере
 
   return {
     imported: eventsToInsert.length,
@@ -143,10 +173,6 @@ export async function importFromExcel(params: IImportParams): Promise<IImportRes
 
 // ─── Sync employee from Sigur (SSE) ───
 
-/**
- * Синхронизация событий Sigur для конкретного сотрудника.
- * Использует SSE-стрим, поэтому принимает req/res напрямую.
- */
 async function loadMappedEmployeeDayEvents(params: {
   day: string;
   connection?: 'external' | 'internal';
@@ -235,14 +261,12 @@ export async function syncEmployeeRange(params: {
 }): Promise<{ inserted: number; skipped: number; total: number; rawFetched: number }> {
   const { employeeId, startDate, endDate } = params;
 
-  const empQuery = supabase
-    .from('employees')
-    .select('id, full_name, sigur_employee_id')
-    .eq('id', employeeId)
-    .eq('is_archived', false);
-
-  const { data: empData, error: empError } = await empQuery.single();
-  if (empError || !empData) {
+  const empRows = await query<{ id: number; full_name: string | null; sigur_employee_id: number | null }>(
+    'SELECT id, full_name, sigur_employee_id FROM employees WHERE id = $1 AND is_archived = false',
+    [employeeId],
+  );
+  const empData = empRows[0];
+  if (!empData) {
     throw Object.assign(new Error('Сотрудник не найден'), { statusCode: 404 });
   }
 
@@ -271,11 +295,10 @@ export async function syncEmployeeRange(params: {
 
     if (mapped.length === 0) continue;
 
-    const { data: existingHashes } = await supabase
-      .from('skud_events')
-      .select('dedup_hash')
-      .eq('event_date', day)
-      .not('dedup_hash', 'is', null);
+    const existingHashes = await query<{ dedup_hash: string | null }>(
+      'SELECT dedup_hash FROM skud_events WHERE event_date = $1 AND dedup_hash IS NOT NULL',
+      [day],
+    );
 
     const existingSet = new Set<string>();
     for (const evt of existingHashes || []) {
@@ -310,11 +333,11 @@ export async function syncEmployeeRange(params: {
     const BATCH = 500;
     for (let i = 0; i < toInsert.length; i += BATCH) {
       const batch = toInsert.slice(i, i + BATCH);
-      const { error: insertErr } = await supabase
-        .from('skud_events')
-        .upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true });
-      if (!insertErr) {
+      try {
+        await bulkInsertSkudEvents(batch);
         totalInserted += batch.length;
+      } catch (err) {
+        console.error('[sync-employee-range] insert batch error:', err);
       }
     }
   }
@@ -323,7 +346,10 @@ export async function syncEmployeeRange(params: {
     const pairs = [...summariesToUpdate].map(date => ({
       emp_id: employeeId, date,
     }));
-    await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: pairs });
+    await query(
+      'SELECT public.batch_recalculate_skud_daily_summary($1::jsonb)',
+      [JSON.stringify(pairs)],
+    );
   }
 
   return {
@@ -346,15 +372,12 @@ export async function syncEmployee(
 ): Promise<void> {
   const { employeeId, startDate, endDate } = params;
 
-  // 1. Загрузка сотрудника
-  const empQuery = supabase
-    .from('employees')
-    .select('id, full_name, sigur_employee_id')
-    .eq('id', employeeId)
-    .eq('is_archived', false);
-
-  const { data: empData, error: empError } = await empQuery.single();
-  if (empError || !empData) {
+  const empRows = await query<{ id: number; full_name: string | null; sigur_employee_id: number | null }>(
+    'SELECT id, full_name, sigur_employee_id FROM employees WHERE id = $1 AND is_archived = false',
+    [employeeId],
+  );
+  const empData = empRows[0];
+  if (!empData) {
     throw Object.assign(new Error('Сотрудник не найден'), { statusCode: 404 });
   }
 
@@ -363,10 +386,8 @@ export async function syncEmployee(
 
   console.log(`[sync-employee] id=${employeeId}, sigurId=${sigurEmpId}, name="${employeeName}"`);
 
-  // 2. Список дней
   const days = buildInclusiveDateRange(startDate, endDate);
 
-  // 3. SSE-стрим прогресса
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -384,7 +405,6 @@ export async function syncEmployee(
 
   send({ type: 'start', totalDays: days.length, employeeName });
 
-  // 4. Обработка по дням
   for (let dayIdx = 0; dayIdx < days.length; dayIdx++) {
     const day = days[dayIdx];
     const dayStart = `${day}T00:00:00`;
@@ -400,7 +420,6 @@ export async function syncEmployee(
       continue;
     }
 
-    // Фильтрация по sigurEmpId или ФИО
     const filtered = rawEvents.filter(raw => {
       const r = raw as Record<string, unknown>;
       const data = r.data as Record<string, unknown> | undefined;
@@ -408,9 +427,7 @@ export async function syncEmployee(
       const accessObject = additionalData?.accessObject as Record<string, unknown> | undefined;
       const accessObjectData = accessObject?.data as Record<string, unknown> | undefined;
       const evtEmpId = data?.employeeId ?? accessObjectData?.id;
-      // Совпадение по Sigur ID
       if (sigurEmpId != null && evtEmpId != null && Number(evtEmpId) === Number(sigurEmpId)) return true;
-      // Фолбэк на имя
       const name = accessObjectData?.name;
       return typeof name === 'string' && normalizePersonName(name) === employeeName;
     });
@@ -435,12 +452,10 @@ export async function syncEmployee(
       .map(raw => mapSigurEvent(raw as Record<string, unknown>))
       .filter((m): m is NonNullable<typeof m> & { physicalPerson: string } => m !== null && m.physicalPerson !== null);
 
-    // Дедупликация
-    const { data: existingHashes } = await supabase
-      .from('skud_events')
-      .select('dedup_hash')
-      .eq('event_date', day)
-      .not('dedup_hash', 'is', null);
+    const existingHashes = await query<{ dedup_hash: string | null }>(
+      'SELECT dedup_hash FROM skud_events WHERE event_date = $1 AND dedup_hash IS NOT NULL',
+      [day],
+    );
 
     const existingSet = new Set<string>();
     for (const evt of existingHashes || []) {
@@ -476,25 +491,28 @@ export async function syncEmployee(
     const BATCH = 500;
     for (let i = 0; i < toInsert.length; i += BATCH) {
       const batch = toInsert.slice(i, i + BATCH);
-      const { error: insertErr } = await supabase.from('skud_events').upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true });
-      if (!insertErr) {
+      try {
+        await bulkInsertSkudEvents(batch);
         dayInserted += batch.length;
         totalInserted += batch.length;
+      } catch (err) {
+        console.error('[sync-employee] insert batch error:', err);
       }
     }
 
     send({ type: 'day_done', day, raw: rawEvents.length, matched: filtered.length, inserted: dayInserted });
   }
 
-  // 5. Пересчёт daily summary
   if (summariesToUpdate.size > 0) {
     const pairs = [...summariesToUpdate].map(date => ({
       emp_id: employeeId, date,
     }));
-    await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: pairs });
+    await query(
+      'SELECT public.batch_recalculate_skud_daily_summary($1::jsonb)',
+      [JSON.stringify(pairs)],
+    );
   }
 
-  // 6. Аудит
   await auditService.logFromRequest(req, req.user.id, 'SYNC_SIGUR_EMPLOYEE', {
     details: { employeeId, sigurEmpId, startDate, endDate, rawFetched: totalRaw, inserted: totalInserted, skipped: totalSkipped },
   });
@@ -512,21 +530,28 @@ export async function cleanDuplicates(): Promise<ICleanDuplicatesResult> {
   let totalUpdated = 0;
   let totalDeleted = 0;
 
-  // 1. Бэкфилл: вычисляем dedup_hash для строк без него
   while (true) {
-    const { data: rows } = await supabase
-      .from('skud_events')
-      .select('id, physical_person, event_date, event_time, access_point, direction')
-      .is('dedup_hash', null)
-      .order('id')
-      .range(offset, offset + BATCH - 1);
+    const rows = await query<{
+      id: number;
+      physical_person: string | null;
+      event_date: string;
+      event_time: string;
+      access_point: string | null;
+      direction: 'entry' | 'exit' | null;
+    }>(
+      `SELECT id, physical_person, event_date, event_time, access_point, direction
+       FROM skud_events
+       WHERE dedup_hash IS NULL
+       ORDER BY id
+       LIMIT ${BATCH} OFFSET ${offset}`,
+    );
 
     if (!rows || rows.length === 0) break;
 
     for (const row of rows) {
       const name = row.physical_person || '';
       const hash = computeDedupHash(name, row.event_date, row.event_time, row.access_point, row.direction);
-      await supabase.from('skud_events').update({ dedup_hash: hash }).eq('id', row.id);
+      await execute('UPDATE skud_events SET dedup_hash = $1 WHERE id = $2', [hash, row.id]);
       totalUpdated++;
     }
 
@@ -534,13 +559,14 @@ export async function cleanDuplicates(): Promise<ICleanDuplicatesResult> {
     offset += BATCH;
   }
 
-  // 2. Удаляем дубли
-  const { data: dupes } = await supabase.rpc('find_skud_duplicate_ids');
+  const dupes = await query<{ dedup_hash: string; event_date: string; min_id: number; count: number; id: number }>(
+    'SELECT * FROM public.find_skud_duplicate_ids()',
+  );
   if (dupes && dupes.length > 0) {
-    const idsToDelete: number[] = dupes.map((d: { id: number }) => d.id);
+    const idsToDelete: number[] = dupes.map(d => d.id);
     for (let i = 0; i < idsToDelete.length; i += BATCH) {
       const batch = idsToDelete.slice(i, i + BATCH);
-      await supabase.from('skud_events').delete().in('id', batch);
+      await execute('DELETE FROM skud_events WHERE id = ANY($1::bigint[])', [batch]);
       totalDeleted += batch.length;
     }
   }
@@ -553,25 +579,24 @@ export async function cleanDuplicates(): Promise<ICleanDuplicatesResult> {
 export async function clearData(params: IClearParams): Promise<void> {
   const { startDate, endDate } = params;
 
-  let eventsQuery = supabase
-    .from('skud_events')
-    .delete()
-    .gte('id', 0);
-
-  let summaryQuery = supabase
-    .from('skud_daily_summary')
-    .delete()
-    .gte('id', 0);
+  const eventsConditions: string[] = ['id >= 0'];
+  const eventsParams: unknown[] = [];
+  const summaryConditions: string[] = ['id >= 0'];
+  const summaryParams: unknown[] = [];
 
   if (startDate) {
-    eventsQuery = eventsQuery.gte('event_date', startDate);
-    summaryQuery = summaryQuery.gte('date', startDate);
+    eventsParams.push(startDate);
+    eventsConditions.push(`event_date >= $${eventsParams.length}`);
+    summaryParams.push(startDate);
+    summaryConditions.push(`date >= $${summaryParams.length}`);
   }
   if (endDate) {
-    eventsQuery = eventsQuery.lte('event_date', endDate);
-    summaryQuery = summaryQuery.lte('date', endDate);
+    eventsParams.push(endDate);
+    eventsConditions.push(`event_date <= $${eventsParams.length}`);
+    summaryParams.push(endDate);
+    summaryConditions.push(`date <= $${summaryParams.length}`);
   }
 
-  await eventsQuery;
-  await summaryQuery;
+  await execute(`DELETE FROM skud_events WHERE ${eventsConditions.join(' AND ')}`, eventsParams);
+  await execute(`DELETE FROM skud_daily_summary WHERE ${summaryConditions.join(' AND ')}`, summaryParams);
 }

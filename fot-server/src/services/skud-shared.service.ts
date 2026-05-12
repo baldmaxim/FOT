@@ -1,7 +1,7 @@
 /**
  * СКУД: общие хелперы и кэши, используемые несколькими сервисами.
  */
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 
 // ─── Кэш дерева отделов ───
 
@@ -13,7 +13,9 @@ export async function getAllDepartmentsTree(): Promise<{ id: string; parent_id: 
   const now = Date.now();
   if (deptTreeCache && deptTreeCache.expiresAt > now) return deptTreeCache.data;
 
-  const { data } = await supabase.from('org_departments').select('id, parent_id');
+  const data = await query<{ id: string; parent_id: string | null }>(
+    'SELECT id, parent_id FROM org_departments',
+  );
   deptTreeCache = { data: data || [], expiresAt: now + DEPT_TREE_CACHE_TTL };
   return deptTreeCache.data;
 }
@@ -103,9 +105,9 @@ export async function getSyncFilteredEmployees(): Promise<{ empIds: Set<number>;
     return syncFilterCache.data;
   }
   // 1. Загружаем whitelist sigur_department_id
-  const { data: filterRows } = await supabase
-    .from('skud_sync_department_filter')
-    .select('sigur_department_id');
+  const filterRows = await query<{ sigur_department_id: number }>(
+    'SELECT sigur_department_id FROM skud_sync_department_filter',
+  );
 
   if (!filterRows || filterRows.length === 0) {
     console.log('[sync-filter] Пустой whitelist → ничего не синхронизируем');
@@ -118,10 +120,10 @@ export async function getSyncFilteredEmployees(): Promise<{ empIds: Set<number>;
   console.log('[sync-filter] sigur_department_ids из фильтра:', sigurDeptIds);
 
   // 2. Маппим sigur_department_id → org_departments.id
-  const { data: depts } = await supabase
-    .from('org_departments')
-    .select('id, parent_id, name, sigur_department_id')
-    .in('sigur_department_id', sigurDeptIds);
+  const depts = await query<{ id: string; parent_id: string | null; name: string | null; sigur_department_id: number }>(
+    'SELECT id, parent_id, name, sigur_department_id FROM org_departments WHERE sigur_department_id = ANY($1::int[])',
+    [sigurDeptIds],
+  );
 
   console.log('[sync-filter] Найдено отделов по sigur_id:', depts?.length || 0,
     depts?.map(d => `${d.name} (sigur=${d.sigur_department_id})`));
@@ -147,11 +149,10 @@ export async function getSyncFilteredEmployees(): Promise<{ empIds: Set<number>;
   console.log('[sync-filter] Итого отделов (с дочерними):', deptIds.size);
 
   // 4. Загружаем сотрудников из этих отделов
-  const { data: employees } = await supabase
-    .from('employees')
-    .select('id, full_name')
-    .eq('is_archived', false)
-    .in('org_department_id', [...deptIds]);
+  const employees = await query<{ id: number; full_name: string | null }>(
+    'SELECT id, full_name FROM employees WHERE is_archived = false AND org_department_id = ANY($1::uuid[])',
+    [[...deptIds]],
+  );
 
   const empIds = new Set<number>();
   const empNames = new Set<string>();
@@ -191,13 +192,12 @@ export async function getInternalAccessPoints(): Promise<Set<string>> {
     return internalPointsCache.data;
   }
 
-  const { data } = await supabase
-    .from('skud_access_point_settings')
-    .select('access_point_name')
-    .eq('is_internal', true);
+  const data = await query<{ access_point_name: string }>(
+    'SELECT access_point_name FROM skud_access_point_settings WHERE is_internal = true',
+  );
 
   const points = new Set<string>(
-    (data || []).map((s: { access_point_name: string }) => s.access_point_name.trim()),
+    (data || []).map(s => s.access_point_name.trim()),
   );
   internalPointsCache = { data: points, expiresAt: now + AP_CACHE_TTL };
   return points;
@@ -250,17 +250,23 @@ export async function queryEventsByEmployeeId(
   startDate: unknown,
   endDate: unknown,
 ): Promise<Record<string, unknown>[]> {
-  let query = supabase
-    .from('skud_events')
-    .select('id, physical_person, card_number, event_date, event_time, access_point, direction, employee_id')
-    .eq('employee_id', employeeId)
-    .order('event_date', { ascending: false })
-    .order('event_time', { ascending: false })
-    .limit(5000);
-  if (startDate && typeof startDate === 'string') query = query.gte('event_date', startDate);
-  if (endDate && typeof endDate === 'string') query = query.lte('event_date', endDate);
+  const conditions: string[] = ['employee_id = $1'];
+  const params: unknown[] = [employeeId];
+  if (startDate && typeof startDate === 'string') {
+    params.push(startDate);
+    conditions.push(`event_date >= $${params.length}`);
+  }
+  if (endDate && typeof endDate === 'string') {
+    params.push(endDate);
+    conditions.push(`event_date <= $${params.length}`);
+  }
+  const sql = `SELECT id, physical_person, card_number, event_date, event_time, access_point, direction, employee_id
+    FROM skud_events
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY event_date DESC, event_time DESC
+    LIMIT 5000`;
 
-  const { data } = await query;
+  const data = await query<Record<string, unknown>>(sql, params);
   return data || [];
 }
 
@@ -272,15 +278,22 @@ export async function searchAndBackfillByName(
   endDate: unknown,
 ): Promise<Record<string, unknown>[]> {
   // Быстрая проверка: есть ли вообще unmatched события за период
-  let countQuery = supabase
-    .from('skud_events')
-    .select('id', { count: 'exact', head: true })
-    .is('employee_id', null);
+  const countConditions: string[] = ['employee_id IS NULL'];
+  const countParams: unknown[] = [];
+  if (startDate && typeof startDate === 'string') {
+    countParams.push(startDate);
+    countConditions.push(`event_date >= $${countParams.length}`);
+  }
+  if (endDate && typeof endDate === 'string') {
+    countParams.push(endDate);
+    countConditions.push(`event_date <= $${countParams.length}`);
+  }
 
-  if (startDate && typeof startDate === 'string') countQuery = countQuery.gte('event_date', startDate);
-  if (endDate && typeof endDate === 'string') countQuery = countQuery.lte('event_date', endDate);
-
-  const { count } = await countQuery;
+  const countRow = await query<{ count: number }>(
+    `SELECT count(*)::int AS count FROM skud_events WHERE ${countConditions.join(' AND ')}`,
+    countParams,
+  );
+  const count = countRow[0]?.count ?? 0;
   if (!count || count === 0) return [];
 
   const PAGE_SIZE = 1000;
@@ -290,24 +303,29 @@ export async function searchAndBackfillByName(
   const idsToBackfill: number[] = [];
 
   while (offset < MAX_SCAN) {
-    let query = supabase
-      .from('skud_events')
-      .select('id, physical_person, card_number, event_date, event_time, access_point, direction, employee_id')
-      .is('employee_id', null)
-      .order('event_date')
-      .range(offset, offset + PAGE_SIZE - 1);
-
-    if (startDate && typeof startDate === 'string') query = query.gte('event_date', startDate);
-    if (endDate && typeof endDate === 'string') query = query.lte('event_date', endDate);
-
-    const { data: page } = await query;
+    const pageConditions: string[] = ['employee_id IS NULL'];
+    const pageParams: unknown[] = [];
+    if (startDate && typeof startDate === 'string') {
+      pageParams.push(startDate);
+      pageConditions.push(`event_date >= $${pageParams.length}`);
+    }
+    if (endDate && typeof endDate === 'string') {
+      pageParams.push(endDate);
+      pageConditions.push(`event_date <= $${pageParams.length}`);
+    }
+    const sql = `SELECT id, physical_person, card_number, event_date, event_time, access_point, direction, employee_id
+      FROM skud_events
+      WHERE ${pageConditions.join(' AND ')}
+      ORDER BY event_date ASC
+      LIMIT ${PAGE_SIZE} OFFSET ${offset}`;
+    const page = await query<Record<string, unknown>>(sql, pageParams);
     if (!page || page.length === 0) break;
 
     for (const ev of page) {
-      const name = (ev.physical_person || '').toLowerCase().trim();
+      const name = String(ev.physical_person || '').toLowerCase().trim();
       if (name === employeeName) {
         matched.push(ev);
-        idsToBackfill.push(ev.id);
+        idsToBackfill.push(ev.id as number);
       }
     }
 
@@ -317,13 +335,15 @@ export async function searchAndBackfillByName(
 
   // Бэкфилл employee_id на найденные записи (в фоне, пакетный RPC)
   if (idsToBackfill.length > 0) {
-    supabase
-      .rpc('bulk_update_employee_ids', {
-        p_event_ids: idsToBackfill,
-        p_employee_ids: idsToBackfill.map(() => employeeId),
-      })
+    query(
+      'SELECT public.bulk_update_employee_ids($1::bigint[], $2::bigint[])',
+      [idsToBackfill, idsToBackfill.map(() => employeeId)],
+    )
       .then(() => {
         console.log(`[employee-events] backfilled employee_id=${employeeId} on ${idsToBackfill.length} events`);
+      })
+      .catch(err => {
+        console.error('[employee-events] backfill failed:', err);
       });
   }
 

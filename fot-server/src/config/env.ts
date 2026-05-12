@@ -60,6 +60,20 @@ const envSchema = z.object({
   SENTRY_AUTH_TOKEN: optionalString,
   SENTRY_ORG: optionalString,
   SENTRY_PROJECT: optionalString,
+
+  // PostgreSQL (прямое подключение через pg-Pool)
+  DATABASE_URL: z.string().min(1),
+  DATABASE_POOL_MAX: z.string().regex(/^\d+$/).default('10'),
+  DATABASE_STATEMENT_TIMEOUT_MS: z.string().regex(/^\d+$/).default('30000'),
+  DATABASE_SSL: z.string().default('true'),
+  DATABASE_SSL_CA_PATH: optionalString,
+
+  // Object Storage (S3-compatible — Cloudflare R2 / Yandex Object Storage)
+  OBJECT_STORAGE_ENDPOINT: optionalString,
+  OBJECT_STORAGE_ACCESS_KEY_ID: optionalString,
+  OBJECT_STORAGE_SECRET_ACCESS_KEY: optionalString,
+  OBJECT_STORAGE_REGION: z.string().default('auto'),
+  OBJECT_STORAGE_FORCE_PATH_STYLE: z.string().default('false'),
 });
 
 const parsed = envSchema.safeParse(process.env);

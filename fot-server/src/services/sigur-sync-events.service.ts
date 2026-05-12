@@ -1,5 +1,5 @@
 import { sigurService } from './sigur.service.js';
-import { supabase } from '../config/database.js';
+import { query, execute } from '../config/postgres.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
 import { computeDedupHash, computeFailureDedupHash } from '../utils/dedup.utils.js';
 import { buildInclusiveDateRange, buildMoscowEventTimestamp } from '../utils/date.utils.js';
@@ -59,10 +59,13 @@ export async function syncEventsLogic(
 
   // 1. Загружаем сотрудников
   send({ type: 'events_preparing', phase: 'db_employees' });
-  const { data: employeesData } = await supabase
-    .from('employees')
-    .select('id, full_name, sigur_employee_id')
-    .eq('is_archived', false);
+  const employeesData = await query<{
+    id: number;
+    full_name: string | null;
+    sigur_employee_id: number | null;
+  }>(
+    'SELECT id, full_name, sigur_employee_id FROM employees WHERE is_archived = false',
+  );
 
   const employeeByName = new Map<string, { id: number }>();
   const sigurIdMap = new Map<number, { id: number }>();
@@ -131,13 +134,12 @@ export async function syncEventsLogic(
     const HASH_PAGE = 10000;
     let hashOffset = 0;
     while (true) {
-      const { data: hashPage } = await supabase
-        .from('skud_events')
-        .select('dedup_hash')
-        .gte('event_date', days[0])
-        .lte('event_date', days[days.length - 1])
-        .not('dedup_hash', 'is', null)
-        .range(hashOffset, hashOffset + HASH_PAGE - 1);
+      const hashPage = await query<{ dedup_hash: string | null }>(
+        `SELECT dedup_hash FROM skud_events
+         WHERE event_date >= $1 AND event_date <= $2 AND dedup_hash IS NOT NULL
+         LIMIT ${HASH_PAGE} OFFSET ${hashOffset}`,
+        [days[0], days[days.length - 1]],
+      );
       if (!hashPage || hashPage.length === 0) break;
       for (const evt of hashPage) {
         if (evt.dedup_hash) existingSet.add(evt.dedup_hash);
@@ -154,13 +156,12 @@ export async function syncEventsLogic(
     const HASH_PAGE = 10000;
     let hashOffset = 0;
     while (true) {
-      const { data: hashPage } = await supabase
-        .from('skud_event_failures')
-        .select('dedup_hash')
-        .gte('event_date', days[0])
-        .lte('event_date', days[days.length - 1])
-        .not('dedup_hash', 'is', null)
-        .range(hashOffset, hashOffset + HASH_PAGE - 1);
+      const hashPage = await query<{ dedup_hash: string | null }>(
+        `SELECT dedup_hash FROM skud_event_failures
+         WHERE event_date >= $1 AND event_date <= $2 AND dedup_hash IS NOT NULL
+         LIMIT ${HASH_PAGE} OFFSET ${hashOffset}`,
+        [days[0], days[days.length - 1]],
+      );
       if (!hashPage || hashPage.length === 0) break;
       for (const evt of hashPage) {
         if (evt.dedup_hash) existingFailureSet.add(evt.dedup_hash);
@@ -358,29 +359,66 @@ export async function syncEventsLogic(
       });
     }
 
-    // Вставка батчами с паузами (защита от 502 на облачном Supabase)
+    // Вставка батчами с паузами
+    const EVENT_COLUMNS = [
+      'physical_person', 'card_number', 'event_date', 'event_time',
+      'event_at', 'access_point', 'direction', 'employee_id', 'dedup_hash',
+    ];
     for (let i = 0; i < dayInserts.length; i += BATCH_SIZE) {
       const batch = dayInserts.slice(i, i + BATCH_SIZE);
-      const { error: insertError } = await supabase.from('skud_events').upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true });
-      if (insertError) {
-        errors.push(`[${day}] ${insertError.message}`);
-      } else {
+      try {
+        const params: unknown[] = [];
+        const placeholders: string[] = [];
+        for (const row of batch) {
+          const group: string[] = [];
+          for (const col of EVENT_COLUMNS) {
+            params.push(row[col]);
+            group.push(`$${params.length}`);
+          }
+          placeholders.push(`(${group.join(', ')})`);
+        }
+        await execute(
+          `INSERT INTO skud_events (${EVENT_COLUMNS.join(', ')})
+           VALUES ${placeholders.join(', ')}
+           ON CONFLICT (dedup_hash, event_date) DO NOTHING`,
+          params,
+        );
         totalInserted += batch.length;
+      } catch (insertError) {
+        errors.push(`[${day}] ${(insertError as Error).message}`);
       }
       if (i + BATCH_SIZE < dayInserts.length) await sleep(BATCH_DELAY_MS);
     }
 
     // Вставка ошибочных событий — отдельной таблицей, без recalc-RPC.
+    const FAILURE_COLUMNS = [
+      'physical_person', 'card_number', 'event_date', 'event_time',
+      'event_at', 'access_point', 'direction', 'employee_id',
+      'failure_type', 'failure_type_id', 'reason', 'raw_event_id', 'dedup_hash',
+    ];
     let dayFailuresInserted = 0;
     for (let i = 0; i < dayFailureInserts.length; i += BATCH_SIZE) {
       const batch = dayFailureInserts.slice(i, i + BATCH_SIZE);
-      const { error: insertError } = await supabase
-        .from('skud_event_failures')
-        .upsert(batch, { onConflict: 'dedup_hash,event_date', ignoreDuplicates: true });
-      if (insertError) {
-        errors.push(`[${day}][failures] ${insertError.message}`);
-      } else {
+      try {
+        const params: unknown[] = [];
+        const placeholders: string[] = [];
+        for (const row of batch) {
+          const group: string[] = [];
+          for (const col of FAILURE_COLUMNS) {
+            params.push(row[col]);
+            group.push(`$${params.length}`);
+          }
+          placeholders.push(`(${group.join(', ')})`);
+        }
+        await execute(
+          `INSERT INTO skud_event_failures (${FAILURE_COLUMNS.join(', ')})
+           VALUES ${placeholders.join(', ')}
+           ON CONFLICT (dedup_hash, event_date) DO NOTHING`,
+          params,
+        );
         dayFailuresInserted += batch.length;
+      } catch (insertError) {
+        errors.push(`[${day}][failures] ${(insertError as Error).message}`);
       }
       if (i + BATCH_SIZE < dayFailureInserts.length) await sleep(BATCH_DELAY_MS);
     }
@@ -409,7 +447,10 @@ export async function syncEventsLogic(
     const SUMMARY_BATCH = 200;
     for (let i = 0; i < allPairs.length; i += SUMMARY_BATCH) {
       const chunk = allPairs.slice(i, i + SUMMARY_BATCH);
-      await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: chunk });
+      await query(
+        'SELECT public.batch_recalculate_skud_daily_summary($1::jsonb)',
+        [JSON.stringify(chunk)],
+      );
       if (i + SUMMARY_BATCH < allPairs.length) await sleep(BATCH_DELAY_MS);
     }
   }

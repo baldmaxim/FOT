@@ -9,6 +9,10 @@ process.env.ENCRYPTION_KEY ||= '0'.repeat(64);
 process.env.JWT_SECRET ||= 'test-jwt-secret-must-be-long-enough-for-zod-validator';
 process.env.NODE_ENV ||= 'test';
 process.env.SIGUR_RUNTIME_ALLOWED_HOSTS ||= '*';
+process.env.DATABASE_URL ||= 'postgres://test:test@localhost.test:5432/test';
+process.env.DATABASE_POOL_MAX ||= '10';
+process.env.DATABASE_STATEMENT_TIMEOUT_MS ||= '30000';
+process.env.DATABASE_SSL ||= 'false';
 // Гарантируем, что Sentry молчит в тестах (DSN не задан → init не вызывается).
 delete process.env.SENTRY_DSN;
 

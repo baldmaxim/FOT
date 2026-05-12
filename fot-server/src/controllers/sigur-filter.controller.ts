@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import { supabase } from '../config/database.js';
+import { query, execute } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { invalidateDeptTreeCache, invalidateSyncFilterCache } from '../services/skud-shared.service.js';
 
@@ -16,15 +16,15 @@ interface ISigurDeptRow {
  * Непустой → активируются только отделы из whitelist + все их предки (включая ручных).
  */
 async function reconcileDepartmentsActivity(whitelistSigurIds: number[]): Promise<void> {
-  const { data: allDepts, error } = await supabase
-    .from('org_departments')
-    .select('id, sigur_department_id, parent_id');
-
-  if (error) {
-    throw new Error(`reconcile: failed to load departments: ${error.message}`);
+  let rows: ISigurDeptRow[];
+  try {
+    rows = await query<ISigurDeptRow>(
+      'SELECT id, sigur_department_id, parent_id FROM org_departments',
+    );
+  } catch (error) {
+    throw new Error(`reconcile: failed to load departments: ${(error as Error).message}`);
   }
 
-  const rows = (allDepts || []) as ISigurDeptRow[];
   const sigurIdToDbId = new Map<number, string>();
   for (const row of rows) {
     if (row.sigur_department_id != null) {
@@ -60,23 +60,25 @@ async function reconcileDepartmentsActivity(whitelistSigurIds: number[]): Promis
 
   for (let i = 0; i < inactiveDbIds.length; i += BATCH) {
     const batch = inactiveDbIds.slice(i, i + BATCH);
-    const { error: updateError } = await supabase
-      .from('org_departments')
-      .update({ is_active: false })
-      .in('id', batch);
-    if (updateError) {
-      throw new Error(`reconcile: failed to deactivate: ${updateError.message}`);
+    try {
+      await execute(
+        'UPDATE org_departments SET is_active = false WHERE id = ANY($1::uuid[])',
+        [batch],
+      );
+    } catch (updateError) {
+      throw new Error(`reconcile: failed to deactivate: ${(updateError as Error).message}`);
     }
   }
 
   for (let i = 0; i < activeSigurDbIds.length; i += BATCH) {
     const batch = activeSigurDbIds.slice(i, i + BATCH);
-    const { error: updateError } = await supabase
-      .from('org_departments')
-      .update({ is_active: true })
-      .in('id', batch);
-    if (updateError) {
-      throw new Error(`reconcile: failed to activate: ${updateError.message}`);
+    try {
+      await execute(
+        'UPDATE org_departments SET is_active = true WHERE id = ANY($1::uuid[])',
+        [batch],
+      );
+    } catch (updateError) {
+      throw new Error(`reconcile: failed to activate: ${(updateError as Error).message}`);
     }
   }
 }
@@ -88,16 +90,12 @@ export const sigurFilterController = {
    */
   async getFilter(_req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { data, error } = await supabase
-        .from('skud_sync_department_filter')
-        .select('id, sigur_department_id, sigur_department_name, created_at')
-        .order('sigur_department_name');
-
-      if (error) {
-        res.status(500).json({ success: false, error: error.message });
-        return;
-      }
-      res.json({ success: true, data: data || [] });
+      const data = await query(
+        `SELECT id, sigur_department_id, sigur_department_name, created_at
+         FROM skud_sync_department_filter
+         ORDER BY sigur_department_name`,
+      );
+      res.json({ success: true, data });
     } catch (error) {
       console.error('getSyncFilter error:', error);
       res.status(500).json({ success: false, error: 'Ошибка загрузки фильтра синхронизации' });
@@ -119,32 +117,33 @@ export const sigurFilterController = {
       }
 
       // Удаляем все текущие записи
-      const { error: deleteError } = await supabase
-        .from('skud_sync_department_filter')
-        .delete()
-        .neq('id', '00000000-0000-0000-0000-000000000000');
-
-      if (deleteError) {
-        res.status(500).json({ success: false, error: deleteError.message });
+      try {
+        await execute(
+          "DELETE FROM skud_sync_department_filter WHERE id <> '00000000-0000-0000-0000-000000000000'::uuid",
+        );
+      } catch (deleteError) {
+        res.status(500).json({ success: false, error: (deleteError as Error).message });
         return;
       }
 
       // Вставляем новые записи
       if (departments.length > 0) {
-        const rows = departments.map(d => ({
-          sigur_department_id: d.sigur_department_id,
-          sigur_department_name: d.sigur_department_name || null,
-        }));
-
         const BATCH = 500;
-        for (let i = 0; i < rows.length; i += BATCH) {
-          const batch = rows.slice(i, i + BATCH);
-          const { error: insertError } = await supabase
-            .from('skud_sync_department_filter')
-            .insert(batch);
-
-          if (insertError) {
-            res.status(500).json({ success: false, error: insertError.message });
+        for (let i = 0; i < departments.length; i += BATCH) {
+          const batch = departments.slice(i, i + BATCH);
+          const params: unknown[] = [];
+          const placeholders: string[] = [];
+          for (const d of batch) {
+            params.push(d.sigur_department_id, d.sigur_department_name || null);
+            placeholders.push(`($${params.length - 1}, $${params.length})`);
+          }
+          try {
+            await execute(
+              `INSERT INTO skud_sync_department_filter (sigur_department_id, sigur_department_name) VALUES ${placeholders.join(', ')}`,
+              params,
+            );
+          } catch (insertError) {
+            res.status(500).json({ success: false, error: (insertError as Error).message });
             return;
           }
         }
