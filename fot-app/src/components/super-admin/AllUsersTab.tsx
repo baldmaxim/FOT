@@ -362,14 +362,13 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
 
       <div className={styles.controlGroup}>
         <label>Начальник участка:</label>
-        <label className={styles.editNameBtn} style={{ cursor: 'pointer', gap: 8, display: 'inline-flex', alignItems: 'center' }}>
+        <label className={styles.editNameBtn} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}>
           <input
             type="checkbox"
             checked={user.is_site_supervisor}
             disabled={savingSiteSupervisor}
             onChange={(e) => { void handleSiteSupervisorChange(e.target.checked); }}
           />
-          <span>{user.is_site_supervisor ? 'Начальник участка' : 'Сотрудник'}</span>
         </label>
       </div>
 
