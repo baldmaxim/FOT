@@ -3,6 +3,7 @@ import { AlertCircle, RefreshCw, Search, X } from 'lucide-react';
 import { skudService } from '../../services/skudService';
 import { employeeService } from '../../services/employeeService';
 import type { SkudEventFailure } from '../../types';
+import { formatFailureType } from '../../utils/skudFailureTypes';
 import '../../styles/SkudFailuresTab.css';
 
 interface IEmployeeOption {
@@ -310,7 +311,7 @@ export const SkudFailuresTab: FC = () => {
                     {row.direction === 'entry' ? 'Вход' : row.direction === 'exit' ? 'Выход' : '—'}
                   </td>
                   <td>
-                    <span className="skud-failure-badge">{row.failure_type}</span>
+                    <span className="skud-failure-badge" title={row.failure_type}>{formatFailureType(row.failure_type)}</span>
                   </td>
                   <td title={row.reason || ''}>{row.reason || '—'}</td>
                 </tr>

@@ -13,6 +13,7 @@ import {
   mergeFailuresIntoDisplay,
   sumBreakSeconds,
 } from '../../utils/skudDisplay';
+import { formatFailureType } from '../../utils/skudFailureTypes';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 import { AttendanceCalendar } from './AttendanceCalendar';
 import { EmployeeInfoSection } from './EmployeeInfoSection';
@@ -153,7 +154,7 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
                         <XCircle size={14} />
                       </span>
                       <span className="ec-event-time">{f.event_time.slice(0, 5)}</span>
-                      <span className="ec-event-failure-badge">{f.failure_type}</span>
+                      <span className="ec-event-failure-badge" title={f.failure_type}>{formatFailureType(f.failure_type)}</span>
                       {f.access_point && (
                         <AccessPointTrigger
                           accessPointName={f.access_point}

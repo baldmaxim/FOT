@@ -13,6 +13,7 @@ import {
   mergeFailuresIntoDisplay,
   sumBreakSeconds,
 } from '../../utils/skudDisplay';
+import { formatFailureType } from '../../utils/skudFailureTypes';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 import { getDayStatus, STATUS_LABEL_RU, STATUS_TO_DETAIL_HOURS_CLASS } from '../../utils/dayStatus';
 
@@ -190,7 +191,7 @@ const EventsTab: FC<{
                   <XCircle size={14} />
                 </span>
                 <span className="ts-modal-event-time">{formatTime(f.event_time)}</span>
-                <span className="ts-modal-event-failure-badge">{f.failure_type}</span>
+                <span className="ts-modal-event-failure-badge" title={f.failure_type}>{formatFailureType(f.failure_type)}</span>
                 {f.access_point ? (
                   <AccessPointTrigger
                     accessPointName={f.access_point}

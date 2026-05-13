@@ -19,6 +19,7 @@ import {
   timeToSeconds,
   toLocalISO,
 } from '../../utils/skudDisplay';
+import { formatFailureType } from '../../utils/skudFailureTypes';
 
 interface IEmployeeSkudSectionProps {
   employeeId: number;
@@ -443,7 +444,7 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
                     <span className="event-status-mark event-status-mark--failure" aria-label="Не учитывается">
                       <XCircle size={14} />
                     </span>
-                    <span className="skud-failure-badge">{f.failure_type}</span>
+                    <span className="skud-failure-badge" title={f.failure_type}>{formatFailureType(f.failure_type)}</span>
                     {f.reason && <span className="skud-failure-reason">{f.reason}</span>}
                   </div>
                   <div className="skud-col-point">
@@ -631,7 +632,7 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
                             <span className="skud-event-time">
                               <Clock size={12} /> {formatTime(f.event_time)}
                             </span>
-                            <span className="skud-failure-badge">{f.failure_type}</span>
+                            <span className="skud-failure-badge" title={f.failure_type}>{formatFailureType(f.failure_type)}</span>
                             {f.access_point && (
                               <AccessPointTrigger
                                 accessPointName={f.access_point}

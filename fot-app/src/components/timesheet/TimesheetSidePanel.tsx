@@ -12,6 +12,7 @@ import {
   buildDisplayItems,
   mergeFailuresIntoDisplay,
 } from '../../utils/skudDisplay';
+import { formatFailureType } from '../../utils/skudFailureTypes';
 import {
   getDaysInMonth,
   formatDateRu,
@@ -333,7 +334,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                                     <XCircle size={13} />
                                   </span>
                                   <span className="ts-day-event-time">{formatTime(f.event_time)}</span>
-                                  <span className="ts-day-event-failure-badge">{f.failure_type}</span>
+                                  <span className="ts-day-event-failure-badge" title={f.failure_type}>{formatFailureType(f.failure_type)}</span>
                                   {f.access_point && (
                                     <AccessPointTrigger
                                       accessPointName={f.access_point}
