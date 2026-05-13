@@ -227,24 +227,39 @@
 }
 
 .cardCountValue {
-  font-size: 1.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 1.4rem;
   font-weight: 700;
   letter-spacing: -0.5px;
-  color: var(--success);
+  color: var(--text-primary);
   line-height: 1;
 }
 
+.cardCountValue::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success, #22c55e);
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15);
+}
+
 .cardCountLabel {
-  font-size: 0.7rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
   color: var(--text-tertiary);
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .cardEmpty {
-  padding: 14px;
+  padding: 10px;
   text-align: center;
   color: var(--text-tertiary);
-  font-size: 0.85rem;
+  font-size: 0.78rem;
   background: var(--bg-primary);
   border-radius: 8px;
   border: 1px dashed var(--border);
@@ -261,6 +276,11 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
+  transition: border-color 0.15s ease;
+}
+
+.company:hover {
+  border-color: var(--border-hover, var(--border));
 }
 
 .companyHeader {
@@ -272,9 +292,11 @@
   padding: 10px 12px;
   background: transparent;
   border: none;
+  border-left: 3px solid transparent;
   cursor: pointer;
   color: var(--text-primary);
-  font-size: 0.88rem;
+  font-size: 0.85rem;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
 }
 
 .companyHeader:not(:disabled):hover {
@@ -283,12 +305,12 @@
 
 .companyHeader:disabled {
   cursor: default;
-  color: var(--text-tertiary);
+  opacity: 0.55;
 }
 
 .companyHeaderOpen {
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
+  border-left-color: var(--accent);
 }
 
 .companyName {
@@ -297,95 +319,135 @@
   gap: 6px;
   text-align: left;
   font-weight: 500;
+  color: var(--text-primary);
 }
 
 .companyIcon {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   color: var(--text-tertiary);
   flex-shrink: 0;
 }
 
 .companyCount {
-  display: flex;
+  display: inline-flex;
   align-items: baseline;
   gap: 4px;
   font-weight: 600;
   color: var(--accent);
+  opacity: 0.85;
 }
 
 .companyCountLabel {
-  font-size: 0.7rem;
+  font-size: 0.66rem;
   color: var(--text-tertiary);
   font-weight: 400;
+  letter-spacing: 0.3px;
 }
 
 .employeeList {
   list-style: none;
   margin: 0;
-  padding: 4px 0;
+  padding: 0;
+  background: var(--bg-secondary);
 }
 
 .employeeRow {
-  padding: 8px 12px;
+  padding: 10px 14px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   border-bottom: 1px solid var(--border);
+  transition: background-color 0.12s ease;
 }
 
 .employeeRow:last-child {
   border-bottom: none;
 }
 
+.employeeRow:hover {
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.05));
+}
+
 .employeeName {
-  font-size: 0.88rem;
-  font-weight: 500;
-  color: var(--text-primary);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.employeeNameText {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .unsyncedBadge {
-  font-size: 0.65rem;
-  font-weight: 600;
+  font-size: 0.6rem;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.5px;
   padding: 1px 6px;
   border-radius: 999px;
-  background: var(--warning-muted, rgba(245, 158, 11, 0.15));
-  color: var(--warning, #f59e0b);
-  border: 1px solid var(--warning, #f59e0b);
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px dashed var(--warning, #f59e0b);
   white-space: nowrap;
+  line-height: 1.4;
 }
 
-.employeeMeta {
+.employeePosition {
+  font-size: 0.76rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+
+.employeeDepartment {
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: var(--accent);
+  opacity: 0.78;
+  line-height: 1.3;
+}
+
+.employeeFooter {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
-  font-size: 0.75rem;
+  margin-top: 2px;
+  font-size: 0.72rem;
   color: var(--text-tertiary);
-}
-
-.employeeTime {
-  color: var(--text-secondary);
+  line-height: 1.3;
 }
 
 .employeeAp {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
+  min-width: 0;
   max-width: 100%;
+}
+
+.employeeApText {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.employeeTime {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 .tinyIcon {
   width: 12px;
   height: 12px;
+  color: var(--text-tertiary);
   flex-shrink: 0;
 }
 

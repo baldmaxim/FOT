@@ -48,6 +48,7 @@ export interface IPresenceObjectEmployee {
   employee_id: number;
   full_name: string;
   position_name: string | null;
+  department_name: string | null;
   first_entry: string | null;
   last_access_point: string | null;
   since: string | null;

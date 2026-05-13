@@ -1,25 +1,28 @@
 /**
- * Резолвер компании для unsynced СКУД-проходов: physical_person → корневой
- * sigur-департамент (компания). Тянет полный список Sigur employees и
- * departments один раз в 10 минут, держит in-memory индексы.
+ * Резолвер компании и непосредственного отдела для unsynced СКУД-проходов:
+ * physical_person → { root sigur department (= компания), department (= конкретное
+ * подразделение) }. Тянет полный список Sigur employees и departments один раз
+ * в 10 минут, держит in-memory индексы.
  *
- * Стратегия деградации: если Sigur не настроен или fetch упал, возвращаем
- * пустые мапы — вызывающий код кладёт unsynced людей в bucket «Без компании».
+ * Деградация: если Sigur не настроен или fetch упал, возвращаем пустую мапу —
+ * вызывающий код кладёт unsynced людей в bucket «Без компании».
  */
 import { sigurService } from './sigur.service.js';
 
 const RESOLVER_CACHE_TTL_MS = 10 * 60_000;
 
-export interface ISigurCompanyResolution {
+export interface ISigurDeptRef {
   sigur_department_id: number;
   name: string;
 }
 
+export interface ISigurEmployeeResolution {
+  root: ISigurDeptRef;
+  department: ISigurDeptRef;
+}
+
 interface ICachedResolver {
-  /** Map<lowercase(name), root sigur department id> */
-  nameToRootDeptId: Map<string, number>;
-  /** Map<root sigur department id, { sigur_department_id, name }> */
-  rootMeta: Map<number, ISigurCompanyResolution>;
+  byName: Map<string, ISigurEmployeeResolution>;
   expiresAt: number;
 }
 
@@ -74,11 +77,10 @@ async function loadAllSigurEmployees(): Promise<Array<{ name: string; department
   return result;
 }
 
-function resolveRootDepartmentId(
-  deptId: number | null,
+function resolveRootNode(
+  deptId: number,
   tree: Map<number, { id: number; parentId: number | null; name: string }>,
-): number | null {
-  if (deptId == null) return null;
+): { id: number; name: string } | null {
   let currentId: number | null = deptId;
   const visited = new Set<number>();
   while (currentId != null) {
@@ -86,7 +88,7 @@ function resolveRootDepartmentId(
     visited.add(currentId);
     const node = tree.get(currentId);
     if (!node) return null;
-    if (node.parentId == null) return node.id;
+    if (node.parentId == null) return { id: node.id, name: node.name };
     currentId = node.parentId;
   }
   return null;
@@ -95,11 +97,7 @@ function resolveRootDepartmentId(
 async function buildResolver(): Promise<ICachedResolver> {
   const isConfigured = await sigurService.isConfigured();
   if (!isConfigured) {
-    return {
-      nameToRootDeptId: new Map(),
-      rootMeta: new Map(),
-      expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS,
-    };
+    return { byName: new Map(), expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
   }
 
   let tree: Map<number, { id: number; parentId: number | null; name: string }>;
@@ -110,39 +108,33 @@ async function buildResolver(): Promise<ICachedResolver> {
       loadAllSigurEmployees(),
     ]);
   } catch (error) {
-    console.warn('[sigur-presence-resolver] failed to load Sigur data, falling back to empty maps:', (error as Error).message);
-    return {
-      nameToRootDeptId: new Map(),
-      rootMeta: new Map(),
-      expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS,
-    };
+    console.warn(
+      '[sigur-presence-resolver] failed to load Sigur data, falling back to empty maps:',
+      (error as Error).message,
+    );
+    return { byName: new Map(), expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
   }
 
-  const nameToRootDeptId = new Map<string, number>();
-  const rootMeta = new Map<number, ISigurCompanyResolution>();
+  const byName = new Map<string, ISigurEmployeeResolution>();
 
   for (const employee of employees) {
     const normalized = normalizeName(employee.name);
     if (!normalized) continue;
-    const rootId = resolveRootDepartmentId(employee.departmentId, tree);
-    if (rootId == null) continue;
+    if (employee.departmentId == null) continue;
+    const deptNode = tree.get(employee.departmentId);
+    if (!deptNode) continue;
+    const root = resolveRootNode(employee.departmentId, tree);
+    if (!root) continue;
 
-    // First-wins: один человек может встречаться многократно (history) —
-    // берём первое попадание, остальные игнорируем.
-    if (!nameToRootDeptId.has(normalized)) {
-      nameToRootDeptId.set(normalized, rootId);
-    }
-    if (!rootMeta.has(rootId)) {
-      const node = tree.get(rootId);
-      rootMeta.set(rootId, { sigur_department_id: rootId, name: node?.name || '' });
-    }
+    // First-wins: один человек может встречаться многократно — берём первое попадание.
+    if (byName.has(normalized)) continue;
+    byName.set(normalized, {
+      root: { sigur_department_id: root.id, name: root.name },
+      department: { sigur_department_id: deptNode.id, name: deptNode.name },
+    });
   }
 
-  return {
-    nameToRootDeptId,
-    rootMeta,
-    expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS,
-  };
+  return { byName, expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
 }
 
 async function getResolver(): Promise<ICachedResolver> {
@@ -165,36 +157,21 @@ export function invalidateSigurPresenceResolverCache(): void {
 }
 
 /**
- * Резолвит physical_person из СКУД-события в корневой sigur-департамент
- * (= «компанию»). Возвращает null если человек не найден в Sigur, Sigur
- * не настроен или fetch упал.
+ * Bulk-резолв для массива physical_person за один вызов — share-cache.
+ * Возвращает Map по lowercase-имени.
  */
-export async function resolveSigurCompanyByPhysicalPerson(
-  physicalPerson: string,
-): Promise<ISigurCompanyResolution | null> {
-  const normalized = normalizeName(physicalPerson);
-  if (!normalized) return null;
-  const resolver = await getResolver();
-  const rootId = resolver.nameToRootDeptId.get(normalized);
-  if (rootId == null) return null;
-  return resolver.rootMeta.get(rootId) ?? null;
-}
-
-/** Bulk-резолв для массива physical_person за один вызов — share-cache. */
-export async function resolveSigurCompaniesByNames(
+export async function resolveSigurEmployeesByNames(
   names: string[],
-): Promise<Map<string, ISigurCompanyResolution>> {
-  const result = new Map<string, ISigurCompanyResolution>();
+): Promise<Map<string, ISigurEmployeeResolution>> {
+  const result = new Map<string, ISigurEmployeeResolution>();
   if (names.length === 0) return result;
   const resolver = await getResolver();
   for (const name of names) {
     const normalized = normalizeName(name);
     if (!normalized) continue;
     if (result.has(normalized)) continue;
-    const rootId = resolver.nameToRootDeptId.get(normalized);
-    if (rootId == null) continue;
-    const meta = resolver.rootMeta.get(rootId);
-    if (meta) result.set(normalized, meta);
+    const match = resolver.byName.get(normalized);
+    if (match) result.set(normalized, match);
   }
   return result;
 }

@@ -9,7 +9,7 @@
 import { getPresence } from './skud-presence.service.js';
 import { listTravelObjects } from './skud-travel.service.js';
 import { getCompanyResolveIndex, getInternalAccessPoints } from './skud-shared.service.js';
-import { resolveSigurCompaniesByNames } from './sigur-presence-resolver.service.js';
+import { resolveSigurEmployeesByNames } from './sigur-presence-resolver.service.js';
 import { query } from '../config/postgres.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 
@@ -21,6 +21,7 @@ export interface IPresenceObjectEmployee {
   employee_id: number;
   full_name: string;
   position_name: string | null;
+  department_name: string | null;
   first_entry: string | null;
   last_access_point: string | null;
   since: string | null;
@@ -166,7 +167,7 @@ export async function getPresenceByObject(): Promise<IPresenceByObjectResponse> 
   const onlineUnsynced = [...personState.values()].filter(s => s.last.direction === 'entry');
   const unsyncedNames = onlineUnsynced.map(s => s.physical_person);
   const sigurResolved = unsyncedNames.length > 0
-    ? await resolveSigurCompaniesByNames(unsyncedNames)
+    ? await resolveSigurEmployeesByNames(unsyncedNames)
     : new Map();
 
   // ─── Аккумулятор bucket'ов ───
@@ -242,6 +243,7 @@ export async function getPresenceByObject(): Promise<IPresenceByObjectResponse> 
       employee_id: emp.employee_id,
       full_name: emp.full_name,
       position_name: emp.position_name,
+      department_name: emp.department_name,
       first_entry: emp.first_entry,
       last_access_point: emp.last_access_point,
       since: emp.since,
@@ -258,18 +260,20 @@ export async function getPresenceByObject(): Promise<IPresenceByObjectResponse> 
 
     let companyId = NO_COMPANY_ID;
     let companyName = 'Без компании';
+    let departmentName: string | null = null;
     const sigurMatch = sigurResolved.get(state.physical_person.toLowerCase());
     if (sigurMatch) {
+      departmentName = sigurMatch.department.name || null;
       // Если у local-каталога уже есть компания с этим sigur_department_id —
       // мерджим в её bucket (чтобы synced и unsynced одной компании показывались вместе).
-      const localCompanyId = companyIndex.companyBySigurId.get(sigurMatch.sigur_department_id);
+      const localCompanyId = companyIndex.companyBySigurId.get(sigurMatch.root.sigur_department_id);
       if (localCompanyId) {
         const meta = companyIndex.companyMeta.get(localCompanyId);
         companyId = localCompanyId;
-        companyName = meta?.name || sigurMatch.name || '—';
+        companyName = meta?.name || sigurMatch.root.name || '—';
       } else {
-        companyId = `${SIGUR_COMPANY_ID_PREFIX}${sigurMatch.sigur_department_id}`;
-        companyName = sigurMatch.name || '—';
+        companyId = `${SIGUR_COMPANY_ID_PREFIX}${sigurMatch.root.sigur_department_id}`;
+        companyName = sigurMatch.root.name || '—';
       }
     }
 
@@ -278,6 +282,7 @@ export async function getPresenceByObject(): Promise<IPresenceByObjectResponse> 
       employee_id: unsyncedEmployeeKey(state.physical_person.toLowerCase()),
       full_name: state.physical_person,
       position_name: null,
+      department_name: departmentName,
       first_entry: state.first_entry_time,
       last_access_point: lastAp,
       since: state.last.event_time,

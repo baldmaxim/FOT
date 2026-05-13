@@ -18,7 +18,8 @@ const matchesEmployee = (emp: IPresenceObjectEmployee, query: string): boolean =
   if (!query) return true;
   const normalized = query.toLowerCase();
   return emp.full_name.toLowerCase().includes(normalized)
-    || (emp.position_name?.toLowerCase().includes(normalized) ?? false);
+    || (emp.position_name?.toLowerCase().includes(normalized) ?? false)
+    || (emp.department_name?.toLowerCase().includes(normalized) ?? false);
 };
 
 interface IFilteredBucket extends Omit<IPresenceObjectBucket, 'companies'> {
@@ -67,7 +68,7 @@ const filterData = (
 const EmployeeRow: FC<{ emp: IPresenceObjectEmployee }> = ({ emp }) => (
   <li className={styles.employeeRow}>
     <div className={styles.employeeName}>
-      {emp.full_name}
+      <span className={styles.employeeNameText}>{emp.full_name}</span>
       {emp.is_unsynced && (
         <span
           className={styles.unsyncedBadge}
@@ -77,15 +78,20 @@ const EmployeeRow: FC<{ emp: IPresenceObjectEmployee }> = ({ emp }) => (
         </span>
       )}
     </div>
-    <div className={styles.employeeMeta}>
-      {emp.position_name && <span>{emp.position_name}</span>}
-      <span className={styles.employeeTime}>с {formatTime(emp.first_entry)}</span>
+    {emp.position_name && (
+      <div className={styles.employeePosition}>{emp.position_name}</div>
+    )}
+    {emp.department_name && (
+      <div className={styles.employeeDepartment}>{emp.department_name}</div>
+    )}
+    <div className={styles.employeeFooter}>
       {emp.last_access_point && (
         <span className={styles.employeeAp} title={emp.last_access_point}>
           <MapPinIcon className={styles.tinyIcon} />
-          {emp.last_access_point}
+          <span className={styles.employeeApText}>{emp.last_access_point}</span>
         </span>
       )}
+      <span className={styles.employeeTime}>с {formatTime(emp.first_entry)}</span>
     </div>
   </li>
 );
