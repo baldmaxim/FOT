@@ -188,7 +188,12 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
     direct_employee_ids: value.direct_employee_ids,
   }));
 
-  employees.sort((a, b) => a.full_name.localeCompare(b.full_name, 'ru'));
+  employees.sort((a, b) => {
+    const aHasDirect = a.direct_employee_ids.length > 0 ? 1 : 0;
+    const bHasDirect = b.direct_employee_ids.length > 0 ? 1 : 0;
+    if (aHasDirect !== bHasDirect) return bHasDirect - aHasDirect;
+    return a.full_name.localeCompare(b.full_name, 'ru');
+  });
   return { employees, scope: scope as 'all' | 'department' };
 }
 
