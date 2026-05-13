@@ -281,6 +281,13 @@ export async function getPresenceByObject(): Promise<IPresenceByObjectResponse> 
     let companyId = NO_COMPANY_ID;
     let companyName = 'Без компании';
     let departmentName: string | null = null;
+    // TODO: если sigurMatch === undefined — physical_person не нашёлся в кэше Sigur
+    // (resolveSigurEmployeesByNames). Пример: «Худойкулов Алишер Холмаматович»
+    // имеет в Sigur отдел «ИНЖСИСТЕМ ООО», но попадает в «Без компании».
+    // Причина в одном из: (a) normalize-несовпадение physical_person vs /api/v1/employees,
+    // (b) у сотрудника в Sigur нет departmentId → отбракован в loadAllSigurEmployees,
+    // (c) root-узел (parent=null) — служебная иерархия выше «компании».
+    // См. логи `[sigur-presence-resolver] unresolved sample (raw)` для диагностики.
     const sigurMatch = sigurResolved.get(normalizeMatchName(state.physical_person));
     if (sigurMatch) {
       departmentName = sigurMatch.department.name || null;
@@ -320,12 +327,41 @@ export async function getPresenceByObject(): Promise<IPresenceByObjectResponse> 
   // ─── Финализация ───
   const finalBuckets: IPresenceObjectBucket[] = [];
   for (const bucket of buckets.values()) {
-    const companies: IPresenceObjectCompany[] = [];
-    let bucketTotal = 0;
+    // Пост-merge: компании с одинаковым normalized именем (но разными id —
+    // например, local UUID для synced и `sigur::ID` для unsynced) сливаются
+    // в одну. Предпочтение — не-`sigur::` записи (local). `NO_COMPANY_ID`
+    // никогда не мерджится, чтобы fallback-группа не поглощала реальные.
+    const byNormalizedName = new Map<string, IPresenceObjectCompany>();
+    const standalone: IPresenceObjectCompany[] = [];
     for (const company of bucket.companies.values()) {
+      if (company.company_id === NO_COMPANY_ID) {
+        standalone.push(company);
+        continue;
+      }
+      const key = normalizeMatchName(company.company_name);
+      if (!key) {
+        standalone.push(company);
+        continue;
+      }
+      const existing = byNormalizedName.get(key);
+      if (!existing) {
+        byNormalizedName.set(key, company);
+        continue;
+      }
+      const existingIsSigur = existing.company_id.startsWith(SIGUR_COMPANY_ID_PREFIX);
+      const candidateIsSigur = company.company_id.startsWith(SIGUR_COMPANY_ID_PREFIX);
+      const winner = existingIsSigur && !candidateIsSigur ? company : existing;
+      const loser = winner === existing ? company : existing;
+      winner.employees.push(...loser.employees);
+      winner.online_count += loser.online_count;
+      byNormalizedName.set(key, winner);
+    }
+
+    const companies: IPresenceObjectCompany[] = [...byNormalizedName.values(), ...standalone];
+    let bucketTotal = 0;
+    for (const company of companies) {
       company.employees.sort(compareEmployees);
       bucketTotal += company.online_count;
-      companies.push(company);
     }
     companies.sort((a, b) => compareByCountThenName(a.online_count, b.online_count, a.company_name, b.company_name));
     finalBuckets.push({

@@ -255,7 +255,7 @@ export async function resolveSigurEmployeesByNames(
   const result = new Map<string, ISigurEmployeeResolution>();
   if (names.length === 0) return result;
   const resolver = await getResolver();
-  const unresolvedSample: string[] = [];
+  const unresolvedSample: Array<{ raw: string; normalized: string }> = [];
 
   for (const name of names) {
     if (!name) continue;
@@ -278,8 +278,8 @@ export async function resolveSigurEmployeesByNames(
       }
     }
 
-    if (unresolvedSample.length < 5) {
-      unresolvedSample.push(normalized);
+    if (unresolvedSample.length < 10) {
+      unresolvedSample.push({ raw: name, normalized });
     }
   }
 
@@ -289,7 +289,7 @@ export async function resolveSigurEmployeesByNames(
       `[sigur-presence-resolver] resolved ${result.size}/${names.length} (index size=${resolver.byName.size}, prefix size=${resolver.byPrefix.size}, unresolved=${unresolvedCount})`,
     );
     if (unresolvedSample.length > 0) {
-      console.log('[sigur-presence-resolver] unresolved sample:', unresolvedSample);
+      console.log('[sigur-presence-resolver] unresolved sample (raw → normalized):', unresolvedSample);
     }
   }
   return result;

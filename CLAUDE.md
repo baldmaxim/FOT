@@ -132,6 +132,7 @@ cd fot-data-api && uvicorn app.main:app --reload --port 4001
 - Arrow functions, деструктуризация пропсов, `export const`
 - Один компонент на файл, максимум 500 строк — иначе дели на части
 - MVP: минимально работающая версия, без фич "на будущее"
+- **Модалки**: закрытие по клику на overlay — только через хук [`useOverlayDismiss`](fot-app/src/hooks/useOverlayDismiss.ts). Модалка НЕ должна закрываться, если ЛКМ зажата внутри (выделение текста, drag-to-select) и отпущена за границами. Простой `onClick={onClose}` на overlay запрещён.
 
 ## Именование
 

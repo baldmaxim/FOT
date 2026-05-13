@@ -1,6 +1,7 @@
-import { type FC, useEffect } from 'react';
+import { type FC, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { MapPinIcon } from '../../../components/ui/Icons';
+import { useOverlayDismiss } from '../../../hooks/useOverlayDismiss';
 import type { IPresenceObjectBucket } from '../../../types';
 import { CompanyGroup } from './CompanyGroup';
 import styles from './SkudPresencePage.module.css';
@@ -11,6 +12,12 @@ interface IObjectDetailsModalProps {
 }
 
 export const ObjectDetailsModal: FC<IObjectDetailsModalProps> = ({ bucket, onClose }) => {
+  const overlayHandlers = useOverlayDismiss(onClose);
+  const [expanded, setExpanded] = useState<Set<string>>(() =>
+    // Если в bucket'е только одна компания — разворачиваем её сразу.
+    bucket.companies.length === 1 ? new Set([bucket.companies[0].company_id]) : new Set(),
+  );
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -19,11 +26,20 @@ export const ObjectDetailsModal: FC<IObjectDetailsModalProps> = ({ bucket, onClo
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
+  const toggle = (companyId: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(companyId)) next.delete(companyId);
+      else next.add(companyId);
+      return next;
+    });
+  };
+
   if (typeof document === 'undefined') return null;
 
   return createPortal(
-    <div className={styles.modalOverlay} onClick={onClose}>
-      <div className={styles.modal} onClick={e => e.stopPropagation()}>
+    <div className={styles.modalOverlay} {...overlayHandlers}>
+      <div className={styles.modal}>
         <header className={styles.modalHeader}>
           <div className={styles.modalTitle}>
             <MapPinIcon className={styles.cardIcon} />
@@ -47,8 +63,8 @@ export const ObjectDetailsModal: FC<IObjectDetailsModalProps> = ({ bucket, onClo
               <CompanyGroup
                 key={company.company_id}
                 company={company}
-                isExpanded
-                forceExpanded
+                isExpanded={expanded.has(company.company_id)}
+                onToggle={() => toggle(company.company_id)}
               />
             ))
           )}

@@ -410,6 +410,77 @@ describe('getPresenceByObject', () => {
     expect(sklad.companies[0].online_count).toBe(2);
   });
 
+  it('post-merges company duplicates within bucket by normalized name (local + sigur::ID)', async () => {
+    // Сценарий из прода: companyByNormalizedName НЕ матчит «(СУ-10) ООО СУ-10»
+    // (например, не было раньше или индекс не успел перестроиться). Synced
+    // сотрудник попадает в local company-1, unsynced — в виртуальный `sigur::999`.
+    // Пост-merge на финализации должен слить их в одну запись (local выигрывает).
+    travelMock.mockResolvedValue([makeTravelObject('obj-1', 'ЖК Инжой', ['Турникет-1'])]);
+    presenceMock.mockResolvedValue([
+      makePresenceItem({ employee_id: 1, full_name: 'Synced One', status: 'online', last_access_point: 'Турникет-1' }),
+    ]);
+    pgQuery.mockImplementation((sql: string) => {
+      if (sql.includes('FROM employees')) {
+        return Promise.resolve([{ id: 1, org_department_id: 'dept-A' }]);
+      }
+      if (sql.includes('FROM skud_events') && sql.includes('employee_id IS NULL')) {
+        return Promise.resolve([
+          { physical_person: 'Чужой Иван', event_time: '09:00:00', direction: 'entry', access_point: 'Турникет-1' },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    companyResolveMock.mockResolvedValue({
+      rootId: 'root',
+      companyByDeptId: new Map([['dept-A', 'company-1']]),
+      companyMeta: new Map([['company-1', { id: 'company-1', name: '(СУ-10) ООО СУ-10', sigur_department_id: null }]]),
+      // companyBySigurId и companyByNormalizedName пусты — оба канала merge не сработают
+      companyBySigurId: new Map(),
+      companyByNormalizedName: new Map(),
+    });
+    sigurResolveMock.mockResolvedValue(new Map([
+      ['чужой иван', makeSigurMatch(999, '(СУ-10) ООО СУ-10', 110, 'Бригада №2')],
+    ]));
+
+    const data = await getPresenceByObject();
+    const sklad = data.buckets.find(b => b.object_id === 'obj-1')!;
+    // Post-merge сливает sigur::999 в company-1 по имени.
+    expect(sklad.companies).toHaveLength(1);
+    expect(sklad.companies[0].company_id).toBe('company-1');
+    expect(sklad.companies[0].online_count).toBe(2);
+  });
+
+  it('post-merge keeps __no_company__ standalone (never absorbs real companies)', async () => {
+    travelMock.mockResolvedValue([makeTravelObject('obj-1', 'Склад', ['Турникет-1'])]);
+    presenceMock.mockResolvedValue([
+      makePresenceItem({ employee_id: 1, status: 'online', last_access_point: 'Турникет-1' }),
+      makePresenceItem({ employee_id: 2, status: 'online', last_access_point: 'Турникет-1' }),
+    ]);
+    pgQuery.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('FROM employees')
+        ? [
+            { id: 1, org_department_id: null }, // → NO_COMPANY_ID
+            { id: 2, org_department_id: 'dept-A' }, // → company-1 «Без компании» (теоретически)
+          ]
+        : []),
+    );
+    companyResolveMock.mockResolvedValue({
+      rootId: 'root',
+      companyByDeptId: new Map([['dept-A', 'company-1']]),
+      // У company-1 имя случайно тоже «Без компании» — проверяем, что NO_COMPANY_ID
+      // не сливается с реальной компанией даже при таком совпадении.
+      companyMeta: new Map([['company-1', { id: 'company-1', name: 'Без компании', sigur_department_id: null }]]),
+      companyBySigurId: new Map(),
+      companyByNormalizedName: new Map(),
+    });
+
+    const data = await getPresenceByObject();
+    const sklad = data.buckets.find(b => b.object_id === 'obj-1')!;
+    expect(sklad.companies).toHaveLength(2);
+    const ids = sklad.companies.map(c => c.company_id).sort();
+    expect(ids).toEqual([NO_COMPANY_ID, 'company-1'].sort());
+  });
+
   it('puts unsynced person into __no_company__ when Sigur did not resolve', async () => {
     travelMock.mockResolvedValue([makeTravelObject('obj-1', 'Склад', ['Турникет-1'])]);
     pgQuery.mockImplementation((sql: string) => {
