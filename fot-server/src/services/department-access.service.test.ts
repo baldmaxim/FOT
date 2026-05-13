@@ -1,14 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-type QueryRecord = {
-  table: string;
-  operations: Array<{ method: string; args: unknown[] }>;
-};
+const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgExecute: vi.fn(),
+  pgTx: vi.fn(),
+}));
 
-type QueryResponse = {
-  data?: unknown;
-  error?: { message?: string } | null;
-};
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
+}));
 
 const mockedState = vi.hoisted(() => ({
   employeeDepartmentAccess: [] as Array<{
@@ -19,76 +23,56 @@ const mockedState = vi.hoisted(() => ({
   }>,
 }));
 
-function matchesQueryRecord<T extends Record<string, unknown>>(row: T, query: QueryRecord): boolean {
-  return query.operations.every((operation) => {
-    if (operation.method === 'eq') {
-      const [field, value] = operation.args;
-      return row[String(field)] === value;
-    }
-
-    if (operation.method === 'neq') {
-      const [field, value] = operation.args;
-      return row[String(field)] !== value;
-    }
-
-    if (operation.method === 'in') {
-      const [field, values] = operation.args;
-      return Array.isArray(values) && values.includes(row[String(field)]);
-    }
-
-    return true;
-  });
-}
-
-function resolveQuery(query: QueryRecord): QueryResponse {
-  if (query.table === 'employee_department_access') {
-    return {
-      data: mockedState.employeeDepartmentAccess.filter(row => matchesQueryRecord(row, query)),
-      error: null,
-    };
-  }
-
-  throw new Error(`Unexpected query for table ${query.table}`);
-}
-
-function createBuilder(table: string) {
-  const query: QueryRecord = { table, operations: [] };
-
-  const builder = {
-    select: (...args: unknown[]) => {
-      query.operations.push({ method: 'select', args });
-      return builder;
-    },
-    eq: (...args: unknown[]) => {
-      query.operations.push({ method: 'eq', args });
-      return builder;
-    },
-    neq: (...args: unknown[]) => {
-      query.operations.push({ method: 'neq', args });
-      return builder;
-    },
-    in: (...args: unknown[]) => {
-      query.operations.push({ method: 'in', args });
-      return builder;
-    },
-    then: (onFulfilled: (value: QueryResponse) => unknown, onRejected?: (reason: unknown) => unknown) =>
-      Promise.resolve(resolveQuery(query)).then(onFulfilled, onRejected),
-  };
-
-  return builder;
-}
-
-vi.mock('../config/database.js', () => ({
-  supabase: {
-    from: vi.fn((table: string) => createBuilder(table)),
-  },
-}));
-
 import { listManagedDepartmentIdsForUser, loadManagedDepartmentMap } from './department-access.service.js';
 
 describe('department-access.service', () => {
   beforeEach(() => {
     mockedState.employeeDepartmentAccess = [];
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
+
+    // Эмулирует чтения из employee_department_access по различным SQL-формам:
+    //  - WHERE employee_id = $1 AND is_active = true [AND source <> $N]
+    //  - WHERE is_active = true [AND source <> $N] [AND employee_id = ANY($N::int[])]
+    pgQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      if (!/employee_department_access/i.test(sql)) {
+        throw new Error(`Unexpected query SQL: ${sql}`);
+      }
+
+      let rows = mockedState.employeeDepartmentAccess.filter(row => row.is_active);
+
+      // Извлекаем фильтры по позиционным параметрам через регексп с захватом номера
+      const employeeIdMatch = /employee_id\s*=\s*\$(\d+)/.exec(sql);
+      const employeeAnyMatch = /employee_id\s*=\s*ANY\(\$(\d+)/i.exec(sql);
+      const excludeSourceMatch = /source\s*<>\s*\$(\d+)/.exec(sql);
+
+      if (employeeIdMatch) {
+        const idx = Number(employeeIdMatch[1]) - 1;
+        const val = params[idx];
+        rows = rows.filter(row => row.employee_id === val);
+      }
+      if (employeeAnyMatch) {
+        const idx = Number(employeeAnyMatch[1]) - 1;
+        const arr = (params[idx] as number[]) || [];
+        const set = new Set(arr);
+        rows = rows.filter(row => set.has(row.employee_id));
+      }
+      if (excludeSourceMatch) {
+        const idx = Number(excludeSourceMatch[1]) - 1;
+        const val = params[idx];
+        rows = rows.filter(row => row.source !== val);
+      }
+
+      if (/SELECT\s+department_id\s/i.test(sql)) {
+        return rows.map(row => ({ department_id: row.department_id }));
+      }
+      if (/SELECT\s+employee_id\s*,\s*department_id/i.test(sql)) {
+        return rows.map(row => ({ employee_id: row.employee_id, department_id: row.department_id }));
+      }
+      return rows;
+    });
   });
 
   it('возвращает только активные руководительские назначения сотрудника', async () => {

@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query, queryOne, withTransaction } from '../config/postgres.js';
 import { invalidateDeptTreeCache } from './skud-shared.service.js';
 import { settingsService } from './settings.service.js';
 import { ensureLocalSigurDepartment } from './sigur-linked-employees.service.js';
@@ -33,48 +33,47 @@ interface IEmployeeArchiveRow {
 }
 
 async function loadDepartmentById(id: string): Promise<IArchiveDepartmentRow | null> {
-  const { data, error } = await supabase
-    .from('org_departments')
-    .select('id, name, sigur_department_id, parent_id, is_active')
-    .eq('id', id)
-    .eq('is_active', true)
-    .maybeSingle();
-
-  if (error || !data) {
+  try {
+    return await queryOne<IArchiveDepartmentRow>(
+      `SELECT id, name, sigur_department_id, parent_id, is_active
+         FROM org_departments
+        WHERE id = $1 AND is_active = true
+        LIMIT 1`,
+      [id],
+    );
+  } catch {
     return null;
   }
-
-  return data as IArchiveDepartmentRow;
 }
 
 async function loadDepartmentBySigurId(sigurDepartmentId: number): Promise<IArchiveDepartmentRow | null> {
-  const { data, error } = await supabase
-    .from('org_departments')
-    .select('id, name, sigur_department_id, parent_id, is_active')
-    .eq('sigur_department_id', sigurDepartmentId)
-    .eq('is_active', true)
-    .maybeSingle();
-
-  if (error || !data) {
+  try {
+    return await queryOne<IArchiveDepartmentRow>(
+      `SELECT id, name, sigur_department_id, parent_id, is_active
+         FROM org_departments
+        WHERE sigur_department_id = $1 AND is_active = true
+        LIMIT 1`,
+      [sigurDepartmentId],
+    );
+  } catch {
     return null;
   }
-
-  return data as IArchiveDepartmentRow;
 }
 
 async function loadDepartmentByName(name: string): Promise<IArchiveDepartmentRow | null> {
-  const { data, error } = await supabase
-    .from('org_departments')
-    .select('id, name, sigur_department_id, parent_id, is_active')
-    .eq('name', name)
-    .eq('is_active', true)
-    .order('parent_id', { ascending: true });
-
-  if (error || !data || data.length === 0) {
+  let rows: IArchiveDepartmentRow[];
+  try {
+    rows = await query<IArchiveDepartmentRow>(
+      `SELECT id, name, sigur_department_id, parent_id, is_active
+         FROM org_departments
+        WHERE name = $1 AND is_active = true
+        ORDER BY parent_id ASC NULLS FIRST`,
+      [name],
+    );
+  } catch {
     return null;
   }
-
-  const rows = data as IArchiveDepartmentRow[];
+  if (rows.length === 0) return null;
   return rows.find(row => row.parent_id === null) || rows[0] || null;
 }
 
@@ -162,21 +161,17 @@ export async function ensureLocalArchiveDepartment(
     return existing;
   }
 
-  const { data, error } = await supabase
-    .from('org_departments')
-    .insert({
-      parent_id: null,
-      name: DEFAULT_ARCHIVE_DEPARTMENT_NAME,
-      description: LOCAL_ARCHIVE_DEPARTMENT_DESCRIPTION,
-    })
-    .select('id, name, sigur_department_id, parent_id, is_active')
-    .single();
+  const createdRow = await queryOne<IArchiveDepartmentRow>(
+    `INSERT INTO org_departments (parent_id, name, description)
+     VALUES ($1, $2, $3)
+     RETURNING id, name, sigur_department_id, parent_id, is_active`,
+    [null, DEFAULT_ARCHIVE_DEPARTMENT_NAME, LOCAL_ARCHIVE_DEPARTMENT_DESCRIPTION],
+  );
 
-  if (error || !data) {
-    throw new Error(error?.message || 'Не удалось создать локальный архивный отдел');
+  if (!createdRow) {
+    throw new Error('Не удалось создать локальный архивный отдел');
   }
 
-  const createdRow = data as IArchiveDepartmentRow;
   invalidateDeptTreeCache();
   await persistLocalArchiveDepartment(createdRow, userId);
 
@@ -210,24 +205,24 @@ async function moveEmployeesIntoArchiveDepartment(
     return [];
   }
 
-  const { error: updateEmployeesError } = await supabase
-    .from('employees')
-    .update({
-      org_department_id: archiveDepartmentId,
-      department_locked: false,
-      updated_at: new Date().toISOString(),
-    })
-    .in('id', uniqueIds);
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE employees
+          SET org_department_id = $1,
+              department_locked = false,
+              updated_at = $2
+        WHERE id = ANY($3::int[])`,
+      [archiveDepartmentId, new Date().toISOString(), uniqueIds],
+    );
 
-  if (updateEmployeesError) {
-    throw new Error(updateEmployeesError.message);
-  }
-
-  await supabase
-    .from('employee_assignments')
-    .update({ effective_to: effectiveDate })
-    .in('employee_id', uniqueIds)
-    .is('effective_to', null);
+    await client.query(
+      `UPDATE employee_assignments
+          SET effective_to = $1
+        WHERE employee_id = ANY($2::int[])
+          AND effective_to IS NULL`,
+      [effectiveDate, uniqueIds],
+    );
+  });
 
   for (const id of uniqueIds) {
     try {
@@ -264,17 +259,14 @@ export async function reconcileFiredEmployeesArchiveDepartment(
   options: { connection?: ConnectionType } = {},
 ): Promise<{ archiveDepartmentId: string; movedEmployeeIds: number[] }> {
   const archiveDepartment = await ensureLocalArchiveDepartment(userId, { connection: options.connection });
-  const { data, error } = await supabase
-    .from('employees')
-    .select('id, org_department_id')
-    .eq('employment_status', 'fired')
-    .eq('is_archived', false);
+  const rows = await query<IEmployeeArchiveRow>(
+    `SELECT id, org_department_id
+       FROM employees
+      WHERE employment_status = 'fired'
+        AND is_archived = false`,
+  );
 
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  const employeeIdsToMove = ((data || []) as IEmployeeArchiveRow[])
+  const employeeIdsToMove = rows
     .filter(employee => employee.org_department_id !== archiveDepartment.id)
     .map(employee => employee.id);
 

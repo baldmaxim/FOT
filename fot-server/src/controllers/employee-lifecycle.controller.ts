@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { AxiosError } from 'axios';
-import { supabase } from '../config/database.js';
+import { query, queryOne, execute } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { loadEmployeeFullName } from '../services/audit-context.helpers.js';
 import { DomainValidationError, employeeChangesService } from '../services/employee-changes.service.js';
@@ -70,32 +70,21 @@ export function getErrorMessage(error: unknown, fallback: string): string {
 }
 
 export async function loadEmployeeLifecycleRow(employeeId: number): Promise<EmployeeEncrypted | null> {
-  const { data, error } = await supabase
-    .from('employees')
-    .select(EMPLOYEE_LIFECYCLE_COLUMNS)
-    .eq('id', employeeId)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
-  return (data as EmployeeEncrypted | null) ?? null;
+  const data = await queryOne<EmployeeEncrypted>(
+    `SELECT ${EMPLOYEE_LIFECYCLE_COLUMNS} FROM employees WHERE id = $1`,
+    [employeeId],
+  );
+  return data;
 }
 
 export async function loadTargetDepartment(id: string): Promise<ITargetDepartmentRow | null> {
-  const { data, error } = await supabase
-    .from('org_departments')
-    .select('id, sigur_department_id, name')
-    .eq('id', id)
-    .eq('is_active', true)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
-  return (data as ITargetDepartmentRow | null) ?? null;
+  const data = await queryOne<ITargetDepartmentRow>(
+    `SELECT id, sigur_department_id, name
+       FROM org_departments
+      WHERE id = $1 AND is_active = true`,
+    [id],
+  );
+  return data;
 }
 
 async function assertDepartmentMoveAllowed(
@@ -235,14 +224,15 @@ export async function archive(req: AuthenticatedRequest, res: Response): Promise
       return;
     }
 
-    const { data, error } = await supabase
-      .from('employees')
-      .update({ is_archived: true, archived_at: new Date().toISOString() })
-      .eq('id', id)
-      .select(EMPLOYEE_LIFECYCLE_COLUMNS)
-      .single();
+    const data = await queryOne<EmployeeEncrypted>(
+      `UPDATE employees
+          SET is_archived = true, archived_at = $1
+        WHERE id = $2
+      RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
+      [new Date().toISOString(), id],
+    );
 
-    if (error || !data) {
+    if (!data) {
       res.status(404).json({ success: false, error: 'Employee not found' });
       return;
     }
@@ -273,14 +263,15 @@ export async function restore(req: AuthenticatedRequest, res: Response): Promise
       return;
     }
 
-    const { data, error } = await supabase
-      .from('employees')
-      .update({ is_archived: false, archived_at: null })
-      .eq('id', id)
-      .select(EMPLOYEE_LIFECYCLE_COLUMNS)
-      .single();
+    const data = await queryOne<EmployeeEncrypted>(
+      `UPDATE employees
+          SET is_archived = false, archived_at = NULL
+        WHERE id = $1
+      RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
+      [id],
+    );
 
-    if (error || !data) {
+    if (!data) {
       res.status(404).json({ success: false, error: 'Employee not found' });
       return;
     }
@@ -394,29 +385,29 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
       });
     }
 
-    const { data, error } = await supabase
-      .from('employees')
-      .update({
-        employment_status: 'fired',
-        org_department_id: targetDepartmentId,
-        department_locked: false,
-      })
-      .eq('id', id)
-      .select(EMPLOYEE_LIFECYCLE_COLUMNS)
-      .single();
+    const data = await queryOne<EmployeeEncrypted>(
+      `UPDATE employees
+          SET employment_status = 'fired',
+              org_department_id = $1,
+              department_locked = false
+        WHERE id = $2
+      RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
+      [targetDepartmentId, id],
+    );
 
-    if (error || !data) {
+    if (!data) {
       res.status(500).json({ success: false, error: 'Failed to update employee status' });
       return;
     }
 
     employeeCache.invalidate(id);
 
-    await supabase
-      .from('employee_assignments')
-      .update({ effective_to: today })
-      .eq('employee_id', id)
-      .is('effective_to', null);
+    await execute(
+      `UPDATE employee_assignments
+          SET effective_to = $1
+        WHERE employee_id = $2 AND effective_to IS NULL`,
+      [today, id],
+    );
 
     await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE', {
       entityType: 'employee',
@@ -570,20 +561,31 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       existing.sigur_employee_id && !sigurDetached ? 'sigur_sync' : 'portal_lifecycle',
     );
 
-    const { data, error } = await supabase
-      .from('employees')
-      .update({
-        employment_status: 'active',
-        org_department_id: targetDepartment.id,
-        department_locked: sigurDetached,
-        ...(sigurDetached ? { sigur_employee_id: null } : {}),
-      })
-      .eq('id', id)
-      .select(EMPLOYEE_LIFECYCLE_COLUMNS)
-      .single();
+    let data: EmployeeEncrypted | null;
+    try {
+      const updateFields = sigurDetached
+        ? `employment_status = 'active',
+             org_department_id = $1,
+             department_locked = $2,
+             sigur_employee_id = NULL`
+        : `employment_status = 'active',
+             org_department_id = $1,
+             department_locked = $2`;
+      data = await queryOne<EmployeeEncrypted>(
+        `UPDATE employees
+            SET ${updateFields}
+          WHERE id = $3
+        RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
+        [targetDepartment.id, sigurDetached, id],
+      );
+    } catch (updateErr) {
+      console.error('[rehire] DB update failed:', updateErr);
+      res.status(404).json({ success: false, error: 'Employee not found' });
+      return;
+    }
 
-    if (error || !data) {
-      console.error('[rehire] DB update failed:', error);
+    if (!data) {
+      console.error('[rehire] DB update failed: no row returned');
       res.status(404).json({ success: false, error: 'Employee not found' });
       return;
     }
@@ -591,29 +593,25 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
     employeeCache.invalidate(id);
 
     try {
-      const { error: closeErr } = await supabase
-        .from('employee_assignments')
-        .update({ effective_to: today })
-        .eq('employee_id', employeeId)
-        .is('effective_to', null);
-      if (closeErr) {
+      try {
+        await execute(
+          `UPDATE employee_assignments
+              SET effective_to = $1
+            WHERE employee_id = $2 AND effective_to IS NULL`,
+          [today, employeeId],
+        );
+      } catch (closeErr) {
         console.warn('[rehire] close previous assignments failed (non-critical):', closeErr);
       }
 
-      const { error: assignError } = await supabase
-        .from('employee_assignments')
-        .insert({
-          employee_id: employeeId,
-          org_department_id: targetDepartment.id,
-          position_id: data.position_id || null,
-          effective_from: today,
-          is_primary: true,
-          assignment_type: 'main',
-          change_reason: 'Восстановление на работу',
-          created_by: req.user.id,
-        });
-
-      if (assignError) {
+      try {
+        await execute(
+          `INSERT INTO employee_assignments
+             (employee_id, org_department_id, position_id, effective_from, is_primary, assignment_type, change_reason, created_by)
+           VALUES ($1, $2, $3, $4, true, 'main', 'Восстановление на работу', $5)`,
+          [employeeId, targetDepartment.id, data.position_id || null, today, req.user.id],
+        );
+      } catch (assignError) {
         console.warn('[rehire] employee_assignments insert failed (non-critical):', assignError);
       }
     } catch (assignCatch) {
@@ -885,27 +883,32 @@ export async function getHistory(req: AuthenticatedRequest, res: Response): Prom
       return;
     }
 
-    const { data: emp } = await supabase.from('employees').select('id').eq('id', id).single();
+    const emp = await queryOne<{ id: number }>(
+      `SELECT id FROM employees WHERE id = $1`,
+      [id],
+    );
     if (!emp) {
       res.status(404).json({ success: false, error: 'Employee not found' });
       return;
     }
 
-    const { data, error } = await supabase
-      .from('employee_history')
-      .select('*')
-      .eq('employee_id', id)
-      .order('event_date', { ascending: false });
-
-    if (error) {
-      console.error('Get employee history error:', error);
+    let data: Record<string, unknown>[];
+    try {
+      data = await query<Record<string, unknown>>(
+        `SELECT * FROM employee_history
+          WHERE employee_id = $1
+          ORDER BY event_date DESC`,
+        [id],
+      );
+    } catch (historyErr) {
+      console.error('Get employee history error:', historyErr);
       res.status(500).json({ success: false, error: 'Failed to fetch history' });
       return;
     }
 
     const structureCache = await loadStructureCache();
 
-    const events = (data || []).map((row: Record<string, unknown>) => {
+    const events = data.map((row: Record<string, unknown>) => {
       const eventData = row.event_data as Record<string, unknown> || {};
       let decryptedData: Record<string, unknown> = {};
 

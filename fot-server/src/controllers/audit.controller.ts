@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 interface AuditIssue {
@@ -48,43 +48,69 @@ export const auditController = {
       const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
       const offset = (pageNum - 1) * limitNum;
 
-      let query = supabase
-        .from('audit_logs')
-        .select('id, user_id, action, entity_type, entity_id, details, ip_address, created_at', { count: 'exact' });
+      const whereParts: string[] = [];
+      const params: unknown[] = [];
+      const addParam = (value: unknown): string => {
+        params.push(value);
+        return `$${params.length}`;
+      };
 
-      if (action) query = query.eq('action', action);
-      if (user_id) query = query.eq('user_id', user_id);
-      if (date_from) query = query.gte('created_at', date_from);
+      if (action) whereParts.push(`action = ${addParam(action)}`);
+      if (user_id) whereParts.push(`user_id = ${addParam(user_id)}`);
+      if (date_from) whereParts.push(`created_at >= ${addParam(date_from)}`);
       if (date_to) {
         const end = date_to.length === 10 ? `${date_to}T23:59:59.999Z` : date_to;
-        query = query.lte('created_at', end);
+        whereParts.push(`created_at <= ${addParam(end)}`);
       }
+      const whereSql = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
-      const { data: logs, error, count } = await query
-        .order('created_at', { ascending: false })
-        .range(offset, offset + limitNum - 1);
+      const limitPlaceholder = addParam(limitNum);
+      const offsetPlaceholder = addParam(offset);
 
-      if (error) throw error;
+      const logs = await query<{
+        id: string;
+        user_id: string | null;
+        action: string;
+        entity_type: string | null;
+        entity_id: string | null;
+        details: unknown;
+        ip_address: string | null;
+        created_at: string;
+        total_count: number;
+      }>(
+        `SELECT id, user_id, action, entity_type, entity_id, details, ip_address, created_at,
+                count(*) OVER ()::int AS total_count
+           FROM audit_logs
+           ${whereSql}
+           ORDER BY created_at DESC
+           LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}`,
+        params,
+      );
 
-      const userIds = [...new Set((logs || []).map(l => l.user_id).filter(Boolean))];
+      const userIds = [...new Set(logs.map(l => l.user_id).filter((v): v is string => Boolean(v)))];
       const userMap: Record<string, string> = {};
 
       if (userIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from('user_profiles')
-          .select('id, full_name')
-          .in('id', userIds);
-        for (const p of profiles || []) {
+        const profiles = await query<{ id: string; full_name: string | null }>(
+          `SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])`,
+          [userIds],
+        );
+        for (const p of profiles) {
           userMap[p.id] = p.full_name || p.id;
         }
       }
 
-      const enriched = (logs || []).map(log => ({
-        ...log,
-        user_name: log.user_id ? (userMap[log.user_id] || log.user_id) : null,
-      }));
+      const total = logs.length > 0 ? logs[0].total_count : 0;
 
-      res.json({ success: true, data: enriched, total: count ?? 0, page: pageNum, limit: limitNum });
+      const enriched = logs.map(log => {
+        const { total_count: _total, ...rest } = log;
+        return {
+          ...rest,
+          user_name: log.user_id ? (userMap[log.user_id] || log.user_id) : null,
+        };
+      });
+
+      res.json({ success: true, data: enriched, total, page: pageNum, limit: limitNum });
     } catch (error) {
       console.error('[audit] getActionLogs error:', error);
       res.status(500).json({ success: false, error: 'Ошибка загрузки истории действий' });
@@ -100,23 +126,19 @@ export const auditController = {
       }
 
       // Загружаем все данные параллельно одним батчем
-      const [empResult, assignResult, salaryResult] = await Promise.all([
-        supabase
-          .from('employees')
-          .select('id, full_name, birth_date, patent_expiry_date')
-          .eq('is_archived', false),
-        supabase
-          .from('employee_assignments')
-          .select('employee_id, org_department_id, org_site_id')
-          .is('effective_to', null),
-        supabase
-          .from('salary_history')
-          .select('employee_id'),
+      const [employees, assignments, salaryRecords] = await Promise.all([
+        query<{ id: number; full_name: string | null; birth_date: string | null; patent_expiry_date: string | null }>(
+          `SELECT id, full_name, birth_date, patent_expiry_date
+             FROM employees
+            WHERE is_archived = false`,
+        ),
+        query<{ employee_id: number; org_department_id: string | null; org_site_id: string | null }>(
+          `SELECT employee_id, org_department_id, org_site_id
+             FROM employee_assignments
+            WHERE effective_to IS NULL`,
+        ),
+        query<{ employee_id: number }>(`SELECT employee_id FROM salary_history`),
       ]);
-
-      const employees = empResult.data || [];
-      const assignments = assignResult.data || [];
-      const salaryRecords = salaryResult.data || [];
 
       // Предварительные индексы
       const assignmentsByEmp = new Map<number, typeof assignments>();
@@ -181,48 +203,72 @@ export const auditController = {
       const checkMap: Record<string, () => Promise<AuditCheckResult>> = {
         'unassigned': async () => {
           const [e, a] = await Promise.all([
-            supabase.from('employees').select('id, full_name').eq('is_archived', false),
-            supabase.from('employee_assignments').select('employee_id').is('effective_to', null),
+            query<{ id: number; full_name: string | null }>(
+              `SELECT id, full_name FROM employees WHERE is_archived = false`,
+            ),
+            query<{ employee_id: number }>(
+              `SELECT employee_id FROM employee_assignments WHERE effective_to IS NULL`,
+            ),
           ]);
           const byEmp = new Map<number, number>();
-          for (const r of a.data || []) byEmp.set(r.employee_id, (byEmp.get(r.employee_id) || 0) + 1);
-          return checkUnassigned(e.data || [], byEmp as never);
+          for (const r of a) byEmp.set(r.employee_id, (byEmp.get(r.employee_id) || 0) + 1);
+          return checkUnassigned(e, byEmp as never);
         },
         'orphaned': async () => {
           const [e, a] = await Promise.all([
-            supabase.from('employees').select('id, full_name').eq('is_archived', false),
-            supabase.from('employee_assignments').select('employee_id, org_department_id, org_site_id').is('effective_to', null),
+            query<{ id: number; full_name: string | null }>(
+              `SELECT id, full_name FROM employees WHERE is_archived = false`,
+            ),
+            query<{ employee_id: number; org_department_id: string | null; org_site_id: string | null }>(
+              `SELECT employee_id, org_department_id, org_site_id
+                 FROM employee_assignments
+                WHERE effective_to IS NULL`,
+            ),
           ]);
-          return checkOrphaned(e.data || [], a.data || []);
+          return checkOrphaned(e, a);
         },
         'no-salary': async () => {
           const [e, s] = await Promise.all([
-            supabase.from('employees').select('id, full_name').eq('is_archived', false),
-            supabase.from('salary_history').select('employee_id'),
+            query<{ id: number; full_name: string | null }>(
+              `SELECT id, full_name FROM employees WHERE is_archived = false`,
+            ),
+            query<{ employee_id: number }>(`SELECT employee_id FROM salary_history`),
           ]);
-          const set = new Set((s.data || []).map(r => r.employee_id));
-          return checkNoSalary(e.data || [], set);
+          const set = new Set(s.map(r => r.employee_id));
+          return checkNoSalary(e, set);
         },
         'expired-patents': async () => {
-          const { data } = await supabase.from('employees').select('id, full_name, patent_expiry_date').eq('is_archived', false).not('patent_expiry_date', 'is', null);
-          return checkExpiredPatents(data || []);
+          const data = await query<{ id: number; full_name: string | null; patent_expiry_date: string | null }>(
+            `SELECT id, full_name, patent_expiry_date
+               FROM employees
+              WHERE is_archived = false AND patent_expiry_date IS NOT NULL`,
+          );
+          return checkExpiredPatents(data);
         },
         'no-birthdate': async () => {
-          const { data } = await supabase.from('employees').select('id, full_name, birth_date').eq('is_archived', false);
-          return checkMissingBirthDate(data || []);
+          const data = await query<{ id: number; full_name: string | null; birth_date: string | null }>(
+            `SELECT id, full_name, birth_date FROM employees WHERE is_archived = false`,
+          );
+          return checkMissingBirthDate(data);
         },
         'duplicates': async () => {
-          const { data } = await supabase.from('employees').select('id, full_name').eq('is_archived', false);
-          return checkDuplicates(data || []);
+          const data = await query<{ id: number; full_name: string | null }>(
+            `SELECT id, full_name FROM employees WHERE is_archived = false`,
+          );
+          return checkDuplicates(data);
         },
         'multiple-assignments': async () => {
           const [e, a] = await Promise.all([
-            supabase.from('employees').select('id, full_name').eq('is_archived', false),
-            supabase.from('employee_assignments').select('employee_id').is('effective_to', null),
+            query<{ id: number; full_name: string | null }>(
+              `SELECT id, full_name FROM employees WHERE is_archived = false`,
+            ),
+            query<{ employee_id: number }>(
+              `SELECT employee_id FROM employee_assignments WHERE effective_to IS NULL`,
+            ),
           ]);
           const byEmp = new Map<number, number>();
-          for (const r of a.data || []) byEmp.set(r.employee_id, (byEmp.get(r.employee_id) || 0) + 1);
-          return checkMultipleAssignments(e.data || [], byEmp as never);
+          for (const r of a) byEmp.set(r.employee_id, (byEmp.get(r.employee_id) || 0) + 1);
+          return checkMultipleAssignments(e, byEmp as never);
         },
       };
 

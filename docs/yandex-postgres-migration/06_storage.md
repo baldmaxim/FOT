@@ -104,9 +104,47 @@ OBJECT_STORAGE_FORCE_PATH_STYLE=false
 | Provider | OBJECT_STORAGE_ENDPOINT | REGION | FORCE_PATH_STYLE |
 |---|---|---|---|
 | Yandex Object Storage | `https://storage.yandexcloud.net` | `ru-central1` | `false` |
+| **Cloud.ru S3** (использован в rehearsal'е) | `https://s3.cloud.ru` | `ru-central-1` (с дефисом!) | `true` (см. ниже) |
 | AWS S3 | `https://s3.<region>.amazonaws.com` | реальный | `false` |
 | Cloudflare R2 | `https://<acct>.r2.cloudflarestorage.com` | `auto` | `false` |
 | MinIO (self-hosted) | `http://minio:9000` | `us-east-1` (любой) | `true` |
+
+### Cloud.ru S3 — особенности (rehearsal Phase 11)
+
+В Phase 11 staging rehearsal target — **Cloud.ru S3** (endpoint
+`s3.cloud.ru`). Что важно знать для production-готовности скриптов:
+
+1. **Access Key ID — это склейка `<tenant_uuid>:<key_id>` через двоеточие**
+   (например `1158f2b3-3f8b-4b6d-9146-4c7e966cf74b:0387e445...`). Так
+   credentials отдаются в Cloud.ru console — копируется целиком вместе с
+   `:` и передаётся в SDK как одна строка `accessKeyId`.
+2. **Регион — `ru-central-1` (с дефисом)**, не как у Yandex (`ru-central1`
+   без дефиса). Несовпадение → `SignatureDoesNotMatch`.
+3. **`FORCE_PATH_STYLE=true` обязателен** для bucket с точкой в имени
+   (например `fot.app`). Virtual-hosted style строит URL
+   `https://fot.app.s3.cloud.ru/...`, на котором SSL cert не валиден
+   (cert на `*.s3.cloud.ru`, но `fot.app.s3...` — третий уровень).
+   Path-style: `https://s3.cloud.ru/fot.app/...` — cert валиден.
+4. **HEAD отсутствующего объекта возвращает 403, не 404.** Большинство
+   S3-совместимых провайдеров отвечают `404 NoSuchKey` на HEAD/GET
+   несуществующего ключа; Cloud.ru же закрывает «existence» за access
+   policy и отвечает `403 AccessDenied`. **Migrator-скрипт это учитывает**
+   (см. `targetHasObject` в `migrate-skud-object-maps-storage.ts`):
+   статус-коды `403`, `404`, имя `NoSuchKey`, `AccessDenied` — все
+   трактуются как «объект не существует, надо мигрировать».
+5. **Bucket с точкой в имени** (`fot.app`) — формально валиден, но в
+   некоторых SDK вызывает confused URL building. Если решаем перейти
+   на Yandex Object Storage для prod — лучше сразу создавать имя без
+   точек (например `fot-app-storage`), это снимет необходимость в
+   `FORCE_PATH_STYLE=true`.
+
+### Что выбрать для production
+
+Решение оставлено за оператором. Технически оба варианта одинаково
+поддерживаются — разница в costing/SLA/региональной близости. Если
+runtime fot-server деплоится в Yandex Cloud, **Yandex Object Storage
+предпочтителен** (latency в той же сети). Если runtime в другом провайдере,
+выгоднее storage рядом с runtime.
 
 ## 5. Перевозка существующих файлов (если в Supabase Storage уже есть данные)
 
@@ -146,9 +184,10 @@ npm run migrate:yandex:skud-object-maps -- --apply
 
 - Идемпотентно: если объект уже есть в target (HeadObject 200) → `skipped_exists`.
 - Параллельность — `BATCH_SIZE` (по умолчанию 25).
-- Скачивание через `supabase.storage.from(bucket).download(path)`, заливка
+- Скачивание через Supabase Storage REST API: `GET {SOURCE_SUPABASE_URL}/storage/v1/object/{bucket}/{path}`
+  с `Authorization: Bearer {SOURCE_SUPABASE_SERVICE_ROLE_KEY}`. Заливка
   через `@aws-sdk/client-s3` `PutObjectCommand`.
-- `ContentType` сохраняется из Supabase (image/png|jpeg|webp).
+- `ContentType` сохраняется из заголовка ответа Supabase Storage (image/png|jpeg|webp).
 - Отчёт: `.migration/storage_migration_report.{json,md}` — totals + first 5
   successful samples + first 50 failures.
 
@@ -202,3 +241,8 @@ npm run migrate:yandex:skud-object-maps -- --apply
   MinIO, выставьте `OBJECT_STORAGE_FORCE_PATH_STYLE=true` — иначе
   S3-клиент попытается ходить по vhost-стилю
   (`bucket.minio:9000`), что обычно не работает.
+
+После Phase 10E `@supabase/supabase-js` удалён из runtime/scripts.
+`migrate-skud-object-maps-storage.ts` теперь использует Supabase Storage
+REST API напрямую через `fetch()` с Bearer auth — никаких runtime-зависимостей
+от SDK не осталось.

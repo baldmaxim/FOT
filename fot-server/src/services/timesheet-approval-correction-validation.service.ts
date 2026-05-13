@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import { listEmployeeIdsAssignedToDepartmentPeriod } from './timesheet-department-assignments.service.js';
 import { loadCalendarMonth } from './schedule.service.js';
 import type { ITimesheetDateRange } from './timesheet-range.service.js';
@@ -101,37 +101,38 @@ export async function validateCorrectionAttachments(
     return { ok: true };
   }
 
-  const adjRes = await supabase
-    .from('attendance_adjustments')
-    .select('employee_id, work_date')
-    .in('employee_id', employeeIds)
-    .gte('work_date', range.startDate)
-    .lte('work_date', range.endDate);
-  if (adjRes.error) throw adjRes.error;
-  const adjustments = (adjRes.data || []) as IAdjustmentDateRow[];
+  const adjustments = await query<IAdjustmentDateRow>(
+    `SELECT employee_id, work_date
+       FROM attendance_adjustments
+      WHERE employee_id = ANY($1::int[])
+        AND work_date >= $2
+        AND work_date <= $3`,
+    [employeeIds, range.startDate, range.endDate],
+  );
 
-  const leaveRes = await supabase
-    .from('leave_requests')
-    .select('id, employee_id, request_type, start_date, end_date, correction_date')
-    .in('employee_id', employeeIds)
-    .eq('status', 'approved')
-    .in('request_type', [...ATTACHMENT_REQUIRED_LEAVE_TYPES])
-    .lte('start_date', range.endDate)
-    .gte('end_date', range.startDate);
-  if (leaveRes.error) throw leaveRes.error;
-  const leaves = (leaveRes.data || []) as ILeaveRow[];
+  const leaves = await query<ILeaveRow>(
+    `SELECT id, employee_id, request_type, start_date, end_date, correction_date
+       FROM leave_requests
+      WHERE employee_id = ANY($1::int[])
+        AND status = 'approved'
+        AND request_type = ANY($2::text[])
+        AND start_date <= $3
+        AND end_date >= $4`,
+    [employeeIds, [...ATTACHMENT_REQUIRED_LEAVE_TYPES], range.endDate, range.startDate],
+  );
 
   const leaveIdSet = new Set(leaves.map(l => String(l.id)));
   const linkedLeaveIds = new Set<string>();
 
   if (leaveIdSet.size > 0) {
-    const linkRes = await supabase
-      .from('document_links')
-      .select('entity_id')
-      .eq('entity_type', 'leave_request')
-      .in('entity_id', [...leaveIdSet]);
-    if (linkRes.error) throw linkRes.error;
-    for (const row of linkRes.data || []) {
+    const linkRows = await query<{ entity_id: string }>(
+      `SELECT entity_id
+         FROM document_links
+        WHERE entity_type = 'leave_request'
+          AND entity_id = ANY($1::text[])`,
+      [[...leaveIdSet]],
+    );
+    for (const row of linkRows) {
       linkedLeaveIds.add(String(row.entity_id));
     }
   }
@@ -144,14 +145,15 @@ export async function validateCorrectionAttachments(
 
   let weekendSkudRows: Array<{ employee_id: number; date: string }> = [];
   if (weekendDates.size > 0) {
-    const skudRes = await supabase
-      .from('skud_daily_summary')
-      .select('employee_id, date, total_minutes')
-      .in('employee_id', employeeIds)
-      .in('date', [...weekendDates])
-      .gt('total_minutes', 0);
-    if (skudRes.error) throw skudRes.error;
-    weekendSkudRows = (skudRes.data || []).map(row => ({
+    const skudRows = await query<{ employee_id: number; date: string; total_minutes: number }>(
+      `SELECT employee_id, date, total_minutes
+         FROM skud_daily_summary
+        WHERE employee_id = ANY($1::int[])
+          AND date = ANY($2::date[])
+          AND total_minutes > 0`,
+      [employeeIds, [...weekendDates]],
+    );
+    weekendSkudRows = skudRows.map(row => ({
       employee_id: Number(row.employee_id),
       date: String(row.date),
     }));
@@ -163,12 +165,11 @@ export async function validateCorrectionAttachments(
 
   let nameMap = new Map<number, string | null>();
   if (referencedEmployeeIds.size > 0) {
-    const empRes = await supabase
-      .from('employees')
-      .select('id, full_name')
-      .in('id', [...referencedEmployeeIds]);
-    if (empRes.error) throw empRes.error;
-    nameMap = new Map((empRes.data || []).map(row => [Number(row.id), (row.full_name as string | null) ?? null]));
+    const empRows = await query<{ id: number; full_name: string | null }>(
+      'SELECT id, full_name FROM employees WHERE id = ANY($1::int[])',
+      [[...referencedEmployeeIds]],
+    );
+    nameMap = new Map(empRows.map(row => [Number(row.id), row.full_name ?? null]));
   }
 
   const missing: IMissingDay[] = [];

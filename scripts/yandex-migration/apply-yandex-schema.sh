@@ -73,9 +73,22 @@ if grep -nE '^[[:space:]]*DROP[[:space:]]+(TABLE|SCHEMA|FUNCTION|TRIGGER|INDEX|V
   echo "[apply-yandex-schema] CONFIRM_DROP=true — применяем как есть, включая DROP."
 fi
 
-echo "[apply-yandex-schema] applying $IN"
+# --single-transaction обязателен на Yandex Managed PG: target доступен
+# только через pooler (port 6432, прямой 5432 закрыт), который сбрасывает
+# session-level SET (включая check_function_bodies = false) между statements.
+# В одной транзакции SET держится до COMMIT — без этого pg_dump-сгенерированные
+# LANGUAGE sql функции с forward references к таблицам падают на CREATE.
+# Можно отключить через NO_SINGLE_TRANSACTION=true (для локальных стендов
+# с прямым доступом к 5432).
+SINGLE_TX_FLAG=""
+if [[ "${NO_SINGLE_TRANSACTION:-false}" != "true" ]]; then
+  SINGLE_TX_FLAG="--single-transaction"
+fi
+
+echo "[apply-yandex-schema] applying $IN ${SINGLE_TX_FLAG}"
 psql \
   "$TARGET_DATABASE_URL" \
+  ${SINGLE_TX_FLAG} \
   --variable=ON_ERROR_STOP=1 \
   --no-psqlrc \
   --file="$IN"

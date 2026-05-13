@@ -46,6 +46,17 @@ def _build_kwargs() -> dict[str, Any]:
     return kwargs
 
 
+async def _configure_connection(conn) -> None:
+    """Хук на каждое новое соединение в пуле.
+
+    Yandex Managed PG (Odyssey pooler в transaction-mode) сбрасывает
+    prepared statements между transactions, что валит psycopg auto-prepare
+    через ошибку "prepared statement _pg3_0 does not exist". Отключаем
+    server-side prepared statements полностью.
+    """
+    conn.prepare_threshold = None
+
+
 async def get_pool() -> AsyncConnectionPool:
     """Lazy singleton AsyncConnectionPool. Открывается при первом await."""
     global _pool
@@ -62,6 +73,7 @@ async def get_pool() -> AsyncConnectionPool:
             max_size=10,
             timeout=10.0,
             open=False,  # async pools открываем явно через await
+            configure=_configure_connection,
         )
         await pool.open()
         _pool = pool

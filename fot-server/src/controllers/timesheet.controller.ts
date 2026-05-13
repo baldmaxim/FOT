@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import type {
   AuthenticatedRequest,
@@ -190,18 +190,18 @@ async function countAcceptedMandatorySaturdays(
   excludeAdjustmentId: number | null,
 ): Promise<number> {
   const { monthStart, monthEnd } = monthBoundsForDate(workDate);
-  const { data, error } = await supabase
-    .from('attendance_adjustments')
-    .select('id, work_date')
-    .eq('employee_id', employeeId)
-    .gte('work_date', monthStart)
-    .lte('work_date', monthEnd)
-    .in('status', ['work', 'remote'])
-    .in('approval_status', ['auto_approved', 'approved']);
-  if (error) throw error;
+  const data = await query<{ id: number | string; work_date: string }>(
+    `SELECT id, work_date FROM attendance_adjustments
+       WHERE employee_id = $1
+         AND work_date >= $2
+         AND work_date <= $3
+         AND status IN ('work', 'remote')
+         AND approval_status IN ('auto_approved', 'approved')`,
+    [employeeId, monthStart, monthEnd],
+  );
 
   let count = 0;
-  for (const row of (data ?? []) as Array<{ id: number | string; work_date: string }>) {
+  for (const row of data) {
     if (excludeAdjustmentId != null && Number(row.id) === excludeAdjustmentId) continue;
     const d = new Date(`${String(row.work_date)}T00:00:00`);
     if (d.getDay() === 6) count++;
@@ -217,12 +217,16 @@ async function resolveAdjustmentApprovalStatus(
 ): Promise<'auto_approved' | 'pending'> {
   if (!WORKED_STATUSES_FOR_APPROVAL.has(status)) return 'auto_approved';
 
-  const { data: employee, error } = await supabase
-    .from('employees')
-    .select('id')
-    .eq('id', employeeId)
-    .maybeSingle();
-  if (error || !employee) return 'auto_approved';
+  let employee: { id: number | string } | null = null;
+  try {
+    employee = await query<{ id: number | string }>(
+      `SELECT id FROM employees WHERE id = $1 LIMIT 1`,
+      [employeeId],
+    ).then(rows => rows[0] ?? null);
+  } catch {
+    return 'auto_approved';
+  }
+  if (!employee) return 'auto_approved';
 
   const schedules = await resolveSchedulesForPeriod(
     [{ id: Number(employee.id) }],
@@ -284,19 +288,17 @@ async function findApprovalLockForDate(
   departmentId: string,
   workDate: string,
 ): Promise<IApprovalLockInfo | null> {
-  const { data, error } = await supabase
-    .from('timesheet_approvals')
-    .select('id, start_date, end_date, status')
-    .eq('department_id', departmentId)
-    .in('status', ['submitted', 'approved', 'returned'])
-    .lte('start_date', workDate)
-    .gte('end_date', workDate)
-    .order('status', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) throw error;
-  return (data as IApprovalLockInfo | null) ?? null;
+  const rows = await query<IApprovalLockInfo>(
+    `SELECT id, start_date, end_date, status FROM timesheet_approvals
+       WHERE department_id = $1
+         AND status IN ('submitted', 'approved', 'returned')
+         AND start_date <= $2
+         AND end_date >= $2
+       ORDER BY status DESC
+       LIMIT 1`,
+    [departmentId, workDate],
+  );
+  return rows[0] ?? null;
 }
 
 /**
@@ -308,20 +310,19 @@ async function loadApprovalLockedDatesForDepartment(
   startDate: string,
   endDate: string,
 ): Promise<string[]> {
-  const { data, error } = await supabase
-    .from('timesheet_approvals')
-    .select('start_date, end_date, status')
-    .eq('department_id', departmentId)
-    .in('status', ['submitted', 'approved', 'returned'])
-    .lte('start_date', endDate)
-    .gte('end_date', startDate);
-
-  if (error) throw error;
+  const data = await query<{ start_date: string; end_date: string; status: string }>(
+    `SELECT start_date, end_date, status FROM timesheet_approvals
+       WHERE department_id = $1
+         AND status IN ('submitted', 'approved', 'returned')
+         AND start_date <= $2
+         AND end_date >= $3`,
+    [departmentId, endDate, startDate],
+  );
 
   const locked = new Set<string>();
   const start = new Date(`${startDate}T00:00:00Z`);
   const end = new Date(`${endDate}T00:00:00Z`);
-  for (const row of data || []) {
+  for (const row of data) {
     const aStart = new Date(`${row.start_date}T00:00:00Z`);
     const aEnd = new Date(`${row.end_date}T00:00:00Z`);
     const cursor = new Date(Math.max(aStart.getTime(), start.getTime()));
@@ -369,13 +370,12 @@ async function resolvePlannedHoursByItems(items: Array<{ employee_id: number; wo
   if (uniqueItems.length === 0) return new Map();
 
   const employeeIds = [...new Set(uniqueItems.map(item => item.employee_id))];
-  const { data: employees, error } = await supabase
-    .from('employees')
-    .select('id')
-    .in('id', employeeIds);
-  if (error) throw error;
+  const employees = await query<{ id: number | string }>(
+    `SELECT id FROM employees WHERE id = ANY($1::int[])`,
+    [employeeIds],
+  );
 
-  const employeeRows = (employees || []).map(employee => ({
+  const employeeRows = employees.map(employee => ({
     id: Number(employee.id),
   }));
 
@@ -402,13 +402,12 @@ async function resolveShiftDurationByItems(
   if (uniqueItems.length === 0) return new Map();
 
   const employeeIds = [...new Set(uniqueItems.map(item => item.employee_id))];
-  const { data: employees, error } = await supabase
-    .from('employees')
-    .select('id')
-    .in('id', employeeIds);
-  if (error) throw error;
+  const employees = await query<{ id: number | string }>(
+    `SELECT id FROM employees WHERE id = ANY($1::int[])`,
+    [employeeIds],
+  );
 
-  const employeeRows = (employees || []).map(employee => ({
+  const employeeRows = employees.map(employee => ({
     id: Number(employee.id),
   }));
 
@@ -431,13 +430,11 @@ async function resolvePlannedHoursForObjectItem(params: {
   work_date: string;
   object_id?: string | null;
 }): Promise<number | null> {
-  const { data: employee, error } = await supabase
-    .from('employees')
-    .select('id')
-    .eq('id', params.employee_id)
-    .maybeSingle();
-
-  if (error) throw error;
+  const employees = await query<{ id: number | string }>(
+    `SELECT id FROM employees WHERE id = $1 LIMIT 1`,
+    [params.employee_id],
+  );
+  const employee = employees[0] ?? null;
   if (!employee) return null;
 
   const employeeSchedule = await resolveSchedulesForPeriod(
@@ -775,18 +772,15 @@ async function buildManagedDepartmentTimesheetSummary(params: {
 
   const { normHours, actualHours, deviations } = computeStatsFromTimesheetData(data, params.month);
 
-  const { data: approvals, error: approvalsError } = await supabase
-    .from('timesheet_approvals')
-    .select('id, start_date, end_date, status')
-    .eq('department_id', params.departmentId)
-    .lte('start_date', params.endDate)
-    .gte('end_date', params.startDate);
+  const approvals = await query<{ id: number | string; start_date: string; end_date: string; status: string }>(
+    `SELECT id, start_date, end_date, status FROM timesheet_approvals
+       WHERE department_id = $1
+         AND start_date <= $2
+         AND end_date >= $3`,
+    [params.departmentId, params.endDate, params.startDate],
+  );
 
-  if (approvalsError) {
-    throw approvalsError;
-  }
-
-  const approvalsTyped = (approvals || []).map(row => ({
+  const approvalsTyped = approvals.map(row => ({
     id: Number(row.id),
     start_date: String(row.start_date),
     end_date: String(row.end_date),
@@ -1002,32 +996,45 @@ export const timesheetController = {
           ?? null;
       }
 
-      let empQuery = supabase
-        .from('employees')
-        .select('id, full_name, position_id, org_department_id, employment_status, excluded_from_timesheet, excluded_from_timesheet_date')
-        .eq('employment_status', 'active')
-        .eq('is_archived', false)
-        .order('full_name');
+      const empWhere: string[] = [`employment_status = 'active'`, `is_archived = false`];
+      const empParams: unknown[] = [];
 
       if (shouldApplyDeptFilter) {
-        empQuery = empQuery.in('id', departmentEmployeeIds);
+        empParams.push(departmentEmployeeIds);
+        empWhere.push(`id = ANY($${empParams.length}::int[])`);
       } else {
         // Без deptFilter (self/employee-filter) сохраняем прежнее поведение: исключённые не видны.
-        empQuery = empQuery.eq('excluded_from_timesheet', false);
+        empWhere.push(`excluded_from_timesheet = false`);
       }
       if (hasEmployeeFilter) {
-        empQuery = empQuery.eq('id', requestedEmployeeId as number);
+        empParams.push(requestedEmployeeId as number);
+        empWhere.push(`id = $${empParams.length}`);
       } else if (scope === 'self' && req.user.employee_id) {
-        empQuery = empQuery.eq('id', req.user.employee_id);
+        empParams.push(req.user.employee_id);
+        empWhere.push(`id = $${empParams.length}`);
       }
 
-      const { data: employees, error: empError } = await empQuery;
-      if (empError) throw empError;
+      const employees = await query<{
+        id: number | string;
+        full_name: string | null;
+        position_id: string | null;
+        org_department_id: string | null;
+        employment_status: string | null;
+        excluded_from_timesheet: boolean;
+        excluded_from_timesheet_date: string | null;
+      }>(
+        `SELECT id, full_name, position_id, org_department_id, employment_status,
+                excluded_from_timesheet, excluded_from_timesheet_date
+           FROM employees
+           WHERE ${empWhere.join(' AND ')}
+           ORDER BY full_name`,
+        empParams,
+      );
       mark('employees');
 
-      const employeeIds = (employees || []).map(e => Number(e.id)).filter(Number.isFinite);
+      const employeeIds = employees.map(e => Number(e.id)).filter(Number.isFinite);
 
-      const empList = (employees || []).map(e => ({ id: Number(e.id) }));
+      const empList = employees.map(e => ({ id: Number(e.id) }));
       const [dailySchedulesMap, calendarMonth] = await Promise.all([
         resolveSchedulesForPeriod(empList, startDate, endDate),
         loadCalendarMonth(year, mon),
@@ -1041,14 +1048,14 @@ export const timesheetController = {
       }
 
       // Fetch position names
-      const positionIds = [...new Set((employees || []).map(e => e.position_id).filter(Boolean))];
+      const positionIds = [...new Set(employees.map(e => e.position_id).filter((v): v is string => !!v))];
       const posMap = new Map<string, string>();
       if (positionIds.length > 0) {
-        const { data: positions } = await supabase
-          .from('positions')
-          .select('id, name')
-          .in('id', positionIds);
-        (positions || []).forEach((p: { id: string; name: string }) => posMap.set(p.id, p.name));
+        const positions = await query<{ id: string; name: string }>(
+          `SELECT id, name FROM positions WHERE id = ANY($1::uuid[])`,
+          [positionIds],
+        );
+        positions.forEach((p) => posMap.set(p.id, p.name));
       }
       mark('positions');
 
@@ -1056,9 +1063,9 @@ export const timesheetController = {
         ? 'actual'
         : (scope === 'department' ? 'capped_to_schedule' : 'actual');
       const { entries, objectEntries } = await buildAttendanceEntries({
-        employees: (employees || []).map(employee => ({
+        employees: employees.map(employee => ({
           id: Number(employee.id),
-          full_name: (employee.full_name as string | null) || null,
+          full_name: employee.full_name || null,
         })),
         startDate,
         endDate,
@@ -1207,15 +1214,15 @@ export const timesheetController = {
       let departmentApprovals: Array<{ id: number; start_date: string; end_date: string; status: TimesheetApprovalStatus }> = [];
       let approvalLockedDates: string[] = [];
       if (effectiveApprovalDeptId) {
-        const { data: approvalsRows, error: approvalsErr } = await supabase
-          .from('timesheet_approvals')
-          .select('id, start_date, end_date, status')
-          .eq('department_id', effectiveApprovalDeptId)
-          .lte('start_date', endDate)
-          .gte('end_date', startDate)
-          .order('start_date', { ascending: true });
-        if (approvalsErr) throw approvalsErr;
-        departmentApprovals = (approvalsRows || []).map(row => ({
+        const approvalsRows = await query<{ id: number | string; start_date: string; end_date: string; status: string }>(
+          `SELECT id, start_date, end_date, status FROM timesheet_approvals
+             WHERE department_id = $1
+               AND start_date <= $2
+               AND end_date >= $3
+             ORDER BY start_date ASC`,
+          [effectiveApprovalDeptId, endDate, startDate],
+        );
+        departmentApprovals = approvalsRows.map(row => ({
           id: Number(row.id),
           start_date: String(row.start_date),
           end_date: String(row.end_date),
@@ -1800,9 +1807,8 @@ export const timesheetController = {
       } else if (requestedDepartmentId) {
         employeeIds = await listEmployeeIdsAssignedToDepartmentPeriod(requestedDepartmentId, startDate, endDate);
       } else {
-        const { data, error } = await supabase.from('employees').select('id');
-        if (error) throw error;
-        employeeIds = (data || []).map((row) => Number(row.id));
+        const data = await query<{ id: number | string }>(`SELECT id FROM employees`);
+        employeeIds = data.map((row) => Number(row.id));
       }
 
       if (employeeIds.length === 0) {
@@ -2015,31 +2021,36 @@ export const timesheetController = {
         employeeIds = [...ids];
       }
 
-      let conflicts: Array<{ employee_id: number; work_date: string; skud_minutes: number }> = [];
+      const conflicts: Array<{ employee_id: number; work_date: string; skud_minutes: number }> = [];
       if (employeeIds.length > 0 || scope === 'all') {
-        const adjQuery = supabase
-          .from('attendance_adjustments')
-          .select('employee_id, work_date')
-          .eq('source_type', 'manual')
-          .eq('status', 'absent')
-          .gte('work_date', startDate)
-          .lte('work_date', endDate);
-        if (employeeIds.length > 0) adjQuery.in('employee_id', employeeIds);
-        const adjRes = await adjQuery;
-        if (adjRes.error) throw adjRes.error;
-        const absentRows = (adjRes.data || []) as Array<{ employee_id: number; work_date: string }>;
+        const adjWhere: string[] = [
+          `source_type = 'manual'`,
+          `status = 'absent'`,
+          `work_date >= $1`,
+          `work_date <= $2`,
+        ];
+        const adjParams: unknown[] = [startDate, endDate];
+        if (employeeIds.length > 0) {
+          adjParams.push(employeeIds);
+          adjWhere.push(`employee_id = ANY($${adjParams.length}::int[])`);
+        }
+        const absentRows = await query<{ employee_id: number; work_date: string }>(
+          `SELECT employee_id, work_date FROM attendance_adjustments
+             WHERE ${adjWhere.join(' AND ')}`,
+          adjParams,
+        );
         if (absentRows.length > 0) {
           const empIdsForCheck = [...new Set(absentRows.map((r) => Number(r.employee_id)))];
-          const skudRes = await supabase
-            .from('skud_daily_summary')
-            .select('employee_id, date, total_minutes')
-            .in('employee_id', empIdsForCheck)
-            .gte('date', startDate)
-            .lte('date', endDate)
-            .gt('total_minutes', 0);
-          if (skudRes.error) throw skudRes.error;
+          const skudRows = await query<{ employee_id: number; date: string; total_minutes: number | string | null }>(
+            `SELECT employee_id, date, total_minutes FROM skud_daily_summary
+               WHERE employee_id = ANY($1::int[])
+                 AND date >= $2
+                 AND date <= $3
+                 AND total_minutes > 0`,
+            [empIdsForCheck, startDate, endDate],
+          );
           const skudMap = new Map<string, number>();
-          for (const row of skudRes.data || []) {
+          for (const row of skudRows) {
             skudMap.set(`${Number(row.employee_id)}_${String(row.date)}`, Number(row.total_minutes ?? 0));
           }
           for (const row of absentRows) {

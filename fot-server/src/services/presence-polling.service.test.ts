@@ -1,19 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-type QueryOperation = {
-  method: string;
-  args: unknown[];
-};
+type RowMap = Record<string, unknown>;
 
-type QueryRecord = {
-  table: string;
-  operations: QueryOperation[];
-};
+const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgExecute: vi.fn(),
+  pgTx: vi.fn(),
+}));
 
-type QueryResponse = {
-  data?: unknown;
-  error?: { message: string } | null;
-};
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
+}));
+
+// presence-polling.service оборачивает горячие RPC и UPSERT'ы в withDbSlot
+// (семафор контроля concurrency). В тестах он должен быть прозрачным wrapper'ом.
+const dbSlotMock = vi.hoisted(() => ({
+  withDbSlot: vi.fn(async <T>(_label: string, fn: () => Promise<T>): Promise<T> => fn()),
+  getDbInflight: vi.fn(() => 0),
+}));
+
+vi.mock('../config/db-instrumentation.js', () => ({
+  withDbSlot: dbSlotMock.withDbSlot,
+  getDbInflight: dbSlotMock.getDbInflight,
+}));
 
 type RuntimeStateRow = {
   key: string;
@@ -26,27 +39,32 @@ type RuntimeStateRow = {
 };
 
 const mockedState = vi.hoisted(() => ({
-  queryLog: [] as QueryRecord[],
   envMock: {
-    interval: '15000',
+    interval: '5000',
   },
-  queryResolver: (() => ({ data: [], error: null })) as (query: QueryRecord) => QueryResponse | Promise<QueryResponse>,
+  // Контролируемые результаты SQL по типам запросов.
+  responses: {
+    employees: [] as RowMap[],
+    latestStoredEvent: null as RowMap | null,
+    /** Очередь результатов upsert-call'ов: каждая запись либо rows[], либо ошибку. */
+    upsertQueue: [] as Array<{ ok: true; rows: RowMap[] } | { ok: false; message: string }>,
+    /** Очередь результатов summary RPC. */
+    summaryQueue: [] as Array<{ ok: true } | { ok: false; message: string }>,
+  },
+  // Сюда копится фактический payload каждого upsert-вызова.
+  upsertPayloadLog: [] as RowMap[][],
+  // Сюда — параметры RPC recalc_summary (массив pairs).
+  rpcPairsLog: [] as Array<Array<{ emp_id: number; date: string }>>,
   ioMock: {
     emit: vi.fn(),
-  },
-  supabaseMock: {
-    from: vi.fn(),
-    rpc: vi.fn(async () => ({ data: null, error: null })),
   },
   sigurServiceMock: {
     isConfigured: vi.fn(() => true),
     getBackgroundConnectionType: vi.fn(() => 'external'),
     getEvents: vi.fn<(...args: unknown[]) => Promise<Array<Record<string, unknown>>>>(async () => []),
     getEventsByLastId: vi.fn<(...args: unknown[]) => Promise<Array<Record<string, unknown>>>>(async () => []),
-    // Тесты мокают getEvents/getEventsByLastId — новые методы делегируют на них и
-    // упаковывают результат в { pass, failures: [] }. Так старые ожидания тестов на
-    // getEvents.toHaveBeenCalledWith(...) продолжают работать, но прод-код видит
-    // новый API.
+    // Делегаты для совместимости со старыми тестами: запаковывают результат getEvents/getEventsByLastId
+    // в { pass, failures }, чтобы вызовы getEvents.toHaveBeenCalledWith() продолжали работать.
     getEventsWithFailures: vi.fn(async (
       startTime?: string,
       endTime?: string,
@@ -146,74 +164,6 @@ const mockedState = vi.hoisted(() => ({
   },
 }));
 
-function createBuilder(table: string) {
-  const query: QueryRecord = { table, operations: [] };
-  mockedState.queryLog.push(query);
-
-  const builder = {
-    select: (...args: unknown[]) => {
-      query.operations.push({ method: 'select', args });
-      return builder;
-    },
-    eq: (...args: unknown[]) => {
-      query.operations.push({ method: 'eq', args });
-      return builder;
-    },
-    not: (...args: unknown[]) => {
-      query.operations.push({ method: 'not', args });
-      return builder;
-    },
-    order: (...args: unknown[]) => {
-      query.operations.push({ method: 'order', args });
-      return builder;
-    },
-    limit: (...args: unknown[]) => {
-      query.operations.push({ method: 'limit', args });
-      return builder;
-    },
-    gte: (...args: unknown[]) => {
-      query.operations.push({ method: 'gte', args });
-      return builder;
-    },
-    lte: (...args: unknown[]) => {
-      query.operations.push({ method: 'lte', args });
-      return builder;
-    },
-    upsert: (...args: unknown[]) => {
-      query.operations.push({ method: 'upsert', args });
-      return builder;
-    },
-    then: (onFulfilled: (value: QueryResponse) => unknown, onRejected?: (reason: unknown) => unknown) => {
-      const response = mockedState.queryResolver(query);
-      return Promise.resolve(response).then(value => {
-        const upsert = findOperation(query, 'upsert');
-        const selectsInsertedRows = !!upsert && !!findOperation(query, 'select', 'employee_id,event_date');
-        if (
-          selectsInsertedRows
-          && value.error == null
-          && value.data == null
-          && Array.isArray(upsert.args[0])
-        ) {
-          return {
-            ...value,
-            data: (upsert.args[0] as Array<{ employee_id: number | null; event_date: string | null }>)
-              .map(row => ({ employee_id: row.employee_id, event_date: row.event_date })),
-          };
-        }
-        return value;
-      }).then(onFulfilled, onRejected);
-    },
-  };
-
-  return builder;
-}
-
-mockedState.supabaseMock.from.mockImplementation((table: string) => createBuilder(table));
-
-vi.mock('../config/database.js', () => ({
-  supabase: mockedState.supabaseMock,
-}));
-
 vi.mock('../config/env.js', () => ({
   env: {
     get SIGUR_PRESENCE_POLL_INTERVAL_MS() {
@@ -244,6 +194,7 @@ vi.mock('./sigur-monitor.service.js', () => ({
 vi.mock('./sigur-runtime-state.service.js', () => ({
   SIGUR_POLLING_LEASE_TTL_SECONDS: 180,
   SIGUR_POLLING_STATE_KEY: 'sigur_presence_polling',
+  SIGUR_STRUCTURE_SYNC_STATE_KEY: 'sigur_structure_sync',
   getSigurRuntimeOwner: (scope: string) => `owner:${scope}`,
   getSigurRuntimeState: mockedState.runtimeStateMock.getSigurRuntimeState,
   tryAcquireSigurRuntimeLease: mockedState.runtimeStateMock.tryAcquireSigurRuntimeLease,
@@ -262,10 +213,6 @@ import {
   resetPresencePollingStateForTests,
   resolvePresencePollIntervalMs,
 } from './presence-polling.service.js';
-
-function findOperation(query: QueryRecord, method: string, firstArg?: unknown): QueryOperation | undefined {
-  return query.operations.find(op => op.method === method && (firstArg === undefined || op.args[0] === firstArg));
-}
 
 function makeEvent(params: {
   timestamp: string;
@@ -296,16 +243,102 @@ function makeEvent(params: {
   };
 }
 
+// ─── Маршрутизатор pg helpers ──────────────────────────────────────────────
+// query() обслуживает:
+//   1. SELECT ... FROM employees WHERE is_archived = false → mockedState.responses.employees
+//   2. INSERT INTO skud_events ... RETURNING employee_id, event_date → берём из upsertQueue
+//   3. SELECT public.batch_recalculate_skud_daily_summary($1::jsonb) → берём из summaryQueue
+// queryOne() — SELECT event_date, event_time FROM skud_events ORDER BY ... LIMIT 1.
+// execute() — INSERT INTO skud_event_failures (нам не критично что вернёт).
+function installPgRouter(): void {
+  pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+    const lower = sql.trim().toLowerCase();
+
+    if (lower.startsWith('select id, full_name, sigur_employee_id from employees')) {
+      return mockedState.responses.employees;
+    }
+
+    if (lower.startsWith('insert into skud_events')) {
+      mockedState.upsertPayloadLog.push(reconstructEventBatch(params || []));
+      const next = mockedState.responses.upsertQueue.shift();
+      if (!next) {
+        // Дефолт: пустой результат (все дубликаты).
+        return [];
+      }
+      if (!next.ok) {
+        throw new Error(next.message);
+      }
+      return next.rows;
+    }
+
+    if (lower.startsWith('select public.batch_recalculate_skud_daily_summary')) {
+      const pairsJson = params?.[0];
+      if (typeof pairsJson === 'string') {
+        try {
+          mockedState.rpcPairsLog.push(JSON.parse(pairsJson));
+        } catch {
+          mockedState.rpcPairsLog.push([]);
+        }
+      }
+      const next = mockedState.responses.summaryQueue.shift();
+      if (next && !next.ok) {
+        throw new Error(next.message);
+      }
+      return [];
+    }
+
+    throw new Error(`Unexpected pg.query SQL: ${sql.slice(0, 120)}`);
+  });
+
+  pgQueryOne.mockImplementation(async (sql: string) => {
+    const lower = sql.trim().toLowerCase();
+    if (lower.startsWith('select event_date, event_time from skud_events')) {
+      return mockedState.responses.latestStoredEvent;
+    }
+    return null;
+  });
+
+  pgExecute.mockResolvedValue(0);
+}
+
+// EVENT_COLUMNS из presence-polling.service: 9 колонок по событию.
+const EVENT_COLUMN_COUNT = 9;
+function reconstructEventBatch(params: unknown[]): RowMap[] {
+  const cols = [
+    'physical_person', 'card_number', 'event_date', 'event_time',
+    'event_at', 'access_point', 'direction', 'employee_id', 'dedup_hash',
+  ];
+  const result: RowMap[] = [];
+  for (let i = 0; i + EVENT_COLUMN_COUNT <= params.length; i += EVENT_COLUMN_COUNT) {
+    const row: RowMap = {};
+    for (let c = 0; c < EVENT_COLUMN_COUNT; c++) {
+      row[cols[c]] = params[i + c];
+    }
+    result.push(row);
+  }
+  return result;
+}
+
 describe('presence-polling.service', () => {
   beforeEach(() => {
-    mockedState.queryLog.length = 0;
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
+
     mockedState.envMock.interval = '5000';
     mockedState.ioMock.emit.mockClear();
-    mockedState.queryResolver = () => ({ data: [], error: null });
-    mockedState.supabaseMock.from.mockClear();
-    mockedState.supabaseMock.from.mockImplementation((table: string) => createBuilder(table));
-    mockedState.supabaseMock.rpc.mockClear();
-    mockedState.supabaseMock.rpc.mockResolvedValue({ data: null, error: null });
+    mockedState.responses.employees = [];
+    mockedState.responses.latestStoredEvent = null;
+    mockedState.responses.upsertQueue = [];
+    mockedState.responses.summaryQueue = [];
+    mockedState.upsertPayloadLog = [];
+    mockedState.rpcPairsLog = [];
+    dbSlotMock.withDbSlot.mockClear();
+    dbSlotMock.withDbSlot.mockImplementation(async (_label, fn) => fn());
+    dbSlotMock.getDbInflight.mockClear();
+    dbSlotMock.getDbInflight.mockReturnValue(0);
+
     mockedState.sigurServiceMock.isConfigured.mockReturnValue(true);
     mockedState.sigurServiceMock.getBackgroundConnectionType.mockReturnValue('external');
     mockedState.sigurServiceMock.getEvents.mockReset();
@@ -320,6 +353,8 @@ describe('presence-polling.service', () => {
     mockedState.runtimeStateMock.mergeSigurRuntimeState.mockClear();
     mockedState.runtimeStateMock.releaseSigurRuntimeLease.mockClear();
     mockedState.runtimeStateMock.startSigurRuntimeLeaseHeartbeat.mockClear();
+
+    installPgRouter();
     resetPresencePollingStateForTests();
   });
 
@@ -337,25 +372,13 @@ describe('presence-polling.service', () => {
   it('requests missed events from the last stored event on cold start', async () => {
     const now = new Date(2026, 2, 27, 12, 0, 0);
 
-    mockedState.queryResolver = (query) => {
-      if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
-        return { data: [{ event_date: '2026-03-27', event_time: '08:10:00' }], error: null };
-      }
-      if (query.table === 'employees') {
-        return {
-          data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_events' && findOperation(query, 'select', 'dedup_hash')) {
-        return { data: [], error: null };
-      }
-      if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
-        return { data: null, error: null };
-      }
-      throw new Error(`Unexpected query: ${query.table}`);
-    };
+    mockedState.responses.latestStoredEvent = { event_date: '2026-03-27', event_time: '08:10:00' };
+    mockedState.responses.employees = [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }];
+    // 1 событие → 1 успешный upsert с одной inserted row.
+    mockedState.responses.upsertQueue = [{
+      ok: true,
+      rows: [{ employee_id: 1, event_date: '2026-03-27' }],
+    }];
 
     mockedState.sigurServiceMock.getEvents.mockResolvedValue([
       makeEvent({ timestamp: '2026-03-27T08:30:00+03:00' }),
@@ -388,25 +411,8 @@ describe('presence-polling.service', () => {
   it('keeps recovering from the previous day but caps the catch-up window length', async () => {
     const now = new Date(2026, 2, 27, 10, 0, 0);
 
-    mockedState.queryResolver = (query) => {
-      if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
-        return { data: [{ event_date: '2026-03-26', event_time: '23:58:00' }], error: null };
-      }
-      if (query.table === 'employees') {
-        return {
-          data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_events' && findOperation(query, 'select', 'dedup_hash')) {
-        return { data: [], error: null };
-      }
-      if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
-        return { data: null, error: null };
-      }
-      throw new Error(`Unexpected query: ${query.table}`);
-    };
+    mockedState.responses.latestStoredEvent = { event_date: '2026-03-26', event_time: '23:58:00' };
+    mockedState.responses.employees = [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }];
 
     await pollEventsOnce(now);
 
@@ -422,22 +428,8 @@ describe('presence-polling.service', () => {
     const firstNow = new Date(2026, 2, 27, 10, 0, 0);
     const secondNow = new Date(2026, 2, 27, 10, 5, 0);
 
-    mockedState.queryResolver = (query) => {
-      if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
-        return { data: [{ event_date: '2026-03-27', event_time: '08:00:00' }], error: null };
-      }
-      if (query.table === 'employees') {
-        return {
-          data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_events' && findOperation(query, 'select', 'dedup_hash')) {
-        return { data: [], error: null };
-      }
-      throw new Error(`Unexpected query: ${query.table}`);
-    };
+    mockedState.responses.latestStoredEvent = { event_date: '2026-03-27', event_time: '08:00:00' };
+    mockedState.responses.employees = [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }];
 
     await pollEventsOnce(firstNow);
     await pollEventsOnce(secondNow);
@@ -467,27 +459,13 @@ describe('presence-polling.service', () => {
   it('does not advance the checkpoint when persisting events fails', async () => {
     const firstNow = new Date(2026, 2, 27, 10, 0, 0);
     const secondNow = new Date(2026, 2, 27, 10, 5, 0);
-    let upsertCalls = 0;
 
-    mockedState.queryResolver = (query) => {
-      if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
-        return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
-      }
-      if (query.table === 'employees') {
-        return {
-          data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }],
-          error: null,
-        };
-      }
-      if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
-        upsertCalls += 1;
-        if (upsertCalls === 1) {
-          return { data: null, error: { message: 'temporary insert failure' } };
-        }
-        return { data: null, error: null };
-      }
-      throw new Error(`Unexpected query: ${query.table}`);
-    };
+    mockedState.responses.latestStoredEvent = { event_date: '2026-03-27', event_time: '09:00:00' };
+    mockedState.responses.employees = [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }];
+    // upsert первого цикла фейлится "temporary insert failure" (НЕ transient: retry не делаем).
+    mockedState.responses.upsertQueue = [
+      { ok: false, message: 'temporary insert failure' },
+    ];
 
     mockedState.sigurServiceMock.getEvents.mockResolvedValue([
       makeEvent({ timestamp: '2026-03-27T09:15:00+03:00' }),
@@ -504,6 +482,12 @@ describe('presence-polling.service', () => {
     }));
     expect(mockedState.ioMock.emit).not.toHaveBeenCalled();
     mockedState.ioMock.emit.mockClear();
+
+    // Второй цикл: upsert проходит (1 insertedRow).
+    mockedState.responses.upsertQueue = [{
+      ok: true,
+      rows: [{ employee_id: 1, event_date: '2026-03-27' }],
+    }];
 
     await pollEventsOnce(secondNow);
 
@@ -531,19 +515,8 @@ describe('presence-polling.service', () => {
   it('falls back to the start of the current day when the database has no events', async () => {
     const now = new Date(2026, 2, 27, 9, 30, 0);
 
-    mockedState.queryResolver = (query) => {
-      if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
-        return { data: [], error: null };
-      }
-      if (query.table === 'employees') {
-        return { data: [], error: null };
-      }
-
-      if (query.table === 'skud_events' && findOperation(query, 'select', 'dedup_hash')) {
-        return { data: [], error: null };
-      }
-      throw new Error(`Unexpected query: ${query.table}`);
-    };
+    mockedState.responses.latestStoredEvent = null;
+    mockedState.responses.employees = [];
 
     await pollEventsOnce(now);
 
@@ -558,22 +531,9 @@ describe('presence-polling.service', () => {
   it('stores unmatched events instead of dropping them', async () => {
     const now = new Date(2026, 2, 27, 10, 0, 0);
 
-    mockedState.queryResolver = (query) => {
-      if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
-        return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
-      }
-      if (query.table === 'employees') {
-        return { data: [], error: null };
-      }
-
-      if (query.table === 'skud_events' && findOperation(query, 'select', 'dedup_hash')) {
-        return { data: [], error: null };
-      }
-      if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
-        return { data: null, error: null };
-      }
-      throw new Error(`Unexpected query: ${query.table}`);
-    };
+    mockedState.responses.latestStoredEvent = { event_date: '2026-03-27', event_time: '09:00:00' };
+    mockedState.responses.employees = [];
+    mockedState.responses.upsertQueue = [{ ok: true, rows: [] }];
 
     mockedState.sigurServiceMock.getEvents.mockResolvedValue([
       makeEvent({ timestamp: '2026-03-27T09:15:00+03:00', employeeId: 999, name: 'Неизвестный Сотрудник' }),
@@ -581,42 +541,32 @@ describe('presence-polling.service', () => {
 
     await pollEventsOnce(now);
 
-    const upsertQuery = mockedState.queryLog.find(query => query.table === 'skud_events' && findOperation(query, 'upsert'));
-    const payload = upsertQuery?.operations.find(op => op.method === 'upsert')?.args[0] as Array<{
-      employee_id: number | null;
-      physical_person: string;
-      event_at: string;
-    }>;
-
+    // Должен быть ровно один upsert с одним event'ом, у которого employee_id=null.
+    expect(mockedState.upsertPayloadLog).toHaveLength(1);
+    const payload = mockedState.upsertPayloadLog[0];
     expect(payload).toHaveLength(1);
-    expect(payload[0]?.employee_id).toBeNull();
-    expect(payload[0]?.physical_person).toBe('Неизвестный Сотрудник');
-    expect(payload[0]?.event_at).toBe('2026-03-27T09:15:00+03:00');
-    expect(mockedState.supabaseMock.rpc).not.toHaveBeenCalled();
+    expect(payload[0].employee_id).toBeNull();
+    expect(payload[0].physical_person).toBe('Неизвестный Сотрудник');
+    expect(payload[0].event_at).toBe('2026-03-27T09:15:00+03:00');
+    // Без матча → нет insertedSummaryKeys → нет вызова recalc RPC.
+    expect(mockedState.rpcPairsLog).toHaveLength(0);
   });
 
   it('forwards all events to upsert and relies on DB dedup (no pre-check query)', async () => {
     // После оптимизации egress пред-запрос существующих dedup_hash удалён.
     // Теперь все события из окна overlap отправляются в upsert, а Postgres
-    // отсекает дубликаты через UNIQUE (dedup_hash, event_date) +
-    // ignoreDuplicates: true. Это снижает ingress-трафик из Supabase.
+    // отсекает дубликаты через UNIQUE (dedup_hash, event_date) + ON CONFLICT DO NOTHING.
     const now = new Date(2026, 2, 27, 10, 0, 0);
 
-    mockedState.queryResolver = (query) => {
-      if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
-        return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
-      }
-      if (query.table === 'employees') {
-        return {
-          data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }],
-          error: null,
-        };
-      }
-      if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
-        return { data: null, error: null };
-      }
-      throw new Error(`Unexpected query: ${query.table}`);
-    };
+    mockedState.responses.latestStoredEvent = { event_date: '2026-03-27', event_time: '09:00:00' };
+    mockedState.responses.employees = [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }];
+    mockedState.responses.upsertQueue = [{
+      ok: true,
+      rows: [
+        { employee_id: 1, event_date: '2026-03-27' },
+        { employee_id: 1, event_date: '2026-03-27' },
+      ],
+    }];
 
     mockedState.sigurServiceMock.getEvents.mockResolvedValue([
       makeEvent({ timestamp: '2026-03-27T09:00:00+03:00' }),
@@ -625,39 +575,29 @@ describe('presence-polling.service', () => {
 
     await pollEventsOnce(now);
 
-    const upsertQuery = mockedState.queryLog.find(query => query.table === 'skud_events' && findOperation(query, 'upsert'));
-    const payload = upsertQuery?.operations.find(op => op.method === 'upsert')?.args[0] as Array<{ event_time: string }>;
-
-    // Оба события уезжают в upsert; дубликат отсечёт Postgres
+    // Оба события уезжают в upsert; дубликат отсечёт Postgres.
+    expect(mockedState.upsertPayloadLog).toHaveLength(1);
+    const payload = mockedState.upsertPayloadLog[0];
     expect(payload).toHaveLength(2);
     expect(payload.map(p => p.event_time).sort()).toEqual(['09:00:00', '09:15:00']);
     expect(POLL_OVERLAP_MS).toBeGreaterThan(0);
 
-    // Гарантия: пред-select по dedup_hash больше не вызывается
-    const preCheck = mockedState.queryLog.find(query =>
-      query.table === 'skud_events' && findOperation(query, 'select', 'dedup_hash'),
+    // Пред-select по dedup_hash больше не вызывается. Гарантия: pgQuery позвали только для
+    // employees + INSERT skud_events + RPC summary.
+    const dedupHashCalls = pgQuery.mock.calls.filter(([sql]) =>
+      typeof sql === 'string' && sql.toLowerCase().includes('dedup_hash')
+      && sql.toLowerCase().startsWith('select'),
     );
-    expect(preCheck).toBeUndefined();
+    expect(dedupHashCalls).toHaveLength(0);
   });
 
   it('does not emit realtime updates when the DB ignores overlap duplicates', async () => {
     const now = new Date(2026, 2, 27, 10, 0, 0);
 
-    mockedState.queryResolver = (query) => {
-      if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
-        return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
-      }
-      if (query.table === 'employees') {
-        return {
-          data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }],
-          error: null,
-        };
-      }
-      if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
-        return { data: [], error: null };
-      }
-      throw new Error(`Unexpected query: ${query.table}`);
-    };
+    mockedState.responses.latestStoredEvent = { event_date: '2026-03-27', event_time: '09:00:00' };
+    mockedState.responses.employees = [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }];
+    // upsert ничего не вставил (всё дубликаты).
+    mockedState.responses.upsertQueue = [{ ok: true, rows: [] }];
 
     mockedState.sigurServiceMock.getEvents.mockResolvedValue([
       makeEvent({ timestamp: '2026-03-27T09:00:00+03:00' }),
@@ -665,21 +605,14 @@ describe('presence-polling.service', () => {
 
     await pollEventsOnce(now);
 
-    // Realtime НЕ должен срабатывать, если все события — дубликаты (presenceChanged=false,
-    // totalInserted=0). Клиентам refetch-ить нечего: ни одного нового прохода в БД.
+    // Realtime не срабатывает: totalInserted=0.
     expect(mockedState.ioMock.emit).not.toHaveBeenCalled();
 
-    // Recalc RPC при этом вызывается — это страховка от Bug A: если предыдущий тик упал
-    // на recalc после успешного upsert, текущий тик увидит события дубликатами и должен
-    // повторить пересчёт. RPC идемпотентна, лишний вызов безопасен.
-    expect(mockedState.supabaseMock.rpc).toHaveBeenCalledWith(
-      'batch_recalculate_skud_daily_summary',
-      expect.objectContaining({
-        p_pairs: expect.arrayContaining([
-          expect.objectContaining({ emp_id: 1, date: '2026-03-27' }),
-        ]),
-      }),
-    );
+    // Recalc RPC всё равно вызывается — страховка от Bug A (recalc, упавший в предыдущем тике).
+    expect(mockedState.rpcPairsLog.length).toBeGreaterThanOrEqual(1);
+    expect(mockedState.rpcPairsLog[0]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ emp_id: 1, date: '2026-03-27' }),
+    ]));
     expect(mockedState.sigurMonitorMock.recordSigurMonitorSuccess).toHaveBeenCalledWith(expect.objectContaining({
       meta: expect.objectContaining({
         inserted: 0,
@@ -691,12 +624,7 @@ describe('presence-polling.service', () => {
   it('passes the actual background connection to the failure hook', async () => {
     const now = new Date(2026, 2, 27, 10, 0, 0);
 
-    mockedState.queryResolver = (query) => {
-      if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
-        return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
-      }
-      throw new Error(`Unexpected query: ${query.table}`);
-    };
+    mockedState.responses.latestStoredEvent = { event_date: '2026-03-27', event_time: '09:00:00' };
 
     mockedState.sigurServiceMock.getEvents.mockRejectedValueOnce(new Error('connect ETIMEDOUT external-host:9500'));
 
@@ -709,28 +637,19 @@ describe('presence-polling.service', () => {
     }));
   });
 
-  it('retries the upsert on transient Supabase errors and succeeds on the second attempt', async () => {
+  it('retries the upsert on transient pg errors and succeeds on the second attempt', async () => {
     vi.useFakeTimers();
     try {
       const now = new Date(2026, 2, 27, 10, 0, 0);
-      let upsertCalls = 0;
 
-      mockedState.queryResolver = (query) => {
-        if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
-          return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
-        }
-        if (query.table === 'employees') {
-          return { data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }], error: null };
-        }
-        if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
-          upsertCalls += 1;
-          if (upsertCalls === 1) {
-            return { data: null, error: { message: '<!DOCTYPE html><html>502 Bad Gateway</html>' } };
-          }
-          return { data: null, error: null };
-        }
-        throw new Error(`Unexpected query: ${query.table}`);
-      };
+      mockedState.responses.latestStoredEvent = { event_date: '2026-03-27', event_time: '09:00:00' };
+      mockedState.responses.employees = [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }];
+      mockedState.responses.upsertQueue = [
+        // 1-я попытка: 502 → retry.
+        { ok: false, message: '<!DOCTYPE html><html>502 Bad Gateway</html>' },
+        // 2-я попытка: успех.
+        { ok: true, rows: [{ employee_id: 1, event_date: '2026-03-27' }] },
+      ];
 
       mockedState.sigurServiceMock.getEvents.mockResolvedValue([
         makeEvent({ timestamp: '2026-03-27T09:15:00+03:00' }),
@@ -740,7 +659,7 @@ describe('presence-polling.service', () => {
       await vi.runAllTimersAsync();
       await cyclePromise;
 
-      expect(upsertCalls).toBe(2);
+      expect(mockedState.upsertPayloadLog.length).toBe(2);
       expect(mockedState.sigurMonitorMock.recordSigurMonitorFailure).not.toHaveBeenCalled();
       expect(mockedState.sigurMonitorMock.recordSigurMonitorSuccess).toHaveBeenCalledWith(expect.objectContaining({
         meta: expect.objectContaining({ inserted: 1, persistenceErrors: 0, summaryError: null }),
@@ -759,21 +678,15 @@ describe('presence-polling.service', () => {
     vi.useFakeTimers();
     try {
       const now = new Date(2026, 2, 27, 10, 0, 0);
-      let upsertCalls = 0;
 
-      mockedState.queryResolver = (query) => {
-        if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
-          return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
-        }
-        if (query.table === 'employees') {
-          return { data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }], error: null };
-        }
-        if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
-          upsertCalls += 1;
-          return { data: null, error: { message: 'canceling statement due to statement timeout' } };
-        }
-        throw new Error(`Unexpected query: ${query.table}`);
-      };
+      mockedState.responses.latestStoredEvent = { event_date: '2026-03-27', event_time: '09:00:00' };
+      mockedState.responses.employees = [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }];
+      // 1 первичная + 2 retry = 3 attempts, все падают.
+      mockedState.responses.upsertQueue = [
+        { ok: false, message: 'canceling statement due to statement timeout' },
+        { ok: false, message: 'canceling statement due to statement timeout' },
+        { ok: false, message: 'canceling statement due to statement timeout' },
+      ];
 
       mockedState.sigurServiceMock.getEvents.mockResolvedValue([
         makeEvent({ timestamp: '2026-03-27T09:15:00+03:00' }),
@@ -783,8 +696,7 @@ describe('presence-polling.service', () => {
       await vi.runAllTimersAsync();
       await cyclePromise;
 
-      // 1 первичная + 2 retry = 3 attempts
-      expect(upsertCalls).toBe(3);
+      expect(mockedState.upsertPayloadLog.length).toBe(3);
       expect(mockedState.runtimeStateMock.mergeSigurRuntimeState).toHaveBeenCalledTimes(1);
       const mergeCall = mockedState.runtimeStateMock.mergeSigurRuntimeState.mock.calls[0][0] as unknown as {
         checkpointAt?: Date;
@@ -806,26 +718,19 @@ describe('presence-polling.service', () => {
     vi.useFakeTimers();
     try {
       const now = new Date(2026, 2, 27, 10, 0, 0);
-      let upsertCalls = 0;
 
-      mockedState.queryResolver = (query) => {
-        if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
-          return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
-        }
-        if (query.table === 'employees') {
-          return { data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }], error: null };
-        }
-        if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
-          upsertCalls += 1;
-          // 1-й батч (200 событий) — ОК; все попытки 2-го батча (50 событий) — timeout
-          if (upsertCalls === 1) return { data: null, error: null };
-          return { data: null, error: { message: 'canceling statement due to statement timeout' } };
-        }
-        throw new Error(`Unexpected query: ${query.table}`);
-      };
+      mockedState.responses.latestStoredEvent = { event_date: '2026-03-27', event_time: '09:00:00' };
+      mockedState.responses.employees = [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }];
+      // 1-й батч (200 событий) — успех; 2-й батч (50 событий) — все 3 попытки timeout.
+      mockedState.responses.upsertQueue = [
+        { ok: true, rows: [] }, // батч 1
+        { ok: false, message: 'canceling statement due to statement timeout' },
+        { ok: false, message: 'canceling statement due to statement timeout' },
+        { ok: false, message: 'canceling statement due to statement timeout' },
+      ];
 
       const events: Array<Record<string, unknown>> = [];
-      // 250 событий = 200 (батч 1, успех) + 50 (батч 2, fail после retries)
+      // 250 событий = 200 (батч 1, успех) + 50 (батч 2, fail после retries).
       for (let i = 0; i < 250; i++) {
         const minute = String(Math.floor(i / 60)).padStart(2, '0');
         const second = String(i % 60).padStart(2, '0');
@@ -841,8 +746,7 @@ describe('presence-polling.service', () => {
       await vi.runAllTimersAsync();
       await cyclePromise;
 
-      // 1 успешный + 1 первичный fail + 2 retry на 2-м батче = 4
-      expect(upsertCalls).toBe(4);
+      expect(mockedState.upsertPayloadLog.length).toBe(4);
       expect(mockedState.runtimeStateMock.mergeSigurRuntimeState).toHaveBeenCalledTimes(1);
       const mergeCall = mockedState.runtimeStateMock.mergeSigurRuntimeState.mock.calls[0][0] as unknown as {
         checkpointAt?: Date;
@@ -861,29 +765,20 @@ describe('presence-polling.service', () => {
     }
   });
 
-  it('retries the summary RPC on <!DOCTYPE html> Supabase responses and records partial failure', async () => {
+  it('retries the summary RPC on transient pg responses and records partial failure', async () => {
     vi.useFakeTimers();
     try {
       const now = new Date(2026, 2, 27, 10, 0, 0);
 
-      mockedState.queryResolver = (query) => {
-        if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
-          return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
-        }
-        if (query.table === 'employees') {
-          return { data: [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }], error: null };
-        }
-        if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
-          return { data: null, error: null };
-        }
-        throw new Error(`Unexpected query: ${query.table}`);
-      };
-
-      let rpcCalls = 0;
-      (mockedState.supabaseMock.rpc as unknown as { mockImplementation: (impl: (...args: unknown[]) => Promise<unknown>) => void }).mockImplementation(async () => {
-        rpcCalls += 1;
-        return { data: null, error: { message: '<!DOCTYPE html><html><head><title>502</title></head></html>' } };
-      });
+      mockedState.responses.latestStoredEvent = { event_date: '2026-03-27', event_time: '09:00:00' };
+      mockedState.responses.employees = [{ id: 1, full_name: 'Иван Иванов', sigur_employee_id: 101 }];
+      mockedState.responses.upsertQueue = [{ ok: true, rows: [{ employee_id: 1, event_date: '2026-03-27' }] }];
+      // 1 первичная + 2 retry = 3 attempts, все падают на <!DOCTYPE.
+      mockedState.responses.summaryQueue = [
+        { ok: false, message: '<!DOCTYPE html><html><head><title>502</title></head></html>' },
+        { ok: false, message: '<!DOCTYPE html><html><head><title>502</title></head></html>' },
+        { ok: false, message: '<!DOCTYPE html><html><head><title>502</title></head></html>' },
+      ];
 
       mockedState.sigurServiceMock.getEvents.mockResolvedValue([
         makeEvent({ timestamp: '2026-03-27T09:15:00+03:00' }),
@@ -893,14 +788,13 @@ describe('presence-polling.service', () => {
       await vi.runAllTimersAsync();
       await cyclePromise;
 
-      // 1 первичная + 2 retry = 3 attempts
-      expect(rpcCalls).toBe(3);
+      expect(mockedState.rpcPairsLog.length).toBe(3);
       expect(mockedState.runtimeStateMock.mergeSigurRuntimeState).toHaveBeenCalledTimes(1);
       const mergeCall = mockedState.runtimeStateMock.mergeSigurRuntimeState.mock.calls[0][0] as unknown as {
         checkpointAt?: Date;
         meta: { lastError: string };
       };
-      // Inserted ОК → есть lastSuccessfulEventAt → checkpointAt выставляется (— 10s overlap)
+      // Inserted ОК → есть lastSuccessfulEventAt → checkpointAt выставляется (— 10s overlap).
       expect(mergeCall.checkpointAt).toBeInstanceOf(Date);
       expect(mergeCall.meta.lastError.toLowerCase()).toContain('<!doctype');
       expect(mockedState.sigurMonitorMock.recordSigurMonitorFailure).toHaveBeenCalled();
@@ -913,24 +807,18 @@ describe('presence-polling.service', () => {
   it('chunks summary recalc RPC into batches of at most 100 pairs', async () => {
     const now = new Date(2026, 2, 27, 10, 0, 0);
 
-    // 250 событий = 250 уникальных (employee_id, date) пар (employee_id зашит в sigur_employee_id)
+    // 250 событий = 250 уникальных (employee_id, date) пар.
     const employees: Array<{ id: number; full_name: string; sigur_employee_id: number }> = [];
     for (let i = 0; i < 250; i++) {
       employees.push({ id: 1000 + i, full_name: `Сотрудник${i}`, sigur_employee_id: 200 + i });
     }
-
-    mockedState.queryResolver = (query) => {
-      if (query.table === 'skud_events' && findOperation(query, 'select', 'event_date, event_time')) {
-        return { data: [{ event_date: '2026-03-27', event_time: '09:00:00' }], error: null };
-      }
-      if (query.table === 'employees') {
-        return { data: employees, error: null };
-      }
-      if (query.table === 'skud_events' && findOperation(query, 'upsert')) {
-        return { data: null, error: null };
-      }
-      throw new Error(`Unexpected query: ${query.table}`);
-    };
+    mockedState.responses.latestStoredEvent = { event_date: '2026-03-27', event_time: '09:00:00' };
+    mockedState.responses.employees = employees;
+    // 2 батча по 200/50 событий (presence-polling BATCH_SIZE=200), оба возвращают inserted rows.
+    mockedState.responses.upsertQueue = [
+      { ok: true, rows: Array.from({ length: 200 }, (_, i) => ({ employee_id: 1000 + i, event_date: '2026-03-27' })) },
+      { ok: true, rows: Array.from({ length: 50 }, (_, i) => ({ employee_id: 1200 + i, event_date: '2026-03-27' })) },
+    ];
 
     const events: Array<Record<string, unknown>> = [];
     for (let i = 0; i < 250; i++) {
@@ -953,16 +841,12 @@ describe('presence-polling.service', () => {
       vi.useRealTimers();
     }
 
-    // 250 пар → 3 чанка (100 + 100 + 50)
-    expect(mockedState.supabaseMock.rpc).toHaveBeenCalledTimes(3);
-    const rpcCalls = (mockedState.supabaseMock.rpc as unknown as { mock: { calls: unknown[][] } }).mock.calls;
-    for (const call of rpcCalls) {
-      const args = call[1] as { p_pairs: unknown[] };
-      expect(args.p_pairs.length).toBeLessThanOrEqual(100);
+    // 250 пар → 3 чанка (100 + 100 + 50).
+    expect(mockedState.rpcPairsLog).toHaveLength(3);
+    for (const chunk of mockedState.rpcPairsLog) {
+      expect(chunk.length).toBeLessThanOrEqual(100);
     }
-    const totalPairs = rpcCalls.reduce((sum: number, call: unknown[]) => {
-      return sum + ((call[1] as { p_pairs: unknown[] }).p_pairs.length);
-    }, 0);
+    const totalPairs = mockedState.rpcPairsLog.reduce((sum, chunk) => sum + chunk.length, 0);
     expect(totalPairs).toBe(250);
   });
 

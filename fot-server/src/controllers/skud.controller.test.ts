@@ -2,20 +2,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../types/index.js';
 
-type QueryRecord = {
-  table: string;
-  operations: Array<{ method: string; args: unknown[] }>;
-};
+const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgExecute: vi.fn(),
+  pgTx: vi.fn(),
+}));
 
-type QueryResponse = {
-  data?: unknown;
-  error?: { message: string } | null;
-};
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
+}));
 
 const mockedState = vi.hoisted(() => {
   const state = {
-    queryLog: [] as QueryRecord[],
-    resolver: (() => ({ data: [], error: null })) as (query: QueryRecord) => QueryResponse | Promise<QueryResponse>,
     cache: new Map<string, string[]>(),
     isConfigured: vi.fn(() => false),
     getSigurAccessPoints: vi.fn(async () => [] as Record<string, unknown>[]),
@@ -27,36 +29,6 @@ const mockedState = vi.hoisted(() => {
 
   return state;
 });
-
-function createBuilder(table: string) {
-  const query: QueryRecord = { table, operations: [] };
-  mockedState.queryLog.push(query);
-
-  const builder = {
-    select: (...args: unknown[]) => {
-      query.operations.push({ method: 'select', args });
-      return builder;
-    },
-    not: (...args: unknown[]) => {
-      query.operations.push({ method: 'not', args });
-      return builder;
-    },
-    limit: (...args: unknown[]) => {
-      query.operations.push({ method: 'limit', args });
-      return builder;
-    },
-    then: (onFulfilled: (value: QueryResponse) => unknown, onRejected?: (reason: unknown) => unknown) =>
-      Promise.resolve(mockedState.resolver(query)).then(onFulfilled, onRejected),
-  };
-
-  return builder;
-}
-
-vi.mock('../config/database.js', () => ({
-  supabase: {
-    from: vi.fn((table: string) => createBuilder(table)),
-  },
-}));
 
 vi.mock('../services/sigur.service.js', () => ({
   sigurService: {
@@ -146,8 +118,10 @@ function makeRes() {
 
 describe('skudController.getAccessPoints', () => {
   beforeEach(() => {
-    mockedState.queryLog.length = 0;
-    mockedState.resolver = () => ({ data: [], error: null });
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
     mockedState.cache.clear();
     mockedState.isConfigured.mockReset();
     mockedState.isConfigured.mockReturnValue(false);
@@ -178,26 +152,23 @@ describe('skudController.getAccessPoints', () => {
         { name: 'Главный вход', id: 112 },
       ],
     });
-    expect(mockedState.queryLog).toHaveLength(0);
+    expect(pgQuery).not.toHaveBeenCalled();
   });
 
   it('falls back to DB metadata with null ids when Sigur is unavailable', async () => {
     mockedState.isConfigured.mockReturnValue(true);
     mockedState.getSigurAccessPoints.mockRejectedValue(new Error('sigur down'));
-    mockedState.resolver = (query) => {
-      if (query.table !== 'skud_events') {
-        throw new Error(`Unexpected table: ${query.table}`);
+    pgQuery.mockImplementation(async (sql: string) => {
+      if (!/FROM skud_events/i.test(sql)) {
+        throw new Error(`Unexpected SQL: ${sql}`);
       }
-      return {
-        data: [
-          { access_point: ' Главный вход ' },
-          { access_point: 'Боковой вход' },
-          { access_point: 'Главный вход' },
-          { access_point: null },
-        ],
-        error: null,
-      };
-    };
+      return [
+        { access_point: ' Главный вход ' },
+        { access_point: 'Боковой вход' },
+        { access_point: 'Главный вход' },
+        { access_point: null },
+      ];
+    });
 
     const req = makeReq({ query: { includeMeta: '1' } });
     const res = makeRes();
@@ -228,6 +199,6 @@ describe('skudController.getAccessPoints', () => {
       success: true,
       data: ['Боковой вход', 'Главный вход'],
     });
-    expect(mockedState.queryLog).toHaveLength(0);
+    expect(pgQuery).not.toHaveBeenCalled();
   });
 });

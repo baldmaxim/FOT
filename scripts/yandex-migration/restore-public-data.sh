@@ -107,8 +107,14 @@ CONFIRM_DROP="${CONFIRM_DROP:-false}"
 RESTORE_JOBS="${RESTORE_JOBS:-4}"
 USE_DISABLE_TRIGGERS="${USE_DISABLE_TRIGGERS:-false}"
 
-if [[ ! -f "$IN" ]]; then
-  echo "ERROR: входной файл не найден: $IN" >&2
+if [[ ! -e "$IN" ]]; then
+  echo "ERROR: входной путь не найден: $IN" >&2
+  exit 2
+fi
+# pg_restore принимает custom-format file ИЛИ directory-format directory.
+# `-f` тестит только файл; `-d` директорию; `-e` любую существующую сущность.
+if [[ ! -f "$IN" && ! -d "$IN" ]]; then
+  echo "ERROR: $IN не file и не directory" >&2
   exit 2
 fi
 

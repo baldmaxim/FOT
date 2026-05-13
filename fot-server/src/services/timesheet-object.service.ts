@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import { getInternalAccessPoints } from './skud-shared.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 
@@ -266,18 +266,16 @@ const fetchRawEvents = async ({
   const rows: IRawEventRow[] = [];
   for (let index = 0; index < employeeIds.length; index += BATCH_SIZE) {
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
-    const { data, error } = await supabase
-      .from('skud_events')
-      .select('employee_id, event_date, event_time, access_point, direction')
-      .in('employee_id', batch)
-      .gte('event_date', startDate)
-      .lte('event_date', endDate)
-      .order('employee_id', { ascending: true })
-      .order('event_date', { ascending: true })
-      .order('event_time', { ascending: true });
-
-    if (error) throw error;
-    rows.push(...((data || []) as IRawEventRow[]));
+    const data = await query<IRawEventRow>(
+      `SELECT employee_id, event_date, event_time, access_point, direction
+         FROM skud_events
+        WHERE employee_id = ANY($1::int[])
+          AND event_date >= $2
+          AND event_date <= $3
+        ORDER BY employee_id ASC, event_date ASC, event_time ASC`,
+      [batch, startDate, endDate],
+    );
+    rows.push(...data);
   }
 
   return rows;
@@ -287,31 +285,33 @@ const fetchObjectMappings = async (): Promise<{
   accessPointToObjectId: Map<string, string>;
   objectNameById: Map<string, string>;
 }> => {
-  const [mappingsResult, objectsResult] = await Promise.all([
-    supabase
-      .from('skud_object_access_points')
-      .select('object_id, access_point_name'),
-    supabase
-      .from('skud_objects')
-      .select('id, name')
-      .eq('is_active', true),
-  ]);
+  let mappingsRows: ITravelObjectMappingRow[] = [];
+  let objectsRows: ITravelObjectRow[] = [];
 
-  if (mappingsResult.error) {
-    if (isMissingTableError(mappingsResult.error)) {
+  try {
+    mappingsRows = await query<ITravelObjectMappingRow>(
+      'SELECT object_id, access_point_name FROM skud_object_access_points',
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
       return { accessPointToObjectId: new Map(), objectNameById: new Map() };
     }
-    throw mappingsResult.error;
+    throw err;
   }
-  if (objectsResult.error) {
-    if (isMissingTableError(objectsResult.error)) {
+
+  try {
+    objectsRows = await query<ITravelObjectRow>(
+      'SELECT id, name FROM skud_objects WHERE is_active = true',
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
       return { accessPointToObjectId: new Map(), objectNameById: new Map() };
     }
-    throw objectsResult.error;
+    throw err;
   }
 
   const accessPointToObjectId = new Map<string, string>();
-  for (const row of (mappingsResult.data || []) as ITravelObjectMappingRow[]) {
+  for (const row of mappingsRows) {
     const point = normalizeAccessPoint(row.access_point_name);
     if (point) {
       accessPointToObjectId.set(point, row.object_id);
@@ -319,7 +319,7 @@ const fetchObjectMappings = async (): Promise<{
   }
 
   const objectNameById = new Map<string, string>();
-  for (const row of (objectsResult.data || []) as ITravelObjectRow[]) {
+  for (const row of objectsRows) {
     objectNameById.set(row.id, row.name);
   }
 

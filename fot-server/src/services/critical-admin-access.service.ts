@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import {
   CRITICAL_ADMIN_PAGE_KEYS,
   accessModeFromFlags,
@@ -33,27 +33,31 @@ interface ICriticalAccessMutation {
 }
 
 export async function ensureCriticalAdminAccess(mutation: ICriticalAccessMutation = {}): Promise<void> {
-  const [{ data: roles, error: rolesError }, { data: users, error: usersError }, { data: accessRows, error: accessError }] = await Promise.all([
-    supabase.from('system_roles').select('id, code, is_active'),
-    supabase.from('user_profiles').select('id, is_approved, system_role_id'),
-    supabase.from('role_page_access').select('role_code, page_path, can_view, can_edit'),
-  ]);
+  let roles: IRoleSnapshot[];
+  let users: IUserSnapshot[];
+  let accessRows: IRoleAccessSnapshot[];
+  try {
+    [roles, users, accessRows] = await Promise.all([
+      query<IRoleSnapshot>('SELECT id, code, is_active FROM system_roles'),
+      query<IUserSnapshot>('SELECT id, is_approved, system_role_id FROM user_profiles'),
+      query<IRoleAccessSnapshot>('SELECT role_code, page_path, can_view, can_edit FROM role_page_access'),
+    ]);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to load access invariant snapshot: ${message}`);
+  }
 
-  if (rolesError) throw new Error(`Failed to load roles for access invariant: ${rolesError.message}`);
-  if (usersError) throw new Error(`Failed to load users for access invariant: ${usersError.message}`);
-  if (accessError) throw new Error(`Failed to load role page access for invariant: ${accessError.message}`);
-
-  const rolesByCode = new Map<string, IRoleSnapshot>((roles || []).map(role => [role.code, role as IRoleSnapshot]));
-  const roleCodeById = new Map<string, string>((roles || []).map(role => [role.id, role.code]));
+  const rolesByCode = new Map<string, IRoleSnapshot>(roles.map(role => [role.code, role]));
+  const roleCodeById = new Map<string, string>(roles.map(role => [role.id, role.code]));
   const roleActive = new Map<string, boolean>();
   const roleAccess = new Map<string, Map<string, AccessMode>>();
 
-  for (const role of roles || []) {
+  for (const role of roles) {
     roleActive.set(role.code, !!role.is_active);
     roleAccess.set(role.code, new Map());
   }
 
-  for (const row of (accessRows || []) as IRoleAccessSnapshot[]) {
+  for (const row of accessRows) {
     const roleCode = row.role_code;
     if (!roleCode) continue;
     if (!roleAccess.has(roleCode)) {
@@ -83,8 +87,7 @@ export async function ensureCriticalAdminAccess(mutation: ICriticalAccessMutatio
 
   const removedUserIds = new Set(mutation.removedUserIds || []);
 
-  const hasCoverage = (users || []).some((rawUser) => {
-    const user = rawUser as IUserSnapshot;
+  const hasCoverage = users.some((user) => {
     if (!user.is_approved || removedUserIds.has(user.id)) return false;
 
     const overriddenRoleCode = mutation.userRoleById?.[user.id];

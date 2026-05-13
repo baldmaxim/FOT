@@ -5,6 +5,44 @@
 - Схема в Yandex уже накатана через [04_schema_prepare.md](04_schema_prepare.md).
 - Auth-таблица `app_auth.users` уже создана и заполнена через [03_auth_users.md](03_auth_users.md).
 - Все недостающие RPC восстановлены через [01_recover_runtime_functions.md](01_recover_runtime_functions.md).
+- `.migration/yandex.env` создан из `.migration/yandex.env.example` и подгружен.
+
+## ENV / DSN (важно для Phase 11+)
+
+Используются **две DSN для source** + одна для target. Полный шаблон —
+[`.migration/yandex.env.example`](../../.migration/yandex.env.example).
+
+| Переменная | Кем читается | Особенности |
+|---|---|---|
+| `SOURCE_DATABASE_URL` | psql / pg_dump / pg_restore (libpq) | `sslmode=require` (libpq принимает), без `uselibpqcompat`. |
+| `SOURCE_DATABASE_URL_NODE` | TS-скрипты (Node `pg`) | Тот же DSN + `uselibpqcompat=true&sslmode=require`. Без флага Node-`pg` трактует `sslmode=require` как `verify-full` и падает на Supabase self-signed AWS chain. Скрипты делают fallback `SOURCE_DATABASE_URL_NODE \|\| SOURCE_DATABASE_URL`. |
+| `TARGET_DATABASE_URL` | все клиенты | Yandex Managed PG. `sslmode=verify-full&sslrootcert=...`. DSN ОБЯЗАТЕЛЬНО в двойных кавычках в `.env` (иначе `&` интерпретируется bash'ем как фоновый оператор). |
+| `TARGET_SSL` / `TARGET_SSL_CA_PATH` | TS-скрипты | Дополняют URL для Node `pg`. Путь к CA — **абсолютный** (cwd скриптов часто `fot-server/`). |
+
+**НЕ использовать** `DATABASE_URL` текущего fot-server'а в роли target — это
+другая база и другой проект. Source — Supabase, target — Yandex.
+
+Источник для `pg_dump` обязан быть **session pooler** (port 5432) или
+**direct connection**, а **не transaction pooler** (port 6543). pg_dump
+требует session-state для long-running COPY и snapshot consistency.
+
+### Windows / PowerShell notes
+
+- Миграционные команды запускать из **Git Bash**, не PowerShell — `.env`
+  читается через `source`. Под PowerShell `.env`-loader потребует
+  `Get-Content | ForEach-Object`-костыля.
+- PG client tools 17+ нужны. Установка: `scoop install postgresql`
+  (даёт v18.x — back-compatible с PG17 source/target). Путь:
+  `C:/Users/<you>/scoop/apps/postgresql/current/bin` добавить в PATH.
+- Yandex Managed PG в большинстве случаев открывает только pooler
+  port 6432 (Odyssey), прямой 5432 закрыт firewall'ом. Pooler в transaction
+  mode сбрасывает session-level `SET` между statements — поэтому
+  `apply-yandex-schema.sh` по умолчанию использует `--single-transaction`
+  (отключается через `NO_SINGLE_TRANSACTION=true` для локальных стендов с
+  прямым доступом).
+- TS-скрипты используют `spawnSync('psql', [..., '-f', '-'])` со stdin вместо
+  `-c "..."` — это обходит баг Windows escape для double-quoted идентификаторов
+  внутри SQL (см. Phase 11 `fix-sequences` regression).
 
 ## Финальный порядок проверок (TL;DR)
 

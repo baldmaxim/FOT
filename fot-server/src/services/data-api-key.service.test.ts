@@ -110,6 +110,6 @@ describe('revokeKey', () => {
     await dataApiKeyService.revokeKey('key-1');
     const [sql, params] = pgExecute.mock.calls[0];
     expect(sql).toMatch(/revoked_at IS NULL/);
-    expect(params[1]).toBe('key-1');
+    expect(params[0]).toBe('key-1');
   });
 });

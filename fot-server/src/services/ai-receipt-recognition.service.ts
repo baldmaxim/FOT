@@ -1,6 +1,6 @@
 import axios from 'axios';
 import * as Sentry from '@sentry/node';
-import { supabase } from '../config/database.js';
+import { query, queryOne, execute } from '../config/postgres.js';
 import { r2Service } from './r2.service.js';
 import { openRouterService, OpenRouterError, type IChatMessage } from './openrouter.service.js';
 import { encryptReceiptFields, encryptRawResponse } from './patent-receipt-encryption.helper.js';
@@ -263,24 +263,33 @@ const updateDocumentStatus = async (
   attemptIncrement: boolean,
   errorText?: string | null,
 ): Promise<void> => {
-  const patch: Record<string, unknown> = {
-    recognition_status: status,
-    recognized_at: status === 'done' || status === 'needs_review' ? new Date().toISOString() : null,
+  const setParts: string[] = [];
+  const params: unknown[] = [];
+  const addParam = (value: unknown): string => {
+    params.push(value);
+    return `$${params.length}`;
   };
+
+  setParts.push(`recognition_status = ${addParam(status)}`);
+  setParts.push(
+    `recognized_at = ${addParam(status === 'done' || status === 'needs_review' ? new Date().toISOString() : null)}`,
+  );
   if (status === 'failed') {
-    patch.recognition_error = errorText ? errorText.slice(0, 1000) : null;
+    setParts.push(`recognition_error = ${addParam(errorText ? errorText.slice(0, 1000) : null)}`);
   } else if (status === 'done' || status === 'needs_review' || status === 'processing') {
-    patch.recognition_error = null;
+    setParts.push(`recognition_error = NULL`);
   }
   if (attemptIncrement) {
-    const { data: cur } = await supabase
-      .from('documents')
-      .select('recognition_attempts')
-      .eq('id', documentId)
-      .single();
-    patch.recognition_attempts = ((cur?.recognition_attempts as number | null) || 0) + 1;
+    const cur = await queryOne<{ recognition_attempts: number | null }>(
+      `SELECT recognition_attempts FROM documents WHERE id = $1`,
+      [documentId],
+    );
+    const nextAttempts = (cur?.recognition_attempts ?? 0) + 1;
+    setParts.push(`recognition_attempts = ${addParam(nextAttempts)}`);
   }
-  await supabase.from('documents').update(patch).eq('id', documentId);
+
+  const idPlaceholder = addParam(documentId);
+  await execute(`UPDATE documents SET ${setParts.join(', ')} WHERE id = ${idPlaceholder}`, params);
 };
 
 export const aiReceiptRecognitionService = {
@@ -292,13 +301,14 @@ export const aiReceiptRecognitionService = {
     documentId: number,
     opts?: { modelOverride?: string },
   ): Promise<IRecognitionRunResult> {
-    const { data: doc, error: docErr } = await supabase
-      .from('documents')
-      .select('id, employee_id, category, file_name, file_size, mime_type, r2_key')
-      .eq('id', documentId)
-      .single();
+    const doc = await queryOne<IDocumentRow & { category: string }>(
+      `SELECT id, employee_id, category, file_name, file_size, mime_type, r2_key
+         FROM documents
+        WHERE id = $1`,
+      [documentId],
+    );
 
-    if (docErr || !doc) {
+    if (!doc) {
       return { ok: false, status: 'failed', error: 'Документ не найден' };
     }
     if (doc.category !== 'patent_check') {
@@ -356,12 +366,11 @@ export const aiReceiptRecognitionService = {
       const payload = validatePayload(parsed);
 
       if (doc.employee_id && payload.payer_full_name) {
-        const { data: emp } = await supabase
-          .from('employees')
-          .select('full_name')
-          .eq('id', doc.employee_id)
-          .single();
-        const employeeFullName = (emp?.full_name as string | null | undefined) ?? null;
+        const emp = await queryOne<{ full_name: string | null }>(
+          `SELECT full_name FROM employees WHERE id = $1`,
+          [doc.employee_id],
+        );
+        const employeeFullName = emp?.full_name ?? null;
         const fioRes = normalizePayerFio(payload.payer_full_name, employeeFullName, payload.confidence);
         if (fioRes.corrected && fioRes.value) {
           console.log(`[ai-receipt-recognition] auto-corrected fio doc=${documentId} "${payload.payer_full_name}" -> "${fioRes.value}"`);
@@ -419,13 +428,21 @@ export const aiReceiptRecognitionService = {
         updated_at: new Date().toISOString(),
       };
 
-      const { data: upserted, error: upsertErr } = await supabase
-        .from('patent_payment_receipts')
-        .upsert(encryptReceiptFields(upsertRow), { onConflict: 'document_id' })
-        .select('id')
-        .single();
-
-      if (upsertErr) throw upsertErr;
+      const encryptedRow = encryptReceiptFields(upsertRow) as Record<string, unknown>;
+      const cols = Object.keys(encryptedRow);
+      const params: unknown[] = [];
+      const placeholders = cols.map(c => {
+        params.push(encryptedRow[c]);
+        return `$${params.length}`;
+      });
+      const updateSetParts = cols
+        .filter(c => c !== 'document_id')
+        .map(c => `${c} = EXCLUDED.${c}`);
+      const upsertSql = `INSERT INTO patent_payment_receipts (${cols.join(', ')})
+        VALUES (${placeholders.join(', ')})
+        ON CONFLICT (document_id) DO UPDATE SET ${updateSetParts.join(', ')}
+        RETURNING id`;
+      const upserted = await queryOne<{ id: number }>(upsertSql, params);
 
       await updateDocumentStatus(documentId, status, false);
 
@@ -479,11 +496,11 @@ export const aiReceiptRecognitionService = {
         return;
       }
 
-      await supabase
-        .from('documents')
-        .update({ recognition_status: 'pending' })
-        .eq('id', documentId)
-        .is('recognition_status', null);
+      await execute(
+        `UPDATE documents SET recognition_status = 'pending'
+           WHERE id = $1 AND recognition_status IS NULL`,
+        [documentId],
+      );
 
       setImmediate(() => {
         void this.recognizePatentReceipt(documentId).catch(err =>
@@ -503,16 +520,20 @@ export const aiReceiptRecognitionService = {
    * Восстановить зависшие задачи при старте сервера.
    */
   async resumePendingRecognitions(): Promise<number> {
-    const { data, error } = await supabase
-      .from('documents')
-      .select('id')
-      .eq('category', 'patent_check')
-      .in('recognition_status', ['pending', 'processing'])
-      .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+    let rows: { id: number }[];
+    try {
+      rows = await query<{ id: number }>(
+        `SELECT id FROM documents
+          WHERE category = 'patent_check'
+            AND recognition_status = ANY($1::text[])
+            AND created_at >= $2`,
+        [['pending', 'processing'], new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()],
+      );
+    } catch {
+      return 0;
+    }
 
-    if (error || !data) return 0;
-
-    for (const row of data as { id: number }[]) {
+    for (const row of rows) {
       setImmediate(() => {
         void this.recognizePatentReceipt(row.id).catch(err =>
           console.error(`[ai-receipt-recognition] resume ${row.id}`, err),
@@ -520,6 +541,6 @@ export const aiReceiptRecognitionService = {
       });
     }
 
-    return data.length;
+    return rows.length;
   },
 };

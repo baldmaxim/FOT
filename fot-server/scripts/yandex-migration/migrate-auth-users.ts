@@ -200,7 +200,11 @@ function buildSsl(prefix: 'SOURCE' | 'TARGET'): ClientConfig['ssl'] {
 }
 
 function resolveConfig(args: ICliArgs): IMigrationConfig {
-  const sourceUrl = process.env.SOURCE_DATABASE_URL;
+  // SOURCE_DATABASE_URL_NODE имеет приоритет — Node `pg` требует
+  // uselibpqcompat=true для encryption-only TLS (sslmode=require без
+  // verify CA), а libpq (pg_dump/psql) этот параметр не понимает,
+  // поэтому держим две DSN.
+  const sourceUrl = process.env.SOURCE_DATABASE_URL_NODE || process.env.SOURCE_DATABASE_URL;
   const targetUrl = process.env.TARGET_DATABASE_URL;
   if (!sourceUrl) throw new Error('SOURCE_DATABASE_URL не задан');
   if (!targetUrl) throw new Error('TARGET_DATABASE_URL не задан');

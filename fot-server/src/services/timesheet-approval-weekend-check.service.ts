@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import { loadCalendarMonth } from './schedule.service.js';
 import { listEmployeeIdsAssignedToDepartmentPeriod } from './timesheet-department-assignments.service.js';
 import { countApprovalAttachments } from './timesheet-approval-attachments.service.js';
@@ -78,25 +78,27 @@ export async function checkWeekendWorkRequirement(params: {
 
   const weekendWorkDates = new Set<string>();
 
-  const adjRes = await supabase
-    .from('attendance_adjustments')
-    .select('employee_id, work_date, status')
-    .in('employee_id', employeeIds)
-    .in('work_date', weekendDates)
-    .eq('status', 'work');
-  if (adjRes.error) throw adjRes.error;
-  for (const row of adjRes.data || []) {
+  const adjRows = await query<{ employee_id: number; work_date: string; status: string }>(
+    `SELECT employee_id, work_date, status
+       FROM attendance_adjustments
+      WHERE employee_id = ANY($1::int[])
+        AND work_date = ANY($2::date[])
+        AND status = 'work'`,
+    [employeeIds, weekendDates],
+  );
+  for (const row of adjRows) {
     weekendWorkDates.add(String(row.work_date));
   }
 
-  const skudRes = await supabase
-    .from('skud_daily_summary')
-    .select('employee_id, date, total_minutes')
-    .in('employee_id', employeeIds)
-    .in('date', weekendDates)
-    .gt('total_minutes', 0);
-  if (skudRes.error) throw skudRes.error;
-  for (const row of skudRes.data || []) {
+  const skudRows = await query<{ employee_id: number; date: string; total_minutes: number }>(
+    `SELECT employee_id, date, total_minutes
+       FROM skud_daily_summary
+      WHERE employee_id = ANY($1::int[])
+        AND date = ANY($2::date[])
+        AND total_minutes > 0`,
+    [employeeIds, weekendDates],
+  );
+  for (const row of skudRows) {
     weekendWorkDates.add(String(row.date));
   }
 

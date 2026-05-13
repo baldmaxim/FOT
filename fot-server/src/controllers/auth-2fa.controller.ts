@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import { supabase } from '../config/database.js';
+import { execute, queryOne } from '../config/postgres.js';
 import { totpService } from '../services/totp.service.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest, UserProfile } from '../types/index.js';
@@ -24,18 +24,17 @@ export const verify2FA = async (req: AuthenticatedRequest, res: Response): Promi
   try {
     const { code } = verify2FASchema.parse(req.body);
 
-    const { data: profileRow, error } = await supabase
-      .from('user_profiles')
-      .select('*')
-      .eq('id', req.user.id)
-      .single();
+    const profileRow = await queryOne<UserProfile>(
+      'SELECT * FROM user_profiles WHERE id = $1::uuid',
+      [req.user.id],
+    );
 
-    if (error || !profileRow || !profileRow.totp_secret) {
+    if (!profileRow || !profileRow.totp_secret) {
       res.status(400).json({ success: false, error: '2FA not configured' });
       return;
     }
 
-    const profile = profileRow as UserProfile;
+    const profile = profileRow;
     const isValid = totpService.verifyToken(profile.totp_secret!, code);
 
     if (!isValid) {
@@ -86,18 +85,17 @@ export const useRecoveryCode = async (req: AuthenticatedRequest, res: Response):
   try {
     const { code } = recoveryCodeSchema.parse(req.body);
 
-    const { data: profileRow, error } = await supabase
-      .from('user_profiles')
-      .select('*')
-      .eq('id', req.user.id)
-      .single();
+    const profileRow = await queryOne<UserProfile>(
+      'SELECT * FROM user_profiles WHERE id = $1::uuid',
+      [req.user.id],
+    );
 
-    if (error || !profileRow || !profileRow.recovery_codes) {
+    if (!profileRow || !profileRow.recovery_codes) {
       res.status(400).json({ success: false, error: 'Recovery codes not available' });
       return;
     }
 
-    const profile = profileRow as UserProfile;
+    const profile = profileRow;
     const usedIndex = totpService.verifyRecoveryCode(profile.recovery_codes!, code);
 
     if (usedIndex === -1) {
@@ -111,10 +109,10 @@ export const useRecoveryCode = async (req: AuthenticatedRequest, res: Response):
     const updatedCodes = [...profile.recovery_codes!];
     updatedCodes.splice(usedIndex, 1);
 
-    await supabase
-      .from('user_profiles')
-      .update({ recovery_codes: updatedCodes })
-      .eq('id', req.user.id);
+    await execute(
+      'UPDATE user_profiles SET recovery_codes = $1 WHERE id = $2::uuid',
+      [updatedCodes, req.user.id],
+    );
 
     const role = await getRoleById(profile.system_role_id);
     if (!role) {

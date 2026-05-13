@@ -12,7 +12,7 @@
  * Запуск: cd fot-server && npx tsx scripts/backfill-orphan-skud-summaries.ts [--days=60]
  * Идемпотентен — RPC batch_recalculate_skud_daily_summary пересчитывает с нуля и UPSERT-ит.
  */
-import { supabase } from '../src/config/database.js';
+import { execute, query } from '../src/config/postgres.js';
 
 const DEFAULT_DAYS = 60;
 const RPC_BATCH = 200;
@@ -33,18 +33,19 @@ async function collectOrphanPairs(cutoff: string): Promise<Array<{ emp_id: numbe
   const eventPairs = new Set<string>();
   let from = 0;
   while (true) {
-    const { data: rows, error } = await supabase
-      .from('skud_events')
-      .select('employee_id, event_date')
-      .gte('event_date', cutoff)
-      .not('employee_id', 'is', null)
-      .order('id', { ascending: true })
-      .range(from, from + PAGE - 1);
-    if (error) throw error;
-    if (!rows || rows.length === 0) break;
+    const rows = await query<{ employee_id: number | null; event_date: string | null }>(
+      `SELECT employee_id, event_date
+         FROM skud_events
+        WHERE event_date >= $1
+          AND employee_id IS NOT NULL
+        ORDER BY id ASC
+        LIMIT $2 OFFSET $3`,
+      [cutoff, PAGE, from],
+    );
+    if (rows.length === 0) break;
     for (const row of rows) {
-      const empId = (row as { employee_id: number | null }).employee_id;
-      const date = (row as { event_date: string | null }).event_date;
+      const empId = row.employee_id;
+      const date = row.event_date;
       if (empId == null || !date) continue;
       eventPairs.add(`${empId}:${date}`);
     }
@@ -56,17 +57,18 @@ async function collectOrphanPairs(cutoff: string): Promise<Array<{ emp_id: numbe
   const summaryPairs = new Set<string>();
   let sFrom = 0;
   while (true) {
-    const { data: rows, error } = await supabase
-      .from('skud_daily_summary')
-      .select('employee_id, date')
-      .gte('date', cutoff)
-      .order('date', { ascending: true })
-      .range(sFrom, sFrom + PAGE - 1);
-    if (error) throw error;
-    if (!rows || rows.length === 0) break;
+    const rows = await query<{ employee_id: number | null; date: string | null }>(
+      `SELECT employee_id, date
+         FROM skud_daily_summary
+        WHERE date >= $1
+        ORDER BY date ASC
+        LIMIT $2 OFFSET $3`,
+      [cutoff, PAGE, sFrom],
+    );
+    if (rows.length === 0) break;
     for (const row of rows) {
-      const empId = (row as { employee_id: number | null }).employee_id;
-      const date = (row as { date: string | null }).date;
+      const empId = row.employee_id;
+      const date = row.date;
       if (empId == null || !date) continue;
       summaryPairs.add(`${empId}:${date}`);
     }
@@ -103,9 +105,16 @@ const main = async (): Promise<void> => {
   let failedChunks = 0;
   for (let i = 0; i < pairs.length; i += RPC_BATCH) {
     const chunk = pairs.slice(i, i + RPC_BATCH);
-    const { error: rpcErr } = await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: chunk });
-    if (rpcErr) {
-      console.error(`[backfill] чанк ${i}-${i + chunk.length} упал:`, rpcErr.message);
+    try {
+      await execute(
+        'SELECT public.batch_recalculate_skud_daily_summary($1::jsonb)',
+        [JSON.stringify(chunk)],
+      );
+    } catch (err) {
+      console.error(
+        `[backfill] чанк ${i}-${i + chunk.length} упал:`,
+        err instanceof Error ? err.message : err,
+      );
       failedChunks += 1;
       continue;
     }

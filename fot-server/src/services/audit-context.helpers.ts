@@ -1,13 +1,12 @@
-import { supabase } from '../config/database.js';
+import { query, queryOne } from '../config/postgres.js';
 
 export async function loadEmployeeFullName(employeeId: number): Promise<string | null> {
   try {
-    const { data } = await supabase
-      .from('employees')
-      .select('full_name')
-      .eq('id', employeeId)
-      .maybeSingle();
-    return (data?.full_name as string | null) ?? null;
+    const row = await queryOne<{ full_name: string | null }>(
+      'SELECT full_name FROM employees WHERE id = $1',
+      [employeeId],
+    );
+    return row?.full_name ?? null;
   } catch {
     return null;
   }
@@ -16,12 +15,11 @@ export async function loadEmployeeFullName(employeeId: number): Promise<string |
 export async function loadDepartmentName(departmentId: string | null | undefined): Promise<string | null> {
   if (!departmentId) return null;
   try {
-    const { data } = await supabase
-      .from('org_departments')
-      .select('name')
-      .eq('id', departmentId)
-      .maybeSingle();
-    return (data?.name as string | null) ?? null;
+    const row = await queryOne<{ name: string | null }>(
+      'SELECT name FROM org_departments WHERE id = $1::uuid',
+      [departmentId],
+    );
+    return row?.name ?? null;
   } catch {
     return null;
   }
@@ -32,13 +30,12 @@ export async function loadEmployeeFullNamesMap(ids: number[]): Promise<Map<numbe
   const unique = [...new Set(ids)].filter(id => Number.isFinite(id));
   if (unique.length === 0) return map;
   try {
-    const { data } = await supabase
-      .from('employees')
-      .select('id, full_name')
-      .in('id', unique);
-    for (const row of data ?? []) {
-      const name = (row as { full_name?: string | null }).full_name;
-      if (name) map.set((row as { id: number }).id, name);
+    const rows = await query<{ id: number; full_name: string | null }>(
+      'SELECT id, full_name FROM employees WHERE id = ANY($1::int[])',
+      [unique],
+    );
+    for (const row of rows) {
+      if (row.full_name) map.set(row.id, row.full_name);
     }
   } catch {
     // ignore — вернём то, что успели собрать
@@ -51,13 +48,12 @@ export async function loadDepartmentNamesMap(ids: string[]): Promise<Map<string,
   const unique = [...new Set(ids)].filter(Boolean);
   if (unique.length === 0) return map;
   try {
-    const { data } = await supabase
-      .from('org_departments')
-      .select('id, name')
-      .in('id', unique);
-    for (const row of data ?? []) {
-      const name = (row as { name?: string | null }).name;
-      if (name) map.set((row as { id: string }).id, name);
+    const rows = await query<{ id: string; name: string | null }>(
+      'SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])',
+      [unique],
+    );
+    for (const row of rows) {
+      if (row.name) map.set(row.id, row.name);
     }
   } catch {
     // ignore
@@ -68,12 +64,11 @@ export async function loadDepartmentNamesMap(ids: string[]): Promise<Map<string,
 export async function loadUserFullName(userId: string | null | undefined): Promise<string | null> {
   if (!userId) return null;
   try {
-    const { data } = await supabase
-      .from('user_profiles')
-      .select('full_name')
-      .eq('id', userId)
-      .maybeSingle();
-    return (data?.full_name as string | null) ?? null;
+    const row = await queryOne<{ full_name: string | null }>(
+      'SELECT full_name FROM user_profiles WHERE id = $1::uuid',
+      [userId],
+    );
+    return row?.full_name ?? null;
   } catch {
     return null;
   }

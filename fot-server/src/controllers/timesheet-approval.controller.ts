@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { supabase } from '../config/database.js';
+import { query, queryOne } from '../config/postgres.js';
 import type {
   AuthenticatedRequest,
   TimesheetApproval,
@@ -75,27 +75,18 @@ function buildRangeRedirectPath(root: string, range: ITimesheetDateRange): strin
 }
 
 async function loadDepartmentName(departmentId: string): Promise<string> {
-  const { data } = await supabase
-    .from('org_departments')
-    .select('name')
-    .eq('id', departmentId)
-    .maybeSingle();
-
+  const data = await queryOne<{ name: string | null }>(
+    `SELECT name FROM org_departments WHERE id = $1 LIMIT 1`,
+    [departmentId],
+  );
   return (data?.name as string | undefined) || departmentId;
 }
 
 async function loadApprovalById(id: string): Promise<TimesheetApproval | null> {
-  const { data, error } = await supabase
-    .from('timesheet_approvals')
-    .select('*')
-    .eq('id', id)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
-  return (data as TimesheetApproval | null) ?? null;
+  return queryOne<TimesheetApproval>(
+    `SELECT * FROM timesheet_approvals WHERE id = $1 LIMIT 1`,
+    [id],
+  );
 }
 
 async function ensureApprovalDepartmentAccess(
@@ -116,12 +107,11 @@ async function logApprovalAudit(
   const deptId = details.department_id;
   if (typeof deptId === 'string' && deptId && details.department_name === undefined) {
     try {
-      const { data } = await supabase
-        .from('org_departments')
-        .select('name')
-        .eq('id', deptId)
-        .maybeSingle();
-      enrichedDetails = { ...details, department_name: (data?.name as string | null) ?? null };
+      const data = await queryOne<{ name: string | null }>(
+        `SELECT name FROM org_departments WHERE id = $1 LIMIT 1`,
+        [deptId],
+      );
+      enrichedDetails = { ...details, department_name: data?.name ?? null };
     } catch {
       // best-effort enrichment; keep original details
     }
@@ -278,17 +268,12 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const { data: exactRow, error: exactError } = await supabase
-      .from('timesheet_approvals')
-      .select('*')
-      .eq('department_id', deptId)
-      .eq('start_date', range.startDate)
-      .eq('end_date', range.endDate)
-      .maybeSingle();
-
-    if (exactError) throw exactError;
-
-    const existing = (exactRow as TimesheetApproval | null) ?? null;
+    const existing = await queryOne<TimesheetApproval>(
+      `SELECT * FROM timesheet_approvals
+         WHERE department_id = $1 AND start_date = $2 AND end_date = $3
+         LIMIT 1`,
+      [deptId, range.startDate, range.endDate],
+    );
 
     const correctionCheck = await validateCorrectionAttachments(deptId, range);
     if (!correctionCheck.ok) {
@@ -336,43 +321,28 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     try {
       if (existing) {
-        const { data, error } = await supabase
-          .from('timesheet_approvals')
-          .update({
-            status: 'submitted',
-            submitted_by: req.user.id,
-            submitted_at: now,
-            reviewed_by: null,
-            reviewed_at: null,
-            review_comment: null,
-            updated_at: now,
-          })
-          .eq('id', existing.id)
-          .select()
-          .single();
-
-        if (error) throw error;
-        approval = data as TimesheetApproval;
+        approval = await queryOne<TimesheetApproval>(
+          `UPDATE timesheet_approvals
+             SET status = 'submitted',
+                 submitted_by = $1,
+                 submitted_at = $2,
+                 reviewed_by = NULL,
+                 reviewed_at = NULL,
+                 review_comment = NULL,
+                 updated_at = $3
+             WHERE id = $4
+             RETURNING *`,
+          [req.user.id, now, now, existing.id],
+        );
       } else {
-        const { data, error } = await supabase
-          .from('timesheet_approvals')
-          .insert({
-            department_id: deptId,
-            start_date: range.startDate,
-            end_date: range.endDate,
-            status: 'submitted',
-            submitted_by: req.user.id,
-            submitted_at: now,
-            reviewed_by: null,
-            reviewed_at: null,
-            review_comment: null,
-            updated_at: now,
-          })
-          .select()
-          .single();
-
-        if (error) throw error;
-        approval = data as TimesheetApproval;
+        approval = await queryOne<TimesheetApproval>(
+          `INSERT INTO timesheet_approvals
+             (department_id, start_date, end_date, status, submitted_by, submitted_at,
+              reviewed_by, reviewed_at, review_comment, updated_at)
+             VALUES ($1, $2, $3, 'submitted', $4, $5, NULL, NULL, NULL, $6)
+             RETURNING *`,
+          [deptId, range.startDate, range.endDate, req.user.id, now, now],
+        );
       }
     } catch (dbErr) {
       const code = (dbErr as { code?: string } | null)?.code;
@@ -438,15 +408,12 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
       return;
     }
 
-    const { data, error } = await supabase
-      .from('timesheet_approvals')
-      .select('*')
-      .eq('department_id', department_id)
-      .eq('start_date', range.startDate)
-      .eq('end_date', range.endDate)
-      .maybeSingle();
-
-    if (error) throw error;
+    const data = await queryOne<TimesheetApproval>(
+      `SELECT * FROM timesheet_approvals
+         WHERE department_id = $1 AND start_date = $2 AND end_date = $3
+         LIMIT 1`,
+      [department_id, range.startDate, range.endDate],
+    );
     res.json({ success: true, data });
   } catch (err) {
     console.error('timesheet-approval.getStatus error:', err);
@@ -489,20 +456,22 @@ const listDepartmentApprovals = async (req: AuthenticatedRequest, res: Response)
       }
     }
 
-    let query = supabase
-      .from('timesheet_approvals')
-      .select('*')
-      .eq('department_id', department_id)
-      .order('start_date', { ascending: true });
-
+    const whereParts: string[] = ['department_id = $1'];
+    const params: unknown[] = [department_id];
     if (rangeStart && rangeEnd) {
-      query = query.lte('start_date', rangeEnd).gte('end_date', rangeStart);
+      params.push(rangeEnd);
+      whereParts.push(`start_date <= $${params.length}`);
+      params.push(rangeStart);
+      whereParts.push(`end_date >= $${params.length}`);
     }
+    const data = await query<TimesheetApproval>(
+      `SELECT * FROM timesheet_approvals
+         WHERE ${whereParts.join(' AND ')}
+         ORDER BY start_date ASC`,
+      params,
+    );
 
-    const { data, error } = await query;
-    if (error) throw error;
-
-    res.json({ success: true, data: data || [] });
+    res.json({ success: true, data });
   } catch (err) {
     console.error('timesheet-approval.listDepartmentApprovals error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения согласований' });
@@ -545,22 +514,22 @@ async function changeApprovalReviewState(
     }
 
     const now = new Date().toISOString();
-    const { data, error } = await supabase
-      .from('timesheet_approvals')
-      .update({
-        status: input.nextStatus,
-        reviewed_by: req.user.id,
-        reviewed_at: now,
-        review_comment: comment,
-        updated_at: now,
-      })
-      .eq('id', id)
-      .select()
-      .single();
+    const data = await queryOne<TimesheetApproval>(
+      `UPDATE timesheet_approvals
+         SET status = $1,
+             reviewed_by = $2,
+             reviewed_at = $3,
+             review_comment = $4,
+             updated_at = $5
+         WHERE id = $6
+         RETURNING *`,
+      [input.nextStatus, req.user.id, now, comment, now, id],
+    );
 
-    if (error) throw error;
-
-    const updatedApproval = data as TimesheetApproval;
+    if (!data) {
+      throw new Error('Approval not found after update');
+    }
+    const updatedApproval = data;
     const range: ITimesheetDateRange = {
       startDate: updatedApproval.start_date,
       endDate: updatedApproval.end_date,
@@ -608,20 +577,22 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
   try {
     const approval = await loadApprovalById(req.params.id);
     if (approval) {
-      const { count, error } = await supabase
-        .from('attendance_adjustments')
-        .select('id', { count: 'exact', head: true })
-        .eq('approval_status', 'pending')
-        .in(
-          'employee_id',
-          await import('../services/timesheet-department-assignments.service.js').then(m =>
-            m.listEmployeeIdsAssignedToDepartmentPeriod(approval.department_id, approval.start_date, approval.end_date),
-          ),
-        )
-        .gte('work_date', approval.start_date)
-        .lte('work_date', approval.end_date);
-      if (error) throw error;
-      if ((count ?? 0) > 0) {
+      const employeeIds = await import('../services/timesheet-department-assignments.service.js').then(m =>
+        m.listEmployeeIdsAssignedToDepartmentPeriod(approval.department_id, approval.start_date, approval.end_date),
+      );
+      let count = 0;
+      if (employeeIds.length > 0) {
+        const row = await queryOne<{ count: number | string }>(
+          `SELECT COUNT(*)::int AS count FROM attendance_adjustments
+             WHERE approval_status = 'pending'
+               AND employee_id = ANY($1::int[])
+               AND work_date >= $2
+               AND work_date <= $3`,
+          [employeeIds, approval.start_date, approval.end_date],
+        );
+        count = row ? Number(row.count) : 0;
+      }
+      if (count > 0) {
         res.status(409).json({
           success: false,
           error: 'Сначала согласуйте корректировки в выходные дни',
@@ -699,11 +670,8 @@ const getHistory = async (req: AuthenticatedRequest, res: Response): Promise<voi
 const getPending = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const scope = await resolveRequestDataScope(_req);
-    let query = supabase
-      .from('timesheet_approvals')
-      .select('*')
-      .eq('status', 'submitted')
-      .order('submitted_at', { ascending: false });
+    const whereParts: string[] = [`status = 'submitted'`];
+    const params: unknown[] = [];
 
     if (scope === 'department') {
       const managedDepartmentIds = await resolveManagedDepartmentIds(_req);
@@ -711,15 +679,20 @@ const getPending = async (_req: AuthenticatedRequest, res: Response): Promise<vo
         res.json({ success: true, data: [] });
         return;
       }
-      query = query.in('department_id', managedDepartmentIds);
+      params.push(managedDepartmentIds);
+      whereParts.push(`department_id = ANY($${params.length}::uuid[])`);
     } else if (scope === 'self') {
       res.json({ success: true, data: [] });
       return;
     }
 
-    const { data, error } = await query;
-    if (error) throw error;
-    res.json({ success: true, data: data || [] });
+    const data = await query<TimesheetApproval>(
+      `SELECT * FROM timesheet_approvals
+         WHERE ${whereParts.join(' AND ')}
+         ORDER BY submitted_at DESC`,
+      params,
+    );
+    res.json({ success: true, data });
   } catch (err) {
     console.error('timesheet-approval.getPending error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения списка' });
@@ -738,14 +711,14 @@ const getByStatus = async (req: AuthenticatedRequest, res: Response): Promise<vo
     }
 
     const scope = await resolveRequestDataScope(req);
-    let query = supabase
-      .from('timesheet_approvals')
-      .select('*');
+    const whereParts: string[] = [];
+    const params: unknown[] = [];
 
     if (status === 'rejected') {
-      query = query.in('status', ['rejected', 'returned']);
+      whereParts.push(`status IN ('rejected', 'returned')`);
     } else if (status) {
-      query = query.eq('status', status);
+      params.push(status);
+      whereParts.push(`status = $${params.length}`);
     }
 
     if (scope === 'department') {
@@ -754,17 +727,21 @@ const getByStatus = async (req: AuthenticatedRequest, res: Response): Promise<vo
         res.json({ success: true, data: [] });
         return;
       }
-      query = query.in('department_id', managedDepartmentIds);
+      params.push(managedDepartmentIds);
+      whereParts.push(`department_id = ANY($${params.length}::uuid[])`);
     } else if (scope === 'self') {
       res.json({ success: true, data: [] });
       return;
     }
 
-    query = query.order('updated_at', { ascending: false });
-
-    const { data, error } = await query;
-    if (error) throw error;
-    res.json({ success: true, data: data || [] });
+    const whereSql = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
+    const data = await query<TimesheetApproval>(
+      `SELECT * FROM timesheet_approvals
+         ${whereSql}
+         ORDER BY updated_at DESC`,
+      params,
+    );
+    res.json({ success: true, data });
   } catch (err) {
     console.error('timesheet-approval.getByStatus error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения списка' });
@@ -983,19 +960,17 @@ const listAttachments = async (req: AuthenticatedRequest, res: Response): Promis
         res.status(400).json({ success: false, error: 'approval_id или department_id+start_date+end_date обязательны' });
         return;
       }
-      const match = await supabase
-        .from('timesheet_approvals')
-        .select('id, department_id')
-        .eq('department_id', deptId)
-        .eq('start_date', range.startDate)
-        .eq('end_date', range.endDate)
-        .maybeSingle();
-      if (match.error) throw match.error;
-      if (!match.data) {
+      const match = await queryOne<{ id: number | string; department_id: string }>(
+        `SELECT id, department_id FROM timesheet_approvals
+           WHERE department_id = $1 AND start_date = $2 AND end_date = $3
+           LIMIT 1`,
+        [deptId, range.startDate, range.endDate],
+      );
+      if (!match) {
         res.json({ success: true, data: [] });
         return;
       }
-      approvalId = Number(match.data.id);
+      approvalId = Number(match.id);
     }
 
     if (!approvalId) {
@@ -1030,20 +1005,20 @@ const deleteAttachment = async (req: AuthenticatedRequest, res: Response): Promi
       return;
     }
 
-    const linkRes = await supabase
-      .from('document_links')
-      .select('entity_id')
-      .eq('document_id', documentId)
-      .eq('entity_type', 'timesheet_approval')
-      .eq('purpose', 'weekend_confirmation')
-      .maybeSingle();
-    if (linkRes.error) throw linkRes.error;
-    if (!linkRes.data) {
+    const linkRow = await queryOne<{ entity_id: string }>(
+      `SELECT entity_id FROM document_links
+         WHERE document_id = $1
+           AND entity_type = 'timesheet_approval'
+           AND purpose = 'weekend_confirmation'
+         LIMIT 1`,
+      [documentId],
+    );
+    if (!linkRow) {
       res.status(404).json({ success: false, error: 'Вложение не найдено' });
       return;
     }
 
-    const approvalId = Number(linkRes.data.entity_id);
+    const approvalId = Number(linkRow.entity_id);
     const approval = await loadApprovalById(String(approvalId));
     if (!approval) {
       res.status(404).json({ success: false, error: 'Подача не найдена' });
@@ -1085,12 +1060,14 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
     }
 
     const scope = await resolveRequestDataScope(req);
-    let query = supabase.from('timesheet_approvals').select('*');
+    const whereParts: string[] = [];
+    const params: unknown[] = [];
 
     if (status === 'rejected') {
-      query = query.in('status', ['rejected', 'returned']);
+      whereParts.push(`status IN ('rejected', 'returned')`);
     } else {
-      query = query.eq('status', status);
+      params.push(status);
+      whereParts.push(`status = $${params.length}`);
     }
 
     if (scope === 'department') {
@@ -1099,18 +1076,19 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         res.json({ success: true, data: [] });
         return;
       }
-      query = query.in('department_id', managedDepartmentIds);
+      params.push(managedDepartmentIds);
+      whereParts.push(`department_id = ANY($${params.length}::uuid[])`);
     } else if (scope === 'self') {
       res.json({ success: true, data: [] });
       return;
     }
 
-    query = query.order('updated_at', { ascending: false });
-
-    const { data, error } = await query;
-    if (error) throw error;
-
-    const rows = (data || []) as TimesheetApproval[];
+    const rows = await query<TimesheetApproval>(
+      `SELECT * FROM timesheet_approvals
+         WHERE ${whereParts.join(' AND ')}
+         ORDER BY updated_at DESC`,
+      params,
+    );
     if (rows.length === 0) {
       res.json({ success: true, data: [] });
       return;
@@ -1121,19 +1099,23 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
       rows.flatMap((r) => [r.submitted_by, r.reviewed_by]).filter((id): id is string => Boolean(id)),
     )];
 
-    const [deptsRes, usersRes] = await Promise.all([
+    const [deptRows, userRows] = await Promise.all([
       deptIds.length > 0
-        ? supabase.from('org_departments').select('id, name').in('id', deptIds)
-        : Promise.resolve({ data: [], error: null }),
+        ? query<{ id: string; name: string | null }>(
+          `SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])`,
+          [deptIds],
+        )
+        : Promise.resolve([] as Array<{ id: string; name: string | null }>),
       userIds.length > 0
-        ? supabase.from('user_profiles').select('id, full_name').in('id', userIds)
-        : Promise.resolve({ data: [], error: null }),
+        ? query<{ id: string; full_name: string | null }>(
+          `SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])`,
+          [userIds],
+        )
+        : Promise.resolve([] as Array<{ id: string; full_name: string | null }>),
     ]);
-    if (deptsRes.error) throw deptsRes.error;
-    if (usersRes.error) throw usersRes.error;
 
-    const deptNames = new Map((deptsRes.data || []).map((row) => [String(row.id), String(row.name ?? '')]));
-    const userNames = new Map((usersRes.data || []).map((row) => [String(row.id), String(row.full_name ?? '')]));
+    const deptNames = new Map(deptRows.map((row) => [String(row.id), String(row.name ?? '')]));
+    const userNames = new Map(userRows.map((row) => [String(row.id), String(row.full_name ?? '')]));
 
     const enriched = await Promise.all(rows.map(async (row) => {
       const weekend = await checkWeekendWorkRequirement({
@@ -1153,14 +1135,22 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
       let largeCorrectionDates: string[] = [];
 
       if (employeeIds.length > 0) {
-        const adjRes = await supabase
-          .from('attendance_adjustments')
-          .select('employee_id, work_date, status, hours_override, source_type, created_by, approval_status')
-          .in('employee_id', employeeIds)
-          .gte('work_date', row.start_date)
-          .lte('work_date', row.end_date);
-        if (adjRes.error) throw adjRes.error;
-        const adjustments = adjRes.data || [];
+        const adjustments = await query<{
+          employee_id: number;
+          work_date: string;
+          status: string;
+          hours_override: number | string | null;
+          source_type: string;
+          created_by: string | null;
+          approval_status: string | null;
+        }>(
+          `SELECT employee_id, work_date, status, hours_override, source_type, created_by, approval_status
+             FROM attendance_adjustments
+             WHERE employee_id = ANY($1::int[])
+               AND work_date >= $2
+               AND work_date <= $3`,
+          [employeeIds, row.start_date, row.end_date],
+        );
         anyCorrection = adjustments.some((a) => String(a.source_type) === 'manual');
         absentDays = adjustments.some((a) => String(a.status) === 'absent');
 
@@ -1179,17 +1169,18 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         }
 
         if (anyCorrection) {
-          const workAdjustments = adjustments.filter((a) => String(a.source_type) === 'manual' && typeof a.hours_override === 'number');
+          const workAdjustments = adjustments.filter((a) => String(a.source_type) === 'manual' && a.hours_override != null);
           if (workAdjustments.length > 0) {
             const dates = [...new Set(workAdjustments.map((a) => String(a.work_date)))];
-            const skudRes = await supabase
-              .from('skud_daily_summary')
-              .select('employee_id, date, total_minutes')
-              .in('employee_id', employeeIds)
-              .in('date', dates);
-            if (skudRes.error) throw skudRes.error;
+            const skudRows = await query<{ employee_id: number; date: string; total_minutes: number | string | null }>(
+              `SELECT employee_id, date, total_minutes
+                 FROM skud_daily_summary
+                 WHERE employee_id = ANY($1::int[])
+                   AND date = ANY($2::date[])`,
+              [employeeIds, dates],
+            );
             const skudMap = new Map<string, number>();
-            for (const s of skudRes.data || []) {
+            for (const s of skudRows) {
               skudMap.set(`${Number(s.employee_id)}_${String(s.date)}`, Number(s.total_minutes ?? 0));
             }
             const largeDates = new Set<string>();

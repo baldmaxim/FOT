@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import { invalidateDeptTreeCache, invalidateSyncFilterCache } from './skud-shared.service.js';
 import type { Employee, EmployeeEncrypted } from '../types/index.js';
 
@@ -54,18 +54,17 @@ export async function loadStructureCache(): Promise<StructureCache> {
     positions: new Map(),
   };
 
-  const deptQuery = supabase.from('org_departments').select('id, name');
-  const posQuery = supabase.from('positions').select('id, name');
+  const [departments, positions] = await Promise.all([
+    query<{ id: string; name: string }>('SELECT id, name FROM org_departments'),
+    query<{ id: string; name: string }>('SELECT id, name FROM positions'),
+  ]);
 
-  const [departmentsRes, positionsRes] = await Promise.all([deptQuery, posQuery]);
-
-  (departmentsRes.data || []).forEach((d: { id: string; name: string }) => {
+  for (const d of departments) {
     cache.departments.set(d.id, d.name || '');
-  });
-
-  (positionsRes.data || []).forEach((p: { id: string; name: string }) => {
+  }
+  for (const p of positions) {
     cache.positions.set(p.id, p.name || '');
-  });
+  }
 
   structureCacheStore.set(STRUCTURE_CACHE_KEY, { data: cache, expiresAt: now + STRUCTURE_CACHE_TTL_MS });
   return cache;

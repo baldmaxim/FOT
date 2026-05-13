@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import { supabase } from '../config/database.js';
+import { query, queryOne } from '../config/postgres.js';
 import { escapeLike } from '../utils/search.utils.js';
 import type { AuthenticatedRequest, IResolvedSchedule, SalaryRaiseStatus } from '../types/index.js';
 import { employeeChangesService } from '../services/employee-changes.service.js';
@@ -238,18 +238,17 @@ const normalizeSalaryRaiseRequest = (row: Record<string, unknown>): Record<strin
 const resolveSalaryRaiseSchemaMode = async (): Promise<SalaryRaiseSchemaMode> => {
   if (!salaryRaiseSchemaModePromise) {
     salaryRaiseSchemaModePromise = (async () => {
-      const { error } = await supabase
-        .from('salary_raise_requests')
-        .select('flow_version')
-        .limit(1);
-
-      if (!error) return 'v2';
-
-      if (typeof error.message === 'string' && error.message.includes('flow_version')) {
-        return 'legacy';
+      try {
+        await query('SELECT flow_version FROM salary_raise_requests LIMIT 1');
+        return 'v2';
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        const message = error instanceof Error ? error.message : String(error);
+        if (code === '42703' || message.includes('flow_version')) {
+          return 'legacy';
+        }
+        throw error;
       }
-
-      throw error;
     })().catch((error) => {
       salaryRaiseSchemaModePromise = null;
       throw error;
@@ -366,11 +365,10 @@ const notifyUsers = (userIds: string[], title: string, body: string) => {
 const loadDepartmentName = async (departmentId: string | null | undefined): Promise<string | null> => {
   if (!departmentId) return null;
 
-  const { data } = await supabase
-    .from('org_departments')
-    .select('name')
-    .eq('id', departmentId)
-    .maybeSingle();
+  const data = await queryOne<{ name: string | null }>(
+    `SELECT name FROM org_departments WHERE id = $1`,
+    [departmentId],
+  );
 
   return typeof data?.name === 'string' ? data.name : null;
 };
@@ -378,11 +376,10 @@ const loadDepartmentName = async (departmentId: string | null | undefined): Prom
 const loadPositionName = async (positionId: string | null | undefined): Promise<string | null> => {
   if (!positionId) return null;
 
-  const { data } = await supabase
-    .from('positions')
-    .select('name')
-    .eq('id', positionId)
-    .maybeSingle();
+  const data = await queryOne<{ name: string | null }>(
+    `SELECT name FROM positions WHERE id = $1`,
+    [positionId],
+  );
 
   return typeof data?.name === 'string' ? data.name : null;
 };
@@ -394,15 +391,12 @@ const getScopedCandidateEmployeeIds = async (req: AuthenticatedRequest): Promise
   }
 
   if (scope === 'all') {
-    const { data, error } = await supabase
-      .from('employees')
-      .select('id')
-      .eq('employment_status', 'active')
-      .eq('is_archived', false);
+    const data = await query<{ id: number }>(
+      `SELECT id FROM employees
+        WHERE employment_status = 'active' AND is_archived = false`,
+    );
 
-    if (error) throw error;
-
-    return [...new Set((data || [])
+    return [...new Set(data
       .map((row) => Number(row.id))
       .filter((value) => Number.isInteger(value) && value > 0)
       .filter((value) => value !== req.user.employee_id))];
@@ -450,50 +444,66 @@ const canManageSalaryRaiseEmployee = async (req: AuthenticatedRequest, employeeI
 };
 
 const buildEmployeeSnapshot = async (employeeId: number) => {
-  const { data: employee, error } = await supabase
-    .from('employees')
-    .select('id, full_name, current_salary, hire_date, work_object, position_id, org_department_id, employment_status, is_archived')
-    .eq('id', employeeId)
-    .maybeSingle();
+  const employee = await queryOne<{
+    id: number;
+    full_name: string | null;
+    current_salary: number | string | null;
+    hire_date: string | null;
+    work_object: string | null;
+    position_id: string | null;
+    org_department_id: string | null;
+    employment_status: string | null;
+    is_archived: boolean | null;
+  }>(
+    `SELECT id, full_name, current_salary, hire_date, work_object, position_id,
+            org_department_id, employment_status, is_archived
+       FROM employees
+      WHERE id = $1`,
+    [employeeId],
+  );
 
-  if (error) throw error;
   if (!employee) return null;
   if (employee.is_archived || employee.employment_status !== 'active') return null;
 
   const [positionName, departmentName, profile, lastRaise] = await Promise.all([
     loadPositionName(employee.position_id),
     loadDepartmentName(employee.org_department_id),
-    supabase.from('user_profiles').select('supervisor_id').eq('employee_id', employeeId).maybeSingle(),
-    supabase
-      .from('salary_history')
-      .select('effective_date')
-      .eq('employee_id', employeeId)
-      .order('effective_date', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+    queryOne<{ supervisor_id: string | null }>(
+      `SELECT supervisor_id FROM user_profiles WHERE employee_id = $1`,
+      [employeeId],
+    ),
+    queryOne<{ effective_date: string | null }>(
+      `SELECT effective_date FROM salary_history
+        WHERE employee_id = $1
+        ORDER BY effective_date DESC
+        LIMIT 1`,
+      [employeeId],
+    ),
   ]);
 
   let supervisorName: string | null = null;
-  if (profile.data?.supervisor_id) {
-    const { data: supervisorProfile } = await supabase
-      .from('user_profiles')
-      .select('full_name, employee_id')
-      .eq('id', profile.data.supervisor_id)
-      .maybeSingle();
+  if (profile?.supervisor_id) {
+    const supervisorProfile = await queryOne<{ full_name: string | null; employee_id: number | null }>(
+      `SELECT full_name, employee_id FROM user_profiles WHERE id = $1`,
+      [profile.supervisor_id],
+    );
 
     supervisorName = typeof supervisorProfile?.full_name === 'string' && supervisorProfile.full_name.trim()
       ? supervisorProfile.full_name
       : null;
 
     if (!supervisorName && supervisorProfile?.employee_id) {
-      const { data: supervisorEmployee } = await supabase
-        .from('employees')
-        .select('full_name')
-        .eq('id', supervisorProfile.employee_id)
-        .maybeSingle();
+      const supervisorEmployee = await queryOne<{ full_name: string | null }>(
+        `SELECT full_name FROM employees WHERE id = $1`,
+        [supervisorProfile.employee_id],
+      );
       supervisorName = typeof supervisorEmployee?.full_name === 'string' ? supervisorEmployee.full_name : null;
     }
   }
+
+  const currentSalaryNum = typeof employee.current_salary === 'number'
+    ? employee.current_salary
+    : (employee.current_salary != null ? Number(employee.current_salary) : null);
 
   return {
     employee_id: employee.id,
@@ -501,39 +511,42 @@ const buildEmployeeSnapshot = async (employeeId: number) => {
     position_name: positionName,
     department_name: departmentName,
     work_object: employee.work_object,
-    current_salary: typeof employee.current_salary === 'number' ? employee.current_salary : null,
+    current_salary: currentSalaryNum != null && Number.isFinite(currentSalaryNum) ? currentSalaryNum : null,
     hire_date: employee.hire_date,
     supervisor_name: supervisorName,
-    last_raise_date: lastRaise.data?.effective_date || null,
+    last_raise_date: lastRaise?.effective_date || null,
   };
 };
 
 const buildManagerSnapshot = async (userId: string) => {
-  const { data: profile, error } = await supabase
-    .from('user_profiles')
-    .select('id, full_name, employee_id, position_type')
-    .eq('id', userId)
-    .maybeSingle();
+  const profile = await queryOne<{
+    id: string;
+    full_name: string | null;
+    employee_id: number | null;
+    position_type: string | null;
+  }>(
+    `SELECT id, full_name, employee_id, position_type
+       FROM user_profiles
+      WHERE id = $1`,
+    [userId],
+  );
 
-  if (error) throw error;
   if (!profile) return null;
 
   let fullName = typeof profile.full_name === 'string' ? profile.full_name : null;
   let departmentId: string | null = null;
   if ((!fullName || !fullName.trim()) && profile.employee_id) {
-    const { data: employee } = await supabase
-      .from('employees')
-      .select('full_name, org_department_id')
-      .eq('id', profile.employee_id)
-      .maybeSingle();
+    const employee = await queryOne<{ full_name: string | null; org_department_id: string | null }>(
+      `SELECT full_name, org_department_id FROM employees WHERE id = $1`,
+      [profile.employee_id],
+    );
     fullName = typeof employee?.full_name === 'string' ? employee.full_name : null;
     departmentId = typeof employee?.org_department_id === 'string' ? employee.org_department_id : null;
   } else if (profile.employee_id) {
-    const { data: employee } = await supabase
-      .from('employees')
-      .select('org_department_id')
-      .eq('id', profile.employee_id)
-      .maybeSingle();
+    const employee = await queryOne<{ org_department_id: string | null }>(
+      `SELECT org_department_id FROM employees WHERE id = $1`,
+      [profile.employee_id],
+    );
     departmentId = typeof employee?.org_department_id === 'string' ? employee.org_department_id : null;
   }
 
@@ -549,27 +562,27 @@ const buildManagerSnapshot = async (userId: string) => {
 };
 
 const getSalaryRaiseReviewerIds = async (excludeId?: string): Promise<string[]> => {
-  const [{ data: roles, error: rolesError }, { data: pageAccess, error: pageAccessError }] = await Promise.all([
-    supabase.from('system_roles').select('id, code, permissions, is_active'),
-    supabase
-      .from('role_page_access')
-      .select('system_role_id, role_code')
-      .eq('page_path', '/salary-raise-review')
-      .eq('can_edit', true),
+  const [roles, pageAccess] = await Promise.all([
+    query<{ id: string; code: string; permissions: unknown; is_active: boolean }>(
+      `SELECT id, code, permissions, is_active FROM system_roles`,
+    ),
+    query<{ system_role_id: string | null; role_code: string | null }>(
+      `SELECT system_role_id, role_code
+         FROM role_page_access
+        WHERE page_path = $1 AND can_edit = true`,
+      ['/salary-raise-review'],
+    ),
   ]);
-
-  if (rolesError) throw rolesError;
-  if (pageAccessError) throw pageAccessError;
 
   const roleIds = new Set<string>();
   const roleCodes = new Set<string>();
 
-  for (const role of roles || []) {
+  for (const role of roles) {
     if (!role.is_active) continue;
     const permissions = Array.isArray(role.permissions) ? role.permissions : [];
     if (!permissions.includes('data.scope.all')) continue;
 
-    const hasReviewAccess = (pageAccess || []).some((entry) => (
+    const hasReviewAccess = pageAccess.some((entry) => (
       (entry.system_role_id && entry.system_role_id === role.id)
       || (!entry.system_role_id && entry.role_code === role.code)
     ));
@@ -582,19 +595,18 @@ const getSalaryRaiseReviewerIds = async (excludeId?: string): Promise<string[]> 
 
   if (roleIds.size === 0 && roleCodes.size === 0) return [];
 
-  let query = supabase
-    .from('user_profiles')
-    .select('id, system_role_id, position_type')
-    .eq('is_approved', true);
-
+  const params: unknown[] = [];
+  let sql = `SELECT id, system_role_id, position_type
+               FROM user_profiles
+              WHERE is_approved = true`;
   if (excludeId) {
-    query = query.neq('id', excludeId);
+    params.push(excludeId);
+    sql += ` AND id <> $${params.length}`;
   }
 
-  const { data: users, error } = await query;
-  if (error) throw error;
+  const users = await query<{ id: string; system_role_id: string | null; position_type: string | null }>(sql, params);
 
-  return [...new Set((users || [])
+  return [...new Set(users
     .filter((user) => {
       if (user.system_role_id && roleIds.has(user.system_role_id)) return true;
       return typeof user.position_type === 'string' && roleCodes.has(user.position_type);
@@ -606,12 +618,12 @@ const enrichWithNames = async (requests: Record<string, unknown>[]) => {
   const employeeIds = [...new Set(requests.map((request) => Number(request.employee_id)).filter(Number.isFinite))];
   if (employeeIds.length === 0) return requests;
 
-  const { data: employees } = await supabase
-    .from('employees')
-    .select('id, full_name')
-    .in('id', employeeIds);
+  const employees = await query<{ id: number; full_name: string | null }>(
+    `SELECT id, full_name FROM employees WHERE id = ANY($1::int[])`,
+    [employeeIds],
+  );
 
-  const nameMap = new Map((employees || []).map((employee) => [employee.id, employee.full_name]));
+  const nameMap = new Map(employees.map((employee) => [employee.id, employee.full_name]));
 
   return requests.map((request) => ({
     ...request,
@@ -622,18 +634,15 @@ const enrichWithNames = async (requests: Record<string, unknown>[]) => {
 const ensureSalaryRaiseRequestVisible = async (req: AuthenticatedRequest, requestId: number) => {
   const schemaMode = await resolveSalaryRaiseSchemaMode();
 
-  let query = supabase
-    .from('salary_raise_requests')
-    .select('*')
-    .eq('id', requestId);
-
+  const params: unknown[] = [requestId];
+  let sql = `SELECT * FROM salary_raise_requests WHERE id = $1`;
   if (schemaMode === 'v2') {
-    query = query.eq('flow_version', FLOW_VERSION);
+    params.push(FLOW_VERSION);
+    sql += ` AND flow_version = $${params.length}`;
   }
 
-  const { data, error } = await query.maybeSingle();
+  const data = await queryOne<Record<string, unknown>>(sql, params);
 
-  if (error) throw error;
   if (!data) return null;
 
   if (data.author_user_id === req.user.id) {
@@ -864,23 +873,23 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       manager_snapshot: managerSnapshot,
     });
 
-    const insertPayload = schemaMode === 'v2'
+    const insertPayload: Record<string, unknown> = schemaMode === 'v2'
       ? {
           employee_id: payload.employee_id,
           author_user_id: req.user.id,
           flow_version: FLOW_VERSION,
           status: 'draft',
-          employee_snapshot: employeeSnapshot,
-          manager_snapshot: managerSnapshot,
+          employee_snapshot: JSON.stringify(employeeSnapshot),
+          manager_snapshot: JSON.stringify(managerSnapshot),
           current_salary_entered: payload.current_salary_entered,
           request_type: REQUEST_TYPE_FALLBACK,
           requested_salary: payload.requested_salary,
           raise_percentage: raisePercentage,
           desired_effective_date: DEFAULT_EFFECTIVE_DATE(),
           reason_brief: payload.manager_justification,
-          achievements: payload.achievements,
-          responsibility_changes: {},
-          self_assessment: {},
+          achievements: JSON.stringify(payload.achievements),
+          responsibility_changes: JSON.stringify({}),
+          self_assessment: JSON.stringify({}),
           work_object_id: workObject.id,
           work_object_name: workObject.name,
           job_summary: payload.job_summary,
@@ -891,29 +900,35 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
           employee_id: payload.employee_id,
           author_user_id: req.user.id,
           status: 'draft',
-          employee_snapshot: employeeSnapshot,
+          employee_snapshot: JSON.stringify(employeeSnapshot),
           request_type: REQUEST_TYPE_FALLBACK,
           requested_salary: payload.requested_salary,
           raise_percentage: raisePercentage,
           desired_effective_date: DEFAULT_EFFECTIVE_DATE(),
           reason_brief: payload.manager_justification,
-          achievements: payload.achievements,
-          responsibility_changes: {},
-          self_assessment: {
+          achievements: JSON.stringify(payload.achievements),
+          responsibility_changes: JSON.stringify({}),
+          self_assessment: JSON.stringify({
             [LEGACY_V2_KEY]: legacyV2Payload,
-          },
+          }),
           updated_at: new Date().toISOString(),
         };
 
-    const { data, error } = await supabase
-      .from('salary_raise_requests')
-      .insert(insertPayload)
-      .select('*')
-      .single();
+    const columns = Object.keys(insertPayload);
+    const values = Object.values(insertPayload);
+    const placeholders = columns.map((_, idx) => `$${idx + 1}`);
+    const data = await queryOne<Record<string, unknown>>(
+      `INSERT INTO salary_raise_requests (${columns.join(', ')})
+       VALUES (${placeholders.join(', ')})
+       RETURNING *`,
+      values,
+    );
 
-    if (error) throw error;
+    if (!data) {
+      throw new Error('Insert returned no row');
+    }
 
-    res.json({ success: true, data: normalizeSalaryRaiseRequest(data as Record<string, unknown>) });
+    res.json({ success: true, data: normalizeSalaryRaiseRequest(data) });
   } catch (error) {
     console.error('salary-raise.create error:', error);
     res.status(500).json({ success: false, error: 'Ошибка создания заявки' });
@@ -981,16 +996,16 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       manager_snapshot: managerSnapshot,
     });
 
-    const updatePayload = schemaMode === 'v2'
+    const updatePayload: Record<string, unknown> = schemaMode === 'v2'
       ? {
           employee_id: payload.employee_id,
-          employee_snapshot: employeeSnapshot,
-          manager_snapshot: managerSnapshot,
+          employee_snapshot: JSON.stringify(employeeSnapshot),
+          manager_snapshot: JSON.stringify(managerSnapshot),
           current_salary_entered: payload.current_salary_entered,
           requested_salary: payload.requested_salary,
           raise_percentage: raisePercentage,
           reason_brief: payload.manager_justification,
-          achievements: payload.achievements,
+          achievements: JSON.stringify(payload.achievements),
           work_object_id: workObject.id,
           work_object_name: workObject.name,
           job_summary: payload.job_summary,
@@ -999,28 +1014,36 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         }
       : {
           employee_id: payload.employee_id,
-          employee_snapshot: employeeSnapshot,
+          employee_snapshot: JSON.stringify(employeeSnapshot),
           requested_salary: payload.requested_salary,
           raise_percentage: raisePercentage,
           reason_brief: payload.manager_justification,
-          achievements: payload.achievements,
-          self_assessment: {
+          achievements: JSON.stringify(payload.achievements),
+          self_assessment: JSON.stringify({
             ...toRecord(existing.self_assessment),
             [LEGACY_V2_KEY]: legacyV2Payload,
-          },
+          }),
           updated_at: new Date().toISOString(),
         };
 
-    const { data, error } = await supabase
-      .from('salary_raise_requests')
-      .update(updatePayload)
-      .eq('id', requestId)
-      .select('*')
-      .single();
+    const updateColumns = Object.keys(updatePayload);
+    const updateValues = Object.values(updatePayload);
+    const setClauses = updateColumns.map((col, idx) => `${col} = $${idx + 1}`);
+    updateValues.push(requestId);
+    const data = await queryOne<Record<string, unknown>>(
+      `UPDATE salary_raise_requests
+          SET ${setClauses.join(', ')}
+        WHERE id = $${updateValues.length}
+      RETURNING *`,
+      updateValues,
+    );
 
-    if (error) throw error;
+    if (!data) {
+      res.status(404).json({ success: false, error: 'Заявка не найдена' });
+      return;
+    }
 
-    res.json({ success: true, data: normalizeSalaryRaiseRequest(data as Record<string, unknown>) });
+    res.json({ success: true, data: normalizeSalaryRaiseRequest(data) });
   } catch (error) {
     console.error('salary-raise.update error:', error);
     res.status(500).json({ success: false, error: 'Ошибка обновления заявки' });
@@ -1030,23 +1053,19 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const schemaMode = await resolveSalaryRaiseSchemaMode();
-    let query = supabase
-      .from('salary_raise_requests')
-      .select('*')
-      .eq('author_user_id', req.user.id)
-      .order('created_at', { ascending: false });
-
+    const params: unknown[] = [req.user.id];
+    let sql = `SELECT * FROM salary_raise_requests WHERE author_user_id = $1`;
     if (schemaMode === 'v2') {
-      query = query.eq('flow_version', FLOW_VERSION);
+      params.push(FLOW_VERSION);
+      sql += ` AND flow_version = $${params.length}`;
     }
+    sql += ` ORDER BY created_at DESC`;
 
-    const { data, error } = await query;
-
-    if (error) throw error;
+    const data = await query<Record<string, unknown>>(sql, params);
 
     res.json({
       success: true,
-      data: (data || []).map((item) => normalizeSalaryRaiseRequest(item as Record<string, unknown>)),
+      data: data.map((item) => normalizeSalaryRaiseRequest(item)),
     });
   } catch (error) {
     console.error('salary-raise.getMy error:', error);
@@ -1057,25 +1076,21 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
 const getPending = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const schemaMode = await resolveSalaryRaiseSchemaMode();
-    let query = supabase
-      .from('salary_raise_requests')
-      .select('*')
-      .order('created_at', { ascending: false });
-
+    const params: unknown[] = [];
+    let sql = `SELECT * FROM salary_raise_requests`;
     if (schemaMode === 'v2') {
-      query = query
-        .eq('flow_version', FLOW_VERSION)
-        .eq('status', 'admin_review');
+      params.push(FLOW_VERSION, 'admin_review');
+      sql += ` WHERE flow_version = $1 AND status = $2`;
     } else {
-      query = query.in('status', ['admin_review', 'supervisor_review', 'hr_review', 'finance_review']);
+      params.push(['admin_review', 'supervisor_review', 'hr_review', 'finance_review']);
+      sql += ` WHERE status = ANY($1::text[])`;
     }
+    sql += ` ORDER BY created_at DESC`;
 
-    const { data, error } = await query;
-
-    if (error) throw error;
+    const data = await query<Record<string, unknown>>(sql, params);
 
     const scoped: Record<string, unknown>[] = [];
-    for (const request of data || []) {
+    for (const request of data) {
       if (await canAccessEmployeeInScope(req, Number(request.employee_id))) {
         scoped.push(request);
       }
@@ -1095,29 +1110,35 @@ const getPending = async (req: AuthenticatedRequest, res: Response): Promise<voi
 const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const schemaMode = await resolveSalaryRaiseSchemaMode();
-    let query = supabase
-      .from('salary_raise_requests')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const params: unknown[] = [];
+    const conditions: string[] = [];
 
     if (schemaMode === 'v2') {
-      query = query.eq('flow_version', FLOW_VERSION);
+      params.push(FLOW_VERSION);
+      conditions.push(`flow_version = $${params.length}`);
     }
 
     const status = typeof req.query.status === 'string' ? req.query.status : undefined;
     if (status) {
       if (schemaMode === 'legacy' && status === 'admin_review') {
-        query = query.in('status', ['admin_review', 'supervisor_review', 'hr_review', 'finance_review']);
+        params.push(['admin_review', 'supervisor_review', 'hr_review', 'finance_review']);
+        conditions.push(`status = ANY($${params.length}::text[])`);
       } else {
-        query = query.eq('status', status);
+        params.push(status);
+        conditions.push(`status = $${params.length}`);
       }
     }
 
-    const { data, error } = await query;
-    if (error) throw error;
+    let sql = `SELECT * FROM salary_raise_requests`;
+    if (conditions.length > 0) {
+      sql += ` WHERE ${conditions.join(' AND ')}`;
+    }
+    sql += ` ORDER BY created_at DESC`;
+
+    const data = await query<Record<string, unknown>>(sql, params);
 
     const scoped: Record<string, unknown>[] = [];
-    for (const request of data || []) {
+    for (const request of data) {
       if (await canAccessEmployeeInScope(req, Number(request.employee_id))) {
         scoped.push(request);
       }
@@ -1161,43 +1182,51 @@ const getCandidates = async (req: AuthenticatedRequest, res: Response): Promise<
       return;
     }
 
-    let query = supabase
-      .from('employees')
-      .select('id, full_name, position_id, org_department_id, employment_status, is_archived')
-      .in('id', candidateIds)
-      .eq('employment_status', 'active')
-      .eq('is_archived', false)
-      .order('full_name')
-      .limit(20);
-
+    const params: unknown[] = [candidateIds];
+    let sql = `SELECT id, full_name, position_id, org_department_id, employment_status, is_archived
+                 FROM employees
+                WHERE id = ANY($1::int[])
+                  AND employment_status = 'active'
+                  AND is_archived = false`;
     if (search) {
-      query = query.ilike('full_name', `%${escapeLike(search)}%`);
+      params.push(`%${escapeLike(search)}%`);
+      sql += ` AND full_name ILIKE $${params.length}`;
     }
+    sql += ` ORDER BY full_name LIMIT 20`;
 
-    const { data, error } = await query;
-    if (error) throw error;
+    const data = await query<{
+      id: number;
+      full_name: string | null;
+      position_id: string | null;
+      org_department_id: string | null;
+      employment_status: string | null;
+      is_archived: boolean | null;
+    }>(sql, params);
 
-    const positionIds = [...new Set((data || []).map((item) => item.position_id).filter(Boolean))];
-    const departmentIds = [...new Set((data || []).map((item) => item.org_department_id).filter(Boolean))];
+    const positionIds = [...new Set(data.map((item) => item.position_id).filter((v): v is string => Boolean(v)))];
+    const departmentIds = [...new Set(data.map((item) => item.org_department_id).filter((v): v is string => Boolean(v)))];
 
     const [positions, departments] = await Promise.all([
       positionIds.length > 0
-        ? supabase.from('positions').select('id, name').in('id', positionIds)
-        : Promise.resolve({ data: [], error: null }),
+        ? query<{ id: string; name: string | null }>(
+            `SELECT id, name FROM positions WHERE id = ANY($1::uuid[])`,
+            [positionIds],
+          )
+        : Promise.resolve([] as { id: string; name: string | null }[]),
       departmentIds.length > 0
-        ? supabase.from('org_departments').select('id, name').in('id', departmentIds)
-        : Promise.resolve({ data: [], error: null }),
+        ? query<{ id: string; name: string | null }>(
+            `SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])`,
+            [departmentIds],
+          )
+        : Promise.resolve([] as { id: string; name: string | null }[]),
     ]);
 
-    if (positions.error) throw positions.error;
-    if (departments.error) throw departments.error;
-
-    const positionMap = new Map((positions.data || []).map((item) => [item.id, item.name]));
-    const departmentMap = new Map((departments.data || []).map((item) => [item.id, item.name]));
+    const positionMap = new Map(positions.map((item) => [item.id, item.name]));
+    const departmentMap = new Map(departments.map((item) => [item.id, item.name]));
 
     res.json({
       success: true,
-      data: (data || []).map((item) => ({
+      data: data.map((item) => ({
         employee_id: item.id,
         full_name: item.full_name,
         position_name: item.position_id ? positionMap.get(item.position_id) || null : null,
@@ -1263,17 +1292,18 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const { data, error } = await supabase
-      .from('salary_raise_requests')
-      .update({
-        status: nextStatus,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', requestId)
-      .select('*')
-      .single();
+    const data = await queryOne<Record<string, unknown>>(
+      `UPDATE salary_raise_requests
+          SET status = $1, updated_at = $2
+        WHERE id = $3
+      RETURNING *`,
+      [nextStatus, new Date().toISOString(), requestId],
+    );
 
-    if (error) throw error;
+    if (!data) {
+      res.status(404).json({ success: false, error: 'Заявка не найдена' });
+      return;
+    }
 
     const reviewerIds = await getSalaryRaiseReviewerIds(req.user.id);
     const employeeSnapshot = (request.employee_snapshot || {}) as Record<string, unknown>;
@@ -1283,7 +1313,7 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       `Новая заявка на повышение оклада: ${String(employeeSnapshot.full_name || 'Сотрудник')}`,
     );
 
-    res.json({ success: true, data: normalizeSalaryRaiseRequest(data as Record<string, unknown>) });
+    res.json({ success: true, data: normalizeSalaryRaiseRequest(data) });
   } catch (error) {
     console.error('salary-raise.submit error:', error);
     res.status(500).json({ success: false, error: 'Ошибка отправки заявки' });
@@ -1312,19 +1342,20 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const { data, error } = await supabase
-      .from('salary_raise_requests')
-      .update({
-        status: nextStatus,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', requestId)
-      .select('*')
-      .single();
+    const data = await queryOne<Record<string, unknown>>(
+      `UPDATE salary_raise_requests
+          SET status = $1, updated_at = $2
+        WHERE id = $3
+      RETURNING *`,
+      [nextStatus, new Date().toISOString(), requestId],
+    );
 
-    if (error) throw error;
+    if (!data) {
+      res.status(404).json({ success: false, error: 'Заявка не найдена' });
+      return;
+    }
 
-    res.json({ success: true, data: normalizeSalaryRaiseRequest(data as Record<string, unknown>) });
+    res.json({ success: true, data: normalizeSalaryRaiseRequest(data) });
   } catch (error) {
     console.error('salary-raise.cancel error:', error);
     res.status(500).json({ success: false, error: 'Ошибка отмены заявки' });
@@ -1364,30 +1395,35 @@ const adminReview = async (req: AuthenticatedRequest, res: Response): Promise<vo
       comment: parsed.data.comment || null,
     };
 
-    const { data, error } = await supabase
-      .from('salary_raise_requests')
-      .update(
-        schemaMode === 'v2'
-          ? {
-              status: nextStatus,
-              admin_review: reviewPayload,
-              admin_reviewer_id: req.user.id,
-              admin_reviewed_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            }
-          : {
-              status: nextStatus,
-              finance_review: reviewPayload,
-              finance_reviewer_id: req.user.id,
-              finance_reviewed_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            },
-      )
-      .eq('id', requestId)
-      .select('*')
-      .single();
+    const nowIso = new Date().toISOString();
+    const data = schemaMode === 'v2'
+      ? await queryOne<Record<string, unknown>>(
+          `UPDATE salary_raise_requests
+              SET status = $1,
+                  admin_review = $2::jsonb,
+                  admin_reviewer_id = $3,
+                  admin_reviewed_at = $4,
+                  updated_at = $4
+            WHERE id = $5
+          RETURNING *`,
+          [nextStatus, JSON.stringify(reviewPayload), req.user.id, nowIso, requestId],
+        )
+      : await queryOne<Record<string, unknown>>(
+          `UPDATE salary_raise_requests
+              SET status = $1,
+                  finance_review = $2::jsonb,
+                  finance_reviewer_id = $3,
+                  finance_reviewed_at = $4,
+                  updated_at = $4
+            WHERE id = $5
+          RETURNING *`,
+          [nextStatus, JSON.stringify(reviewPayload), req.user.id, nowIso, requestId],
+        );
 
-    if (error) throw error;
+    if (!data) {
+      res.status(404).json({ success: false, error: 'Заявка не найдена' });
+      return;
+    }
 
     if (parsed.data.action === 'approve') {
       await employeeChangesService.changeSalary(Number(request.employee_id), Number(request.requested_salary), {
@@ -1405,7 +1441,7 @@ const adminReview = async (req: AuthenticatedRequest, res: Response): Promise<vo
         : 'Ваша заявка на повышение оклада отклонена.',
     );
 
-    res.json({ success: true, data: normalizeSalaryRaiseRequest(data as Record<string, unknown>) });
+    res.json({ success: true, data: normalizeSalaryRaiseRequest(data) });
   } catch (error) {
     console.error('salary-raise.adminReview error:', error);
     res.status(500).json({ success: false, error: 'Ошибка рассмотрения заявки' });

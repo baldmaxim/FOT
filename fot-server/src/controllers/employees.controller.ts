@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import { supabase } from '../config/database.js';
+import { execute, query, queryOne } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { loadStructureCache, decryptEmployee, decryptEmployeeList } from '../services/employee-mapper.service.js';
 import { employeeCache } from '../services/employee-cache.service.js';
@@ -136,15 +136,11 @@ export const employeesController = {
 
         // Main query with exact count
         const selectCols = req.query.view === 'staff' ? staffColumns : listColumns;
-        let q = supabase
-          .from('employees')
-          .select(selectCols, { count: 'exact' })
-          .eq('is_archived', showArchived)
-          .range(offset, offset + pageSize - 1);
+        const params: unknown[] = [];
+        const whereParts: string[] = [];
 
-        q = status === 'excluded'
-          ? q.order('excluded_from_timesheet_at', { ascending: false })
-          : q.order('full_name');
+        params.push(showArchived);
+        whereParts.push(`is_archived = $${params.length}`);
 
         if (scope === 'self') {
           if (!req.user.employee_id) {
@@ -155,20 +151,25 @@ export const employeesController = {
             });
             return;
           }
-          q = q.eq('id', req.user.employee_id);
+          params.push(req.user.employee_id);
+          whereParts.push(`id = $${params.length}`);
         } else if (departmentFilterIds?.length) {
-          q = departmentFilterIds.length === 1
-            ? q.eq('org_department_id', departmentFilterIds[0])
-            : q.in('org_department_id', departmentFilterIds);
+          params.push(departmentFilterIds);
+          whereParts.push(`org_department_id = ANY($${params.length}::uuid[])`);
         }
-        if (search) q = q.ilike('full_name', `%${escapeLike(search)}%`);
-        if (status === 'fired') q = q.eq('employment_status', 'fired');
-        else if (status === 'excluded') q = q.eq('excluded_from_timesheet', true).neq('employment_status', 'fired');
-        else if (status === 'active' || !status) q = q.neq('employment_status', 'fired');
+        if (search) {
+          params.push(`%${escapeLike(search)}%`);
+          whereParts.push(`full_name ILIKE $${params.length}`);
+        }
+        if (status === 'fired') {
+          whereParts.push(`employment_status = 'fired'`);
+        } else if (status === 'excluded') {
+          whereParts.push(`excluded_from_timesheet = true AND employment_status <> 'fired'`);
+        } else if (status === 'active' || !status) {
+          whereParts.push(`employment_status <> 'fired'`);
+        }
 
         // Фильтр по графику: schedule_id=<uuid> или schedule_id=__default__ (legacy).
-        // Если запрошенный schedule — дефолтный (is_default=true), включаем и тех,
-        // у кого ESA на этот шаблон, и тех, у кого активного ESA нет вообще.
         const scheduleParam = typeof req.query.schedule_id === 'string' ? req.query.schedule_id.trim() : '';
         if (scheduleParam) {
           const today = new Date().toISOString().slice(0, 10);
@@ -177,42 +178,47 @@ export const employeesController = {
           if (scheduleParam === '__default__') {
             isDefaultRequested = true;
           } else {
-            const { data: tplRow, error: tplErr } = await supabase
-              .from('work_schedules')
-              .select('is_default')
-              .eq('id', scheduleParam)
-              .maybeSingle();
-            if (tplErr) {
+            try {
+              const tplRow = await queryOne<{ is_default: boolean | null }>(
+                'SELECT is_default FROM work_schedules WHERE id = $1',
+                [scheduleParam],
+              );
+              isDefaultRequested = !!tplRow?.is_default;
+            } catch (tplErr) {
               console.error('Get schedule template error:', tplErr);
               res.status(500).json({ success: false, error: 'Failed to fetch employees' });
               return;
             }
-            isDefaultRequested = !!tplRow?.is_default;
           }
 
-          const { data: activeAss, error: assErr } = await supabase
-            .from('employee_schedule_assignments')
-            .select('employee_id, schedule_id')
-            .lte('effective_from', today)
-            .or(`effective_to.is.null,effective_to.gte.${today}`);
-          if (assErr) {
+          let activeAss: Array<{ employee_id: number; schedule_id: string }>;
+          try {
+            activeAss = await query<{ employee_id: number; schedule_id: string }>(
+              `SELECT employee_id, schedule_id
+                 FROM employee_schedule_assignments
+                WHERE effective_from <= $1
+                  AND (effective_to IS NULL OR effective_to >= $1)`,
+              [today],
+            );
+          } catch (assErr) {
             console.error('Get schedule assignments error:', assErr);
             res.status(500).json({ success: false, error: 'Failed to fetch employees' });
             return;
           }
 
           if (isDefaultRequested) {
-            // Включаем тех, у кого либо нет активного ESA, либо ESA указывает на этот же
-            // дефолтный шаблон. Исключаем тех, чьё ESA ведёт на другой шаблон.
             const excluded = [...new Set(
-              (activeAss || [])
+              activeAss
                 .filter(r => r.schedule_id !== scheduleParam)
                 .map(r => Number(r.employee_id)),
             )];
-            if (excluded.length > 0) q = q.not('id', 'in', `(${excluded.join(',')})`);
+            if (excluded.length > 0) {
+              params.push(excluded);
+              whereParts.push(`id <> ALL($${params.length}::int[])`);
+            }
           } else {
             const ids = [...new Set(
-              (activeAss || [])
+              activeAss
                 .filter(r => r.schedule_id === scheduleParam)
                 .map(r => Number(r.employee_id)),
             )];
@@ -224,20 +230,37 @@ export const employeesController = {
               });
               return;
             }
-            q = q.in('id', ids);
+            params.push(ids);
+            whereParts.push(`id = ANY($${params.length}::int[])`);
           }
         }
 
-        const { data, error, count } = await q;
-        if (error) {
-          console.error('Get employees paginated error:', error);
+        const orderSql = status === 'excluded'
+          ? 'ORDER BY excluded_from_timesheet_at DESC'
+          : 'ORDER BY full_name ASC';
+        params.push(pageSize);
+        const limitIdx = params.length;
+        params.push(offset);
+        const offsetIdx = params.length;
+
+        const sql = `SELECT ${selectCols}, count(*) OVER ()::int AS total_count
+                       FROM employees
+                      WHERE ${whereParts.join(' AND ')}
+                      ${orderSql}
+                      LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
+
+        let data: Array<Record<string, unknown> & { total_count: number }>;
+        try {
+          data = await query<Record<string, unknown> & { total_count: number }>(sql, params);
+        } catch (err) {
+          console.error('Get employees paginated error:', err);
           res.status(500).json({ success: false, error: 'Failed to fetch employees' });
           return;
         }
 
         const structureCache = await loadStructureCache();
-        const employees = (data || []).map(emp => decryptEmployeeList(emp as unknown as EmployeeEncrypted, structureCache));
-        const total = count ?? 0;
+        const employees = data.map(emp => decryptEmployeeList(emp as unknown as EmployeeEncrypted, structureCache));
+        const total = data.length > 0 ? Number(data[0].total_count) : 0;
 
         auditService.logFromRequest(req, req.user.id, 'VIEW_EMPLOYEES', {
           details: { count: employees.length, page, archived: showArchived },
@@ -261,34 +284,45 @@ export const employeesController = {
 
       const legacyColumns: string = isListView ? listColumns : EMPLOYEE_FULL_COLUMNS;
       while (hasMore) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        let q: any = supabase
-          .from('employees')
-          .select(legacyColumns)
-          .eq('is_archived', showArchived)
-          .order('id')
-          .range(from, from + INTERNAL_PAGE - 1);
+        const params: unknown[] = [];
+        const whereParts: string[] = [];
+        params.push(showArchived);
+        whereParts.push(`is_archived = $${params.length}`);
 
         if (scope === 'self') {
           if (!req.user.employee_id) {
             break;
           }
-          q = q.eq('id', req.user.employee_id);
+          params.push(req.user.employee_id);
+          whereParts.push(`id = $${params.length}`);
         } else if (departmentFilterIds?.length) {
-          q = departmentFilterIds.length === 1
-            ? q.eq('org_department_id', departmentFilterIds[0])
-            : q.in('org_department_id', departmentFilterIds);
+          params.push(departmentFilterIds);
+          whereParts.push(`org_department_id = ANY($${params.length}::uuid[])`);
         }
 
-        const { data, error } = await q;
-        if (error) {
-          console.error('Get employees error:', error);
+        params.push(INTERNAL_PAGE);
+        const limitIdx = params.length;
+        params.push(from);
+        const offsetIdx = params.length;
+
+        let data: EmployeeEncrypted[];
+        try {
+          data = await query<EmployeeEncrypted>(
+            `SELECT ${legacyColumns}
+               FROM employees
+              WHERE ${whereParts.join(' AND ')}
+              ORDER BY id
+              LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+            params,
+          );
+        } catch (err) {
+          console.error('Get employees error:', err);
           res.status(500).json({ success: false, error: 'Failed to fetch employees' });
           return;
         }
 
-        allRows = allRows.concat((data || []) as unknown as EmployeeEncrypted[]);
-        hasMore = (data?.length || 0) === INTERNAL_PAGE;
+        allRows = allRows.concat(data);
+        hasMore = data.length === INTERNAL_PAGE;
         from += INTERNAL_PAGE;
       }
 
@@ -332,10 +366,11 @@ export const employeesController = {
       const scopedDepartmentFilterIds = scope === 'department'
         ? await resolveManagedDepartmentIds(req)
         : await resolveDepartmentFilterIds(await resolveScopedDepartmentId(req, null));
-      let rowsQuery = supabase
-        .from('employees')
-        .select('id, org_department_id, employment_status')
-        .eq('is_archived', showArchived);
+
+      const params: unknown[] = [];
+      const whereParts: string[] = [];
+      params.push(showArchived);
+      whereParts.push(`is_archived = $${params.length}`);
 
       if (scope === 'self') {
         if (!req.user.employee_id) {
@@ -343,19 +378,23 @@ export const employeesController = {
           res.json({ success: true, data: { byDepartment: {}, byStatus: { active: 0, fired: 0 } } });
           return;
         }
-        rowsQuery = rowsQuery.eq('id', req.user.employee_id);
+        params.push(req.user.employee_id);
+        whereParts.push(`id = $${params.length}`);
       } else if (scopedDepartmentFilterIds?.length) {
-        rowsQuery = scopedDepartmentFilterIds.length === 1
-          ? rowsQuery.eq('org_department_id', scopedDepartmentFilterIds[0])
-          : rowsQuery.in('org_department_id', scopedDepartmentFilterIds);
+        params.push(scopedDepartmentFilterIds);
+        whereParts.push(`org_department_id = ANY($${params.length}::uuid[])`);
       }
 
-      const { data: rows } = await rowsQuery;
+      const rows = await query<{ id: number; org_department_id: string | null; employment_status: string }>(
+        `SELECT id, org_department_id, employment_status
+           FROM employees
+          WHERE ${whereParts.join(' AND ')}`,
+        params,
+      );
 
       const byDepartment: Record<string, number> = {};
       const byStatus = { active: 0, fired: 0 };
-      for (const row of rows || []) {
-        const r = row as { org_department_id: string | null; employment_status: string };
+      for (const r of rows) {
         if (r.employment_status === 'fired') {
           byStatus.fired++;
         } else {
@@ -406,50 +445,52 @@ export const employeesController = {
         return;
       }
 
-      const employeeResult = await supabase
-        .from('employees')
-        .select(EMPLOYEE_FULL_COLUMNS)
-        .eq('id', idNum)
-        .single();
+      const employeeRow = await queryOne<Record<string, unknown>>(
+        `SELECT ${EMPLOYEE_FULL_COLUMNS} FROM employees WHERE id = $1`,
+        [idNum],
+      );
 
-      if (employeeResult.error || !employeeResult.data) {
+      if (!employeeRow) {
         res.status(404).json({ success: false, error: 'Employee not found' });
         return;
       }
 
       const structureCache = await loadStructureCache();
-      const employee = decryptEmployee(employeeResult.data as unknown as EmployeeEncrypted, structureCache);
+      const employee = decryptEmployee(employeeRow as unknown as EmployeeEncrypted, structureCache);
 
       // Подмешиваем активное назначение (участок + руководитель участка)
       const today = new Date().toISOString().slice(0, 10);
-      const assignmentResult = await supabase
-        .from('employee_assignments')
-        .select('org_site_id, is_primary, effective_from, effective_to')
-        .eq('employee_id', idNum)
-        .lte('effective_from', today)
-        .or(`effective_to.is.null,effective_to.gte.${today}`)
-        .order('is_primary', { ascending: false, nullsFirst: false })
-        .order('effective_from', { ascending: false })
-        .limit(1);
+      const activeAssignment = await queryOne<{
+        org_site_id: string | null;
+        is_primary: boolean | null;
+        effective_from: string;
+        effective_to: string | null;
+      }>(
+        `SELECT org_site_id, is_primary, effective_from, effective_to
+           FROM employee_assignments
+          WHERE employee_id = $1
+            AND effective_from <= $2
+            AND (effective_to IS NULL OR effective_to >= $2)
+          ORDER BY is_primary DESC NULLS LAST, effective_from DESC
+          LIMIT 1`,
+        [idNum, today],
+      );
 
-      const activeAssignment = assignmentResult.data?.[0] ?? null;
       if (activeAssignment?.org_site_id) {
-        const siteResult = await supabase
-          .from('org_sites')
-          .select('name, manager_id')
-          .eq('id', activeAssignment.org_site_id)
-          .maybeSingle();
+        const siteRow = await queryOne<{ name: string | null; manager_id: number | null }>(
+          'SELECT name, manager_id FROM org_sites WHERE id = $1',
+          [activeAssignment.org_site_id],
+        );
 
-        if (siteResult.data) {
-          employee.site_name = siteResult.data.name ?? null;
-          if (siteResult.data.manager_id) {
-            const managerResult = await supabase
-              .from('employees')
-              .select('full_name')
-              .eq('id', siteResult.data.manager_id)
-              .maybeSingle();
-            if (managerResult.data) {
-              employee.site_manager_full_name = managerResult.data.full_name ?? null;
+        if (siteRow) {
+          employee.site_name = siteRow.name ?? null;
+          if (siteRow.manager_id) {
+            const managerRow = await queryOne<{ full_name: string | null }>(
+              'SELECT full_name FROM employees WHERE id = $1',
+              [siteRow.manager_id],
+            );
+            if (managerRow) {
+              employee.site_manager_full_name = managerRow.full_name ?? null;
             }
           }
         }
@@ -502,13 +543,13 @@ export const employeesController = {
         return;
       }
 
-      const { data: departmentRow, error: departmentErr } = await supabase
-        .from('org_departments')
-        .select('id, sigur_department_id, name')
-        .eq('id', validated.org_department_id)
-        .eq('is_active', true)
-        .maybeSingle();
-      if (departmentErr || !departmentRow) {
+      const departmentRow = await queryOne<{ id: string; sigur_department_id: number | null; name: string }>(
+        `SELECT id, sigur_department_id, name
+           FROM org_departments
+          WHERE id = $1 AND is_active = true`,
+        [validated.org_department_id],
+      );
+      if (!departmentRow) {
         res.status(400).json({ success: false, error: 'Отдел не найден или неактивен' });
         return;
       }
@@ -517,12 +558,11 @@ export const employeesController = {
         return;
       }
 
-      const { data: positionRow, error: positionErr } = await supabase
-        .from('positions')
-        .select('id, sigur_position_id, name')
-        .eq('id', validated.position_id)
-        .maybeSingle();
-      if (positionErr || !positionRow) {
+      const positionRow = await queryOne<{ id: string; sigur_position_id: number | null; name: string }>(
+        `SELECT id, sigur_position_id, name FROM positions WHERE id = $1`,
+        [validated.position_id],
+      );
+      if (!positionRow) {
         res.status(400).json({ success: false, error: 'Должность не найдена' });
         return;
       }
@@ -546,32 +586,37 @@ export const employeesController = {
       sigurEmployeeIdCreated = sigurProfile.sigurEmployeeId;
 
       // 2. Пишем в нашу БД
-      const { data, error } = await supabase
-        .from('employees')
-        .insert({
-          full_name: validated.full_name,
-          last_name: fio.lastName,
-          first_name: fio.firstName || null,
-          middle_name: fio.middleName || null,
-          hire_date: validated.hire_date,
-          org_department_id: validated.org_department_id,
-          position_id: validated.position_id,
-          sigur_employee_id: sigurEmployeeIdCreated,
-          tab_number: tabNumber,
-          employment_status: 'active',
-          department_locked: false,
-        })
-        .select(EMPLOYEE_FULL_COLUMNS)
-        .single();
+      let data: EmployeeEncrypted | null = null;
+      let insertErr: unknown = null;
+      try {
+        data = await queryOne<EmployeeEncrypted>(
+          `INSERT INTO employees
+             (full_name, last_name, first_name, middle_name, hire_date,
+              org_department_id, position_id, sigur_employee_id, tab_number,
+              employment_status, department_locked)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', false)
+           RETURNING ${EMPLOYEE_FULL_COLUMNS}`,
+          [
+            validated.full_name,
+            fio.lastName,
+            fio.firstName || null,
+            fio.middleName || null,
+            validated.hire_date,
+            validated.org_department_id,
+            validated.position_id,
+            sigurEmployeeIdCreated,
+            tabNumber,
+          ],
+        );
+      } catch (err) {
+        insertErr = err;
+      }
 
-      if (error || !data) {
-        // Откатить создание в Sigur не можем автоматически (могли успеть события), поэтому:
-        // — блокируем созданного сотрудника в Sigur, чтобы он точно не ходил по пропуску;
-        // — логируем, чтобы администратор мог подчистить.
+      if (insertErr || !data) {
         const orphanSigurId = sigurEmployeeIdCreated;
         console.error('[createEmployee] Sigur create succeeded but DB insert failed, manual cleanup needed', {
           sigurEmployeeId: orphanSigurId,
-          error,
+          error: insertErr,
         });
         try {
           await sigurService.blockEmployee(orphanSigurId, connection);
@@ -581,10 +626,11 @@ export const employeesController = {
             blockErr,
           });
         }
+        const detail = insertErr instanceof Error ? insertErr.message : 'insert failed';
         res.status(500).json({
           success: false,
           error: `Sigur-сотрудник создан (id=${orphanSigurId}), но запись в БД не создана. Заблокируйте его вручную в Sigur.`,
-          detail: error?.message || 'insert failed',
+          detail,
         });
         return;
       }
@@ -664,11 +710,10 @@ export const employeesController = {
         }
       }
 
-      const { data: existing } = await supabase
-        .from('employees')
-        .select('id, sigur_employee_id, name_locked')
-        .eq('id', id)
-        .single();
+      const existing = await queryOne<{ id: number; sigur_employee_id: number | null; name_locked: boolean | null }>(
+        `SELECT id, sigur_employee_id, name_locked FROM employees WHERE id = $1`,
+        [id],
+      );
 
       if (!existing) {
         res.status(404).json({ success: false, error: 'Employee not found' });
@@ -772,12 +817,17 @@ export const employeesController = {
         }
 
         if (Object.keys(localUpdateData).length > 1) {
-          const { error: localUpdateError } = await supabase
-            .from('employees')
-            .update(localUpdateData)
-            .eq('id', id);
-
-          if (localUpdateError) {
+          const keys = Object.keys(localUpdateData);
+          const updParams: unknown[] = keys.map(k => localUpdateData[k]);
+          const setSql = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+          updParams.push(id);
+          try {
+            await execute(
+              `UPDATE employees SET ${setSql} WHERE id = $${updParams.length}`,
+              updParams,
+            );
+          } catch (localUpdateError) {
+            console.error('Update employee (Sigur-linked local fields) error:', localUpdateError);
             res.status(500).json({ success: false, error: 'Failed to update employee' });
             return;
           }
@@ -786,13 +836,12 @@ export const employeesController = {
         await syncLinkedEmployeeFromSigur(employeeId);
 
         employeeCache.invalidate(id);
-        const { data: refreshed, error: refreshedError } = await supabase
-          .from('employees')
-          .select(EMPLOYEE_FULL_COLUMNS)
-          .eq('id', id)
-          .single();
+        const refreshed = await queryOne<EmployeeEncrypted>(
+          `SELECT ${EMPLOYEE_FULL_COLUMNS} FROM employees WHERE id = $1`,
+          [id],
+        );
 
-        if (refreshedError || !refreshed) {
+        if (!refreshed) {
           res.status(500).json({ success: false, error: 'Failed to refresh employee after Sigur update' });
           return;
         }
@@ -804,7 +853,7 @@ export const employeesController = {
         });
 
         const structureCache = await loadStructureCache();
-        const employee = decryptEmployee(refreshed as unknown as EmployeeEncrypted, structureCache);
+        const employee = decryptEmployee(refreshed, structureCache);
         res.json({ success: true, data: employee });
         return;
       }
@@ -877,16 +926,25 @@ export const employeesController = {
         updateData.position_id = validated.position_id;
       }
 
-      const { data, error } = await supabase
-        .from('employees')
-        .update(updateData)
-        .eq('id', id)
-        .select(EMPLOYEE_FULL_COLUMNS)
-        .single();
-
-      if (error) {
-        console.error('Update employee error:', error);
+      const keys = Object.keys(updateData);
+      const params: unknown[] = keys.map(k => updateData[k]);
+      const setSql = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+      params.push(id);
+      let data: EmployeeEncrypted | null = null;
+      try {
+        data = await queryOne<EmployeeEncrypted>(
+          `UPDATE employees SET ${setSql}
+            WHERE id = $${params.length}
+            RETURNING ${EMPLOYEE_FULL_COLUMNS}`,
+          params,
+        );
+      } catch (err) {
+        console.error('Update employee error:', err);
         res.status(500).json({ success: false, error: 'Failed to update employee' });
+        return;
+      }
+      if (!data) {
+        res.status(404).json({ success: false, error: 'Employee not found' });
         return;
       }
 
@@ -899,7 +957,7 @@ export const employeesController = {
       });
 
       const structureCache = await loadStructureCache();
-      const employee = decryptEmployee(data as unknown as EmployeeEncrypted, structureCache);
+      const employee = decryptEmployee(data, structureCache);
       res.json({ success: true, data: employee });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -922,13 +980,10 @@ export const employeesController = {
         return;
       }
 
-      const { error } = await supabase
-        .from('employees')
-        .delete()
-        .eq('id', id);
-
-      if (error) {
-        console.error('Delete employee error:', error);
+      try {
+        await execute('DELETE FROM employees WHERE id = $1', [id]);
+      } catch (err) {
+        console.error('Delete employee error:', err);
         res.status(500).json({ success: false, error: 'Failed to delete employee' });
         return;
       }
@@ -1000,13 +1055,12 @@ export const employeesController = {
       }
 
       const name = position_name.trim();
-      const { data: employeeRow, error: employeeError } = await supabase
-        .from('employees')
-        .select('id, sigur_employee_id, position_id')
-        .eq('id', employeeId)
-        .single();
+      const employeeRow = await queryOne<{ id: number; sigur_employee_id: number | null; position_id: string | null }>(
+        `SELECT id, sigur_employee_id, position_id FROM employees WHERE id = $1`,
+        [employeeId],
+      );
 
-      if (employeeError || !employeeRow) {
+      if (!employeeRow) {
         res.status(404).json({ success: false, error: 'Employee not found' });
         return;
       }
@@ -1031,22 +1085,21 @@ export const employeesController = {
 
         await syncLinkedEmployeeFromSigur(employeeId);
       } else {
-        const { data: existing } = await supabase
-          .from('positions')
-          .select('id')
-          .ilike('name', name)
-          .limit(1)
-          .single();
+        const existing = await queryOne<{ id: string }>(
+          'SELECT id FROM positions WHERE name ILIKE $1 LIMIT 1',
+          [name],
+        );
 
         if (existing) {
           positionId = existing.id;
         } else {
-          const { data: created } = await supabase
-            .from('positions')
-            .insert({ name, is_active: true, sort_order: 0 })
-            .select('id')
-            .single();
-          positionId = created!.id;
+          const created = await queryOne<{ id: string }>(
+            `INSERT INTO positions (name, is_active, sort_order)
+             VALUES ($1, true, 0)
+             RETURNING id`,
+            [name],
+          );
+          positionId = created?.id ?? null;
         }
 
         if (!positionId) {

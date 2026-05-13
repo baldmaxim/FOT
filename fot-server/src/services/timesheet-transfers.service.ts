@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query, queryOne, withTransaction } from '../config/postgres.js';
 import { formatDateShift } from './timesheet-department-assignments.service.js';
 import { escapeLike } from '../utils/search.utils.js';
 
@@ -32,37 +32,43 @@ interface IAssignmentRow {
   effective_to: string | null;
 }
 
+interface IAssignmentRawRow {
+  id: string | number;
+  employee_id: number | string;
+  org_department_id: string;
+  effective_from: string;
+  effective_to: string | null;
+}
+
+const mapAssignmentRow = (row: IAssignmentRawRow): IAssignmentRow => ({
+  id: String(row.id),
+  employee_id: Number(row.employee_id),
+  org_department_id: String(row.org_department_id),
+  effective_from: String(row.effective_from),
+  effective_to: row.effective_to ?? null,
+});
+
 async function loadAssignmentsByIds(ids: string[]): Promise<IAssignmentRow[]> {
   if (ids.length === 0) return [];
-  const { data, error } = await supabase
-    .from('employee_assignments')
-    .select('id, employee_id, org_department_id, effective_from, effective_to')
-    .in('id', ids);
-  if (error) throw error;
-  return (data || []).map(row => ({
-    id: String(row.id),
-    employee_id: Number(row.employee_id),
-    org_department_id: String(row.org_department_id),
-    effective_from: String(row.effective_from),
-    effective_to: (row.effective_to as string | null) ?? null,
-  }));
+  const rows = await query<IAssignmentRawRow>(
+    `SELECT id, employee_id, org_department_id, effective_from, effective_to
+       FROM employee_assignments
+       WHERE id = ANY($1::uuid[])`,
+    [ids],
+  );
+  return rows.map(mapAssignmentRow);
 }
 
 async function loadAssignmentById(id: string): Promise<IAssignmentRow | null> {
-  const { data, error } = await supabase
-    .from('employee_assignments')
-    .select('id, employee_id, org_department_id, effective_from, effective_to')
-    .eq('id', id)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) return null;
-  return {
-    id: String(data.id),
-    employee_id: Number(data.employee_id),
-    org_department_id: String(data.org_department_id),
-    effective_from: String(data.effective_from),
-    effective_to: (data.effective_to as string | null) ?? null,
-  };
+  const row = await queryOne<IAssignmentRawRow>(
+    `SELECT id, employee_id, org_department_id, effective_from, effective_to
+       FROM employee_assignments
+       WHERE id = $1
+       LIMIT 1`,
+    [id],
+  );
+  if (!row) return null;
+  return mapAssignmentRow(row);
 }
 
 /**
@@ -76,44 +82,32 @@ async function loadAssignmentById(id: string): Promise<IAssignmentRow | null> {
  */
 async function findPreviousClosedAssignment(assignment: IAssignmentRow): Promise<IAssignmentRow | null> {
   const expectedClose = formatDateShift(assignment.effective_from, -1);
-  const { data: strict, error: strictErr } = await supabase
-    .from('employee_assignments')
-    .select('id, employee_id, org_department_id, effective_from, effective_to')
-    .eq('employee_id', assignment.employee_id)
-    .eq('effective_to', expectedClose)
-    .order('effective_from', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (strictErr) throw strictErr;
+  const strict = await queryOne<IAssignmentRawRow>(
+    `SELECT id, employee_id, org_department_id, effective_from, effective_to
+       FROM employee_assignments
+       WHERE employee_id = $1
+         AND effective_to = $2
+       ORDER BY effective_from DESC
+       LIMIT 1`,
+    [assignment.employee_id, expectedClose],
+  );
   if (strict) {
-    return {
-      id: String(strict.id),
-      employee_id: Number(strict.employee_id),
-      org_department_id: String(strict.org_department_id),
-      effective_from: String(strict.effective_from),
-      effective_to: (strict.effective_to as string | null) ?? null,
-    };
+    return mapAssignmentRow(strict);
   }
 
-  const { data: lenient, error: lenientErr } = await supabase
-    .from('employee_assignments')
-    .select('id, employee_id, org_department_id, effective_from, effective_to')
-    .eq('employee_id', assignment.employee_id)
-    .neq('id', assignment.id)
-    .not('effective_to', 'is', null)
-    .lt('effective_to', assignment.effective_from)
-    .order('effective_to', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (lenientErr) throw lenientErr;
+  const lenient = await queryOne<IAssignmentRawRow>(
+    `SELECT id, employee_id, org_department_id, effective_from, effective_to
+       FROM employee_assignments
+       WHERE employee_id = $1
+         AND id <> $2
+         AND effective_to IS NOT NULL
+         AND effective_to < $3
+       ORDER BY effective_to DESC
+       LIMIT 1`,
+    [assignment.employee_id, assignment.id, assignment.effective_from],
+  );
   if (!lenient) return null;
-  return {
-    id: String(lenient.id),
-    employee_id: Number(lenient.employee_id),
-    org_department_id: String(lenient.org_department_id),
-    effective_from: String(lenient.effective_from),
-    effective_to: (lenient.effective_to as string | null) ?? null,
-  };
+  return mapAssignmentRow(lenient);
 }
 
 /**
@@ -124,28 +118,22 @@ async function findPreviousClosedAssignment(assignment: IAssignmentRow): Promise
  */
 export async function listDepartmentTransfers(departmentId: string): Promise<IDepartmentTransfersListing> {
   // 1) Закрытые назначения в этом отделе.
-  const { data: closedHere, error: closedErr } = await supabase
-    .from('employee_assignments')
-    .select('id, employee_id, org_department_id, effective_from, effective_to')
-    .eq('org_department_id', departmentId)
-    .not('effective_to', 'is', null)
-    .order('effective_to', { ascending: false });
-  if (closedErr) throw closedErr;
+  const closedHere = await query<IAssignmentRawRow>(
+    `SELECT id, employee_id, org_department_id, effective_from, effective_to
+       FROM employee_assignments
+       WHERE org_department_id = $1
+         AND effective_to IS NOT NULL
+       ORDER BY effective_to DESC`,
+    [departmentId],
+  );
 
   const lastClosedByEmployee = new Map<number, IAssignmentRow>();
-  for (const row of closedHere || []) {
-    const empId = Number(row.employee_id);
-    if (!Number.isFinite(empId)) continue;
-    const cur: IAssignmentRow = {
-      id: String(row.id),
-      employee_id: empId,
-      org_department_id: String(row.org_department_id),
-      effective_from: String(row.effective_from),
-      effective_to: (row.effective_to as string | null) ?? null,
-    };
-    const existing = lastClosedByEmployee.get(empId);
+  for (const row of closedHere) {
+    const cur = mapAssignmentRow(row);
+    if (!Number.isFinite(cur.employee_id)) continue;
+    const existing = lastClosedByEmployee.get(cur.employee_id);
     if (!existing || (cur.effective_to ?? '') > (existing.effective_to ?? '')) {
-      lastClosedByEmployee.set(empId, cur);
+      lastClosedByEmployee.set(cur.employee_id, cur);
     }
   }
 
@@ -154,53 +142,50 @@ export async function listDepartmentTransfers(departmentId: string): Promise<IDe
   // 2) Текущие открытые назначения этих сотрудников.
   const transfers: ITransferRow[] = [];
   if (candidateEmployeeIds.length > 0) {
-    const { data: openRows, error: openErr } = await supabase
-      .from('employee_assignments')
-      .select('id, employee_id, org_department_id, effective_from, effective_to')
-      .in('employee_id', candidateEmployeeIds)
-      .is('effective_to', null);
-    if (openErr) throw openErr;
+    const openRows = await query<IAssignmentRawRow>(
+      `SELECT id, employee_id, org_department_id, effective_from, effective_to
+         FROM employee_assignments
+         WHERE employee_id = ANY($1::int[])
+           AND effective_to IS NULL`,
+      [candidateEmployeeIds],
+    );
 
     const openByEmployee = new Map<number, IAssignmentRow>();
-    for (const row of openRows || []) {
-      const empId = Number(row.employee_id);
-      if (!Number.isFinite(empId)) continue;
-      const cur: IAssignmentRow = {
-        id: String(row.id),
-        employee_id: empId,
-        org_department_id: String(row.org_department_id),
-        effective_from: String(row.effective_from),
-        effective_to: null,
-      };
-      const existing = openByEmployee.get(empId);
+    for (const row of openRows) {
+      const cur = mapAssignmentRow(row);
+      if (!Number.isFinite(cur.employee_id)) continue;
+      const existing = openByEmployee.get(cur.employee_id);
       if (!existing || cur.effective_from > existing.effective_from) {
-        openByEmployee.set(empId, cur);
+        openByEmployee.set(cur.employee_id, cur);
       }
     }
 
     // 3) Подгружаем имена сотрудников и названия целевых отделов.
     const targetDeptIds = [...new Set([...openByEmployee.values()].map(a => a.org_department_id))];
-    const [{ data: employeesRows, error: empErr }, { data: deptRows, error: deptErr }] = await Promise.all([
-      supabase
-        .from('employees')
-        .select('id, full_name, is_archived, employment_status')
-        .in('id', candidateEmployeeIds),
+    const [employeesRows, deptRows] = await Promise.all([
+      query<{ id: number; full_name: string | null; is_archived: boolean; employment_status: string | null }>(
+        `SELECT id, full_name, is_archived, employment_status
+           FROM employees
+           WHERE id = ANY($1::int[])`,
+        [candidateEmployeeIds],
+      ),
       targetDeptIds.length > 0
-        ? supabase.from('org_departments').select('id, name').in('id', targetDeptIds)
-        : Promise.resolve({ data: [] as Array<{ id: string; name: string }>, error: null }),
+        ? query<{ id: string; name: string | null }>(
+          `SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])`,
+          [targetDeptIds],
+        )
+        : Promise.resolve([] as Array<{ id: string; name: string | null }>),
     ]);
-    if (empErr) throw empErr;
-    if (deptErr) throw deptErr;
 
     const nameByEmployee = new Map<number, string>();
     const archivedSet = new Set<number>();
-    for (const row of employeesRows || []) {
+    for (const row of employeesRows) {
       const empId = Number(row.id);
       nameByEmployee.set(empId, String(row.full_name || ''));
       if (row.is_archived || row.employment_status !== 'active') archivedSet.add(empId);
     }
     const deptNameById = new Map<string, string>();
-    for (const row of deptRows || []) {
+    for (const row of deptRows) {
       deptNameById.set(String(row.id), String(row.name || ''));
     }
 
@@ -226,19 +211,25 @@ export async function listDepartmentTransfers(departmentId: string): Promise<IDe
   transfers.sort((a, b) => (a.transfer_date > b.transfer_date ? -1 : a.transfer_date < b.transfer_date ? 1 : 0));
 
   // 4) Исключённые из этого отдела.
-  const { data: excludedRows, error: exclErr } = await supabase
-    .from('employees')
-    .select('id, full_name, excluded_from_timesheet_date, excluded_from_timesheet_at')
-    .eq('org_department_id', departmentId)
-    .eq('excluded_from_timesheet', true)
-    .eq('is_archived', false);
-  if (exclErr) throw exclErr;
+  const excludedRows = await query<{
+    id: number;
+    full_name: string | null;
+    excluded_from_timesheet_date: string | null;
+    excluded_from_timesheet_at: string | null;
+  }>(
+    `SELECT id, full_name, excluded_from_timesheet_date, excluded_from_timesheet_at
+       FROM employees
+       WHERE org_department_id = $1
+         AND excluded_from_timesheet = true
+         AND is_archived = false`,
+    [departmentId],
+  );
 
-  const exclusions: IExclusionRow[] = (excludedRows || []).map(row => ({
+  const exclusions: IExclusionRow[] = excludedRows.map(row => ({
     employee_id: Number(row.id),
     employee_full_name: String(row.full_name || ''),
-    exclusion_date: (row.excluded_from_timesheet_date as string | null) ?? null,
-    excluded_at: (row.excluded_from_timesheet_at as string | null) ?? null,
+    exclusion_date: row.excluded_from_timesheet_date ?? null,
+    excluded_at: row.excluded_from_timesheet_at ?? null,
   }));
 
   exclusions.sort((a, b) => {
@@ -269,13 +260,11 @@ export interface IUpdateTransferInput {
 }
 
 async function ensureDepartmentExists(deptId: string): Promise<void> {
-  const { data, error } = await supabase
-    .from('org_departments')
-    .select('id')
-    .eq('id', deptId)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) throw new Error('Отдел не найден');
+  const row = await queryOne<{ id: string }>(
+    `SELECT id FROM org_departments WHERE id = $1 LIMIT 1`,
+    [deptId],
+  );
+  if (!row) throw new Error('Отдел не найден');
 }
 
 /**
@@ -337,64 +326,73 @@ export async function updateTransfer(
   const previousDay = formatDateShift(nextDate, -1);
 
   if (dateChanged) {
-    const { data: overlap, error: overlapErr } = await supabase
-      .from('employee_assignments')
-      .select('id, effective_from, effective_to')
-      .eq('employee_id', newA.employee_id)
-      .neq('id', oldA.id)
-      .neq('id', newA.id)
-      .lte('effective_from', previousDay)
-      .or(`effective_to.is.null,effective_to.gte.${oldA.effective_from}`);
-    if (overlapErr) throw overlapErr;
-    if ((overlap || []).length > 0) {
+    const overlap = await query<{ id: string }>(
+      `SELECT id
+         FROM employee_assignments
+         WHERE employee_id = $1
+           AND id <> $2
+           AND id <> $3
+           AND effective_from <= $4
+           AND (effective_to IS NULL OR effective_to >= $5)`,
+      [newA.employee_id, oldA.id, newA.id, previousDay, oldA.effective_from],
+    );
+    if (overlap.length > 0) {
       throw new Error('Новая дата пересекается с другими назначениями сотрудника');
     }
   }
 
   const nowIso = new Date().toISOString();
 
-  const oldUpdate: Record<string, unknown> = { updated_at: nowIso };
-  if (dateChanged) oldUpdate.effective_to = previousDay;
-  if (fromDeptChanged) oldUpdate.org_department_id = nextFromDept;
-
-  if (Object.keys(oldUpdate).length > 1) {
-    const { error: oldUpdErr } = await supabase
-      .from('employee_assignments')
-      .update(oldUpdate)
-      .eq('id', oldA.id);
-    if (oldUpdErr) throw oldUpdErr;
-  }
-
-  const newUpdate: Record<string, unknown> = { updated_at: nowIso };
-  if (dateChanged) newUpdate.effective_from = nextDate;
-  if (toDeptChanged) newUpdate.org_department_id = nextToDept;
-
-  if (Object.keys(newUpdate).length > 1) {
-    const { error: newUpdErr } = await supabase
-      .from('employee_assignments')
-      .update(newUpdate)
-      .eq('id', newA.id);
-    if (newUpdErr) {
-      // Откатываем изменения старого назначения.
-      const rollback: Record<string, unknown> = { updated_at: nowIso };
-      if (dateChanged) rollback.effective_to = oldA.effective_to;
-      if (fromDeptChanged) rollback.org_department_id = oldA.org_department_id;
-      await supabase
-        .from('employee_assignments')
-        .update(rollback)
-        .eq('id', oldA.id);
-      throw newUpdErr;
+  await withTransaction(async (client) => {
+    const oldUpdates: string[] = ['updated_at = $1'];
+    const oldParams: unknown[] = [nowIso];
+    if (dateChanged) {
+      oldParams.push(previousDay);
+      oldUpdates.push(`effective_to = $${oldParams.length}`);
     }
-  }
+    if (fromDeptChanged) {
+      oldParams.push(nextFromDept);
+      oldUpdates.push(`org_department_id = $${oldParams.length}`);
+    }
+    if (oldUpdates.length > 1) {
+      oldParams.push(oldA.id);
+      await client.query(
+        `UPDATE employee_assignments
+           SET ${oldUpdates.join(', ')}
+           WHERE id = $${oldParams.length}`,
+        oldParams,
+      );
+    }
 
-  // Если поменялся отдел открытого назначения — синхронизируем employees.org_department_id.
-  if (toDeptChanged) {
-    const { error: empErr } = await supabase
-      .from('employees')
-      .update({ org_department_id: nextToDept, updated_at: nowIso })
-      .eq('id', newA.employee_id);
-    if (empErr) throw empErr;
-  }
+    const newUpdates: string[] = ['updated_at = $1'];
+    const newParams: unknown[] = [nowIso];
+    if (dateChanged) {
+      newParams.push(nextDate);
+      newUpdates.push(`effective_from = $${newParams.length}`);
+    }
+    if (toDeptChanged) {
+      newParams.push(nextToDept);
+      newUpdates.push(`org_department_id = $${newParams.length}`);
+    }
+    if (newUpdates.length > 1) {
+      newParams.push(newA.id);
+      await client.query(
+        `UPDATE employee_assignments
+           SET ${newUpdates.join(', ')}
+           WHERE id = $${newParams.length}`,
+        newParams,
+      );
+    }
+
+    if (toDeptChanged) {
+      await client.query(
+        `UPDATE employees
+           SET org_department_id = $1, updated_at = $2
+           WHERE id = $3`,
+        [nextToDept, nowIso, newA.employee_id],
+      );
+    }
+  });
 
   return {
     assignment_new_id: newA.id,
@@ -443,12 +441,15 @@ function wrapPgError(err: unknown, fallback: string): Error {
  */
 export async function tryDeleteTransfer(assignmentNewId: string): Promise<IDeleteTransferResult | null> {
   // Полная копия new — нужна, чтобы восстановить через INSERT, если переоткрытие old свалится.
-  const { data: fullNew, error: loadErr } = await supabase
-    .from('employee_assignments')
-    .select('*')
-    .eq('id', assignmentNewId)
-    .maybeSingle();
-  if (loadErr) throw wrapPgError(loadErr, 'Не удалось загрузить назначение');
+  let fullNew: Record<string, unknown> | null;
+  try {
+    fullNew = await queryOne<Record<string, unknown>>(
+      `SELECT * FROM employee_assignments WHERE id = $1 LIMIT 1`,
+      [assignmentNewId],
+    );
+  } catch (err) {
+    throw wrapPgError(err, 'Не удалось загрузить назначение');
+  }
   if (!fullNew) throw new Error('Назначение не найдено');
   if ((fullNew.effective_to as string | null) != null) {
     throw new Error('Назначение уже закрыто, отмена не выполняется');
@@ -467,60 +468,42 @@ export async function tryDeleteTransfer(assignmentNewId: string): Promise<IDelet
 
   const nowIso = new Date().toISOString();
   const expectedClose = formatDateShift(newA.effective_from, -1);
-  const oldEffectiveToOriginal = oldA.effective_to;
-  const needFixInvariant = oldEffectiveToOriginal !== expectedClose;
 
-  // Шаг 1: выправить инвариант на old (если нарушен). Закрытое [from, expectedClose] не
-  // пересекается с открытым new [new.effective_from, ∞) — триггер пройдёт.
-  if (needFixInvariant) {
-    const { error: fixErr } = await supabase
-      .from('employee_assignments')
-      .update({ effective_to: expectedClose, updated_at: nowIso })
-      .eq('id', oldA.id);
-    if (fixErr) throw wrapPgError(fixErr, 'Не удалось выправить дату закрытия предыдущего назначения');
+  try {
+    await withTransaction(async (client) => {
+      // Шаг 1: выправить инвариант на old (закрытое не пересекается с открытым new).
+      await client.query(
+        `UPDATE employee_assignments
+           SET effective_to = $1, updated_at = $2
+           WHERE id = $3`,
+        [expectedClose, nowIso, oldA.id],
+      );
+
+      // Шаг 2: удалить new.
+      await client.query(
+        `DELETE FROM employee_assignments WHERE id = $1`,
+        [newA.id],
+      );
+
+      // Шаг 3: переоткрыть old.
+      await client.query(
+        `UPDATE employee_assignments
+           SET effective_to = NULL, updated_at = $1
+           WHERE id = $2`,
+        [nowIso, oldA.id],
+      );
+
+      // Шаг 4: синхронизируем employees.org_department_id.
+      await client.query(
+        `UPDATE employees
+           SET org_department_id = $1, updated_at = $2
+           WHERE id = $3`,
+        [oldA.org_department_id, nowIso, newA.employee_id],
+      );
+    });
+  } catch (err) {
+    throw wrapPgError(err, 'Не удалось отменить перевод');
   }
-
-  // Шаг 2: удалить new — у сотрудника остаётся только закрытое old.
-  const { error: delErr } = await supabase
-    .from('employee_assignments')
-    .delete()
-    .eq('id', newA.id);
-  if (delErr) {
-    // Откатываем шаг 1.
-    if (needFixInvariant) {
-      await supabase
-        .from('employee_assignments')
-        .update({ effective_to: oldEffectiveToOriginal, updated_at: nowIso })
-        .eq('id', oldA.id);
-    }
-    throw wrapPgError(delErr, 'Не удалось удалить назначение');
-  }
-
-  // Шаг 3: переоткрыть old (других открытых нет, нет пересечения).
-  const { error: openErr } = await supabase
-    .from('employee_assignments')
-    .update({ effective_to: null, updated_at: nowIso })
-    .eq('id', oldA.id);
-  if (openErr) {
-    // Восстанавливаем new из сохранённой копии и откатываем шаг 1.
-    await supabase
-      .from('employee_assignments')
-      .insert(fullNew as Record<string, unknown>);
-    if (needFixInvariant) {
-      await supabase
-        .from('employee_assignments')
-        .update({ effective_to: oldEffectiveToOriginal, updated_at: nowIso })
-        .eq('id', oldA.id);
-    }
-    throw wrapPgError(openErr, 'Не удалось переоткрыть предыдущее назначение');
-  }
-
-  // Шаг 4: синхронизируем employees.org_department_id.
-  const { error: empErr } = await supabase
-    .from('employees')
-    .update({ org_department_id: oldA.org_department_id, updated_at: nowIso })
-    .eq('id', newA.employee_id);
-  if (empErr) throw wrapPgError(empErr, 'Не удалось обновить отдел сотрудника');
 
   return {
     employee_id: newA.employee_id,
@@ -545,35 +528,49 @@ export async function updateExclusionDate(
   employeeId: number,
   newDate: string,
 ): Promise<IUpdateExclusionResult> {
-  const { data: emp, error } = await supabase
-    .from('employees')
-    .select('id, excluded_from_timesheet, org_department_id')
-    .eq('id', employeeId)
-    .maybeSingle();
-  if (error) throw error;
+  const emp = await queryOne<{
+    id: number;
+    excluded_from_timesheet: boolean;
+    org_department_id: string | null;
+  }>(
+    `SELECT id, excluded_from_timesheet, org_department_id
+       FROM employees
+       WHERE id = $1
+       LIMIT 1`,
+    [employeeId],
+  );
   if (!emp) throw new Error('Сотрудник не найден');
   if (!emp.excluded_from_timesheet) throw new Error('Сотрудник не исключён из табеля');
 
   const previousDay = formatDateShift(newDate, -1);
   const nowIso = new Date().toISOString();
 
-  const { error: updErr } = await supabase
-    .from('employees')
-    .update({ excluded_from_timesheet_date: newDate, updated_at: nowIso })
-    .eq('id', employeeId);
-  if (updErr) throw updErr;
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE employees
+         SET excluded_from_timesheet_date = $1, updated_at = $2
+         WHERE id = $3`,
+      [newDate, nowIso, employeeId],
+    );
 
-  // Если есть закрытое назначение в текущем отделе сотрудника — синхронизируем его дату закрытия.
-  if (emp.org_department_id) {
-    await supabase
-      .from('employee_assignments')
-      .update({ effective_to: previousDay, updated_at: nowIso })
-      .eq('employee_id', employeeId)
-      .eq('org_department_id', String(emp.org_department_id))
-      .not('effective_to', 'is', null)
-      .order('effective_to', { ascending: false })
-      .limit(1);
-  }
+    if (emp.org_department_id) {
+      // Подзапрос на последнее закрытое назначение сотрудника в этом отделе.
+      await client.query(
+        `UPDATE employee_assignments
+           SET effective_to = $1, updated_at = $2
+           WHERE id = (
+             SELECT id
+               FROM employee_assignments
+               WHERE employee_id = $3
+                 AND org_department_id = $4
+                 AND effective_to IS NOT NULL
+               ORDER BY effective_to DESC
+               LIMIT 1
+           )`,
+        [previousDay, nowIso, employeeId, String(emp.org_department_id)],
+      );
+    }
+  });
 
   return { employee_id: employeeId, excluded_from_timesheet_date: newDate };
 }
@@ -584,50 +581,59 @@ export interface IDeleteExclusionResult {
 }
 
 export async function deleteExclusion(employeeId: number): Promise<IDeleteExclusionResult> {
-  const { data: emp, error } = await supabase
-    .from('employees')
-    .select('id, excluded_from_timesheet, org_department_id, excluded_from_timesheet_date')
-    .eq('id', employeeId)
-    .maybeSingle();
-  if (error) throw error;
+  const emp = await queryOne<{
+    id: number;
+    excluded_from_timesheet: boolean;
+    org_department_id: string | null;
+    excluded_from_timesheet_date: string | null;
+  }>(
+    `SELECT id, excluded_from_timesheet, org_department_id, excluded_from_timesheet_date
+       FROM employees
+       WHERE id = $1
+       LIMIT 1`,
+    [employeeId],
+  );
   if (!emp) throw new Error('Сотрудник не найден');
   if (!emp.excluded_from_timesheet) throw new Error('Сотрудник не исключён из табеля');
 
   const nowIso = new Date().toISOString();
 
-  const { error: updErr } = await supabase
-    .from('employees')
-    .update({
-      excluded_from_timesheet: false,
-      excluded_from_timesheet_at: null,
-      excluded_from_timesheet_date: null,
-      updated_at: nowIso,
-    })
-    .eq('id', employeeId);
-  if (updErr) throw updErr;
-
   let reopenedAssignmentId: string | null = null;
-  if (emp.org_department_id) {
-    // Восстанавливаем последнее закрытое назначение в текущем отделе.
-    const { data: lastClosed, error: lastErr } = await supabase
-      .from('employee_assignments')
-      .select('id')
-      .eq('employee_id', employeeId)
-      .eq('org_department_id', String(emp.org_department_id))
-      .not('effective_to', 'is', null)
-      .order('effective_to', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (lastErr) throw lastErr;
-    if (lastClosed) {
-      const { error: openErr } = await supabase
-        .from('employee_assignments')
-        .update({ effective_to: null, updated_at: nowIso })
-        .eq('id', String(lastClosed.id));
-      if (openErr) throw openErr;
-      reopenedAssignmentId = String(lastClosed.id);
+
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE employees
+         SET excluded_from_timesheet = false,
+             excluded_from_timesheet_at = NULL,
+             excluded_from_timesheet_date = NULL,
+             updated_at = $1
+         WHERE id = $2`,
+      [nowIso, employeeId],
+    );
+
+    if (emp.org_department_id) {
+      const lastClosed = await client.query<{ id: string }>(
+        `SELECT id
+           FROM employee_assignments
+           WHERE employee_id = $1
+             AND org_department_id = $2
+             AND effective_to IS NOT NULL
+           ORDER BY effective_to DESC
+           LIMIT 1`,
+        [employeeId, String(emp.org_department_id)],
+      );
+      const lastClosedRow = lastClosed.rows[0];
+      if (lastClosedRow) {
+        await client.query(
+          `UPDATE employee_assignments
+             SET effective_to = NULL, updated_at = $1
+             WHERE id = $2`,
+          [nowIso, String(lastClosedRow.id)],
+        );
+        reopenedAssignmentId = String(lastClosedRow.id);
+      }
     }
-  }
+  });
 
   return { employee_id: employeeId, reopened_assignment_id: reopenedAssignmentId };
 }
@@ -697,32 +703,33 @@ interface IBuildArgs {
 
 async function buildAllTransfers(args: IBuildArgs): Promise<ITransferAdminRow[]> {
   // 1) Все открытые назначения активных сотрудников.
-  let openQuery = supabase
-    .from('employee_assignments')
-    .select('id, employee_id, org_department_id, effective_from, effective_to')
-    .is('effective_to', null);
-  if (args.dateFrom) openQuery = openQuery.gte('effective_from', args.dateFrom);
-  if (args.dateTo) openQuery = openQuery.lte('effective_from', args.dateTo);
-  const { data: openRows, error: openErr } = await openQuery;
-  if (openErr) throw openErr;
+  const openWhere: string[] = ['effective_to IS NULL'];
+  const openParams: unknown[] = [];
+  if (args.dateFrom) {
+    openParams.push(args.dateFrom);
+    openWhere.push(`effective_from >= $${openParams.length}`);
+  }
+  if (args.dateTo) {
+    openParams.push(args.dateTo);
+    openWhere.push(`effective_from <= $${openParams.length}`);
+  }
+  const openRows = await query<IAssignmentRawRow>(
+    `SELECT id, employee_id, org_department_id, effective_from, effective_to
+       FROM employee_assignments
+       WHERE ${openWhere.join(' AND ')}`,
+    openParams,
+  );
 
-  if (!openRows || openRows.length === 0) return [];
+  if (openRows.length === 0) return [];
 
   // Группируем по сотруднику, оставляем последнее открытое.
   const openByEmployee = new Map<number, IAssignmentRow>();
   for (const row of openRows) {
-    const empId = Number(row.employee_id);
-    if (!Number.isFinite(empId)) continue;
-    const cur: IAssignmentRow = {
-      id: String(row.id),
-      employee_id: empId,
-      org_department_id: String(row.org_department_id),
-      effective_from: String(row.effective_from),
-      effective_to: null,
-    };
-    const existing = openByEmployee.get(empId);
+    const cur = mapAssignmentRow(row);
+    if (!Number.isFinite(cur.employee_id)) continue;
+    const existing = openByEmployee.get(cur.employee_id);
     if (!existing || cur.effective_from > existing.effective_from) {
-      openByEmployee.set(empId, cur);
+      openByEmployee.set(cur.employee_id, cur);
     }
   }
 
@@ -730,28 +737,22 @@ async function buildAllTransfers(args: IBuildArgs): Promise<ITransferAdminRow[]>
   if (candidateEmployeeIds.length === 0) return [];
 
   // 2) Закрытые назначения этих сотрудников.
-  const { data: closedRows, error: closedErr } = await supabase
-    .from('employee_assignments')
-    .select('id, employee_id, org_department_id, effective_from, effective_to')
-    .in('employee_id', candidateEmployeeIds)
-    .not('effective_to', 'is', null);
-  if (closedErr) throw closedErr;
+  const closedRows = await query<IAssignmentRawRow>(
+    `SELECT id, employee_id, org_department_id, effective_from, effective_to
+       FROM employee_assignments
+       WHERE employee_id = ANY($1::int[])
+         AND effective_to IS NOT NULL`,
+    [candidateEmployeeIds],
+  );
 
   // Для каждого сотрудника берём последнее закрытое (по effective_to desc).
   const lastClosedByEmployee = new Map<number, IAssignmentRow>();
-  for (const row of closedRows || []) {
-    const empId = Number(row.employee_id);
-    if (!Number.isFinite(empId)) continue;
-    const cur: IAssignmentRow = {
-      id: String(row.id),
-      employee_id: empId,
-      org_department_id: String(row.org_department_id),
-      effective_from: String(row.effective_from),
-      effective_to: (row.effective_to as string | null) ?? null,
-    };
-    const existing = lastClosedByEmployee.get(empId);
+  for (const row of closedRows) {
+    const cur = mapAssignmentRow(row);
+    if (!Number.isFinite(cur.employee_id)) continue;
+    const existing = lastClosedByEmployee.get(cur.employee_id);
     if (!existing || (cur.effective_to ?? '') > (existing.effective_to ?? '')) {
-      lastClosedByEmployee.set(empId, cur);
+      lastClosedByEmployee.set(cur.employee_id, cur);
     }
   }
 
@@ -761,41 +762,43 @@ async function buildAllTransfers(args: IBuildArgs): Promise<ITransferAdminRow[]>
   for (const a of openByEmployee.values()) deptIds.add(a.org_department_id);
   for (const a of lastClosedByEmployee.values()) deptIds.add(a.org_department_id);
 
-  const [{ data: employeesRows, error: empErr }, { data: deptRows, error: deptErr }] = await Promise.all([
-    supabase
-      .from('employees')
-      .select('id, full_name, position_id, is_archived, employment_status')
-      .in('id', employeeIds),
+  const [employeesRows, deptRows] = await Promise.all([
+    query<{ id: number; full_name: string | null; position_id: string | null; is_archived: boolean; employment_status: string | null }>(
+      `SELECT id, full_name, position_id, is_archived, employment_status
+         FROM employees
+         WHERE id = ANY($1::int[])`,
+      [employeeIds],
+    ),
     deptIds.size > 0
-      ? supabase.from('org_departments').select('id, name').in('id', [...deptIds])
-      : Promise.resolve({ data: [] as Array<{ id: string; name: string }>, error: null }),
+      ? query<{ id: string; name: string | null }>(
+        `SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])`,
+        [[...deptIds]],
+      )
+      : Promise.resolve([] as Array<{ id: string; name: string | null }>),
   ]);
-  if (empErr) throw empErr;
-  if (deptErr) throw deptErr;
 
   const nameByEmployee = new Map<number, string>();
   const archivedSet = new Set<number>();
   const positionIdByEmployee = new Map<number, string | null>();
-  for (const row of employeesRows || []) {
+  for (const row of employeesRows) {
     const empId = Number(row.id);
     nameByEmployee.set(empId, String(row.full_name || ''));
     if (row.is_archived || row.employment_status !== 'active') archivedSet.add(empId);
-    positionIdByEmployee.set(empId, (row.position_id as string | null) ?? null);
+    positionIdByEmployee.set(empId, row.position_id ?? null);
   }
   const deptNameById = new Map<string, string>();
-  for (const row of deptRows || []) {
+  for (const row of deptRows) {
     deptNameById.set(String(row.id), String(row.name || ''));
   }
 
   const positionIds = [...new Set([...positionIdByEmployee.values()].filter((v): v is string => !!v))];
   const positionNameById = new Map<string, string>();
   if (positionIds.length > 0) {
-    const { data: posRows, error: posErr } = await supabase
-      .from('positions')
-      .select('id, name')
-      .in('id', positionIds);
-    if (posErr) throw posErr;
-    for (const row of posRows || []) {
+    const posRows = await query<{ id: string; name: string | null }>(
+      `SELECT id, name FROM positions WHERE id = ANY($1::uuid[])`,
+      [positionIds],
+    );
+    for (const row of posRows) {
       positionNameById.set(String(row.id), String(row.name || ''));
     }
   }
@@ -838,49 +841,72 @@ async function buildAllTransfers(args: IBuildArgs): Promise<ITransferAdminRow[]>
 }
 
 async function buildAllExclusions(args: IBuildArgs): Promise<IExclusionAdminRow[]> {
-  let q = supabase
-    .from('employees')
-    .select('id, full_name, position_id, org_department_id, excluded_from_timesheet_date, excluded_from_timesheet_at')
-    .eq('excluded_from_timesheet', true)
-    .eq('is_archived', false);
-  if (args.dateFrom) q = q.gte('excluded_from_timesheet_date', args.dateFrom);
-  if (args.dateTo) q = q.lte('excluded_from_timesheet_date', args.dateTo);
-  if (args.deptFilter) q = q.eq('org_department_id', args.deptFilter);
-  if (args.query) q = q.ilike('full_name', `%${escapeLike(args.query)}%`);
+  const where: string[] = ['excluded_from_timesheet = true', 'is_archived = false'];
+  const params: unknown[] = [];
+  if (args.dateFrom) {
+    params.push(args.dateFrom);
+    where.push(`excluded_from_timesheet_date >= $${params.length}`);
+  }
+  if (args.dateTo) {
+    params.push(args.dateTo);
+    where.push(`excluded_from_timesheet_date <= $${params.length}`);
+  }
+  if (args.deptFilter) {
+    params.push(args.deptFilter);
+    where.push(`org_department_id = $${params.length}`);
+  }
+  if (args.query) {
+    params.push(`%${escapeLike(args.query)}%`);
+    where.push(`full_name ILIKE $${params.length}`);
+  }
 
-  const { data, error } = await q;
-  if (error) throw error;
+  const rows = await query<{
+    id: number;
+    full_name: string | null;
+    position_id: string | null;
+    org_department_id: string | null;
+    excluded_from_timesheet_date: string | null;
+    excluded_from_timesheet_at: string | null;
+  }>(
+    `SELECT id, full_name, position_id, org_department_id, excluded_from_timesheet_date, excluded_from_timesheet_at
+       FROM employees
+       WHERE ${where.join(' AND ')}`,
+    params,
+  );
 
-  const rows = data || [];
   if (rows.length === 0) return [];
 
   const deptIds = [...new Set(rows.map(r => r.org_department_id).filter((v): v is string => !!v))];
   const positionIds = [...new Set(rows.map(r => r.position_id).filter((v): v is string => !!v))];
 
-  const [{ data: deptRows, error: deptErr }, { data: posRows, error: posErr }] = await Promise.all([
+  const [deptRows, posRows] = await Promise.all([
     deptIds.length > 0
-      ? supabase.from('org_departments').select('id, name').in('id', deptIds)
-      : Promise.resolve({ data: [] as Array<{ id: string; name: string }>, error: null }),
+      ? query<{ id: string; name: string | null }>(
+        `SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])`,
+        [deptIds],
+      )
+      : Promise.resolve([] as Array<{ id: string; name: string | null }>),
     positionIds.length > 0
-      ? supabase.from('positions').select('id, name').in('id', positionIds)
-      : Promise.resolve({ data: [] as Array<{ id: string; name: string }>, error: null }),
+      ? query<{ id: string; name: string | null }>(
+        `SELECT id, name FROM positions WHERE id = ANY($1::uuid[])`,
+        [positionIds],
+      )
+      : Promise.resolve([] as Array<{ id: string; name: string | null }>),
   ]);
-  if (deptErr) throw deptErr;
-  if (posErr) throw posErr;
 
   const deptNameById = new Map<string, string>();
-  for (const row of deptRows || []) deptNameById.set(String(row.id), String(row.name || ''));
+  for (const row of deptRows) deptNameById.set(String(row.id), String(row.name || ''));
   const positionNameById = new Map<string, string>();
-  for (const row of posRows || []) positionNameById.set(String(row.id), String(row.name || ''));
+  for (const row of posRows) positionNameById.set(String(row.id), String(row.name || ''));
 
   const result: IExclusionAdminRow[] = rows.map(row => {
-    const deptId = (row.org_department_id as string | null) ?? null;
-    const posId = (row.position_id as string | null) ?? null;
+    const deptId = row.org_department_id ?? null;
+    const posId = row.position_id ?? null;
     return {
       employee_id: Number(row.id),
       employee_full_name: String(row.full_name || ''),
-      exclusion_date: (row.excluded_from_timesheet_date as string | null) ?? null,
-      excluded_at: (row.excluded_from_timesheet_at as string | null) ?? null,
+      exclusion_date: row.excluded_from_timesheet_date ?? null,
+      excluded_at: row.excluded_from_timesheet_at ?? null,
       department_id: deptId,
       department_name: deptId ? deptNameById.get(deptId) || '' : '',
       employee_position: posId ? positionNameById.get(posId) || null : null,

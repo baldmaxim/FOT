@@ -1,9 +1,8 @@
-"""Построение безопасных SELECT-запросов через supabase-py.
+"""Построение безопасных SELECT-запросов поверх psycopg.
 
 Все имена таблиц и колонок проверяются по whitelist `data_api_key_tables`
-(см. ``get_table_access``). Никакого raw SQL, только цепочка builder-методов
-PostgREST. Параметры фильтрации разбираются вручную из query string,
-чтобы поддерживались только разрешённые операторы.
+(см. ``get_table_access``). Idents оборачиваются в `psycopg.sql.Identifier`,
+values уходят строго через параметры. Никакого f-string SQL.
 """
 
 from __future__ import annotations
@@ -11,9 +10,9 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException, status
-from supabase import Client
+from psycopg import sql
 
-from app.lib.supabase import get_supabase
+from app.lib.postgres import fetch_all, fetch_one
 
 # Поддерживаемые префиксы query-параметров: значение проверяется по полю,
 # которое явно перечислено в allowed_fields ключа.
@@ -24,33 +23,34 @@ MAX_LIMIT = 1000
 DEFAULT_LIMIT = 100
 
 
-def get_table_access(api_key_id: str, table_name: str) -> list[str] | None:
+async def get_table_access(api_key_id: str, table_name: str) -> list[str] | None:
     """Возвращает список allowed_fields для пары ключ/таблица или None."""
-    supabase = get_supabase()
-    result = (
-        supabase.table("data_api_key_tables")
-        .select("allowed_fields")
-        .eq("key_id", api_key_id)
-        .eq("table_name", table_name)
-        .maybe_single()
-        .execute()
+    row = await fetch_one(
+        """
+        SELECT allowed_fields
+          FROM data_api_key_tables
+         WHERE key_id = %s AND table_name = %s
+         LIMIT 1
+        """,
+        (api_key_id, table_name),
     )
-    if not result or not result.data:
+    if not row:
         return None
-    fields = result.data.get("allowed_fields") or []
+    fields = row.get("allowed_fields") or []
     return list(fields) if fields else None
 
 
-def list_accessible_tables(api_key_id: str) -> list[dict[str, Any]]:
-    supabase = get_supabase()
-    result = (
-        supabase.table("data_api_key_tables")
-        .select("table_name, allowed_fields")
-        .eq("key_id", api_key_id)
-        .order("table_name")
-        .execute()
+async def list_accessible_tables(api_key_id: str) -> list[dict[str, Any]]:
+    rows = await fetch_all(
+        """
+        SELECT table_name, allowed_fields
+          FROM data_api_key_tables
+         WHERE key_id = %s
+         ORDER BY table_name ASC
+        """,
+        (api_key_id,),
     )
-    return list(result.data or [])
+    return rows
 
 
 def parse_pagination(query: dict[str, str]) -> tuple[int, int]:
@@ -86,32 +86,38 @@ def _ensure_allowed(field: str, allowed: set[str], context: str) -> None:
         )
 
 
-def _apply_filter(builder, op: str, column: str, value: str):
-    if op == "eq":
-        return builder.eq(column, value)
-    if op == "neq":
-        return builder.neq(column, value)
-    if op == "gt":
-        return builder.gt(column, value)
-    if op == "gte":
-        return builder.gte(column, value)
-    if op == "lt":
-        return builder.lt(column, value)
-    if op == "lte":
-        return builder.lte(column, value)
-    if op == "like":
-        return builder.like(column, value)
-    if op == "ilike":
-        return builder.ilike(column, value)
+_OP_TO_SQL = {
+    "eq": "=",
+    "neq": "<>",
+    "gt": ">",
+    "gte": ">=",
+    "lt": "<",
+    "lte": "<=",
+    "like": "LIKE",
+    "ilike": "ILIKE",
+}
+
+
+def _build_filter_clause(op: str, column: str, value: str) -> tuple[sql.Composed, list[Any]]:
+    """Собирает кусок WHERE и параметры."""
+    col_ident = sql.Identifier(column)
+    if op in _OP_TO_SQL:
+        return sql.SQL("{col} {op} %s").format(
+            col=col_ident,
+            op=sql.SQL(_OP_TO_SQL[op]),
+        ), [value]
     if op == "in":
         values = [v for v in value.split(",") if v]
         if not values:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"in.{column} requires at least one value")
-        return builder.in_(column, values)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"in.{column} requires at least one value",
+            )
+        return sql.SQL("{col} = ANY(%s)").format(col=col_ident), [values]
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported operator '{op}'")
 
 
-def execute_select(
+async def execute_select(
     table_name: str,
     allowed_fields: list[str],
     query: dict[str, str],
@@ -120,8 +126,12 @@ def execute_select(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No fields allowed for this table")
     allowed_set = set(allowed_fields)
 
-    supabase: Client = get_supabase()
-    builder = supabase.table(table_name).select(",".join(allowed_fields))
+    # SELECT col1, col2, ... FROM table — все имена через Identifier.
+    select_idents = sql.SQL(", ").join(sql.Identifier(f) for f in allowed_fields)
+    table_ident = sql.Identifier(table_name)
+
+    where_parts: list[sql.Composed] = []
+    params: list[Any] = []
 
     for raw_key, raw_value in query.items():
         if raw_key in _RESERVED_PARAMS:
@@ -133,8 +143,11 @@ def execute_select(
             continue
         op, column = parsed
         _ensure_allowed(column, allowed_set, "filter")
-        builder = _apply_filter(builder, op, column, raw_value)
+        clause, clause_params = _build_filter_clause(op, column, raw_value)
+        where_parts.append(clause)
+        params.extend(clause_params)
 
+    order_clause: sql.Composed | None = None
     order = query.get("order")
     if order:
         column, _, direction = order.partition(".")
@@ -142,10 +155,20 @@ def execute_select(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="order requires a column")
         _ensure_allowed(column, allowed_set, "order")
         desc = direction.lower() == "desc"
-        builder = builder.order(column, desc=desc)
+        order_clause = sql.SQL("ORDER BY {col} {dir}").format(
+            col=sql.Identifier(column),
+            dir=sql.SQL("DESC") if desc else sql.SQL("ASC"),
+        )
 
     limit, offset = parse_pagination(query)
-    builder = builder.range(offset, offset + limit - 1)
 
-    result = builder.execute()
-    return list(result.data or []), limit, offset
+    statement = sql.SQL("SELECT {fields} FROM {table}").format(fields=select_idents, table=table_ident)
+    if where_parts:
+        statement = statement + sql.SQL(" WHERE ") + sql.SQL(" AND ").join(where_parts)
+    if order_clause is not None:
+        statement = statement + sql.SQL(" ") + order_clause
+    statement = statement + sql.SQL(" LIMIT %s OFFSET %s")
+    params.extend([limit, offset])
+
+    rows = await fetch_all(statement, tuple(params))
+    return rows, limit, offset

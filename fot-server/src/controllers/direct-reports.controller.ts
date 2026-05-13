@@ -8,7 +8,7 @@ import {
 } from '../services/employee-direct-reports.service.js';
 import { AUDIT_ACTIONS, auditService } from '../services/audit.service.js';
 import { canAccessEmployeeInScope, resolveAccessibleDepartmentIds } from '../services/data-scope.service.js';
-import { supabase } from '../config/database.js';
+import { queryOne } from '../config/postgres.js';
 
 const assignSchema = z.object({
   manager_employee_id: z.number().int().positive(),
@@ -117,17 +117,16 @@ export const directReportsController = {
 
       const accessible = await resolveAccessibleDepartmentIds(req);
       if (accessible !== 'all') {
-        const { data: row } = await supabase
-          .from('employee_direct_reports')
-          .select('manager_employee_id, subordinate_employee_id')
-          .eq('id', id)
-          .maybeSingle();
+        const row = await queryOne<{ manager_employee_id: number; subordinate_employee_id: number }>(
+          'SELECT manager_employee_id, subordinate_employee_id FROM employee_direct_reports WHERE id = $1::uuid',
+          [id],
+        );
         if (!row) {
           return res.status(404).json({ success: false, error: 'Назначение не найдено' });
         }
         const [managerOk, subordinateOk] = await Promise.all([
-          canAccessEmployeeInScope(req, row.manager_employee_id as number),
-          canAccessEmployeeInScope(req, row.subordinate_employee_id as number),
+          canAccessEmployeeInScope(req, row.manager_employee_id),
+          canAccessEmployeeInScope(req, row.subordinate_employee_id),
         ]);
         if (!managerOk || !subordinateOk) {
           return res.status(403).json({ success: false, error: 'Назначение вне вашей зоны доступа' });

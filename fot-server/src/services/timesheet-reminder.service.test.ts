@@ -5,10 +5,18 @@ const mockedState = vi.hoisted(() => ({
   listUserIdsAssignedToDepartment: vi.fn(async () => [] as string[]),
 }));
 
-vi.mock('../config/database.js', () => ({
-  supabase: {
-    from: vi.fn(),
-  },
+const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgExecute: vi.fn(),
+  pgTx: vi.fn(),
+}));
+
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
 }));
 
 vi.mock('./notification.service.js', () => ({

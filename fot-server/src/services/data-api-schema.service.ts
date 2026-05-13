@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 
 // Запрещённые таблицы — служебные, аудитные и инфраструктурные.
 // Список захардкожен, чтобы админ через UI не мог по ошибке выдать к ним доступ.
@@ -76,11 +76,15 @@ let cache: { schema: SchemaTable[]; expiresAt: number } | null = null;
 const CACHE_TTL_MS = 60_000;
 
 async function loadFullSchema(): Promise<SchemaTable[]> {
-  const { data, error } = await supabase.rpc('data_api_list_public_schema');
-  if (error) {
-    throw new Error(`Failed to load public schema: ${error.message}`);
+  let rows: RpcRow[];
+  try {
+    rows = await query<RpcRow>(
+      'SELECT table_name, column_name, data_type, is_nullable FROM public.data_api_list_public_schema()',
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to load public schema: ${message}`);
   }
-  const rows = (data ?? []) as RpcRow[];
 
   const byTable = new Map<string, SchemaColumn[]>();
   for (const row of rows) {

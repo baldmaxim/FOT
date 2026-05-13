@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { execute, query } from '../config/postgres.js';
 import { getRolePageAccess } from './access-control.service.js';
 import { loadManagedDepartmentMap } from './department-access.service.js';
 import { getRoleById } from './roles-cache.service.js';
@@ -39,35 +39,33 @@ async function resolveRoleCode(systemRoleId: string | null | undefined): Promise
 
 export const timesheetResponsiblesService = {
   async getByDepartment(departmentId: string): Promise<ITimesheetResponsible[]> {
-    const { data, error } = await supabase
-      .from('timesheet_responsibles')
-      .select('department_id, user_id, role, is_active')
-      .eq('department_id', departmentId)
-      .eq('is_active', true);
+    const data = await query<{ department_id: string; user_id: string; role: string; is_active: boolean }>(
+      `SELECT department_id, user_id, role, is_active
+         FROM timesheet_responsibles
+        WHERE department_id = $1
+          AND is_active = true`,
+      [departmentId],
+    );
 
-    if (error) throw error;
-
-    const userIds = [...new Set((data || []).map(item => item.user_id as string))];
+    const userIds = [...new Set(data.map(item => item.user_id))];
     if (userIds.length === 0) return [];
 
-    const { data: profiles, error: profilesError } = await supabase
-      .from('user_profiles')
-      .select('id, full_name, system_role_id, employee_id')
-      .in('id', userIds);
+    const profiles = await query<IUserProfileLite>(
+      'SELECT id, full_name, system_role_id, employee_id FROM user_profiles WHERE id = ANY($1::uuid[])',
+      [userIds],
+    );
 
-    if (profilesError) throw profilesError;
+    const profileMap = new Map(profiles.map(p => [p.id, p]));
 
-    const profileMap = new Map((profiles || []).map(p => [p.id as string, p as IUserProfileLite]));
-
-    const rows = (data || []).filter(item => RESPONSIBLE_ROLES.includes(item.role as TimesheetResponsibleRole));
+    const rows = data.filter(item => RESPONSIBLE_ROLES.includes(item.role as TimesheetResponsibleRole));
     const result: ITimesheetResponsible[] = [];
 
     for (const item of rows) {
-      const profile = profileMap.get(item.user_id as string);
+      const profile = profileMap.get(item.user_id);
       const role_code = profile ? await resolveRoleCode(profile.system_role_id) : null;
       result.push({
-        department_id: item.department_id as string,
-        user_id: item.user_id as string,
+        department_id: item.department_id,
+        user_id: item.user_id,
         role: item.role as TimesheetResponsibleRole,
         is_active: !!item.is_active,
         full_name: profile?.full_name ?? null,
@@ -109,57 +107,63 @@ export const timesheetResponsiblesService = {
       .filter(row => !!row.userId)
       .map(row => ({
         department_id: input.departmentId,
-        user_id: row.userId,
+        user_id: row.userId as string,
         role: row.role,
         is_active: true,
         updated_at: new Date().toISOString(),
       }));
 
-    if (upsertRows.length > 0) {
-      const { error } = await supabase
-        .from('timesheet_responsibles')
-        .upsert(upsertRows, { onConflict: 'department_id,role' });
-      if (error) throw error;
+    for (const r of upsertRows) {
+      await execute(
+        `INSERT INTO timesheet_responsibles (department_id, user_id, role, is_active, updated_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (department_id, role) DO UPDATE SET
+           user_id = EXCLUDED.user_id,
+           is_active = EXCLUDED.is_active,
+           updated_at = EXCLUDED.updated_at`,
+        [r.department_id, r.user_id, r.role, r.is_active, r.updated_at],
+      );
     }
 
     const rolesToDelete = rows.filter(row => !row.userId).map(row => row.role);
 
     if (rolesToDelete.length > 0) {
-      const { error } = await supabase
-        .from('timesheet_responsibles')
-        .delete()
-        .eq('department_id', input.departmentId)
-        .in('role', rolesToDelete);
-      if (error) throw error;
+      await execute(
+        'DELETE FROM timesheet_responsibles WHERE department_id = $1 AND role = ANY($2::text[])',
+        [input.departmentId, rolesToDelete],
+      );
     }
 
     return this.getByDepartment(input.departmentId);
   },
 
   async getCandidateUsersByDepartment(departmentId: string): Promise<ITimesheetResponsibleCandidate[]> {
-    const { data: profiles, error: profilesError } = await supabase
-      .from('user_profiles')
-      .select('id, full_name, system_role_id, employee_id')
-      .eq('is_approved', true);
+    const typedProfiles = await query<IUserProfileLite>(
+      'SELECT id, full_name, system_role_id, employee_id FROM user_profiles WHERE is_approved = true',
+    );
 
-    if (profilesError) throw profilesError;
-
-    const typedProfiles = (profiles || []) as IUserProfileLite[];
     const employeeIds = typedProfiles
       .map(p => p.employee_id)
       .filter((id): id is number => Number.isInteger(id));
 
     const departmentByEmployeeId = new Map<number, string | null>();
     if (employeeIds.length > 0) {
-      const { data: employees, error: employeesError } = await supabase
-        .from('employees')
-        .select('id, org_department_id, employment_status, is_archived, excluded_from_timesheet')
-        .in('id', employeeIds);
-      if (employeesError) throw employeesError;
+      const employees = await query<{
+        id: number;
+        org_department_id: string | null;
+        employment_status: string;
+        is_archived: boolean;
+        excluded_from_timesheet: boolean;
+      }>(
+        `SELECT id, org_department_id, employment_status, is_archived, excluded_from_timesheet
+           FROM employees
+          WHERE id = ANY($1::int[])`,
+        [employeeIds],
+      );
 
-      for (const employee of employees || []) {
+      for (const employee of employees) {
         if (employee.is_archived || employee.excluded_from_timesheet || employee.employment_status !== 'active') continue;
-        departmentByEmployeeId.set(employee.id as number, (employee.org_department_id as string | null) ?? null);
+        departmentByEmployeeId.set(Number(employee.id), employee.org_department_id ?? null);
       }
     }
 
@@ -201,28 +205,23 @@ export const timesheetResponsiblesService = {
   },
 
   async getHrRecipientsForDepartment(departmentId: string): Promise<string[]> {
-    const { data: profiles, error } = await supabase
-      .from('user_profiles')
-      .select('id, full_name, system_role_id, employee_id')
-      .eq('is_approved', true);
+    const typedProfiles = await query<IUserProfileLite>(
+      'SELECT id, full_name, system_role_id, employee_id FROM user_profiles WHERE is_approved = true',
+    );
 
-    if (error) throw error;
-
-    const typedProfiles = (profiles || []) as IUserProfileLite[];
     const employeeIds = typedProfiles
       .map(p => p.employee_id)
       .filter((id): id is number => Number.isInteger(id));
 
     const departmentByEmployeeId = new Map<number, string | null>();
     if (employeeIds.length > 0) {
-      const { data: employees, error: employeesError } = await supabase
-        .from('employees')
-        .select('id, org_department_id')
-        .in('id', employeeIds);
-      if (employeesError) throw employeesError;
+      const employees = await query<{ id: number; org_department_id: string | null }>(
+        'SELECT id, org_department_id FROM employees WHERE id = ANY($1::int[])',
+        [employeeIds],
+      );
 
-      for (const employee of employees || []) {
-        departmentByEmployeeId.set(employee.id as number, (employee.org_department_id as string | null) ?? null);
+      for (const employee of employees) {
+        departmentByEmployeeId.set(Number(employee.id), employee.org_department_id ?? null);
       }
     }
 

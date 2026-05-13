@@ -1,7 +1,7 @@
 /**
  * Сервис авто-генерации расчётных листков из данных табеля.
  */
-import { supabase } from '../config/database.js';
+import { query, execute } from '../config/postgres.js';
 import { buildAttendanceEntries } from './attendance.service.js';
 import { resolveSchedulesBulk, resolveSchedulesForPeriod, countWorkingDaysForSchedule, loadCalendarMonth } from './schedule.service.js';
 
@@ -31,23 +31,31 @@ export const generatePayslipsForMonth = async (
   const midMonth = `${period}-15`;
 
   // 1. Получаем активных сотрудников с окладом
-  let query = supabase
-    .from('employees')
-    .select('id, full_name, current_salary, org_department_id')
-    .eq('employment_status', 'active');
+  type EmpRow = {
+    id: number;
+    full_name: string | null;
+    current_salary: number | null;
+    org_department_id: string | null;
+  };
 
-  if (departmentId) {
-    query = query.eq('org_department_id', departmentId);
-  }
+  const employees = departmentId
+    ? await query<EmpRow>(
+        `SELECT id, full_name, current_salary, org_department_id
+           FROM employees
+          WHERE employment_status = 'active' AND org_department_id = $1`,
+        [departmentId],
+      )
+    : await query<EmpRow>(
+        `SELECT id, full_name, current_salary, org_department_id
+           FROM employees
+          WHERE employment_status = 'active'`,
+      );
 
-  const { data: employees, error: empErr } = await query;
-
-  if (empErr) throw empErr;
-  if (!employees || employees.length === 0) return { generated: 0, payslips: [] };
+  if (employees.length === 0) return { generated: 0, payslips: [] };
 
   // 2. Resolve расписания
   const scheduleMap = await resolveSchedulesBulk(
-    employees.map(e => ({ id: e.id as number })),
+    employees.map(e => ({ id: e.id })),
     midMonth,
   );
 
@@ -55,7 +63,7 @@ export const generatePayslipsForMonth = async (
   const [calendarMonth, dailySchedulesMap] = await Promise.all([
     loadCalendarMonth(year, month),
     resolveSchedulesForPeriod(
-      employees.map(e => ({ id: e.id as number })),
+      employees.map(e => ({ id: e.id })),
       startDate,
       endDate,
     ),
@@ -63,8 +71,8 @@ export const generatePayslipsForMonth = async (
 
   const attendance = await buildAttendanceEntries({
     employees: employees.map(e => ({
-      id: e.id as number,
-      full_name: (e.full_name as string | null) || null,
+      id: e.id,
+      full_name: e.full_name || null,
     })),
     startDate,
     endDate,
@@ -83,11 +91,19 @@ export const generatePayslipsForMonth = async (
 
   // 5. Генерируем расчётные листки
   const payslips: IGeneratedPayslip[] = [];
-  const upsertRecords: Array<Record<string, unknown>> = [];
+  const upsertRecords: Array<{
+    employee_id: number;
+    period: string;
+    gross_amount: number;
+    net_amount: number;
+    deductions: number;
+    details: Record<string, unknown>;
+    created_by: string;
+  }> = [];
 
   for (const emp of employees) {
-    const empId = emp.id as number;
-    const salary = (emp.current_salary as number) ?? 0;
+    const empId = emp.id;
+    const salary = emp.current_salary ?? 0;
     if (salary <= 0) continue;
 
     const sched = scheduleMap.get(empId);
@@ -103,7 +119,7 @@ export const generatePayslipsForMonth = async (
 
     payslips.push({
       employee_id: empId,
-      full_name: emp.full_name as string,
+      full_name: emp.full_name || '',
       salary,
       norm_days: normDays,
       worked_days: workedDays,
@@ -128,10 +144,28 @@ export const generatePayslipsForMonth = async (
     const BATCH = 500;
     for (let i = 0; i < upsertRecords.length; i += BATCH) {
       const batch = upsertRecords.slice(i, i + BATCH);
-      const { error } = await supabase
-        .from('payslips')
-        .upsert(batch, { onConflict: 'employee_id,period' });
-      if (error) throw error;
+      const empIds = batch.map(r => r.employee_id);
+      const periods = batch.map(r => r.period);
+      const grosses = batch.map(r => r.gross_amount);
+      const nets = batch.map(r => r.net_amount);
+      const dedus = batch.map(r => r.deductions);
+      const details = batch.map(r => JSON.stringify(r.details));
+      const createdBys = batch.map(r => r.created_by);
+
+      await execute(
+        `INSERT INTO payslips
+           (employee_id, period, gross_amount, net_amount, deductions, details, created_by)
+         SELECT u.employee_id, u.period, u.gross_amount, u.net_amount, u.deductions, u.details::jsonb, u.created_by
+           FROM unnest($1::bigint[], $2::text[], $3::numeric[], $4::numeric[], $5::numeric[], $6::text[], $7::uuid[])
+             AS u(employee_id, period, gross_amount, net_amount, deductions, details, created_by)
+         ON CONFLICT (employee_id, period) DO UPDATE SET
+           gross_amount = EXCLUDED.gross_amount,
+           net_amount = EXCLUDED.net_amount,
+           deductions = EXCLUDED.deductions,
+           details = EXCLUDED.details,
+           created_by = EXCLUDED.created_by`,
+        [empIds, periods, grosses, nets, dedus, details, createdBys],
+      );
     }
   }
 

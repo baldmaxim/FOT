@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import { supabase } from '../config/database.js';
+import { execute, queryOne } from '../config/postgres.js';
+import { localAuthService } from '../services/local-auth.service.js';
 import { totpService } from '../services/totp.service.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -10,19 +11,14 @@ const enable2FASchema = z.object({
 });
 
 export const auth2faSelfController = {
-  /**
-   * POST /api/auth/2fa/setup
-   * Пользователь генерирует себе QR-код для настройки 2FA
-   */
   async setup2FA(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { data: profile, error: fetchError } = await supabase
-        .from('user_profiles')
-        .select('two_factor_enabled')
-        .eq('id', req.user.id)
-        .single();
+      const profile = await queryOne<{ two_factor_enabled: boolean }>(
+        'SELECT two_factor_enabled FROM user_profiles WHERE id = $1::uuid',
+        [req.user.id],
+      );
 
-      if (fetchError || !profile) {
+      if (!profile) {
         res.status(404).json({ success: false, error: 'Профиль не найден' });
         return;
       }
@@ -32,23 +28,22 @@ export const auth2faSelfController = {
         return;
       }
 
-      const { data: authUser } = await supabase.auth.admin.getUserById(req.user.id);
+      const authUser = await localAuthService.getUserById(req.user.id);
 
-      if (!authUser?.user?.email) {
+      if (!authUser?.email) {
         res.status(400).json({ success: false, error: 'Email пользователя не найден' });
         return;
       }
 
-      const { secret, encryptedSecret } = totpService.generateSecret(authUser.user.email);
-      const qrCode = await totpService.generateQRCode(authUser.user.email, secret);
+      const { secret, encryptedSecret } = totpService.generateSecret(authUser.email);
+      const qrCode = await totpService.generateQRCode(authUser.email, secret);
 
-      // Сохраняем секрет, но НЕ включаем 2FA — ждём подтверждения кодом
-      const { error: updateError } = await supabase
-        .from('user_profiles')
-        .update({ totp_secret: encryptedSecret })
-        .eq('id', req.user.id);
-
-      if (updateError) {
+      try {
+        await execute(
+          'UPDATE user_profiles SET totp_secret = $1 WHERE id = $2::uuid',
+          [encryptedSecret, req.user.id],
+        );
+      } catch (updateError) {
         console.error('Setup 2FA error:', updateError);
         res.status(500).json({ success: false, error: 'Не удалось сохранить настройки 2FA' });
         return;
@@ -61,21 +56,16 @@ export const auth2faSelfController = {
     }
   },
 
-  /**
-   * POST /api/auth/2fa/enable
-   * Пользователь подтверждает 2FA вводом кода из приложения
-   */
   async enable2FA(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { code } = enable2FASchema.parse(req.body);
 
-      const { data: profile, error: fetchError } = await supabase
-        .from('user_profiles')
-        .select('totp_secret, two_factor_enabled')
-        .eq('id', req.user.id)
-        .single();
+      const profile = await queryOne<{ totp_secret: string | null; two_factor_enabled: boolean }>(
+        'SELECT totp_secret, two_factor_enabled FROM user_profiles WHERE id = $1::uuid',
+        [req.user.id],
+      );
 
-      if (fetchError || !profile) {
+      if (!profile) {
         res.status(404).json({ success: false, error: 'Профиль не найден' });
         return;
       }
@@ -99,15 +89,14 @@ export const auth2faSelfController = {
 
       const { codes, encryptedCodes } = totpService.generateRecoveryCodes();
 
-      const { error: updateError } = await supabase
-        .from('user_profiles')
-        .update({
-          two_factor_enabled: true,
-          recovery_codes: encryptedCodes,
-        })
-        .eq('id', req.user.id);
-
-      if (updateError) {
+      try {
+        await execute(
+          `UPDATE user_profiles
+              SET two_factor_enabled = true, recovery_codes = $1
+            WHERE id = $2::uuid`,
+          [encryptedCodes, req.user.id],
+        );
+      } catch (updateError) {
         console.error('Enable 2FA error:', updateError);
         res.status(500).json({ success: false, error: 'Не удалось включить 2FA' });
         return;
@@ -132,22 +121,16 @@ export const auth2faSelfController = {
     }
   },
 
-  /**
-   * POST /api/auth/2fa/disable
-   * Пользователь отключает свою 2FA
-   */
   async disable2FA(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { error } = await supabase
-        .from('user_profiles')
-        .update({
-          totp_secret: null,
-          recovery_codes: null,
-          two_factor_enabled: false,
-        })
-        .eq('id', req.user.id);
-
-      if (error) {
+      try {
+        await execute(
+          `UPDATE user_profiles
+              SET totp_secret = NULL, recovery_codes = NULL, two_factor_enabled = false
+            WHERE id = $1::uuid`,
+          [req.user.id],
+        );
+      } catch (error) {
         console.error('Disable 2FA error:', error);
         res.status(500).json({ success: false, error: 'Не удалось отключить 2FA' });
         return;

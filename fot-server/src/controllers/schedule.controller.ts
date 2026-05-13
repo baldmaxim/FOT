@@ -3,7 +3,7 @@
  */
 import { Response } from 'express';
 import { z } from 'zod';
-import { supabase } from '../config/database.js';
+import { execute, query, queryOne } from '../config/postgres.js';
 import { resolveSchedule, resolveSchedulesBulk, computeNetWorkHours } from '../services/schedule.service.js';
 import { canAccessEmployeeInScope, resolveRequestDataScope, resolveScopedDepartmentIds } from '../services/data-scope.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -136,6 +136,17 @@ type ObjectScheduleRow = {
   effective_to: string | null;
 };
 
+// Возвращает SELECT-список колонок таблицы назначений + work_schedules как jsonb,
+// эмулируя `select('*, work_schedules(*)')` из Supabase.
+const SCHEDULE_ASSIGNMENT_JOIN = (
+  table: 'employee_schedule_assignments' | 'object_schedule_assignments',
+  alias = 'a',
+): string => {
+  return `${alias}.*, to_jsonb(ws.*) AS work_schedules
+     FROM ${table} ${alias}
+     LEFT JOIN work_schedules ws ON ws.id = ${alias}.schedule_id`;
+};
+
 const shiftIsoDate = (date: string, days: number): string => {
   const cursor = new Date(`${date}T00:00:00Z`);
   cursor.setUTCDate(cursor.getUTCDate() + days);
@@ -170,14 +181,13 @@ const normalizeDayOverrides = (
 };
 
 const loadEmployeeScheduleRows = async (employeeId: number): Promise<EmployeeScheduleRow[]> => {
-  const { data, error } = await supabase
-    .from('employee_schedule_assignments')
-    .select('id, schedule_id, effective_from, effective_to')
-    .eq('employee_id', employeeId)
-    .order('effective_from', { ascending: true });
-
-  if (error) throw error;
-  return (data || []) as EmployeeScheduleRow[];
+  return query<EmployeeScheduleRow>(
+    `SELECT id, schedule_id, effective_from, effective_to
+       FROM employee_schedule_assignments
+      WHERE employee_id = $1
+      ORDER BY effective_from ASC`,
+    [employeeId],
+  );
 };
 
 const loadEmployeeScheduleRowsBatch = async (
@@ -187,38 +197,37 @@ const loadEmployeeScheduleRowsBatch = async (
   if (!employeeIds.length) return result;
   for (const id of employeeIds) result.set(id, []);
 
-  const { data, error } = await supabase
-    .from('employee_schedule_assignments')
-    .select('id, employee_id, schedule_id, effective_from, effective_to')
-    .in('employee_id', employeeIds)
-    .order('effective_from', { ascending: true });
+  const data = await query<{ id: string; employee_id: number; schedule_id: string; effective_from: string; effective_to: string | null }>(
+    `SELECT id, employee_id, schedule_id, effective_from, effective_to
+       FROM employee_schedule_assignments
+      WHERE employee_id = ANY($1::int[])
+      ORDER BY effective_from ASC`,
+    [employeeIds],
+  );
 
-  if (error) throw error;
-
-  for (const row of data || []) {
-    const employeeId = Number((row as { employee_id?: unknown }).employee_id);
+  for (const row of data) {
+    const employeeId = Number(row.employee_id);
     if (!Number.isFinite(employeeId)) continue;
     const bucket = result.get(employeeId);
     if (!bucket) continue;
     bucket.push({
-      id: (row as EmployeeScheduleRow).id,
-      schedule_id: (row as EmployeeScheduleRow).schedule_id,
-      effective_from: (row as EmployeeScheduleRow).effective_from,
-      effective_to: (row as EmployeeScheduleRow).effective_to,
+      id: row.id,
+      schedule_id: row.schedule_id,
+      effective_from: row.effective_from,
+      effective_to: row.effective_to,
     });
   }
   return result;
 };
 
 const loadObjectScheduleRows = async (objectId: string): Promise<ObjectScheduleRow[]> => {
-  const { data, error } = await supabase
-    .from('object_schedule_assignments')
-    .select('id, schedule_id, effective_from, effective_to')
-    .eq('object_id', objectId)
-    .order('effective_from', { ascending: true });
-
-  if (error) throw error;
-  return (data || []) as ObjectScheduleRow[];
+  return query<ObjectScheduleRow>(
+    `SELECT id, schedule_id, effective_from, effective_to
+       FROM object_schedule_assignments
+      WHERE object_id = $1
+      ORDER BY effective_from ASC`,
+    [objectId],
+  );
 };
 
 const assignEmployeeSchedule = async (
@@ -237,47 +246,56 @@ const assignEmployeeSchedule = async (
 
   if (activeAtDate?.effective_from === effectiveFrom) {
     const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : activeAtDate.effective_to ?? null);
-    const update: Record<string, unknown> = {
-      schedule_id: scheduleId,
-      effective_to: nextEffectiveTo,
-      updated_at: nowIso,
-    };
-    if (anchorDate !== undefined) update.anchor_date = anchorDate;
-    const { data, error } = await supabase
-      .from('employee_schedule_assignments')
-      .update(update)
-      .eq('id', activeAtDate.id)
-      .select('*, work_schedules(*)')
-      .single();
-
-    if (error) throw error;
-    return data;
+    if (anchorDate !== undefined) {
+      await execute(
+        `UPDATE employee_schedule_assignments
+            SET schedule_id = $1, effective_to = $2, updated_at = $3, anchor_date = $4
+          WHERE id = $5`,
+        [scheduleId, nextEffectiveTo, nowIso, anchorDate, activeAtDate.id],
+      );
+    } else {
+      await execute(
+        `UPDATE employee_schedule_assignments
+            SET schedule_id = $1, effective_to = $2, updated_at = $3
+          WHERE id = $4`,
+        [scheduleId, nextEffectiveTo, nowIso, activeAtDate.id],
+      );
+    }
+    const updated = await queryOne<Record<string, unknown>>(
+      `SELECT ${SCHEDULE_ASSIGNMENT_JOIN('employee_schedule_assignments')} WHERE a.id = $1`,
+      [activeAtDate.id],
+    );
+    if (!updated) throw new Error('Failed to load updated employee_schedule_assignment');
+    return updated;
   }
 
   if (activeAtDate && activeAtDate.effective_from < effectiveFrom) {
-    const { error } = await supabase
-      .from('employee_schedule_assignments')
-      .update({ effective_to: previousIsoDate(effectiveFrom), updated_at: nowIso })
-      .eq('id', activeAtDate.id);
-    if (error) throw error;
+    await execute(
+      `UPDATE employee_schedule_assignments
+          SET effective_to = $1, updated_at = $2
+        WHERE id = $3`,
+      [previousIsoDate(effectiveFrom), nowIso, activeAtDate.id],
+    );
   }
 
   const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : null);
-  const insert: Record<string, unknown> = {
-    employee_id: employeeId,
-    schedule_id: scheduleId,
-    effective_from: effectiveFrom,
-    effective_to: nextEffectiveTo,
-    created_by: createdBy,
-  };
-  if (anchorDate !== undefined) insert.anchor_date = anchorDate;
-  const { data, error } = await supabase
-    .from('employee_schedule_assignments')
-    .insert(insert)
-    .select('*, work_schedules(*)')
-    .single();
-
-  if (error) throw error;
+  const inserted = await queryOne<{ id: string }>(
+    anchorDate !== undefined
+      ? `INSERT INTO employee_schedule_assignments
+           (employee_id, schedule_id, effective_from, effective_to, created_by, anchor_date)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`
+      : `INSERT INTO employee_schedule_assignments
+           (employee_id, schedule_id, effective_from, effective_to, created_by)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    anchorDate !== undefined
+      ? [employeeId, scheduleId, effectiveFrom, nextEffectiveTo, createdBy, anchorDate]
+      : [employeeId, scheduleId, effectiveFrom, nextEffectiveTo, createdBy],
+  );
+  if (!inserted) throw new Error('Failed to insert employee_schedule_assignment');
+  const data = await queryOne<Record<string, unknown>>(
+    `SELECT ${SCHEDULE_ASSIGNMENT_JOIN('employee_schedule_assignments')} WHERE a.id = $1`,
+    [inserted.id],
+  );
   return data;
 };
 
@@ -290,12 +308,7 @@ const removeEmployeeSchedule = async (
   const nowIso = new Date().toISOString();
   const exactRow = rows.find(row => row.effective_from === effectiveDate) || null;
   if (exactRow) {
-    const { error } = await supabase
-      .from('employee_schedule_assignments')
-      .delete()
-      .eq('id', exactRow.id);
-
-    if (error) throw error;
+    await execute('DELETE FROM employee_schedule_assignments WHERE id = $1', [exactRow.id]);
     return true;
   }
 
@@ -304,12 +317,12 @@ const removeEmployeeSchedule = async (
     return false;
   }
 
-  const { error } = await supabase
-    .from('employee_schedule_assignments')
-    .update({ effective_to: previousIsoDate(effectiveDate), updated_at: nowIso })
-    .eq('id', activeAtDate.id);
-
-  if (error) throw error;
+  await execute(
+    `UPDATE employee_schedule_assignments
+        SET effective_to = $1, updated_at = $2
+      WHERE id = $3`,
+    [previousIsoDate(effectiveDate), nowIso, activeAtDate.id],
+  );
   return true;
 };
 
@@ -328,47 +341,56 @@ const assignObjectSchedule = async (
 
   if (activeAtDate?.effective_from === effectiveFrom) {
     const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : activeAtDate.effective_to ?? null);
-    const update: Record<string, unknown> = {
-      schedule_id: scheduleId,
-      effective_to: nextEffectiveTo,
-      updated_at: nowIso,
-    };
-    if (anchorDate !== undefined) update.anchor_date = anchorDate;
-    const { data, error } = await supabase
-      .from('object_schedule_assignments')
-      .update(update)
-      .eq('id', activeAtDate.id)
-      .select('*, work_schedules(*)')
-      .single();
-
-    if (error) throw error;
-    return data;
+    if (anchorDate !== undefined) {
+      await execute(
+        `UPDATE object_schedule_assignments
+            SET schedule_id = $1, effective_to = $2, updated_at = $3, anchor_date = $4
+          WHERE id = $5`,
+        [scheduleId, nextEffectiveTo, nowIso, anchorDate, activeAtDate.id],
+      );
+    } else {
+      await execute(
+        `UPDATE object_schedule_assignments
+            SET schedule_id = $1, effective_to = $2, updated_at = $3
+          WHERE id = $4`,
+        [scheduleId, nextEffectiveTo, nowIso, activeAtDate.id],
+      );
+    }
+    const updated = await queryOne<Record<string, unknown>>(
+      `SELECT ${SCHEDULE_ASSIGNMENT_JOIN('object_schedule_assignments')} WHERE a.id = $1`,
+      [activeAtDate.id],
+    );
+    if (!updated) throw new Error('Failed to load updated object_schedule_assignment');
+    return updated;
   }
 
   if (activeAtDate && activeAtDate.effective_from < effectiveFrom) {
-    const { error } = await supabase
-      .from('object_schedule_assignments')
-      .update({ effective_to: previousIsoDate(effectiveFrom), updated_at: nowIso })
-      .eq('id', activeAtDate.id);
-    if (error) throw error;
+    await execute(
+      `UPDATE object_schedule_assignments
+          SET effective_to = $1, updated_at = $2
+        WHERE id = $3`,
+      [previousIsoDate(effectiveFrom), nowIso, activeAtDate.id],
+    );
   }
 
   const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : null);
-  const insert: Record<string, unknown> = {
-    object_id: objectId,
-    schedule_id: scheduleId,
-    effective_from: effectiveFrom,
-    effective_to: nextEffectiveTo,
-    created_by: createdBy,
-  };
-  if (anchorDate !== undefined) insert.anchor_date = anchorDate;
-  const { data, error } = await supabase
-    .from('object_schedule_assignments')
-    .insert(insert)
-    .select('*, work_schedules(*)')
-    .single();
-
-  if (error) throw error;
+  const inserted = await queryOne<{ id: string }>(
+    anchorDate !== undefined
+      ? `INSERT INTO object_schedule_assignments
+           (object_id, schedule_id, effective_from, effective_to, created_by, anchor_date)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`
+      : `INSERT INTO object_schedule_assignments
+           (object_id, schedule_id, effective_from, effective_to, created_by)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    anchorDate !== undefined
+      ? [objectId, scheduleId, effectiveFrom, nextEffectiveTo, createdBy, anchorDate]
+      : [objectId, scheduleId, effectiveFrom, nextEffectiveTo, createdBy],
+  );
+  if (!inserted) throw new Error('Failed to insert object_schedule_assignment');
+  const data = await queryOne<Record<string, unknown>>(
+    `SELECT ${SCHEDULE_ASSIGNMENT_JOIN('object_schedule_assignments')} WHERE a.id = $1`,
+    [inserted.id],
+  );
   return data;
 };
 
@@ -380,12 +402,7 @@ const removeObjectSchedule = async (
   const nowIso = new Date().toISOString();
   const exactRow = rows.find(row => row.effective_from === effectiveDate) || null;
   if (exactRow) {
-    const { error } = await supabase
-      .from('object_schedule_assignments')
-      .delete()
-      .eq('id', exactRow.id);
-
-    if (error) throw error;
+    await execute('DELETE FROM object_schedule_assignments WHERE id = $1', [exactRow.id]);
     return true;
   }
 
@@ -394,12 +411,12 @@ const removeObjectSchedule = async (
     return false;
   }
 
-  const { error } = await supabase
-    .from('object_schedule_assignments')
-    .update({ effective_to: previousIsoDate(effectiveDate), updated_at: nowIso })
-    .eq('id', activeAtDate.id);
-
-  if (error) throw error;
+  await execute(
+    `UPDATE object_schedule_assignments
+        SET effective_to = $1, updated_at = $2
+      WHERE id = $3`,
+    [previousIsoDate(effectiveDate), nowIso, activeAtDate.id],
+  );
   return true;
 };
 
@@ -407,13 +424,9 @@ export const scheduleController = {
   /** GET /api/schedules — шаблоны */
   async list(_req: AuthenticatedRequest, res: Response) {
     try {
-      const { data, error } = await supabase
-        .from('work_schedules')
-        .select('*')
-        .order('is_default', { ascending: false })
-        .order('name');
-
-      if (error) throw error;
+      const data = await query<Record<string, unknown>>(
+        'SELECT * FROM work_schedules ORDER BY is_default DESC, name ASC',
+      );
       res.json({ success: true, data });
     } catch (err) {
       console.error('[schedules] list error:', err);
@@ -441,13 +454,21 @@ export const scheduleController = {
         day_overrides: normalizeDayOverrides(parsed.data.day_overrides, lunchMinutes),
       };
 
-      const { data, error } = await supabase
-        .from('work_schedules')
-        .insert(body)
-        .select()
-        .single();
-
-      if (error) throw error;
+      const cols = Object.keys(body);
+      const placeholders = cols.map((_, idx) => `$${idx + 1}`).join(', ');
+      const values = cols.map(c => {
+        const v = (body as Record<string, unknown>)[c];
+        // jsonb-поля упаковываем как JSON; arrays оставляем как есть.
+        if (c === 'day_overrides' || c === 'cycle_days') {
+          return v == null ? null : JSON.stringify(v);
+        }
+        return v;
+      });
+      const data = await queryOne<Record<string, unknown>>(
+        `INSERT INTO work_schedules (${cols.join(', ')}) VALUES (${placeholders}) RETURNING *`,
+        values,
+      );
+      if (!data) throw new Error('Insert work_schedules вернул пустой результат');
       res.status(201).json({ success: true, data });
     } catch (err) {
       console.error('[schedules] create error:', err);
@@ -475,19 +496,23 @@ export const scheduleController = {
       const body: Record<string, unknown> = { ...parsed.data, updated_at: new Date().toISOString() };
 
       if (affectsWorkHours) {
-        const { data: current, error: loadError } = await supabase
-          .from('work_schedules')
-          .select('work_start, work_end, lunch_minutes, day_overrides')
-          .eq('id', id)
-          .single();
-        if (loadError) throw loadError;
+        const current = await queryOne<{
+          work_start: string;
+          work_end: string;
+          lunch_minutes: number | null;
+          day_overrides: Record<string, unknown> | null;
+        }>(
+          'SELECT work_start, work_end, lunch_minutes, day_overrides FROM work_schedules WHERE id = $1',
+          [id],
+        );
+        if (!current) throw new Error('График не найден');
 
-        const workStart = normalizeTime(parsed.data.work_start ?? current!.work_start);
-        const workEnd = normalizeTime(parsed.data.work_end ?? current!.work_end);
-        const lunchMinutes = parsed.data.lunch_minutes ?? current!.lunch_minutes ?? 0;
+        const workStart = normalizeTime(parsed.data.work_start ?? current.work_start);
+        const workEnd = normalizeTime(parsed.data.work_end ?? current.work_end);
+        const lunchMinutes = parsed.data.lunch_minutes ?? current.lunch_minutes ?? 0;
         const overridesSource = parsed.data.day_overrides !== undefined
           ? parsed.data.day_overrides
-          : current!.day_overrides;
+          : current.day_overrides;
 
         body.work_start = workStart;
         body.work_end = workEnd;
@@ -498,14 +523,28 @@ export const scheduleController = {
         delete body.work_hours;
       }
 
-      const { data, error } = await supabase
-        .from('work_schedules')
-        .update(body)
-        .eq('id', id)
-        .select()
-        .single();
-
-      if (error) throw error;
+      const cols = Object.keys(body);
+      if (cols.length === 0) {
+        const data = await queryOne<Record<string, unknown>>(
+          'SELECT * FROM work_schedules WHERE id = $1',
+          [id],
+        );
+        return res.json({ success: true, data });
+      }
+      const setExpr = cols.map((c, idx) => `${c} = $${idx + 1}`).join(', ');
+      const values = cols.map(c => {
+        const v = body[c];
+        if (c === 'day_overrides' || c === 'cycle_days') {
+          return v == null ? null : JSON.stringify(v);
+        }
+        return v;
+      });
+      values.push(id);
+      const data = await queryOne<Record<string, unknown>>(
+        `UPDATE work_schedules SET ${setExpr} WHERE id = $${cols.length + 1} RETURNING *`,
+        values,
+      );
+      if (!data) throw new Error('График не найден');
       res.json({ success: true, data });
     } catch (err) {
       console.error('[schedules] update error:', err);
@@ -518,31 +557,30 @@ export const scheduleController = {
     try {
       const { id } = req.params;
 
-      const [{ count: empCount }, { count: objectCount }] = await Promise.all([
-        supabase
-          .from('employee_schedule_assignments')
-          .select('id', { count: 'exact', head: true })
-          .eq('schedule_id', id),
-        supabase
-          .from('object_schedule_assignments')
-          .select('id', { count: 'exact', head: true })
-          .eq('schedule_id', id),
+      const [empCountRow, objectCountRow] = await Promise.all([
+        queryOne<{ count: string }>(
+          'SELECT COUNT(*)::int AS count FROM employee_schedule_assignments WHERE schedule_id = $1',
+          [id],
+        ),
+        queryOne<{ count: string }>(
+          'SELECT COUNT(*)::int AS count FROM object_schedule_assignments WHERE schedule_id = $1',
+          [id],
+        ),
       ]);
+      const empCount = Number(empCountRow?.count ?? 0);
+      const objectCount = Number(objectCountRow?.count ?? 0);
 
-      if ((empCount || 0) > 0) {
+      if (empCount > 0) {
         return res.status(409).json({ success: false, error: 'График назначен сотрудникам, удалить нельзя' });
       }
-      if ((objectCount || 0) > 0) {
+      if (objectCount > 0) {
         return res.status(409).json({ success: false, error: 'График назначен объектам, удалить нельзя' });
       }
 
-      const { error } = await supabase
-        .from('work_schedules')
-        .delete()
-        .eq('id', id)
-        .eq('is_default', false);
-
-      if (error) throw error;
+      await execute(
+        'DELETE FROM work_schedules WHERE id = $1 AND is_default = false',
+        [id],
+      );
       res.json({ success: true });
     } catch (err) {
       console.error('[schedules] remove error:', err);
@@ -604,17 +642,15 @@ export const scheduleController = {
         return res.status(400).json({ success: false, error: 'employee_ids должны содержать корректные id сотрудников' });
       }
 
-      const { data, error } = await supabase
-        .from('employee_schedule_assignments')
-        .select('*, work_schedules(*)')
-        .in('employee_id', employeeIds)
-        .lte('effective_from', today)
-        .or(`effective_to.is.null,effective_to.gte.${today}`)
-        .order('employee_id')
-        .order('effective_from', { ascending: false });
-
-      if (error) throw error;
-      res.json({ success: true, data: data || [] });
+      const data = await query<Record<string, unknown>>(
+        `SELECT ${SCHEDULE_ASSIGNMENT_JOIN('employee_schedule_assignments')}
+          WHERE a.employee_id = ANY($1::int[])
+            AND a.effective_from <= $2
+            AND (a.effective_to IS NULL OR a.effective_to >= $2)
+          ORDER BY a.employee_id ASC, a.effective_from DESC`,
+        [employeeIds, today],
+      );
+      res.json({ success: true, data });
     } catch (err) {
       console.error('[schedules] listEmployeeAssignments error:', err);
       res.status(500).json({ success: false, error: 'Ошибка загрузки персональных графиков сотрудников' });
@@ -624,14 +660,11 @@ export const scheduleController = {
   /** GET /api/schedules/objects — список привязок object → schedule */
   async listObjectAssignments(_req: AuthenticatedRequest, res: Response) {
     try {
-      const { data, error } = await supabase
-        .from('object_schedule_assignments')
-        .select('*, work_schedules(*)')
-        .order('object_id')
-        .order('effective_from', { ascending: false });
-
-      if (error) throw error;
-      res.json({ success: true, data: data || [] });
+      const data = await query<Record<string, unknown>>(
+        `SELECT ${SCHEDULE_ASSIGNMENT_JOIN('object_schedule_assignments')}
+          ORDER BY a.object_id ASC, a.effective_from DESC`,
+      );
+      res.json({ success: true, data });
     } catch (err) {
       console.error('[schedules] listObjectAssignments error:', err);
       res.status(500).json({ success: false, error: 'Ошибка загрузки графиков объектов' });
@@ -717,33 +750,30 @@ export const scheduleController = {
         }
       }
 
-      const { data: departments, error: departmentsError } = await supabase
-        .from('org_departments')
-        .select('id, name, kind')
-        .in('id', departmentIds);
+      const departments = await query<{ id: string; name: string | null; kind: string | null }>(
+        'SELECT id, name, kind FROM org_departments WHERE id = ANY($1::uuid[])',
+        [departmentIds],
+      );
 
-      if (departmentsError) throw departmentsError;
-
-      if ((departments || []).length !== departmentIds.length) {
+      if (departments.length !== departmentIds.length) {
         return res.status(400).json({ success: false, error: 'Переданы несуществующие бригады' });
       }
 
-      const invalidDepartments = (departments || []).filter(department => department.kind !== 'brigade');
+      const invalidDepartments = departments.filter(department => department.kind !== 'brigade');
       if (invalidDepartments.length > 0) {
         return res.status(400).json({ success: false, error: 'Можно выбирать только отделы-бригады' });
       }
 
-      const { data: employees, error: employeesError } = await supabase
-        .from('employees')
-        .select('id')
-        .in('org_department_id', departmentIds)
-        .eq('is_archived', false)
-        .eq('excluded_from_timesheet', false)
-        .neq('employment_status', 'fired');
+      const employees = await query<{ id: number }>(
+        `SELECT id FROM employees
+          WHERE org_department_id = ANY($1::uuid[])
+            AND is_archived = false
+            AND excluded_from_timesheet = false
+            AND employment_status <> 'fired'`,
+        [departmentIds],
+      );
 
-      if (employeesError) throw employeesError;
-
-      const employeeIds = (employees || []).map(row => row.id as number);
+      const employeeIds = employees.map(row => row.id);
       let employeesUpdated = 0;
       const CHUNK_SIZE = 20;
 

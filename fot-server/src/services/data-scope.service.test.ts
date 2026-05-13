@@ -1,74 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-type CompanyAccessRow = { company_root_id: string };
-type AccessRow = { employee_id: number; department_id: string; source: string; is_active: boolean };
-
-const mockState = vi.hoisted(() => ({
-  userCompanyAccess: [] as Array<{ user_id: string } & CompanyAccessRow>,
-  employeeDepartmentAccess: [] as AccessRow[],
-  /** Вернёт ids потомков для p_root_ids (включая сами корни). */
-  rpcSubtree: new Map<string, string[]>(),
+const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgExecute: vi.fn(),
+  pgTx: vi.fn(),
 }));
 
-vi.mock('../config/database.js', () => {
-  function buildCompanyAccessQuery(userId: string) {
-    return Promise.resolve({
-      data: mockState.userCompanyAccess
-        .filter(r => r.user_id === userId)
-        .map(({ company_root_id }) => ({ company_root_id })),
-      error: null,
-    });
-  }
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
+}));
 
-  return {
-    supabase: {
-      from(table: string) {
-        if (table === 'user_company_access') {
-          let userId = '';
-          const builder = {
-            select: () => builder,
-            eq: (col: string, value: string) => {
-              if (col === 'user_id') userId = value;
-              return builder;
-            },
-            then: (onFulfilled: (v: unknown) => unknown) => buildCompanyAccessQuery(userId).then(onFulfilled),
-          };
-          return builder;
-        }
-        if (table === 'employee_department_access') {
-          // Не используется в этих тестах — возвращаем пустоту.
-          const builder = {
-            select: () => builder,
-            eq: () => builder,
-            neq: () => builder,
-            then: (onFulfilled: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(onFulfilled),
-          };
-          return builder;
-        }
-        throw new Error(`Unexpected table ${table}`);
-      },
-      rpc: (name: string, params: { p_root_ids: string[] }) => {
-        if (name !== 'get_descendant_department_ids') {
-          throw new Error(`Unexpected RPC ${name}`);
-        }
-        const ids = new Set<string>();
-        for (const root of params.p_root_ids) {
-          const subtree = mockState.rpcSubtree.get(root) ?? [root];
-          for (const id of subtree) ids.add(id);
-        }
-        return Promise.resolve({
-          data: [...ids].map(id => ({ id })),
-          error: null,
-        });
-      },
-    },
-  };
-});
+vi.mock('../config/db-instrumentation.js', () => ({
+  withDbSlot: vi.fn((_label: string, fn: () => Promise<unknown>) => fn()),
+}));
 
 // Также мокаем department-access.service: в тестах нам нужен только admin-путь.
 vi.mock('./department-access.service.js', () => ({
   listExplicitDepartmentIdsForUser: vi.fn().mockResolvedValue([]),
   loadEmployeeAccessMap: vi.fn().mockResolvedValue(new Map()),
+}));
+
+const mockState = vi.hoisted(() => ({
+  /** Записи user_company_access по user_id */
+  userCompanyAccess: [] as Array<{ user_id: string; company_root_id: string }>,
+  /** Вернёт ids потомков для p_root_ids (включая сами корни). */
+  rpcSubtree: new Map<string, string[]>(),
 }));
 
 import { invalidateAccessibleScopeCache, resolveAccessibleDepartmentIds, resolveCompanyScope } from './data-scope.service.js';
@@ -97,6 +57,30 @@ function buildReq(overrides: Partial<AuthenticatedRequest['user']> = {}): Authen
 beforeEach(() => {
   mockState.userCompanyAccess = [];
   mockState.rpcSubtree = new Map();
+  pgQuery.mockReset();
+  pgQueryOne.mockReset();
+  pgExecute.mockReset();
+  pgTx.mockReset();
+
+  pgQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
+    if (/FROM user_company_access/i.test(sql)) {
+      const userId = String(params[0] ?? '');
+      return mockState.userCompanyAccess
+        .filter(r => r.user_id === userId)
+        .map(({ company_root_id }) => ({ company_root_id }));
+    }
+    if (/get_descendant_department_ids/i.test(sql)) {
+      const roots = (params[0] as string[]) ?? [];
+      const ids = new Set<string>();
+      for (const root of roots) {
+        const subtree = mockState.rpcSubtree.get(root) ?? [root];
+        for (const id of subtree) ids.add(id);
+      }
+      return [...ids].map(id => ({ id }));
+    }
+    throw new Error(`Unexpected query SQL: ${sql}`);
+  });
+
   invalidateAccessibleScopeCache();
 });
 

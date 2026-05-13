@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import { DEFAULT_ACCESS_PAGE_CATALOG, type PageCatalogItem } from '../config/access-control.js';
 import { getRoleByCode, getRoleById, invalidateRolesCache } from './roles-cache.service.js';
 import { resolveAccessibleDepartmentIds } from './data-scope.service.js';
@@ -38,16 +38,18 @@ async function loadPageAccessCache(): Promise<RolePageAccessMap> {
     return pageAccessCache;
   }
 
-  const { data, error } = await supabase
-    .from('role_page_access')
-    .select('role_code, page_path, can_view, can_edit');
-
-  if (error) {
-    throw new Error(`Failed to load role page access cache: ${error.message}`);
+  let data: Array<{ role_code: string | null; page_path: string; can_view: boolean | null; can_edit: boolean | null }>;
+  try {
+    data = await query(
+      `SELECT role_code, page_path, can_view, can_edit FROM role_page_access`,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to load role page access cache: ${msg}`);
   }
 
   const cache: RolePageAccessMap = new Map();
-  for (const entry of data || []) {
+  for (const entry of data) {
     if (!entry.role_code) continue;
     if (!cache.has(entry.role_code)) {
       cache.set(entry.role_code, new Map());
@@ -77,16 +79,17 @@ function mergePageCatalog(dbPages: PageCatalogItem[] | null): PageCatalogItem[] 
 }
 
 async function loadPageCatalogFromDatabase(): Promise<PageCatalogItem[] | null> {
-  const { data, error } = await supabase
-    .from('access_pages')
-    .select('key, label, group_code, group_label, surface, supports_edit, sort_order, is_active')
-    .eq('is_active', true)
-    .order('sort_order', { ascending: true });
-
-  if (error) {
+  try {
+    const rows = await query<PageCatalogItem>(
+      `SELECT key, label, group_code, group_label, surface, supports_edit, sort_order, is_active
+         FROM access_pages
+        WHERE is_active = true
+        ORDER BY sort_order ASC`,
+    );
+    return rows;
+  } catch {
     return null;
   }
-  return (data as PageCatalogItem[]) || null;
 }
 
 export async function loadAccessPageCatalog(): Promise<PageCatalogItem[]> {

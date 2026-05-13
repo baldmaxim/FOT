@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { execute, queryOne } from '../config/postgres.js';
 
 export type EmployeeDepartmentAccessSource =
   | 'manual_admin_ui'
@@ -6,6 +6,12 @@ export type EmployeeDepartmentAccessSource =
   | 'portal_lifecycle';
 
 const TECHNICAL_SOURCES: EmployeeDepartmentAccessSource[] = ['sigur_sync', 'portal_lifecycle'];
+
+function isMissingTableError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = 'code' in error ? String((error as { code?: unknown }).code || '') : '';
+  return code === '42P01';
+}
 
 export async function upsertTechnicalDepartmentAccess(
   employeeId: number,
@@ -16,47 +22,49 @@ export async function upsertTechnicalDepartmentAccess(
   if (!employeeId || !currentDepartmentId) return;
   const now = new Date().toISOString();
 
-  if (previousDepartmentId && previousDepartmentId !== currentDepartmentId) {
-    const { error: deactivateError } = await supabase
-      .from('employee_department_access')
-      .update({ is_active: false, updated_at: now })
-      .eq('employee_id', employeeId)
-      .eq('department_id', previousDepartmentId)
-      .in('source', TECHNICAL_SOURCES);
-    if (deactivateError) throw deactivateError;
-  }
-
-  const { data: existing, error: selectError } = await supabase
-    .from('employee_department_access')
-    .select('source, is_active')
-    .eq('employee_id', employeeId)
-    .eq('department_id', currentDepartmentId)
-    .maybeSingle();
-  if (selectError) throw selectError;
-
-  if (existing) {
-    if (!existing.is_active) {
-      const { error: activateError } = await supabase
-        .from('employee_department_access')
-        .update({ is_active: true, updated_at: now })
-        .eq('employee_id', employeeId)
-        .eq('department_id', currentDepartmentId);
-      if (activateError) throw activateError;
+  try {
+    if (previousDepartmentId && previousDepartmentId !== currentDepartmentId) {
+      await execute(
+        `UPDATE employee_department_access
+            SET is_active = false, updated_at = $1
+          WHERE employee_id = $2
+            AND department_id = $3
+            AND source = ANY($4::text[])`,
+        [now, employeeId, previousDepartmentId, TECHNICAL_SOURCES],
+      );
     }
-    return;
-  }
 
-  const { error: insertError } = await supabase
-    .from('employee_department_access')
-    .insert({
-      employee_id: employeeId,
-      department_id: currentDepartmentId,
-      source,
-      is_active: true,
-      created_at: now,
-      updated_at: now,
-    });
-  if (insertError) throw insertError;
+    const existing = await queryOne<{ source: string; is_active: boolean }>(
+      `SELECT source, is_active
+         FROM employee_department_access
+        WHERE employee_id = $1 AND department_id = $2`,
+      [employeeId, currentDepartmentId],
+    );
+
+    if (existing) {
+      if (!existing.is_active) {
+        await execute(
+          `UPDATE employee_department_access
+              SET is_active = true, updated_at = $1
+            WHERE employee_id = $2 AND department_id = $3`,
+          [now, employeeId, currentDepartmentId],
+        );
+      }
+      return;
+    }
+
+    await execute(
+      `INSERT INTO employee_department_access
+         (employee_id, department_id, source, is_active, created_at, updated_at)
+       VALUES ($1, $2, $3, true, $4, $4)`,
+      [employeeId, currentDepartmentId, source, now],
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function deactivateAllDepartmentAccessForEmployee(
@@ -64,12 +72,19 @@ export async function deactivateAllDepartmentAccessForEmployee(
 ): Promise<void> {
   if (!employeeId) return;
   const now = new Date().toISOString();
-  const { error } = await supabase
-    .from('employee_department_access')
-    .update({ is_active: false, updated_at: now })
-    .eq('employee_id', employeeId)
-    .eq('is_active', true);
-  if (error) throw error;
+  try {
+    await execute(
+      `UPDATE employee_department_access
+          SET is_active = false, updated_at = $1
+        WHERE employee_id = $2 AND is_active = true`,
+      [now, employeeId],
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function batchUpsertTechnicalDepartmentAccess(

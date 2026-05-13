@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { execute, query } from '../config/postgres.js';
 import type {
   TimesheetApprovalEvent,
   TimesheetApprovalEventAction,
@@ -33,22 +33,23 @@ interface IActorProfile {
 async function loadActorProfileMap(userIds: string[]): Promise<Map<string, IActorProfile>> {
   if (userIds.length === 0) return new Map();
 
-  const { data, error } = await supabase
-    .from('user_profiles')
-    .select('id, full_name, position_type, system_role_id')
-    .in('id', userIds);
+  const data = await query<{
+    id: string;
+    full_name: string | null;
+    position_type: string | null;
+    system_role_id: string | null;
+  }>(
+    'SELECT id, full_name, position_type, system_role_id FROM user_profiles WHERE id = ANY($1::uuid[])',
+    [userIds],
+  );
 
-  if (error) {
-    throw error;
-  }
-
-  return new Map((data || []).map(profile => [
-    profile.id as string,
+  return new Map(data.map(profile => [
+    profile.id,
     {
-      id: profile.id as string,
-      full_name: (profile.full_name as string | null) ?? null,
-      position_type: (profile.position_type as string | null) ?? null,
-      system_role_id: (profile.system_role_id as string | null) ?? null,
+      id: profile.id,
+      full_name: profile.full_name ?? null,
+      position_type: profile.position_type ?? null,
+      system_role_id: profile.system_role_id ?? null,
     },
   ]));
 }
@@ -74,40 +75,36 @@ export const timesheetApprovalHistoryService = {
     metadata?: Record<string, unknown>;
     createdAt?: string;
   }): Promise<void> {
-    const { error } = await supabase
-      .from('timesheet_approval_events')
-      .insert({
-        approval_id: input.approvalId,
-        department_id: input.departmentId,
-        start_date: input.startDate,
-        end_date: input.endDate,
-        action: input.action,
-        from_status: input.fromStatus,
-        to_status: input.toStatus,
-        actor_user_id: input.actorUserId,
-        comment: input.comment ?? null,
-        metadata: input.metadata ?? {},
-        created_at: input.createdAt ?? new Date().toISOString(),
-      });
-
-    if (error) {
-      throw error;
-    }
+    await execute(
+      `INSERT INTO timesheet_approval_events
+         (approval_id, department_id, start_date, end_date, action,
+          from_status, to_status, actor_user_id, comment, metadata, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)`,
+      [
+        input.approvalId,
+        input.departmentId,
+        input.startDate,
+        input.endDate,
+        input.action,
+        input.fromStatus,
+        input.toStatus,
+        input.actorUserId,
+        input.comment ?? null,
+        JSON.stringify(input.metadata ?? {}),
+        input.createdAt ?? new Date().toISOString(),
+      ],
+    );
   },
 
   async listByApprovalId(approvalId: number): Promise<TimesheetApprovalEvent[]> {
-    const { data, error } = await supabase
-      .from('timesheet_approval_events')
-      .select('id, approval_id, department_id, start_date, end_date, action, from_status, to_status, actor_user_id, comment, metadata, created_at')
-      .eq('approval_id', approvalId)
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false });
-
-    if (error) {
-      throw error;
-    }
-
-    const rows = (data || []) as IApprovalEventRow[];
+    const rows = await query<IApprovalEventRow>(
+      `SELECT id, approval_id, department_id, start_date, end_date, action,
+              from_status, to_status, actor_user_id, comment, metadata, created_at
+         FROM timesheet_approval_events
+        WHERE approval_id = $1
+        ORDER BY created_at DESC, id DESC`,
+      [approvalId],
+    );
     const actorProfileMap = await loadActorProfileMap([
       ...new Set(rows.map(row => row.actor_user_id).filter(Boolean)),
     ]);

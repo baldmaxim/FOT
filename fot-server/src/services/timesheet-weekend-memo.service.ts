@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { supabase } from '../config/database.js';
+import { query, queryOne } from '../config/postgres.js';
 import { writeTimesheetWorkbookBuffer } from './timesheet-excel.service.js';
 
 export interface IWeekendMemoEmployee {
@@ -44,61 +44,50 @@ export async function loadWeekendMemoData(params: {
     department_name: null,
   };
 
-  const profileRes = await supabase
-    .from('user_profiles')
-    .select('id, full_name, employee_id')
-    .eq('id', managerUserId)
-    .maybeSingle();
-  if (profileRes.error) throw profileRes.error;
-  if (profileRes.data) {
-    initiator.full_name = (profileRes.data.full_name as string | null) ?? null;
-    const initiatorEmployeeId = (profileRes.data.employee_id as number | null) ?? null;
+  const profile = await queryOne<{ id: string; full_name: string | null; employee_id: number | null }>(
+    'SELECT id, full_name, employee_id FROM user_profiles WHERE id = $1',
+    [managerUserId],
+  );
+  if (profile) {
+    initiator.full_name = profile.full_name ?? null;
+    const initiatorEmployeeId = profile.employee_id ?? null;
     if (initiatorEmployeeId) {
-      const empRes = await supabase
-        .from('employees')
-        .select('id, position_id, department_id')
-        .eq('id', initiatorEmployeeId)
-        .maybeSingle();
-      if (empRes.error) throw empRes.error;
-      const positionId = empRes.data?.position_id ?? null;
-      const departmentId = empRes.data?.department_id ?? null;
+      const empRow = await queryOne<{ id: number; position_id: string | null; department_id: string | null }>(
+        'SELECT id, position_id, department_id FROM employees WHERE id = $1',
+        [initiatorEmployeeId],
+      );
+      const positionId = empRow?.position_id ?? null;
+      const departmentId = empRow?.department_id ?? null;
       if (positionId) {
-        const posRes = await supabase
-          .from('positions')
-          .select('id, name')
-          .eq('id', positionId)
-          .maybeSingle();
-        if (posRes.error) throw posRes.error;
-        initiator.position_name = (posRes.data?.name as string | null) ?? null;
+        const posRow = await queryOne<{ id: string; name: string | null }>(
+          'SELECT id, name FROM positions WHERE id = $1',
+          [positionId],
+        );
+        initiator.position_name = posRow?.name ?? null;
       }
       if (departmentId) {
-        const deptRes = await supabase
-          .from('org_departments')
-          .select('id, name')
-          .eq('id', departmentId)
-          .maybeSingle();
-        if (deptRes.error) throw deptRes.error;
-        initiator.department_name = (deptRes.data?.name as string | null) ?? null;
+        const deptRow = await queryOne<{ id: string; name: string | null }>(
+          'SELECT id, name FROM org_departments WHERE id = $1',
+          [departmentId],
+        );
+        initiator.department_name = deptRow?.name ?? null;
       }
     }
   }
 
-  const empRes = await supabase
-    .from('employees')
-    .select('id, full_name, position_id')
-    .in('id', employeeIds);
-  if (empRes.error) throw empRes.error;
-  const employeesRaw = (empRes.data || []) as Array<{ id: number; full_name: string; position_id: string | null }>;
+  const employeesRaw = await query<{ id: number; full_name: string; position_id: string | null }>(
+    'SELECT id, full_name, position_id FROM employees WHERE id = ANY($1::int[])',
+    [employeeIds],
+  );
 
   const positionIds = [...new Set(employeesRaw.map(e => e.position_id).filter((v): v is string => Boolean(v)))];
   const positionsMap = new Map<string, string>();
   if (positionIds.length > 0) {
-    const posRes = await supabase
-      .from('positions')
-      .select('id, name')
-      .in('id', positionIds);
-    if (posRes.error) throw posRes.error;
-    for (const row of posRes.data || []) {
+    const posRows = await query<{ id: string; name: string | null }>(
+      'SELECT id, name FROM positions WHERE id = ANY($1::uuid[])',
+      [positionIds],
+    );
+    for (const row of posRows) {
       positionsMap.set(String(row.id), String(row.name ?? ''));
     }
   }

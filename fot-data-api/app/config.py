@@ -9,8 +9,10 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    SUPABASE_URL: str = Field(..., description="URL Supabase Cloud")
-    SUPABASE_SERVICE_ROLE_KEY: str = Field(..., description="Service role key — даёт полный доступ, обходит RLS")
+    DATABASE_URL: str = Field(..., description="postgres://user:pass@host:port/dbname")
+    DATABASE_SSL: bool = Field(default=True, description="Включает TLS (sslmode=require/verify-full)")
+    DATABASE_SSL_CA_PATH: str | None = Field(default=None, description="Путь к корневому CA для verify-full")
+    DATABASE_POOL_MAX: int = Field(default=10, description="Максимум коннектов в пуле psycopg")
     PORT: int = 4001
     DEFAULT_RATE_LIMIT_PER_MINUTE: int = 60
 

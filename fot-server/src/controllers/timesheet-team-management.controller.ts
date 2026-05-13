@@ -9,7 +9,7 @@
  */
 import { Response } from 'express';
 import { z } from 'zod';
-import { supabase } from '../config/database.js';
+import { execute, query, queryOne } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { escapeLike } from '../utils/search.utils.js';
 import { employeeCache } from '../services/employee-cache.service.js';
@@ -170,41 +170,44 @@ export const timesheetTeamManagementController = {
         return res.status(403).json({ success: false, error: 'Нет доступа к управлению составом этого отдела' });
       }
 
-      const { data: employees, error } = await supabase
-        .from('employees')
-        .select('id, full_name, org_department_id, excluded_from_timesheet')
-        .ilike('full_name', `%${escapeLike(parsed.q)}%`)
-        .eq('employment_status', 'active')
-        .eq('is_archived', false)
-        .neq('org_department_id', targetDepartmentId)
-        .order('full_name')
-        .limit(20);
+      const employees = await query<{
+        id: number;
+        full_name: string | null;
+        org_department_id: string | null;
+        excluded_from_timesheet: boolean;
+      }>(
+        `SELECT id, full_name, org_department_id, excluded_from_timesheet
+           FROM employees
+          WHERE full_name ILIKE $1
+            AND employment_status = 'active'
+            AND is_archived = false
+            AND (org_department_id IS NULL OR org_department_id <> $2)
+          ORDER BY full_name
+          LIMIT 20`,
+        [`%${escapeLike(parsed.q)}%`, targetDepartmentId],
+      );
 
-      if (error) throw error;
-
-      const departmentIds = [...new Set((employees || [])
+      const departmentIds = [...new Set(employees
         .map(employee => employee.org_department_id)
         .filter((value): value is string => Boolean(value)))];
 
       const departmentNameById = new Map<string, string>();
       if (departmentIds.length > 0) {
-        const { data: departments, error: departmentsError } = await supabase
-          .from('org_departments')
-          .select('id, name')
-          .in('id', departmentIds);
-
-        if (departmentsError) throw departmentsError;
-        for (const department of departments || []) {
+        const departments = await query<{ id: string; name: string | null }>(
+          'SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])',
+          [departmentIds],
+        );
+        for (const department of departments) {
           departmentNameById.set(String(department.id), String(department.name || ''));
         }
       }
 
       res.json({
         success: true,
-        data: (employees || []).map(employee => ({
+        data: employees.map(employee => ({
           id: Number(employee.id),
           full_name: String(employee.full_name || ''),
-          org_department_id: (employee.org_department_id as string | null) ?? null,
+          org_department_id: employee.org_department_id ?? null,
           department_name: employee.org_department_id
             ? departmentNameById.get(String(employee.org_department_id)) || null
             : null,
@@ -237,11 +240,10 @@ export const timesheetTeamManagementController = {
       const [employeeRow, targetDepartment, excludedFlagRow] = await Promise.all([
         loadEmployeeLifecycleRow(parsed.employee_id),
         loadTargetDepartment(targetDepartmentId),
-        supabase
-          .from('employees')
-          .select('excluded_from_timesheet')
-          .eq('id', parsed.employee_id)
-          .maybeSingle(),
+        queryOne<{ excluded_from_timesheet: boolean }>(
+          'SELECT excluded_from_timesheet FROM employees WHERE id = $1',
+          [parsed.employee_id],
+        ),
       ]);
 
       if (!employeeRow) {
@@ -258,7 +260,7 @@ export const timesheetTeamManagementController = {
       }
 
       const fromDepartmentId = employeeRow.org_department_id;
-      const restoredFromExclusion = Boolean(excludedFlagRow.data?.excluded_from_timesheet);
+      const restoredFromExclusion = Boolean(excludedFlagRow?.excluded_from_timesheet);
 
       const moveResult = await moveEmployeeToDepartmentInternal({
         req,
@@ -269,16 +271,15 @@ export const timesheetTeamManagementController = {
       });
 
       if (restoredFromExclusion) {
-        const { error: unexcludeError } = await supabase
-          .from('employees')
-          .update({
-            excluded_from_timesheet: false,
-            excluded_from_timesheet_at: null,
-            excluded_from_timesheet_date: null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', parsed.employee_id);
-        if (unexcludeError) throw unexcludeError;
+        await execute(
+          `UPDATE employees
+              SET excluded_from_timesheet = false,
+                  excluded_from_timesheet_at = NULL,
+                  excluded_from_timesheet_date = NULL,
+                  updated_at = $1
+            WHERE id = $2`,
+          [new Date().toISOString(), parsed.employee_id],
+        );
       }
 
       employeeCache.invalidate(parsed.employee_id);
@@ -337,12 +338,19 @@ export const timesheetTeamManagementController = {
         return res.status(403).json({ success: false, error: 'Нет доступа к управлению составом этого отдела' });
       }
 
-      const { data: employee, error } = await supabase
-        .from('employees')
-        .select('id, full_name, org_department_id, employment_status, excluded_from_timesheet')
-        .eq('id', parsed.employee_id)
-        .single();
-      if (error || !employee) {
+      const employee = await queryOne<{
+        id: number;
+        full_name: string | null;
+        org_department_id: string | null;
+        employment_status: string;
+        excluded_from_timesheet: boolean;
+      }>(
+        `SELECT id, full_name, org_department_id, employment_status, excluded_from_timesheet
+           FROM employees
+          WHERE id = $1`,
+        [parsed.employee_id],
+      );
+      if (!employee) {
         return res.status(404).json({ success: false, error: 'Сотрудник не найден' });
       }
       if (employee.org_department_id !== targetDepartmentId) {
@@ -359,24 +367,24 @@ export const timesheetTeamManagementController = {
       const effectiveDate = parsed.effective_date;
       const previousDay = formatDateShift(effectiveDate, -1);
 
-      const { error: updateError } = await supabase
-        .from('employees')
-        .update({
-          excluded_from_timesheet: true,
-          excluded_from_timesheet_at: excludedAt,
-          excluded_from_timesheet_date: effectiveDate,
-          updated_at: excludedAt,
-        })
-        .eq('id', parsed.employee_id);
-      if (updateError) throw updateError;
+      await execute(
+        `UPDATE employees
+            SET excluded_from_timesheet = true,
+                excluded_from_timesheet_at = $1,
+                excluded_from_timesheet_date = $2,
+                updated_at = $1
+          WHERE id = $3`,
+        [excludedAt, effectiveDate, parsed.employee_id],
+      );
 
-      const { error: closeAssignmentError } = await supabase
-        .from('employee_assignments')
-        .update({ effective_to: previousDay, updated_at: excludedAt })
-        .eq('employee_id', parsed.employee_id)
-        .eq('org_department_id', targetDepartmentId)
-        .is('effective_to', null);
-      if (closeAssignmentError) throw closeAssignmentError;
+      await execute(
+        `UPDATE employee_assignments
+            SET effective_to = $1, updated_at = $2
+          WHERE employee_id = $3
+            AND org_department_id = $4
+            AND effective_to IS NULL`,
+        [previousDay, excludedAt, parsed.employee_id, targetDepartmentId],
+      );
 
       employeeCache.invalidate(parsed.employee_id);
 
@@ -388,7 +396,7 @@ export const timesheetTeamManagementController = {
         details: {
           source: 'timesheet_team_management',
           employee_id: parsed.employee_id,
-          employee_full_name: (employee.full_name as string | null) ?? null,
+          employee_full_name: employee.full_name ?? null,
           department_id: targetDepartmentId,
           department_name: auditDeptName,
           effective_date: effectiveDate,

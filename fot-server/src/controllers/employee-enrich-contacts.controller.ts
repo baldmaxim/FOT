@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { readExcelRows } from '../utils/excel-reader.js';
-import { supabase } from '../config/database.js';
+import { execute, query } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { normalizeFullName } from '../utils/fio.utils.js';
 import { cleanCell } from '../utils/import-cells.utils.js';
@@ -62,18 +62,22 @@ export const employeeEnrichContactsController = {
       const PAGE_SIZE = 1000;
       let from = 0;
       while (true) {
-        const { data, error } = await supabase
-          .from('employees')
-          .select('id, full_name, email')
-          .eq('is_archived', false)
-          .range(from, from + PAGE_SIZE - 1);
-
-        if (error) {
+        let data: Array<{ id: number; full_name: string; email: string | null }>;
+        try {
+          data = await query<{ id: number; full_name: string; email: string | null }>(
+            `SELECT id, full_name, email
+               FROM employees
+              WHERE is_archived = false
+              ORDER BY id
+              LIMIT $1 OFFSET $2`,
+            [PAGE_SIZE, from],
+          );
+        } catch {
           res.status(500).json({ success: false, error: 'Ошибка загрузки сотрудников' });
           return;
         }
 
-        if (!data || data.length === 0) break;
+        if (data.length === 0) break;
         dbEmployees.push(...data);
         if (data.length < PAGE_SIZE) break;
         from += PAGE_SIZE;
@@ -199,15 +203,15 @@ export const employeeEnrichContactsController = {
         // Skip if same email
         if (match.email === row.email) continue;
 
-        const { error } = await supabase
-          .from('employees')
-          .update({ email: row.email, updated_at: new Date().toISOString() })
-          .eq('id', match.id);
-
-        if (error) {
-          errors.push(`${row.fullName}: ${error.message}`);
-        } else {
+        try {
+          await execute(
+            'UPDATE employees SET email = $1, updated_at = $2 WHERE id = $3',
+            [row.email, new Date().toISOString(), match.id],
+          );
           updated++;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          errors.push(`${row.fullName}: ${msg}`);
         }
       }
 

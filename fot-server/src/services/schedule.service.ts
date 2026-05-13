@@ -2,7 +2,7 @@
  * Сервис графиков работы: resolve (каскад employee → default),
  * bulk, хелперы с учётом производственного календаря.
  */
-import { supabase } from '../config/database.js';
+import { query, queryOne } from '../config/postgres.js';
 import type {
   IResolvedSchedule,
   IDayOverride,
@@ -385,21 +385,29 @@ export const loadCalendarMonth = async (
   year: number,
   month: number,
 ): Promise<IProductionCalendarMonth | null> => {
-  const { data } = await supabase
-    .from('production_calendar')
-    .select('year, month, norm_days, norm_hours, holidays, mandatory_holidays, pre_holidays')
-    .eq('year', year)
-    .eq('month', month)
-    .maybeSingle();
+  const data = await queryOne<{
+    year: number;
+    month: number;
+    norm_days: number | string | null;
+    norm_hours: number | string | null;
+    holidays: string[] | null;
+    mandatory_holidays: string[] | null;
+    pre_holidays: string[] | null;
+  }>(
+    `SELECT year, month, norm_days, norm_hours, holidays, mandatory_holidays, pre_holidays
+       FROM production_calendar
+      WHERE year = $1 AND month = $2`,
+    [year, month],
+  );
   if (!data) return null;
   return {
-    year: data.year as number,
-    month: data.month as number,
+    year: data.year,
+    month: data.month,
     norm_days: Number(data.norm_days) || 0,
     norm_hours: Number(data.norm_hours) || 0,
-    holidays: (data.holidays as string[]) || [],
-    mandatory_holidays: (data.mandatory_holidays as string[]) || [],
-    pre_holidays: (data.pre_holidays as string[]) || [],
+    holidays: data.holidays || [],
+    mandatory_holidays: data.mandatory_holidays || [],
+    pre_holidays: data.pre_holidays || [],
   };
 };
 
@@ -407,6 +415,13 @@ const extractWorkSchedule = (value: unknown): Record<string, unknown> | null => 
   if (!value) return null;
   if (Array.isArray(value)) return (value[0] as Record<string, unknown>) || null;
   return value as Record<string, unknown>;
+};
+
+// JOIN-выборка: пакуем все поля work_schedules в row_to_json, чтобы повторить семантику
+// Supabase `select(..., work_schedules(*))`. На стороне TS читаем через extractWorkSchedule.
+const SCHEDULE_JOIN_SELECT = (assignmentColumns: string[], assignmentAlias = 'a'): string => {
+  const cols = assignmentColumns.map(c => `${assignmentAlias}.${c}`).join(', ');
+  return `${cols}, to_jsonb(ws.*) AS work_schedules`;
 };
 
 const isAssignmentActiveOnDate = (
@@ -457,19 +472,25 @@ export const resolveObjectSchedule = async (
   objectId: string,
   date: string,
 ): Promise<IResolvedSchedule | null> => {
-  const { data } = await supabase
-    .from('object_schedule_assignments')
-    .select('schedule_id, anchor_date, work_schedules(*)')
-    .eq('object_id', objectId)
-    .lte('effective_from', date)
-    .or(`effective_to.is.null,effective_to.gte.${date}`)
-    .order('effective_from', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const data = await queryOne<{
+    schedule_id: string;
+    anchor_date: string | null;
+    work_schedules: Record<string, unknown> | null;
+  }>(
+    `SELECT ${SCHEDULE_JOIN_SELECT(['schedule_id', 'anchor_date'])}
+       FROM object_schedule_assignments a
+       LEFT JOIN work_schedules ws ON ws.id = a.schedule_id
+      WHERE a.object_id = $1
+        AND a.effective_from <= $2
+        AND (a.effective_to IS NULL OR a.effective_to >= $2)
+      ORDER BY a.effective_from DESC
+      LIMIT 1`,
+    [objectId, date],
+  );
 
   const objectSchedule = extractWorkSchedule(data?.work_schedules);
   if (!objectSchedule) return null;
-  const assignmentAnchor = (data?.anchor_date as string | null | undefined) ?? null;
+  const assignmentAnchor = data?.anchor_date ?? null;
   return mapToResolved(objectSchedule, 'object', assignmentAnchor);
 };
 
@@ -485,16 +506,19 @@ export const resolveObjectSchedulesForPeriod = async (
   const uniqueObjectIds = [...new Set(objectIds.filter(Boolean))];
   if (uniqueObjectIds.length === 0) return result;
 
-  const { data } = await supabase
-    .from('object_schedule_assignments')
-    .select('object_id, effective_from, effective_to, anchor_date, work_schedules(*)')
-    .in('object_id', uniqueObjectIds)
-    .lte('effective_from', endDate)
-    .or(`effective_to.is.null,effective_to.gte.${startDate}`)
-    .order('effective_from', { ascending: false });
+  const data = await query<Record<string, unknown>>(
+    `SELECT ${SCHEDULE_JOIN_SELECT(['object_id', 'effective_from', 'effective_to', 'anchor_date'])}
+       FROM object_schedule_assignments a
+       LEFT JOIN work_schedules ws ON ws.id = a.schedule_id
+      WHERE a.object_id = ANY($1::uuid[])
+        AND a.effective_from <= $2
+        AND (a.effective_to IS NULL OR a.effective_to >= $3)
+      ORDER BY a.effective_from DESC`,
+    [uniqueObjectIds, endDate, startDate],
+  );
 
   const objectRows = new Map<string, Record<string, unknown>[]>();
-  for (const row of (data || []) as Record<string, unknown>[]) {
+  for (const row of data) {
     const objectId = String(row.object_id || '');
     if (!objectId) continue;
     const rows = objectRows.get(objectId) || [];
@@ -528,32 +552,35 @@ export const resolveSchedule = async (
   date: string,
 ): Promise<IResolvedSchedule> => {
   // 1. Проверить персональный график сотрудника
-  const { data: empSched } = await supabase
-    .from('employee_schedule_assignments')
-    .select('schedule_id, anchor_date, work_schedules(*)')
-    .eq('employee_id', employeeId)
-    .lte('effective_from', date)
-    .or(`effective_to.is.null,effective_to.gte.${date}`)
-    .order('effective_from', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const empSched = await queryOne<{
+    schedule_id: string;
+    anchor_date: string | null;
+    work_schedules: Record<string, unknown> | null;
+  }>(
+    `SELECT ${SCHEDULE_JOIN_SELECT(['schedule_id', 'anchor_date'])}
+       FROM employee_schedule_assignments a
+       LEFT JOIN work_schedules ws ON ws.id = a.schedule_id
+      WHERE a.employee_id = $1
+        AND a.effective_from <= $2
+        AND (a.effective_to IS NULL OR a.effective_to >= $2)
+      ORDER BY a.effective_from DESC
+      LIMIT 1`,
+    [employeeId, date],
+  );
 
   const employeeSchedule = extractWorkSchedule(empSched?.work_schedules);
   if (employeeSchedule) {
-    const assignmentAnchor = (empSched?.anchor_date as string | null | undefined) ?? null;
+    const assignmentAnchor = empSched?.anchor_date ?? null;
     return mapToResolved(employeeSchedule, 'employee', assignmentAnchor);
   }
 
   // 2. Дефолт
-  const { data: defaultSched } = await supabase
-    .from('work_schedules')
-    .select('*')
-    .eq('is_default', true)
-    .limit(1)
-    .maybeSingle();
+  const defaultSched = await queryOne<Record<string, unknown>>(
+    'SELECT * FROM work_schedules WHERE is_default = true LIMIT 1',
+  );
 
   if (defaultSched) {
-    return mapToResolved(defaultSched as Record<string, unknown>, 'default');
+    return mapToResolved(defaultSched, 'default');
   }
 
   return { ...DEFAULT_SCHEDULE };
@@ -569,25 +596,24 @@ export const resolveSchedulesBulk = async (
 
   const employeeIds = employees.map(e => e.id);
 
-  const [empSchedsRes, defaultRes] = await Promise.all([
-    supabase
-      .from('employee_schedule_assignments')
-      .select('employee_id, effective_from, anchor_date, work_schedules(*)')
-      .in('employee_id', employeeIds)
-      .lte('effective_from', date)
-      .or(`effective_to.is.null,effective_to.gte.${date}`)
-      .order('effective_from', { ascending: false }),
-
-    supabase
-      .from('work_schedules')
-      .select('*')
-      .eq('is_default', true)
-      .limit(1)
-      .maybeSingle(),
+  const [empSchedsRows, defaultSched] = await Promise.all([
+    query<Record<string, unknown>>(
+      `SELECT ${SCHEDULE_JOIN_SELECT(['employee_id', 'effective_from', 'anchor_date'])}
+         FROM employee_schedule_assignments a
+         LEFT JOIN work_schedules ws ON ws.id = a.schedule_id
+        WHERE a.employee_id = ANY($1::int[])
+          AND a.effective_from <= $2
+          AND (a.effective_to IS NULL OR a.effective_to >= $2)
+        ORDER BY a.effective_from DESC`,
+      [employeeIds, date],
+    ),
+    queryOne<Record<string, unknown>>(
+      'SELECT * FROM work_schedules WHERE is_default = true LIMIT 1',
+    ),
   ]);
 
   const employeeMap = new Map<number, { schedule: Record<string, unknown>; anchor: string | null }>();
-  for (const row of (empSchedsRes.data || []) as Record<string, unknown>[]) {
+  for (const row of empSchedsRows) {
     const employeeId = row.employee_id as number;
     if (!employeeMap.has(employeeId)) {
       const schedule = extractWorkSchedule(row.work_schedules);
@@ -599,8 +625,6 @@ export const resolveSchedulesBulk = async (
       }
     }
   }
-
-  const defaultSched = defaultRes.data as Record<string, unknown> | null;
 
   for (const emp of employees) {
     const empEntry = employeeMap.get(emp.id);
@@ -627,33 +651,32 @@ export const resolveSchedulesForPeriod = async (
 
   const employeeIds = employees.map(e => e.id);
 
-  const [empSchedsRes, defaultRes] = await Promise.all([
-    supabase
-      .from('employee_schedule_assignments')
-      .select('employee_id, effective_from, effective_to, anchor_date, work_schedules(*)')
-      .in('employee_id', employeeIds)
-      .lte('effective_from', endDate)
-      .or(`effective_to.is.null,effective_to.gte.${startDate}`)
-      .order('effective_from', { ascending: false }),
-
-    supabase
-      .from('work_schedules')
-      .select('*')
-      .eq('is_default', true)
-      .limit(1)
-      .maybeSingle(),
+  const [empSchedsRows, defaultSched] = await Promise.all([
+    query<Record<string, unknown>>(
+      `SELECT ${SCHEDULE_JOIN_SELECT(['employee_id', 'effective_from', 'effective_to', 'anchor_date'])}
+         FROM employee_schedule_assignments a
+         LEFT JOIN work_schedules ws ON ws.id = a.schedule_id
+        WHERE a.employee_id = ANY($1::int[])
+          AND a.effective_from <= $2
+          AND (a.effective_to IS NULL OR a.effective_to >= $3)
+        ORDER BY a.effective_from DESC`,
+      [employeeIds, endDate, startDate],
+    ),
+    queryOne<Record<string, unknown>>(
+      'SELECT * FROM work_schedules WHERE is_default = true LIMIT 1',
+    ),
   ]);
 
   const employeeRows = new Map<number, Record<string, unknown>[]>();
-  for (const row of (empSchedsRes.data || []) as Record<string, unknown>[]) {
+  for (const row of empSchedsRows) {
     const employeeId = row.employee_id as number;
     const rows = employeeRows.get(employeeId) || [];
     rows.push(row);
     employeeRows.set(employeeId, rows);
   }
 
-  const defaultSchedule = defaultRes.data
-    ? mapToResolved(defaultRes.data as Record<string, unknown>, 'default')
+  const defaultSchedule = defaultSched
+    ? mapToResolved(defaultSched, 'default')
     : { ...DEFAULT_SCHEDULE };
 
   for (const employee of employees) {

@@ -1,7 +1,7 @@
 import * as Sentry from '@sentry/node';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { supabase } from '../config/database.js';
-import { withSupabaseSlot } from '../config/supabase-instrumentation.js';
+import { query } from '../config/postgres.js';
+import { withDbSlot } from '../config/db-instrumentation.js';
 import { listExplicitDepartmentIdsForUser, loadEmployeeAccessMap } from './department-access.service.js';
 
 export type DataScope = 'self' | 'department' | 'all';
@@ -49,18 +49,19 @@ export async function resolveCompanyScope(req: AuthenticatedRequest): Promise<{ 
     return req.user.company_scope;
   }
 
-  const { data, error } = await supabase
-    .from('user_company_access')
-    .select('company_root_id')
-    .eq('user_id', req.user.id);
-
-  if (error) {
+  let rows: { company_root_id: string }[];
+  try {
+    rows = await query<{ company_root_id: string }>(
+      'SELECT company_root_id FROM user_company_access WHERE user_id = $1::uuid',
+      [req.user.id],
+    );
+  } catch (error) {
     console.error('[resolveCompanyScope] failed to load user_company_access', error);
     req.user.company_scope = { roots: 'all' };
     return req.user.company_scope;
   }
 
-  const roots = (data || []).map(row => row.company_root_id as string);
+  const roots = rows.map(row => row.company_root_id);
   req.user.company_scope = { roots: roots.length === 0 ? 'all' : roots };
   return req.user.company_scope;
 }
@@ -100,9 +101,17 @@ export async function resolveAccessibleDepartmentIds(
     }
 
     type RpcResult = { data: { id: string }[] | null; error: { message: string } | null };
-    const rpcPromise: Promise<RpcResult> = withSupabaseSlot('get_descendant_department_ids', async () => {
-      const { data, error } = await supabase.rpc('get_descendant_department_ids', { p_root_ids: scope.roots });
-      return { data: (data ?? null) as { id: string }[] | null, error: error ? { message: error.message } : null };
+    const rpcPromise: Promise<RpcResult> = withDbSlot('get_descendant_department_ids', async () => {
+      try {
+        const rows = await query<{ id: string }>(
+          'SELECT id FROM public.get_descendant_department_ids($1::uuid[])',
+          [scope.roots],
+        );
+        return { data: rows, error: null };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { data: null, error: { message } };
+      }
     });
     const timeoutPromise = new Promise<RpcResult>((resolve) => {
       setTimeout(() => resolve({ data: null, error: { message: 'rpc_timeout' } }), SCOPE_RPC_TIMEOUT_MS);

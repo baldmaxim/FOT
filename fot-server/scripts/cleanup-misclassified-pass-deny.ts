@@ -28,7 +28,7 @@
  * Без --dry-run скрипт реально удаляет записи и пересчитывает summary.
  * --dry-run только печатает что было бы удалено и сколько пар пересчитано.
  */
-import { supabase } from '../src/config/database.js';
+import { execute, query } from '../src/config/postgres.js';
 import { computeDedupHash } from '../src/utils/dedup.utils.js';
 
 const PAGE = 2000;
@@ -87,22 +87,28 @@ async function main(): Promise<void> {
   {
     let from = 0;
     while (true) {
-      const { data: rows, error } = await supabase
-        .from('skud_event_failures')
-        .select('physical_person, event_date, event_time, access_point, direction')
-        .gte('event_date', startDate)
-        .lte('event_date', endDate)
-        .order('event_date', { ascending: true })
-        .range(from, from + PAGE - 1);
-      if (error) throw error;
-      if (!rows || rows.length === 0) break;
+      const rows = await query<{
+        physical_person: string | null;
+        event_date: string;
+        event_time: string;
+        access_point: string | null;
+        direction: 'entry' | 'exit' | null;
+      }>(
+        `SELECT physical_person, event_date, event_time, access_point, direction
+           FROM skud_event_failures
+          WHERE event_date >= $1 AND event_date <= $2
+          ORDER BY event_date ASC
+          LIMIT $3 OFFSET $4`,
+        [startDate, endDate, PAGE, from],
+      );
+      if (rows.length === 0) break;
       for (const row of rows) {
         failures.push({
-          physical_person: (row as Record<string, unknown>).physical_person as string | null,
-          event_date: String((row as Record<string, unknown>).event_date),
-          event_time: String((row as Record<string, unknown>).event_time),
-          access_point: (row as Record<string, unknown>).access_point as string | null,
-          direction: (row as Record<string, unknown>).direction as 'entry' | 'exit' | null,
+          physical_person: row.physical_person,
+          event_date: String(row.event_date),
+          event_time: String(row.event_time),
+          access_point: row.access_point,
+          direction: row.direction,
         });
       }
       if (rows.length < PAGE) break;
@@ -141,24 +147,33 @@ async function main(): Promise<void> {
   const matches: SkudEventMatch[] = [];
   for (let i = 0; i < allHashes.length; i += DELETE_BATCH) {
     const chunk = allHashes.slice(i, i + DELETE_BATCH);
-    const { data: rows, error } = await supabase
-      .from('skud_events')
-      .select('id, employee_id, event_date, event_at, dedup_hash, physical_person, access_point, direction')
-      .in('dedup_hash', chunk)
-      .gte('event_date', startDate)
-      .lte('event_date', endDate);
-    if (error) throw error;
-    if (!rows) continue;
+    const rows = await query<{
+      id: number;
+      employee_id: number | null;
+      event_date: string;
+      event_at: string;
+      dedup_hash: string;
+      physical_person: string | null;
+      access_point: string | null;
+      direction: string | null;
+    }>(
+      `SELECT id, employee_id, event_date, event_at, dedup_hash, physical_person, access_point, direction
+         FROM skud_events
+        WHERE dedup_hash = ANY($1::text[])
+          AND event_date >= $2
+          AND event_date <= $3`,
+      [chunk, startDate, endDate],
+    );
     for (const row of rows) {
       matches.push({
-        id: Number((row as Record<string, unknown>).id),
-        employee_id: ((row as Record<string, unknown>).employee_id as number | null) ?? null,
-        event_date: String((row as Record<string, unknown>).event_date),
-        event_at: String((row as Record<string, unknown>).event_at),
-        dedup_hash: String((row as Record<string, unknown>).dedup_hash),
-        physical_person: ((row as Record<string, unknown>).physical_person as string | null) ?? null,
-        access_point: ((row as Record<string, unknown>).access_point as string | null) ?? null,
-        direction: ((row as Record<string, unknown>).direction as string | null) ?? null,
+        id: Number(row.id),
+        employee_id: row.employee_id ?? null,
+        event_date: String(row.event_date),
+        event_at: String(row.event_at),
+        dedup_hash: String(row.dedup_hash),
+        physical_person: row.physical_person ?? null,
+        access_point: row.access_point ?? null,
+        direction: row.direction ?? null,
       });
     }
   }
@@ -196,13 +211,17 @@ async function main(): Promise<void> {
   let deleted = 0;
   for (let i = 0; i < idsToDelete.length; i += DELETE_BATCH) {
     const chunk = idsToDelete.slice(i, i + DELETE_BATCH);
-    const { error } = await supabase
-      .from('skud_events')
-      .delete()
-      .in('id', chunk);
-    if (error) {
-      console.error(`[cleanup] ошибка удаления batch ${i}/${idsToDelete.length}:`, error.message);
-      throw error;
+    try {
+      await execute(
+        'DELETE FROM skud_events WHERE id = ANY($1::bigint[])',
+        [chunk],
+      );
+    } catch (err) {
+      console.error(
+        `[cleanup] ошибка удаления batch ${i}/${idsToDelete.length}:`,
+        err instanceof Error ? err.message : err,
+      );
+      throw err;
     }
     deleted += chunk.length;
   }
@@ -216,10 +235,17 @@ async function main(): Promise<void> {
   let recalced = 0;
   for (let i = 0; i < allPairs.length; i += RECALC_BATCH) {
     const chunk = allPairs.slice(i, i + RECALC_BATCH);
-    const { error } = await supabase.rpc('batch_recalculate_skud_daily_summary', { p_pairs: chunk });
-    if (error) {
-      console.error(`[cleanup] ошибка recalc batch ${i}/${allPairs.length}:`, error.message);
-      throw error;
+    try {
+      await execute(
+        'SELECT public.batch_recalculate_skud_daily_summary($1::jsonb)',
+        [JSON.stringify(chunk)],
+      );
+    } catch (err) {
+      console.error(
+        `[cleanup] ошибка recalc batch ${i}/${allPairs.length}:`,
+        err instanceof Error ? err.message : err,
+      );
+      throw err;
     }
     recalced += chunk.length;
   }

@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **fot-server/** — Express + TypeScript (бэкенд, порт 3001)
 - **fot-data-api/** — Python/FastAPI, read-only API на порту 4001 для внешних интеграций (1С). Авторизация — Bearer-токены `fot_<prefix>_<secret>`, выдаются через админ-вкладку «API-доступ». Whitelist таблиц/полей в БД, slowapi rate-limit per-key. Детали в [API_1C.md](API_1C.md) и [fot-data-api/README.md](fot-data-api/README.md).
 
-БД: Supabase Cloud (PostgreSQL). Связь: фронтенд → REST API (`/api/...`) с JWT Bearer → бэкенд → Supabase Cloud (service role key, без RLS). Реалтайм через Socket.IO (чат, присутствие).
+БД: **Yandex Managed PostgreSQL** (Phase 10 миграция с Supabase Cloud завершена). Связь: фронтенд → REST API (`/api/...`) с JWT Bearer → бэкенд → PG через `pg`-Pool (`fot-server/src/config/postgres.ts` — `query/queryOne/execute/withTransaction`). Аутентификация — собственная таблица `app_auth.users` + bcrypt (`local-auth.service.ts`), без Supabase Auth/PostgREST. Реалтайм через Socket.IO (чат, присутствие).
 
 Внешняя интеграция: Sigur REST API (СКУД — система контроля доступа). Настройки подключения в `.env`.
 
@@ -62,9 +62,9 @@ cd fot-data-api && uvicorn app.main:app --reload --port 4001
 ## Ключевые паттерны
 
 - **Авторизация**: JWT + 2FA (TOTP). Роли через `position_type` + `system_role_id` (таблица `system_roles`). Проверка в middleware (`auth.ts`), на фронте — `<ProtectedRoute>`. Иерархия ролей через `level` из `system_roles`.
-- **Скоуп админа**: `system_admin` видит все компании; `admin` (компанийный) — только корни Sigur, привязанные через таблицу `user_company_access` (миграция 083). Резолвинг скоупа в `data-scope.service.ts` + RPC `get_descendant_department_ids(uuid[])`.
+- **Скоуп админа**: `system_admin` видит все компании; `admin` (компанийный) — только корни Sigur, привязанные через таблицу `user_company_access` (миграция 083). Резолвинг скоупа в `data-scope.service.ts` + функция `public.get_descendant_department_ids($1::uuid[])`.
 - **ФИО сотрудников**: хранятся plain-text (`full_name`, `last_name`, `first_name`, `middle_name`). `encryption.service.ts` используется только для TOTP и чата, не для ФИО.
-- **Supabase**: используется service role key (RLS отключён), авторизация проверяется в middleware бэкенда. Фронтенд к PostgREST напрямую не обращается.
+- **БД-runtime**: прямой `pg.Pool` через `config/postgres.ts` (`query/queryOne/execute/withTransaction`). Supabase SDK удалён из package.json в Phase 10E (см. `docs/yandex-postgres-migration/`). RLS не используется — авторизация проверяется в middleware. Аутентификация через `app_auth.users` + bcrypt (`local-auth.service.ts`).
 - **API роуты**: все под префиксом `/api/` — auth, employees, admin, skud, sigur, structure, timesheet, audit, chat, push, leave-requests, documents, payslips, payments, production-calendar, timesheet-approvals, schedules, roles, salary-raise, settings, notifications, work-categories, official-memos, admin-data-api, correction-approvals, patent-receipts, daily-tasks, direct-reports.
 - **Фронтенд роуты**: по ролям — `worker` видит `/employee/*`, `header`+ видит `/dashboard`, `admin`+ видит `/employees`, `super_admin` видит `/skud-settings`, `/admin/*`.
 
@@ -72,7 +72,7 @@ cd fot-data-api && uvicorn app.main:app --reload --port 4001
 
 - **Контроллеры** (`fot-server/src/controllers/`): декомпозированы по доменам — `admin-*`, `auth-*`, `employee-*`, `sigur-*`, `skud-*`, `timesheet-*`.
 - **Сервисы** (`fot-server/src/services/`): `sigur-sync-*` (employees, events, structure, shared), `skud-*` (backfill, dashboard, discipline, import, presence, shared), `employee-mapper.service.ts` (кэш структуры + маппинг полей).
-- **Конфиг** (`fot-server/src/config/`): `database.ts` (Supabase service-role клиент), `env.ts`, `features.ts` (`LOGIN_2FA_ENABLED`, `CRITICAL_2FA_ENABLED`, `IS_PRODUCTION`), `access-control.ts`.
+- **Конфиг** (`fot-server/src/config/`): `postgres.ts` (pg-Pool + helpers `query/queryOne/execute/withTransaction`), `env.ts` (включая `DATABASE_URL`, `DATABASE_POOL_MAX`, `DATABASE_STATEMENT_TIMEOUT_MS`, `DATABASE_SSL`, `DATABASE_SSL_CA_PATH`), `features.ts` (`LOGIN_2FA_ENABLED`, `CRITICAL_2FA_ENABLED`, `IS_PRODUCTION`), `access-control.ts`, `supabase-instrumentation.ts` (legacy-имя — это семафор `withSupabaseSlot` для presence-polling и тяжёлых RPC; переименование запланировано отдельно).
 - **Типы Express**: `fot-server/src/types/express.d.ts` — расширение `req.user` с типизацией.
 - **Middleware**: `auth.ts`, `rateLimit.ts` (`apiLimiter` 500/15мин, `authLimiter` 10/15мин, `twoFactorLimiter` 5/5мин, `importLimiter` 5/1ч; в dev лимиты выше), `cacheResponse.ts` — LRU-кеш JSON-ответов (max 200, настраиваемый TTL/key), `noStore` (отключение кэша на чувствительных эндпоинтах), `skipCacheForToday` (инвалидация дневного кэша), `serverTiming` (Server-Timing header).
 - **Загрузка файлов**: multer в `memoryStorage` (используется в `admin.routes.ts`, `employees.routes.ts`).

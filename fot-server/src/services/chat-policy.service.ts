@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import type { ChatInboundMode } from '../types/index.js';
 import { getRoleById } from './roles-cache.service.js';
 import { loadEmployeeAccessMap } from './department-access.service.js';
@@ -67,23 +67,35 @@ export const chatPolicyService = {
     const uniqueIds = [...new Set(userIds.filter(Boolean))];
     if (uniqueIds.length === 0) return new Map();
 
-    const { data: profiles, error: profileError } = await supabase
-      .from('user_profiles')
-      .select('id, full_name, system_role_id, supervisor_id, employee_id, chat_inbound_mode, is_approved')
-      .in('id', uniqueIds);
-
-    if (profileError) {
-      throw new Error(`Failed to load chat user contexts: ${profileError.message}`);
+    let profiles: Array<{
+      id: string;
+      full_name: string | null;
+      system_role_id: string | null;
+      supervisor_id: string | null;
+      employee_id: number | null;
+      chat_inbound_mode: string | null;
+      is_approved: boolean | null;
+    }>;
+    try {
+      profiles = await query(
+        `SELECT id, full_name, system_role_id, supervisor_id, employee_id, chat_inbound_mode, is_approved
+           FROM user_profiles
+          WHERE id = ANY($1::uuid[])`,
+        [uniqueIds],
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      throw new Error(`Failed to load chat user contexts: ${msg}`);
     }
 
-    const employeeIds = (profiles || [])
+    const employeeIds = profiles
       .map(profile => profile.employee_id)
       .filter((id): id is number => typeof id === 'number');
 
     const employeeAccessMap = await loadEmployeeAccessMap(employeeIds);
 
     const result = new Map<string, IChatUserContext>();
-    for (const profile of profiles || []) {
+    for (const profile of profiles) {
       const role = await getRoleById(profile.system_role_id);
       result.set(profile.id, {
         id: profile.id,
@@ -107,25 +119,29 @@ export const chatPolicyService = {
 
     if (uniqueIds.length === 0) return state;
 
-    const [leftRows, rightRows] = await Promise.all([
-      supabase
-        .from('chat_contact_grants')
-        .select('user_a_id, user_b_id, expires_at')
-        .eq('user_a_id', currentUserId)
-        .in('user_b_id', uniqueIds),
-      supabase
-        .from('chat_contact_grants')
-        .select('user_a_id, user_b_id, expires_at')
-        .eq('user_b_id', currentUserId)
-        .in('user_a_id', uniqueIds),
-    ]);
-
-    const errors = [leftRows.error, rightRows.error].filter(Boolean);
-    if (errors.length > 0) {
-      throw new Error(`Failed to load chat grants: ${errors[0]?.message}`);
+    let leftRows: Array<{ user_a_id: string; user_b_id: string; expires_at: string | null }>;
+    let rightRows: Array<{ user_a_id: string; user_b_id: string; expires_at: string | null }>;
+    try {
+      [leftRows, rightRows] = await Promise.all([
+        query<{ user_a_id: string; user_b_id: string; expires_at: string | null }>(
+          `SELECT user_a_id, user_b_id, expires_at
+             FROM chat_contact_grants
+            WHERE user_a_id = $1 AND user_b_id = ANY($2::uuid[])`,
+          [currentUserId, uniqueIds],
+        ),
+        query<{ user_a_id: string; user_b_id: string; expires_at: string | null }>(
+          `SELECT user_a_id, user_b_id, expires_at
+             FROM chat_contact_grants
+            WHERE user_b_id = $1 AND user_a_id = ANY($2::uuid[])`,
+          [currentUserId, uniqueIds],
+        ),
+      ]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      throw new Error(`Failed to load chat grants: ${msg}`);
     }
 
-    [...(leftRows.data || []), ...(rightRows.data || [])].forEach(row => {
+    [...leftRows, ...rightRows].forEach(row => {
       if (!isActiveGrant(row.expires_at)) return;
       const counterpartId = row.user_a_id === currentUserId ? row.user_b_id : row.user_a_id;
       state.set(counterpartId, { hasGrant: true });
@@ -140,28 +156,34 @@ export const chatPolicyService = {
 
     if (uniqueIds.length === 0) return result;
 
-    const [outgoingRows, incomingRows] = await Promise.all([
-      supabase
-        .from('chat_contact_requests')
-        .select('target_user_id')
-        .eq('requester_id', currentUserId)
-        .eq('status', 'pending')
-        .in('target_user_id', uniqueIds),
-      supabase
-        .from('chat_contact_requests')
-        .select('requester_id')
-        .eq('target_user_id', currentUserId)
-        .eq('status', 'pending')
-        .in('requester_id', uniqueIds),
-    ]);
-
-    const errors = [outgoingRows.error, incomingRows.error].filter(Boolean);
-    if (errors.length > 0) {
-      throw new Error(`Failed to load chat requests: ${errors[0]?.message}`);
+    let outgoingRows: Array<{ target_user_id: string }>;
+    let incomingRows: Array<{ requester_id: string }>;
+    try {
+      [outgoingRows, incomingRows] = await Promise.all([
+        query<{ target_user_id: string }>(
+          `SELECT target_user_id
+             FROM chat_contact_requests
+            WHERE requester_id = $1
+              AND status = 'pending'
+              AND target_user_id = ANY($2::uuid[])`,
+          [currentUserId, uniqueIds],
+        ),
+        query<{ requester_id: string }>(
+          `SELECT requester_id
+             FROM chat_contact_requests
+            WHERE target_user_id = $1
+              AND status = 'pending'
+              AND requester_id = ANY($2::uuid[])`,
+          [currentUserId, uniqueIds],
+        ),
+      ]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      throw new Error(`Failed to load chat requests: ${msg}`);
     }
 
-    (outgoingRows.data || []).forEach(row => result.set(row.target_user_id, 'outgoing_pending'));
-    (incomingRows.data || []).forEach(row => {
+    outgoingRows.forEach(row => result.set(row.target_user_id, 'outgoing_pending'));
+    incomingRows.forEach(row => {
       if (!result.has(row.requester_id)) {
         result.set(row.requester_id, 'incoming_pending');
       }

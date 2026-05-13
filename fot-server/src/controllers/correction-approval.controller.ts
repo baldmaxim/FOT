@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { supabase } from '../config/database.js';
+import { query, queryOne } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import {
   resolveAccessibleDepartmentIds,
@@ -53,27 +53,37 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
       return;
     }
 
-    const { data: pendingRows, error: pendingErr } = await supabase
-      .from('attendance_adjustments')
-      .select('id, employee_id, work_date, status, hours_override, reason, created_by, created_at')
-      .eq('approval_status', 'pending')
-      .gte('work_date', startDate)
-      .lte('work_date', endDate)
-      .order('work_date', { ascending: true });
-    if (pendingErr) throw pendingErr;
-    const adjustments = pendingRows || [];
+    const adjustments = await query<{
+      id: number;
+      employee_id: number;
+      work_date: string;
+      status: string;
+      hours_override: number | null;
+      reason: string | null;
+      created_by: string | null;
+      created_at: string;
+    }>(
+      `SELECT id, employee_id, work_date::text AS work_date, status, hours_override, reason, created_by, created_at
+         FROM attendance_adjustments
+        WHERE approval_status = 'pending'
+          AND work_date >= $1::date
+          AND work_date <= $2::date
+        ORDER BY work_date ASC`,
+      [startDate, endDate],
+    );
+
     if (adjustments.length === 0) {
       res.json({ success: true, data: [] });
       return;
     }
 
     const employeeIds = [...new Set(adjustments.map(a => Number(a.employee_id)))];
-    const { data: employeesRows, error: empErr } = await supabase
-      .from('employees')
-      .select('id, full_name, org_department_id')
-      .in('id', employeeIds);
-    if (empErr) throw empErr;
-    const employees = employeesRows || [];
+    const employees = await query<{ id: number; full_name: string | null; org_department_id: string | null }>(
+      `SELECT id, full_name, org_department_id
+         FROM employees
+        WHERE id = ANY($1::bigint[])`,
+      [employeeIds],
+    );
 
     const allowedDeptIds = accessible === 'all' ? null : new Set(accessible);
     const filteredEmployees = employees.filter(e => {
@@ -87,7 +97,7 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
     }
 
     const employeeMap = new Map(filteredEmployees.map(e => [Number(e.id), {
-      full_name: (e.full_name as string | null) ?? null,
+      full_name: e.full_name ?? null,
       department_id: e.org_department_id ? String(e.org_department_id) : null,
     }]));
 
@@ -96,12 +106,11 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
       .filter((id): id is string => id !== null))];
     const deptNamesMap = new Map<string, string>();
     if (deptIds.length > 0) {
-      const { data: deptRows, error: deptErr } = await supabase
-        .from('org_departments')
-        .select('id, name')
-        .in('id', deptIds);
-      if (deptErr) throw deptErr;
-      for (const row of deptRows || []) {
+      const deptRows = await query<{ id: string; name: string | null }>(
+        `SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])`,
+        [deptIds],
+      );
+      for (const row of deptRows) {
         deptNamesMap.set(String(row.id), String(row.name ?? ''));
       }
     }
@@ -109,12 +118,11 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
     const userIds = [...new Set(adjustments.map(a => a.created_by).filter((v): v is string => Boolean(v)))];
     const userNamesMap = new Map<string, string>();
     if (userIds.length > 0) {
-      const { data: userRows, error: userErr } = await supabase
-        .from('user_profiles')
-        .select('id, full_name')
-        .in('id', userIds);
-      if (userErr) throw userErr;
-      for (const row of userRows || []) {
+      const userRows = await query<{ id: string; full_name: string | null }>(
+        `SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])`,
+        [userIds],
+      );
+      for (const row of userRows) {
         userNamesMap.set(String(row.id), String(row.full_name ?? ''));
       }
     }
@@ -142,7 +150,7 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
         work_date: String(adj.work_date),
         status: String(adj.status),
         hours_override: typeof adj.hours_override === 'number' ? adj.hours_override : null,
-        notes: (adj.reason as string | null) ?? null,
+        notes: adj.reason ?? null,
         created_by: adj.created_by ? String(adj.created_by) : null,
         created_by_name: adj.created_by ? userNamesMap.get(String(adj.created_by)) ?? null : null,
         created_at: String(adj.created_at),
@@ -168,12 +176,17 @@ async function loadAdjustmentForApproval(adjustmentId: number): Promise<{
   work_date: string;
   approval_status: string;
 } | null> {
-  const { data, error } = await supabase
-    .from('attendance_adjustments')
-    .select('id, employee_id, work_date, approval_status')
-    .eq('id', adjustmentId)
-    .maybeSingle();
-  if (error) throw error;
+  const data = await queryOne<{
+    id: number;
+    employee_id: number;
+    work_date: string;
+    approval_status: string;
+  }>(
+    `SELECT id, employee_id, work_date::text AS work_date, approval_status
+       FROM attendance_adjustments
+      WHERE id = $1`,
+    [adjustmentId],
+  );
   if (!data) return null;
   return {
     id: Number(data.id),
@@ -189,12 +202,11 @@ async function ensureAdjustmentDepartmentAccess(
 ): Promise<boolean> {
   const accessible = await resolveAccessibleDepartmentIds(req);
   if (accessible === 'all') return true;
-  const { data, error } = await supabase
-    .from('employees')
-    .select('org_department_id')
-    .eq('id', employeeId)
-    .maybeSingle();
-  if (error || !data) return false;
+  const data = await queryOne<{ org_department_id: string | null }>(
+    `SELECT org_department_id FROM employees WHERE id = $1`,
+    [employeeId],
+  );
+  if (!data) return false;
   const deptId = data.org_department_id ? String(data.org_department_id) : null;
   return deptId !== null && accessible.includes(deptId);
 }
@@ -221,19 +233,18 @@ async function changeAdjustmentApproval(
   }
 
   const now = new Date().toISOString();
-  const { data: updatedRows, error } = await supabase
-    .from('attendance_adjustments')
-    .update({
-      approval_status: nextStatus,
-      approved_by: req.user.id,
-      approved_at: now,
-      approval_comment: comment,
-    })
-    .eq('id', adjustmentId)
-    .eq('approval_status', 'pending')
-    .select('id');
-  if (error) throw error;
-  if (!updatedRows || updatedRows.length === 0) {
+  const updatedRows = await query<{ id: number }>(
+    `UPDATE attendance_adjustments SET
+       approval_status = $1,
+       approved_by = $2,
+       approved_at = $3,
+       approval_comment = $4
+     WHERE id = $5 AND approval_status = 'pending'
+     RETURNING id`,
+    [nextStatus, req.user.id, now, comment, adjustmentId],
+  );
+
+  if (updatedRows.length === 0) {
     res.status(409).json({
       success: false,
       error: 'Корректировка уже не в статусе pending',
@@ -306,12 +317,12 @@ async function bulkChangeByIds(
   }
   const uniqueIds = [...new Set(ids)];
 
-  const { data: rows, error: loadErr } = await supabase
-    .from('attendance_adjustments')
-    .select('id, employee_id, approval_status')
-    .in('id', uniqueIds);
-  if (loadErr) throw loadErr;
-  const adjustments = rows || [];
+  const adjustments = await query<{ id: number; employee_id: number; approval_status: string }>(
+    `SELECT id, employee_id, approval_status
+       FROM attendance_adjustments
+      WHERE id = ANY($1::bigint[])`,
+    [uniqueIds],
+  );
 
   const pending = adjustments.filter(a => String(a.approval_status) === 'pending');
   const skippedNotPending = uniqueIds.length - pending.length;
@@ -331,13 +342,12 @@ async function bulkChangeByIds(
   if (accessible !== 'all') {
     const allowedDeptSet = new Set(accessible);
     const employeeIds = [...new Set(pending.map(a => Number(a.employee_id)))];
-    const { data: empRows, error: empErr } = await supabase
-      .from('employees')
-      .select('id, org_department_id')
-      .in('id', employeeIds);
-    if (empErr) throw empErr;
+    const empRows = await query<{ id: number; org_department_id: string | null }>(
+      `SELECT id, org_department_id FROM employees WHERE id = ANY($1::bigint[])`,
+      [employeeIds],
+    );
     const allowedEmpSet = new Set<number>();
-    for (const row of empRows || []) {
+    for (const row of empRows) {
       const deptId = row.org_department_id ? String(row.org_department_id) : null;
       if (deptId && allowedDeptSet.has(deptId)) allowedEmpSet.add(Number(row.id));
     }
@@ -362,20 +372,18 @@ async function bulkChangeByIds(
   }
 
   const now = new Date().toISOString();
-  const { data: updated, error: updErr } = await supabase
-    .from('attendance_adjustments')
-    .update({
-      approval_status: nextStatus,
-      approved_by: req.user.id,
-      approved_at: now,
-      approval_comment: comment,
-    })
-    .in('id', allowedIds)
-    .eq('approval_status', 'pending')
-    .select('id');
-  if (updErr) throw updErr;
+  const updated = await query<{ id: number }>(
+    `UPDATE attendance_adjustments SET
+       approval_status = $1,
+       approved_by = $2,
+       approved_at = $3,
+       approval_comment = $4
+     WHERE id = ANY($5::bigint[]) AND approval_status = 'pending'
+     RETURNING id`,
+    [nextStatus, req.user.id, now, comment, allowedIds],
+  );
 
-  const processedCount = (updated || []).length;
+  const processedCount = updated.length;
 
   await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.UPDATE_TIMESHEET_ENTRY, {
     entityType: 'attendance_adjustment',
@@ -432,34 +440,32 @@ const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<vo
       return;
     }
 
-    const { data: empRows, error: empErr } = await supabase
-      .from('employees')
-      .select('id')
-      .eq('org_department_id', deptId);
-    if (empErr) throw empErr;
-    const employeeIds = (empRows || []).map(r => Number(r.id));
+    const empRows = await query<{ id: number }>(
+      `SELECT id FROM employees WHERE org_department_id = $1`,
+      [deptId],
+    );
+    const employeeIds = empRows.map(r => Number(r.id));
     if (employeeIds.length === 0) {
       res.json({ success: true, data: { approved_count: 0 } });
       return;
     }
 
     const now = new Date().toISOString();
-    const { data: updated, error: updErr } = await supabase
-      .from('attendance_adjustments')
-      .update({
-        approval_status: 'approved',
-        approved_by: req.user.id,
-        approved_at: now,
-        approval_comment: null,
-      })
-      .eq('approval_status', 'pending')
-      .in('employee_id', employeeIds)
-      .gte('work_date', startDate)
-      .lte('work_date', endDate)
-      .select('id');
-    if (updErr) throw updErr;
+    const updated = await query<{ id: number }>(
+      `UPDATE attendance_adjustments SET
+         approval_status = 'approved',
+         approved_by = $1,
+         approved_at = $2,
+         approval_comment = NULL
+       WHERE approval_status = 'pending'
+         AND employee_id = ANY($3::bigint[])
+         AND work_date >= $4::date
+         AND work_date <= $5::date
+       RETURNING id`,
+      [req.user.id, now, employeeIds, startDate, endDate],
+    );
 
-    const approvedCount = (updated || []).length;
+    const approvedCount = updated.length;
 
     await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.UPDATE_TIMESHEET_ENTRY, {
       entityType: 'attendance_adjustment',
@@ -502,27 +508,40 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
       return;
     }
 
-    const { data: rows, error: loadErr } = await supabase
-      .from('attendance_adjustments')
-      .select('id, employee_id, work_date, status, hours_override, reason, created_by, created_at, approval_status, approved_by, approved_at, approval_comment')
-      .in('approval_status', statuses)
-      .gte('work_date', startDate)
-      .lte('work_date', endDate)
-      .order('approved_at', { ascending: false });
-    if (loadErr) throw loadErr;
-    const adjustments = rows || [];
+    const adjustments = await query<{
+      id: number;
+      employee_id: number;
+      work_date: string;
+      status: string;
+      hours_override: number | null;
+      reason: string | null;
+      created_by: string | null;
+      created_at: string;
+      approval_status: string;
+      approved_by: string | null;
+      approved_at: string | null;
+      approval_comment: string | null;
+    }>(
+      `SELECT id, employee_id, work_date::text AS work_date, status, hours_override, reason, created_by, created_at,
+              approval_status, approved_by, approved_at, approval_comment
+         FROM attendance_adjustments
+        WHERE approval_status = ANY($1::text[])
+          AND work_date >= $2::date
+          AND work_date <= $3::date
+        ORDER BY approved_at DESC`,
+      [statuses, startDate, endDate],
+    );
+
     if (adjustments.length === 0) {
       res.json({ success: true, data: [] });
       return;
     }
 
     const employeeIds = [...new Set(adjustments.map(a => Number(a.employee_id)))];
-    const { data: employeesRows, error: empErr } = await supabase
-      .from('employees')
-      .select('id, full_name, org_department_id')
-      .in('id', employeeIds);
-    if (empErr) throw empErr;
-    const employees = employeesRows || [];
+    const employees = await query<{ id: number; full_name: string | null; org_department_id: string | null }>(
+      `SELECT id, full_name, org_department_id FROM employees WHERE id = ANY($1::bigint[])`,
+      [employeeIds],
+    );
 
     const allowedDeptIds = accessible === 'all' ? null : new Set(accessible);
     const filteredEmployees = employees.filter(e => {
@@ -536,7 +555,7 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
     }
 
     const employeeMap = new Map(filteredEmployees.map(e => [Number(e.id), {
-      full_name: (e.full_name as string | null) ?? null,
+      full_name: e.full_name ?? null,
       department_id: e.org_department_id ? String(e.org_department_id) : null,
     }]));
 
@@ -545,12 +564,11 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
       .filter((id): id is string => id !== null))];
     const deptNamesMap = new Map<string, string>();
     if (deptIds.length > 0) {
-      const { data: deptRows, error: deptErr } = await supabase
-        .from('org_departments')
-        .select('id, name')
-        .in('id', deptIds);
-      if (deptErr) throw deptErr;
-      for (const row of deptRows || []) {
+      const deptRows = await query<{ id: string; name: string | null }>(
+        `SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])`,
+        [deptIds],
+      );
+      for (const row of deptRows) {
         deptNamesMap.set(String(row.id), String(row.name ?? ''));
       }
     }
@@ -561,12 +579,11 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
     ])];
     const userNamesMap = new Map<string, string>();
     if (userIds.length > 0) {
-      const { data: userRows, error: userErr } = await supabase
-        .from('user_profiles')
-        .select('id, full_name')
-        .in('id', userIds);
-      if (userErr) throw userErr;
-      for (const row of userRows || []) {
+      const userRows = await query<{ id: string; full_name: string | null }>(
+        `SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])`,
+        [userIds],
+      );
+      for (const row of userRows) {
         userNamesMap.set(String(row.id), String(row.full_name ?? ''));
       }
     }
@@ -594,7 +611,7 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
         work_date: String(adj.work_date),
         status: String(adj.status),
         hours_override: typeof adj.hours_override === 'number' ? adj.hours_override : null,
-        notes: (adj.reason as string | null) ?? null,
+        notes: adj.reason ?? null,
         created_by: adj.created_by ? String(adj.created_by) : null,
         created_by_name: adj.created_by ? userNamesMap.get(String(adj.created_by)) ?? null : null,
         created_at: String(adj.created_at),
@@ -602,7 +619,7 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
         approved_by: adj.approved_by ? String(adj.approved_by) : null,
         approved_by_name: adj.approved_by ? userNamesMap.get(String(adj.approved_by)) ?? null : null,
         approved_at: adj.approved_at ? String(adj.approved_at) : null,
-        approval_comment: (adj.approval_comment as string | null) ?? null,
+        approval_comment: adj.approval_comment ?? null,
       });
     }
 
@@ -646,19 +663,18 @@ const revertOne = async (req: AuthenticatedRequest, res: Response): Promise<void
     }
 
     const prevStatus = adj.approval_status;
-    const { data: updatedRows, error } = await supabase
-      .from('attendance_adjustments')
-      .update({
-        approval_status: 'pending',
-        approved_by: null,
-        approved_at: null,
-        approval_comment: null,
-      })
-      .eq('id', id)
-      .in('approval_status', ['approved', 'rejected'])
-      .select('id');
-    if (error) throw error;
-    if (!updatedRows || updatedRows.length === 0) {
+    const updatedRows = await query<{ id: number }>(
+      `UPDATE attendance_adjustments SET
+         approval_status = 'pending',
+         approved_by = NULL,
+         approved_at = NULL,
+         approval_comment = NULL
+       WHERE id = $1 AND approval_status = ANY($2::text[])
+       RETURNING id`,
+      [id, ['approved', 'rejected']],
+    );
+
+    if (updatedRows.length === 0) {
       res.status(409).json({
         success: false,
         error: 'Не удалось откатить — статус изменился',

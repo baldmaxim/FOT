@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import { getRolePageAccess } from './access-control.service.js';
 import { loadManagedDepartmentMap } from './department-access.service.js';
 import { getRoleById } from './roles-cache.service.js';
@@ -37,14 +37,12 @@ function roleMatchesWorkflowKind(access: IRoleWorkflowAccess, kind: WorkflowReci
 async function loadDepartmentByEmployeeId(employeeIds: number[]): Promise<Map<number, string | null>> {
   if (employeeIds.length === 0) return new Map();
 
-  const { data, error } = await supabase
-    .from('employees')
-    .select('id, org_department_id')
-    .in('id', employeeIds);
+  const data = await query<{ id: number; org_department_id: string | null }>(
+    'SELECT id, org_department_id FROM employees WHERE id = ANY($1::int[])',
+    [employeeIds],
+  );
 
-  if (error) throw error;
-
-  return new Map((data || []).map(e => [e.id as number, (e.org_department_id as string | null) ?? null]));
+  return new Map(data.map(e => [Number(e.id), e.org_department_id ?? null]));
 }
 
 async function loadRoleWorkflowAccess(roleIds: string[]): Promise<Map<string, IRoleWorkflowAccess>> {
@@ -75,14 +73,9 @@ export async function listTimesheetWorkflowRecipientIds(
     (options?.excludeRoleCodes || []).map(code => code.trim()).filter(Boolean),
   );
 
-  const { data, error } = await supabase
-    .from('user_profiles')
-    .select('id, system_role_id, employee_id')
-    .eq('is_approved', true);
-
-  if (error) throw error;
-
-  const profiles = (data || []) as IUserProfileLite[];
+  const profiles = await query<IUserProfileLite>(
+    'SELECT id, system_role_id, employee_id FROM user_profiles WHERE is_approved = true',
+  );
   if (profiles.length === 0) return [];
 
   const departmentByEmployeeId = await loadDepartmentByEmployeeId(

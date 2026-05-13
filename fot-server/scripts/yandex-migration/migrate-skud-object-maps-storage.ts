@@ -23,7 +23,6 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
-import { createClient } from '@supabase/supabase-js';
 import { Client, type ClientConfig } from 'pg';
 
 const REPORT_DIR = '.migration';
@@ -41,8 +40,8 @@ Usage:
 
 ENV:
   SOURCE_DATABASE_URL                postgres://...  (required) — Supabase PG
-  SOURCE_SUPABASE_URL                https://*.supabase.co  (required)
-  SOURCE_SUPABASE_SERVICE_ROLE_KEY   eyJ...  (required)
+  SOURCE_SUPABASE_URL                https://*.supabase.co  (required) — REST endpoint
+  SOURCE_SUPABASE_SERVICE_ROLE_KEY   eyJ...  (required) — Bearer token для Storage REST
   SOURCE_SSL                         true|false  default: true
   SOURCE_SSL_CA_PATH                 /path/to/ca.pem  optional
 
@@ -61,7 +60,8 @@ ENV:
        WHERE map_storage_path IS NOT NULL AND map_storage_path != ''
   2. Для каждой записи:
      - HeadObject target → если уже есть, SKIP (идемпотентно)
-     - supabase.storage.from('${SOURCE_BUCKET}').download(path) → Blob
+     - GET {SOURCE_SUPABASE_URL}/storage/v1/object/${SOURCE_BUCKET}/<path>
+       с Authorization: Bearer SOURCE_SUPABASE_SERVICE_ROLE_KEY → ArrayBuffer
      - PutObject target (с тем же ContentType, если был возвращён)
   3. Отчёт: .migration/storage_migration_report.{json,md}
 
@@ -171,22 +171,76 @@ async function targetHasObject(s3: S3Client, bucket: string, Key: string): Promi
     await s3.send(new HeadObjectCommand({ Bucket: bucket, Key }));
     return true;
   } catch (err) {
-    const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-    if (e?.name === 'NotFound' || e?.$metadata?.httpStatusCode === 404) return false;
+    const e = err as { name?: string; $metadata?: { httpStatusCode?: number }; Code?: string };
+    const code = e?.$metadata?.httpStatusCode;
+    // 404: AWS, MinIO. 403: Cloud.ru и некоторые другие S3-совместимые
+    // провайдеры закрывают существование ключа за access policy и отдают
+    // 403/AccessDenied на HEAD отсутствующего объекта. NoSuchKey по имени
+    // тоже трактуем как "не существует".
+    if (
+      e?.name === 'NotFound'
+      || code === 404
+      || code === 403
+      || e?.name === 'NoSuchKey'
+      || e?.Code === 'NoSuchKey'
+      || e?.Code === 'AccessDenied'
+    ) {
+      return false;
+    }
     throw err;
   }
 }
 
-async function blobToBuffer(blob: Blob): Promise<{ buffer: Buffer; contentType: string }> {
-  const arrayBuffer = await blob.arrayBuffer();
-  return { buffer: Buffer.from(arrayBuffer), contentType: blob.type || 'application/octet-stream' };
+interface ISupabaseDownloadResult {
+  buffer: Buffer;
+  contentType: string;
+}
+
+/**
+ * Скачивает объект из Supabase Storage через REST API (без SDK).
+ * Возвращает null при 404 (объекта нет в исходном бакете).
+ */
+async function downloadFromSupabaseStorage(
+  supabaseUrl: string,
+  supabaseKey: string,
+  bucket: string,
+  storagePath: string,
+): Promise<ISupabaseDownloadResult | null> {
+  // path может содержать слэши (vendor/key/file.png) — кодируем посегментно,
+  // чтобы не сломать структуру URL и при этом экранировать пробелы/UTF-8.
+  const encodedPath = storagePath
+    .split('/')
+    .map(seg => encodeURIComponent(seg))
+    .join('/');
+  const url = `${supabaseUrl.replace(/\/+$/, '')}/storage/v1/object/${bucket}/${encodedPath}`;
+  const resp = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${supabaseKey}`,
+      apikey: supabaseKey,
+    },
+  });
+  if (!resp.ok) {
+    if (resp.status === 404) return null;
+    const body = await resp.text().catch(() => '');
+    throw new Error(
+      `Supabase Storage download ${resp.status} ${resp.statusText}${body ? ` — ${body.slice(0, 200)}` : ''}`,
+    );
+  }
+  const arrayBuffer = await resp.arrayBuffer();
+  return {
+    buffer: Buffer.from(arrayBuffer),
+    contentType: resp.headers.get('content-type') ?? 'application/octet-stream',
+  };
 }
 
 async function run(args: ICliArgs): Promise<number> {
   const dryRun = args.dryRun ?? envFlag('DRY_RUN', true);
   const batchSize = envInt('BATCH_SIZE', DEFAULT_BATCH);
 
-  const sourcePgUrl = process.env.SOURCE_DATABASE_URL;
+  // SOURCE_DATABASE_URL_NODE имеет приоритет — Node `pg` требует
+  // uselibpqcompat=true для encryption-only TLS (libpq не понимает этот
+  // параметр, поэтому держим две DSN для Supabase pooler).
+  const sourcePgUrl = process.env.SOURCE_DATABASE_URL_NODE || process.env.SOURCE_DATABASE_URL;
   const supabaseUrl = process.env.SOURCE_SUPABASE_URL;
   const supabaseKey = process.env.SOURCE_SUPABASE_SERVICE_ROLE_KEY;
   if (!sourcePgUrl) throw new Error('SOURCE_DATABASE_URL не задан');
@@ -201,10 +255,6 @@ async function run(args: ICliArgs): Promise<number> {
 
   const pg = new Client({ connectionString: sourcePgUrl, ssl: buildSourceSsl() });
   await pg.connect();
-
-  const supabase = createClient(supabaseUrl, supabaseKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
 
   const s3 = new S3Client({
     endpoint: tgt.endpoint,
@@ -255,18 +305,21 @@ async function run(args: ICliArgs): Promise<number> {
               return;
             }
 
-            // 2. Скачать из Supabase Storage
-            const { data: blob, error } = await supabase.storage
-              .from(SOURCE_BUCKET)
-              .download(storagePath);
-            if (error || !blob) {
-              outcome.error = `supabase download: ${error?.message || 'no data'}`;
+            // 2. Скачать из Supabase Storage (REST API через fetch)
+            const downloaded = await downloadFromSupabaseStorage(
+              supabaseUrl,
+              supabaseKey,
+              SOURCE_BUCKET,
+              storagePath,
+            );
+            if (!downloaded) {
+              outcome.error = 'supabase download: 404 not found in source bucket';
               report.totals.failed++;
               report.failures.push(outcome);
               return;
             }
 
-            const { buffer, contentType } = await blobToBuffer(blob);
+            const { buffer, contentType } = downloaded;
             outcome.bytes = buffer.byteLength;
 
             // 3. PutObject в target

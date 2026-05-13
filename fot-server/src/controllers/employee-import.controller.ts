@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import { supabase } from '../config/database.js';
+import { execute, queryOne } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { resolveRequestDataScope } from '../services/data-scope.service.js';
@@ -15,29 +15,27 @@ export async function deleteAll(req: AuthenticatedRequest, res: Response): Promi
       return;
     }
 
-    const { count: beforeCount } = await supabase
-      .from('employees')
-      .select('*', { count: 'exact', head: true });
+    const countRow = await queryOne<{ total: number }>(
+      'SELECT count(*)::int AS total FROM employees',
+    );
+    const beforeCount = countRow?.total ?? 0;
 
-    const { error } = await supabase
-      .from('employees')
-      .delete()
-      .neq('id', 0);
-
-    if (error) {
-      console.error('Delete all employees error:', error);
+    try {
+      await execute('DELETE FROM employees WHERE id <> 0');
+    } catch (deleteError) {
+      console.error('Delete all employees error:', deleteError);
       res.status(500).json({ success: false, error: 'Failed to delete employees' });
       return;
     }
 
     await auditService.logFromRequest(req, req.user.id, 'DELETE_ALL_EMPLOYEES', {
-      details: { deleted: beforeCount || 0 },
+      details: { deleted: beforeCount },
     });
 
     res.json({
       success: true,
-      data: { deleted: beforeCount || 0 },
-      message: `Удалено ${beforeCount || 0} сотрудников`,
+      data: { deleted: beforeCount },
+      message: `Удалено ${beforeCount} сотрудников`,
     });
   } catch (error) {
     console.error('Delete all employees error:', error);

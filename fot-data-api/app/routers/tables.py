@@ -13,7 +13,7 @@ router = APIRouter(prefix="/external/v1", tags=["external"])
 
 @router.get("/tables", response_model=TablesResponse, summary="Список доступных ключу таблиц")
 async def list_tables(request: Request, api_key: ApiKey = Depends(authenticate)) -> TablesResponse:
-    rows = list_accessible_tables(api_key.id)
+    rows = await list_accessible_tables(api_key.id)
     return TablesResponse(
         data=[TableAccess(table_name=r["table_name"], allowed_fields=list(r["allowed_fields"] or [])) for r in rows]
     )
@@ -25,7 +25,7 @@ async def table_schema(
     request: Request,
     api_key: ApiKey = Depends(authenticate),
 ) -> TableSchemaResponse:
-    allowed_fields = get_table_access(api_key.id, table_name)
+    allowed_fields = await get_table_access(api_key.id, table_name)
     if not allowed_fields:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Table is not accessible")
     return TableSchemaResponse(
@@ -40,10 +40,10 @@ async def read_table(
     request: Request,
     api_key: ApiKey = Depends(authenticate),
 ) -> DataResponse:
-    allowed_fields = get_table_access(api_key.id, table_name)
+    allowed_fields = await get_table_access(api_key.id, table_name)
     if not allowed_fields:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Table is not accessible")
 
     query_params = dict(request.query_params)
-    rows, limit, offset = execute_select(table_name, allowed_fields, query_params)
+    rows, limit, offset = await execute_select(table_name, allowed_fields, query_params)
     return DataResponse(data=rows, limit=limit, offset=offset)

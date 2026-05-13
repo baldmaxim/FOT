@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { readExcelRows } from '../utils/excel-reader.js';
-import { supabase } from '../config/database.js';
+import { execute, query } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { parseDate } from '../utils/date.utils.js';
 import { parseFIO, normalizeFullName } from '../utils/fio.utils.js';
@@ -110,19 +110,25 @@ export const employeeEnrichController = {
       const PAGE_SIZE = 1000;
       let from = 0;
       while (true) {
-        const { data, error: empError } = await supabase
-          .from('employees')
-          .select('id, full_name, country, hire_date, position_id, org_department_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object')
-          .eq('is_archived', false)
-          .range(from, from + PAGE_SIZE - 1);
-
-        if (empError) {
+        let data: Array<{ id: number; full_name: string; [k: string]: unknown }>;
+        try {
+          data = await query<{ id: number; full_name: string; [k: string]: unknown }>(
+            `SELECT id, full_name, country, hire_date, position_id, org_department_id, tab_number,
+                    current_status, permit_expiry_date, registration_cat1, registration_cat4,
+                    doc_receipt_date, work_object
+               FROM employees
+              WHERE is_archived = false
+              ORDER BY id
+              LIMIT $1 OFFSET $2`,
+            [PAGE_SIZE, from],
+          );
+        } catch (empError) {
           console.error('Enrich: load employees error:', empError);
           res.status(500).json({ success: false, error: 'Ошибка загрузки сотрудников' });
           return;
         }
 
-        if (!data || data.length === 0) break;
+        if (data.length === 0) break;
         dbEmployees.push(...data);
         if (data.length < PAGE_SIZE) break;
         from += PAGE_SIZE;
@@ -143,13 +149,17 @@ export const employeeEnrichController = {
       }
 
       // Загружаем позиции для маппинга
-      const { data: positions } = await supabase
-        .from('positions')
-        .select('id, name')
-        .eq('is_active', true);
+      let positions: Array<{ id: string; name: string | null }> = [];
+      try {
+        positions = await query<{ id: string; name: string | null }>(
+          'SELECT id, name FROM positions WHERE is_active = true',
+        );
+      } catch {
+        positions = [];
+      }
 
       const posNameToId = new Map<string, string>();
-      for (const p of (positions || [])) {
+      for (const p of positions) {
         if (p.name) posNameToId.set(p.name.toLowerCase(), p.id);
       }
 
@@ -254,19 +264,30 @@ export const employeeEnrichController = {
 
       // 1. Создаём недостающие позиции
       if (newPositions.size > 0) {
-        const posInserts = Array.from(newPositions).map(name => ({
-          name,
-          is_active: true,
-          sort_order: 0,
-        }));
+        try {
+          const names = Array.from(newPositions);
+          const createdPos = await query<{ id: string; name: string | null }>(
+            `INSERT INTO positions (name, is_active, sort_order)
+               SELECT n, true, 0 FROM unnest($1::text[]) AS n
+             ON CONFLICT (name) DO NOTHING
+             RETURNING id, name`,
+            [names],
+          );
 
-        const { data: createdPos } = await supabase
-          .from('positions')
-          .upsert(posInserts, { onConflict: 'name', ignoreDuplicates: true })
-          .select('id, name');
+          // ignoreDuplicates: true → нужно дозагрузить уже существующие
+          const existing = await query<{ id: string; name: string | null }>(
+            `SELECT id, name FROM positions WHERE name = ANY($1::text[])`,
+            [names],
+          );
 
-        for (const p of (createdPos || [])) {
-          posNameToId.set(p.name.toLowerCase(), p.id);
+          for (const p of createdPos) {
+            if (p.name) posNameToId.set(p.name.toLowerCase(), p.id);
+          }
+          for (const p of existing) {
+            if (p.name) posNameToId.set(p.name.toLowerCase(), p.id);
+          }
+        } catch (posErr) {
+          console.error('Enrich: positions upsert error:', posErr);
         }
       }
 
@@ -317,15 +338,21 @@ export const employeeEnrichController = {
         // Проверяем есть ли реальные обновления (кроме updated_at и FIO)
         if (Object.keys(updateData).length <= 4) continue; // updated_at + last/first/middle
 
-        const { error: updateError } = await supabase
-          .from('employees')
-          .update(updateData)
-          .eq('id', match.id);
+        const setClauses: string[] = [];
+        const params: unknown[] = [];
+        for (const [k, v] of Object.entries(updateData)) {
+          params.push(v);
+          setClauses.push(`${k} = $${params.length}`);
+        }
+        params.push(match.id);
+        const updateSql = `UPDATE employees SET ${setClauses.join(', ')} WHERE id = $${params.length}`;
 
-        if (updateError) {
-          errors.push(`${row.fullName}: ${updateError.message}`);
-        } else {
+        try {
+          await execute(updateSql, params);
           updated++;
+        } catch (updateError) {
+          const msg = updateError instanceof Error ? updateError.message : String(updateError);
+          errors.push(`${row.fullName}: ${msg}`);
         }
       }
 

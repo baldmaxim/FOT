@@ -1,6 +1,6 @@
 import type { Response } from 'express';
 import { z } from 'zod';
-import { supabase } from '../config/database.js';
+import { query, queryOne } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const dateArraySchema = z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional();
@@ -22,15 +22,15 @@ const getByYear = async (req: AuthenticatedRequest, res: Response): Promise<void
       return;
     }
 
-    const { data, error } = await supabase
-      .from('production_calendar')
-      .select('year, month, norm_days, norm_hours, holidays, mandatory_holidays, pre_holidays, is_custom, updated_by, updated_at')
-      .eq('year', year)
-      .order('month', { ascending: true });
-
-    if (error) throw error;
+    const data = await query(
+      `SELECT year, month, norm_days, norm_hours, holidays, mandatory_holidays, pre_holidays, is_custom, updated_by, updated_at
+         FROM production_calendar
+        WHERE year = $1
+        ORDER BY month ASC`,
+      [year],
+    );
     res.setHeader('Cache-Control', 'private, max-age=3600');
-    res.json({ success: true, data: data || [] });
+    res.json({ success: true, data });
   } catch (err) {
     console.error('production-calendar.getByYear error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения календаря' });
@@ -53,26 +53,43 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const payload: Record<string, unknown> = {
-      year,
-      month,
-      norm_days: parsed.data.norm_days,
-      norm_hours: parsed.data.norm_hours,
-      is_custom: true,
-      updated_by: req.user.employee_id ?? null,
-      updated_at: new Date().toISOString(),
-    };
-    if (parsed.data.holidays !== undefined) payload.holidays = parsed.data.holidays;
-    if (parsed.data.mandatory_holidays !== undefined) payload.mandatory_holidays = parsed.data.mandatory_holidays;
-    if (parsed.data.pre_holidays !== undefined) payload.pre_holidays = parsed.data.pre_holidays;
+    const updatedBy = req.user.employee_id ?? null;
+    const nowIso = new Date().toISOString();
+    const holidays = parsed.data.holidays ?? null;
+    const mandatoryHolidays = parsed.data.mandatory_holidays ?? null;
+    const preHolidays = parsed.data.pre_holidays ?? null;
 
-    const { data, error } = await supabase
-      .from('production_calendar')
-      .upsert(payload, { onConflict: 'year,month' })
-      .select()
-      .single();
+    const data = await queryOne(
+      `INSERT INTO production_calendar
+         (year, month, norm_days, norm_hours, is_custom, updated_by, updated_at,
+          holidays, mandatory_holidays, pre_holidays)
+       VALUES ($1, $2, $3, $4, true, $5, $6,
+               COALESCE($7::date[], '{}'::date[]),
+               COALESCE($8::date[], '{}'::date[]),
+               COALESCE($9::date[], '{}'::date[]))
+       ON CONFLICT (year, month) DO UPDATE SET
+         norm_days = EXCLUDED.norm_days,
+         norm_hours = EXCLUDED.norm_hours,
+         is_custom = EXCLUDED.is_custom,
+         updated_by = EXCLUDED.updated_by,
+         updated_at = EXCLUDED.updated_at,
+         holidays = CASE WHEN $7::date[] IS NULL THEN production_calendar.holidays ELSE EXCLUDED.holidays END,
+         mandatory_holidays = CASE WHEN $8::date[] IS NULL THEN production_calendar.mandatory_holidays ELSE EXCLUDED.mandatory_holidays END,
+         pre_holidays = CASE WHEN $9::date[] IS NULL THEN production_calendar.pre_holidays ELSE EXCLUDED.pre_holidays END
+       RETURNING *`,
+      [
+        year,
+        month,
+        parsed.data.norm_days,
+        parsed.data.norm_hours,
+        updatedBy,
+        nowIso,
+        holidays,
+        mandatoryHolidays,
+        preHolidays,
+      ],
+    );
 
-    if (error) throw error;
     res.json({ success: true, data });
   } catch (err) {
     console.error('production-calendar.update error:', err);

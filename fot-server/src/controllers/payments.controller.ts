@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { supabase } from '../config/database.js';
+import { query, queryOne } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
 
@@ -14,14 +14,13 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
       return;
     }
 
-    const { data, error } = await supabase
-      .from('payments')
-      .select('*')
-      .eq('employee_id', employeeId)
-      .order('payment_date', { ascending: false });
-
-    if (error) throw error;
-    res.json({ success: true, data: data || [] });
+    const data = await query(
+      `SELECT * FROM payments
+        WHERE employee_id = $1
+        ORDER BY payment_date DESC`,
+      [employeeId],
+    );
+    res.json({ success: true, data });
   } catch (err) {
     console.error('payments.getMy error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения выплат' });
@@ -38,14 +37,13 @@ const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<
       return;
     }
 
-    const { data, error } = await supabase
-      .from('payments')
-      .select('*')
-      .eq('employee_id', employeeId)
-      .order('payment_date', { ascending: false });
-
-    if (error) throw error;
-    res.json({ success: true, data: data || [] });
+    const data = await query(
+      `SELECT * FROM payments
+        WHERE employee_id = $1
+        ORDER BY payment_date DESC`,
+      [employeeId],
+    );
+    res.json({ success: true, data });
   } catch (err) {
     console.error('payments.getByEmployee error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения выплат' });
@@ -69,21 +67,21 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const { data, error } = await supabase
-      .from('payments')
-      .insert({
+    const data = await queryOne(
+      `INSERT INTO payments
+         (employee_id, payment_date, amount, payment_type, description, period, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [
         employee_id,
         payment_date,
         amount,
         payment_type,
-        description: description || null,
-        period: period || null,
-        created_by: req.user.id,
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
+        description || null,
+        period || null,
+        req.user.id,
+      ],
+    );
     res.json({ success: true, data });
   } catch (err) {
     console.error('payments.create error:', err);
@@ -106,23 +104,34 @@ const importBatch = async (req: AuthenticatedRequest, res: Response): Promise<vo
       }
     }
 
-    const records = items.map((item: { employee_id: number; payment_date: string; amount: number; payment_type: string; description?: string; period?: string }) => ({
-      employee_id: item.employee_id,
-      payment_date: item.payment_date,
-      amount: item.amount,
-      payment_type: item.payment_type,
-      description: item.description || null,
-      period: item.period || null,
-      created_by: req.user.id,
-    }));
+    type Item = {
+      employee_id: number;
+      payment_date: string;
+      amount: number;
+      payment_type: string;
+      description?: string;
+      period?: string;
+    };
+    const list = items as Item[];
+    const empIds = list.map(it => it.employee_id);
+    const dates = list.map(it => it.payment_date);
+    const amounts = list.map(it => it.amount);
+    const types = list.map(it => it.payment_type);
+    const descriptions = list.map(it => it.description || null);
+    const periods = list.map(it => it.period || null);
+    const createdBy = req.user.id;
 
-    const { data, error } = await supabase
-      .from('payments')
-      .insert(records)
-      .select();
+    const inserted = await query(
+      `INSERT INTO payments
+         (employee_id, payment_date, amount, payment_type, description, period, created_by)
+       SELECT u.employee_id, u.payment_date, u.amount, u.payment_type, u.description, u.period, $7
+         FROM unnest($1::bigint[], $2::date[], $3::numeric[], $4::text[], $5::text[], $6::text[])
+           AS u(employee_id, payment_date, amount, payment_type, description, period)
+       RETURNING id`,
+      [empIds, dates, amounts, types, descriptions, periods, createdBy],
+    );
 
-    if (error) throw error;
-    res.json({ success: true, data: { imported: (data || []).length } });
+    res.json({ success: true, data: { imported: inserted.length } });
   } catch (err) {
     console.error('payments.importBatch error:', err);
     res.status(500).json({ success: false, error: 'Ошибка импорта выплат' });

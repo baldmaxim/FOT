@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import { notificationService } from './notification.service.js';
 import { pushService } from './push.service.js';
 
@@ -56,14 +56,11 @@ const shouldFireNow = (parts: IMoscowParts): boolean => {
 };
 
 const loadAllowedRoleCodes = async (): Promise<Set<string>> => {
-  const { data, error } = await supabase
-    .from('role_page_access')
-    .select('role_code')
-    .eq('page_path', '/employee/tasks')
-    .eq('can_view', true);
-
-  if (error) throw error;
-  return new Set((data || []).map(r => r.role_code as string));
+  const rows = await query<{ role_code: string }>(
+    `SELECT role_code FROM role_page_access
+      WHERE page_path = '/employee/tasks' AND can_view = true`,
+  );
+  return new Set(rows.map(r => r.role_code));
 };
 
 interface ICandidate {
@@ -74,26 +71,20 @@ interface ICandidate {
 const loadCandidates = async (allowedRoleCodes: Set<string>): Promise<ICandidate[]> => {
   if (allowedRoleCodes.size === 0) return [];
 
-  const { data, error } = await supabase
-    .from('user_profiles')
-    .select('id, employee_id, system_roles!inner(code)')
-    .not('employee_id', 'is', null)
-    .eq('is_approved', true);
-
-  if (error) throw error;
-
-  const profiles = (data || []) as Array<{
+  const profiles = await query<{
     id: string;
-    employee_id: number;
-    system_roles: { code: string } | { code: string }[] | null;
-  }>;
+    employee_id: number | null;
+    role_code: string | null;
+  }>(
+    `SELECT up.id, up.employee_id, sr.code AS role_code
+       FROM user_profiles up
+       JOIN system_roles sr ON sr.id = up.system_role_id
+      WHERE up.employee_id IS NOT NULL AND up.is_approved = true`,
+  );
 
   const filtered: ICandidate[] = [];
   for (const profile of profiles) {
-    const role = Array.isArray(profile.system_roles)
-      ? profile.system_roles[0]
-      : profile.system_roles;
-    if (!role || !allowedRoleCodes.has(role.code)) continue;
+    if (!profile.role_code || !allowedRoleCodes.has(profile.role_code)) continue;
     if (profile.employee_id == null) continue;
     filtered.push({ user_id: profile.id, employee_id: profile.employee_id });
   }
@@ -102,14 +93,12 @@ const loadCandidates = async (allowedRoleCodes: Set<string>): Promise<ICandidate
 
   // Оставляем только активных сотрудников
   const employeeIds = filtered.map(c => c.employee_id);
-  const { data: employees, error: empErr } = await supabase
-    .from('employees')
-    .select('id, employment_status')
-    .in('id', employeeIds)
-    .eq('employment_status', 'active');
-
-  if (empErr) throw empErr;
-  const activeIds = new Set((employees || []).map(e => e.id as number));
+  const employees = await query<{ id: number }>(
+    `SELECT id FROM employees
+      WHERE id = ANY($1::bigint[]) AND employment_status = 'active'`,
+    [employeeIds],
+  );
+  const activeIds = new Set(employees.map(e => e.id));
   return filtered.filter(c => activeIds.has(c.employee_id));
 };
 
@@ -119,14 +108,12 @@ const loadEmployeesWithFilledToday = async (
 ): Promise<Set<number>> => {
   if (employeeIds.length === 0) return new Set();
 
-  const { data, error } = await supabase
-    .from('daily_tasks')
-    .select('employee_id')
-    .eq('task_date', taskDate)
-    .in('employee_id', employeeIds);
-
-  if (error) throw error;
-  return new Set((data || []).map(r => r.employee_id as number));
+  const rows = await query<{ employee_id: number }>(
+    `SELECT employee_id FROM daily_tasks
+      WHERE task_date = $1 AND employee_id = ANY($2::bigint[])`,
+    [taskDate, employeeIds],
+  );
+  return new Set(rows.map(r => r.employee_id));
 };
 
 const reserveRemindersInLog = async (
@@ -135,20 +122,19 @@ const reserveRemindersInLog = async (
 ): Promise<ICandidate[]> => {
   if (candidates.length === 0) return [];
 
-  const rows = candidates.map(c => ({
-    employee_id: c.employee_id,
-    reminder_date: reminderDate,
-  }));
+  const empIds = candidates.map(c => c.employee_id);
 
-  // ON CONFLICT DO NOTHING + RETURNING — Supabase возвращает только реально вставленные
-  const { data, error } = await supabase
-    .from('daily_tasks_reminder_log')
-    .upsert(rows, { onConflict: 'employee_id,reminder_date', ignoreDuplicates: true })
-    .select('employee_id');
-
-  if (error) throw error;
-  const inserted = new Set((data || []).map(r => r.employee_id as number));
-  return candidates.filter(c => inserted.has(c.employee_id));
+  // ON CONFLICT DO NOTHING + RETURNING — возвращает только реально вставленные
+  const inserted = await query<{ employee_id: number }>(
+    `INSERT INTO daily_tasks_reminder_log (employee_id, reminder_date)
+     SELECT u.employee_id, $2::date
+       FROM unnest($1::bigint[]) AS u(employee_id)
+     ON CONFLICT (employee_id, reminder_date) DO NOTHING
+     RETURNING employee_id`,
+    [empIds, reminderDate],
+  );
+  const insertedSet = new Set(inserted.map(r => r.employee_id));
+  return candidates.filter(c => insertedSet.has(c.employee_id));
 };
 
 async function runReminderCycle(): Promise<void> {

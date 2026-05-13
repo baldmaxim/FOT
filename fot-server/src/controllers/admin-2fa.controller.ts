@@ -1,46 +1,44 @@
 import { Response } from 'express';
-import { supabase } from '../config/database.js';
+import { execute, queryOne } from '../config/postgres.js';
+import { localAuthService } from '../services/local-auth.service.js';
 import { totpService } from '../services/totp.service.js';
 import { auditService } from '../services/audit.service.js';
-import type { AuthenticatedRequest } from '../types/index.js';
+import type { AuthenticatedRequest, UserProfile } from '../types/index.js';
 
 export const admin2faController = {
   async generate2FA(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
 
-      const { data: profile, error: fetchError } = await supabase
-        .from('user_profiles')
-        .select('*')
-        .eq('id', id)
-        .single();
+      const profile = await queryOne<UserProfile>(
+        'SELECT * FROM user_profiles WHERE id = $1::uuid',
+        [id],
+      );
 
-      if (fetchError || !profile) {
+      if (!profile) {
         res.status(404).json({ success: false, error: 'User not found' });
         return;
       }
 
-      const { data: authUser } = await supabase.auth.admin.getUserById(id);
+      const authUser = await localAuthService.getUserById(id);
 
-      if (!authUser?.user?.email) {
+      if (!authUser?.email) {
         res.status(400).json({ success: false, error: 'User email not found' });
         return;
       }
 
-      const { secret, encryptedSecret } = totpService.generateSecret(authUser.user.email);
+      const { secret, encryptedSecret } = totpService.generateSecret(authUser.email);
       const { codes, encryptedCodes } = totpService.generateRecoveryCodes();
-      const qrCode = await totpService.generateQRCode(authUser.user.email, secret);
+      const qrCode = await totpService.generateQRCode(authUser.email, secret);
 
-      const { error: updateError } = await supabase
-        .from('user_profiles')
-        .update({
-          totp_secret: encryptedSecret,
-          recovery_codes: encryptedCodes,
-          two_factor_enabled: true,
-        })
-        .eq('id', id);
-
-      if (updateError) {
+      try {
+        await execute(
+          `UPDATE user_profiles
+              SET totp_secret = $1, recovery_codes = $2, two_factor_enabled = true
+            WHERE id = $3::uuid`,
+          [encryptedSecret, encryptedCodes, id],
+        );
+      } catch (updateError) {
         console.error('Update 2FA error:', updateError);
         res.status(500).json({ success: false, error: 'Failed to save 2FA settings' });
         return;
@@ -70,16 +68,14 @@ export const admin2faController = {
     try {
       const { id } = req.params;
 
-      const { error } = await supabase
-        .from('user_profiles')
-        .update({
-          totp_secret: null,
-          recovery_codes: null,
-          two_factor_enabled: false,
-        })
-        .eq('id', id);
-
-      if (error) {
+      try {
+        await execute(
+          `UPDATE user_profiles
+              SET totp_secret = NULL, recovery_codes = NULL, two_factor_enabled = false
+            WHERE id = $1::uuid`,
+          [id],
+        );
+      } catch (error) {
         console.error('Disable 2FA error:', error);
         res.status(500).json({ success: false, error: 'Failed to disable 2FA' });
         return;

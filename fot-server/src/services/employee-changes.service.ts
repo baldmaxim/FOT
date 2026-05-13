@@ -1,4 +1,5 @@
-import { supabase } from '../config/database.js';
+import { execute, queryOne, withTransaction } from '../config/postgres.js';
+import type { PoolClient } from 'pg';
 import { employeeCache } from './employee-cache.service.js';
 import { settingsService } from './settings.service.js';
 import {
@@ -28,16 +29,19 @@ interface ChangeOpts {
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-const syncEmployeeSalarySnapshot = async (employeeId: number, salary: number | null): Promise<void> => {
-  await supabase
-    .from('employees')
-    .update({
-      current_salary: salary,
-      // Legacy mirror for old screens/imports until salary_actual is retired fully.
-      salary_actual: salary,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', employeeId);
+const syncEmployeeSalarySnapshotTx = async (
+  client: PoolClient,
+  employeeId: number,
+  salary: number | null,
+): Promise<void> => {
+  await client.query(
+    `UPDATE employees
+        SET current_salary = $1,
+            salary_actual = $1,
+            updated_at = $2
+      WHERE id = $3`,
+    [salary, new Date().toISOString(), employeeId],
+  );
 };
 
 /**
@@ -46,16 +50,21 @@ const syncEmployeeSalarySnapshot = async (employeeId: number, salary: number | n
  * effective_from = hire_date (или 2020-01-01). Применяется во время чистки списков; после
  * финализации настройка выключается, и переводы снова пишут полноценную историю.
  */
-const applyFrozenAssignment = async (
+const applyFrozenAssignmentTx = async (
+  client: PoolClient,
   employeeId: number,
   patch: { org_department_id?: string | null; position_id?: string | null },
   reason: string,
 ): Promise<void> => {
-  const { data: emp } = await supabase
-    .from('employees')
-    .select('org_department_id, position_id, hire_date')
-    .eq('id', employeeId)
-    .single();
+  const empResult = await client.query<{
+    org_department_id: string | null;
+    position_id: string | null;
+    hire_date: string | null;
+  }>(
+    `SELECT org_department_id, position_id, hire_date FROM employees WHERE id = $1`,
+    [employeeId],
+  );
+  const emp = empResult.rows[0] ?? null;
 
   const nextDeptId = patch.org_department_id !== undefined
     ? patch.org_department_id
@@ -64,55 +73,78 @@ const applyFrozenAssignment = async (
     ? patch.position_id
     : emp?.position_id ?? null;
 
-  const { data: openRows } = await supabase
-    .from('employee_assignments')
-    .select('id, effective_from')
-    .eq('employee_id', employeeId)
-    .is('effective_to', null)
-    .order('effective_from', { ascending: true });
-
-  const open = (openRows || [])[0] || null;
+  const openResult = await client.query<{ id: string; effective_from: string }>(
+    `SELECT id, effective_from
+       FROM employee_assignments
+      WHERE employee_id = $1 AND effective_to IS NULL
+      ORDER BY effective_from ASC`,
+    [employeeId],
+  );
+  const openRows = openResult.rows;
+  const open = openRows[0] || null;
   const nowIso = new Date().toISOString();
 
   if (open) {
-    const { error: updateError } = await supabase
-      .from('employee_assignments')
-      .update({
-        org_department_id: nextDeptId,
-        position_id: nextPositionId,
-        is_primary: true,
-        assignment_type: 'main',
-        change_reason: reason,
-        updated_at: nowIso,
-      })
-      .eq('id', open.id)
-      .eq('employee_id', employeeId);
-    if (updateError) throw updateError;
+    await client.query(
+      `UPDATE employee_assignments
+          SET org_department_id = $1,
+              position_id = $2,
+              is_primary = true,
+              assignment_type = 'main',
+              change_reason = $3,
+              updated_at = $4
+        WHERE id = $5 AND employee_id = $6`,
+      [nextDeptId, nextPositionId, reason, nowIso, open.id, employeeId],
+    );
 
-    if ((openRows || []).length > 1) {
-      const extraIds = (openRows || []).slice(1).map(r => r.id);
-      const { error: closeExtraError } = await supabase
-        .from('employee_assignments')
-        .update({ effective_to: open.effective_from, updated_at: nowIso })
-        .in('id', extraIds)
-        .eq('employee_id', employeeId);
-      if (closeExtraError) throw closeExtraError;
+    if (openRows.length > 1) {
+      const extraIds = openRows.slice(1).map(r => r.id);
+      await client.query(
+        `UPDATE employee_assignments
+            SET effective_to = $1, updated_at = $2
+          WHERE id = ANY($3::uuid[]) AND employee_id = $4`,
+        [open.effective_from, nowIso, extraIds, employeeId],
+      );
     }
   } else {
-    const effectiveFrom = (emp?.hire_date as string | null) || '2020-01-01';
-    const { error: insertError } = await supabase
-      .from('employee_assignments')
-      .insert({
-        employee_id: employeeId,
-        org_department_id: nextDeptId,
-        position_id: nextPositionId,
-        effective_from: effectiveFrom,
-        is_primary: true,
-        assignment_type: 'main',
-        change_reason: reason,
-      });
-    if (insertError) throw insertError;
+    const effectiveFrom = emp?.hire_date || '2020-01-01';
+    await client.query(
+      `INSERT INTO employee_assignments
+         (employee_id, org_department_id, position_id, effective_from,
+          is_primary, assignment_type, change_reason)
+       VALUES ($1, $2, $3, $4, true, 'main', $5)`,
+      [employeeId, nextDeptId, nextPositionId, effectiveFrom, reason],
+    );
   }
+};
+
+const syncEmployeeAssignmentSnapshotTx = async (
+  client: PoolClient,
+  employeeId: number,
+  referenceDate = today(),
+): Promise<void> => {
+  const assignments = await getEmployeeAssignments(employeeId);
+  const activeAssignment = [...assignments]
+    .reverse()
+    .find(assignment => isAssignmentActiveOnDateInclusive(
+      assignment.effective_from,
+      assignment.effective_to,
+      referenceDate,
+    )) || null;
+
+  await client.query(
+    `UPDATE employees
+        SET position_id = $1,
+            org_department_id = $2,
+            updated_at = $3
+      WHERE id = $4`,
+    [
+      activeAssignment?.position_id || null,
+      activeAssignment?.org_department_id || null,
+      new Date().toISOString(),
+      employeeId,
+    ],
+  );
 };
 
 const syncEmployeeAssignmentSnapshot = async (employeeId: number, referenceDate = today()): Promise<void> => {
@@ -125,19 +157,24 @@ const syncEmployeeAssignmentSnapshot = async (employeeId: number, referenceDate 
       referenceDate,
     )) || null;
 
-  await supabase
-    .from('employees')
-    .update({
-      position_id: activeAssignment?.position_id || null,
-      org_department_id: activeAssignment?.org_department_id || null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', employeeId);
+  await execute(
+    `UPDATE employees
+        SET position_id = $1,
+            org_department_id = $2,
+            updated_at = $3
+      WHERE id = $4`,
+    [
+      activeAssignment?.position_id || null,
+      activeAssignment?.org_department_id || null,
+      new Date().toISOString(),
+      employeeId,
+    ],
+  );
 };
 
 /**
  * Единый сервис для изменений сотрудника с автоматической записью истории.
- * Все контроллеры должны вызывать эти методы вместо прямого supabase.update().
+ * Все контроллеры должны вызывать эти методы вместо прямого UPDATE.
  */
 export const employeeChangesService = {
   /**
@@ -146,30 +183,33 @@ export const employeeChangesService = {
   async changeSalary(employeeId: number, salary: number, opts: ChangeOpts = {}): Promise<void> {
     const date = opts.effectiveDate || today();
 
-    await supabase
-      .from('salary_history')
-      .insert({
-        employee_id: employeeId,
-        salary,
-        effective_date: date,
-        change_reason: opts.reason || null,
-        note: opts.note || null,
-        created_by: opts.createdBy || null,
-      });
+    await withTransaction(async (client) => {
+      await client.query(
+        `INSERT INTO salary_history
+           (employee_id, salary, effective_date, change_reason, note, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          employeeId,
+          salary,
+          date,
+          opts.reason || null,
+          opts.note || null,
+          opts.createdBy || null,
+        ],
+      );
 
-    // Обновляем salary snapshot только из самой поздней записи
-    const { data: latest } = await supabase
-      .from('salary_history')
-      .select('salary')
-      .eq('employee_id', employeeId)
-      .order('effective_date', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
-
-    if (latest) {
-      await syncEmployeeSalarySnapshot(employeeId, latest.salary);
-    }
+      const latestResult = await client.query<{ salary: number | null }>(
+        `SELECT salary FROM salary_history
+          WHERE employee_id = $1
+          ORDER BY effective_date DESC, created_at DESC
+          LIMIT 1`,
+        [employeeId],
+      );
+      const latest = latestResult.rows[0] ?? null;
+      if (latest) {
+        await syncEmployeeSalarySnapshotTx(client, employeeId, latest.salary);
+      }
+    });
 
     employeeCache.invalidate(employeeId);
   },
@@ -181,38 +221,48 @@ export const employeeChangesService = {
     const { freezeHistory } = await settingsService.getEmployeeTransferConfig();
 
     if (freezeHistory) {
-      await applyFrozenAssignment(employeeId, { position_id: positionId }, opts.reason || 'Заморозка истории переводов');
-      await supabase
-        .from('employees')
-        .update({ position_id: positionId, updated_at: new Date().toISOString() })
-        .eq('id', employeeId);
+      await withTransaction(async (client) => {
+        await applyFrozenAssignmentTx(
+          client,
+          employeeId,
+          { position_id: positionId },
+          opts.reason || 'Заморозка истории переводов',
+        );
+        await client.query(
+          `UPDATE employees SET position_id = $1, updated_at = $2 WHERE id = $3`,
+          [positionId, new Date().toISOString(), employeeId],
+        );
+      });
       employeeCache.invalidate(employeeId);
       return;
     }
 
     const date = opts.effectiveDate || today();
 
-    const { data: emp } = await supabase
-      .from('employees')
-      .select('org_department_id, position_id')
-      .eq('id', employeeId)
-      .single();
+    await withTransaction(async (client) => {
+      const empRes = await client.query<{ org_department_id: string | null; position_id: string | null }>(
+        `SELECT org_department_id, position_id FROM employees WHERE id = $1`,
+        [employeeId],
+      );
+      const emp = empRes.rows[0] ?? null;
 
-    // Новое назначение (не закрываем старые — они имеют свои даты)
-    await supabase
-      .from('employee_assignments')
-      .insert({
-        employee_id: employeeId,
-        org_department_id: emp?.org_department_id || null,
-        position_id: positionId,
-        effective_from: date,
-        is_primary: true,
-        assignment_type: 'main',
-        change_reason: opts.reason || 'Смена должности',
-        created_by: opts.createdBy || null,
-      });
+      await client.query(
+        `INSERT INTO employee_assignments
+           (employee_id, org_department_id, position_id, effective_from,
+            is_primary, assignment_type, change_reason, created_by)
+         VALUES ($1, $2, $3, $4, true, 'main', $5, $6)`,
+        [
+          employeeId,
+          emp?.org_department_id || null,
+          positionId,
+          date,
+          opts.reason || 'Смена должности',
+          opts.createdBy || null,
+        ],
+      );
 
-    await syncEmployeeAssignmentSnapshot(employeeId);
+      await syncEmployeeAssignmentSnapshotTx(client, employeeId);
+    });
 
     employeeCache.invalidate(employeeId);
   },
@@ -224,21 +274,30 @@ export const employeeChangesService = {
     const { freezeHistory } = await settingsService.getEmployeeTransferConfig();
 
     if (freezeHistory) {
-      await applyFrozenAssignment(employeeId, { org_department_id: departmentId }, opts.reason || 'Заморозка истории переводов');
+      await withTransaction(async (client) => {
+        await applyFrozenAssignmentTx(
+          client,
+          employeeId,
+          { org_department_id: departmentId },
+          opts.reason || 'Заморозка истории переводов',
+        );
 
-      const updateData: Record<string, unknown> = {
-        org_department_id: departmentId,
-        updated_at: new Date().toISOString(),
-      };
-      if (opts.lockDepartment !== undefined) {
-        updateData.department_locked = opts.lockDepartment;
-      }
-
-      const { error: employeeError } = await supabase
-        .from('employees')
-        .update(updateData)
-        .eq('id', employeeId);
-      if (employeeError) throw employeeError;
+        const updateData: Record<string, unknown> = {
+          org_department_id: departmentId,
+          updated_at: new Date().toISOString(),
+        };
+        if (opts.lockDepartment !== undefined) {
+          updateData.department_locked = opts.lockDepartment;
+        }
+        const keys = Object.keys(updateData);
+        const params: unknown[] = keys.map(k => updateData[k]);
+        const setSql = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+        params.push(employeeId);
+        await client.query(
+          `UPDATE employees SET ${setSql} WHERE id = $${params.length}`,
+          params,
+        );
+      });
 
       employeeCache.invalidate(employeeId);
       return;
@@ -246,86 +305,92 @@ export const employeeChangesService = {
 
     const date = opts.effectiveDate || today();
 
-    const { data: emp } = await supabase
-      .from('employees')
-      .select('position_id, org_department_id')
-      .eq('id', employeeId)
-      .single();
+    await withTransaction(async (client) => {
+      const empRes = await client.query<{ position_id: string | null; org_department_id: string | null }>(
+        `SELECT position_id, org_department_id FROM employees WHERE id = $1`,
+        [employeeId],
+      );
+      const emp = empRes.rows[0] ?? null;
 
-    const assignments = await getEmployeeAssignments(employeeId);
-    const previousDay = formatDateShift(date, -1);
-    const nextAssignment = assignments.find(assignment => assignment.effective_from > date) || null;
-    const sameDayAssignment = assignments.find(assignment => assignment.effective_from === date) || null;
-    const activeAssignment = assignments.find(assignment => isAssignmentActiveOnDateInclusive(
-      assignment.effective_from,
-      assignment.effective_to,
-      date,
-    )) || null;
+      const assignments = await getEmployeeAssignments(employeeId);
+      const previousDay = formatDateShift(date, -1);
+      const nextAssignment = assignments.find(assignment => assignment.effective_from > date) || null;
+      const sameDayAssignment = assignments.find(assignment => assignment.effective_from === date) || null;
+      const activeAssignment = assignments.find(assignment => isAssignmentActiveOnDateInclusive(
+        assignment.effective_from,
+        assignment.effective_to,
+        date,
+      )) || null;
 
-    if (activeAssignment && activeAssignment.id !== sameDayAssignment?.id) {
-      const { error: closeError } = await supabase
-        .from('employee_assignments')
-        .update({
-          effective_to: previousDay,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', activeAssignment.id)
-        .eq('employee_id', employeeId);
+      if (activeAssignment && activeAssignment.id !== sameDayAssignment?.id) {
+        await client.query(
+          `UPDATE employee_assignments
+              SET effective_to = $1, updated_at = $2
+            WHERE id = $3 AND employee_id = $4`,
+          [previousDay, new Date().toISOString(), activeAssignment.id, employeeId],
+        );
+      }
 
-      if (closeError) throw closeError;
-    }
+      const nextEffectiveTo = nextAssignment ? formatDateShift(nextAssignment.effective_from, -1) : null;
 
-    const nextEffectiveTo = nextAssignment ? formatDateShift(nextAssignment.effective_from, -1) : null;
+      if (sameDayAssignment) {
+        await client.query(
+          `UPDATE employee_assignments
+              SET org_department_id = $1,
+                  position_id = $2,
+                  effective_to = $3,
+                  is_primary = true,
+                  assignment_type = 'main',
+                  change_reason = $4,
+                  created_by = $5,
+                  updated_at = $6
+            WHERE id = $7 AND employee_id = $8`,
+          [
+            departmentId,
+            emp?.position_id || null,
+            nextEffectiveTo,
+            opts.reason || 'Перевод в другой отдел',
+            opts.createdBy || null,
+            new Date().toISOString(),
+            sameDayAssignment.id,
+            employeeId,
+          ],
+        );
+      } else {
+        await client.query(
+          `INSERT INTO employee_assignments
+             (employee_id, org_department_id, position_id, effective_from,
+              effective_to, is_primary, assignment_type, change_reason, created_by)
+           VALUES ($1, $2, $3, $4, $5, true, 'main', $6, $7)`,
+          [
+            employeeId,
+            departmentId,
+            emp?.position_id || null,
+            date,
+            nextEffectiveTo,
+            opts.reason || 'Перевод в другой отдел',
+            opts.createdBy || null,
+          ],
+        );
+      }
 
-    if (sameDayAssignment) {
-      const { error: updateError } = await supabase
-        .from('employee_assignments')
-        .update({
-          org_department_id: departmentId,
-          position_id: emp?.position_id || null,
-          effective_to: nextEffectiveTo,
-          is_primary: true,
-          assignment_type: 'main',
-          change_reason: opts.reason || 'Перевод в другой отдел',
-          created_by: opts.createdBy || null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', sameDayAssignment.id)
-        .eq('employee_id', employeeId);
+      const updateData: Record<string, unknown> = {
+        updated_at: new Date().toISOString(),
+      };
+      if (opts.lockDepartment !== undefined) {
+        updateData.department_locked = opts.lockDepartment;
+      }
+      const keys = Object.keys(updateData);
+      const params: unknown[] = keys.map(k => updateData[k]);
+      const setSql = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+      params.push(employeeId);
+      await client.query(
+        `UPDATE employees SET ${setSql} WHERE id = $${params.length}`,
+        params,
+      );
 
-      if (updateError) throw updateError;
-    } else {
-      const { error: insertError } = await supabase
-        .from('employee_assignments')
-        .insert({
-          employee_id: employeeId,
-          org_department_id: departmentId,
-          position_id: emp?.position_id || null,
-          effective_from: date,
-          effective_to: nextEffectiveTo,
-          is_primary: true,
-          assignment_type: 'main',
-          change_reason: opts.reason || 'Перевод в другой отдел',
-          created_by: opts.createdBy || null,
-        });
-
-      if (insertError) throw insertError;
-    }
-
-    const updateData: Record<string, unknown> = {
-      updated_at: new Date().toISOString(),
-    };
-    if (opts.lockDepartment !== undefined) {
-      updateData.department_locked = opts.lockDepartment;
-    }
-
-    const { error: employeeError } = await supabase
-      .from('employees')
-      .update(updateData)
-      .eq('id', employeeId);
-    if (employeeError) throw employeeError;
-
-    await syncEmployeeAssignmentSnapshot(employeeId);
+      await syncEmployeeAssignmentSnapshotTx(client, employeeId);
+    });
 
     employeeCache.invalidate(employeeId);
   },
@@ -344,30 +409,34 @@ export const employeeChangesService = {
     if (updates.change_reason !== undefined) updateData.change_reason = updates.change_reason;
     if (updates.note !== undefined) updateData.note = updates.note;
 
-    const { data: updated, error } = await supabase
-      .from('salary_history')
-      .update(updateData)
-      .eq('id', historyId)
-      .eq('employee_id', employeeId)
-      .select('id');
-    if (error) throw error;
-    if (!updated || updated.length === 0) {
-      throw new Error('Salary history record not found');
-    }
+    await withTransaction(async (client) => {
+      const keys = Object.keys(updateData);
+      const params: unknown[] = keys.map(k => updateData[k]);
+      const setSql = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+      params.push(historyId);
+      params.push(employeeId);
+      const updResult = await client.query<{ id: number }>(
+        `UPDATE salary_history SET ${setSql}
+          WHERE id = $${params.length - 1} AND employee_id = $${params.length}
+          RETURNING id`,
+        params,
+      );
+      if (updResult.rows.length === 0) {
+        throw new Error('Salary history record not found');
+      }
 
-    // Пересчитать актуальный оклад
-    const { data: latest } = await supabase
-      .from('salary_history')
-      .select('salary')
-      .eq('employee_id', employeeId)
-      .order('effective_date', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
-
-    if (latest) {
-      await syncEmployeeSalarySnapshot(employeeId, latest.salary);
-    }
+      const latestRes = await client.query<{ salary: number | null }>(
+        `SELECT salary FROM salary_history
+          WHERE employee_id = $1
+          ORDER BY effective_date DESC, created_at DESC
+          LIMIT 1`,
+        [employeeId],
+      );
+      const latest = latestRes.rows[0] ?? null;
+      if (latest) {
+        await syncEmployeeSalarySnapshotTx(client, employeeId, latest.salary);
+      }
+    });
 
     employeeCache.invalidate(employeeId);
   },
@@ -376,27 +445,28 @@ export const employeeChangesService = {
    * Удалить запись salary_history
    */
   async deleteSalaryHistory(historyId: number, employeeId: number): Promise<void> {
-    const { data: deleted, error } = await supabase
-      .from('salary_history')
-      .delete()
-      .eq('id', historyId)
-      .eq('employee_id', employeeId)
-      .select('id');
-    if (error) throw error;
-    if (!deleted || deleted.length === 0) {
-      throw new DomainValidationError('Salary history record not found');
-    }
+    await withTransaction(async (client) => {
+      const delResult = await client.query<{ id: number }>(
+        `DELETE FROM salary_history
+          WHERE id = $1 AND employee_id = $2
+          RETURNING id`,
+        [historyId, employeeId],
+      );
+      if (delResult.rows.length === 0) {
+        throw new DomainValidationError('Salary history record not found');
+      }
 
-    const { data: latest } = await supabase
-      .from('salary_history')
-      .select('salary')
-      .eq('employee_id', employeeId)
-      .order('effective_date', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
+      const latestRes = await client.query<{ salary: number | null }>(
+        `SELECT salary FROM salary_history
+          WHERE employee_id = $1
+          ORDER BY effective_date DESC, created_at DESC
+          LIMIT 1`,
+        [employeeId],
+      );
+      const latest = latestRes.rows[0] ?? null;
+      await syncEmployeeSalarySnapshotTx(client, employeeId, latest?.salary ?? null);
+    });
 
-    await syncEmployeeSalarySnapshot(employeeId, latest?.salary || null);
     employeeCache.invalidate(employeeId);
   },
 
@@ -414,18 +484,24 @@ export const employeeChangesService = {
     if (updates.effective_from !== undefined) updateData.effective_from = updates.effective_from;
     if (updates.change_reason !== undefined) updateData.change_reason = updates.change_reason;
 
-    const { data: updated, error } = await supabase
-      .from('employee_assignments')
-      .update(updateData)
-      .eq('id', assignmentId)
-      .eq('employee_id', employeeId)
-      .select('id');
-    if (error) throw error;
-    if (!updated || updated.length === 0) {
-      throw new DomainValidationError('Assignment record not found');
-    }
+    await withTransaction(async (client) => {
+      const keys = Object.keys(updateData);
+      const params: unknown[] = keys.map(k => updateData[k]);
+      const setSql = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+      params.push(assignmentId);
+      params.push(employeeId);
+      const updResult = await client.query<{ id: string }>(
+        `UPDATE employee_assignments SET ${setSql}
+          WHERE id = $${params.length - 1} AND employee_id = $${params.length}
+          RETURNING id`,
+        params,
+      );
+      if (updResult.rows.length === 0) {
+        throw new DomainValidationError('Assignment record not found');
+      }
 
-    await syncEmployeeAssignmentSnapshot(employeeId);
+      await syncEmployeeAssignmentSnapshotTx(client, employeeId);
+    });
 
     employeeCache.invalidate(employeeId);
   },
@@ -447,30 +523,30 @@ export const employeeChangesService = {
     assignmentId: string,
     employeeId: number,
   ): Promise<{ reverted: IDeleteTransferResult | null }> {
-    const { data: target, error: loadErr } = await supabase
-      .from('employee_assignments')
-      .select('id, effective_to')
-      .eq('id', assignmentId)
-      .eq('employee_id', employeeId)
-      .maybeSingle();
-    if (loadErr) throw loadErr;
+    const target = await queryOne<{ id: string; effective_to: string | null }>(
+      `SELECT id, effective_to
+         FROM employee_assignments
+        WHERE id = $1 AND employee_id = $2
+        LIMIT 1`,
+      [assignmentId, employeeId],
+    );
     if (!target) throw new DomainValidationError('Assignment record not found');
 
     if (target.effective_to == null) {
-      const { data: emp } = await supabase
-        .from('employees')
-        .select('employment_status, is_archived')
-        .eq('id', employeeId)
-        .maybeSingle();
-      const isActive = emp && emp.employment_status === 'active' && !emp.is_archived;
+      const emp = await queryOne<{ employment_status: string; is_archived: boolean }>(
+        `SELECT employment_status, is_archived FROM employees WHERE id = $1`,
+        [employeeId],
+      );
+      const isActive = !!emp && emp.employment_status === 'active' && !emp.is_archived;
       if (isActive) {
-        const { count, error: cntErr } = await supabase
-          .from('employee_assignments')
-          .select('id', { count: 'exact', head: true })
-          .eq('employee_id', employeeId)
-          .is('effective_to', null);
-        if (cntErr) throw cntErr;
-        if ((count ?? 0) <= 1) {
+        const cntRow = await queryOne<{ cnt: string }>(
+          `SELECT count(*)::text AS cnt
+             FROM employee_assignments
+            WHERE employee_id = $1 AND effective_to IS NULL`,
+          [employeeId],
+        );
+        const count = Number(cntRow?.cnt ?? 0);
+        if (count <= 1) {
           const reverted = await tryDeleteTransfer(assignmentId);
           if (!reverted) {
             throw new DomainValidationError(
@@ -485,18 +561,19 @@ export const employeeChangesService = {
       }
     }
 
-    const { data: deleted, error } = await supabase
-      .from('employee_assignments')
-      .delete()
-      .eq('id', assignmentId)
-      .eq('employee_id', employeeId)
-      .select('id');
-    if (error) throw error;
-    if (!deleted || deleted.length === 0) {
-      throw new DomainValidationError('Assignment record not found');
-    }
+    await withTransaction(async (client) => {
+      const delResult = await client.query<{ id: string }>(
+        `DELETE FROM employee_assignments
+          WHERE id = $1 AND employee_id = $2
+          RETURNING id`,
+        [assignmentId, employeeId],
+      );
+      if (delResult.rows.length === 0) {
+        throw new DomainValidationError('Assignment record not found');
+      }
 
-    await syncEmployeeAssignmentSnapshot(employeeId);
+      await syncEmployeeAssignmentSnapshotTx(client, employeeId);
+    });
 
     employeeCache.invalidate(employeeId);
     return { reverted: null };

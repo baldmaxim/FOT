@@ -1,22 +1,13 @@
 /**
  * Скрипт для создания тестового кода привязки
- * Запуск: npx ts-node scripts/create-test-code.ts
+ * Запуск: npx tsx scripts/create-test-code.ts
  */
 
-import { createClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
 
+import { queryOne } from '../src/config/postgres.js';
+
 dotenv.config();
-
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!supabaseUrl || !supabaseServiceKey) {
-  console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env');
-  process.exit(1);
-}
-
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 // Генерация кода формата FOT-XXXXXX
 function generateCode(): string {
@@ -28,51 +19,62 @@ function generateCode(): string {
   return code;
 }
 
-async function main() {
+interface IOrgRow {
+  id: string;
+  name: string;
+}
+
+interface IAdminRow {
+  id: string;
+  full_name: string | null;
+  position_type: string;
+}
+
+interface ILinkCodeRow {
+  id: string;
+  code: string;
+  expires_at: string;
+}
+
+async function main(): Promise<void> {
   console.log('Создание тестового кода привязки...\n');
 
-  // 1. Получаем первую организацию
-  const { data: orgs, error: orgError } = await supabase
-    .from('organizations')
-    .select('id, name')
-    .limit(1);
+  // 1. Получаем первую организацию (или создаём)
+  let org = await queryOne<IOrgRow>(
+    'SELECT id, name FROM organizations LIMIT 1',
+  );
 
-  if (orgError || !orgs?.length) {
-    console.error('Ошибка получения организации:', orgError?.message || 'Нет организаций');
-
-    // Создаём тестовую организацию
-    console.log('Создаём тестовую организацию...');
-    const { data: newOrg, error: createOrgError } = await supabase
-      .from('organizations')
-      .insert({ name: 'Тестовая организация' })
-      .select()
-      .single();
-
-    if (createOrgError) {
-      console.error('Не удалось создать организацию:', createOrgError.message);
+  if (!org) {
+    console.log('Организаций нет, создаём тестовую...');
+    org = await queryOne<IOrgRow>(
+      `INSERT INTO organizations (name)
+       VALUES ($1)
+       RETURNING id, name`,
+      ['Тестовая организация'],
+    );
+    if (!org) {
+      console.error('Не удалось создать организацию');
       process.exit(1);
     }
-
-    orgs!.push(newOrg);
   }
 
-  const org = orgs![0];
   console.log(`Организация: ${org.name} (${org.id})`);
 
   // 2. Получаем super_admin пользователя
-  const { data: admins, error: adminError } = await supabase
-    .from('user_profiles')
-    .select('id, full_name, position_type')
-    .eq('position_type', 'super_admin')
-    .limit(1);
+  const admin = await queryOne<IAdminRow>(
+    `SELECT id, full_name, position_type
+       FROM user_profiles
+      WHERE position_type = $1
+      LIMIT 1`,
+    ['super_admin'],
+  );
 
-  if (adminError || !admins?.length) {
+  if (!admin) {
     console.error('Ошибка: не найден super_admin пользователь');
     console.log('Сначала создайте пользователя с position_type = super_admin');
     process.exit(1);
   }
 
-  const admin = admins[0];
   console.log(`Создатель: ${admin.full_name || 'Super Admin'} (${admin.id})`);
 
   // 3. Генерируем уникальный код
@@ -80,32 +82,26 @@ async function main() {
   let attempts = 0;
 
   while (attempts < 10) {
-    const { data: existing } = await supabase
-      .from('employee_link_codes')
-      .select('id')
-      .eq('code', code)
-      .single();
-
+    const existing = await queryOne<{ id: string }>(
+      'SELECT id FROM employee_link_codes WHERE code = $1 LIMIT 1',
+      [code],
+    );
     if (!existing) break;
     code = generateCode();
     attempts++;
   }
 
   // 4. Создаём код привязки
-  const { data: linkCode, error: codeError } = await supabase
-    .from('employee_link_codes')
-    .insert({
-      organization_id: org.id,
-      code: code,
-      position_type: 'worker_office',
-      created_by: admin.id,
-      expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 дней
-    })
-    .select()
-    .single();
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const linkCode = await queryOne<ILinkCodeRow>(
+    `INSERT INTO employee_link_codes (organization_id, code, position_type, created_by, expires_at)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, code, expires_at`,
+    [org.id, code, 'worker_office', admin.id, expiresAt],
+  );
 
-  if (codeError) {
-    console.error('Ошибка создания кода:', codeError.message);
+  if (!linkCode) {
+    console.error('Ошибка создания кода');
     process.exit(1);
   }
 

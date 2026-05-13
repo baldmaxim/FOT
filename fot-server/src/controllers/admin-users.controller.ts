@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import { supabase } from '../config/database.js';
+import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
+import { localAuthService } from '../services/local-auth.service.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest, ChatInboundMode, UserProfile } from '../types/index.js';
 import { logSupabaseError } from './admin-helpers.js';
@@ -123,17 +124,16 @@ async function assertTargetUserInScope(
   const accessible = await resolveAccessibleDepartmentIds(req);
   if (accessible === 'all') return { ok: true };
 
-  const { data: profile } = await supabase
-    .from('user_profiles')
-    .select('employee_id')
-    .eq('id', targetUserId)
-    .maybeSingle();
+  const profile = await queryOne<{ employee_id: number | null }>(
+    'SELECT employee_id FROM user_profiles WHERE id = $1::uuid',
+    [targetUserId],
+  );
   if (!profile) return { ok: false, status: 404, error: 'Пользователь не найден' };
   if (!profile.employee_id) {
     return { ok: false, status: 403, error: 'Пользователь без сотрудника недоступен в вашем скоупе' };
   }
 
-  const allowed = await canAccessEmployeeInScope(req, profile.employee_id as number);
+  const allowed = await canAccessEmployeeInScope(req, profile.employee_id);
   if (!allowed) return { ok: false, status: 403, error: 'Пользователь вне вашей зоны доступа' };
   return { ok: true };
 }
@@ -154,12 +154,12 @@ async function filterUsersByCompanyScope<T extends { employee_id: number | null 
   const employeeIds = [...new Set(users.map(u => u.employee_id).filter((id): id is number => typeof id === 'number'))];
   if (employeeIds.length === 0) return [];
 
-  const { data } = await supabase
-    .from('employees')
-    .select('id, org_department_id')
-    .in('id', employeeIds);
+  const data = await query<{ id: number; org_department_id: string | null }>(
+    'SELECT id, org_department_id FROM employees WHERE id = ANY($1::int[])',
+    [employeeIds],
+  );
   const employeeDeptMap = new Map<number, string | null>();
-  for (const row of (data || []) as Array<{ id: number; org_department_id: string | null }>) {
+  for (const row of data) {
     employeeDeptMap.set(row.id, row.org_department_id);
   }
 
@@ -176,16 +176,12 @@ async function validateDepartmentIds(departmentIds: string[]): Promise<{ missing
     return { missingIds: [] };
   }
 
-  const { data: departments, error: departmentError } = await supabase
-    .from('org_departments')
-    .select('id')
-    .in('id', normalizedDepartmentIds);
+  const departments = await query<{ id: string }>(
+    'SELECT id FROM org_departments WHERE id = ANY($1::uuid[])',
+    [normalizedDepartmentIds],
+  );
 
-  if (departmentError) {
-    throw departmentError;
-  }
-
-  const foundIds = new Set((departments || []).map(department => department.id as string));
+  const foundIds = new Set(departments.map(department => department.id));
   return {
     missingIds: normalizedDepartmentIds.filter(departmentId => !foundIds.has(departmentId)),
   };
@@ -204,20 +200,17 @@ async function replaceExplicitDepartmentAccess(params: {
 }): Promise<string[]> {
   const explicitDepartmentIds = uniqueStringValues(params.departmentIds);
 
-  const { data: existingAccessRows, error: existingAccessError } = await supabase
-    .from('employee_department_access')
-    .select('department_id, is_active, source')
-    .eq('employee_id', params.employeeId)
-    .neq('source', MEMBERSHIP_SOURCE);
-
-  if (existingAccessError) {
-    throw existingAccessError;
-  }
+  const existingAccessRows = await query<{ department_id: string; is_active: boolean; source: string }>(
+    `SELECT department_id, is_active, source
+       FROM employee_department_access
+      WHERE employee_id = $1 AND source <> $2`,
+    [params.employeeId, MEMBERSHIP_SOURCE],
+  );
 
   const nextDepartmentSet = new Set(explicitDepartmentIds);
-  const activeDepartmentIds = (existingAccessRows || [])
+  const activeDepartmentIds = existingAccessRows
     .filter(row => row.is_active)
-    .map(row => row.department_id as string)
+    .map(row => row.department_id)
     .filter(Boolean);
   const departmentIdsToDeactivate = activeDepartmentIds
     .filter(departmentId => !nextDepartmentSet.has(departmentId));
@@ -225,40 +218,31 @@ async function replaceExplicitDepartmentAccess(params: {
   const now = new Date().toISOString();
 
   if (explicitDepartmentIds.length > 0) {
-    const rows = explicitDepartmentIds.map(departmentId => ({
-      employee_id: params.employeeId,
-      department_id: departmentId,
-      source: params.source,
-      is_active: true,
-      created_by: params.actorUserId,
-      updated_at: now,
-    }));
-
-    const { error: upsertError } = await supabase
-      .from('employee_department_access')
-      .upsert(rows, {
-        onConflict: 'employee_id,department_id',
-      });
-
-    if (upsertError) {
-      throw upsertError;
-    }
+    // Bulk UPSERT через unnest — каждый ряд из массива параметров.
+    await execute(
+      `INSERT INTO employee_department_access
+         (employee_id, department_id, source, is_active, created_by, updated_at)
+       SELECT $1::int, dept_id, $2::text, true, $3::uuid, $4::timestamptz
+         FROM unnest($5::uuid[]) AS dept_id
+       ON CONFLICT (employee_id, department_id)
+       DO UPDATE SET
+         source = EXCLUDED.source,
+         is_active = true,
+         created_by = EXCLUDED.created_by,
+         updated_at = EXCLUDED.updated_at`,
+      [params.employeeId, params.source, params.actorUserId, now, explicitDepartmentIds],
+    );
   }
 
   if (departmentIdsToDeactivate.length > 0) {
-    const { error: deactivateError } = await supabase
-      .from('employee_department_access')
-      .update({
-        is_active: false,
-        updated_at: now,
-      })
-      .eq('employee_id', params.employeeId)
-      .in('department_id', departmentIdsToDeactivate)
-      .neq('source', MEMBERSHIP_SOURCE);
-
-    if (deactivateError) {
-      throw deactivateError;
-    }
+    await execute(
+      `UPDATE employee_department_access
+          SET is_active = false, updated_at = $1::timestamptz
+        WHERE employee_id = $2
+          AND department_id = ANY($3::uuid[])
+          AND source <> $4`,
+      [now, params.employeeId, departmentIdsToDeactivate, MEMBERSHIP_SOURCE],
+    );
   }
 
   return explicitDepartmentIds;
@@ -278,24 +262,19 @@ async function upsertEmployeeDepartmentAccess(params: {
   }
 
   const now = new Date().toISOString();
-  const rows = additionalDepartmentIds.map(departmentId => ({
-    employee_id: params.employeeId,
-    department_id: departmentId,
-    source: params.source,
-    is_active: true,
-    created_by: params.actorUserId,
-    updated_at: now,
-  }));
-
-  const { error: upsertError } = await supabase
-    .from('employee_department_access')
-    .upsert(rows, {
-      onConflict: 'employee_id,department_id',
-    });
-
-  if (upsertError) {
-    throw upsertError;
-  }
+  await execute(
+    `INSERT INTO employee_department_access
+       (employee_id, department_id, source, is_active, created_by, updated_at)
+     SELECT $1::int, dept_id, $2::text, true, $3::uuid, $4::timestamptz
+       FROM unnest($5::uuid[]) AS dept_id
+     ON CONFLICT (employee_id, department_id)
+     DO UPDATE SET
+       source = EXCLUDED.source,
+       is_active = true,
+       created_by = EXCLUDED.created_by,
+       updated_at = EXCLUDED.updated_at`,
+    [params.employeeId, params.source, params.actorUserId, now, additionalDepartmentIds],
+  );
 
   return additionalDepartmentIds;
 }
@@ -303,18 +282,18 @@ async function upsertEmployeeDepartmentAccess(params: {
 export const adminUsersController = {
   async getAllUsers(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { data: rawUsers, error: usersError } = await supabase
-        .from('user_profiles')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (usersError) {
+      let rawUsers: UserProfile[];
+      try {
+        rawUsers = await query<UserProfile>(
+          'SELECT * FROM user_profiles ORDER BY created_at DESC',
+        );
+      } catch (usersError) {
         logSupabaseError('GetUsers', usersError);
         res.status(500).json({ success: false, error: 'Failed to fetch users' });
         return;
       }
 
-      const users = await filterUsersByCompanyScope(req, rawUsers as UserProfile[]);
+      const users = await filterUsersByCompanyScope(req, rawUsers);
 
       const assignedDepartmentMap = await loadExplicitManagerAssignmentMap(
         users.map((u: UserProfile) => ({
@@ -326,30 +305,16 @@ export const adminUsersController = {
       const allRoles = await getAllRoles();
       const roleCodeById = new Map(allRoles.map(r => [r.id, r.code]));
 
-      // Подгружаем email и статус подтверждения из Supabase Auth
+      // Подгружаем email и статус подтверждения из app_auth.users одним батчем по id.
       const authEmailMap: Record<string, { email: string; email_confirmed: boolean }> = {};
       try {
-        const perPage = 1000;
-        let page = 1;
-        let hasMore = true;
-        while (hasMore) {
-          const { data: authData, error: authError } = await supabase.auth.admin.listUsers({ page, perPage });
-          if (authError) {
-            console.error('[GetUsers] listUsers error:', authError);
-            break;
-          }
-          if (authData?.users) {
-            for (const au of authData.users) {
-              authEmailMap[au.id] = {
-                email: au.email || '',
-                email_confirmed: !!au.email_confirmed_at,
-              };
-            }
-            hasMore = authData.users.length === perPage;
-            page++;
-          } else {
-            hasMore = false;
-          }
+        const userIds = users.map((u: UserProfile) => u.id);
+        const authUsersById = await localAuthService.getUsersByIds(userIds);
+        for (const [userId, authUser] of authUsersById.entries()) {
+          authEmailMap[userId] = {
+            email: authUser.email || '',
+            email_confirmed: !!authUser.email_confirmed_at,
+          };
         }
       } catch (err) {
         console.error('[GetUsers] Auth fetch error:', err);
@@ -391,58 +356,78 @@ export const adminUsersController = {
         return;
       }
 
-      let employeesQuery = supabase
-        .from('employees')
-        .select('id, full_name, position_id, org_department_id')
-        .eq('employment_status', 'active')
-        .eq('is_archived', false)
-        .order('full_name', { ascending: true })
-        .range(0, 9999);
-
-      if (accessible !== 'all') {
-        employeesQuery = employeesQuery.in('org_department_id', accessible);
-      }
-
-      const { data: employees, error: employeesError } = await employeesQuery;
-
-      if (employeesError) {
+      type EmployeeRow = {
+        id: number;
+        full_name: string;
+        position_id: string | number | null;
+        org_department_id: string | null;
+      };
+      let employees: EmployeeRow[];
+      try {
+        if (accessible === 'all') {
+          employees = await query<EmployeeRow>(
+            `SELECT id, full_name, position_id, org_department_id
+               FROM employees
+              WHERE employment_status = 'active' AND is_archived = false
+              ORDER BY full_name ASC
+              LIMIT 10000`,
+          );
+        } else {
+          employees = await query<EmployeeRow>(
+            `SELECT id, full_name, position_id, org_department_id
+               FROM employees
+              WHERE employment_status = 'active' AND is_archived = false
+                AND org_department_id = ANY($1::uuid[])
+              ORDER BY full_name ASC
+              LIMIT 10000`,
+            [accessible],
+          );
+        }
+      } catch (employeesError) {
         logSupabaseError('GetEmployeeDepartmentAssignments', employeesError);
         res.status(500).json({ success: false, error: 'Не удалось загрузить назначения сотрудников' });
         return;
       }
 
-      const employeeIds = (employees || []).map(employee => employee.id as number);
+      const employeeIds = employees.map(employee => employee.id);
       // HR-экран «Назначения сотрудников»: показываем только ручные
       // назначения (manual/excel/manager_excel), sigur_sync (членство) сюда
       // не попадает — иначе каждый сотрудник виднелся бы с 1 «назначением».
       const explicitDepartmentMap = await loadEmployeeManagerAssignmentMap(employeeIds);
 
-      const positionIds = [...new Set((employees || [])
-        .map(e => e.position_id as string | number | null)
+      const positionIds = [...new Set(employees
+        .map(e => e.position_id)
         .filter((id): id is string | number => id != null))];
-      const departmentIds = [...new Set((employees || [])
-        .map(e => e.org_department_id as string | null)
+      const departmentIds = [...new Set(employees
+        .map(e => e.org_department_id)
         .filter((id): id is string => typeof id === 'string' && id.length > 0))];
 
+      const positionIdsAsText = positionIds.map(v => String(v));
       const [positionRows, departmentRows] = await Promise.all([
-        positionIds.length > 0
-          ? supabase.from('positions').select('id, name').in('id', positionIds)
-          : Promise.resolve({ data: [] as Array<{ id: string | number; name: string }>, error: null }),
+        positionIdsAsText.length > 0
+          ? query<{ id: string | number; name: string }>(
+              'SELECT id, name FROM positions WHERE id::text = ANY($1::text[])',
+              [positionIdsAsText],
+            )
+          : Promise.resolve([] as Array<{ id: string | number; name: string }>),
         departmentIds.length > 0
-          ? supabase.from('org_departments').select('id, name').in('id', departmentIds)
-          : Promise.resolve({ data: [] as Array<{ id: string; name: string }>, error: null }),
+          ? query<{ id: string; name: string }>(
+              'SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])',
+              [departmentIds],
+            )
+          : Promise.resolve([] as Array<{ id: string; name: string }>),
       ]);
       const positionMap = new Map<string, string>(
-        (positionRows.data || []).map(p => [String(p.id), p.name as string]),
+        positionRows.map(p => [String(p.id), p.name]),
       );
       const departmentMap = new Map<string, string>(
-        (departmentRows.data || []).map(d => [String(d.id), d.name as string]),
+        departmentRows.map(d => [String(d.id), d.name]),
       );
 
-      const payload = (employees || []).map(employee => ({
+      const payload = employees.map(employee => ({
         employee_id: employee.id,
         full_name: employee.full_name,
-        assigned_department_ids: explicitDepartmentMap.get(employee.id as number) || [],
+        assigned_department_ids: explicitDepartmentMap.get(employee.id) || [],
         position_name: employee.position_id != null
           ? (positionMap.get(String(employee.position_id)) ?? null)
           : null,
@@ -460,13 +445,14 @@ export const adminUsersController = {
 
   async getPendingUsers(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { data: rawUsers, error: usersError } = await supabase
-        .from('user_profiles')
-        .select('*')
-        .eq('is_approved', false)
-        .order('created_at', { ascending: false });
-
-      if (usersError) {
+      let users: UserProfile[];
+      try {
+        users = await query<UserProfile>(
+          `SELECT * FROM user_profiles
+            WHERE is_approved = false
+            ORDER BY created_at DESC`,
+        );
+      } catch (usersError) {
         logSupabaseError('GetPendingUsers', usersError);
         res.status(500).json({ success: false, error: 'Failed to fetch pending users' });
         return;
@@ -481,9 +467,8 @@ export const adminUsersController = {
         res.json({ success: true, data: [] });
         return;
       }
-      const users = rawUsers as UserProfile[] | null;
 
-      if (!users || users.length === 0) {
+      if (users.length === 0) {
         res.json({ success: true, data: [] });
         return;
       }
@@ -491,32 +476,35 @@ export const adminUsersController = {
       const allRoles = await getAllRoles();
       const roleCodeById = new Map(allRoles.map(r => [r.id, r.code]));
 
-      const usersWithEmail = await Promise.all(
-        users.map(async (u: UserProfile) => {
-          let email = '';
-          let emailConfirmed = false;
-          try {
-            const { data: authUser, error: authError } = await supabase.auth.admin.getUserById(u.id);
-            if (authError) {
-              console.error(`Failed to get email for user ${u.id}:`, authError);
-            }
-            email = authUser?.user?.email || '';
-            emailConfirmed = !!authUser?.user?.email_confirmed_at;
-          } catch (e) {
-            console.error('Failed to get user email:', e);
-          }
+      // Батчевая подгрузка email/email_confirmed из app_auth.users одним запросом
+      // вместо N последовательных вызовов getUserById.
+      let authUsersById = new Map<string, { email: string; email_confirmed_at: string | null }>();
+      try {
+        const ids = users.map(u => u.id);
+        const fullMap = await localAuthService.getUsersByIds(ids);
+        for (const [userId, authUser] of fullMap.entries()) {
+          authUsersById.set(userId, {
+            email: authUser.email || '',
+            email_confirmed_at: authUser.email_confirmed_at,
+          });
+        }
+      } catch (e) {
+        console.error('Failed to load pending users emails:', e);
+        authUsersById = new Map();
+      }
 
-          return {
-            id: u.id,
-            email,
-            email_confirmed: emailConfirmed,
-            full_name: u.full_name,
-            position_type: roleCodeById.get(u.system_role_id) ?? '',
-            imported_position: u.imported_position,
-            created_at: u.created_at,
-          };
-        })
-      );
+      const usersWithEmail = users.map((u: UserProfile) => {
+        const info = authUsersById.get(u.id);
+        return {
+          id: u.id,
+          email: info?.email || '',
+          email_confirmed: !!info?.email_confirmed_at,
+          full_name: u.full_name,
+          position_type: roleCodeById.get(u.system_role_id) ?? '',
+          imported_position: u.imported_position,
+          created_at: u.created_at,
+        };
+      });
 
       res.json({ success: true, data: usersWithEmail });
     } catch (error) {
@@ -602,17 +590,19 @@ export const adminUsersController = {
       ])];
 
       if (employeeIds.length > 0) {
-        const { data: employees, error: employeesError } = await supabase
-          .from('employees')
-          .select('id')
-          .in('id', employeeIds);
-
-        if (employeesError) {
+        let employees: Array<{ id: number }>;
+        try {
+          employees = await query<{ id: number }>(
+            'SELECT id FROM employees WHERE id = ANY($1::int[])',
+            [employeeIds],
+          );
+        } catch (employeesError) {
+          logSupabaseError('ApplyDepartmentAccessImport-employees', employeesError);
           res.status(500).json({ success: false, error: 'Не удалось проверить выбранных сотрудников' });
           return;
         }
 
-        const foundEmployeeIds = new Set((employees || []).map(employee => employee.id as number));
+        const foundEmployeeIds = new Set(employees.map(employee => employee.id));
         const missingEmployeeIds = employeeIds.filter(employeeId => !foundEmployeeIds.has(employeeId));
         if (missingEmployeeIds.length > 0) {
           res.status(400).json({
@@ -625,17 +615,19 @@ export const adminUsersController = {
       }
 
       if (departmentIds.length > 0) {
-        const { data: departments, error: departmentsError } = await supabase
-          .from('org_departments')
-          .select('id')
-          .in('id', departmentIds);
-
-        if (departmentsError) {
+        let departments: Array<{ id: string }>;
+        try {
+          departments = await query<{ id: string }>(
+            'SELECT id FROM org_departments WHERE id = ANY($1::uuid[])',
+            [departmentIds],
+          );
+        } catch (departmentsError) {
+          logSupabaseError('ApplyDepartmentAccessImport-departments', departmentsError);
           res.status(500).json({ success: false, error: 'Не удалось проверить подразделения из импорта' });
           return;
         }
 
-        const foundDepartmentIds = new Set((departments || []).map(department => department.id as string));
+        const foundDepartmentIds = new Set(departments.map(department => department.id));
         const missingDepartmentIds = departmentIds.filter(departmentId => !foundDepartmentIds.has(departmentId));
         if (missingDepartmentIds.length > 0) {
           res.status(400).json({
@@ -721,12 +713,14 @@ export const adminUsersController = {
         res.status(403).json({ success: false, error: 'Очистка назначений доступна только системному администратору' });
         return;
       }
-      const { error, count } = await supabase
-        .from('employee_department_access')
-        .delete({ count: 'exact' })
-        .neq('id', '00000000-0000-0000-0000-000000000000');
-
-      if (error) {
+      let deletedCount = 0;
+      try {
+        deletedCount = await execute(
+          `DELETE FROM employee_department_access
+            WHERE id <> '00000000-0000-0000-0000-000000000000'::uuid`,
+        );
+      } catch (error) {
+        logSupabaseError('ClearDepartmentAssignments', error);
         res.status(500).json({ success: false, error: 'Не удалось очистить назначения' });
         return;
       }
@@ -734,10 +728,10 @@ export const adminUsersController = {
       await auditService.logFromRequest(req, req.user.id, 'USER_DEPARTMENT_ACCESS_CHANGED', {
         entityType: 'employee',
         entityId: 'all',
-        details: { deleted_count: count ?? 0 },
+        details: { deleted_count: deletedCount },
       });
 
-      res.json({ success: true, data: { deleted: count ?? 0 } });
+      res.json({ success: true, data: { deleted: deletedCount } });
     } catch (error) {
       console.error('Clear department assignments error:', error);
       res.status(500).json({ success: false, error: 'Не удалось очистить назначения' });
@@ -781,30 +775,43 @@ export const adminUsersController = {
         }
       }
 
-      const { data: employees, error: employeesError } = await supabase
-        .from('employees')
-        .select('id, full_name, org_department_id, employment_status, is_archived')
-        .in('id', employeeIds);
-
-      if (employeesError) {
+      type TransferEmployeeRow = {
+        id: number;
+        full_name: string | null;
+        org_department_id: string | null;
+        employment_status: string | null;
+        is_archived: boolean;
+      };
+      let employees: TransferEmployeeRow[];
+      try {
+        employees = await query<TransferEmployeeRow>(
+          `SELECT id, full_name, org_department_id, employment_status, is_archived
+             FROM employees
+            WHERE id = ANY($1::int[])`,
+          [employeeIds],
+        );
+      } catch (employeesError) {
+        logSupabaseError('ApplyBrigadeWorkerTransfers-employees', employeesError);
         res.status(500).json({ success: false, error: 'Не удалось проверить сотрудников' });
         return;
       }
 
-      const employeesById = new Map((employees || []).map(employee => [Number(employee.id), employee]));
+      const employeesById = new Map(employees.map(employee => [Number(employee.id), employee]));
 
-      const { data: departments, error: departmentsError } = await supabase
-        .from('org_departments')
-        .select('id')
-        .in('id', departmentIds)
-        .eq('is_active', true);
-
-      if (departmentsError) {
+      let departments: Array<{ id: string }>;
+      try {
+        departments = await query<{ id: string }>(
+          `SELECT id FROM org_departments
+            WHERE id = ANY($1::uuid[]) AND is_active = true`,
+          [departmentIds],
+        );
+      } catch (departmentsError) {
+        logSupabaseError('ApplyBrigadeWorkerTransfers-departments', departmentsError);
         res.status(500).json({ success: false, error: 'Не удалось проверить подразделения' });
         return;
       }
 
-      const foundDepartmentIds = new Set((departments || []).map(department => String(department.id)));
+      const foundDepartmentIds = new Set(departments.map(department => String(department.id)));
 
       let applied = 0;
       let restored = 0;
@@ -854,15 +861,14 @@ export const adminUsersController = {
 
           const restoredFromArchive = Boolean(employee.is_archived);
           if (restoredFromArchive) {
-            const { error: unarchiveError } = await supabase
-              .from('employees')
-              .update({
-                is_archived: false,
-                archived_at: null,
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', transfer.employee_id);
-            if (unarchiveError) throw unarchiveError;
+            await execute(
+              `UPDATE employees
+                  SET is_archived = false,
+                      archived_at = NULL,
+                      updated_at = $1::timestamptz
+                WHERE id = $2`,
+              [new Date().toISOString(), transfer.employee_id],
+            );
             restored += 1;
           }
 
@@ -929,34 +935,34 @@ export const adminUsersController = {
         return;
       }
 
-      const { data: profile, error: fetchError } = await supabase
-        .from('user_profiles')
-        .select('*')
-        .eq('id', id)
-        .single();
+      const profile = await queryOne<UserProfile>(
+        'SELECT * FROM user_profiles WHERE id = $1::uuid',
+        [id],
+      );
 
-      if (fetchError || !profile) {
+      if (!profile) {
         res.status(404).json({ success: false, error: 'User not found' });
         return;
       }
 
-      const updateData: Record<string, unknown> = {
-        is_approved: true,
-        approved_by: req.user.id,
-        approved_at: new Date().toISOString(),
-        system_role_id: roleAssignment.id,
-      };
-
+      const setClauses: string[] = [
+        'is_approved = true',
+        'approved_by = $2::uuid',
+        'approved_at = $3::timestamptz',
+        'system_role_id = $4::uuid',
+      ];
+      const params: unknown[] = [id, req.user.id, new Date().toISOString(), roleAssignment.id];
       if (employee_id) {
-        updateData.employee_id = employee_id;
+        setClauses.push('employee_id = $5');
+        params.push(employee_id);
       }
 
-      const { error: updateError } = await supabase
-        .from('user_profiles')
-        .update(updateData)
-        .eq('id', id);
-
-      if (updateError) {
+      try {
+        await execute(
+          `UPDATE user_profiles SET ${setClauses.join(', ')} WHERE id = $1::uuid`,
+          params,
+        );
+      } catch (updateError) {
         console.error('Approve user error:', updateError);
         res.status(500).json({ success: false, error: 'Failed to approve user' });
         return;
@@ -977,13 +983,13 @@ export const adminUsersController = {
           const departmentIds = accessMap.get(employee_id) || [];
 
           if (departmentIds.length > 0) {
-            const { data: departments } = await supabase
-              .from('org_departments')
-              .select('id, name')
-              .in('id', departmentIds);
+            const departments = await query<{ id: string; name: string | null }>(
+              'SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])',
+              [departmentIds],
+            );
 
             const nameById = new Map<string, string>(
-              (departments || []).map(d => [d.id as string, (d.name as string) || 'Без названия']),
+              departments.map(d => [d.id, d.name || 'Без названия']),
             );
             const names = departmentIds
               .map(depId => nameById.get(depId) || 'Без названия')
@@ -1028,20 +1034,17 @@ export const adminUsersController = {
         return;
       }
 
-      const { error: profileError } = await supabase
-        .from('user_profiles')
-        .delete()
-        .eq('id', id);
-
-      if (profileError) {
+      try {
+        await execute('DELETE FROM user_profiles WHERE id = $1::uuid', [id]);
+      } catch (profileError) {
         console.error('Delete profile error:', profileError);
         res.status(500).json({ success: false, error: 'Failed to reject user' });
         return;
       }
 
-      const { error: authError } = await supabase.auth.admin.deleteUser(id);
-
-      if (authError) {
+      try {
+        await localAuthService.deleteUser(id);
+      } catch (authError) {
         console.error('Delete auth user error:', authError);
       }
 
@@ -1077,20 +1080,17 @@ export const adminUsersController = {
         return;
       }
 
-      const { error: profileError } = await supabase
-        .from('user_profiles')
-        .delete()
-        .eq('id', id);
-
-      if (profileError) {
+      try {
+        await execute('DELETE FROM user_profiles WHERE id = $1::uuid', [id]);
+      } catch (profileError) {
         console.error('Delete profile error:', profileError);
         res.status(500).json({ success: false, error: 'Failed to delete user' });
         return;
       }
 
-      const { error: authError } = await supabase.auth.admin.deleteUser(id);
-
-      if (authError) {
+      try {
+        await localAuthService.deleteUser(id);
+      } catch (authError) {
         console.error('Delete auth user error:', authError);
       }
 
@@ -1115,11 +1115,9 @@ export const adminUsersController = {
         return;
       }
 
-      const { error } = await supabase.auth.admin.updateUserById(id, {
-        email_confirm: true,
-      });
-
-      if (error) {
+      try {
+        await localAuthService.updateUserById(id, { emailConfirm: true });
+      } catch (error) {
         console.error('Confirm email error:', error);
         res.status(500).json({ success: false, error: 'Failed to confirm email' });
         return;
@@ -1168,26 +1166,21 @@ export const adminUsersController = {
         return;
       }
 
-      const { data: beforeProfileRaw } = await supabase
-        .from('user_profiles')
-        .select('full_name, system_roles:system_role_id(code)')
-        .eq('id', id)
-        .maybeSingle();
-      const beforeProfile = beforeProfileRaw as
-        | { full_name: string | null; system_roles: { code: string | null } | { code: string | null }[] | null }
-        | null;
-      const beforeRoleCode = Array.isArray(beforeProfile?.system_roles)
-        ? (beforeProfile?.system_roles[0]?.code ?? null)
-        : (beforeProfile?.system_roles?.code ?? null);
+      const beforeProfile = await queryOne<{ full_name: string | null; role_code: string | null }>(
+        `SELECT up.full_name, sr.code AS role_code
+           FROM user_profiles up
+           LEFT JOIN system_roles sr ON sr.id = up.system_role_id
+          WHERE up.id = $1::uuid`,
+        [id],
+      );
+      const beforeRoleCode = beforeProfile?.role_code ?? null;
 
-      const { error } = await supabase
-        .from('user_profiles')
-        .update({
-          system_role_id: roleAssignment.id,
-        })
-        .eq('id', id);
-
-      if (error) {
+      try {
+        await execute(
+          'UPDATE user_profiles SET system_role_id = $1::uuid WHERE id = $2::uuid',
+          [roleAssignment.id, id],
+        );
+      } catch (error) {
         console.error('Update position error:', error);
         res.status(500).json({ success: false, error: 'Failed to update position' });
         return;
@@ -1225,12 +1218,12 @@ export const adminUsersController = {
         return;
       }
 
-      const { error } = await supabase
-        .from('user_profiles')
-        .update({ full_name: full_name.trim() })
-        .eq('id', id);
-
-      if (error) {
+      try {
+        await execute(
+          'UPDATE user_profiles SET full_name = $1 WHERE id = $2::uuid',
+          [full_name.trim(), id],
+        );
+      } catch (error) {
         console.error('Update name error:', error);
         res.status(500).json({ success: false, error: 'Failed to update name' });
         return;
@@ -1280,12 +1273,13 @@ export const adminUsersController = {
         }
       }
 
-      const { error } = await supabase
-        .from('user_profiles')
-        .update({ employee_id })
-        .eq('id', id);
-
-      if (error) {
+      try {
+        await execute(
+          'UPDATE user_profiles SET employee_id = $1 WHERE id = $2::uuid',
+          [employee_id, id],
+        );
+      } catch (error) {
+        console.error('Update employee error:', error);
         res.status(500).json({ success: false, error: 'Failed to update employee link' });
         return;
       }
@@ -1314,12 +1308,12 @@ export const adminUsersController = {
         return;
       }
 
-      const { error } = await supabase
-        .from('user_profiles')
-        .update({ chat_inbound_mode })
-        .eq('id', id);
-
-      if (error) {
+      try {
+        await execute(
+          'UPDATE user_profiles SET chat_inbound_mode = $1 WHERE id = $2::uuid',
+          [chat_inbound_mode, id],
+        );
+      } catch (error) {
         console.error('Update chat inbound mode error:', error);
         res.status(500).json({ success: false, error: 'Failed to update chat inbound mode' });
         return;
@@ -1348,13 +1342,12 @@ export const adminUsersController = {
       const { department_ids } = updateDepartmentAccessSchema.parse(req.body);
       const normalizedDepartmentIds = [...new Set(department_ids.map(value => value.trim()))];
 
-      const { data: profile, error: profileError } = await supabase
-        .from('user_profiles')
-        .select('employee_id')
-        .eq('id', id)
-        .single();
+      const profile = await queryOne<{ employee_id: number | null }>(
+        'SELECT employee_id FROM user_profiles WHERE id = $1::uuid',
+        [id],
+      );
 
-      if (profileError || !profile) {
+      if (!profile) {
         res.status(404).json({ success: false, error: 'User not found' });
         return;
       }
@@ -1444,13 +1437,12 @@ export const adminUsersController = {
       const { department_ids } = updateDepartmentAccessSchema.parse(req.body);
       const normalizedDepartmentIds = uniqueStringValues(department_ids);
 
-      const { data: employee, error: employeeError } = await supabase
-        .from('employees')
-        .select('id, full_name')
-        .eq('id', employeeId)
-        .single();
+      const employee = await queryOne<{ id: number; full_name: string | null }>(
+        'SELECT id, full_name FROM employees WHERE id = $1',
+        [employeeId],
+      );
 
-      if (employeeError || !employee) {
+      if (!employee) {
         res.status(404).json({ success: false, error: 'Сотрудник не найден' });
         return;
       }
@@ -1506,12 +1498,11 @@ export const adminUsersController = {
         },
       });
 
-      const { data: linkedProfile } = await supabase
-        .from('user_profiles')
-        .select('id')
-        .eq('employee_id', employeeId)
-        .maybeSingle();
-      emitDepartmentAccessChanged(linkedProfile?.id as string | null | undefined);
+      const linkedProfile = await queryOne<{ id: string }>(
+        'SELECT id FROM user_profiles WHERE employee_id = $1 LIMIT 1',
+        [employeeId],
+      );
+      emitDepartmentAccessChanged(linkedProfile?.id);
 
       res.json({
         success: true,
@@ -1544,39 +1535,42 @@ export const adminUsersController = {
         return;
       }
 
-      const { data: linkedProfiles } = await supabase
-        .from('user_profiles')
-        .select('employee_id')
-        .not('employee_id', 'is', null);
+      const linkedProfiles = await query<{ employee_id: number | null }>(
+        'SELECT employee_id FROM user_profiles WHERE employee_id IS NOT NULL',
+      );
 
-      const linkedIds = (linkedProfiles || [])
-        .map((p: { employee_id: number | null }) => p.employee_id)
+      const linkedIds = linkedProfiles
+        .map(p => p.employee_id)
         .filter((id): id is number => id !== null);
 
-      let query = supabase
-        .from('employees')
-        .select('id, full_name, org_department_id')
-        .ilike('full_name', `%${escapeLike(q)}%`)
-        .eq('employment_status', 'active')
-        .limit(20);
-
+      const params: unknown[] = [`%${escapeLike(q)}%`];
+      let sql = `SELECT id, full_name, org_department_id
+                   FROM employees
+                  WHERE full_name ILIKE $1
+                    AND employment_status = 'active'`;
       if (accessible !== 'all') {
-        query = query.in('org_department_id', accessible);
+        params.push(accessible);
+        sql += ` AND org_department_id = ANY($${params.length}::uuid[])`;
       }
-
       if (linkedIds.length > 0) {
-        query = query.not('id', 'in', `(${linkedIds.join(',')})`);
+        params.push(linkedIds);
+        sql += ` AND id <> ALL($${params.length}::int[])`;
       }
+      sql += ' LIMIT 20';
 
-      const { data: employees, error } = await query;
-
-      if (error) {
+      let employees: Array<{ id: number; full_name: string; org_department_id: string | null }>;
+      try {
+        employees = await query<{ id: number; full_name: string; org_department_id: string | null }>(
+          sql,
+          params,
+        );
+      } catch (error) {
         logSupabaseError('SearchUnlinkedEmployees', error);
         res.status(500).json({ success: false, error: 'Failed to search employees' });
         return;
       }
 
-      res.json({ success: true, data: employees || [] });
+      res.json({ success: true, data: employees });
     } catch (error) {
       console.error('Search unlinked employees error:', error);
       res.status(500).json({ success: false, error: 'Failed to search employees' });
@@ -1596,32 +1590,33 @@ export const adminUsersController = {
         return;
       }
 
-      const { data: rootRow, error: rootError } = await supabase
-        .from('org_departments')
-        .select('id')
-        .is('parent_id', null)
-        .eq('name', 'Объект')
-        .maybeSingle();
+      const rootRow = await queryOne<{ id: string }>(
+        `SELECT id FROM org_departments
+          WHERE parent_id IS NULL AND name = $1
+          LIMIT 1`,
+        ['Объект'],
+      );
 
-      if (rootError || !rootRow) {
+      if (!rootRow) {
         res.json({ success: true, data: [] });
         return;
       }
 
-      const { data: companies, error } = await supabase
-        .from('org_departments')
-        .select('id, name')
-        .eq('parent_id', rootRow.id)
-        .eq('is_active', true)
-        .order('name');
-
-      if (error) {
+      let companies: Array<{ id: string; name: string }>;
+      try {
+        companies = await query<{ id: string; name: string }>(
+          `SELECT id, name FROM org_departments
+            WHERE parent_id = $1::uuid AND is_active = true
+            ORDER BY name ASC`,
+          [rootRow.id],
+        );
+      } catch (error) {
         logSupabaseError('ListCompanies', error);
         res.status(500).json({ success: false, error: 'Не удалось загрузить компании' });
         return;
       }
 
-      res.json({ success: true, data: companies || [] });
+      res.json({ success: true, data: companies });
     } catch (error) {
       console.error('List companies error:', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить компании' });
@@ -1642,18 +1637,19 @@ export const adminUsersController = {
       }
 
       const { id } = req.params;
-      const { data: links, error } = await supabase
-        .from('user_company_access')
-        .select('company_root_id')
-        .eq('user_id', id);
-
-      if (error) {
+      let links: Array<{ company_root_id: string }>;
+      try {
+        links = await query<{ company_root_id: string }>(
+          'SELECT company_root_id FROM user_company_access WHERE user_id = $1::uuid',
+          [id],
+        );
+      } catch (error) {
         logSupabaseError('GetUserCompanies', error);
         res.status(500).json({ success: false, error: 'Не удалось загрузить привязки компаний' });
         return;
       }
 
-      const ids = (links || []).map(row => row.company_root_id as string);
+      const ids = links.map(row => row.company_root_id);
       res.json({
         success: true,
         data: {
@@ -1688,13 +1684,12 @@ export const adminUsersController = {
 
       const desired = [...new Set(company_root_ids)];
 
-      const { data: profile, error: profileError } = await supabase
-        .from('user_profiles')
-        .select('id, system_role_id')
-        .eq('id', id)
-        .maybeSingle();
+      const profile = await queryOne<{ id: string; system_role_id: string }>(
+        'SELECT id, system_role_id FROM user_profiles WHERE id = $1::uuid',
+        [id],
+      );
 
-      if (profileError || !profile) {
+      if (!profile) {
         res.status(404).json({ success: false, error: 'Пользователь не найден' });
         return;
       }
@@ -1710,47 +1705,47 @@ export const adminUsersController = {
         return;
       }
 
-      const { data: existing, error: existingError } = await supabase
-        .from('user_company_access')
-        .select('company_root_id')
-        .eq('user_id', id);
-
-      if (existingError) {
+      let existing: Array<{ company_root_id: string }>;
+      try {
+        existing = await query<{ company_root_id: string }>(
+          'SELECT company_root_id FROM user_company_access WHERE user_id = $1::uuid',
+          [id],
+        );
+      } catch (existingError) {
         logSupabaseError('ReplaceUserCompanies-load', existingError);
         res.status(500).json({ success: false, error: 'Не удалось обновить привязки компаний' });
         return;
       }
 
-      const existingIds = new Set((existing || []).map(row => row.company_root_id as string));
+      const existingIds = new Set(existing.map(row => row.company_root_id));
       const desiredSet = new Set(desired);
       const toAdd = desired.filter(rootId => !existingIds.has(rootId));
       const toRemove = [...existingIds].filter(rootId => !desiredSet.has(rootId));
 
-      if (toAdd.length > 0) {
-        const rows = toAdd.map(rootId => ({
-          user_id: id,
-          company_root_id: rootId,
-          created_by: req.user.id,
-        }));
-        const { error: insertError } = await supabase.from('user_company_access').insert(rows);
-        if (insertError) {
-          logSupabaseError('ReplaceUserCompanies-insert', insertError);
-          res.status(400).json({ success: false, error: insertError.message });
-          return;
-        }
-      }
-
-      if (toRemove.length > 0) {
-        const { error: deleteError } = await supabase
-          .from('user_company_access')
-          .delete()
-          .eq('user_id', id)
-          .in('company_root_id', toRemove);
-        if (deleteError) {
-          logSupabaseError('ReplaceUserCompanies-delete', deleteError);
-          res.status(500).json({ success: false, error: 'Не удалось снять старые привязки' });
-          return;
-        }
+      try {
+        await withTransaction(async client => {
+          if (toAdd.length > 0) {
+            await client.query(
+              `INSERT INTO user_company_access (user_id, company_root_id, created_by)
+               SELECT $1::uuid, root_id, $2::uuid
+                 FROM unnest($3::uuid[]) AS root_id`,
+              [id, req.user.id, toAdd],
+            );
+          }
+          if (toRemove.length > 0) {
+            await client.query(
+              `DELETE FROM user_company_access
+                WHERE user_id = $1::uuid
+                  AND company_root_id = ANY($2::uuid[])`,
+              [id, toRemove],
+            );
+          }
+        });
+      } catch (writeError) {
+        logSupabaseError('ReplaceUserCompanies-write', writeError);
+        const msg = writeError instanceof Error ? writeError.message : 'Не удалось обновить привязки компаний';
+        res.status(500).json({ success: false, error: msg });
+        return;
       }
 
       await auditService.logFromRequest(req, req.user.id, 'USER_COMPANY_ACCESS_CHANGED', {

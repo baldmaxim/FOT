@@ -1,5 +1,5 @@
 import { readExcelRows } from '../utils/excel-reader.js';
-import { supabase } from '../config/database.js';
+import { execute, query } from '../config/postgres.js';
 
 const IMPORT_SOURCE_TYPE = 'manager_excel_admin_ui';
 
@@ -122,14 +122,10 @@ export interface IManagerDepartmentImportBrigadeAliasInput {
   department_id: string;
 }
 
-function isMissingTableError(error: unknown, tableName: string): boolean {
+function isMissingTableError(error: unknown, _tableName: string): boolean {
   if (!error || typeof error !== 'object') return false;
-
   const code = 'code' in error ? String((error as { code?: unknown }).code || '') : '';
-  const message = 'message' in error ? String((error as { message?: unknown }).message || '') : '';
-
-  return code === 'PGRST205'
-    || message.includes(`Could not find the table 'public.${tableName}'`);
+  return code === '42P01';
 }
 
 function warnMissingEmployeeAliasTable(): void {
@@ -274,28 +270,15 @@ async function parseWorkbookBuffer(buffer: Buffer): Promise<IParsedLink[]> {
 }
 
 async function loadActiveDepartments(): Promise<IDepartmentRow[]> {
-  const { data, error } = await supabase
-    .from('org_departments')
-    .select('id, name')
-    .eq('is_active', true);
-
-  if (error) {
-    throw error;
-  }
-
-  return (data || []) as IDepartmentRow[];
+  return query<IDepartmentRow>(
+    'SELECT id, name FROM org_departments WHERE is_active = true',
+  );
 }
 
 async function loadAllEmployees(): Promise<IEmployeeRow[]> {
-  const { data, error } = await supabase
-    .from('employees')
-    .select('id, full_name, org_department_id, is_archived');
-
-  if (error) {
-    throw error;
-  }
-
-  return (data || []) as IEmployeeRow[];
+  return query<IEmployeeRow>(
+    'SELECT id, full_name, org_department_id, is_archived FROM employees',
+  );
 }
 
 function buildDepartmentMatchIndex(rows: IDepartmentRow[]): Map<string, IDepartmentRow[]> {
@@ -430,22 +413,24 @@ export function classifyBrigadeWorkers(params: {
 }
 
 async function loadSavedEmployeeAliasIndex(): Promise<Map<string, number>> {
-  const { data, error } = await supabase
-    .from('manager_department_import_employee_aliases')
-    .select('section_name_normalized, manager_name_normalized, employee_id')
-    .eq('source_type', IMPORT_SOURCE_TYPE)
-    .eq('is_active', true);
-
-  if (error) {
-    if (isMissingTableError(error, 'manager_department_import_employee_aliases')) {
+  let rows: IEmployeeAliasRow[];
+  try {
+    rows = await query<IEmployeeAliasRow>(
+      `SELECT section_name_normalized, manager_name_normalized, employee_id
+         FROM manager_department_import_employee_aliases
+        WHERE source_type = $1 AND is_active = true`,
+      [IMPORT_SOURCE_TYPE],
+    );
+  } catch (err) {
+    if (isMissingTableError(err, 'manager_department_import_employee_aliases')) {
       warnMissingEmployeeAliasTable();
       return new Map();
     }
-    throw error;
+    throw err;
   }
 
   const result = new Map<string, number>();
-  for (const row of (data || []) as IEmployeeAliasRow[]) {
+  for (const row of rows) {
     result.set(`${row.section_name_normalized}::${row.manager_name_normalized}`, row.employee_id);
   }
 
@@ -455,22 +440,24 @@ async function loadSavedEmployeeAliasIndex(): Promise<Map<string, number>> {
 async function loadSavedBrigadeAliasIndex(
   departmentById: Map<string, IDepartmentRow>,
 ): Promise<Map<string, IDepartmentRow>> {
-  const { data, error } = await supabase
-    .from('manager_department_import_brigade_aliases')
-    .select('section_name_normalized, brigade_name_normalized, department_id')
-    .eq('source_type', IMPORT_SOURCE_TYPE)
-    .eq('is_active', true);
-
-  if (error) {
-    if (isMissingTableError(error, 'manager_department_import_brigade_aliases')) {
+  let rows: IBrigadeAliasRow[];
+  try {
+    rows = await query<IBrigadeAliasRow>(
+      `SELECT section_name_normalized, brigade_name_normalized, department_id
+         FROM manager_department_import_brigade_aliases
+        WHERE source_type = $1 AND is_active = true`,
+      [IMPORT_SOURCE_TYPE],
+    );
+  } catch (err) {
+    if (isMissingTableError(err, 'manager_department_import_brigade_aliases')) {
       warnMissingBrigadeAliasTable();
       return new Map();
     }
-    throw error;
+    throw err;
   }
 
   const result = new Map<string, IDepartmentRow>();
-  for (const row of (data || []) as IBrigadeAliasRow[]) {
+  for (const row of rows) {
     const department = departmentById.get(row.department_id);
     if (!department) continue;
     result.set(`${row.section_name_normalized}::${row.brigade_name_normalized}`, department);
@@ -604,17 +591,44 @@ export async function saveManagerDepartmentImportAliases(params: {
   ).values()];
 
   if (employeeAliasRows.length > 0) {
-    const { error } = await supabase
-      .from('manager_department_import_employee_aliases')
-      .upsert(employeeAliasRows, {
-        onConflict: 'source_type,section_name_normalized,manager_name_normalized',
-      });
-
-    if (error) {
-      if (isMissingTableError(error, 'manager_department_import_employee_aliases')) {
+    const params: unknown[] = [];
+    const valueGroups: string[] = [];
+    for (const r of employeeAliasRows) {
+      const offset = params.length;
+      params.push(
+        r.source_type,
+        r.section_name_normalized,
+        r.manager_name_normalized,
+        r.manager_name_original,
+        r.employee_id,
+        r.is_active,
+        r.created_by,
+        r.updated_at,
+      );
+      valueGroups.push(
+        `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8})`,
+      );
+    }
+    try {
+      await execute(
+        `INSERT INTO manager_department_import_employee_aliases
+           (source_type, section_name_normalized, manager_name_normalized,
+            manager_name_original, employee_id, is_active, created_by, updated_at)
+         VALUES ${valueGroups.join(', ')}
+         ON CONFLICT (source_type, section_name_normalized, manager_name_normalized)
+         DO UPDATE SET
+           manager_name_original = EXCLUDED.manager_name_original,
+           employee_id = EXCLUDED.employee_id,
+           is_active = EXCLUDED.is_active,
+           created_by = EXCLUDED.created_by,
+           updated_at = EXCLUDED.updated_at`,
+        params,
+      );
+    } catch (err) {
+      if (isMissingTableError(err, 'manager_department_import_employee_aliases')) {
         warnMissingEmployeeAliasTable();
       } else {
-        throw error;
+        throw err;
       }
     }
   }
@@ -639,17 +653,44 @@ export async function saveManagerDepartmentImportAliases(params: {
   ).values()];
 
   if (brigadeAliasRows.length > 0) {
-    const { error } = await supabase
-      .from('manager_department_import_brigade_aliases')
-      .upsert(brigadeAliasRows, {
-        onConflict: 'source_type,section_name_normalized,brigade_name_normalized',
-      });
-
-    if (error) {
-      if (isMissingTableError(error, 'manager_department_import_brigade_aliases')) {
+    const params: unknown[] = [];
+    const valueGroups: string[] = [];
+    for (const r of brigadeAliasRows) {
+      const offset = params.length;
+      params.push(
+        r.source_type,
+        r.section_name_normalized,
+        r.brigade_name_normalized,
+        r.brigade_name_original,
+        r.department_id,
+        r.is_active,
+        r.created_by,
+        r.updated_at,
+      );
+      valueGroups.push(
+        `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8})`,
+      );
+    }
+    try {
+      await execute(
+        `INSERT INTO manager_department_import_brigade_aliases
+           (source_type, section_name_normalized, brigade_name_normalized,
+            brigade_name_original, department_id, is_active, created_by, updated_at)
+         VALUES ${valueGroups.join(', ')}
+         ON CONFLICT (source_type, section_name_normalized, brigade_name_normalized)
+         DO UPDATE SET
+           brigade_name_original = EXCLUDED.brigade_name_original,
+           department_id = EXCLUDED.department_id,
+           is_active = EXCLUDED.is_active,
+           created_by = EXCLUDED.created_by,
+           updated_at = EXCLUDED.updated_at`,
+        params,
+      );
+    } catch (err) {
+      if (isMissingTableError(err, 'manager_department_import_brigade_aliases')) {
         warnMissingBrigadeAliasTable();
       } else {
-        throw error;
+        throw err;
       }
     }
   }

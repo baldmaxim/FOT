@@ -25,10 +25,24 @@ exports/
 node_modules/
 /package-lock.json
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
 # Environment variables (IMPORTANT - contains secrets!)
 .env
 .env.local
 .env.*.local
+yandex.env
+docs/yandex-postgres-migration/yandex.env
+# .migration/ содержит миграционные артефакты (dumps, креды, CA, отчёты).
+# Игнорируем всё кроме .example-шаблона и README.
+.migration/*
+!.migration/yandex.env.example
+!.migration/README.md
 
 # Build output
 dist/

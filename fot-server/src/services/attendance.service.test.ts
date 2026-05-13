@@ -1,19 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IProductionCalendarMonth, IResolvedSchedule } from '../types/index.js';
 
-type QueryRecord = {
-  table: string;
-  operations: Array<{ method: string; args: unknown[] }>;
+const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgExecute: vi.fn(),
+  pgTx: vi.fn(),
+}));
+
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
+}));
+
+type SummaryRow = {
+  employee_id: number;
+  date: string;
+  first_entry: string | null;
+  last_exit: string | null;
+  total_hours: number | null;
+  total_minutes?: number | null;
 };
 
-type QueryResponse = {
-  data?: unknown;
-  error?: { code?: string; message?: string } | null;
-};
+type AdjustmentRow = Record<string, unknown>;
 
 const mockedState = vi.hoisted(() => ({
-  queryLog: [] as QueryRecord[],
-  resolver: (() => ({ data: [], error: null })) as (query: QueryRecord) => QueryResponse | Promise<QueryResponse>,
   travelSummary: new Map<string, {
     creditedMinutes: number;
     delayMinutes: number;
@@ -26,71 +39,20 @@ const mockedState = vi.hoisted(() => ({
   scheduleShiftHours: 9,
   isWorkingDay: true,
   needsSkudCheck: false,
+  // Rows for tables consumed by buildAttendanceEntries / upsertAttendanceAdjustment
+  summaryRows: [] as Array<{ employee_id: number; date: string; first_entry: string | null; last_exit: string | null; total_hours: number | null; total_minutes?: number | null }>,
+  adjustmentRows: [] as Array<Record<string, unknown>>,
+  userProfileRows: [] as Array<{ id: string; full_name: string }>,
+  employeeRows: [] as Array<{ id: number; full_name: string }>,
+  // For upsert tests
+  adjustmentUpsertResult: null as AdjustmentRow | null,
   objectSchedulesByDate: new Map<string, Map<string, IResolvedSchedule>>(),
   objectAttendanceData: {
     objectEntries: [] as Array<Record<string, unknown>>,
     objectEntriesByEmployeeDate: new Map<number, Map<string, Array<Record<string, unknown>>>>(),
     employeeDistinctObjectKeys: new Map<number, Set<string>>(),
     legacyBlockedDays: new Map<string, string>(),
-    rawFallbackSummaries: new Map<number, Map<string, {
-      employee_id: number;
-      date: string;
-      first_entry: string | null;
-      last_exit: string | null;
-      total_hours: number | null;
-      total_minutes?: number | null;
-    }>>(),
-  },
-}));
-
-function createBuilder(table: string) {
-  const query: QueryRecord = { table, operations: [] };
-  mockedState.queryLog.push(query);
-
-  const builder = {
-    select: (...args: unknown[]) => {
-      query.operations.push({ method: 'select', args });
-      return builder;
-    },
-    in: (...args: unknown[]) => {
-      query.operations.push({ method: 'in', args });
-      return builder;
-    },
-    gte: (...args: unknown[]) => {
-      query.operations.push({ method: 'gte', args });
-      return builder;
-    },
-    lte: (...args: unknown[]) => {
-      query.operations.push({ method: 'lte', args });
-      return builder;
-    },
-    eq: (...args: unknown[]) => {
-      query.operations.push({ method: 'eq', args });
-      return builder;
-    },
-    order: (...args: unknown[]) => {
-      query.operations.push({ method: 'order', args });
-      return builder;
-    },
-    upsert: (...args: unknown[]) => {
-      query.operations.push({ method: 'upsert', args });
-      return builder;
-    },
-    update: (...args: unknown[]) => {
-      query.operations.push({ method: 'update', args });
-      return builder;
-    },
-    single: async () => mockedState.resolver(query),
-    then: (onFulfilled: (value: QueryResponse) => unknown, onRejected?: (reason: unknown) => unknown) =>
-      Promise.resolve(mockedState.resolver(query)).then(onFulfilled, onRejected),
-  };
-
-  return builder;
-}
-
-vi.mock('../config/database.js', () => ({
-  supabase: {
-    from: vi.fn((table: string) => createBuilder(table)),
+    rawFallbackSummaries: new Map<number, Map<string, SummaryRow>>(),
   },
 }));
 
@@ -125,15 +87,32 @@ import {
   upsertAttendanceAdjustment,
 } from './attendance.service.js';
 
+function tableFromSql(sql: string): 'skud_daily_summary' | 'attendance_adjustments' | 'user_profiles' | 'employees' | 'unknown' {
+  if (/FROM\s+skud_daily_summary\b/i.test(sql)) return 'skud_daily_summary';
+  if (/FROM\s+attendance_adjustments\b/i.test(sql)) return 'attendance_adjustments';
+  if (/INSERT INTO\s+attendance_adjustments\b/i.test(sql)) return 'attendance_adjustments';
+  if (/FROM\s+user_profiles\b/i.test(sql)) return 'user_profiles';
+  if (/FROM\s+employees\b/i.test(sql)) return 'employees';
+  return 'unknown';
+}
+
 describe('attendance.service', () => {
   beforeEach(() => {
-    mockedState.queryLog.length = 0;
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
     mockedState.travelSummary = new Map();
     mockedState.internalPoints = new Set();
     mockedState.scheduleWorkHours = 8;
     mockedState.scheduleShiftHours = 9;
     mockedState.isWorkingDay = true;
     mockedState.needsSkudCheck = false;
+    mockedState.summaryRows = [];
+    mockedState.adjustmentRows = [];
+    mockedState.userProfileRows = [];
+    mockedState.employeeRows = [];
+    mockedState.adjustmentUpsertResult = null;
     mockedState.objectSchedulesByDate = new Map();
     mockedState.objectAttendanceData = {
       objectEntries: [],
@@ -142,7 +121,22 @@ describe('attendance.service', () => {
       legacyBlockedDays: new Map(),
       rawFallbackSummaries: new Map(),
     };
-    mockedState.resolver = () => ({ data: [], error: null });
+
+    pgQuery.mockImplementation(async (sql: string) => {
+      const table = tableFromSql(sql);
+      if (table === 'skud_daily_summary') return mockedState.summaryRows;
+      if (table === 'attendance_adjustments') return mockedState.adjustmentRows;
+      if (table === 'user_profiles') return mockedState.userProfileRows;
+      if (table === 'employees') return mockedState.employeeRows;
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+
+    pgQueryOne.mockImplementation(async (sql: string) => {
+      if (/INSERT INTO attendance_adjustments/i.test(sql)) {
+        return mockedState.adjustmentUpsertResult;
+      }
+      throw new Error(`Unexpected queryOne SQL: ${sql}`);
+    });
   });
 
   it('prefers attendance adjustments over daily summary and keeps travel issue metadata without crediting hours', async () => {
@@ -156,57 +150,31 @@ describe('attendance.service', () => {
       }],
     ]);
 
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_daily_summary') {
-        return {
-          data: [{
-            employee_id: 1,
-            date: '2026-04-01',
-            first_entry: '09:10:00',
-            last_exit: '18:00:00',
-            total_hours: 7.5,
-            total_minutes: 450,
-          }],
-          error: null,
-        };
-      }
+    mockedState.summaryRows = [{
+      employee_id: 1,
+      date: '2026-04-01',
+      first_entry: '09:10:00',
+      last_exit: '18:00:00',
+      total_hours: 7.5,
+      total_minutes: 450,
+    }];
 
-      if (query.table === 'attendance_adjustments') {
-        return {
-          data: [{
-            id: 10,
-            employee_id: 1,
-            work_date: '2026-04-01',
-            status: 'manual',
-            hours_override: 8,
-            source_type: 'manual',
-            source_id: 'manual',
-            reason: 'Manual correction',
-            created_by: 'user-1',
-            created_at: '2026-04-01T07:00:00.000Z',
-            updated_at: '2026-04-01T07:05:00.000Z',
-            metadata: {},
-          }],
-          error: null,
-        };
-      }
+    mockedState.adjustmentRows = [{
+      id: 10,
+      employee_id: 1,
+      work_date: '2026-04-01',
+      status: 'manual',
+      hours_override: 8,
+      source_type: 'manual',
+      source_id: 'manual',
+      reason: 'Manual correction',
+      created_by: 'user-1',
+      created_at: '2026-04-01T07:00:00.000Z',
+      updated_at: '2026-04-01T07:05:00.000Z',
+      metadata: {},
+    }];
 
-      if (query.table === 'user_profiles') {
-        return {
-          data: [{ id: 'user-1', full_name: 'HR Admin' }],
-          error: null,
-        };
-      }
-
-      if (query.table === 'employees') {
-        return {
-          data: [],
-          error: null,
-        };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    mockedState.userProfileRows = [{ id: 'user-1', full_name: 'HR Admin' }];
 
     const dailySchedulesMap = new Map<number, Map<string, IResolvedSchedule>>();
     const calendarMonth = { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth;
@@ -251,27 +219,14 @@ describe('attendance.service', () => {
       }],
     ]);
 
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_daily_summary') {
-        return {
-          data: [{
-            employee_id: 1,
-            date: '2026-04-01',
-            first_entry: '09:00:00',
-            last_exit: '18:00:00',
-            total_hours: 8,
-            total_minutes: 480,
-          }],
-          error: null,
-        };
-      }
-
-      if (query.table === 'attendance_adjustments' || query.table === 'user_profiles' || query.table === 'employees') {
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    mockedState.summaryRows = [{
+      employee_id: 1,
+      date: '2026-04-01',
+      first_entry: '09:00:00',
+      last_exit: '18:00:00',
+      total_hours: 8,
+      total_minutes: 480,
+    }];
 
     const result = await buildAttendanceEntries({
       employees: [{ id: 1, full_name: 'Иван Иванов' }],
@@ -299,19 +254,6 @@ describe('attendance.service', () => {
 
   it('builds a work entry from raw skud events when daily summary is missing', async () => {
     mockedState.needsSkudCheck = true;
-
-    mockedState.resolver = (query) => {
-      if (
-        query.table === 'skud_daily_summary'
-        || query.table === 'attendance_adjustments'
-        || query.table === 'user_profiles'
-        || query.table === 'employees'
-      ) {
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
 
     mockedState.objectAttendanceData.rawFallbackSummaries = new Map([
       [1, new Map([['2026-04-01', {
@@ -351,26 +293,7 @@ describe('attendance.service', () => {
   });
 
   it('builds a work entry from raw skud events even when includeObjectDetails is false (employees view)', async () => {
-    // Bug B: на фронте «По сотрудникам» (TimesheetPage.tsx:236) передаётся include_objects=0,
-    // что в timesheet.controller.ts:907 даёт includeObjectDetails=false. До фикса это полностью
-    // отключало rawFallbackSummaries (createEmptyObjectAttendanceData возвращал пустой Map),
-    // и день без skud_daily_summary рендерился как «Н» даже при наличии событий в skud_events.
-    // Кейс из прода: Фетисова А.А. (id=2502), 2026-05-04, summary отсутствует из-за пропуска
-    // recalc-RPC в presence-polling после транзиентного фейла.
     mockedState.needsSkudCheck = true;
-
-    mockedState.resolver = (query) => {
-      if (
-        query.table === 'skud_daily_summary'
-        || query.table === 'attendance_adjustments'
-        || query.table === 'user_profiles'
-        || query.table === 'employees'
-      ) {
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
 
     mockedState.objectAttendanceData.rawFallbackSummaries = new Map([
       [2502, new Map([['2026-05-04', {
@@ -409,19 +332,6 @@ describe('attendance.service', () => {
 
   it('marks a scheduled skud day as absent when both summary and raw events are missing', async () => {
     mockedState.needsSkudCheck = true;
-
-    mockedState.resolver = (query) => {
-      if (
-        query.table === 'skud_daily_summary'
-        || query.table === 'attendance_adjustments'
-        || query.table === 'user_profiles'
-        || query.table === 'employees'
-      ) {
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
 
     const result = await buildAttendanceEntries({
       employees: [{ id: 1, full_name: 'Иван Иванов' }],
@@ -472,51 +382,31 @@ describe('attendance.service', () => {
       rawFallbackSummaries: new Map(),
     };
 
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_daily_summary') {
-        return {
-          data: [{
-            employee_id: 1,
-            date: '2026-04-01',
-            first_entry: '09:00:00',
-            last_exit: '15:00:00',
-            total_hours: 6,
-            total_minutes: 360,
-          }],
-          error: null,
-        };
-      }
+    mockedState.summaryRows = [{
+      employee_id: 1,
+      date: '2026-04-01',
+      first_entry: '09:00:00',
+      last_exit: '15:00:00',
+      total_hours: 6,
+      total_minutes: 360,
+    }];
 
-      if (query.table === 'attendance_adjustments') {
-        return {
-          data: [{
-            id: 42,
-            employee_id: 1,
-            work_date: '2026-04-01',
-            status: 'absent',
-            hours_override: null,
-            source_type: 'manual',
-            source_id: 'manual',
-            reason: 'Сотрудник не вышел',
-            created_by: 'user-1',
-            created_at: '2026-04-01T07:00:00.000Z',
-            updated_at: '2026-04-01T07:05:00.000Z',
-            metadata: {},
-          }],
-          error: null,
-        };
-      }
+    mockedState.adjustmentRows = [{
+      id: 42,
+      employee_id: 1,
+      work_date: '2026-04-01',
+      status: 'absent',
+      hours_override: null,
+      source_type: 'manual',
+      source_id: 'manual',
+      reason: 'Сотрудник не вышел',
+      created_by: 'user-1',
+      created_at: '2026-04-01T07:00:00.000Z',
+      updated_at: '2026-04-01T07:05:00.000Z',
+      metadata: {},
+    }];
 
-      if (query.table === 'user_profiles') {
-        return { data: [{ id: 'user-1', full_name: 'HR Admin' }], error: null };
-      }
-
-      if (query.table === 'employees') {
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    mockedState.userProfileRows = [{ id: 'user-1', full_name: 'HR Admin' }];
 
     const result = await buildAttendanceEntries({
       employees: [{ id: 1, full_name: 'Иван Иванов' }],
@@ -542,21 +432,12 @@ describe('attendance.service', () => {
   });
 
   it('writes attendance adjustments into canonical attendance_adjustments table', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table === 'attendance_adjustments') {
-        return {
-          data: {
-            id: 99,
-            employee_id: 7,
-            work_date: '2026-04-05',
-            status: 'manual',
-            hours_override: 6,
-          },
-          error: null,
-        };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
+    mockedState.adjustmentUpsertResult = {
+      id: 99,
+      employee_id: 7,
+      work_date: '2026-04-05',
+      status: 'manual',
+      hours_override: 6,
     };
 
     const result = await upsertAttendanceAdjustment({
@@ -576,7 +457,10 @@ describe('attendance.service', () => {
       work_date: '2026-04-05',
       status: 'manual',
     });
-    expect(mockedState.queryLog.map(item => item.table)).toEqual(['attendance_adjustments']);
+    expect(pgQueryOne).toHaveBeenCalledOnce();
+    const [sql] = pgQueryOne.mock.calls[0];
+    expect(sql).toMatch(/INSERT INTO attendance_adjustments/i);
+    expect(sql).toMatch(/ON CONFLICT \(employee_id, work_date, source_type, source_id\)/i);
   });
 
   it('reconciles summary hours with backend object rows even for a single object day', async () => {
@@ -603,27 +487,14 @@ describe('attendance.service', () => {
       rawFallbackSummaries: new Map(),
     };
 
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_daily_summary') {
-        return {
-          data: [{
-            employee_id: 1,
-            date: '2026-04-02',
-            first_entry: '09:00:00',
-            last_exit: '17:02:00',
-            total_hours: 8.03,
-            total_minutes: 482,
-          }],
-          error: null,
-        };
-      }
-
-      if (query.table === 'attendance_adjustments' || query.table === 'user_profiles' || query.table === 'employees') {
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    mockedState.summaryRows = [{
+      employee_id: 1,
+      date: '2026-04-02',
+      first_entry: '09:00:00',
+      last_exit: '17:02:00',
+      total_hours: 8.03,
+      total_minutes: 482,
+    }];
 
     const result = await buildAttendanceEntries({
       employees: [{ id: 1, full_name: 'Иван Иванов' }],
@@ -686,27 +557,14 @@ describe('attendance.service', () => {
       rawFallbackSummaries: new Map(),
     };
 
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_daily_summary') {
-        return {
-          data: [{
-            employee_id: 1,
-            date: '2026-04-01',
-            first_entry: '09:00:00',
-            last_exit: '20:00:00',
-            total_hours: 11,
-            total_minutes: 660,
-          }],
-          error: null,
-        };
-      }
-
-      if (query.table === 'attendance_adjustments' || query.table === 'user_profiles' || query.table === 'employees') {
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    mockedState.summaryRows = [{
+      employee_id: 1,
+      date: '2026-04-01',
+      first_entry: '09:00:00',
+      last_exit: '20:00:00',
+      total_hours: 11,
+      total_minutes: 660,
+    }];
 
     const result = await buildAttendanceEntries({
       employees: [{ id: 1, full_name: 'Иван Иванов' }],
@@ -780,27 +638,14 @@ describe('attendance.service', () => {
       rawFallbackSummaries: new Map(),
     };
 
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_daily_summary') {
-        return {
-          data: [{
-            employee_id: 1,
-            date: '2026-04-01',
-            first_entry: '10:00:00',
-            last_exit: '17:00:00',
-            total_hours: 7,
-            total_minutes: 420,
-          }],
-          error: null,
-        };
-      }
-
-      if (query.table === 'attendance_adjustments' || query.table === 'user_profiles' || query.table === 'employees') {
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    mockedState.summaryRows = [{
+      employee_id: 1,
+      date: '2026-04-01',
+      first_entry: '10:00:00',
+      last_exit: '17:00:00',
+      total_hours: 7,
+      total_minutes: 420,
+    }];
 
     const result = await buildAttendanceEntries({
       employees: [{ id: 1, full_name: 'Иван Иванов' }],
@@ -832,27 +677,14 @@ describe('attendance.service', () => {
     mockedState.scheduleWorkHours = 8;
     mockedState.scheduleShiftHours = 9;
 
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_daily_summary') {
-        return {
-          data: [{
-            employee_id: 1,
-            date: '2026-04-01',
-            first_entry: '08:00:00',
-            last_exit: '18:00:00',
-            total_hours: 10,
-            total_minutes: 600,
-          }],
-          error: null,
-        };
-      }
-
-      if (query.table === 'attendance_adjustments' || query.table === 'user_profiles' || query.table === 'employees') {
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    mockedState.summaryRows = [{
+      employee_id: 1,
+      date: '2026-04-01',
+      first_entry: '08:00:00',
+      last_exit: '18:00:00',
+      total_hours: 10,
+      total_minutes: 600,
+    }];
 
     const result = await buildAttendanceEntries({
       employees: [{ id: 1, full_name: 'Иван Иванов' }],
@@ -878,18 +710,12 @@ describe('attendance.service', () => {
   });
 
   describe('presence_covers_shift', () => {
-    const buildResolver = (summaryRow: Record<string, unknown> | null) => (query: QueryRecord): QueryResponse => {
-      if (query.table === 'skud_daily_summary') {
-        return { data: summaryRow ? [summaryRow] : [], error: null };
-      }
-      if (query.table === 'attendance_adjustments' || query.table === 'user_profiles' || query.table === 'employees') {
-        return { data: [], error: null };
-      }
-      throw new Error(`Unexpected query for table ${query.table}`);
+    const setSummary = (summary: Record<string, unknown> | null): void => {
+      mockedState.summaryRows = summary ? [summary as unknown as typeof mockedState.summaryRows[number]] : [];
     };
 
     it('flags span=8h as insufficient when shift needs 9h (entered 9 left 17 without lunch)', async () => {
-      mockedState.resolver = buildResolver({
+      setSummary({
         employee_id: 1,
         date: '2026-04-01',
         first_entry: '09:00:00',
@@ -912,7 +738,7 @@ describe('attendance.service', () => {
     });
 
     it('accepts full 9:00-18:00 with proper lunch break', async () => {
-      mockedState.resolver = buildResolver({
+      setSummary({
         employee_id: 1,
         date: '2026-04-01',
         first_entry: '09:00:00',
@@ -935,7 +761,7 @@ describe('attendance.service', () => {
     });
 
     it('rejects day when gaps exceed allotted lunch (90min absence while lunch=60)', async () => {
-      mockedState.resolver = buildResolver({
+      setSummary({
         employee_id: 1,
         date: '2026-04-01',
         first_entry: '09:00:00',
@@ -959,7 +785,7 @@ describe('attendance.service', () => {
 
     it('flags past day with missing last_exit as not covering shift', async () => {
       mockedState.needsSkudCheck = true;
-      mockedState.resolver = buildResolver(null);
+      setSummary(null);
       mockedState.objectAttendanceData.rawFallbackSummaries = new Map([
         [1, new Map([['2026-04-01', {
           employee_id: 1,
@@ -986,7 +812,7 @@ describe('attendance.service', () => {
 
     it('marks remote day as covering shift without SKUD check', async () => {
       mockedState.needsSkudCheck = false;
-      mockedState.resolver = buildResolver(null);
+      setSummary(null);
 
       const schedule = { work_hours: 8, lunch_minutes: 0 } as unknown as IResolvedSchedule;
       const result = await buildAttendanceEntries({
@@ -1005,7 +831,7 @@ describe('attendance.service', () => {
     });
 
     it('preserves presence_covers_shift flag in capped_to_schedule mode', async () => {
-      mockedState.resolver = buildResolver({
+      setSummary({
         employee_id: 1,
         date: '2026-04-01',
         first_entry: '09:00:00',

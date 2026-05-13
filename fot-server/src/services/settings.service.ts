@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { execute, query } from '../config/postgres.js';
 
 interface ISetting {
   key: string;
@@ -164,8 +164,10 @@ const parseHour = (value: string | null | undefined, fallback: number): number =
 };
 const loadCache = async () => {
   if (Date.now() - cacheLoadedAt < CACHE_TTL && cache.size > 0) return;
-  const { data } = await supabase.from('system_settings').select('key, value');
-  cache = new Map((data || []).map((s: { key: string; value: string | null }) => [s.key, s.value]));
+  const rows = await query<{ key: string; value: string | null }>(
+    'SELECT key, value FROM system_settings',
+  );
+  cache = new Map(rows.map(s => [s.key, s.value]));
   cacheLoadedAt = Date.now();
 };
 
@@ -185,39 +187,50 @@ export const settingsService = {
   },
 
   async set(key: string, value: string | null, userId: string, description?: string): Promise<void> {
-    await supabase
-      .from('system_settings')
-      .upsert({
-        key,
-        value,
-        description: description || null,
-        is_secret: isSecretKey(key),
-        updated_at: new Date().toISOString(),
-        updated_by: userId,
-      }, { onConflict: 'key' });
+    await execute(
+      `INSERT INTO system_settings (key, value, description, is_secret, updated_at, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (key) DO UPDATE SET
+         value = EXCLUDED.value,
+         description = EXCLUDED.description,
+         is_secret = EXCLUDED.is_secret,
+         updated_at = EXCLUDED.updated_at,
+         updated_by = EXCLUDED.updated_by`,
+      [key, value, description || null, isSecretKey(key), new Date().toISOString(), userId],
+    );
     cache.set(key, value);
   },
 
   async setMultiple(entries: { key: string; value: string | null; description?: string }[], userId: string): Promise<void> {
-    const rows = entries.map(e => ({
-      key: e.key,
-      value: e.value,
-      description: e.description || null,
-      is_secret: isSecretKey(e.key),
-      updated_at: new Date().toISOString(),
-      updated_by: userId,
-    }));
-    await supabase.from('system_settings').upsert(rows, { onConflict: 'key' });
+    if (entries.length === 0) return;
+    const updatedAt = new Date().toISOString();
+    const params: unknown[] = [];
+    const valueGroups: string[] = [];
+    for (const e of entries) {
+      params.push(e.key, e.value, e.description || null, isSecretKey(e.key), updatedAt, userId);
+      const base = params.length;
+      valueGroups.push(`($${base - 5}, $${base - 4}, $${base - 3}, $${base - 2}, $${base - 1}, $${base})`);
+    }
+    await execute(
+      `INSERT INTO system_settings (key, value, description, is_secret, updated_at, updated_by)
+       VALUES ${valueGroups.join(', ')}
+       ON CONFLICT (key) DO UPDATE SET
+         value = EXCLUDED.value,
+         description = EXCLUDED.description,
+         is_secret = EXCLUDED.is_secret,
+         updated_at = EXCLUDED.updated_at,
+         updated_by = EXCLUDED.updated_by`,
+      params,
+    );
     for (const e of entries) cache.set(e.key, e.value);
   },
 
   /** Все настройки (для admin UI). Секретные значения маскируются. */
   async getAll(): Promise<ISetting[]> {
-    const { data } = await supabase
-      .from('system_settings')
-      .select('*')
-      .order('key');
-    return (data || []).map((s: ISetting) => ({
+    const rows = await query<ISetting>(
+      'SELECT key, value, description, is_secret, updated_at FROM system_settings ORDER BY key',
+    );
+    return rows.map(s => ({
       ...s,
       value: s.is_secret && s.value ? '••••••••' : s.value,
     }));

@@ -2,93 +2,35 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../types/index.js';
 
-type QueryRecord = {
-  table: string;
-  operations: Array<{ method: string; args: unknown[] }>;
-};
-
-type QueryResponse = {
-  data?: unknown;
-  error?: { message: string } | null;
-};
-
-const mockedState = vi.hoisted(() => ({
-  queryLog: [] as QueryRecord[],
-  resolver: (() => ({ data: [], error: null })) as (query: QueryRecord) => QueryResponse | Promise<QueryResponse>,
-  scope: 'all' as 'all' | 'department' | 'self' | null,
+const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgExecute: vi.fn(),
+  pgTx: vi.fn(),
 }));
 
-function createBuilder(table: string) {
-  const query: QueryRecord = { table, operations: [] };
-  mockedState.queryLog.push(query);
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
+}));
 
-  const builder = {
-    select: (...args: unknown[]) => {
-      query.operations.push({ method: 'select', args });
-      return builder;
-    },
-    in: (...args: unknown[]) => {
-      query.operations.push({ method: 'in', args });
-      return builder;
-    },
-    eq: (...args: unknown[]) => {
-      query.operations.push({ method: 'eq', args });
-      return builder;
-    },
-    neq: (...args: unknown[]) => {
-      query.operations.push({ method: 'neq', args });
-      return builder;
-    },
-    order: (...args: unknown[]) => {
-      query.operations.push({ method: 'order', args });
-      return builder;
-    },
-    update: (...args: unknown[]) => {
-      query.operations.push({ method: 'update', args });
-      return builder;
-    },
-    delete: (...args: unknown[]) => {
-      query.operations.push({ method: 'delete', args });
-      return builder;
-    },
-    insert: (...args: unknown[]) => {
-      query.operations.push({ method: 'insert', args });
-      return builder;
-    },
-    limit: (...args: unknown[]) => {
-      query.operations.push({ method: 'limit', args });
-      return builder;
-    },
-    lte: (...args: unknown[]) => {
-      query.operations.push({ method: 'lte', args });
-      return builder;
-    },
-    or: (...args: unknown[]) => {
-      query.operations.push({ method: 'or', args });
-      return builder;
-    },
-    single: async () => mockedState.resolver(query),
-    maybeSingle: async () => mockedState.resolver(query),
-    then: (onFulfilled: (value: QueryResponse) => unknown, onRejected?: (reason: unknown) => unknown) =>
-      Promise.resolve(mockedState.resolver(query)).then(onFulfilled, onRejected),
-  };
-
-  return builder;
-}
-
-vi.mock('../config/database.js', () => ({
-  supabase: {
-    from: vi.fn((table: string) => createBuilder(table)),
-  },
+const mockedState = vi.hoisted(() => ({
+  scope: 'all' as 'all' | 'department' | 'self' | null,
 }));
 
 vi.mock('../services/schedule.service.js', () => ({
   resolveSchedule: vi.fn(),
   resolveSchedulesBulk: vi.fn(),
+  // computeNetWorkHours используется в контроллере при create/update. В наших
+  // тестах bulkApplyToBrigades путь его не вызывает, но импорт обязан резолвиться.
+  computeNetWorkHours: vi.fn(() => 8),
 }));
 
 vi.mock('../services/data-scope.service.js', () => ({
   resolveRequestDataScope: vi.fn(async () => mockedState.scope),
+  canAccessEmployeeInScope: vi.fn(async () => true),
   resolveScopedDepartmentIds: vi.fn(async (req: AuthenticatedRequest, departmentIds?: string[] | null) => {
     if (mockedState.scope !== 'department') {
       return departmentIds || [];
@@ -103,10 +45,6 @@ import { scheduleController } from './schedule.controller.js';
 const BRIGADE_1 = '11111111-1111-4111-8111-111111111111';
 const BRIGADE_2 = '22222222-2222-4222-8222-222222222222';
 const SCHEDULE_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-
-function getOperationArg(query: QueryRecord, method: string, column: string): unknown {
-  return query.operations.find(op => op.method === method && op.args[0] === column)?.args[1];
-}
 
 function makeReq(overrides: Partial<AuthenticatedRequest> = {}): AuthenticatedRequest {
   return {
@@ -146,9 +84,11 @@ function makeRes() {
 
 describe('scheduleController.bulkApplyToBrigades', () => {
   beforeEach(() => {
-    mockedState.queryLog.length = 0;
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
     mockedState.scope = 'all';
-    mockedState.resolver = () => ({ data: [], error: null });
   });
 
   it('rejects invalid payload before touching the database', async () => {
@@ -165,62 +105,54 @@ describe('scheduleController.bulkApplyToBrigades', () => {
     await scheduleController.bulkApplyToBrigades(req, res);
 
     expect(res.statusCode).toBe(400);
-    expect(mockedState.queryLog).toHaveLength(0);
+    expect(pgQuery).not.toHaveBeenCalled();
+    expect(pgExecute).not.toHaveBeenCalled();
   });
 
   it('assigns a schedule to active employees from selected brigades', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table === 'org_departments') {
-        return {
-          data: [
-            { id: BRIGADE_1, name: 'Бр. Монолит', kind: 'brigade' },
-            { id: BRIGADE_2, name: ' бр. Отделка ', kind: 'brigade' },
-          ],
-          error: null,
-        };
+    // Бэйс-маршрутизация SELECT'ов: org_departments → 2 бригады, employees → 101,102,
+    // employee_schedule_assignments → у 102 уже есть назначение от 2026-04-01.
+    pgQuery.mockImplementation(async (sql: string) => {
+      const lower = sql.toLowerCase();
+      if (lower.includes('from org_departments')) {
+        return [
+          { id: BRIGADE_1, name: 'Бр. Монолит', kind: 'brigade' },
+          { id: BRIGADE_2, name: ' бр. Отделка ', kind: 'brigade' },
+        ];
       }
-
-      if (query.table === 'employees') {
-        return {
-          data: [{ id: 101 }, { id: 102 }],
-          error: null,
-        };
+      if (lower.includes('from employees')) {
+        return [{ id: 101 }, { id: 102 }];
       }
-
-      if (query.table === 'employee_schedule_assignments') {
-        if (query.operations.some(op => op.method === 'insert')) {
-          return {
-            data: { id: 'new-assignment' },
-            error: null,
-          };
-        }
-
-        if (query.operations.some(op => op.method === 'update')) {
-          return {
-            data: { id: getOperationArg(query, 'eq', 'id') },
-            error: null,
-          };
-        }
-
-        const batchIn = query.operations.find(op => op.method === 'in' && op.args[0] === 'employee_id');
-        if (batchIn) {
-          return {
-            data: [
-              {
-                id: 'existing-102',
-                employee_id: 102,
-                schedule_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-                effective_from: '2026-04-01',
-                effective_to: null,
-              },
-            ],
-            error: null,
-          };
-        }
+      if (lower.includes('from employee_schedule_assignments')) {
+        // loadEmployeeScheduleRowsBatch
+        return [
+          {
+            id: 'existing-102',
+            employee_id: 102,
+            schedule_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            effective_from: '2026-04-01',
+            effective_to: null,
+          },
+        ];
       }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
 
-      throw new Error(`Unexpected query: ${query.table}`);
-    };
+    // Внутри assignEmployeeSchedule выполняется queryOne SELECT ... WHERE a.id = $1
+    // (загрузка возвращаемой строки) и queryOne INSERT ... RETURNING id.
+    // Любая возвращённая запись подходит — мы проверяем только агрегаты в ответе.
+    let insertCounter = 0;
+    pgQueryOne.mockImplementation(async (sql: string) => {
+      const lower = sql.toLowerCase();
+      if (lower.startsWith('insert into employee_schedule_assignments')) {
+        insertCounter += 1;
+        return { id: `new-${insertCounter}` };
+      }
+      // SELECT ... WHERE a.id = $1 после insert/update
+      return { id: 'fetched' };
+    });
+
+    pgExecute.mockResolvedValue(1);
 
     const req = makeReq({
       body: {
@@ -244,61 +176,49 @@ describe('scheduleController.bulkApplyToBrigades', () => {
       },
     });
 
-    const insertQueries = mockedState.queryLog.filter(query => query.table === 'employee_schedule_assignments' && query.operations.some(op => op.method === 'insert'));
-    expect(insertQueries).toHaveLength(2);
-    const updateQuery = mockedState.queryLog.find(query => (
-      query.table === 'employee_schedule_assignments'
-      && query.operations.some(op => op.method === 'update')
-      && query.operations.some(op => op.method === 'eq' && op.args[1] === 'existing-102')
+    // 2 INSERT-а: новые назначения сотрудникам 101 и 102.
+    const insertCalls = pgQueryOne.mock.calls.filter(([sql]) =>
+      typeof sql === 'string' && sql.toLowerCase().startsWith('insert into employee_schedule_assignments'),
+    );
+    expect(insertCalls).toHaveLength(2);
+
+    // UPDATE закрывает старое назначение existing-102 предыдущей датой относительно 2026-04-20.
+    const updateClosureCalls = pgExecute.mock.calls.filter(([sql, params]) => (
+      typeof sql === 'string'
+      && sql.toLowerCase().includes('update employee_schedule_assignments')
+      && sql.toLowerCase().includes('set effective_to')
+      && Array.isArray(params)
+      && (params as unknown[]).includes('existing-102')
+      && (params as unknown[]).includes('2026-04-19')
     ));
-    expect(updateQuery?.operations).toEqual(expect.arrayContaining([
-      {
-        method: 'update',
-        args: [expect.objectContaining({ effective_to: '2026-04-19' })],
-      },
-    ]));
+    expect(updateClosureCalls.length).toBeGreaterThanOrEqual(1);
   });
 
   it('resets personal schedules and reports only actually updated employees', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table === 'org_departments') {
-        return {
-          data: [{ id: BRIGADE_1, name: 'Бр. 1', kind: 'brigade' }],
-          error: null,
-        };
+    pgQuery.mockImplementation(async (sql: string) => {
+      const lower = sql.toLowerCase();
+      if (lower.includes('from org_departments')) {
+        return [{ id: BRIGADE_1, name: 'Бр. 1', kind: 'brigade' }];
       }
-
-      if (query.table === 'employees') {
-        return {
-          data: [{ id: 201 }, { id: 202 }],
-          error: null,
-        };
+      if (lower.includes('from employees')) {
+        return [{ id: 201 }, { id: 202 }];
       }
-
-      if (query.table === 'employee_schedule_assignments') {
-        if (query.operations.some(op => op.method === 'update')) {
-          return { data: { id: 'existing-201' }, error: null };
-        }
-
-        const batchIn = query.operations.find(op => op.method === 'in' && op.args[0] === 'employee_id');
-        if (batchIn) {
-          return {
-            data: [
-              {
-                id: 'existing-201',
-                employee_id: 201,
-                schedule_id: SCHEDULE_ID,
-                effective_from: '2026-04-01',
-                effective_to: null,
-              },
-            ],
-            error: null,
-          };
-        }
+      if (lower.includes('from employee_schedule_assignments')) {
+        // У 201 есть активное назначение, у 202 нет ничего → reset для 202 вернёт false.
+        return [
+          {
+            id: 'existing-201',
+            employee_id: 201,
+            schedule_id: SCHEDULE_ID,
+            effective_from: '2026-04-01',
+            effective_to: null,
+          },
+        ];
       }
-
-      throw new Error(`Unexpected query: ${query.table}`);
-    };
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    pgQueryOne.mockResolvedValue({ id: 'fetched' });
+    pgExecute.mockResolvedValue(1);
 
     const req = makeReq({
       body: {
@@ -320,28 +240,26 @@ describe('scheduleController.bulkApplyToBrigades', () => {
         employees_updated: 1,
       },
     });
-    const updateQuery = mockedState.queryLog.find(query => (
-      query.table === 'employee_schedule_assignments'
-      && query.operations.some(op => op.method === 'update')
+
+    // Для existing-201 (effective_from < 2026-04-25) reset делает UPDATE effective_to=2026-04-24.
+    const updateClosure = pgExecute.mock.calls.find(([sql, params]) => (
+      typeof sql === 'string'
+      && sql.toLowerCase().includes('update employee_schedule_assignments')
+      && sql.toLowerCase().includes('set effective_to')
+      && Array.isArray(params)
+      && (params as unknown[]).includes('existing-201')
+      && (params as unknown[]).includes('2026-04-24')
     ));
-    expect(updateQuery?.operations).toEqual(expect.arrayContaining([
-      {
-        method: 'update',
-        args: [expect.objectContaining({ effective_to: '2026-04-24' })],
-      },
-    ]));
+    expect(updateClosure).toBeTruthy();
   });
 
   it('rejects departments that are not brigades', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table === 'org_departments') {
-        return {
-          data: [{ id: BRIGADE_1, name: 'Отдел снабжения', kind: 'department' }],
-          error: null,
-        };
+    pgQuery.mockImplementation(async (sql: string) => {
+      if (sql.toLowerCase().includes('from org_departments')) {
+        return [{ id: BRIGADE_1, name: 'Отдел снабжения', kind: 'department' }];
       }
-      throw new Error(`Unexpected query: ${query.table}`);
-    };
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
 
     const req = makeReq({
       body: {
@@ -357,7 +275,8 @@ describe('scheduleController.bulkApplyToBrigades', () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.payload).toEqual({ success: false, error: 'Можно выбирать только отделы-бригады' });
-    expect(mockedState.queryLog).toHaveLength(1);
+    // Дальше списка отделов не уходим.
+    expect(pgQuery).toHaveBeenCalledTimes(1);
   });
 
   it('rejects selection outside department scope', async () => {
@@ -376,27 +295,20 @@ describe('scheduleController.bulkApplyToBrigades', () => {
 
     expect(res.statusCode).toBe(403);
     expect(res.payload).toEqual({ success: false, error: 'Можно назначать график только по своей бригаде' });
-    expect(mockedState.queryLog).toHaveLength(0);
+    expect(pgQuery).not.toHaveBeenCalled();
   });
 
   it('returns success when selected brigades have no active employees', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table === 'org_departments') {
-        return {
-          data: [{ id: BRIGADE_1, name: 'Бр. 1', kind: 'brigade' }],
-          error: null,
-        };
+    pgQuery.mockImplementation(async (sql: string) => {
+      const lower = sql.toLowerCase();
+      if (lower.includes('from org_departments')) {
+        return [{ id: BRIGADE_1, name: 'Бр. 1', kind: 'brigade' }];
       }
-
-      if (query.table === 'employees') {
-        return {
-          data: [],
-          error: null,
-        };
+      if (lower.includes('from employees')) {
+        return [];
       }
-
-      throw new Error(`Unexpected query: ${query.table}`);
-    };
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
 
     const req = makeReq({
       body: {

@@ -7,8 +7,18 @@
 
 from __future__ import annotations
 
+import asyncio
+import sys
 import time
-from typing import Awaitable, Callable
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Awaitable, Callable
+
+# psycopg в async-режиме не работает с Windows ProactorEventLoop (default у
+# uvicorn на Windows). Переключаем policy ДО создания event loop'а — пока
+# модуль импортируется, loop ещё не создан. На Linux/macOS условие false,
+# no-op.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -17,6 +27,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.config import get_settings
+from app.lib.postgres import close_pool, get_pool
 from app.routers import health, tables
 from app.services.logging import write_log
 
@@ -35,14 +46,27 @@ def _rate_limit_key(request: Request) -> str:
     return f"ip:{request.client.host if request.client else 'unknown'}"
 
 
-def _dynamic_limit(request: Request) -> str:
-    api_key = getattr(request.state, "api_key", None)
-    if api_key is not None and api_key.rate_limit_per_minute > 0:
-        return f"{api_key.rate_limit_per_minute}/minute"
+def _dynamic_limit() -> str:
+    # slowapi 0.1.9+ вызывает limit-provider без аргументов (раньше передавали
+    # request). Per-key rate-limit из rate_limit_per_minute теперь не доступен
+    # на этом уровне — slowapi применяет один уровень ко всем authenticated
+    # запросам. Per-key throttling можно добавить отдельным middleware'ом
+    # после authenticate (TODO когда понадобится).
     return f"{settings.DEFAULT_RATE_LIMIT_PER_MINUTE}/minute"
 
 
 limiter = Limiter(key_func=_rate_limit_key, default_limits=[])
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Поднимает AsyncConnectionPool psycopg при старте, закрывает при остановке."""
+    await get_pool()
+    try:
+        yield
+    finally:
+        await close_pool()
+
 
 app = FastAPI(
     title="FOT Public Data API",
@@ -51,6 +75,7 @@ app = FastAPI(
     docs_url="/external/v1/docs",
     openapi_url="/external/v1/openapi.json",
     redoc_url=None,
+    lifespan=lifespan,
 )
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
@@ -85,7 +110,7 @@ async def access_log_and_limit(request: Request, call_next: Callable[[Request], 
             api_key = getattr(request.state, "api_key", None)
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             status_code = response.status_code if response is not None else 500
-            write_log(
+            await write_log(
                 key_id=api_key.id if api_key else None,
                 table_name=request.path_params.get("table_name") if hasattr(request, "path_params") else None,
                 ip=request.client.host if request.client else None,

@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import { supabase } from '../config/database.js';
+import { query, queryOne, execute, withTransaction } from '../config/postgres.js';
 import type { AccessMode } from '../config/access-control.js';
 import type { AuthenticatedRequest, SystemRole } from '../types/index.js';
 import {
@@ -51,36 +51,36 @@ const cloneRoleSchema = z.object({
 
 function isMissingFunctionError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
-  const code = 'code' in error ? error.code : null;
-  const message = 'message' in error ? String(error.message || '') : '';
+  const code = (error as { code?: string }).code ?? null;
+  const message = 'message' in error ? String((error as { message?: unknown }).message || '') : '';
   return (
     code === '42883'
     || code === '42703'
-    || code === 'PGRST202'
     || /function .* does not exist/i.test(message)
     || /column .* does not exist/i.test(message)
-    || /schema cache/i.test(message)
-    || /Could not find the function/i.test(message)
   );
 }
 
 async function loadRoleByCode(code: string): Promise<SystemRole | null> {
-  const { data, error } = await supabase
-    .from('system_roles')
-    .select('*')
-    .eq('code', code)
-    .single();
-  if (error || !data) return null;
-  return data as SystemRole;
+  const row = await queryOne<SystemRole>(
+    `SELECT * FROM system_roles WHERE code = $1`,
+    [code],
+  );
+  return row;
 }
 
 async function loadRoleAccessRows(roleCode: string) {
-  const { data, error } = await supabase
-    .from('role_page_access')
-    .select('role_code, page_path, can_view, can_edit')
-    .eq('role_code', roleCode);
-  if (error) throw new Error(`Failed to load role access: ${error.message}`);
-  return data || [];
+  return query<{
+    role_code: string;
+    page_path: string;
+    can_view: boolean;
+    can_edit: boolean;
+  }>(
+    `SELECT role_code, page_path, can_view, can_edit
+       FROM role_page_access
+      WHERE role_code = $1`,
+    [roleCode],
+  );
 }
 
 async function loadRoleAccessModes(roleCode: string): Promise<Record<string, AccessMode>> {
@@ -110,18 +110,25 @@ async function persistAccessProfileFallback(
       can_edit: mode === 'edit',
     }));
 
-  const { error: deleteError } = await supabase
-    .from('role_page_access')
-    .delete()
-    .eq('role_code', roleCode);
-  if (deleteError) throw new Error(deleteError.message);
-
-  if (grantedEntries.length === 0) return;
-
-  const { error: insertError } = await supabase
-    .from('role_page_access')
-    .insert(grantedEntries);
-  if (insertError) throw new Error(insertError.message);
+  await withTransaction(async client => {
+    await client.query(`DELETE FROM role_page_access WHERE role_code = $1`, [roleCode]);
+    if (grantedEntries.length === 0) return;
+    const params: unknown[] = [];
+    const placeholders: string[] = [];
+    for (const entry of grantedEntries) {
+      const groupPlaceholders: string[] = [];
+      for (const col of ['role_code', 'page_path', 'can_view', 'can_edit'] as const) {
+        params.push(entry[col]);
+        groupPlaceholders.push(`$${params.length}`);
+      }
+      placeholders.push(`(${groupPlaceholders.join(', ')})`);
+    }
+    await client.query(
+      `INSERT INTO role_page_access (role_code, page_path, can_view, can_edit)
+       VALUES ${placeholders.join(', ')}`,
+      params,
+    );
+  });
 }
 
 async function persistAccessProfile(
@@ -129,47 +136,54 @@ async function persistAccessProfile(
   pageAccess: Record<string, AccessMode>,
 ): Promise<void> {
   const payload = Object.entries(pageAccess).map(([key, mode]) => ({ key, mode }));
-  const { error } = await supabase.rpc('replace_role_access_profile', {
-    p_role_code: roleCode,
-    p_permissions: [],
-    p_page_access: payload,
-  });
-  if (!error) return;
-  if (!isMissingFunctionError(error)) throw new Error(error.message);
+  try {
+    await execute(
+      `SELECT public.replace_role_access_profile($1, $2::jsonb, $3::jsonb)`,
+      [roleCode, JSON.stringify([]), JSON.stringify(payload)],
+    );
+    return;
+  } catch (error) {
+    if (!isMissingFunctionError(error)) {
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+  }
   await persistAccessProfileFallback(roleCode, pageAccess);
 }
 
 export const rolesController = {
   async getRoles(_req: AuthenticatedRequest, res: Response): Promise<void> {
-    const { data, error } = await supabase
-      .from('system_roles')
-      .select('*')
-      .order('is_admin', { ascending: false })
-      .order('name', { ascending: true });
-
-    if (error) {
-      res.status(500).json({ success: false, error: error.message });
-      return;
+    try {
+      const data = await query<SystemRole>(
+        `SELECT * FROM system_roles
+          ORDER BY is_admin DESC, name ASC`,
+      );
+      res.json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to load roles',
+      });
     }
-    res.json({ success: true, data });
   },
 
   // Минимальный список ролей для UI: только code/name/is_admin активных ролей.
   // Используется AuthContext.loadRoles() для подписей в чате/админке без раскрытия
   // структуры прав. Доступ — любой authenticated (см. roles.routes.ts).
   async getLabels(_req: AuthenticatedRequest, res: Response): Promise<void> {
-    const { data, error } = await supabase
-      .from('system_roles')
-      .select('code, name, is_admin, show_actual_hours')
-      .eq('is_active', true)
-      .order('is_admin', { ascending: false })
-      .order('name', { ascending: true });
-
-    if (error) {
-      res.status(500).json({ success: false, error: error.message });
-      return;
+    try {
+      const data = await query<{ code: string; name: string; is_admin: boolean; show_actual_hours: boolean }>(
+        `SELECT code, name, is_admin, show_actual_hours
+           FROM system_roles
+          WHERE is_active = true
+          ORDER BY is_admin DESC, name ASC`,
+      );
+      res.json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to load role labels',
+      });
     }
-    res.json({ success: true, data });
   },
 
   async getCatalog(_req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -212,26 +226,29 @@ export const rolesController = {
 
     const { code, name, description, is_admin, employee_variant, show_actual_hours } = parsed.data;
 
-    const { data, error } = await supabase
-      .from('system_roles')
-      .insert({
-        code,
-        name,
-        description: description ?? null,
-        is_admin: !!is_admin,
-        employee_variant: employee_variant ?? null,
-        show_actual_hours: !!show_actual_hours,
-        is_active: true,
-      })
-      .select()
-      .single();
-
-    if (error) {
-      if (error.code === '23505') {
+    let data: SystemRole | null;
+    try {
+      data = await queryOne<SystemRole>(
+        `INSERT INTO system_roles
+           (code, name, description, is_admin, employee_variant, show_actual_hours, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, true)
+         RETURNING *`,
+        [code, name, description ?? null, !!is_admin, employee_variant ?? null, !!show_actual_hours],
+      );
+    } catch (error) {
+      const errCode = (error as { code?: string }).code;
+      if (errCode === '23505') {
         res.status(409).json({ success: false, error: 'Роль с таким кодом уже существует' });
       } else {
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Не удалось создать роль',
+        });
       }
+      return;
+    }
+    if (!data) {
+      res.status(500).json({ success: false, error: 'Не удалось создать роль' });
       return;
     }
 
@@ -263,31 +280,39 @@ export const rolesController = {
         return;
       }
 
-      const { data: createdRole, error: createError } = await supabase
-        .from('system_roles')
-        .insert({
-          code: targetCode,
-          name: parsed.data.name,
-          description: parsed.data.description ?? sourceRole.description ?? null,
-          is_admin: parsed.data.is_admin ?? sourceRole.is_admin,
-          employee_variant: parsed.data.employee_variant !== undefined
-            ? parsed.data.employee_variant
-            : sourceRole.employee_variant,
-          show_actual_hours: parsed.data.show_actual_hours ?? sourceRole.show_actual_hours,
-          is_active: parsed.data.is_active ?? true,
-        })
-        .select()
-        .single();
-
-      if (createError || !createdRole) {
-        if (createError?.code === '23505') {
+      let createdRole: SystemRole | null;
+      try {
+        createdRole = await queryOne<SystemRole>(
+          `INSERT INTO system_roles
+             (code, name, description, is_admin, employee_variant, show_actual_hours, is_active)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING *`,
+          [
+            targetCode,
+            parsed.data.name,
+            parsed.data.description ?? sourceRole.description ?? null,
+            parsed.data.is_admin ?? sourceRole.is_admin,
+            parsed.data.employee_variant !== undefined
+              ? parsed.data.employee_variant
+              : sourceRole.employee_variant,
+            parsed.data.show_actual_hours ?? sourceRole.show_actual_hours,
+            parsed.data.is_active ?? true,
+          ],
+        );
+      } catch (createError) {
+        const errCode = (createError as { code?: string }).code;
+        if (errCode === '23505') {
           res.status(409).json({ success: false, error: 'Роль с таким кодом уже существует' });
         } else {
           res.status(500).json({
             success: false,
-            error: createError?.message || 'Не удалось создать роль',
+            error: createError instanceof Error ? createError.message : 'Не удалось создать роль',
           });
         }
+        return;
+      }
+      if (!createdRole) {
+        res.status(500).json({ success: false, error: 'Не удалось создать роль' });
         return;
       }
 
@@ -331,25 +356,40 @@ export const rolesController = {
       }
     }
 
-    const updates: Record<string, unknown> = {
-      name: parsed.data.name,
-      description: parsed.data.description ?? null,
-      updated_at: new Date().toISOString(),
+    const setClauses: string[] = [];
+    const params: unknown[] = [];
+    const addParam = (value: unknown): string => {
+      params.push(value);
+      return `$${params.length}`;
     };
-    if (parsed.data.is_active !== undefined) updates.is_active = parsed.data.is_active;
-    if (parsed.data.is_admin !== undefined) updates.is_admin = parsed.data.is_admin;
-    if (parsed.data.employee_variant !== undefined) updates.employee_variant = parsed.data.employee_variant;
-    if (parsed.data.show_actual_hours !== undefined) updates.show_actual_hours = parsed.data.show_actual_hours;
 
-    const { data, error } = await supabase
-      .from('system_roles')
-      .update(updates)
-      .eq('code', code)
-      .select()
-      .single();
+    setClauses.push(`name = ${addParam(parsed.data.name)}`);
+    setClauses.push(`description = ${addParam(parsed.data.description ?? null)}`);
+    setClauses.push(`updated_at = ${addParam(new Date().toISOString())}`);
+    if (parsed.data.is_active !== undefined) setClauses.push(`is_active = ${addParam(parsed.data.is_active)}`);
+    if (parsed.data.is_admin !== undefined) setClauses.push(`is_admin = ${addParam(parsed.data.is_admin)}`);
+    if (parsed.data.employee_variant !== undefined) setClauses.push(`employee_variant = ${addParam(parsed.data.employee_variant)}`);
+    if (parsed.data.show_actual_hours !== undefined) setClauses.push(`show_actual_hours = ${addParam(parsed.data.show_actual_hours)}`);
 
-    if (error || !data) {
-      res.status(500).json({ success: false, error: error?.message || 'Не удалось обновить роль' });
+    const codePlaceholder = addParam(code);
+
+    let data: SystemRole | null;
+    try {
+      data = await queryOne<SystemRole>(
+        `UPDATE system_roles SET ${setClauses.join(', ')}
+           WHERE code = ${codePlaceholder}
+           RETURNING *`,
+        params,
+      );
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Не удалось обновить роль',
+      });
+      return;
+    }
+    if (!data) {
+      res.status(500).json({ success: false, error: 'Не удалось обновить роль' });
       return;
     }
 
@@ -437,13 +477,13 @@ export const rolesController = {
       return;
     }
 
-    const { error } = await supabase
-      .from('system_roles')
-      .delete()
-      .eq('code', code);
-
-    if (error) {
-      res.status(500).json({ success: false, error: error.message });
+    try {
+      await execute(`DELETE FROM system_roles WHERE code = $1`, [code]);
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Не удалось удалить роль',
+      });
       return;
     }
 

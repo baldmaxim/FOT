@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { execute, query, queryOne } from '../config/postgres.js';
 import { notificationService } from './notification.service.js';
 import { pushService } from './push.service.js';
 
@@ -34,49 +34,47 @@ async function loadExpiringEmployees(): Promise<IExpiringEmployee[]> {
   const todayIso = today.toISOString().slice(0, 10);
   const endIso = end.toISOString().slice(0, 10);
 
-  const { data, error } = await supabase
-    .from('employees')
-    .select('id, full_name, patent_expiry_date')
-    .eq('employment_status', 'active')
-    .eq('is_archived', false)
-    .not('patent_expiry_date', 'is', null)
-    .gte('patent_expiry_date', todayIso)
-    .lte('patent_expiry_date', endIso);
-
-  if (error) throw error;
-  return (data || []) as IExpiringEmployee[];
+  return query<IExpiringEmployee>(
+    `SELECT id, full_name, patent_expiry_date::text AS patent_expiry_date
+       FROM employees
+      WHERE employment_status = 'active'
+        AND is_archived = false
+        AND patent_expiry_date IS NOT NULL
+        AND patent_expiry_date >= $1::date
+        AND patent_expiry_date <= $2::date`,
+    [todayIso, endIso],
+  );
 }
 
 async function loadEmployeeUserIds(employeeIds: number[]): Promise<Map<number, string>> {
   if (employeeIds.length === 0) return new Map();
 
-  const { data, error } = await supabase
-    .from('user_profiles')
-    .select('id, employee_id')
-    .in('employee_id', employeeIds);
-
-  if (error) throw error;
-  return new Map((data || []).map((row: { id: string; employee_id: number }) => [row.employee_id, row.id]));
+  const rows = await query<{ id: string; employee_id: number }>(
+    `SELECT id, employee_id
+       FROM user_profiles
+      WHERE employee_id = ANY($1::bigint[])`,
+    [employeeIds],
+  );
+  return new Map(rows.map(row => [row.employee_id, row.id]));
 }
 
 async function hasReminderLog(employeeId: number, reminderDate: string): Promise<boolean> {
-  const { data, error } = await supabase
-    .from('patent_expiry_reminder_log')
-    .select('employee_id')
-    .eq('employee_id', employeeId)
-    .eq('reminder_date', reminderDate)
-    .maybeSingle();
-
-  if (error) throw error;
-  return !!data;
+  const row = await queryOne<{ employee_id: number }>(
+    `SELECT employee_id
+       FROM patent_expiry_reminder_log
+      WHERE employee_id = $1 AND reminder_date = $2`,
+    [employeeId, reminderDate],
+  );
+  return !!row;
 }
 
 async function writeReminderLog(employeeId: number, reminderDate: string): Promise<void> {
-  const { error } = await supabase
-    .from('patent_expiry_reminder_log')
-    .upsert({ employee_id: employeeId, reminder_date: reminderDate }, { onConflict: 'employee_id,reminder_date' });
-
-  if (error) throw error;
+  await execute(
+    `INSERT INTO patent_expiry_reminder_log (employee_id, reminder_date)
+     VALUES ($1, $2::date)
+     ON CONFLICT (employee_id, reminder_date) DO NOTHING`,
+    [employeeId, reminderDate],
+  );
 }
 
 async function runReminderCycle(): Promise<void> {

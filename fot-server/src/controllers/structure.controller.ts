@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import * as Sentry from '@sentry/node';
-import { supabase } from '../config/database.js';
+import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { getKnownArchiveDepartment, isProtectedArchiveDepartment } from '../services/employee-archive-department.service.js';
 import { invalidateDeptTreeCache } from '../services/skud-shared.service.js';
@@ -67,17 +67,14 @@ function buildDepartmentTree(
 }
 
 async function loadAllActiveDepartments(): Promise<OrgDepartment[]> {
-  const { data, error } = await supabase
-    .from('org_departments')
-    .select('*')
-    .eq('is_active', true)
-    .order('sort_order');
-
-  if (error) {
-    throw error;
-  }
-
-  return ((data || []) as OrgDepartmentEncrypted[]).map(decryptDepartment);
+  const rows = await query<OrgDepartmentEncrypted>(
+    `SELECT id, parent_id, sigur_department_id, name, description, sort_order,
+            is_active, kind, created_at, updated_at
+       FROM org_departments
+      WHERE is_active = true
+      ORDER BY sort_order`,
+  );
+  return rows.map(decryptDepartment);
 }
 
 function buildDepartmentMap(departments: OrgDepartment[]): Map<string, OrgDepartment> {
@@ -149,16 +146,13 @@ async function ensureDepartmentIsEmpty(departmentId: string, allDepartments: Org
     throw createHttpError(409, 'Отдел содержит вложенные отделы. Используйте рекурсивное удаление.');
   }
 
-  const { count, error } = await supabase
-    .from('employees')
-    .select('id', { count: 'exact', head: true })
-    .eq('org_department_id', departmentId);
+  const row = await queryOne<{ cnt: string }>(
+    'SELECT count(*)::text AS cnt FROM employees WHERE org_department_id = $1',
+    [departmentId],
+  );
+  const count = Number(row?.cnt ?? 0);
 
-  if (error) {
-    throw error;
-  }
-
-  if ((count || 0) > 0) {
+  if (count > 0) {
     throw createHttpError(409, 'Отдел не пуст. Сначала переместите сотрудников или используйте рекурсивное удаление.');
   }
 }
@@ -300,14 +294,12 @@ export const structureController = {
       }
 
       if (parentId) {
-        const parent = await supabase
-          .from('org_departments')
-          .select('id')
-          .eq('id', parentId)
-          .eq('is_active', true)
-          .maybeSingle();
+        const parent = await queryOne<{ id: string }>(
+          'SELECT id FROM org_departments WHERE id = $1 AND is_active = true',
+          [parentId],
+        );
 
-        if (!parent.data) {
+        if (!parent) {
           res.status(400).json({ success: false, error: 'Родительский отдел не найден' });
           return;
         }
@@ -322,19 +314,21 @@ export const structureController = {
       const kind: OrgDepartmentKind = explicitKind
         ?? detectDepartmentKindFromName(name, { isRoot: parentId === null });
 
-      const { data, error } = await supabase
-        .from('org_departments')
-        .insert({
-          parent_id: parentId,
-          name,
-          description,
-          kind,
-        })
-        .select()
-        .single();
-
-      if (error || !data) {
-        console.error('Create department error:', error);
+      let data: OrgDepartmentEncrypted | null = null;
+      try {
+        data = await queryOne<OrgDepartmentEncrypted>(
+          `INSERT INTO org_departments (parent_id, name, description, kind)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id, parent_id, sigur_department_id, name, description, sort_order,
+                     is_active, kind, created_at, updated_at`,
+          [parentId, name, description, kind],
+        );
+      } catch (createErr) {
+        console.error('Create department error:', createErr);
+        res.status(500).json({ success: false, error: 'Ошибка создания отдела' });
+        return;
+      }
+      if (!data) {
         res.status(500).json({ success: false, error: 'Ошибка создания отдела' });
         return;
       }
@@ -428,15 +422,25 @@ export const structureController = {
         return;
       }
 
-      const { data, error } = await supabase
-        .from('org_departments')
-        .update(updateData)
-        .eq('id', id)
-        .select()
-        .single();
-
-      if (error || !data) {
-        console.error('Update department error:', error);
+      const setKeys = Object.keys(updateData);
+      const params: unknown[] = setKeys.map(k => updateData[k]);
+      const setSql = setKeys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+      params.push(id);
+      let data: OrgDepartmentEncrypted | null = null;
+      try {
+        data = await queryOne<OrgDepartmentEncrypted>(
+          `UPDATE org_departments SET ${setSql}
+            WHERE id = $${params.length}
+            RETURNING id, parent_id, sigur_department_id, name, description, sort_order,
+                      is_active, kind, created_at, updated_at`,
+          params,
+        );
+      } catch (updErr) {
+        console.error('Update department error:', updErr);
+        res.status(500).json({ success: false, error: 'Ошибка обновления отдела' });
+        return;
+      }
+      if (!data) {
         res.status(500).json({ success: false, error: 'Ошибка обновления отдела' });
         return;
       }
@@ -448,7 +452,7 @@ export const structureController = {
         details: updateData,
       });
 
-      res.json({ success: true, data: decryptDepartment(data as OrgDepartmentEncrypted) });
+      res.json({ success: true, data: decryptDepartment(data) });
     } catch (error) {
       const status = getStatus(error);
       if (status) {
@@ -517,14 +521,10 @@ export const structureController = {
           continue;
         }
 
-        const { error } = await supabase
-          .from('org_departments')
-          .update({ parent_id: parentId })
-          .eq('id', departmentId);
-
-        if (error) {
-          throw error;
-        }
+        await execute(
+          'UPDATE org_departments SET parent_id = $1 WHERE id = $2',
+          [parentId, departmentId],
+        );
 
         movedIds.push(departmentId);
       }
@@ -577,13 +577,10 @@ export const structureController = {
       await ensureDepartmentIsMutable(id);
       await ensureDepartmentIsEmpty(id, departments);
 
-      const { error } = await supabase
-        .from('org_departments')
-        .delete()
-        .eq('id', id);
-
-      if (error) {
-        console.error('Delete department error:', error);
+      try {
+        await execute('DELETE FROM org_departments WHERE id = $1', [id]);
+      } catch (deleteErr) {
+        console.error('Delete department error:', deleteErr);
         res.status(500).json({ success: false, error: 'Ошибка удаления отдела' });
         return;
       }
@@ -636,30 +633,6 @@ export const structureController = {
       const targetParentId = root.parent_id;
       const timestamp = new Date().toISOString();
 
-      const { error: employeesError } = await supabase
-        .from('employees')
-        .update({
-          org_department_id: targetParentId,
-          updated_at: timestamp,
-        })
-        .in('org_department_id', subtreeList);
-
-      if (employeesError) {
-        throw employeesError;
-      }
-
-      const { error: assignmentsError } = await supabase
-        .from('employee_assignments')
-        .update({
-          org_department_id: targetParentId,
-          updated_at: timestamp,
-        })
-        .in('org_department_id', subtreeList);
-
-      if (assignmentsError) {
-        throw assignmentsError;
-      }
-
       const depthOf = (departmentId: string): number => {
         let depth = 0;
         let current = departmentMap.get(departmentId) || null;
@@ -671,16 +644,29 @@ export const structureController = {
       };
 
       const orderedIds = subtreeList.sort((left, right) => depthOf(right) - depthOf(left));
-      for (const departmentId of orderedIds) {
-        const { error } = await supabase
-          .from('org_departments')
-          .delete()
-          .eq('id', departmentId);
 
-        if (error) {
-          throw error;
+      await withTransaction(async (client) => {
+        await client.query(
+          `UPDATE employees
+              SET org_department_id = $1, updated_at = $2
+            WHERE org_department_id = ANY($3::uuid[])`,
+          [targetParentId, timestamp, subtreeList],
+        );
+
+        await client.query(
+          `UPDATE employee_assignments
+              SET org_department_id = $1, updated_at = $2
+            WHERE org_department_id = ANY($3::uuid[])`,
+          [targetParentId, timestamp, subtreeList],
+        );
+
+        for (const departmentId of orderedIds) {
+          await client.query(
+            'DELETE FROM org_departments WHERE id = $1',
+            [departmentId],
+          );
         }
-      }
+      });
 
       invalidateDeptTreeCache();
       await auditService.logFromRequest(req, req.user.id, 'DELETE_ORG_DEPARTMENT_RECURSIVE', {
@@ -720,23 +706,23 @@ export const structureController = {
         return;
       }
 
-      const { count: employeesDeleted, error: empError } = await supabase
-        .from('employees')
-        .delete({ count: 'exact' })
-        .neq('id', 0);
-
-      if (empError) {
+      let employeesDeleted = 0;
+      try {
+        employeesDeleted = await execute(
+          'DELETE FROM employees WHERE id <> 0',
+        );
+      } catch (empError) {
         console.error('Clear employees error:', empError);
         res.status(500).json({ success: false, error: 'Ошибка удаления сотрудников' });
         return;
       }
 
-      const { count: departmentsDeleted, error: deptError } = await supabase
-        .from('org_departments')
-        .delete({ count: 'exact' })
-        .neq('id', '00000000-0000-0000-0000-000000000000');
-
-      if (deptError) {
+      let departmentsDeleted = 0;
+      try {
+        departmentsDeleted = await execute(
+          `DELETE FROM org_departments WHERE id <> '00000000-0000-0000-0000-000000000000'::uuid`,
+        );
+      } catch (deptError) {
         console.error('Clear departments error:', deptError);
         res.status(500).json({ success: false, error: 'Ошибка удаления отделов' });
         return;
@@ -765,19 +751,17 @@ export const structureController = {
 
     const trimmedName = name.trim();
 
-    let query = supabase
-      .from('org_departments')
-      .select('id, name')
-      .eq('is_active', true);
-
+    const params: unknown[] = [];
+    let sql = 'SELECT id, name FROM org_departments WHERE is_active = true';
     if (parentId) {
-      query = query.eq('parent_id', parentId);
+      params.push(parentId);
+      sql += ` AND parent_id = $${params.length}`;
     } else {
-      query = query.is('parent_id', null);
+      sql += ' AND parent_id IS NULL';
     }
 
-    const { data: existing } = await query;
-    const found = (existing || []).find((department: { name: string }) => (
+    const existing = await query<{ id: string; name: string | null }>(sql, params);
+    const found = existing.find(department => (
       (department.name || '').toLowerCase() === trimmedName.toLowerCase()
     ));
 
@@ -785,37 +769,24 @@ export const structureController = {
       return found.id;
     }
 
-    const { data: created, error } = await supabase
-      .from('org_departments')
-      .insert({
-        parent_id: parentId,
-        name: trimmedName,
-      })
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Auto-create department error:', error);
+    try {
+      const created = await queryOne<{ id: string }>(
+        `INSERT INTO org_departments (parent_id, name) VALUES ($1, $2) RETURNING id`,
+        [parentId, trimmedName],
+      );
+      return created?.id ?? null;
+    } catch (err) {
+      console.error('Auto-create department error:', err);
       return null;
     }
-
-    return created.id;
   },
 
   async getPositions(_req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { data, error } = await supabase
-        .from('positions')
-        .select('id, name')
-        .eq('is_active', true)
-        .order('name');
-
-      if (error) {
-        res.status(500).json({ success: false, error: 'Failed to fetch positions' });
-        return;
-      }
-
-      res.json({ success: true, data: data || [] });
+      const rows = await query<{ id: string; name: string }>(
+        `SELECT id, name FROM positions WHERE is_active = true ORDER BY name`,
+      );
+      res.json({ success: true, data: rows });
     } catch (error) {
       console.error('Get positions error:', error);
       res.status(500).json({ success: false, error: 'Failed to fetch positions' });

@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import { encryptionService } from './encryption.service.js';
 import { escapeLike } from '../utils/search.utils.js';
 import {
@@ -71,6 +71,9 @@ type ConversationAccess = {
   write_lock_reason: string | null;
 };
 
+const REQUEST_COLS =
+  'id, requester_id, target_user_id, message, status, created_at, resolved_at, resolved_by';
+
 const decryptOrPassthrough = (content: string): string => {
   if (/^[0-9a-f]+:[0-9a-f]+:[0-9a-f]+$/i.test(content)) {
     try {
@@ -113,70 +116,79 @@ const toWriteState = (
 };
 
 async function getConversationParticipantIds(conversationId: string): Promise<string[]> {
-  const { data: participants, error } = await supabase
-    .from('chat_participants')
-    .select('user_id')
-    .eq('conversation_id', conversationId);
-
-  if (error) {
+  let rows: Array<{ user_id: string }>;
+  try {
+    rows = await query<{ user_id: string }>(
+      `SELECT user_id FROM chat_participants WHERE conversation_id = $1`,
+      [conversationId],
+    );
+  } catch {
     throw new Error('Failed to load conversation participants');
   }
-
-  return (participants || []).map(participant => participant.user_id);
+  return rows.map(p => p.user_id);
 }
 
 async function getOrCreateConversationRecord(userId1: string, userId2: string): Promise<string> {
-  const { data: existing, error: rpcError } = await supabase
-    .rpc('find_direct_conversation', { user1: userId1, user2: userId2 });
-
-  if (rpcError) {
+  // Используем функцию find_direct_conversation (см. миграцию 087).
+  let existing: Array<{ conversation_id: string }>;
+  try {
+    existing = await query<{ conversation_id: string }>(
+      `SELECT conversation_id FROM find_direct_conversation($1::uuid, $2::uuid)`,
+      [userId1, userId2],
+    );
+  } catch {
     throw new Error('Failed to search existing conversation');
   }
 
-  if (existing && existing.length > 0) {
+  if (existing.length > 0) {
     return existing[0].conversation_id;
   }
 
-  const { data: conversation, error: conversationError } = await supabase
-    .from('chat_conversations')
-    .insert({})
-    .select('id')
-    .single();
+  // Создание новой беседы + участников в одной транзакции.
+  try {
+    return await withTransaction(async (client) => {
+      const insRes = await client.query<{ id: string }>(
+        `INSERT INTO chat_conversations DEFAULT VALUES RETURNING id`,
+      );
+      const conversationId = insRes.rows[0]?.id;
+      if (!conversationId) throw new Error('Failed to create conversation');
 
-  if (conversationError || !conversation) {
-    throw new Error('Failed to create conversation');
-  }
+      await client.query(
+        `INSERT INTO chat_participants (conversation_id, user_id)
+         VALUES ($1, $2), ($1, $3)`,
+        [conversationId, userId1, userId2],
+      );
 
-  const { error: participantsError } = await supabase
-    .from('chat_participants')
-    .insert([
-      { conversation_id: conversation.id, user_id: userId1 },
-      { conversation_id: conversation.id, user_id: userId2 },
-    ]);
-
-  if (participantsError) {
+      return conversationId;
+    });
+  } catch (err) {
+    if (err instanceof Error && err.message === 'Failed to create conversation') throw err;
     throw new Error('Failed to create conversation participants');
   }
-
-  return conversation.id;
 }
 
 async function formatContactRequests(rows: ChatRequestRow[], currentUserId: string): Promise<IChatContactRequest[]> {
   if (rows.length === 0) return [];
 
-  const profileIds = [...new Set(rows.flatMap(row => [row.requester_id, row.target_user_id, row.resolved_by]).filter(Boolean) as string[])];
+  const profileIds = [...new Set(
+    rows.flatMap(row => [row.requester_id, row.target_user_id, row.resolved_by])
+      .filter((v): v is string => Boolean(v)),
+  )];
 
-  const { data: profiles, error } = await supabase
-    .from('user_profiles')
-    .select('id, full_name')
-    .in('id', profileIds);
-
-  if (error) {
-    throw new Error('Failed to load request participants');
+  let profiles: Array<{ id: string; full_name: string | null }> = [];
+  if (profileIds.length > 0) {
+    try {
+      profiles = await query<{ id: string; full_name: string | null }>(
+        `SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])`,
+        [profileIds],
+      );
+    } catch {
+      throw new Error('Failed to load request participants');
+    }
   }
 
   const profileById = new Map<string, { id: string; full_name: string | null }>();
-  (profiles || []).forEach(profile => profileById.set(profile.id, profile));
+  profiles.forEach(profile => profileById.set(profile.id, profile));
 
   return rows.map(row => ({
     id: row.id,
@@ -250,30 +262,36 @@ export const chatService = {
     const plainContent = content.trim();
     const encryptedContent = encryptionService.encrypt(plainContent);
 
-    const { data: message, error } = await supabase
-      .from('chat_messages')
-      .insert({
-        conversation_id: conversationId,
-        sender_id: senderId,
-        content: encryptedContent,
-      })
-      .select('id, conversation_id, sender_id, content, created_at')
-      .single();
+    // Многошаговая операция (insert + touch conversation + last_read) — в TX.
+    const message = await withTransaction(async (client) => {
+      const insRes = await client.query<{
+        id: string;
+        conversation_id: string;
+        sender_id: string;
+        content: string;
+        created_at: string;
+      }>(
+        `INSERT INTO chat_messages (conversation_id, sender_id, content)
+         VALUES ($1, $2, $3)
+         RETURNING id, conversation_id, sender_id, content, created_at`,
+        [conversationId, senderId, encryptedContent],
+      );
+      const m = insRes.rows[0];
+      if (!m) throw new Error('Failed to send message');
 
-    if (error || !message) {
-      throw new Error('Failed to send message');
-    }
+      const nowIso = new Date().toISOString();
+      await client.query(
+        `UPDATE chat_conversations SET updated_at = $1 WHERE id = $2`,
+        [nowIso, conversationId],
+      );
+      await client.query(
+        `UPDATE chat_participants SET last_read_at = $1
+          WHERE conversation_id = $2 AND user_id = $3`,
+        [nowIso, conversationId, senderId],
+      );
 
-    await supabase
-      .from('chat_conversations')
-      .update({ updated_at: new Date().toISOString() })
-      .eq('id', conversationId);
-
-    await supabase
-      .from('chat_participants')
-      .update({ last_read_at: new Date().toISOString() })
-      .eq('conversation_id', conversationId)
-      .eq('user_id', senderId);
+      return m;
+    });
 
     return { ...message, content: plainContent, is_read: false } as IChatMessage;
   },
@@ -281,30 +299,44 @@ export const chatService = {
   async getMessages(conversationId: string, userId: string, limit = 50, offset = 0): Promise<IChatMessage[]> {
     await this.getConversationAccess(conversationId, userId);
 
-    const { data, error } = await supabase
-      .from('chat_messages')
-      .select('id, conversation_id, sender_id, content, created_at')
-      .eq('conversation_id', conversationId)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+    let data: Array<{
+      id: string;
+      conversation_id: string;
+      sender_id: string;
+      content: string;
+      created_at: string;
+    }>;
+    try {
+      data = await query(
+        `SELECT id, conversation_id, sender_id, content, created_at
+           FROM chat_messages
+          WHERE conversation_id = $1
+          ORDER BY created_at DESC
+          LIMIT $2 OFFSET $3`,
+        [conversationId, limit, offset],
+      );
+    } catch {
+      throw new Error('Failed to fetch messages');
+    }
 
-    if (error) throw new Error('Failed to fetch messages');
-
-    const { data: participants, error: participantsError } = await supabase
-      .from('chat_participants')
-      .select('conversation_id, user_id, last_read_at')
-      .eq('conversation_id', conversationId);
-
-    if (participantsError) {
+    let participants: Array<{ conversation_id: string; user_id: string; last_read_at: string | null }>;
+    try {
+      participants = await query(
+        `SELECT conversation_id, user_id, last_read_at
+           FROM chat_participants
+          WHERE conversation_id = $1`,
+        [conversationId],
+      );
+    } catch {
       throw new Error('Failed to fetch conversation read state');
     }
 
-    const otherParticipant = (participants || []).find(participant => participant.user_id !== userId);
-    const currentParticipant = (participants || []).find(participant => participant.user_id === userId);
+    const otherParticipant = participants.find(participant => participant.user_id !== userId);
+    const currentParticipant = participants.find(participant => participant.user_id === userId);
     const otherLastReadAt = otherParticipant?.last_read_at ?? null;
     const currentLastReadAt = currentParticipant?.last_read_at ?? null;
 
-    return (data || []).map(message => ({
+    return data.map(message => ({
       ...message,
       content: decryptOrPassthrough(message.content),
       is_read: message.sender_id === userId
@@ -314,43 +346,52 @@ export const chatService = {
   },
 
   async getConversations(userId: string): Promise<IChatConversation[]> {
-    const { data: participations, error: participationsError } = await supabase
-      .from('chat_participants')
-      .select('conversation_id, last_read_at')
-      .eq('user_id', userId);
-
-    if (participationsError) {
+    let participations: Array<{ conversation_id: string; last_read_at: string | null }>;
+    try {
+      participations = await query(
+        `SELECT conversation_id, last_read_at
+           FROM chat_participants
+          WHERE user_id = $1`,
+        [userId],
+      );
+    } catch {
       throw new Error('Failed to load conversations');
     }
 
-    if (!participations || participations.length === 0) return [];
+    if (participations.length === 0) return [];
 
-    const conversationIds = participations.map(participation => participation.conversation_id);
+    const conversationIds = participations.map(p => p.conversation_id);
 
-    const { data: conversations, error: conversationsError } = await supabase
-      .from('chat_conversations')
-      .select('id, created_at, updated_at')
-      .in('id', conversationIds)
-      .order('updated_at', { ascending: false });
-
-    if (conversationsError) {
+    let conversations: Array<{ id: string; created_at: string; updated_at: string }>;
+    try {
+      conversations = await query(
+        `SELECT id, created_at, updated_at
+           FROM chat_conversations
+          WHERE id = ANY($1::uuid[])
+          ORDER BY updated_at DESC`,
+        [conversationIds],
+      );
+    } catch {
       throw new Error('Failed to load conversations');
     }
 
-    if (!conversations || conversations.length === 0) return [];
+    if (conversations.length === 0) return [];
 
-    const { data: allParticipants, error: allParticipantsError } = await supabase
-      .from('chat_participants')
-      .select('conversation_id, user_id, last_read_at')
-      .in('conversation_id', conversationIds);
-
-    if (allParticipantsError) {
+    let allParticipants: Array<{ conversation_id: string; user_id: string; last_read_at: string | null }>;
+    try {
+      allParticipants = await query(
+        `SELECT conversation_id, user_id, last_read_at
+           FROM chat_participants
+          WHERE conversation_id = ANY($1::uuid[])`,
+        [conversationIds],
+      );
+    } catch {
       throw new Error('Failed to load conversation participants');
     }
 
     const participantsByConversation = new Map<string, string[]>();
     const readAtByConversationUser = new Map<string, Map<string, string | null>>();
-    (allParticipants || []).forEach(participant => {
+    allParticipants.forEach(participant => {
       const existing = participantsByConversation.get(participant.conversation_id) || [];
       existing.push(participant.user_id);
       participantsByConversation.set(participant.conversation_id, existing);
@@ -360,34 +401,43 @@ export const chatService = {
       readAtByConversationUser.set(participant.conversation_id, readMap);
     });
 
-    const allUserIds = [...new Set((allParticipants || []).map(participant => participant.user_id))];
-    const { data: profiles, error: profilesError } = await supabase
-      .from('user_profiles')
-      .select('id, full_name')
-      .in('id', allUserIds);
-
-    if (profilesError) {
+    const allUserIds = [...new Set(allParticipants.map(p => p.user_id))];
+    let profiles: Array<{ id: string; full_name: string | null }>;
+    try {
+      profiles = await query(
+        `SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])`,
+        [allUserIds],
+      );
+    } catch {
       throw new Error('Failed to load conversation profiles');
     }
 
     const profileById = new Map<string, { id: string; full_name: string | null }>();
-    (profiles || []).forEach(profile => profileById.set(profile.id, profile));
+    profiles.forEach(profile => profileById.set(profile.id, profile));
 
-    const { data: allMessages, error: allMessagesError } = await supabase
-      .from('chat_messages')
-      .select('conversation_id, content, sender_id, created_at')
-      .in('conversation_id', conversationIds)
-      .order('created_at', { ascending: false })
-      .limit(conversationIds.length * 50);
-
-    if (allMessagesError) {
+    let allMessages: Array<{
+      conversation_id: string;
+      content: string;
+      sender_id: string;
+      created_at: string;
+    }>;
+    try {
+      allMessages = await query(
+        `SELECT conversation_id, content, sender_id, created_at
+           FROM chat_messages
+          WHERE conversation_id = ANY($1::uuid[])
+          ORDER BY created_at DESC
+          LIMIT $2`,
+        [conversationIds, conversationIds.length * 50],
+      );
+    } catch {
       throw new Error('Failed to load conversation messages');
     }
 
     const lastMessageByConversation = new Map<string, { content: string; sender_id: string; created_at: string }>();
     const unreadByConversation = new Map<string, number>();
 
-    (allMessages || []).forEach(message => {
+    allMessages.forEach(message => {
       if (!lastMessageByConversation.has(message.conversation_id)) {
         lastMessageByConversation.set(message.conversation_id, {
           content: message.content,
@@ -443,66 +493,82 @@ export const chatService = {
   async markAsRead(conversationId: string, userId: string): Promise<void> {
     await this.getConversationAccess(conversationId, userId);
 
-    await supabase
-      .from('chat_participants')
-      .update({ last_read_at: new Date().toISOString() })
-      .eq('conversation_id', conversationId)
-      .eq('user_id', userId);
+    await execute(
+      `UPDATE chat_participants SET last_read_at = $1
+        WHERE conversation_id = $2 AND user_id = $3`,
+      [new Date().toISOString(), conversationId, userId],
+    );
   },
 
   async getUnreadCount(userId: string): Promise<number> {
-    const { data: participations, error: participationsError } = await supabase
-      .from('chat_participants')
-      .select('conversation_id, last_read_at')
-      .eq('user_id', userId);
-
-    if (participationsError) {
+    let participations: Array<{ conversation_id: string; last_read_at: string | null }>;
+    try {
+      participations = await query(
+        `SELECT conversation_id, last_read_at
+           FROM chat_participants
+          WHERE user_id = $1`,
+        [userId],
+      );
+    } catch {
       throw new Error('Failed to load unread count');
     }
 
-    if (!participations || participations.length === 0) return 0;
+    if (participations.length === 0) return 0;
 
-    const conversationIds = participations.map(participation => participation.conversation_id);
+    const conversationIds = participations.map(p => p.conversation_id);
     const lastReadByConversation = new Map(
-      participations.map(participation => [participation.conversation_id, participation.last_read_at ?? null] as const),
+      participations.map(p => [p.conversation_id, p.last_read_at ?? null] as const),
     );
 
-    const { data: messages, error } = await supabase
-      .from('chat_messages')
-      .select('conversation_id, sender_id, created_at')
-      .in('conversation_id', conversationIds)
-      .neq('sender_id', userId);
-
-    if (error) {
+    let messages: Array<{ conversation_id: string; sender_id: string; created_at: string }>;
+    try {
+      messages = await query(
+        `SELECT conversation_id, sender_id, created_at
+           FROM chat_messages
+          WHERE conversation_id = ANY($1::uuid[])
+            AND sender_id <> $2`,
+        [conversationIds, userId],
+      );
+    } catch {
       throw new Error('Failed to load unread count');
     }
 
-    return (messages || []).reduce((count, message) => (
+    return messages.reduce((count, message) => (
       wasReadByTimestamp(lastReadByConversation.get(message.conversation_id) ?? null, message.created_at)
         ? count
         : count + 1
     ), 0);
   },
 
-  async searchUsers(query: string, currentUserId: string): Promise<IChatUser[]> {
-    let request = supabase
-      .from('user_profiles')
-      .select('id')
-      .neq('id', currentUserId)
-      .eq('is_approved', true)
-      .order('full_name', { ascending: true })
-      .limit(50);
-
-    if (query.trim()) {
-      request = request.ilike('full_name', `%${escapeLike(query.trim())}%`);
-    }
-
-    const { data: users, error } = await request;
-    if (error) {
+  async searchUsers(searchQuery: string, currentUserId: string): Promise<IChatUser[]> {
+    const trimmed = searchQuery.trim();
+    let users: Array<{ id: string }>;
+    try {
+      if (trimmed) {
+        users = await query<{ id: string }>(
+          `SELECT id FROM user_profiles
+            WHERE id <> $1
+              AND is_approved = true
+              AND full_name ILIKE $2
+            ORDER BY full_name ASC
+            LIMIT 50`,
+          [currentUserId, `%${escapeLike(trimmed)}%`],
+        );
+      } else {
+        users = await query<{ id: string }>(
+          `SELECT id FROM user_profiles
+            WHERE id <> $1
+              AND is_approved = true
+            ORDER BY full_name ASC
+            LIMIT 50`,
+          [currentUserId],
+        );
+      }
+    } catch {
       throw new Error('Failed to search users');
     }
 
-    const candidateIds = (users || []).map(user => user.id);
+    const candidateIds = users.map(user => user.id);
     if (candidateIds.length === 0) return [];
 
     const [contexts, decisions] = await Promise.all([
@@ -534,20 +600,21 @@ export const chatService = {
   },
 
   async listContactRequests(userId: string, box: 'inbox' | 'outbox'): Promise<IChatContactRequest[]> {
-    const query = supabase
-      .from('chat_contact_requests')
-      .select('id, requester_id, target_user_id, message, status, created_at, resolved_at, resolved_by')
-      .order('created_at', { ascending: false });
-
-    const { data, error } = box === 'inbox'
-      ? await query.eq('target_user_id', userId)
-      : await query.eq('requester_id', userId);
-
-    if (error) {
+    const whereCol = box === 'inbox' ? 'target_user_id' : 'requester_id';
+    let data: ChatRequestRow[];
+    try {
+      data = await query<ChatRequestRow>(
+        `SELECT ${REQUEST_COLS}
+           FROM chat_contact_requests
+          WHERE ${whereCol} = $1
+          ORDER BY created_at DESC`,
+        [userId],
+      );
+    } catch {
       throw new Error('Failed to load chat requests');
     }
 
-    return formatContactRequests((data || []) as ChatRequestRow[], userId);
+    return formatContactRequests(data, userId);
   },
 
   async createContactRequest(requesterId: string, targetUserId: string, message?: string | null): Promise<IChatContactRequest> {
@@ -565,62 +632,69 @@ export const chatService = {
       throw new ChatError(decision.availability_reason, 403, 'CHAT_FORBIDDEN');
     }
 
-    const [existingOutgoing, existingIncoming] = await Promise.all([
-      supabase
-        .from('chat_contact_requests')
-        .select('id, requester_id, target_user_id, message, status, created_at, resolved_at, resolved_by')
-        .eq('requester_id', requesterId)
-        .eq('target_user_id', targetUserId)
-        .eq('status', 'pending')
-        .order('created_at', { ascending: false })
-        .limit(1),
-      supabase
-        .from('chat_contact_requests')
-        .select('id, requester_id, target_user_id, message, status, created_at, resolved_at, resolved_by')
-        .eq('requester_id', targetUserId)
-        .eq('target_user_id', requesterId)
-        .eq('status', 'pending')
-        .order('created_at', { ascending: false })
-        .limit(1),
-    ]);
-
-    const existingErrors = [existingOutgoing.error, existingIncoming.error].filter(Boolean);
-    if (existingErrors.length > 0) {
+    let existingOutgoing: ChatRequestRow[];
+    let existingIncoming: ChatRequestRow[];
+    try {
+      [existingOutgoing, existingIncoming] = await Promise.all([
+        query<ChatRequestRow>(
+          `SELECT ${REQUEST_COLS}
+             FROM chat_contact_requests
+            WHERE requester_id = $1 AND target_user_id = $2 AND status = 'pending'
+            ORDER BY created_at DESC
+            LIMIT 1`,
+          [requesterId, targetUserId],
+        ),
+        query<ChatRequestRow>(
+          `SELECT ${REQUEST_COLS}
+             FROM chat_contact_requests
+            WHERE requester_id = $1 AND target_user_id = $2 AND status = 'pending'
+            ORDER BY created_at DESC
+            LIMIT 1`,
+          [targetUserId, requesterId],
+        ),
+      ]);
+    } catch {
       throw new Error('Failed to validate existing requests');
     }
 
-    const existingRow = ((existingOutgoing.data || [])[0] || (existingIncoming.data || [])[0]) as ChatRequestRow | undefined;
+    const existingRow = existingOutgoing[0] || existingIncoming[0];
     if (existingRow) {
       const requests = await formatContactRequests([existingRow], requesterId);
       return requests[0];
     }
 
-    const { data, error } = await supabase
-      .from('chat_contact_requests')
-      .insert({
-        requester_id: requesterId,
-        target_user_id: targetUserId,
-        message: message?.trim() || null,
-      })
-      .select('id, requester_id, target_user_id, message, status, created_at, resolved_at, resolved_by')
-      .single();
-
-    if (error || !data) {
+    let data: ChatRequestRow | null;
+    try {
+      data = await queryOne<ChatRequestRow>(
+        `INSERT INTO chat_contact_requests (requester_id, target_user_id, message)
+         VALUES ($1, $2, $3)
+         RETURNING ${REQUEST_COLS}`,
+        [requesterId, targetUserId, message?.trim() || null],
+      );
+    } catch {
       throw new Error('Failed to create chat request');
     }
 
-    const requests = await formatContactRequests([data as ChatRequestRow], requesterId);
+    if (!data) throw new Error('Failed to create chat request');
+
+    const requests = await formatContactRequests([data], requesterId);
     return requests[0];
   },
 
   async approveContactRequest(requestId: string, currentUserId: string): Promise<{ request: IChatContactRequest; conversation_id: string }> {
-    const { data: requestRow, error } = await supabase
-      .from('chat_contact_requests')
-      .select('id, requester_id, target_user_id, message, status, created_at, resolved_at, resolved_by')
-      .eq('id', requestId)
-      .single();
+    let requestRow: ChatRequestRow | null;
+    try {
+      requestRow = await queryOne<ChatRequestRow>(
+        `SELECT ${REQUEST_COLS}
+           FROM chat_contact_requests
+          WHERE id = $1`,
+        [requestId],
+      );
+    } catch {
+      throw new ChatError('Запрос не найден', 404, 'CHAT_REQUEST_NOT_FOUND');
+    }
 
-    if (error || !requestRow) {
+    if (!requestRow) {
       throw new ChatError('Запрос не найден', 404, 'CHAT_REQUEST_NOT_FOUND');
     }
 
@@ -634,38 +708,35 @@ export const chatService = {
 
     const [userAId, userBId] = chatPolicyService.normalizePair(requestRow.requester_id, requestRow.target_user_id);
 
-    const { error: grantError } = await supabase
-      .from('chat_contact_grants')
-      .upsert({
-        user_a_id: userAId,
-        user_b_id: userBId,
-        source: 'request',
-        created_by: currentUserId,
-      }, { onConflict: 'user_a_id,user_b_id' });
+    // Grant + update запроса — в одной транзакции.
+    const updatedRequest = await withTransaction(async (client) => {
+      await client.query(
+        `INSERT INTO chat_contact_grants (user_a_id, user_b_id, source, created_by)
+         VALUES ($1, $2, 'request', $3)
+         ON CONFLICT (user_a_id, user_b_id) DO UPDATE SET
+           source = EXCLUDED.source,
+           created_by = EXCLUDED.created_by`,
+        [userAId, userBId, currentUserId],
+      );
 
-    if (grantError) {
-      throw new Error('Failed to create chat grant');
-    }
-
-    const now = new Date().toISOString();
-    const { data: updatedRequest, error: updateError } = await supabase
-      .from('chat_contact_requests')
-      .update({
-        status: 'approved',
-        resolved_by: currentUserId,
-        resolved_at: now,
-        updated_at: now,
-      })
-      .eq('id', requestId)
-      .select('id, requester_id, target_user_id, message, status, created_at, resolved_at, resolved_by')
-      .single();
-
-    if (updateError || !updatedRequest) {
-      throw new Error('Failed to approve chat request');
-    }
+      const now = new Date().toISOString();
+      const upRes = await client.query<ChatRequestRow>(
+        `UPDATE chat_contact_requests SET
+           status = 'approved',
+           resolved_by = $1,
+           resolved_at = $2,
+           updated_at = $2
+         WHERE id = $3
+         RETURNING ${REQUEST_COLS}`,
+        [currentUserId, now, requestId],
+      );
+      const row = upRes.rows[0];
+      if (!row) throw new Error('Failed to approve chat request');
+      return row;
+    });
 
     const conversationId = await getOrCreateConversationRecord(updatedRequest.requester_id, updatedRequest.target_user_id);
-    const requests = await formatContactRequests([updatedRequest as ChatRequestRow], currentUserId);
+    const requests = await formatContactRequests([updatedRequest], currentUserId);
 
     return {
       request: requests[0],
@@ -674,13 +745,19 @@ export const chatService = {
   },
 
   async rejectContactRequest(requestId: string, currentUserId: string): Promise<IChatContactRequest> {
-    const { data: requestRow, error } = await supabase
-      .from('chat_contact_requests')
-      .select('id, requester_id, target_user_id, message, status, created_at, resolved_at, resolved_by')
-      .eq('id', requestId)
-      .single();
+    let requestRow: ChatRequestRow | null;
+    try {
+      requestRow = await queryOne<ChatRequestRow>(
+        `SELECT ${REQUEST_COLS}
+           FROM chat_contact_requests
+          WHERE id = $1`,
+        [requestId],
+      );
+    } catch {
+      throw new ChatError('Запрос не найден', 404, 'CHAT_REQUEST_NOT_FOUND');
+    }
 
-    if (error || !requestRow) {
+    if (!requestRow) {
       throw new ChatError('Запрос не найден', 404, 'CHAT_REQUEST_NOT_FOUND');
     }
 
@@ -693,23 +770,27 @@ export const chatService = {
     }
 
     const now = new Date().toISOString();
-    const { data: updatedRequest, error: updateError } = await supabase
-      .from('chat_contact_requests')
-      .update({
-        status: 'rejected',
-        resolved_by: currentUserId,
-        resolved_at: now,
-        updated_at: now,
-      })
-      .eq('id', requestId)
-      .select('id, requester_id, target_user_id, message, status, created_at, resolved_at, resolved_by')
-      .single();
-
-    if (updateError || !updatedRequest) {
+    let updatedRequest: ChatRequestRow | null;
+    try {
+      updatedRequest = await queryOne<ChatRequestRow>(
+        `UPDATE chat_contact_requests SET
+           status = 'rejected',
+           resolved_by = $1,
+           resolved_at = $2,
+           updated_at = $2
+         WHERE id = $3
+         RETURNING ${REQUEST_COLS}`,
+        [currentUserId, now, requestId],
+      );
+    } catch {
       throw new Error('Failed to reject chat request');
     }
 
-    const requests = await formatContactRequests([updatedRequest as ChatRequestRow], currentUserId);
+    if (!updatedRequest) {
+      throw new Error('Failed to reject chat request');
+    }
+
+    const requests = await formatContactRequests([updatedRequest], currentUserId);
     return requests[0];
   },
 };

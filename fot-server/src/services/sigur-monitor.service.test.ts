@@ -1,35 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-type TableName = 'sigur_health_checks' | 'sigur_incidents' | 'skud_events' | 'user_profiles';
+const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgExecute: vi.fn(),
+  pgTx: vi.fn(),
+}));
 
-interface IRow {
-  id?: number | string;
-  [key: string]: unknown;
-}
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
+}));
 
-interface IBuilderState {
-  table: TableName;
-  mode: 'select' | 'insert' | 'update';
-  insertRows?: IRow[];
-  updatePatch?: IRow;
-  filters: Array<(row: IRow) => boolean>;
-  orders: Array<{ field: string; ascending: boolean }>;
-  limit?: number;
-  range?: { from: number; to: number };
-  wantsSingle: boolean;
-  wantsCount: boolean;
-}
+type RowMap = Record<string, unknown>;
 
 const mockedState = vi.hoisted(() => ({
   nextId: 1,
   tables: {
-    sigur_health_checks: [] as IRow[],
-    sigur_incidents: [] as IRow[],
-    skud_events: [] as IRow[],
-    user_profiles: [
-      { id: 'admin-1', position_type: 'admin', is_approved: true },
-      { id: 'super-admin-1', position_type: 'super_admin', is_approved: true },
-    ] as IRow[],
+    sigur_health_checks: [] as RowMap[],
+    sigur_incidents: [] as RowMap[],
+    skud_events: [] as RowMap[],
   },
   settings: {
     enabled: true,
@@ -70,169 +62,6 @@ const mockedState = vi.hoisted(() => ({
   },
 }));
 
-function cloneRow<T extends IRow>(row: T): T {
-  return JSON.parse(JSON.stringify(row));
-}
-
-function normalizeDateValue(value: unknown): number | string {
-  if (typeof value !== 'string') return String(value);
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? value : parsed;
-}
-
-function sortRows(rows: IRow[], orders: Array<{ field: string; ascending: boolean }>): IRow[] {
-  return [...rows].sort((left, right) => {
-    for (const order of orders) {
-      const leftValue = normalizeDateValue(left[order.field]);
-      const rightValue = normalizeDateValue(right[order.field]);
-      if (leftValue === rightValue) continue;
-      if (leftValue > rightValue) return order.ascending ? 1 : -1;
-      return order.ascending ? -1 : 1;
-    }
-    return 0;
-  });
-}
-
-function executeBuilder(state: IBuilderState) {
-  const rows = mockedState.tables[state.table];
-
-  if (state.mode === 'insert') {
-    const inserted = (state.insertRows || []).map(row => {
-      const nowIso = typeof row.checked_at === 'string'
-        ? String(row.checked_at)
-        : typeof row.started_at === 'string'
-          ? String(row.started_at)
-          : new Date('2026-04-11T00:00:00.000Z').toISOString();
-
-      const nextRow = cloneRow({
-        id: mockedState.nextId++,
-        created_at: row.created_at || nowIso,
-        updated_at: row.updated_at || nowIso,
-        ...row,
-      });
-      rows.push(nextRow);
-      return cloneRow(nextRow);
-    });
-
-    return Promise.resolve({
-      data: state.wantsSingle ? inserted[0] || null : inserted,
-      error: null,
-      count: inserted.length,
-    });
-  }
-
-  if (state.mode === 'update') {
-    const filtered = rows.filter(row => state.filters.every(filter => filter(row)));
-    const updated = filtered.map(row => {
-      Object.assign(row, cloneRow(state.updatePatch || {}));
-      return cloneRow(row);
-    });
-
-    return Promise.resolve({
-      data: state.wantsSingle ? updated[0] || null : updated,
-      error: null,
-      count: updated.length,
-    });
-  }
-
-  let filtered = rows.filter(row => state.filters.every(filter => filter(row)));
-  const total = filtered.length;
-  filtered = sortRows(filtered, state.orders);
-
-  if (state.range) {
-    filtered = filtered.slice(state.range.from, state.range.to + 1);
-  } else if (state.limit !== undefined) {
-    filtered = filtered.slice(0, state.limit);
-  }
-
-  const payload = filtered.map(cloneRow);
-  return Promise.resolve({
-    data: state.wantsSingle ? payload[0] || null : payload,
-    error: null,
-    count: state.wantsCount ? total : null,
-  });
-}
-
-function createBuilder(table: TableName) {
-  const state: IBuilderState = {
-    table,
-    mode: 'select',
-    filters: [],
-    orders: [],
-    wantsSingle: false,
-    wantsCount: false,
-  };
-
-  const builder = {
-    select: (_fields?: string, options?: { count?: string }) => {
-      state.wantsCount = options?.count === 'exact';
-      return builder;
-    },
-    insert: (payload: IRow | IRow[]) => {
-      state.mode = 'insert';
-      state.insertRows = (Array.isArray(payload) ? payload : [payload]).map(cloneRow);
-      return builder;
-    },
-    update: (patch: IRow) => {
-      state.mode = 'update';
-      state.updatePatch = cloneRow(patch);
-      return builder;
-    },
-    eq: (field: string, value: unknown) => {
-      state.filters.push(row => row[field] === value);
-      return builder;
-    },
-    in: (field: string, values: unknown[]) => {
-      state.filters.push(row => values.includes(row[field]));
-      return builder;
-    },
-    gte: (field: string, value: unknown) => {
-      state.filters.push(row => normalizeDateValue(row[field]) >= normalizeDateValue(value));
-      return builder;
-    },
-    lte: (field: string, value: unknown) => {
-      state.filters.push(row => normalizeDateValue(row[field]) <= normalizeDateValue(value));
-      return builder;
-    },
-    lt: (field: string, value: unknown) => {
-      state.filters.push(row => normalizeDateValue(row[field]) < normalizeDateValue(value));
-      return builder;
-    },
-    not: (field: string, operator: string, value: unknown) => {
-      if (operator === 'is' && value === null) {
-        state.filters.push(row => row[field] !== null && row[field] !== undefined);
-      }
-      return builder;
-    },
-    order: (field: string, options?: { ascending?: boolean }) => {
-      state.orders.push({ field, ascending: options?.ascending !== false });
-      return builder;
-    },
-    limit: (value: number) => {
-      state.limit = value;
-      return builder;
-    },
-    range: (from: number, to: number) => {
-      state.range = { from, to };
-      return builder;
-    },
-    single: () => {
-      state.wantsSingle = true;
-      return executeBuilder(state);
-    },
-    then: (onFulfilled: (value: unknown) => unknown, onRejected?: (reason: unknown) => unknown) =>
-      executeBuilder(state).then(onFulfilled, onRejected),
-  };
-
-  return builder;
-}
-
-vi.mock('../config/database.js', () => ({
-  supabase: {
-    from: vi.fn((table: TableName) => createBuilder(table)),
-  },
-}));
-
 vi.mock('./notification.service.js', () => ({
   notificationService: mockedState.notificationServiceMock,
 }));
@@ -265,8 +94,177 @@ import {
   runSigurMonitorCycleNow,
 } from './sigur-monitor.service.js';
 
+/**
+ * Парсит набор SET-присваиваний из UPDATE-выражения (`a = $1, b = $2::jsonb, ...`)
+ * и возвращает Record<column, paramIndex(1-based)>.
+ */
+function parseUpdateSetClause(sql: string): Record<string, number> {
+  const match = sql.match(/SET\s+(.+?)\s+WHERE/is);
+  if (!match) return {};
+  const assignments = match[1].split(',');
+  const result: Record<string, number> = {};
+  for (const assignment of assignments) {
+    const m = assignment.trim().match(/^(\w+)\s*=\s*\$(\d+)/);
+    if (m) {
+      result[m[1]] = parseInt(m[2], 10);
+    }
+  }
+  return result;
+}
+
+// ─── Mock-роутер pg-helpers ─────────────────────────────────────────────────
+function installPgRouter(): void {
+  // queryOne: SELECT/INSERT/UPDATE с RETURNING/LIMIT 1.
+  pgQueryOne.mockImplementation(async (sql: string, params?: unknown[]) => {
+    const lower = sql.trim().toLowerCase();
+
+    // SELECT * FROM sigur_incidents WHERE status = 'open' ...
+    if (lower.startsWith("select * from sigur_incidents where status = 'open'")) {
+      const open = mockedState.tables.sigur_incidents
+        .filter(row => row.status === 'open')
+        .sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)));
+      return open[0] || null;
+    }
+
+    // SELECT * FROM sigur_incidents WHERE id = $1
+    if (lower.startsWith('select * from sigur_incidents where id =')) {
+      const id = params?.[0];
+      return mockedState.tables.sigur_incidents.find(row => row.id === id) || null;
+    }
+
+    // SELECT * FROM sigur_health_checks WHERE status = 'success' ...
+    if (lower.startsWith("select * from sigur_health_checks where status = 'success'")) {
+      const success = mockedState.tables.sigur_health_checks
+        .filter(row => row.status === 'success')
+        .sort((a, b) => String(b.checked_at).localeCompare(String(a.checked_at)));
+      return success[0] || null;
+    }
+
+    // SELECT event_date, event_time FROM skud_events ORDER BY ... LIMIT 1
+    if (lower.startsWith('select event_date, event_time from skud_events')) {
+      const sorted = [...mockedState.tables.skud_events].sort((a, b) => {
+        const dateCmp = String(b.event_date).localeCompare(String(a.event_date));
+        if (dateCmp !== 0) return dateCmp;
+        return String(b.event_time).localeCompare(String(a.event_time));
+      });
+      return sorted[0] || null;
+    }
+
+    // INSERT INTO sigur_health_checks (...) RETURNING *
+    if (lower.startsWith('insert into sigur_health_checks')) {
+      // Параметры: checked_at, source, status, connection_type, response_ms,
+      // events_last_window, baseline_events, consecutive_failures, error_message, meta_json.
+      const [
+        checked_at, source, status, connection_type, response_ms,
+        events_last_window, baseline_events, consecutive_failures, error_message, meta_json,
+      ] = (params || []) as unknown[];
+      const nowIso = String(checked_at || new Date().toISOString());
+      const row: RowMap = {
+        id: mockedState.nextId++,
+        checked_at: nowIso,
+        source,
+        status,
+        connection_type,
+        response_ms,
+        events_last_window,
+        baseline_events,
+        consecutive_failures,
+        error_message,
+        meta: typeof meta_json === 'string' ? JSON.parse(meta_json) : (meta_json ?? {}),
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
+      mockedState.tables.sigur_health_checks.push(row);
+      return row;
+    }
+
+    // INSERT INTO sigur_incidents (...) RETURNING *
+    if (lower.startsWith('insert into sigur_incidents')) {
+      const [
+        status, severity, detected_by, started_at, resolved_at, last_success_at,
+        affected_from, affected_to, connection_type, error_message, meta_json,
+      ] = (params || []) as unknown[];
+      const nowIso = String(started_at || new Date().toISOString());
+      const row: RowMap = {
+        id: mockedState.nextId++,
+        status,
+        severity,
+        detected_by,
+        started_at,
+        resolved_at,
+        last_success_at,
+        affected_from,
+        affected_to,
+        connection_type,
+        error_message,
+        meta: typeof meta_json === 'string' ? JSON.parse(meta_json) : (meta_json ?? {}),
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
+      mockedState.tables.sigur_incidents.push(row);
+      return row;
+    }
+
+    // UPDATE sigur_incidents SET ... WHERE id = $N RETURNING *
+    if (lower.startsWith('update sigur_incidents set')) {
+      const setMap = parseUpdateSetClause(sql);
+      const whereIdMatch = sql.match(/WHERE\s+id\s*=\s*\$(\d+)/i);
+      if (!whereIdMatch || !params) return null;
+      const idParamIndex = parseInt(whereIdMatch[1], 10) - 1;
+      const id = params[idParamIndex];
+      const row = mockedState.tables.sigur_incidents.find(r => r.id === id);
+      if (!row) return null;
+      for (const [col, idx] of Object.entries(setMap)) {
+        const raw = params[idx - 1];
+        if (col === 'meta') {
+          row[col] = typeof raw === 'string' ? JSON.parse(raw) : (raw ?? {});
+        } else {
+          row[col] = raw;
+        }
+      }
+      return row;
+    }
+
+    return null;
+  });
+
+  // query: коллекции
+  pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+    const lower = sql.trim().toLowerCase();
+
+    // SELECT * FROM sigur_health_checks ORDER BY checked_at DESC LIMIT $1
+    if (lower.startsWith('select * from sigur_health_checks order by')) {
+      const limit = Number(params?.[0]) || 10;
+      return [...mockedState.tables.sigur_health_checks]
+        .sort((a, b) => String(b.checked_at).localeCompare(String(a.checked_at)))
+        .slice(0, limit);
+    }
+
+    // SELECT event_date FROM skud_events WHERE event_date = ANY(...) AND event_time >= ... AND event_time < ...
+    if (lower.startsWith('select event_date from skud_events')) {
+      const dates = (params?.[0] as string[]) || [];
+      const startTime = String(params?.[1] || '');
+      const endTime = String(params?.[2] || '');
+      return mockedState.tables.skud_events.filter(row => {
+        const date = String(row.event_date);
+        const time = String(row.event_time);
+        return dates.includes(date) && time >= startTime && time < endTime;
+      }).map(row => ({ event_date: row.event_date }));
+    }
+
+    return [];
+  });
+
+  pgExecute.mockResolvedValue(0);
+  pgTx.mockImplementation(async (fn) => fn({ query: vi.fn() } as never));
+}
+
 describe('sigur-monitor.service', () => {
   beforeEach(() => {
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
     mockedState.nextId = 1;
     mockedState.tables.sigur_health_checks = [];
     mockedState.tables.sigur_incidents = [];
@@ -295,6 +293,8 @@ describe('sigur-monitor.service', () => {
       alertCooldownMinutes: 60,
       timezone: 'Europe/Moscow',
     };
+
+    installPgRouter();
     resetSigurMonitorStateForTests();
   });
 

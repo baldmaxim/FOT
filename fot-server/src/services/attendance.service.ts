@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { execute, query, queryOne } from '../config/postgres.js';
 import type { IProductionCalendarMonth, IResolvedSchedule, TimeStatus } from '../types/index.js';
 import { getTravelHoursSummaryForRange } from './skud-travel.service.js';
 import { getScheduleForDate, getShiftDurationHours, isPreHoliday, isWorkingDay, needsSkudCheck } from './schedule.service.js';
@@ -285,22 +285,42 @@ export async function loadAttendanceAdjustments(
 
   for (let index = 0; index < employeeIds.length; index += BATCH_SIZE) {
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
-    const { data, error } = await supabase
-      .from('attendance_adjustments')
-      .select('id, employee_id, work_date, status, hours_override, source_type, source_id, reason, created_by, updated_by, created_at, updated_at, metadata, approval_status, approval_comment, approved_by, approved_at')
-      .in('employee_id', batch)
-      .gte('work_date', startDate)
-      .lte('work_date', endDate);
-
-    if (error) throw error;
+    const data = await query<{
+      id: number;
+      employee_id: number;
+      work_date: string;
+      status: string;
+      hours_override: number | string | null;
+      source_type: string;
+      source_id: string | null;
+      reason: string | null;
+      created_by: string | null;
+      updated_by: string | null;
+      created_at: string;
+      updated_at: string | null;
+      metadata: unknown;
+      approval_status: string | null;
+      approval_comment: string | null;
+      approved_by: string | null;
+      approved_at: string | null;
+    }>(
+      `SELECT id, employee_id, work_date, status, hours_override, source_type, source_id, reason,
+              created_by, updated_by, created_at, updated_at, metadata,
+              approval_status, approval_comment, approved_by, approved_at
+         FROM attendance_adjustments
+         WHERE employee_id = ANY($1::int[])
+           AND work_date >= $2
+           AND work_date <= $3`,
+      [batch, startDate, endDate],
+    );
 
     adjustments.push(
-      ...((data || []).map((row) => ({
+      ...(data.map((row) => ({
         id: Number(row.id),
         employee_id: Number(row.employee_id),
         work_date: String(row.work_date),
         status: String(row.status) as TimeStatus,
-        hours_override: typeof row.hours_override === 'number' ? row.hours_override : null,
+        hours_override: row.hours_override != null ? Number(row.hours_override) : null,
         source_type: String(row.source_type),
         source_id: String(row.source_id ?? ''),
         reason: typeof row.reason === 'string' ? row.reason : null,
@@ -331,28 +351,31 @@ async function loadAdjustmentNames(adjustments: IAttendanceAdjustment[]): Promis
   const { hits: userHits, misses: userMisses } = readUserNameCache(userIds);
   const { hits: legacyHits, misses: legacyMisses } = readLegacyEmployeeNameCache(legacyEmployeeIds);
 
-  const [usersRes, employeesRes] = await Promise.all([
+  const [userRows, employeeRows] = await Promise.all([
     userMisses.length > 0
-      ? supabase.from('user_profiles').select('id, full_name').in('id', userMisses)
-      : Promise.resolve({ data: [], error: null }),
+      ? query<{ id: string; full_name: string | null }>(
+        `SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])`,
+        [userMisses],
+      )
+      : Promise.resolve([] as Array<{ id: string; full_name: string | null }>),
     legacyMisses.length > 0
-      ? supabase.from('employees').select('id, full_name').in('id', legacyMisses)
-      : Promise.resolve({ data: [], error: null }),
+      ? query<{ id: number; full_name: string | null }>(
+        `SELECT id, full_name FROM employees WHERE id = ANY($1::int[])`,
+        [legacyMisses],
+      )
+      : Promise.resolve([] as Array<{ id: number; full_name: string | null }>),
   ]);
-
-  if (usersRes.error) throw usersRes.error;
-  if (employeesRes.error) throw employeesRes.error;
 
   const expiresAt = Date.now() + NAME_CACHE_TTL;
   const userNames = new Map(userHits);
-  for (const row of usersRes.data || []) {
+  for (const row of userRows) {
     const id = String(row.id);
     const name = String(row.full_name || '');
     userNames.set(id, name);
     userNameCache.set(id, { name, expiresAt });
   }
   const legacyEmployeeNames = new Map(legacyHits);
-  for (const row of employeesRes.data || []) {
+  for (const row of employeeRows) {
     const id = Number(row.id);
     const name = String(row.full_name || '');
     legacyEmployeeNames.set(id, name);
@@ -372,16 +395,16 @@ async function loadDailySummaries(
   const rows: ISummaryRow[] = [];
   for (let index = 0; index < employeeIds.length; index += BATCH_SIZE) {
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
-    const { data, error } = await supabase
-      .from('skud_daily_summary')
-      .select('employee_id, date, first_entry, last_exit, total_hours, total_minutes, break_hours, break_minutes')
-      .in('employee_id', batch)
-      .gte('date', startDate)
-      .lte('date', endDate)
-      .order('date', { ascending: true });
-
-    if (error) throw error;
-    rows.push(...((data || []) as ISummaryRow[]));
+    const data = await query<ISummaryRow>(
+      `SELECT employee_id, date, first_entry, last_exit, total_hours, total_minutes, break_hours, break_minutes
+         FROM skud_daily_summary
+         WHERE employee_id = ANY($1::int[])
+           AND date >= $2
+           AND date <= $3
+         ORDER BY date ASC`,
+      [batch, startDate, endDate],
+    );
+    rows.push(...data);
   }
 
   return rows;
@@ -929,15 +952,38 @@ export async function upsertAttendanceAdjustment(input: {
     }
   }
 
-  const result = await supabase
-    .from('attendance_adjustments')
-    .upsert(payload, { onConflict: 'employee_id,work_date,source_type,source_id' })
-    .select('*')
-    .single();
+  // Динамический UPSERT: ON CONFLICT (employee_id, work_date, source_type, source_id) DO UPDATE.
+  const keys = Object.keys(payload);
+  const values = keys.map((k) => payload[k]);
+  const cols = keys.map((k) => `"${k}"`).join(', ');
+  const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
+  const updateClauses = keys
+    .filter((k) => !['employee_id', 'work_date', 'source_type', 'source_id'].includes(k))
+    .map((k) => `"${k}" = EXCLUDED."${k}"`)
+    .join(', ');
 
-  if (result.error) throw result.error;
+  const sql = updateClauses.length > 0
+    ? `INSERT INTO attendance_adjustments (${cols}) VALUES (${placeholders})
+         ON CONFLICT (employee_id, work_date, source_type, source_id)
+         DO UPDATE SET ${updateClauses}
+         RETURNING *`
+    : `INSERT INTO attendance_adjustments (${cols}) VALUES (${placeholders})
+         ON CONFLICT (employee_id, work_date, source_type, source_id) DO NOTHING
+         RETURNING *`;
 
-  return result.data as Record<string, unknown>;
+  const data = await queryOne<Record<string, unknown>>(sql, values);
+  if (!data) {
+    // ON CONFLICT DO NOTHING — вернём существующую строку.
+    const existing = await queryOne<Record<string, unknown>>(
+      `SELECT * FROM attendance_adjustments
+         WHERE employee_id = $1 AND work_date = $2 AND source_type = $3 AND source_id = $4
+         LIMIT 1`,
+      [input.employee_id, input.work_date, input.source_type, input.source_id ?? input.source_type],
+    );
+    if (!existing) throw new Error('Failed to upsert attendance adjustment');
+    return existing;
+  }
+  return data;
 }
 
 export async function deleteAttendanceAdjustmentBySource(input: {
@@ -946,30 +992,21 @@ export async function deleteAttendanceAdjustmentBySource(input: {
   source_type: string;
   source_id: string;
 }): Promise<void> {
-  const result = await supabase
-    .from('attendance_adjustments')
-    .delete()
-    .eq('employee_id', input.employee_id)
-    .eq('work_date', input.work_date)
-    .eq('source_type', input.source_type)
-    .eq('source_id', input.source_id);
-
-  if (result.error) throw result.error;
+  await execute(
+    `DELETE FROM attendance_adjustments
+       WHERE employee_id = $1
+         AND work_date = $2
+         AND source_type = $3
+         AND source_id = $4`,
+    [input.employee_id, input.work_date, input.source_type, input.source_id],
+  );
 }
 
 export async function getAttendanceAdjustmentById(id: number): Promise<Record<string, unknown> | null> {
-  const result = await supabase
-    .from('attendance_adjustments')
-    .select('*')
-    .eq('id', id)
-    .single();
-
-  if (result.error) {
-    if (result.error.code === 'PGRST116') return null;
-    throw result.error;
-  }
-
-  return result.data as Record<string, unknown>;
+  return queryOne<Record<string, unknown>>(
+    `SELECT * FROM attendance_adjustments WHERE id = $1 LIMIT 1`,
+    [id],
+  );
 }
 
 export async function updateAttendanceAdjustmentById(
@@ -997,31 +1034,32 @@ export async function updateAttendanceAdjustmentById(
     }
   }
 
-  const result = await supabase
-    .from('attendance_adjustments')
-    .update(updates)
-    .eq('id', id)
-    .select('*')
-    .single();
-
-  if (result.error) {
-    if (result.error.code === 'PGRST116') return null;
-    throw result.error;
+  const keys = Object.keys(updates);
+  if (keys.length === 0) {
+    return queryOne<Record<string, unknown>>(
+      `SELECT * FROM attendance_adjustments WHERE id = $1 LIMIT 1`,
+      [id],
+    );
   }
+  const setClauses = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ');
+  const values = keys.map((k) => updates[k]);
+  values.push(id);
 
-  return result.data as Record<string, unknown>;
+  return queryOne<Record<string, unknown>>(
+    `UPDATE attendance_adjustments
+       SET ${setClauses}
+       WHERE id = $${values.length}
+       RETURNING *`,
+    values,
+  );
 }
 
 export async function deleteAttendanceAdjustmentById(id: number): Promise<boolean> {
-  const result = await supabase
-    .from('attendance_adjustments')
-    .delete()
-    .eq('id', id)
-    .select('id')
-    .maybeSingle();
-
-  if (result.error) throw result.error;
-  return Boolean(result.data);
+  const deleted = await queryOne<{ id: number }>(
+    `DELETE FROM attendance_adjustments WHERE id = $1 RETURNING id`,
+    [id],
+  );
+  return Boolean(deleted);
 }
 
 export async function loadAttendanceAdjustmentsWithAuthors(
@@ -1043,20 +1081,23 @@ export async function loadAttendanceAdjustmentsWithAuthors(
 
   const employeeIdsPresent = [...new Set(manualAdjustments.map((item) => item.employee_id))];
 
-  const [authorsRes, employeesRes] = await Promise.all([
+  const [authorRows, employeeRows] = await Promise.all([
     authorIds.length > 0
-      ? supabase.from('user_profiles').select('id, full_name').in('id', authorIds)
-      : Promise.resolve({ data: [], error: null }),
+      ? query<{ id: string; full_name: string | null }>(
+        `SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])`,
+        [authorIds],
+      )
+      : Promise.resolve([] as Array<{ id: string; full_name: string | null }>),
     employeeIdsPresent.length > 0
-      ? supabase.from('employees').select('id, full_name').in('id', employeeIdsPresent)
-      : Promise.resolve({ data: [], error: null }),
+      ? query<{ id: number; full_name: string | null }>(
+        `SELECT id, full_name FROM employees WHERE id = ANY($1::int[])`,
+        [employeeIdsPresent],
+      )
+      : Promise.resolve([] as Array<{ id: number; full_name: string | null }>),
   ]);
 
-  if (authorsRes.error) throw authorsRes.error;
-  if (employeesRes.error) throw employeesRes.error;
-
-  const authorNames = new Map((authorsRes.data || []).map((row) => [String(row.id), String(row.full_name || '')]));
-  const employeeNames = new Map((employeesRes.data || []).map((row) => [Number(row.id), String(row.full_name || '')]));
+  const authorNames = new Map(authorRows.map((row) => [String(row.id), String(row.full_name || '')]));
+  const employeeNames = new Map(employeeRows.map((row) => [Number(row.id), String(row.full_name || '')]));
 
   return manualAdjustments.map((item) => {
     const latestAuthorId = item.updated_by ?? item.created_by;

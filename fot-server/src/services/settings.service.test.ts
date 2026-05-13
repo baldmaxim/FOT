@@ -1,18 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mockedState = vi.hoisted(() => ({
-  settingsRows: [] as Array<{ key: string; value: string | null }>,
+const { pgQuery, pgQueryOne, pgExecute, pgTx, mockedState } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgExecute: vi.fn(),
+  pgTx: vi.fn(),
+  mockedState: {
+    settingsRows: [] as Array<{ key: string; value: string | null }>,
+  },
 }));
 
-vi.mock('../config/database.js', () => ({
-  supabase: {
-    from: vi.fn(() => ({
-      select: vi.fn(async () => ({
-        data: mockedState.settingsRows,
-        error: null,
-      })),
-    })),
-  },
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
 }));
 
 import { settingsService } from './settings.service.js';
@@ -28,7 +30,13 @@ describe('settingsService Sigur connection resolution', () => {
   };
 
   beforeEach(() => {
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
     mockedState.settingsRows = [];
+    // SELECT key, value FROM system_settings  →  pgQuery returns rows
+    pgQuery.mockImplementation(async () => mockedState.settingsRows);
     settingsService.invalidateCache();
     process.env.SIGUR_INTERNAL_URL = undefined;
     process.env.SIGUR_INTERNAL_USERNAME = undefined;
@@ -67,6 +75,7 @@ describe('settingsService Sigur connection resolution', () => {
       password: 'db-pass',
       source: 'system_settings',
     });
+    expect(pgQuery.mock.calls[0][0]).toMatch(/SELECT key, value FROM system_settings/i);
   });
 
   it('falls back to env when database override is incomplete', async () => {

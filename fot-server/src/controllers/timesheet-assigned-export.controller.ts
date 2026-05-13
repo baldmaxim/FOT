@@ -1,9 +1,10 @@
 import { Response } from 'express';
 import ExcelJS from 'exceljs';
 import archiver from 'archiver';
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { mailerService } from '../services/mailer.service.js';
+import { localAuthService } from '../services/local-auth.service.js';
 import { resolveRequestDataScope, resolveManagedDepartmentIds } from '../services/data-scope.service.js';
 import {
   fetchTimesheetDataForDepartment,
@@ -62,43 +63,49 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
   //   'sigur_sync' — членство (миграция 049 + employee-lifecycle), в HR-список не включаем.
   //   остальные (manual_admin_ui, excel_admin_ui, manager_excel_admin_ui, …) — ручные
   //   назначения начальников участков, их и показываем.
-  let accessQuery = supabase
-    .from('employee_department_access')
-    .select(`
-      employee_id,
-      department_id,
-      employees!inner(id, full_name, email, employment_status, is_archived, excluded_from_timesheet),
-      org_departments!inner(id, kind, is_active)
-    `)
-    .eq('is_active', true)
-    .neq('source', 'sigur_sync')
-    .eq('employees.employment_status', 'active')
-    .eq('employees.is_archived', false)
-    .eq('employees.excluded_from_timesheet', false)
-    .eq('org_departments.kind', 'brigade')
-    .eq('org_departments.is_active', true);
+  const whereParts: string[] = [
+    `eda.is_active = true`,
+    `eda.source <> 'sigur_sync'`,
+    `e.employment_status = 'active'`,
+    `e.is_archived = false`,
+    `e.excluded_from_timesheet = false`,
+    `od.kind = 'brigade'`,
+    `od.is_active = true`,
+  ];
+  const params: unknown[] = [];
 
   if (scope === 'department') {
     const managed = await resolveManagedDepartmentIds(req);
     if (managed.length === 0) {
       return { error: { status: 403, message: 'Нет доступных отделов в области видимости' } };
     }
-    accessQuery = accessQuery.in('department_id', managed);
+    params.push(managed);
+    whereParts.push(`eda.department_id = ANY($${params.length}::uuid[])`);
   }
 
-  const { data: accessRows, error: accessError } = await accessQuery;
-  if (accessError) throw accessError;
+  const accessRows = await query<{
+    employee_id: number;
+    department_id: string;
+    full_name: string | null;
+    email: string | null;
+  }>(
+    `SELECT eda.employee_id,
+            eda.department_id,
+            e.full_name,
+            e.email
+       FROM employee_department_access eda
+       INNER JOIN employees e ON e.id = eda.employee_id
+       INNER JOIN org_departments od ON od.id = eda.department_id
+      WHERE ${whereParts.join(' AND ')}`,
+    params,
+  );
 
   const byEmployee = new Map<number, { full_name: string; email: string | null; department_ids: string[] }>();
-  for (const row of accessRows || []) {
-    const id = Number((row as { employee_id?: unknown }).employee_id);
-    const departmentId = (row as { department_id?: unknown }).department_id;
-    const employeeRel = (row as { employees?: { full_name?: unknown } | Array<{ full_name?: unknown }> }).employees;
-    const employeeRow = Array.isArray(employeeRel) ? employeeRel[0] : employeeRel;
-    const fullName = String(employeeRow?.full_name ?? '').trim();
-    const email = typeof (employeeRow as { email?: unknown })?.email === 'string'
-      ? ((employeeRow as { email: string }).email || null)
-      : null;
+  for (const row of accessRows) {
+    const id = Number(row.employee_id);
+    const departmentId = row.department_id;
+    const fullName = String(row.full_name ?? '').trim();
+    const email = typeof row.email === 'string' ? (row.email || null) : null;
     if (!Number.isFinite(id) || typeof departmentId !== 'string' || !departmentId.trim()) continue;
     const entry = byEmployee.get(id);
     if (entry) {
@@ -234,43 +241,38 @@ export async function listAssignedEmployees(req: AuthenticatedRequest, res: Resp
     const allDeptIds = Array.from(new Set(result.employees.flatMap(employee => employee.department_ids)));
     const deptNameById = new Map<string, string>();
     if (allDeptIds.length > 0) {
-      const { data: depts, error: deptsError } = await supabase
-        .from('org_departments')
-        .select('id, name')
-        .in('id', allDeptIds);
-      if (deptsError) throw deptsError;
-      for (const row of depts || []) {
-        const id = (row as { id?: unknown }).id;
-        const name = (row as { name?: unknown }).name;
-        if (typeof id === 'string' && typeof name === 'string') {
-          deptNameById.set(id, name);
+      const depts = await query<{ id: string; name: string | null }>(
+        `SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])`,
+        [allDeptIds],
+      );
+      for (const row of depts) {
+        if (typeof row.id === 'string' && typeof row.name === 'string') {
+          deptNameById.set(row.id, row.name);
         }
       }
     }
 
-    // Получаем email для каждого сотрудника через user_profiles → auth.users
+    // Получаем email для каждого сотрудника через user_profiles → app_auth.users
     const employeeIds = result.employees.map(e => e.id);
     const emailByEmployeeId = new Map<number, string>();
     if (employeeIds.length > 0) {
-      const { data: profiles } = await supabase
-        .from('user_profiles')
-        .select('id, employee_id')
-        .in('employee_id', employeeIds);
-      if (profiles && profiles.length > 0) {
+      const profiles = await query<{ id: string; employee_id: number | null }>(
+        `SELECT id, employee_id FROM user_profiles WHERE employee_id = ANY($1::int[])`,
+        [employeeIds],
+      );
+      if (profiles.length > 0) {
         const profileIdToEmpId = new Map<string, number>();
         for (const p of profiles) {
-          const profileId = (p as { id?: unknown }).id;
-          const empId = (p as { employee_id?: unknown }).employee_id;
-          if (typeof profileId === 'string' && typeof empId === 'number') {
-            profileIdToEmpId.set(profileId, empId);
+          if (typeof p.id === 'string' && typeof p.employee_id === 'number') {
+            profileIdToEmpId.set(p.id, p.employee_id);
           }
         }
         try {
-          const { data: authData } = await supabase.auth.admin.listUsers({ perPage: 1000 });
-          for (const au of authData?.users ?? []) {
-            const empId = profileIdToEmpId.get(au.id);
-            if (empId !== undefined && au.email) {
-              emailByEmployeeId.set(empId, au.email);
+          const emails = await localAuthService.getEmailsByUserIds([...profileIdToEmpId.keys()]);
+          for (const [userId, email] of emails.entries()) {
+            const empId = profileIdToEmpId.get(userId);
+            if (empId !== undefined && email) {
+              emailByEmployeeId.set(empId, email);
             }
           }
         } catch {
@@ -473,21 +475,21 @@ export async function emailTimesheetAssigned(req: AuthenticatedRequest, res: Res
     // Получаем email для выбранных сотрудников
     const empIds = assignedEmployees.map(e => e.id);
     const emailByEmployeeId = new Map<number, string>();
-    const { data: profiles } = await supabase
-      .from('user_profiles')
-      .select('id, employee_id')
-      .in('employee_id', empIds);
-    if (profiles && profiles.length > 0) {
+    const profiles = await query<{ id: string; employee_id: number | null }>(
+      `SELECT id, employee_id FROM user_profiles WHERE employee_id = ANY($1::int[])`,
+      [empIds],
+    );
+    if (profiles.length > 0) {
       const profileIdToEmpId = new Map<string, number>();
       for (const p of profiles) {
-        const pid = (p as { id?: unknown }).id;
-        const eid = (p as { employee_id?: unknown }).employee_id;
-        if (typeof pid === 'string' && typeof eid === 'number') profileIdToEmpId.set(pid, eid);
+        if (typeof p.id === 'string' && typeof p.employee_id === 'number') {
+          profileIdToEmpId.set(p.id, p.employee_id);
+        }
       }
-      const { data: authData } = await supabase.auth.admin.listUsers({ perPage: 1000 });
-      for (const au of authData?.users ?? []) {
-        const eid = profileIdToEmpId.get(au.id);
-        if (eid !== undefined && au.email) emailByEmployeeId.set(eid, au.email);
+      const emails = await localAuthService.getEmailsByUserIds([...profileIdToEmpId.keys()]);
+      for (const [userId, email] of emails.entries()) {
+        const eid = profileIdToEmpId.get(userId);
+        if (eid !== undefined && email) emailByEmployeeId.set(eid, email);
       }
     }
     // Фолбэк: брать email из таблицы employees, если auth-запись не найдена

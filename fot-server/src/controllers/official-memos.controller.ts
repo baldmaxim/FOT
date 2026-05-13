@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { supabase } from '../config/database.js';
+import { query, queryOne } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { pushService } from '../services/push.service.js';
 import { notificationService } from '../services/notification.service.js';
@@ -19,43 +19,39 @@ const MAX_BODY_LEN = 5000;
 async function loadEmployeeIdsByDepartments(departmentIds: string[]): Promise<Array<{ id: number; full_name: string | null; org_department_id?: string | null }>> {
   if (departmentIds.length === 0) return [];
 
-  const { data, error } = await supabase
-    .from('employees')
-    .select('id, full_name, org_department_id')
-    .in('org_department_id', departmentIds)
-    .eq('employment_status', 'active');
-
-  if (error) throw error;
-  return data || [];
+  return query<{ id: number; full_name: string | null; org_department_id: string | null }>(
+    `SELECT id, full_name, org_department_id
+       FROM employees
+      WHERE org_department_id = ANY($1::uuid[])
+        AND employment_status = 'active'`,
+    [departmentIds],
+  );
 }
 
 async function loadEmployeeIdsByDepartment(departmentId: string): Promise<Array<{ id: number; full_name: string | null }>> {
-  const { data, error } = await supabase
-    .from('employees')
-    .select('id, full_name')
-    .eq('org_department_id', departmentId)
-    .eq('employment_status', 'active');
-
-  if (error) throw error;
-  return data || [];
+  return query<{ id: number; full_name: string | null }>(
+    `SELECT id, full_name
+       FROM employees
+      WHERE org_department_id = $1
+        AND employment_status = 'active'`,
+    [departmentId],
+  );
 }
 
 async function findEmployeeUserId(employeeId: number): Promise<string | null> {
-  const { data } = await supabase
-    .from('user_profiles')
-    .select('id')
-    .eq('employee_id', employeeId)
-    .maybeSingle();
-  return (data?.id as string) || null;
+  const row = await queryOne<{ id: string }>(
+    `SELECT id FROM user_profiles WHERE employee_id = $1`,
+    [employeeId],
+  );
+  return row?.id ?? null;
 }
 
 async function findSupervisorUserId(employeeId: number): Promise<string | null> {
-  const { data } = await supabase
-    .from('user_profiles')
-    .select('supervisor_id')
-    .eq('employee_id', employeeId)
-    .maybeSingle();
-  return (data?.supervisor_id as string) || null;
+  const row = await queryOne<{ supervisor_id: string | null }>(
+    `SELECT supervisor_id FROM user_profiles WHERE employee_id = $1`,
+    [employeeId],
+  );
+  return row?.supervisor_id ?? null;
 }
 
 /** Создание служебной записки (worker+) */
@@ -82,17 +78,16 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const { data, error } = await supabase
-      .from('official_memos')
-      .insert({
-        employee_id: employeeId,
-        title: title.trim(),
-        body: body.trim(),
-      })
-      .select()
-      .single();
+    const data = await queryOne<{ id: number; employee_id: number; title: string; body: string; status: string; created_at: string }>(
+      `INSERT INTO official_memos (employee_id, title, body)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [employeeId, title.trim(), body.trim()],
+    );
 
-    if (error) throw error;
+    if (!data) {
+      throw new Error('Failed to create memo');
+    }
 
     const supervisorId = await findSupervisorUserId(employeeId);
     const recipientIds = supervisorId && supervisorId !== req.user.id ? [supervisorId] : [];
@@ -136,14 +131,13 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
       return;
     }
 
-    const { data, error } = await supabase
-      .from('official_memos')
-      .select('*')
-      .eq('employee_id', employeeId)
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-    res.json({ success: true, data: data || [] });
+    const data = await query(
+      `SELECT * FROM official_memos
+        WHERE employee_id = $1
+        ORDER BY created_at DESC`,
+      [employeeId],
+    );
+    res.json({ success: true, data });
   } catch (err) {
     console.error('official-memos.getMy error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения служебных записок' });
@@ -156,14 +150,16 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     const scopedDepartmentId = await resolveScopedDepartmentId(req, null);
     const managedDepartmentIds = await resolveManagedDepartmentIds(req);
 
-    let query = supabase
-      .from('official_memos')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const whereParts: string[] = [];
+    const params: unknown[] = [];
+    const addParam = (v: unknown): string => {
+      params.push(v);
+      return `$${params.length}`;
+    };
 
     const status = req.query.status;
     if (typeof status === 'string' && MEMO_STATUSES.includes(status as MemoStatus)) {
-      query = query.eq('status', status);
+      whereParts.push(`status = ${addParam(status)}`);
     }
 
     if (managedDepartmentIds.length > 0) {
@@ -175,23 +171,28 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         res.json({ success: true, data: [] });
         return;
       }
-      query = query.in('employee_id', employeeIds);
+      whereParts.push(`employee_id = ANY(${addParam(employeeIds)}::bigint[])`);
     }
 
-    const { data, error } = await query;
-    if (error) throw error;
+    const whereSql = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
+    const data = await query<{ id: number; employee_id: number; [k: string]: unknown }>(
+      `SELECT * FROM official_memos
+        ${whereSql}
+        ORDER BY created_at DESC`,
+      params,
+    );
 
-    const empIds = [...new Set((data || []).map(r => r.employee_id))];
+    const empIds = [...new Set(data.map(r => r.employee_id))];
     let nameMap = new Map<number, string | null>();
     if (empIds.length > 0) {
-      const { data: emps } = await supabase
-        .from('employees')
-        .select('id, full_name')
-        .in('id', empIds);
-      nameMap = new Map((emps || []).map((e: { id: number; full_name: string | null }) => [e.id, e.full_name]));
+      const emps = await query<{ id: number; full_name: string | null }>(
+        `SELECT id, full_name FROM employees WHERE id = ANY($1::bigint[])`,
+        [empIds],
+      );
+      nameMap = new Map(emps.map(e => [e.id, e.full_name]));
     }
 
-    const enriched = (data || []).map(r => ({
+    const enriched = data.map(r => ({
       ...r,
       employee_name: nameMap.get(r.employee_id) || null,
     }));
@@ -237,15 +238,13 @@ async function notifyAuthor(memoId: number, employeeId: number, status: MemoStat
 async function transition(req: AuthenticatedRequest, res: Response, nextStatus: 'approved' | 'rejected'): Promise<void> {
   try {
     const { id } = req.params;
-    const { comment } = req.body;
 
-    const { data: memo, error: fetchErr } = await supabase
-      .from('official_memos')
-      .select('*')
-      .eq('id', id)
-      .single();
+    const memo = await queryOne<{ id: number; employee_id: number; status: string; title: string | null }>(
+      `SELECT * FROM official_memos WHERE id = $1`,
+      [id],
+    );
 
-    if (fetchErr || !memo) {
+    if (!memo) {
       res.status(404).json({ success: false, error: 'Служебная записка не найдена' });
       return;
     }
@@ -260,22 +259,26 @@ async function transition(req: AuthenticatedRequest, res: Response, nextStatus: 
       return;
     }
 
-    const { data, error } = await supabase
-      .from('official_memos')
-      .update({
-        status: nextStatus,
-        reviewer_id: req.user.id,
-        reviewed_at: new Date().toISOString(),
-        review_comment: typeof comment === 'string' ? comment : null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .single();
+    const nowIso = new Date().toISOString();
+    const reviewComment = typeof req.body?.comment === 'string' ? req.body.comment : null;
 
-    if (error) throw error;
+    const data = await queryOne<{ id: number; employee_id: number; title: string | null }>(
+      `UPDATE official_memos SET
+         status = $1,
+         reviewer_id = $2,
+         reviewed_at = $3,
+         review_comment = $4,
+         updated_at = $3
+       WHERE id = $5
+       RETURNING *`,
+      [nextStatus, req.user.id, nowIso, reviewComment, id],
+    );
 
-    void notifyAuthor(Number(data.id), Number(data.employee_id), nextStatus, String(data.title || ''), typeof comment === 'string' ? comment : null);
+    if (!data) {
+      throw new Error('Failed to update memo');
+    }
+
+    void notifyAuthor(Number(data.id), Number(data.employee_id), nextStatus, String(data.title || ''), reviewComment);
 
     res.json({ success: true, data });
   } catch (err) {
@@ -292,13 +295,12 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   try {
     const { id } = req.params;
 
-    const { data: memo, error: fetchErr } = await supabase
-      .from('official_memos')
-      .select('*')
-      .eq('id', id)
-      .single();
+    const memo = await queryOne<{ id: number; employee_id: number; status: string }>(
+      `SELECT * FROM official_memos WHERE id = $1`,
+      [id],
+    );
 
-    if (fetchErr || !memo) {
+    if (!memo) {
       res.status(404).json({ success: false, error: 'Служебная записка не найдена' });
       return;
     }
@@ -313,17 +315,14 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const { data, error } = await supabase
-      .from('official_memos')
-      .update({
-        status: 'cancelled',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .single();
+    const nowIso = new Date().toISOString();
+    const data = await queryOne(
+      `UPDATE official_memos SET status = 'cancelled', updated_at = $1
+        WHERE id = $2
+        RETURNING *`,
+      [nowIso, id],
+    );
 
-    if (error) throw error;
     res.json({ success: true, data });
   } catch (err) {
     console.error('official-memos.cancel error:', err);

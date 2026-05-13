@@ -2,59 +2,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../types/index.js';
 
-type QueryRecord = {
-  table: string;
-  operations: Array<{ method: string; args: unknown[] }>;
-};
-
-type QueryResponse = {
-  data?: unknown;
-  error?: { message: string } | null;
-};
-
-const mockedState = vi.hoisted(() => ({
-  queryLog: [] as QueryRecord[],
-  resolver: (() => ({ data: [], error: null })) as (query: QueryRecord) => QueryResponse | Promise<QueryResponse>,
-  canAccessEmployeeInScope: vi.fn(async () => true),
+const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgExecute: vi.fn(),
+  pgTx: vi.fn(),
 }));
 
-function createBuilder(table: string) {
-  const query: QueryRecord = { table, operations: [] };
-  mockedState.queryLog.push(query);
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
+}));
 
-  const builder = {
-    select: (...args: unknown[]) => {
-      query.operations.push({ method: 'select', args });
-      return builder;
-    },
-    eq: (...args: unknown[]) => {
-      query.operations.push({ method: 'eq', args });
-      return builder;
-    },
-    order: (...args: unknown[]) => {
-      query.operations.push({ method: 'order', args });
-      return builder;
-    },
-    insert: (...args: unknown[]) => {
-      query.operations.push({ method: 'insert', args });
-      return builder;
-    },
-    upsert: (...args: unknown[]) => {
-      query.operations.push({ method: 'upsert', args });
-      return builder;
-    },
-    single: async () => mockedState.resolver(query),
-    then: (onFulfilled: (value: QueryResponse) => unknown, onRejected?: (reason: unknown) => unknown) =>
-      Promise.resolve(mockedState.resolver(query)).then(onFulfilled, onRejected),
-  };
-
-  return builder;
-}
-
-vi.mock('../config/database.js', () => ({
-  supabase: {
-    from: vi.fn((table: string) => createBuilder(table)),
-  },
+const mockedState = vi.hoisted(() => ({
+  canAccessEmployeeInScope: vi.fn(async () => true),
 }));
 
 vi.mock('../services/data-scope.service.js', () => ({
@@ -106,8 +69,10 @@ function makeRes() {
 
 describe('compensation access controllers', () => {
   beforeEach(() => {
-    mockedState.queryLog.length = 0;
-    mockedState.resolver = () => ({ data: [], error: null });
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
     mockedState.canAccessEmployeeInScope.mockReset();
     mockedState.canAccessEmployeeInScope.mockResolvedValue(true);
   });
@@ -121,25 +86,18 @@ describe('compensation access controllers', () => {
 
     expect(res.statusCode).toBe(403);
     expect(res.payload).toEqual({ success: false, error: 'Нет доступа к сотруднику' });
-    expect(mockedState.queryLog).toHaveLength(0);
+    expect(pgQuery).not.toHaveBeenCalled();
+    expect(pgQueryOne).not.toHaveBeenCalled();
   });
 
   it('writes payslip upsert when employee is inside scope', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table !== 'payslips') {
-        throw new Error(`Unexpected query: ${query.table}`);
-      }
-      return {
-        data: {
-          id: 5,
-          employee_id: 42,
-          period: '2026-04',
-          gross_amount: 100000,
-          net_amount: 87000,
-        },
-        error: null,
-      };
-    };
+    pgQueryOne.mockResolvedValueOnce({
+      id: 5,
+      employee_id: 42,
+      period: '2026-04',
+      gross_amount: 100000,
+      net_amount: 87000,
+    });
 
     const req = makeReq({
       body: {
@@ -155,21 +113,17 @@ describe('compensation access controllers', () => {
     await payslipsController.create(req, res);
 
     expect(res.statusCode).toBe(200);
-    expect(mockedState.queryLog).toHaveLength(1);
-    expect(mockedState.queryLog[0]?.table).toBe('payslips');
-    expect(mockedState.queryLog[0]?.operations).toEqual(expect.arrayContaining([
-      {
-        method: 'upsert',
-        args: [
-          expect.objectContaining({
-            employee_id: 42,
-            period: '2026-04',
-            created_by: 'user-1',
-          }),
-          { onConflict: 'employee_id,period' },
-        ],
-      },
-    ]));
+    expect(pgQueryOne).toHaveBeenCalledOnce();
+    const [sql, params] = pgQueryOne.mock.calls[0];
+    expect(sql).toMatch(/INSERT INTO payslips/i);
+    expect(sql).toMatch(/ON CONFLICT \(employee_id, period\) DO UPDATE/i);
+    // params: [employee_id, period, gross_amount, net_amount, deductions, details, document_id, created_by]
+    expect(params[0]).toBe(42);
+    expect(params[1]).toBe('2026-04');
+    expect(params[2]).toBe(100000);
+    expect(params[3]).toBe(87000);
+    expect(params[4]).toBe(13000);
+    expect(params[7]).toBe('user-1');
   });
 
   it('denies payments batch import when at least one employee is out of scope', async () => {
@@ -191,24 +145,17 @@ describe('compensation access controllers', () => {
 
     expect(res.statusCode).toBe(403);
     expect(res.payload).toEqual({ success: false, error: 'Нет доступа к одному из сотрудников в batch' });
-    expect(mockedState.queryLog).toHaveLength(0);
+    expect(pgQuery).not.toHaveBeenCalled();
+    expect(pgQueryOne).not.toHaveBeenCalled();
   });
 
   it('writes payment insert when employee is inside scope', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table !== 'payments') {
-        throw new Error(`Unexpected query: ${query.table}`);
-      }
-      return {
-        data: {
-          id: 8,
-          employee_id: 42,
-          payment_type: 'salary',
-          amount: 100000,
-        },
-        error: null,
-      };
-    };
+    pgQueryOne.mockResolvedValueOnce({
+      id: 8,
+      employee_id: 42,
+      payment_type: 'salary',
+      amount: 100000,
+    });
 
     const req = makeReq({
       body: {
@@ -225,20 +172,16 @@ describe('compensation access controllers', () => {
     await paymentsController.create(req, res);
 
     expect(res.statusCode).toBe(200);
-    expect(mockedState.queryLog).toHaveLength(1);
-    expect(mockedState.queryLog[0]?.table).toBe('payments');
-    expect(mockedState.queryLog[0]?.operations).toEqual(expect.arrayContaining([
-      {
-        method: 'insert',
-        args: [
-          expect.objectContaining({
-            employee_id: 42,
-            payment_date: '2026-04-10',
-            payment_type: 'salary',
-            created_by: 'user-1',
-          }),
-        ],
-      },
-    ]));
+    expect(pgQueryOne).toHaveBeenCalledOnce();
+    const [sql, params] = pgQueryOne.mock.calls[0];
+    expect(sql).toMatch(/INSERT INTO payments/i);
+    // params: [employee_id, payment_date, amount, payment_type, description, period, created_by]
+    expect(params[0]).toBe(42);
+    expect(params[1]).toBe('2026-04-10');
+    expect(params[2]).toBe(100000);
+    expect(params[3]).toBe('salary');
+    expect(params[4]).toBe('April salary');
+    expect(params[5]).toBe('2026-04');
+    expect(params[6]).toBe('user-1');
   });
 });

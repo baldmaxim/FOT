@@ -1,85 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-type QueryRecord = {
-  table: string;
-  operations: Array<{ method: string; args: unknown[] }>;
-};
+const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgExecute: vi.fn(),
+  pgTx: vi.fn(),
+}));
 
-type QueryResponse = {
-  data?: unknown;
-  error?: { code?: string; message?: string } | null;
-};
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
+}));
 
 const mockedState = vi.hoisted(() => ({
-  queryLog: [] as QueryRecord[],
-  resolver: (() => ({ data: [], error: null })) as (query: QueryRecord) => QueryResponse | Promise<QueryResponse>,
   uploadUrl: 'https://storage.example/upload',
   downloadUrl: 'https://storage.example/download',
   ensuredObjects: [] as Array<{ bucket: string; path: string }>,
   removedObjects: [] as Array<{ bucket: string; path: string | null | undefined }>,
 }));
 
-function createBuilder(table: string) {
-  const query: QueryRecord = { table, operations: [] };
-  mockedState.queryLog.push(query);
-
-  const builder = {
-    select: (...args: unknown[]) => {
-      query.operations.push({ method: 'select', args });
-      return builder;
-    },
-    eq: (...args: unknown[]) => {
-      query.operations.push({ method: 'eq', args });
-      return builder;
-    },
-    in: (...args: unknown[]) => {
-      query.operations.push({ method: 'in', args });
-      return builder;
-    },
-    neq: (...args: unknown[]) => {
-      query.operations.push({ method: 'neq', args });
-      return builder;
-    },
-    order: (...args: unknown[]) => {
-      query.operations.push({ method: 'order', args });
-      return builder;
-    },
-    delete: (...args: unknown[]) => {
-      query.operations.push({ method: 'delete', args });
-      return builder;
-    },
-    insert: (...args: unknown[]) => {
-      query.operations.push({ method: 'insert', args });
-      return builder;
-    },
-    update: (...args: unknown[]) => {
-      query.operations.push({ method: 'update', args });
-      return builder;
-    },
-    single: (...args: unknown[]) => {
-      query.operations.push({ method: 'single', args });
-      return builder;
-    },
-    maybeSingle: (...args: unknown[]) => {
-      query.operations.push({ method: 'maybeSingle', args });
-      return builder;
-    },
-    then: (onFulfilled: (value: QueryResponse) => unknown, onRejected?: (reason: unknown) => unknown) =>
-      Promise.resolve(mockedState.resolver(query)).then(onFulfilled, onRejected),
-  };
-
-  return builder;
-}
-
-vi.mock('../config/database.js', () => ({
-  supabase: {
-    from: vi.fn((table: string) => createBuilder(table)),
-  },
-}));
-
-vi.mock('./supabase-storage.service.js', () => ({
+vi.mock('./object-map-storage.service.js', () => ({
   SKUD_OBJECT_MAPS_BUCKET: 'skud-object-maps',
-  supabaseStorageService: {
+  objectMapStorageService: {
     buildObjectMapPath: vi.fn((objectId: string, fileName: string) => `travel-objects/${objectId}/${fileName}`),
     createSignedUploadUrl: vi.fn(async (_bucket: string, storagePath: string) => ({
       signedUrl: mockedState.uploadUrl,
@@ -114,29 +58,29 @@ import {
   saveTravelObjectMapPoints,
 } from './skud-travel.service.js';
 
-const ok = (data: unknown): QueryResponse => ({ data, error: null });
-
-const hasOperation = (query: QueryRecord, method: string): boolean => (
-  query.operations.some(operation => operation.method === method)
-);
-
-const getOperationArgs = <T = unknown>(query: QueryRecord, method: string): T[] => {
-  const operation = query.operations.find(candidate => candidate.method === method);
-  return (operation?.args || []) as T[];
-};
-
 describe('skud-travel.service map features', () => {
   beforeEach(() => {
-    mockedState.queryLog.length = 0;
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
     mockedState.ensuredObjects.length = 0;
     mockedState.removedObjects.length = 0;
-    mockedState.resolver = () => ok([]);
+
+    pgQuery.mockResolvedValue([]);
+    pgExecute.mockResolvedValue(0);
   });
 
   it('returns map flags and mapped point counts for travel objects', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_objects') {
-        return ok([
+    // listTravelObjects → Promise.all([
+    //   fetchTravelObjectsRaw (query skud_objects),
+    //   fetchTravelMappingsRaw (query skud_object_access_points),
+    //   fetchTravelObjectMapPointsRaw (query skud_object_map_points)
+    // ])
+    pgQuery.mockImplementation(async (sql: string) => {
+      const lower = sql.toLowerCase();
+      if (lower.includes('from skud_objects')) {
+        return [
           {
             id: 'obj-1',
             name: 'Объект 1',
@@ -161,40 +105,23 @@ describe('skud-travel.service map features', () => {
             created_at: '2026-04-01T00:00:00Z',
             updated_at: '2026-04-01T00:00:00Z',
           },
-        ]);
+        ];
       }
-
-      if (query.table === 'skud_object_access_points') {
-        return ok([
+      if (lower.includes('from skud_object_access_points')) {
+        return [
           { object_id: 'obj-1', access_point_name: ' КПП B ' },
           { object_id: 'obj-1', access_point_name: 'КПП A' },
           { object_id: 'obj-2', access_point_name: 'КПП C' },
-        ]);
+        ];
       }
-
-      if (query.table === 'skud_object_map_points') {
-        return ok([
-          {
-            object_id: 'obj-1',
-            access_point_name: 'КПП A',
-            x_ratio: 0.1,
-            y_ratio: 0.2,
-            created_at: '2026-04-10T10:00:00Z',
-            updated_at: '2026-04-10T10:00:00Z',
-          },
-          {
-            object_id: 'obj-1',
-            access_point_name: 'КПП B',
-            x_ratio: 0.3,
-            y_ratio: 0.4,
-            created_at: '2026-04-10T10:00:00Z',
-            updated_at: '2026-04-10T10:00:00Z',
-          },
-        ]);
+      if (lower.includes('from skud_object_map_points')) {
+        return [
+          { object_id: 'obj-1', access_point_name: 'КПП A', x_ratio: 0.1, y_ratio: 0.2, created_at: '2026-04-10T10:00:00Z', updated_at: '2026-04-10T10:00:00Z' },
+          { object_id: 'obj-1', access_point_name: 'КПП B', x_ratio: 0.3, y_ratio: 0.4, created_at: '2026-04-10T10:00:00Z', updated_at: '2026-04-10T10:00:00Z' },
+        ];
       }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
 
     await expect(listTravelObjects()).resolves.toEqual([
       expect.objectContaining({
@@ -213,7 +140,7 @@ describe('skud-travel.service map features', () => {
   });
 
   it('replaces object map metadata, clears markers, and removes the previous file', async () => {
-    let currentObject = {
+    let currentObject: Record<string, unknown> = {
       id: 'obj-1',
       name: 'Объект 1',
       is_active: true,
@@ -225,42 +152,37 @@ describe('skud-travel.service map features', () => {
       created_at: '2026-04-01T00:00:00Z',
       updated_at: '2026-04-01T00:00:00Z',
     };
-    let currentPoints = [
-      {
-        object_id: 'obj-1',
-        access_point_name: 'КПП A',
-        x_ratio: 0.25,
-        y_ratio: 0.75,
-        created_at: '2026-04-01T00:00:00Z',
-        updated_at: '2026-04-01T00:00:00Z',
-      },
-    ];
 
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_objects') {
-        if (hasOperation(query, 'update')) {
-          const [payload] = getOperationArgs<Record<string, unknown>>(query, 'update');
-          currentObject = {
-            ...currentObject,
-            ...payload,
-          };
-          return ok([]);
-        }
-
-        return ok(currentObject);
+    // confirmTravelObjectMapUpload:
+    //   1) fetchTravelObjectByIdRaw → queryOne SELECT ... FROM skud_objects WHERE id = $1
+    //   2) objectMapStorageService.ensureObjectExists(...)
+    //   3) execute(UPDATE skud_objects SET map_storage_path = $1 ...)
+    //   4) execute(DELETE FROM skud_object_map_points WHERE object_id = $1)
+    //   5) (если previousStoragePath !== normalized) → objectMapStorageService.removeObject(...)
+    //   6) getTravelObjectMap → fetchTravelObjectByIdRaw + fetchTravelObjectMapPointsRaw(objectId)
+    pgQueryOne.mockImplementation(async (sql: string) => {
+      if (sql.toLowerCase().includes('from skud_objects')) {
+        return currentObject;
       }
+      return null;
+    });
 
-      if (query.table === 'skud_object_map_points') {
-        if (hasOperation(query, 'delete')) {
-          currentPoints = [];
-          return ok([]);
-        }
-
-        return ok(currentPoints);
+    pgExecute.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.toLowerCase().includes('update skud_objects')) {
+        currentObject = {
+          ...currentObject,
+          map_storage_path: params?.[0],
+          map_file_name: params?.[1],
+          map_mime_type: params?.[2],
+          map_file_size: params?.[3],
+          map_uploaded_at: params?.[4],
+          updated_at: params?.[5],
+        };
       }
+      return 1;
+    });
 
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    pgQuery.mockResolvedValue([]); // fetchTravelObjectMapPointsRaw → []
 
     const result = await confirmTravelObjectMapUpload({
       objectId: 'obj-1',
@@ -299,50 +221,35 @@ describe('skud-travel.service map features', () => {
       created_at: '2026-04-01T00:00:00Z',
       updated_at: '2026-04-10T10:00:00Z',
     };
-    let storedPoints: Array<{
-      object_id: string;
-      access_point_name: string;
-      x_ratio: number;
-      y_ratio: number;
-      created_at: string;
-      updated_at: string;
-    }> = [];
 
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_objects') {
-        return ok(currentObject);
-      }
-
-      if (query.table === 'skud_object_access_points') {
-        return ok([
+    pgQueryOne.mockResolvedValue(currentObject);
+    pgQuery.mockImplementation(async (sql: string) => {
+      const lower = sql.toLowerCase();
+      if (lower.includes('from skud_object_access_points')) {
+        return [
           { object_id: 'obj-1', access_point_name: 'КПП A' },
           { object_id: 'obj-2', access_point_name: 'КПП Z' },
-        ]);
+        ];
       }
-
-      if (query.table === 'skud_object_map_points') {
-        if (hasOperation(query, 'delete')) {
-          if (getOperationArgs<unknown[]>(query, 'eq').some(args => args[0] === 'object_id' && args[1] === 'obj-1')) {
-            storedPoints = [];
-          }
-          return ok([]);
-        }
-
-        if (hasOperation(query, 'insert')) {
-          const [payload] = getOperationArgs<Array<{ object_id: string; access_point_name: string; x_ratio: number; y_ratio: number }>>(query, 'insert');
-          storedPoints = payload.map(point => ({
-            ...point,
-            created_at: '2026-04-10T10:05:00Z',
-            updated_at: '2026-04-10T10:05:00Z',
-          }));
-          return ok(payload);
-        }
-
-        return ok(storedPoints);
+      if (lower.includes('from skud_object_map_points')) {
+        // После INSERT — точка с нормализованными координатами.
+        return [{
+          object_id: 'obj-1',
+          access_point_name: 'КПП A',
+          x_ratio: 1,
+          y_ratio: 0,
+          created_at: '2026-04-10T10:05:00Z',
+          updated_at: '2026-04-10T10:05:00Z',
+        }];
       }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
 
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    const executeCalls: Array<{ sql: string; params: unknown[] }> = [];
+    pgExecute.mockImplementation(async (sql: string, params?: unknown[]) => {
+      executeCalls.push({ sql, params: params || [] });
+      return 1;
+    });
 
     const result = await saveTravelObjectMapPoints({
       objectId: 'obj-1',
@@ -358,45 +265,38 @@ describe('skud-travel.service map features', () => {
         y_ratio: 0,
       },
     ]);
-    expect(
-      mockedState.queryLog.some(query => (
-        query.table === 'skud_object_map_points'
-        && hasOperation(query, 'delete')
-        && hasOperation(query, 'in')
-        && hasOperation(query, 'neq')
-      )),
-    ).toBe(true);
+    // Удаление чужих привязок: DELETE WHERE access_point_name = ANY(...) AND object_id <> $2
+    expect(executeCalls.some(call =>
+      call.sql.toLowerCase().includes('delete from skud_object_map_points')
+      && call.sql.includes('access_point_name = ANY')
+      && call.sql.includes('object_id <>'),
+    )).toBe(true);
   });
 
   it('rejects map markers for access points that are not assigned to the object', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_objects') {
-        return ok({
-          id: 'obj-1',
-          name: 'Объект 1',
-          is_active: true,
-          map_storage_path: 'travel-objects/obj-1/map.png',
-          map_file_name: 'map.png',
-          map_mime_type: 'image/png',
-          map_file_size: 2048,
-          map_uploaded_at: '2026-04-10T10:00:00Z',
-          created_at: '2026-04-01T00:00:00Z',
-          updated_at: '2026-04-10T10:00:00Z',
-        });
-      }
+    pgQueryOne.mockResolvedValue({
+      id: 'obj-1',
+      name: 'Объект 1',
+      is_active: true,
+      map_storage_path: 'travel-objects/obj-1/map.png',
+      map_file_name: 'map.png',
+      map_mime_type: 'image/png',
+      map_file_size: 2048,
+      map_uploaded_at: '2026-04-10T10:00:00Z',
+      created_at: '2026-04-01T00:00:00Z',
+      updated_at: '2026-04-10T10:00:00Z',
+    });
 
-      if (query.table === 'skud_object_access_points') {
-        return ok([
-          { object_id: 'obj-1', access_point_name: 'КПП A' },
-        ]);
+    pgQuery.mockImplementation(async (sql: string) => {
+      const lower = sql.toLowerCase();
+      if (lower.includes('from skud_object_access_points')) {
+        return [{ object_id: 'obj-1', access_point_name: 'КПП A' }];
       }
-
-      if (query.table === 'skud_object_map_points') {
-        return ok([]);
+      if (lower.includes('from skud_object_map_points')) {
+        return [];
       }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
 
     await expect(saveTravelObjectMapPoints({
       objectId: 'obj-1',
@@ -407,18 +307,22 @@ describe('skud-travel.service map features', () => {
   });
 
   it('returns a signed map view for a mapped access point', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_object_map_points') {
-        return ok({
+    // getAccessPointMapView:
+    //   1) queryOne SELECT ... FROM skud_object_map_points WHERE access_point_name = $1 LIMIT 1
+    //   2) fetchTravelObjectByIdRaw → queryOne SELECT ... FROM skud_objects WHERE id = $1
+    //   3) objectMapStorageService.createSignedDownloadUrl(...)
+    pgQueryOne.mockImplementation(async (sql: string) => {
+      const lower = sql.toLowerCase();
+      if (lower.includes('from skud_object_map_points')) {
+        return {
           object_id: 'obj-1',
           access_point_name: 'КПП A',
           x_ratio: 0.4,
           y_ratio: 0.6,
-        });
+        };
       }
-
-      if (query.table === 'skud_objects') {
-        return ok({
+      if (lower.includes('from skud_objects')) {
+        return {
           id: 'obj-1',
           name: 'Склад 1',
           is_active: true,
@@ -429,11 +333,10 @@ describe('skud-travel.service map features', () => {
           map_uploaded_at: '2026-04-10T10:00:00Z',
           created_at: '2026-04-01T00:00:00Z',
           updated_at: '2026-04-10T10:00:00Z',
-        });
+        };
       }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+      return null;
+    });
 
     await expect(getAccessPointMapView(' КПП A ')).resolves.toEqual({
       object_id: 'obj-1',

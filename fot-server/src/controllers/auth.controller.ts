@@ -2,7 +2,8 @@ import crypto from 'crypto';
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
-import { supabase, supabaseAuth } from '../config/database.js';
+import { execute, query, queryOne } from '../config/postgres.js';
+import { localAuthService, LocalAuthError } from '../services/local-auth.service.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest, SystemRole, UserProfile, UserProfileResponse } from '../types/index.js';
 import { LOGIN_2FA_ENABLED } from '../config/features.js';
@@ -43,11 +44,10 @@ const resetPasswordSchema = z.object({
 
 export async function resolveDepartmentId(employeeId: number | null): Promise<string | null> {
   if (!employeeId) return null;
-  const { data } = await supabase
-    .from('employees')
-    .select('org_department_id')
-    .eq('id', employeeId)
-    .single();
+  const data = await queryOne<{ org_department_id: string | null }>(
+    'SELECT org_department_id FROM employees WHERE id = $1',
+    [employeeId],
+  );
   return data?.org_department_id || null;
 }
 
@@ -56,16 +56,17 @@ async function loadCompanyScopeForProfile(
   isAdmin: boolean,
 ): Promise<{ roots: 'all' | string[] }> {
   if (!isAdmin) return { roots: [] };
-  const { data, error } = await supabase
-    .from('user_company_access')
-    .select('company_root_id')
-    .eq('user_id', profile.id);
-  if (error) {
+  try {
+    const rows = await query<{ company_root_id: string }>(
+      'SELECT company_root_id FROM user_company_access WHERE user_id = $1::uuid',
+      [profile.id],
+    );
+    const roots = rows.map(row => row.company_root_id);
+    return { roots: roots.length === 0 ? 'all' : roots };
+  } catch (error) {
     console.error('[loadCompanyScopeForProfile] error:', error);
     return { roots: 'all' };
   }
-  const roots = (data || []).map(row => row.company_root_id as string);
-  return { roots: roots.length === 0 ? 'all' : roots };
 }
 
 async function buildProfileResponse(
@@ -121,40 +122,40 @@ async function register(req: Request, res: Response): Promise<void> {
   try {
     const { email, password, full_name } = registerSchema.parse(req.body);
 
-    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: false,
-    });
-
-    if (authError || !authData.user) {
-      if (authError?.message?.includes('already been registered') || authError?.message?.includes('already exists')) {
+    let authUser;
+    try {
+      authUser = await localAuthService.createUser({
+        email,
+        password,
+        emailConfirm: false,
+      });
+    } catch (authError) {
+      if (authError instanceof LocalAuthError && authError.code === 'DUPLICATE_EMAIL') {
         res.status(400).json({ success: false, error: 'Пользователь с таким email уже существует' });
         return;
       }
       console.error('Auth creation error:', authError);
-      res.status(400).json({ success: false, error: authError?.message || 'Registration failed' });
+      const msg = authError instanceof Error ? authError.message : 'Registration failed';
+      res.status(400).json({ success: false, error: msg });
       return;
     }
 
     const defaultRole = await getRoleByCode(DEFAULT_ROLE_CODE_FOR_NEW_USERS);
     if (!defaultRole) {
-      await supabase.auth.admin.deleteUser(authData.user.id);
+      try { await localAuthService.deleteUser(authUser.id); } catch { /* ignore */ }
       res.status(500).json({ success: false, error: `Default role "${DEFAULT_ROLE_CODE_FOR_NEW_USERS}" not found` });
       return;
     }
 
-    const { error: profileError } = await supabase.from('user_profiles').insert({
-      id: authData.user.id,
-      full_name,
-      system_role_id: defaultRole.id,
-      is_approved: false,
-      two_factor_enabled: false,
-    });
-
-    if (profileError) {
+    try {
+      await execute(
+        `INSERT INTO user_profiles (id, full_name, system_role_id, is_approved, two_factor_enabled)
+         VALUES ($1::uuid, $2, $3::uuid, $4, $5)`,
+        [authUser.id, full_name, defaultRole.id, false, false],
+      );
+    } catch (profileError) {
       console.error('Profile creation failed:', profileError);
-      await supabase.auth.admin.deleteUser(authData.user.id);
+      try { await localAuthService.deleteUser(authUser.id); } catch { /* ignore */ }
       res.status(500).json({ success: false, error: 'Failed to create user profile' });
       return;
     }
@@ -177,36 +178,37 @@ async function login(req: Request, res: Response): Promise<void> {
   try {
     const { email, password } = loginSchema.parse(req.body);
 
-    const { data: authData, error: authError } = await supabaseAuth.auth.signInWithPassword({
-      email,
-      password,
-    });
+    let authUser;
+    try {
+      authUser = await localAuthService.verifyPassword(email, password);
+    } catch (verifyError) {
+      console.error('Login verifyPassword error for', email, ':', verifyError);
+      authUser = null;
+    }
 
-    if (authError || !authData.user) {
+    if (!authUser) {
       // User enumeration защита: единый ответ для всех ветвей (несуществующий
       // email / неверный пароль / email не подтверждён). Конкретная причина —
       // только в audit-логе и Sentry, не в response.
-      console.error('Login error for', email, ':', authError?.message);
       await auditService.logFromRequest(req, null, 'LOGIN_FAILED', {
-        details: { email, reason: authError?.message },
+        details: { email, reason: 'invalid_credentials' },
       });
 
       res.status(401).json({ success: false, error: 'Неверный email или пароль' });
       return;
     }
 
-    const { data: profileRow, error: profileError } = await supabase
-      .from('user_profiles')
-      .select('*')
-      .eq('id', authData.user.id)
-      .single();
+    const profileRow = await queryOne<UserProfile>(
+      'SELECT * FROM user_profiles WHERE id = $1::uuid',
+      [authUser.id],
+    );
 
-    if (profileError || !profileRow) {
+    if (!profileRow) {
       res.status(404).json({ success: false, error: 'User profile not found' });
       return;
     }
 
-    const profile = profileRow as UserProfile;
+    const profile = profileRow;
     const { role, response, departmentId } = await buildProfileResponse(profile);
 
     if (!profile.is_approved) {
@@ -260,20 +262,15 @@ async function forgotPassword(req: Request, res: Response): Promise<void> {
   try {
     const { email } = forgotPasswordSchema.parse(req.body);
 
-    const { data: usersData, error: listError } = await supabase.auth.admin.listUsers();
+    // Ищем пользователя по email напрямую в app_auth.users (case-insensitive),
+    // вместо пагинированного listUsers — это и быстрее, и не зависит от размера базы.
+    const normalizedEmail = email.trim().toLowerCase();
+    const userRow = await queryOne<{ id: string }>(
+      'SELECT id FROM app_auth.users WHERE lower(email) = $1 LIMIT 1',
+      [normalizedEmail],
+    );
 
-    if (listError) {
-      console.error('List users error:', listError);
-      res.json({
-        success: true,
-        message: 'Если аккаунт с таким email существует, инструкции по сбросу пароля будут отправлены.',
-      });
-      return;
-    }
-
-    const user = usersData.users.find(u => u.email === email);
-
-    if (!user) {
+    if (!userRow) {
       res.json({
         success: true,
         message: 'Если аккаунт с таким email существует, инструкции по сбросу пароля будут отправлены.',
@@ -285,21 +282,20 @@ async function forgotPassword(req: Request, res: Response): Promise<void> {
     const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
     const resetTokenExpires = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
-    const { error: updateError } = await supabase
-      .from('user_profiles')
-      .update({
-        reset_token: resetTokenHash,
-        reset_token_expires: resetTokenExpires,
-      })
-      .eq('id', user.id);
-
-    if (updateError) {
+    try {
+      await execute(
+        `UPDATE user_profiles
+            SET reset_token = $1, reset_token_expires = $2
+          WHERE id = $3::uuid`,
+        [resetTokenHash, resetTokenExpires, userRow.id],
+      );
+    } catch (updateError) {
       console.error('Update reset token error:', updateError);
       res.status(500).json({ success: false, error: 'Не удалось создать запрос на сброс пароля' });
       return;
     }
 
-    await auditService.logFromRequest(req, user.id, 'PASSWORD_RESET_REQUESTED', {
+    await auditService.logFromRequest(req, userRow.id, 'PASSWORD_RESET_REQUESTED', {
       details: { email },
     });
 
@@ -322,41 +318,52 @@ async function resetPassword(req: Request, res: Response): Promise<void> {
     const { token, password } = resetPasswordSchema.parse(req.body);
     const resetTokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
-    const { data: profile, error: profileError } = await supabase
-      .from('user_profiles')
-      .select('id, reset_token, reset_token_expires')
-      .eq('reset_token', resetTokenHash)
-      .single();
+    const profile = await queryOne<{ id: string; reset_token: string | null; reset_token_expires: string | null }>(
+      `SELECT id, reset_token, reset_token_expires
+         FROM user_profiles
+        WHERE reset_token = $1`,
+      [resetTokenHash],
+    );
 
-    if (profileError || !profile) {
+    if (!profile) {
       res.status(400).json({ success: false, error: 'Недействительная или просроченная ссылка для сброса пароля' });
       return;
     }
 
     if (!profile.reset_token_expires || new Date(profile.reset_token_expires) < new Date()) {
-      await supabase
-        .from('user_profiles')
-        .update({ reset_token: null, reset_token_expires: null })
-        .eq('id', profile.id);
+      try {
+        await execute(
+          `UPDATE user_profiles
+              SET reset_token = NULL, reset_token_expires = NULL
+            WHERE id = $1::uuid`,
+          [profile.id],
+        );
+      } catch {
+        // ignore
+      }
 
       res.status(400).json({ success: false, error: 'Ссылка для сброса пароля истекла. Запросите новую.' });
       return;
     }
 
-    const { error: updateError } = await supabase.auth.admin.updateUserById(profile.id, {
-      password,
-    });
-
-    if (updateError) {
+    try {
+      await localAuthService.updateUserById(profile.id, { password });
+    } catch (updateError) {
       console.error('Password update error:', updateError);
       res.status(500).json({ success: false, error: 'Не удалось обновить пароль' });
       return;
     }
 
-    await supabase
-      .from('user_profiles')
-      .update({ reset_token: null, reset_token_expires: null })
-      .eq('id', profile.id);
+    try {
+      await execute(
+        `UPDATE user_profiles
+            SET reset_token = NULL, reset_token_expires = NULL
+          WHERE id = $1::uuid`,
+        [profile.id],
+      );
+    } catch {
+      // ignore
+    }
 
     await auditService.logFromRequest(req, profile.id, 'PASSWORD_RESET_COMPLETED', {
       details: { method: 'reset_token' },
@@ -378,18 +385,17 @@ async function resetPassword(req: Request, res: Response): Promise<void> {
 
 async function getMe(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    const { data: profileRow, error } = await supabase
-      .from('user_profiles')
-      .select('*')
-      .eq('id', req.user.id)
-      .single();
+    const profileRow = await queryOne<UserProfile>(
+      'SELECT * FROM user_profiles WHERE id = $1::uuid',
+      [req.user.id],
+    );
 
-    if (error || !profileRow) {
+    if (!profileRow) {
       res.status(404).json({ success: false, error: 'Profile not found' });
       return;
     }
 
-    const profile = profileRow as UserProfile;
+    const profile = profileRow;
     const { role, response, departmentId } = await buildProfileResponse(profile);
 
     const freshToken = generateAccessToken(
@@ -429,19 +435,18 @@ async function refresh(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const { data: profileRow, error } = await supabase
-      .from('user_profiles')
-      .select('*')
-      .eq('id', decoded.sub)
-      .single();
+    const profileRow = await queryOne<UserProfile>(
+      'SELECT * FROM user_profiles WHERE id = $1::uuid',
+      [decoded.sub],
+    );
 
-    if (error || !profileRow || !profileRow.is_approved) {
+    if (!profileRow || !profileRow.is_approved) {
       clearSessionCookies(res);
       res.status(401).json({ success: false, error: 'Session is no longer valid' });
       return;
     }
 
-    const profile = profileRow as UserProfile;
+    const profile = profileRow;
     const { role, response, departmentId } = await buildProfileResponse(profile);
 
     const accessToken = generateAccessToken(profile, role, decoded.email, true, departmentId);

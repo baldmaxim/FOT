@@ -1,69 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-type QueryRecord = {
-  table: string;
-  operations: Array<{ method: string; args: unknown[] }>;
-};
-
-type QueryResponse = {
-  data?: unknown;
-  error?: { code?: string; message?: string } | null;
-};
-
-const mockedState = vi.hoisted(() => ({
-  queryLog: [] as QueryRecord[],
-  resolver: (() => ({ data: [], error: null })) as (query: QueryRecord) => QueryResponse | Promise<QueryResponse>,
-  internalPoints: new Set<string>(),
-  travelLimitMinutes: 60 as number | null,
+const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgExecute: vi.fn(),
+  pgTx: vi.fn(),
 }));
 
-function createBuilder(table: string) {
-  const query: QueryRecord = { table, operations: [] };
-  mockedState.queryLog.push(query);
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
+}));
 
-  const builder = {
-    select: (...args: unknown[]) => {
-      query.operations.push({ method: 'select', args });
-      return builder;
-    },
-    eq: (...args: unknown[]) => {
-      query.operations.push({ method: 'eq', args });
-      return builder;
-    },
-    in: (...args: unknown[]) => {
-      query.operations.push({ method: 'in', args });
-      return builder;
-    },
-    gte: (...args: unknown[]) => {
-      query.operations.push({ method: 'gte', args });
-      return builder;
-    },
-    lte: (...args: unknown[]) => {
-      query.operations.push({ method: 'lte', args });
-      return builder;
-    },
-    order: (...args: unknown[]) => {
-      query.operations.push({ method: 'order', args });
-      return builder;
-    },
-    delete: (...args: unknown[]) => {
-      query.operations.push({ method: 'delete', args });
-      return builder;
-    },
-    upsert: (...args: unknown[]) => {
-      query.operations.push({ method: 'upsert', args });
-      return builder;
-    },
-    then: (onFulfilled: (value: QueryResponse) => unknown, onRejected?: (reason: unknown) => unknown) =>
-      Promise.resolve(mockedState.resolver(query)).then(onFulfilled, onRejected),
-  };
-
-  return builder;
-}
-
-vi.mock('../config/database.js', () => ({
-  supabase: {
-    from: vi.fn((table: string) => createBuilder(table)),
+const mockedState = vi.hoisted(() => ({
+  internalPoints: new Set<string>(),
+  travelLimitMinutes: 60 as number | null,
+  tables: {
+    skud_object_access_points: [] as Array<{ object_id: string; access_point_name: string }>,
+    skud_objects: [] as Array<Record<string, unknown>>,
+    skud_object_routes: [] as Array<Record<string, unknown>>,
+    skud_events: [] as Array<Record<string, unknown>>,
+    /** Сегменты ранее принятых решений (status IN ('approved','rejected')) */
+    skud_travel_segments_decided: [] as Array<Record<string, unknown>>,
   },
 }));
 
@@ -81,65 +41,58 @@ vi.mock('./settings.service.js', () => ({
 import { calculateAndSyncTravelSegments } from './skud-travel.service.js';
 import { listTravelRoutes } from './skud-travel-routes.service.js';
 
+// Маршрутизатор SQL → таблица. Сервис формирует параметризованные SELECT'ы
+// (`SELECT ... FROM skud_events WHERE ...`), поэтому ловим по подстроке `FROM <table>`.
+function routeQuery(sql: string): unknown[] {
+  const lower = sql.toLowerCase();
+  if (lower.includes('from skud_object_access_points')) {
+    return mockedState.tables.skud_object_access_points;
+  }
+  if (lower.includes('from skud_objects')) {
+    return mockedState.tables.skud_objects;
+  }
+  if (lower.includes('from skud_object_routes')) {
+    return mockedState.tables.skud_object_routes;
+  }
+  if (lower.includes('from skud_events')) {
+    return mockedState.tables.skud_events;
+  }
+  if (lower.includes('from skud_travel_segments')) {
+    // fetchExistingDecidedSegments фильтрует по status = ANY($4::text[]).
+    // Возвращаем только заранее заданные approved/rejected записи.
+    return mockedState.tables.skud_travel_segments_decided;
+  }
+  throw new Error(`Unexpected SQL in pgQuery: ${sql}`);
+}
+
 describe('skud-travel.service', () => {
   beforeEach(() => {
-    mockedState.queryLog.length = 0;
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
+
     mockedState.internalPoints = new Set();
     mockedState.travelLimitMinutes = 60;
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_object_access_points') {
-        return {
-          data: [
-            { object_id: 'obj-a', access_point_name: 'КПП A' },
-            { object_id: 'obj-b', access_point_name: 'КПП B' },
-          ],
-          error: null,
-        };
-      }
+    mockedState.tables.skud_object_access_points = [
+      { object_id: 'obj-a', access_point_name: 'КПП A' },
+      { object_id: 'obj-b', access_point_name: 'КПП B' },
+    ];
+    mockedState.tables.skud_objects = [];
+    mockedState.tables.skud_object_routes = [];
+    mockedState.tables.skud_events = [];
+    mockedState.tables.skud_travel_segments_decided = [];
 
-      if (query.table === 'skud_events') {
-        return {
-          data: [],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_travel_segments') {
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    pgQuery.mockImplementation(async (sql: string) => routeQuery(sql));
+    // syncSegmentsToDatabase делает execute('DELETE ...') и execute('INSERT ...'), нам неважно что.
+    pgExecute.mockResolvedValue(0);
   });
 
   it('builds an auto-approved segment when actual travel fits the configured limit', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_object_access_points') {
-        return {
-          data: [
-            { object_id: 'obj-a', access_point_name: 'КПП A' },
-            { object_id: 'obj-b', access_point_name: 'КПП B' },
-          ],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_events') {
-        return {
-          data: [
-            { employee_id: 7, event_date: '2026-04-05', event_time: '10:00:00', access_point: 'КПП A', direction: 'exit' },
-            { employee_id: 7, event_date: '2026-04-05', event_time: '10:45:00', access_point: 'КПП B', direction: 'entry' },
-          ],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_travel_segments') {
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    mockedState.tables.skud_events = [
+      { employee_id: 7, event_date: '2026-04-05', event_time: '10:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 7, event_date: '2026-04-05', event_time: '10:45:00', access_point: 'КПП B', direction: 'entry' },
+    ];
 
     const result = await calculateAndSyncTravelSegments({
       employeeIds: [7],
@@ -170,37 +123,22 @@ describe('skud-travel.service', () => {
   });
 
   it('returns route limits without applying the legacy 1.5 multiplier', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_objects') {
-        return {
-          data: [
-            { id: 'obj-a', name: 'Объект A', is_active: true, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
-            { id: 'obj-b', name: 'Объект B', is_active: true, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
-          ],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_object_routes') {
-        return {
-          data: [
-            {
-              id: 'route-1',
-              from_object_id: 'obj-a',
-              to_object_id: 'obj-b',
-              travel_minutes: 40,
-              credit_multiplier: 1.5,
-              is_active: true,
-              created_at: '2026-04-01T00:00:00Z',
-              updated_at: '2026-04-01T00:00:00Z',
-            },
-          ],
-          error: null,
-        };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    mockedState.tables.skud_objects = [
+      { id: 'obj-a', name: 'Объект A', is_active: true, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
+      { id: 'obj-b', name: 'Объект B', is_active: true, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
+    ];
+    mockedState.tables.skud_object_routes = [
+      {
+        id: 'route-1',
+        from_object_id: 'obj-a',
+        to_object_id: 'obj-b',
+        travel_minutes: 40,
+        credit_multiplier: 1.5,
+        is_active: true,
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T00:00:00Z',
+      },
+    ];
 
     await expect(listTravelRoutes()).resolves.toEqual([
       expect.objectContaining({
@@ -213,33 +151,10 @@ describe('skud-travel.service', () => {
   });
 
   it('marks a segment as pending and credits only the limit when actual travel exceeds it', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_object_access_points') {
-        return {
-          data: [
-            { object_id: 'obj-a', access_point_name: 'КПП A' },
-            { object_id: 'obj-b', access_point_name: 'КПП B' },
-          ],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_events') {
-        return {
-          data: [
-            { employee_id: 8, event_date: '2026-04-06', event_time: '11:00:00', access_point: 'КПП A', direction: 'exit' },
-            { employee_id: 8, event_date: '2026-04-06', event_time: '12:20:00', access_point: 'КПП B', direction: 'entry' },
-          ],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_travel_segments') {
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    mockedState.tables.skud_events = [
+      { employee_id: 8, event_date: '2026-04-06', event_time: '11:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 8, event_date: '2026-04-06', event_time: '12:20:00', access_point: 'КПП B', direction: 'entry' },
+    ];
 
     const result = await calculateAndSyncTravelSegments({
       employeeIds: [8],
@@ -267,32 +182,13 @@ describe('skud-travel.service', () => {
   });
 
   it('marks a segment as needs_object when one of the access points is not mapped to an object', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_object_access_points') {
-        return {
-          data: [
-            { object_id: 'obj-a', access_point_name: 'КПП A' },
-          ],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_events') {
-        return {
-          data: [
-            { employee_id: 9, event_date: '2026-04-07', event_time: '08:30:00', access_point: 'КПП A', direction: 'exit' },
-            { employee_id: 9, event_date: '2026-04-07', event_time: '09:00:00', access_point: 'КПП Z', direction: 'entry' },
-          ],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_travel_segments') {
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    mockedState.tables.skud_object_access_points = [
+      { object_id: 'obj-a', access_point_name: 'КПП A' },
+    ];
+    mockedState.tables.skud_events = [
+      { employee_id: 9, event_date: '2026-04-07', event_time: '08:30:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 9, event_date: '2026-04-07', event_time: '09:00:00', access_point: 'КПП Z', direction: 'entry' },
+    ];
 
     const result = await calculateAndSyncTravelSegments({
       employeeIds: [9],
@@ -319,67 +215,32 @@ describe('skud-travel.service', () => {
   });
 
   it('preserves approved status and credited minutes across resync', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_object_access_points') {
-        return {
-          data: [
-            { object_id: 'obj-a', access_point_name: 'КПП A' },
-            { object_id: 'obj-b', access_point_name: 'КПП B' },
-          ],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_events') {
-        return {
-          data: [
-            { employee_id: 11, event_date: '2026-04-08', event_time: '10:00:00', access_point: 'КПП A', direction: 'exit' },
-            { employee_id: 11, event_date: '2026-04-08', event_time: '11:30:00', access_point: 'КПП B', direction: 'entry' },
-          ],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_travel_segments') {
-        // Запрос ранее принятых решений: фильтр по status IN (approved, rejected)
-        const hasApprovedRejectedFilter = query.operations.some(op => (
-          op.method === 'in'
-          && op.args[0] === 'status'
-          && Array.isArray(op.args[1])
-          && (op.args[1] as string[]).includes('approved')
-        ));
-        if (hasApprovedRejectedFilter) {
-          return {
-            data: [{
-              id: 'seg-1',
-              employee_id: 11,
-              work_date: '2026-04-08',
-              from_object_id: 'obj-a',
-              to_object_id: 'obj-b',
-              from_access_point_name: 'КПП A',
-              to_access_point_name: 'КПП B',
-              exit_time: '10:00:00',
-              entry_time: '11:30:00',
-              actual_minutes: 90,
-              norm_minutes: 60,
-              max_credit_minutes: 60,
-              credited_minutes: 90,
-              delay_minutes: 30,
-              status: 'approved',
-              approved_by: 'user-9',
-              approved_at: '2026-04-08T11:35:00Z',
-              approval_comment: 'Пробка',
-              created_at: '2026-04-08T11:30:00Z',
-              updated_at: '2026-04-08T11:35:00Z',
-            }],
-            error: null,
-          };
-        }
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    mockedState.tables.skud_events = [
+      { employee_id: 11, event_date: '2026-04-08', event_time: '10:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 11, event_date: '2026-04-08', event_time: '11:30:00', access_point: 'КПП B', direction: 'entry' },
+    ];
+    mockedState.tables.skud_travel_segments_decided = [{
+      id: 'seg-1',
+      employee_id: 11,
+      work_date: '2026-04-08',
+      from_object_id: 'obj-a',
+      to_object_id: 'obj-b',
+      from_access_point_name: 'КПП A',
+      to_access_point_name: 'КПП B',
+      exit_time: '10:00:00',
+      entry_time: '11:30:00',
+      actual_minutes: 90,
+      norm_minutes: 60,
+      max_credit_minutes: 60,
+      credited_minutes: 90,
+      delay_minutes: 30,
+      status: 'approved',
+      approved_by: 'user-9',
+      approved_at: '2026-04-08T11:35:00Z',
+      approval_comment: 'Пробка',
+      created_at: '2026-04-08T11:30:00Z',
+      updated_at: '2026-04-08T11:35:00Z',
+    }];
 
     const result = await calculateAndSyncTravelSegments({
       employeeIds: [11],
@@ -412,66 +273,32 @@ describe('skud-travel.service', () => {
   });
 
   it('preserves rejected status and credits only the limit across resync', async () => {
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_object_access_points') {
-        return {
-          data: [
-            { object_id: 'obj-a', access_point_name: 'КПП A' },
-            { object_id: 'obj-b', access_point_name: 'КПП B' },
-          ],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_events') {
-        return {
-          data: [
-            { employee_id: 12, event_date: '2026-04-09', event_time: '10:00:00', access_point: 'КПП A', direction: 'exit' },
-            { employee_id: 12, event_date: '2026-04-09', event_time: '12:00:00', access_point: 'КПП B', direction: 'entry' },
-          ],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_travel_segments') {
-        const hasApprovedRejectedFilter = query.operations.some(op => (
-          op.method === 'in'
-          && op.args[0] === 'status'
-          && Array.isArray(op.args[1])
-          && (op.args[1] as string[]).includes('rejected')
-        ));
-        if (hasApprovedRejectedFilter) {
-          return {
-            data: [{
-              id: 'seg-2',
-              employee_id: 12,
-              work_date: '2026-04-09',
-              from_object_id: 'obj-a',
-              to_object_id: 'obj-b',
-              from_access_point_name: 'КПП A',
-              to_access_point_name: 'КПП B',
-              exit_time: '10:00:00',
-              entry_time: '12:00:00',
-              actual_minutes: 120,
-              norm_minutes: 60,
-              max_credit_minutes: 60,
-              credited_minutes: 60,
-              delay_minutes: 60,
-              status: 'rejected',
-              approved_by: 'user-9',
-              approved_at: '2026-04-09T12:05:00Z',
-              approval_comment: null,
-              created_at: '2026-04-09T12:00:00Z',
-              updated_at: '2026-04-09T12:05:00Z',
-            }],
-            error: null,
-          };
-        }
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    mockedState.tables.skud_events = [
+      { employee_id: 12, event_date: '2026-04-09', event_time: '10:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 12, event_date: '2026-04-09', event_time: '12:00:00', access_point: 'КПП B', direction: 'entry' },
+    ];
+    mockedState.tables.skud_travel_segments_decided = [{
+      id: 'seg-2',
+      employee_id: 12,
+      work_date: '2026-04-09',
+      from_object_id: 'obj-a',
+      to_object_id: 'obj-b',
+      from_access_point_name: 'КПП A',
+      to_access_point_name: 'КПП B',
+      exit_time: '10:00:00',
+      entry_time: '12:00:00',
+      actual_minutes: 120,
+      norm_minutes: 60,
+      max_credit_minutes: 60,
+      credited_minutes: 60,
+      delay_minutes: 60,
+      status: 'rejected',
+      approved_by: 'user-9',
+      approved_at: '2026-04-09T12:05:00Z',
+      approval_comment: null,
+      created_at: '2026-04-09T12:00:00Z',
+      updated_at: '2026-04-09T12:05:00Z',
+    }];
 
     const result = await calculateAndSyncTravelSegments({
       employeeIds: [12],
@@ -495,36 +322,17 @@ describe('skud-travel.service', () => {
     // на «выход» вместо «входа» на Борисовских прудах, в 14:46 вошёл нормально.
     // Раньше парный поиск ломался (exit→exit→entry дают пары exit/exit и same-object exit/entry).
     mockedState.travelLimitMinutes = 90;
-    mockedState.resolver = (query) => {
-      if (query.table === 'skud_object_access_points') {
-        return {
-          data: [
-            { object_id: 'obj-office', access_point_name: 'Офис' },
-            { object_id: 'obj-bor', access_point_name: 'Борисовские пруды' },
-          ],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_events') {
-        return {
-          data: [
-            { employee_id: 13, event_date: '2026-04-29', event_time: '08:23:00', access_point: 'Офис', direction: 'entry' },
-            { employee_id: 13, event_date: '2026-04-29', event_time: '12:39:00', access_point: 'Офис', direction: 'exit' },
-            { employee_id: 13, event_date: '2026-04-29', event_time: '14:43:00', access_point: 'Борисовские пруды', direction: 'exit' },
-            { employee_id: 13, event_date: '2026-04-29', event_time: '14:46:00', access_point: 'Борисовские пруды', direction: 'entry' },
-            { employee_id: 13, event_date: '2026-04-29', event_time: '17:35:00', access_point: 'Борисовские пруды', direction: 'exit' },
-          ],
-          error: null,
-        };
-      }
-
-      if (query.table === 'skud_travel_segments') {
-        return { data: [], error: null };
-      }
-
-      throw new Error(`Unexpected query for table ${query.table}`);
-    };
+    mockedState.tables.skud_object_access_points = [
+      { object_id: 'obj-office', access_point_name: 'Офис' },
+      { object_id: 'obj-bor', access_point_name: 'Борисовские пруды' },
+    ];
+    mockedState.tables.skud_events = [
+      { employee_id: 13, event_date: '2026-04-29', event_time: '08:23:00', access_point: 'Офис', direction: 'entry' },
+      { employee_id: 13, event_date: '2026-04-29', event_time: '12:39:00', access_point: 'Офис', direction: 'exit' },
+      { employee_id: 13, event_date: '2026-04-29', event_time: '14:43:00', access_point: 'Борисовские пруды', direction: 'exit' },
+      { employee_id: 13, event_date: '2026-04-29', event_time: '14:46:00', access_point: 'Борисовские пруды', direction: 'entry' },
+      { employee_id: 13, event_date: '2026-04-29', event_time: '17:35:00', access_point: 'Борисовские пруды', direction: 'exit' },
+    ];
 
     const result = await calculateAndSyncTravelSegments({
       employeeIds: [13],

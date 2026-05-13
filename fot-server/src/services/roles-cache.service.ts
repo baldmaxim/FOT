@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import type { SystemRole } from '../types/index.js';
 
 const ROLES_CACHE_TTL_MS = 300_000;
@@ -13,19 +13,21 @@ async function loadRolesCache(): Promise<void> {
     return;
   }
 
-  const { data, error } = await supabase
-    .from('system_roles')
-    .select('id, code, name, description, is_admin, employee_variant, is_active, show_actual_hours, created_at, updated_at')
-    .eq('is_active', true);
-
-  if (error) {
-    throw new Error(`Failed to load roles cache: ${error.message}`);
+  let rows: SystemRole[];
+  try {
+    rows = await query<SystemRole>(
+      `SELECT id, code, name, description, is_admin, employee_variant, is_active, show_actual_hours, created_at, updated_at
+         FROM system_roles
+        WHERE is_active = true`,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to load roles cache: ${msg}`);
   }
 
   const byId = new Map<string, SystemRole>();
   const byCode = new Map<string, SystemRole>();
-  for (const row of data || []) {
-    const role = row as SystemRole;
+  for (const role of rows) {
     byId.set(role.id, role);
     byCode.set(role.code, role);
   }

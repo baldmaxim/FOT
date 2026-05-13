@@ -1,13 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-type QueryRecord = {
-  table: string;
-  operations: Array<{ method: string; args: unknown[] }>;
-};
+const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgExecute: vi.fn(),
+  pgTx: vi.fn(),
+}));
 
-type QueryResponse = {
-  data?: unknown;
-  error?: { code?: string; message?: string } | null;
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
+}));
+
+type QueryCall = {
+  sql: string;
+  params: unknown[];
+  table: 'employees' | 'skud_daily_summary' | 'skud_events' | 'skud_events_recent' | 'unknown';
+  offset?: number;
+  limit?: number;
 };
 
 type EmployeeRow = {
@@ -37,7 +49,13 @@ type EventRow = {
 };
 
 const mockedState = vi.hoisted(() => ({
-  queryLog: [] as QueryRecord[],
+  queryLog: [] as Array<{
+    sql: string;
+    params: unknown[];
+    table: 'employees' | 'skud_daily_summary' | 'skud_events' | 'skud_events_recent' | 'unknown';
+    offset?: number;
+    limit?: number;
+  }>,
   employees: [] as EmployeeRow[],
   summaryRows: [] as SummaryRow[],
   eventRows: [] as EventRow[],
@@ -63,153 +81,6 @@ function countWorkingDays(startStr: string, endStr: string): number {
   }
   return count;
 }
-
-function createBuilder(table: string) {
-  const query: QueryRecord = { table, operations: [] };
-  mockedState.queryLog.push(query);
-
-  const builder = {
-    select: (...args: unknown[]) => {
-      query.operations.push({ method: 'select', args });
-      return builder;
-    },
-    in: (...args: unknown[]) => {
-      query.operations.push({ method: 'in', args });
-      return builder;
-    },
-    gte: (...args: unknown[]) => {
-      query.operations.push({ method: 'gte', args });
-      return builder;
-    },
-    lte: (...args: unknown[]) => {
-      query.operations.push({ method: 'lte', args });
-      return builder;
-    },
-    eq: (...args: unknown[]) => {
-      query.operations.push({ method: 'eq', args });
-      return builder;
-    },
-    order: (...args: unknown[]) => {
-      query.operations.push({ method: 'order', args });
-      return builder;
-    },
-    range: (...args: unknown[]) => {
-      query.operations.push({ method: 'range', args });
-      return builder;
-    },
-    limit: (...args: unknown[]) => {
-      query.operations.push({ method: 'limit', args });
-      return builder;
-    },
-    then: (onFulfilled: (value: QueryResponse) => unknown, onRejected?: (reason: unknown) => unknown) =>
-      Promise.resolve(resolveQuery(query)).then(onFulfilled, onRejected),
-  };
-
-  return builder;
-}
-
-function getOperation(query: QueryRecord, method: string, field?: string) {
-  return query.operations.find(op => op.method === method && (field === undefined || op.args[0] === field));
-}
-
-function applyFilters<T extends Record<string, unknown>>(rows: T[], query: QueryRecord): T[] {
-  let filtered = rows.slice();
-
-  for (const operation of query.operations) {
-    if (operation.method === 'eq') {
-      const [field, value] = operation.args as [keyof T, unknown];
-      filtered = filtered.filter(row => row[field] === value);
-    }
-    if (operation.method === 'in') {
-      const [field, values] = operation.args as [keyof T, unknown[]];
-      const valueSet = new Set(values);
-      filtered = filtered.filter(row => valueSet.has(row[field]));
-    }
-    if (operation.method === 'gte') {
-      const [field, value] = operation.args as [keyof T, string];
-      filtered = filtered.filter(row => String(row[field]) >= value);
-    }
-    if (operation.method === 'lte') {
-      const [field, value] = operation.args as [keyof T, string];
-      filtered = filtered.filter(row => String(row[field]) <= value);
-    }
-  }
-
-  return filtered;
-}
-
-function applyOrdering<T extends Record<string, unknown>>(rows: T[], query: QueryRecord): T[] {
-  const orders = query.operations
-    .filter(op => op.method === 'order')
-    .map(op => ({
-      field: String(op.args[0]),
-      ascending: ((op.args[1] as { ascending?: boolean } | undefined)?.ascending ?? true),
-    }));
-
-  if (orders.length === 0) return rows;
-
-  const sorted = rows.slice();
-  for (const order of orders.reverse()) {
-    sorted.sort((left, right) => {
-      const leftValue = left[order.field];
-      const rightValue = right[order.field];
-      if (leftValue === rightValue) return 0;
-      if (leftValue == null) return order.ascending ? -1 : 1;
-      if (rightValue == null) return order.ascending ? 1 : -1;
-      const result = leftValue < rightValue ? -1 : 1;
-      return order.ascending ? result : -result;
-    });
-  }
-
-  return sorted;
-}
-
-function applyWindow<T>(rows: T[], query: QueryRecord): T[] {
-  const range = getOperation(query, 'range');
-  if (range) {
-    const [from, to] = range.args as [number, number];
-    return rows.slice(from, to + 1);
-  }
-
-  const limit = getOperation(query, 'limit');
-  if (limit) {
-    const [count] = limit.args as [number];
-    return rows.slice(0, count);
-  }
-
-  return rows;
-}
-
-function resolveQuery(query: QueryRecord): QueryResponse {
-  if (query.table === 'employees') {
-    return {
-      data: applyWindow(applyOrdering(applyFilters(mockedState.employees, query), query), query),
-      error: null,
-    };
-  }
-
-  if (query.table === 'skud_daily_summary') {
-    return {
-      data: applyWindow(applyOrdering(applyFilters(mockedState.summaryRows, query), query), query),
-      error: null,
-    };
-  }
-
-  if (query.table === 'skud_events') {
-    return {
-      data: applyWindow(applyOrdering(applyFilters(mockedState.eventRows, query), query), query),
-      error: null,
-    };
-  }
-
-  throw new Error(`Unexpected query for table ${query.table}`);
-}
-
-vi.mock('../config/database.js', () => ({
-  supabase: {
-    from: vi.fn((table: string) => createBuilder(table)),
-  },
-}));
 
 vi.mock('./skud-shared.service.js', () => ({
   collectDeptIds: vi.fn(async (departmentId: string) => [departmentId]),
@@ -240,47 +111,86 @@ vi.mock('./attendance.service.js', () => ({
 
 import { getDashboardStats, invalidateDashboardCache } from './skud-dashboard.service.js';
 
-function buildEmployees(count: number): EmployeeRow[] {
-  return Array.from({ length: count }, (_, index) => ({
-    id: index + 1,
-    full_name: `Сотрудник ${index + 1}`,
-    org_department_id: 'dept-1',
-    is_archived: false,
-    employment_status: 'active',
-  }));
+function classifyQuery(sql: string, params: unknown[]): QueryCall {
+  let table: QueryCall['table'] = 'unknown';
+  if (/FROM\s+employees\b/i.test(sql)) table = 'employees';
+  else if (/FROM\s+skud_daily_summary\b/i.test(sql)) table = 'skud_daily_summary';
+  else if (/FROM\s+skud_events\b/i.test(sql)) {
+    table = /LIMIT\s+50/i.test(sql) && !/OFFSET/i.test(sql) ? 'skud_events_recent' : 'skud_events';
+  }
+
+  const limitMatch = /LIMIT\s+(\d+)/i.exec(sql);
+  const offsetMatch = /OFFSET\s+(\d+)/i.exec(sql);
+  return {
+    sql,
+    params,
+    table,
+    offset: offsetMatch ? Number(offsetMatch[1]) : undefined,
+    limit: limitMatch ? Number(limitMatch[1]) : undefined,
+  };
 }
 
-function pushSummaryRows(
-  employees: EmployeeRow[],
-  date: string,
-  firstEntry: string,
-  options: { lastExit?: string; totalHours?: number; isPresent?: boolean } = {},
-): void {
-  mockedState.summaryRows.push(...employees.map(employee => ({
-    employee_id: employee.id,
-    date,
-    first_entry: firstEntry,
-    last_exit: options.lastExit ?? '18:00:00',
-    total_hours: options.totalHours ?? 8,
-    is_present: options.isPresent ?? true,
-  })));
+function applyEmployees(empIds: number[]): EmployeeRow[] {
+  return mockedState.employees.filter(emp =>
+    !emp.is_archived && emp.employment_status === 'active' && empIds.length > 0 && empIds.includes(emp.id),
+  );
 }
 
-function pushEventRows(
-  employees: EmployeeRow[],
-  date: string,
-  time: string,
-  direction: 'entry' | 'exit',
-  accessPoint = 'КПП-1',
-): void {
-  mockedState.eventRows.push(...employees.map(employee => ({
-    employee_id: employee.id,
-    event_date: date,
-    event_time: time,
-    physical_person: employee.full_name,
-    access_point: accessPoint,
-    direction,
-  })));
+function applyEmployeesByDept(deptIds: string[]): EmployeeRow[] {
+  return mockedState.employees.filter(emp =>
+    !emp.is_archived && emp.employment_status === 'active' && deptIds.includes(emp.org_department_id),
+  );
+}
+
+function resolveQuery(call: QueryCall): unknown[] {
+  if (call.table === 'employees') {
+    const deptIds = (call.params[0] as string[]) ?? [];
+    return applyEmployeesByDept(deptIds);
+  }
+  if (call.table === 'skud_daily_summary') {
+    const empIds = new Set(((call.params[0] as number[]) ?? []));
+    const start = call.params[1] as string;
+    const end = call.params[2] as string;
+    let rows = mockedState.summaryRows.filter(r => empIds.has(r.employee_id) && r.date >= start && r.date <= end);
+    rows = [...rows].sort((a, b) => (a.date === b.date ? a.employee_id - b.employee_id : a.date < b.date ? -1 : 1));
+    const offset = call.offset ?? 0;
+    const limit = call.limit ?? rows.length;
+    return rows.slice(offset, offset + limit);
+  }
+  if (call.table === 'skud_events') {
+    if (/event_date\s*=\s*\$1\s+AND\s+direction\s*=\s*\$2/i.test(call.sql)) {
+      // today events
+      const date = call.params[0] as string;
+      const direction = call.params[1] as 'entry' | 'exit';
+      const empIds = new Set(((call.params[2] as number[]) ?? []));
+      let rows = mockedState.eventRows.filter(r => r.event_date === date && r.direction === direction && empIds.has(r.employee_id));
+      rows = [...rows].sort((a, b) => (a.employee_id === b.employee_id ? (a.event_time < b.event_time ? -1 : 1) : a.employee_id - b.employee_id));
+      const offset = call.offset ?? 0;
+      const limit = call.limit ?? rows.length;
+      return rows.slice(offset, offset + limit).map(({ event_time, employee_id }) => ({ event_time, employee_id }));
+    }
+    // entry-events over period
+    const empIds = new Set(((call.params[0] as number[]) ?? []));
+    const start = call.params[1] as string;
+    const end = call.params[2] as string;
+    let rows = mockedState.eventRows.filter(r => r.direction === 'entry' && empIds.has(r.employee_id) && r.event_date >= start && r.event_date <= end);
+    rows = [...rows].sort((a, b) =>
+      a.event_date !== b.event_date ? (a.event_date < b.event_date ? -1 : 1)
+        : a.employee_id !== b.employee_id ? a.employee_id - b.employee_id
+          : a.event_time < b.event_time ? -1 : 1);
+    const offset = call.offset ?? 0;
+    const limit = call.limit ?? rows.length;
+    return rows.slice(offset, offset + limit).map(({ event_date, event_time, employee_id }) => ({ event_date, event_time, employee_id }));
+  }
+  if (call.table === 'skud_events_recent') {
+    const date = call.params[0] as string;
+    const empIds = new Set(((call.params[1] as number[]) ?? []));
+    return mockedState.eventRows
+      .filter(r => r.event_date === date && empIds.has(r.employee_id))
+      .sort((a, b) => (a.event_time < b.event_time ? 1 : -1))
+      .slice(0, 50);
+  }
+  return [];
 }
 
 describe('skud-dashboard.service', () => {
@@ -292,6 +202,17 @@ describe('skud-dashboard.service', () => {
     mockedState.summaryRows = [];
     mockedState.eventRows = [];
     mockedState.internalPoints = new Set();
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
+
+    pgQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      const call = classifyQuery(sql, params);
+      mockedState.queryLog.push(call);
+      return resolveQuery(call);
+    });
+
     invalidateDashboardCache();
   });
 
@@ -301,14 +222,34 @@ describe('skud-dashboard.service', () => {
   });
 
   it('paginates weekly summaries and preserves full period stats for large departments', async () => {
-    const employees = buildEmployees(1500);
+    const employees = Array.from({ length: 1500 }, (_, index) => ({
+      id: index + 1,
+      full_name: `Сотрудник ${index + 1}`,
+      org_department_id: 'dept-1',
+      is_archived: false,
+      employment_status: 'active',
+    }));
     const prevWeekDates = ['2026-04-06', '2026-04-07', '2026-04-08', '2026-04-09', '2026-04-10'];
     const currentWeekDates = ['2026-04-13', '2026-04-14', '2026-04-15', '2026-04-16', '2026-04-17'];
 
     mockedState.employees = employees;
     for (const date of [...prevWeekDates, ...currentWeekDates]) {
-      pushSummaryRows(employees, date, '09:00:00');
-      pushEventRows(employees, date, '09:00:00', 'entry');
+      mockedState.summaryRows.push(...employees.map(emp => ({
+        employee_id: emp.id,
+        date,
+        first_entry: '09:00:00',
+        last_exit: '18:00:00',
+        total_hours: 8,
+        is_present: true,
+      })));
+      mockedState.eventRows.push(...employees.map(emp => ({
+        employee_id: emp.id,
+        event_date: date,
+        event_time: '09:00:00',
+        physical_person: emp.full_name,
+        access_point: 'КПП-1',
+        direction: 'entry' as const,
+      })));
     }
 
     const stats = await getDashboardStats({ departmentId: 'dept-1', period: 'week', showActualHours: false });
@@ -326,16 +267,19 @@ describe('skud-dashboard.service', () => {
     });
     expect(stats.todayEntriesCount).toBe(1500);
 
-    const summaryQueries = mockedState.queryLog.filter(query => query.table === 'skud_daily_summary');
+    const summaryQueries = mockedState.queryLog.filter(q => q.table === 'skud_daily_summary');
     expect(summaryQueries.length).toBeGreaterThan(2);
-    expect(summaryQueries.some(query => {
-      const range = getOperation(query, 'range');
-      return Array.isArray(range?.args) && range.args[0] === 1000 && range.args[1] === 1999;
-    })).toBe(true);
+    expect(summaryQueries.some(q => q.offset === 1000 && q.limit === 1000)).toBe(true);
   });
 
   it('paginates monthly entry events for arrival and hourly activity aggregations', async () => {
-    const employees = buildEmployees(800);
+    const employees = Array.from({ length: 800 }, (_, index) => ({
+      id: index + 1,
+      full_name: `Сотрудник ${index + 1}`,
+      org_department_id: 'dept-1',
+      is_archived: false,
+      employment_status: 'active',
+    }));
     const monthDates = [
       '2026-04-01', '2026-04-02', '2026-04-03',
       '2026-04-06', '2026-04-07', '2026-04-08', '2026-04-09', '2026-04-10',
@@ -350,8 +294,22 @@ describe('skud-dashboard.service', () => {
     mockedState.employees = employees;
     for (const date of monthDates) {
       const entryTime = fridayTimes[date] || '09:00:00';
-      pushSummaryRows(employees, date, entryTime);
-      pushEventRows(employees, date, entryTime, 'entry');
+      mockedState.summaryRows.push(...employees.map(emp => ({
+        employee_id: emp.id,
+        date,
+        first_entry: entryTime,
+        last_exit: '18:00:00',
+        total_hours: 8,
+        is_present: true,
+      })));
+      mockedState.eventRows.push(...employees.map(emp => ({
+        employee_id: emp.id,
+        event_date: date,
+        event_time: entryTime,
+        physical_person: emp.full_name,
+        access_point: 'КПП-1',
+        direction: 'entry' as const,
+      })));
     }
 
     const stats = await getDashboardStats({
@@ -368,79 +326,31 @@ describe('skud-dashboard.service', () => {
     });
     expect(stats.avgArrivalByDay.find(item => item.day === 'Пт')?.avgTime).toBe('09:20');
 
-    const pagedEventQueries = mockedState.queryLog.filter(query =>
-      query.table === 'skud_events'
-      && getOperation(query, 'range') !== undefined
-      && getOperation(query, 'gte', 'event_date')?.args[1] === '2026-04-01'
-      && getOperation(query, 'lte', 'event_date')?.args[1] === '2026-04-17',
+    const pagedEventQueries = mockedState.queryLog.filter(q =>
+      q.table === 'skud_events'
+      && q.offset !== undefined
+      && q.params[1] === '2026-04-01'
+      && q.params[2] === '2026-04-17',
     );
     expect(pagedEventQueries.length).toBeGreaterThan(2);
   });
 
   it('keeps today calculations unchanged while using paged today event queries', async () => {
-    const [employeeA, employeeB] = buildEmployees(2);
+    const employeeA = { id: 1, full_name: 'Сотрудник 1', org_department_id: 'dept-1', is_archived: false, employment_status: 'active' };
+    const employeeB = { id: 2, full_name: 'Сотрудник 2', org_department_id: 'dept-1', is_archived: false, employment_status: 'active' };
     mockedState.employees = [employeeA, employeeB];
 
     mockedState.summaryRows = [
-      {
-        employee_id: employeeA.id,
-        date: '2026-04-16',
-        first_entry: '09:00:00',
-        last_exit: '18:00:00',
-        total_hours: 8,
-        is_present: true,
-      },
-      {
-        employee_id: employeeB.id,
-        date: '2026-04-16',
-        first_entry: '09:30:00',
-        last_exit: '18:00:00',
-        total_hours: 8,
-        is_present: true,
-      },
-      {
-        employee_id: employeeA.id,
-        date: '2026-04-17',
-        first_entry: '09:20:00',
-        last_exit: '18:05:00',
-        total_hours: 8,
-        is_present: true,
-      },
-      {
-        employee_id: employeeB.id,
-        date: '2026-04-17',
-        first_entry: '08:55:00',
-        last_exit: null,
-        total_hours: 7.5,
-        is_present: true,
-      },
+      { employee_id: employeeA.id, date: '2026-04-16', first_entry: '09:00:00', last_exit: '18:00:00', total_hours: 8, is_present: true },
+      { employee_id: employeeB.id, date: '2026-04-16', first_entry: '09:30:00', last_exit: '18:00:00', total_hours: 8, is_present: true },
+      { employee_id: employeeA.id, date: '2026-04-17', first_entry: '09:20:00', last_exit: '18:05:00', total_hours: 8, is_present: true },
+      { employee_id: employeeB.id, date: '2026-04-17', first_entry: '08:55:00', last_exit: null, total_hours: 7.5, is_present: true },
     ];
 
     mockedState.eventRows = [
-      {
-        employee_id: employeeA.id,
-        event_date: '2026-04-17',
-        event_time: '09:20:00',
-        physical_person: employeeA.full_name,
-        access_point: 'КПП-1',
-        direction: 'entry',
-      },
-      {
-        employee_id: employeeB.id,
-        event_date: '2026-04-17',
-        event_time: '08:55:00',
-        physical_person: employeeB.full_name,
-        access_point: 'КПП-1',
-        direction: 'entry',
-      },
-      {
-        employee_id: employeeA.id,
-        event_date: '2026-04-17',
-        event_time: '18:05:00',
-        physical_person: employeeA.full_name,
-        access_point: 'КПП-1',
-        direction: 'exit',
-      },
+      { employee_id: employeeA.id, event_date: '2026-04-17', event_time: '09:20:00', physical_person: employeeA.full_name, access_point: 'КПП-1', direction: 'entry' },
+      { employee_id: employeeB.id, event_date: '2026-04-17', event_time: '08:55:00', physical_person: employeeB.full_name, access_point: 'КПП-1', direction: 'entry' },
+      { employee_id: employeeA.id, event_date: '2026-04-17', event_time: '18:05:00', physical_person: employeeA.full_name, access_point: 'КПП-1', direction: 'exit' },
     ];
 
     const stats = await getDashboardStats({ departmentId: 'dept-1', period: 'today', showActualHours: false });
@@ -459,7 +369,13 @@ describe('skud-dashboard.service', () => {
   });
 
   it('returns all late employees instead of truncating the late list to five items', async () => {
-    const employees = buildEmployees(6);
+    const employees = Array.from({ length: 6 }, (_, index) => ({
+      id: index + 1,
+      full_name: `Сотрудник ${index + 1}`,
+      org_department_id: 'dept-1',
+      is_archived: false,
+      employment_status: 'active',
+    }));
     mockedState.employees = employees;
 
     mockedState.summaryRows = employees.map((employee, index) => ({
@@ -486,3 +402,6 @@ describe('skud-dashboard.service', () => {
     expect(stats.topLate.map(item => item.employee_id)).toEqual(employees.map(employee => employee.id));
   });
 });
+
+// Silence unused import warning when typings change.
+void applyEmployees;

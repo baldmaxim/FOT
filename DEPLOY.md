@@ -419,8 +419,8 @@ location / {
 
 ## .env файлы
 Расположены на сервере, не в git:
-- `/var/www/fot/fot-server/.env` — порт 4000, production, CORS, Supabase, JWT, Sigur
-- `/var/www/fot/fot-app/.env` — VITE_API_URL, Supabase ключи
+- `/var/www/fot/fot-server/.env` — порт 4000, production, CORS, JWT, Sigur, `DATABASE_URL` (Yandex Managed PG), `DATABASE_POOL_MAX`, `DATABASE_STATEMENT_TIMEOUT_MS`, `DATABASE_SSL`, опционально `DATABASE_SSL_CA_PATH` (после Phase 10 переезда с Supabase Cloud).
+- `/var/www/fot/fot-app/.env` — `VITE_API_URL` (фронт ходит только в API, без прямого подключения к БД).
 
 ## SSL
 Для `fotsu10.fvds.ru` сертификат уже существует и подключён в отдельном HTTPS server-block на порту `4443`.
@@ -473,8 +473,9 @@ venv/bin/pip install -r requirements.txt
 
 # .env (значения из fot-server/.env, не коммитим)
 cat > .env <<'EOF'
-SUPABASE_URL=https://...supabase.co
-SUPABASE_SERVICE_ROLE_KEY=...
+DATABASE_URL=postgresql://user:pass@host:6432/dbname
+DATABASE_SSL=true
+DATABASE_SSL_CA_PATH=/etc/ssl/yandex/root.crt
 PORT=4001
 DEFAULT_RATE_LIMIT_PER_MINUTE=60
 EOF

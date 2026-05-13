@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { execute, query, queryOne } from '../config/postgres.js';
 
 export interface IDirectReportRow {
   id: string;
@@ -31,9 +31,7 @@ let missingTableWarned = false;
 function isMissingTableError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const code = 'code' in error ? String((error as { code?: unknown }).code || '') : '';
-  const message = 'message' in error ? String((error as { message?: unknown }).message || '') : '';
-  return code === 'PGRST205'
-    || message.includes("Could not find the table 'public.employee_direct_reports'");
+  return code === '42P01';
 }
 
 function warnMissingTable(): void {
@@ -49,25 +47,26 @@ function warnMissingTable(): void {
  */
 export async function listDirectSubordinates(managerEmployeeId: number): Promise<number[]> {
   if (!Number.isInteger(managerEmployeeId) || managerEmployeeId <= 0) return [];
-  const { data, error } = await supabase
-    .from('employee_direct_reports')
-    .select('subordinate_employee_id')
-    .eq('manager_employee_id', managerEmployeeId)
-    .eq('is_active', true);
+  try {
+    const rows = await query<{ subordinate_employee_id: number | null }>(
+      `SELECT subordinate_employee_id
+         FROM employee_direct_reports
+        WHERE manager_employee_id = $1 AND is_active = true`,
+      [managerEmployeeId],
+    );
 
-  if (error) {
-    if (isMissingTableError(error)) {
+    return [...new Set(
+      rows
+        .map(row => row.subordinate_employee_id)
+        .filter((id): id is number => Number.isInteger(id)),
+    )];
+  } catch (err) {
+    if (isMissingTableError(err)) {
       warnMissingTable();
       return [];
     }
-    throw error;
+    throw err;
   }
-
-  return [...new Set(
-    (data || [])
-      .map(row => row.subordinate_employee_id as number | null)
-      .filter((id): id is number => Number.isInteger(id)),
-  )];
 }
 
 /**
@@ -78,22 +77,22 @@ export async function getActiveDirectManagerFor(
   subordinateEmployeeId: number,
 ): Promise<number | null> {
   if (!Number.isInteger(subordinateEmployeeId) || subordinateEmployeeId <= 0) return null;
-  const { data, error } = await supabase
-    .from('employee_direct_reports')
-    .select('manager_employee_id')
-    .eq('subordinate_employee_id', subordinateEmployeeId)
-    .eq('is_active', true)
-    .maybeSingle();
-
-  if (error) {
-    if (isMissingTableError(error)) {
+  try {
+    const row = await queryOne<{ manager_employee_id: number | null }>(
+      `SELECT manager_employee_id
+         FROM employee_direct_reports
+        WHERE subordinate_employee_id = $1 AND is_active = true
+        LIMIT 1`,
+      [subordinateEmployeeId],
+    );
+    return row?.manager_employee_id ?? null;
+  } catch (err) {
+    if (isMissingTableError(err)) {
       warnMissingTable();
       return null;
     }
-    throw error;
+    throw err;
   }
-
-  return (data?.manager_employee_id as number | null) ?? null;
 }
 
 /**
@@ -103,56 +102,57 @@ export async function getActiveDirectManagerFor(
 export async function listDirectReports(
   options: { managerEmployeeId?: number; includeInactive?: boolean } = {},
 ): Promise<IDirectReportWithEmployee[]> {
-  let query = supabase
-    .from('employee_direct_reports')
-    .select(
-      `
-        id,
-        subordinate_employee_id,
-        manager_employee_id,
-        assigned_at,
-        assigned_by,
-        unassigned_at,
-        is_active,
-        note
-      `,
-    )
-    .order('assigned_at', { ascending: false });
-
-  if (options.managerEmployeeId != null) {
-    query = query.eq('manager_employee_id', options.managerEmployeeId);
-  }
-  if (!options.includeInactive) {
-    query = query.eq('is_active', true);
-  }
-
-  const { data, error } = await query;
-  if (error) {
-    if (isMissingTableError(error)) {
+  let rows: IDirectReportRow[];
+  try {
+    const params: unknown[] = [];
+    const whereParts: string[] = [];
+    if (options.managerEmployeeId != null) {
+      params.push(options.managerEmployeeId);
+      whereParts.push(`manager_employee_id = $${params.length}`);
+    }
+    if (!options.includeInactive) {
+      whereParts.push('is_active = true');
+    }
+    const whereSql = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
+    rows = await query<IDirectReportRow>(
+      `SELECT id, subordinate_employee_id, manager_employee_id, assigned_at,
+              assigned_by, unassigned_at, is_active, note
+         FROM employee_direct_reports
+         ${whereSql}
+        ORDER BY assigned_at DESC`,
+      params,
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
       warnMissingTable();
       return [];
     }
-    throw error;
+    throw err;
   }
 
-  const rows = (data || []) as IDirectReportRow[];
   if (rows.length === 0) return [];
 
   const employeeIds = [...new Set(rows.flatMap(r => [r.subordinate_employee_id, r.manager_employee_id]))];
-  const { data: employees, error: empError } = await supabase
-    .from('employees')
-    .select('id, full_name, org_department_id, position_id')
-    .in('id', employeeIds);
-  if (empError) throw empError;
+  const employees = await query<{
+    id: number;
+    full_name: string | null;
+    org_department_id: string | null;
+    position_id: number | null;
+  }>(
+    `SELECT id, full_name, org_department_id, position_id
+       FROM employees
+      WHERE id = ANY($1::int[])`,
+    [employeeIds],
+  );
 
   const employeeMap = new Map<number, { id: number; full_name: string | null; org_department_id: string | null; position_id: number | null }>(
-    (employees || []).map(e => [
-      e.id as number,
+    employees.map(e => [
+      e.id,
       {
-        id: e.id as number,
-        full_name: (e.full_name as string | null) ?? null,
-        org_department_id: (e.org_department_id as string | null) ?? null,
-        position_id: (e.position_id as number | null) ?? null,
+        id: e.id,
+        full_name: e.full_name ?? null,
+        org_department_id: e.org_department_id ?? null,
+        position_id: e.position_id ?? null,
       },
     ]),
   );
@@ -189,12 +189,11 @@ export async function assignDirectReport(
     return { ok: false, reason: 'self_report' };
   }
 
-  const { data: employees, error: empError } = await supabase
-    .from('employees')
-    .select('id')
-    .in('id', [managerId, subId]);
-  if (empError) throw empError;
-  if ((employees || []).length < 2) {
+  const employees = await query<{ id: number }>(
+    'SELECT id FROM employees WHERE id = ANY($1::int[])',
+    [[managerId, subId]],
+  );
+  if (employees.length < 2) {
     return { ok: false, reason: 'employee_not_found' };
   }
 
@@ -203,35 +202,35 @@ export async function assignDirectReport(
     return { ok: false, reason: 'already_assigned', existingManagerEmployeeId: existingManager };
   }
   if (existingManager === managerId) {
-    const { data: existingRow, error: existingErr } = await supabase
-      .from('employee_direct_reports')
-      .select('id, subordinate_employee_id, manager_employee_id, assigned_at, assigned_by, unassigned_at, is_active, note')
-      .eq('subordinate_employee_id', subId)
-      .eq('manager_employee_id', managerId)
-      .eq('is_active', true)
-      .maybeSingle();
-    if (existingErr) throw existingErr;
-    if (existingRow) return { ok: true, row: existingRow as IDirectReportRow };
+    const existingRow = await queryOne<IDirectReportRow>(
+      `SELECT id, subordinate_employee_id, manager_employee_id, assigned_at,
+              assigned_by, unassigned_at, is_active, note
+         FROM employee_direct_reports
+        WHERE subordinate_employee_id = $1 AND manager_employee_id = $2 AND is_active = true
+        LIMIT 1`,
+      [subId, managerId],
+    );
+    if (existingRow) return { ok: true, row: existingRow };
   }
 
   const now = new Date().toISOString();
-  const { data, error } = await supabase
-    .from('employee_direct_reports')
-    .insert({
-      subordinate_employee_id: subId,
-      manager_employee_id: managerId,
-      assigned_at: now,
-      assigned_by: input.assignedBy ?? null,
-      is_active: true,
-      note: input.note ?? null,
-      created_at: now,
-      updated_at: now,
-    })
-    .select('id, subordinate_employee_id, manager_employee_id, assigned_at, assigned_by, unassigned_at, is_active, note')
-    .single();
+  try {
+    const inserted = await queryOne<IDirectReportRow>(
+      `INSERT INTO employee_direct_reports
+         (subordinate_employee_id, manager_employee_id, assigned_at, assigned_by,
+          is_active, note, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, true, $5, $3, $3)
+       RETURNING id, subordinate_employee_id, manager_employee_id, assigned_at,
+                 assigned_by, unassigned_at, is_active, note`,
+      [subId, managerId, now, input.assignedBy ?? null, input.note ?? null],
+    );
 
-  if (error) {
-    const code = (error as { code?: string }).code;
+    if (!inserted) {
+      throw new Error('Insert returned no row');
+    }
+    return { ok: true, row: inserted };
+  } catch (err) {
+    const code = (err as { code?: string }).code;
     if (code === '23505') {
       const refreshedManager = await getActiveDirectManagerFor(subId);
       return {
@@ -240,30 +239,28 @@ export async function assignDirectReport(
         existingManagerEmployeeId: refreshedManager ?? -1,
       };
     }
-    throw error;
+    throw err;
   }
-
-  return { ok: true, row: data as IDirectReportRow };
 }
 
 export async function unassignDirectReportById(rowId: string): Promise<boolean> {
   if (!rowId) return false;
   const now = new Date().toISOString();
-  const { data, error } = await supabase
-    .from('employee_direct_reports')
-    .update({ is_active: false, unassigned_at: now, updated_at: now })
-    .eq('id', rowId)
-    .eq('is_active', true)
-    .select('id')
-    .maybeSingle();
-  if (error) {
-    if (isMissingTableError(error)) {
+  try {
+    const affected = await execute(
+      `UPDATE employee_direct_reports
+          SET is_active = false, unassigned_at = $1, updated_at = $1
+        WHERE id = $2 AND is_active = true`,
+      [now, rowId],
+    );
+    return affected > 0;
+  } catch (err) {
+    if (isMissingTableError(err)) {
       warnMissingTable();
       return false;
     }
-    throw error;
+    throw err;
   }
-  return !!data;
 }
 
 export async function unassignDirectReportByEmployees(
@@ -272,20 +269,21 @@ export async function unassignDirectReportByEmployees(
 ): Promise<boolean> {
   if (!Number.isInteger(managerEmployeeId) || !Number.isInteger(subordinateEmployeeId)) return false;
   const now = new Date().toISOString();
-  const { data, error } = await supabase
-    .from('employee_direct_reports')
-    .update({ is_active: false, unassigned_at: now, updated_at: now })
-    .eq('manager_employee_id', managerEmployeeId)
-    .eq('subordinate_employee_id', subordinateEmployeeId)
-    .eq('is_active', true)
-    .select('id')
-    .maybeSingle();
-  if (error) {
-    if (isMissingTableError(error)) {
+  try {
+    const affected = await execute(
+      `UPDATE employee_direct_reports
+          SET is_active = false, unassigned_at = $1, updated_at = $1
+        WHERE manager_employee_id = $2
+          AND subordinate_employee_id = $3
+          AND is_active = true`,
+      [now, managerEmployeeId, subordinateEmployeeId],
+    );
+    return affected > 0;
+  } catch (err) {
+    if (isMissingTableError(err)) {
       warnMissingTable();
       return false;
     }
-    throw error;
+    throw err;
   }
-  return !!data;
 }

@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { supabase } from '../config/database.js';
+import { query, queryOne, execute } from '../config/postgres.js';
 import { r2Service } from '../services/r2.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { canAccessEmployeeInScope, resolveScopedDepartmentId } from '../services/data-scope.service.js';
@@ -21,15 +21,8 @@ const isValidCategory = async (category: string): Promise<boolean> => {
     return categoryCache.codes.has(category);
   }
 
-  const { data, error } = await supabase
-    .from('document_categories')
-    .select('code');
-
-  if (error) {
-    throw error;
-  }
-
-  const codes = new Set((data || []).map(row => String(row.code)));
+  const rows = await query<{ code: string }>(`SELECT code FROM document_categories`);
+  const codes = new Set(rows.map(row => String(row.code)));
   categoryCache = { codes, expiresAt: Date.now() + CATEGORY_CACHE_TTL_MS };
   return codes.has(category);
 };
@@ -58,53 +51,49 @@ const ensureDocumentLinks = async (
     });
   }
 
-  const { error } = await supabase
-    .from('document_links')
-    .upsert(links, { onConflict: 'document_id,entity_type,entity_id,purpose' });
-
-  if (error) {
-    throw error;
+  const params: unknown[] = [];
+  const placeholders: string[] = [];
+  for (const link of links) {
+    const groupPlaceholders: string[] = [];
+    for (const col of ['document_id', 'entity_type', 'entity_id', 'purpose'] as const) {
+      params.push(link[col]);
+      groupPlaceholders.push(`$${params.length}`);
+    }
+    placeholders.push(`(${groupPlaceholders.join(', ')})`);
   }
+  await execute(
+    `INSERT INTO document_links (document_id, entity_type, entity_id, purpose)
+     VALUES ${placeholders.join(', ')}
+     ON CONFLICT (document_id, entity_type, entity_id, purpose) DO NOTHING`,
+    params,
+  );
 };
 
 const loadDocumentsByEmployeeId = async (employeeId: number): Promise<Record<string, unknown>[]> => {
-  const { data: links, error: linksError } = await supabase
-    .from('document_links')
-    .select('document_id')
-    .eq('entity_type', 'employee')
-    .eq('entity_id', String(employeeId));
+  const links = await query<{ document_id: number }>(
+    `SELECT document_id FROM document_links
+       WHERE entity_type = 'employee' AND entity_id = $1`,
+    [String(employeeId)],
+  );
 
-  if (linksError) {
-    throw linksError;
-  }
-
-  const linkedIds = [...new Set((links || []).map(link => Number(link.document_id)).filter(Number.isFinite))];
+  const linkedIds = [...new Set(links.map(link => Number(link.document_id)).filter(Number.isFinite))];
   let linkedDocs: Record<string, unknown>[] = [];
   if (linkedIds.length > 0) {
-    const { data, error } = await supabase
-      .from('documents')
-      .select(DOCUMENT_SELECT_COLUMNS)
-      .in('id', linkedIds);
-
-    if (error) {
-      throw error;
-    }
-
-    linkedDocs = (data || []) as Record<string, unknown>[];
+    linkedDocs = await query<Record<string, unknown>>(
+      `SELECT ${DOCUMENT_SELECT_COLUMNS} FROM documents WHERE id = ANY($1::int[])`,
+      [linkedIds],
+    );
   }
 
   const linkedIdSet = new Set(linkedDocs.map(doc => Number(doc.id)));
-  const { data: legacyDocs, error: legacyError } = await supabase
-    .from('documents')
-    .select(DOCUMENT_SELECT_COLUMNS)
-    .eq('employee_id', employeeId)
-    .order('created_at', { ascending: false });
+  const legacyDocs = await query<Record<string, unknown>>(
+    `SELECT ${DOCUMENT_SELECT_COLUMNS} FROM documents
+       WHERE employee_id = $1
+       ORDER BY created_at DESC`,
+    [employeeId],
+  );
 
-  if (legacyError) {
-    throw legacyError;
-  }
-
-  const missingLegacyDocs = (legacyDocs || []).filter(doc => !linkedIdSet.has(Number(doc.id)));
+  const missingLegacyDocs = legacyDocs.filter(doc => !linkedIdSet.has(Number(doc.id)));
   if (missingLegacyDocs.length > 0) {
     await Promise.all(
       missingLegacyDocs.map(doc =>
@@ -169,24 +158,22 @@ const uploadFile = async (req: MulterRequest, res: Response): Promise<void> => {
 
     await r2Service.uploadObject(r2Key, buffer, mimeType);
 
-    const { data, error } = await supabase
-      .from('documents')
-      .insert({
-        employee_id: employeeId,
-        leave_request_id: leaveRequestId,
-        category,
-        file_name: safeFileName,
-        file_size: fileSize,
-        mime_type: mimeType,
-        r2_key: r2Key,
-        uploaded_by: req.user.id,
-      })
-      .select()
-      .single();
-
-    if (error) {
+    let data: Record<string, unknown> | null;
+    try {
+      data = await queryOne<Record<string, unknown>>(
+        `INSERT INTO documents
+           (employee_id, leave_request_id, category, file_name, file_size, mime_type, r2_key, uploaded_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING ${DOCUMENT_SELECT_COLUMNS}`,
+        [employeeId, leaveRequestId, category, safeFileName, fileSize, mimeType, r2Key, req.user.id],
+      );
+    } catch (err) {
       try { await r2Service.deleteObject(r2Key); } catch { /* best-effort */ }
-      throw error;
+      throw err;
+    }
+    if (!data) {
+      try { await r2Service.deleteObject(r2Key); } catch { /* best-effort */ }
+      throw new Error('Не удалось создать документ');
     }
 
     await ensureDocumentLinks(Number(data.id), employeeId, category, leaveRequestId);
@@ -210,13 +197,17 @@ const getDownloadUrl = async (req: AuthenticatedRequest, res: Response): Promise
     }
 
     const { id } = req.params;
-    const { data: doc, error } = await supabase
-      .from('documents')
-      .select(DOCUMENT_SELECT_COLUMNS)
-      .eq('id', id)
-      .single();
+    const doc = await queryOne<{
+      id: number;
+      employee_id: number | null;
+      r2_key: string;
+      file_name: string;
+    }>(
+      `SELECT ${DOCUMENT_SELECT_COLUMNS} FROM documents WHERE id = $1`,
+      [id],
+    );
 
-    if (error || !doc) {
+    if (!doc) {
       res.status(404).json({ success: false, error: 'Документ не найден' });
       return;
     }
@@ -225,21 +216,16 @@ const getDownloadUrl = async (req: AuthenticatedRequest, res: Response): Promise
     if (doc.employee_id != null) {
       allowed = await canAccessEmployeeInScope(req, doc.employee_id);
     } else {
-      const linkRes = await supabase
-        .from('document_links')
-        .select('entity_type, entity_id')
-        .eq('document_id', doc.id)
-        .maybeSingle();
-      if (linkRes.error) throw linkRes.error;
-      const link = linkRes.data as { entity_type?: string; entity_id?: string } | null;
+      const link = await queryOne<{ entity_type: string | null; entity_id: string | null }>(
+        `SELECT entity_type, entity_id FROM document_links WHERE document_id = $1 LIMIT 1`,
+        [doc.id],
+      );
       if (link?.entity_type === 'timesheet_approval' && link.entity_id) {
-        const approvalRes = await supabase
-          .from('timesheet_approvals')
-          .select('department_id')
-          .eq('id', link.entity_id)
-          .maybeSingle();
-        if (approvalRes.error) throw approvalRes.error;
-        const deptId = approvalRes.data ? String(approvalRes.data.department_id) : null;
+        const approval = await queryOne<{ department_id: string | null }>(
+          `SELECT department_id FROM timesheet_approvals WHERE id = $1`,
+          [link.entity_id],
+        );
+        const deptId = approval?.department_id ? String(approval.department_id) : null;
         if (deptId) {
           const scoped = await resolveScopedDepartmentId(req, deptId);
           allowed = !!scoped && scoped === deptId;
@@ -288,12 +274,11 @@ const getByLeaveRequest = async (req: AuthenticatedRequest, res: Response): Prom
       return;
     }
 
-    const { data: request, error: reqErr } = await supabase
-      .from('leave_requests')
-      .select('id, employee_id')
-      .eq('id', leaveRequestId)
-      .single();
-    if (reqErr || !request) {
+    const request = await queryOne<{ id: number; employee_id: number }>(
+      `SELECT id, employee_id FROM leave_requests WHERE id = $1`,
+      [leaveRequestId],
+    );
+    if (!request) {
       res.status(404).json({ success: false, error: 'Заявка не найдена' });
       return;
     }
@@ -302,38 +287,37 @@ const getByLeaveRequest = async (req: AuthenticatedRequest, res: Response): Prom
       return;
     }
 
-    const { data: links, error: linksError } = await supabase
-      .from('document_links')
-      .select('document_id')
-      .eq('entity_type', 'leave_request')
-      .eq('entity_id', String(leaveRequestId));
-    if (linksError) throw linksError;
+    const links = await query<{ document_id: number }>(
+      `SELECT document_id FROM document_links
+         WHERE entity_type = 'leave_request' AND entity_id = $1`,
+      [String(leaveRequestId)],
+    );
 
-    const linkedIds = [...new Set((links || []).map(link => Number(link.document_id)).filter(Number.isFinite))];
+    const linkedIds = [...new Set(links.map(link => Number(link.document_id)).filter(Number.isFinite))];
 
-    const { data: legacyDocs, error: legacyErr } = await supabase
-      .from('documents')
-      .select(DOCUMENT_SELECT_COLUMNS)
-      .eq('leave_request_id', leaveRequestId)
-      .order('created_at', { ascending: false });
-    if (legacyErr) throw legacyErr;
+    const legacyDocs = await query<Record<string, unknown>>(
+      `SELECT ${DOCUMENT_SELECT_COLUMNS} FROM documents
+         WHERE leave_request_id = $1
+         ORDER BY created_at DESC`,
+      [leaveRequestId],
+    );
 
     const docIds = new Set<number>(linkedIds);
-    for (const doc of legacyDocs || []) docIds.add(Number(doc.id));
+    for (const doc of legacyDocs) docIds.add(Number(doc.id));
 
     if (docIds.size === 0) {
       res.json({ success: true, data: [] });
       return;
     }
 
-    const { data, error } = await supabase
-      .from('documents')
-      .select(DOCUMENT_SELECT_COLUMNS)
-      .in('id', [...docIds])
-      .order('created_at', { ascending: false });
-    if (error) throw error;
+    const data = await query<Record<string, unknown>>(
+      `SELECT ${DOCUMENT_SELECT_COLUMNS} FROM documents
+         WHERE id = ANY($1::int[])
+         ORDER BY created_at DESC`,
+      [[...docIds]],
+    );
 
-    res.json({ success: true, data: data || [] });
+    res.json({ success: true, data });
   } catch (err) {
     console.error('documents.getByLeaveRequest error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения документов заявки' });
@@ -366,17 +350,16 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   try {
     const { id } = req.params;
 
-    const { data: doc, error: fetchErr } = await supabase
-      .from('documents')
-      .select('r2_key, employee_id')
-      .eq('id', id)
-      .single();
+    const doc = await queryOne<{ r2_key: string; employee_id: number | null }>(
+      `SELECT r2_key, employee_id FROM documents WHERE id = $1`,
+      [id],
+    );
 
-    if (fetchErr || !doc) {
+    if (!doc) {
       res.status(404).json({ success: false, error: 'Документ не найден' });
       return;
     }
-    if (!(await canAccessEmployeeInScope(req, doc.employee_id))) {
+    if (doc.employee_id != null && !(await canAccessEmployeeInScope(req, doc.employee_id))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -389,8 +372,7 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       }
     }
 
-    const { error } = await supabase.from('documents').delete().eq('id', id);
-    if (error) throw error;
+    await execute(`DELETE FROM documents WHERE id = $1`, [id]);
 
     res.json({ success: true });
   } catch (err) {

@@ -1,7 +1,7 @@
 import * as Sentry from '@sentry/node';
 import { sigurService } from './sigur.service.js';
 import { query, queryOne, execute } from '../config/postgres.js';
-import { getSupabaseInflight, withSupabaseSlot } from '../config/supabase-instrumentation.js';
+import { getDbInflight, withDbSlot } from '../config/db-instrumentation.js';
 import { env } from '../config/env.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
 import { computeDedupHash, computeFailureDedupHash } from '../utils/dedup.utils.js';
@@ -704,7 +704,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       let attempt = 0;
       let lastError: string | null = null;
       while (attempt <= RETRY_BACKOFF_MS.length) {
-        const result = await withSupabaseSlot('presence_polling_upsert', async () => {
+        const result = await withDbSlot('presence_polling_upsert', async () => {
           try {
             const params: unknown[] = [];
             const placeholders: string[] = [];
@@ -743,7 +743,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       // Backpressure: при насыщении пула ранний break, чтобы освободить slots для UI-запросов.
       // Шаг цикла фиксированный → не меняем concurrency на лету (иначе пропустим батчи);
       // вместо этого тормозим следующую итерацию задержкой 200мс при SOFT.
-      const inflight = getSupabaseInflight();
+      const inflight = getDbInflight();
       if (inflight >= SLOT_HARD_LIMIT) {
         cycleBudgetExceeded = true;
         persistenceErrors.push(`backpressure: inflight=${inflight} >= hard limit ${SLOT_HARD_LIMIT}`);
@@ -835,7 +835,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       ];
       for (let i = 0; i < failureInserts.length; i += BATCH_SIZE) {
         const batch = failureInserts.slice(i, i + BATCH_SIZE);
-        const result = await withSupabaseSlot('presence_polling_upsert_failures', async () => {
+        const result = await withDbSlot('presence_polling_upsert_failures', async () => {
           try {
             const params: unknown[] = [];
             const placeholders: string[] = [];
@@ -881,7 +881,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         let attempt = 0;
         let lastError: string | null = null;
         while (attempt <= RETRY_BACKOFF_MS.length) {
-          const result = await withSupabaseSlot('rpc_recalc_summary', async () => {
+          const result = await withDbSlot('rpc_recalc_summary', async () => {
             try {
               await query(
                 'SELECT public.batch_recalculate_skud_daily_summary($1::jsonb)',
@@ -902,7 +902,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
       };
       summaryOuter: for (let i = 0; i < allPairs.length; i += SUMMARY_BATCH * BATCH_CONCURRENCY) {
         // Backpressure: симметрично upsert-циклу.
-        const inflight = getSupabaseInflight();
+        const inflight = getDbInflight();
         if (inflight >= SLOT_HARD_LIMIT) {
           cycleBudgetExceeded = true;
           summaryError = summaryError ?? `backpressure: inflight=${inflight} >= hard limit ${SLOT_HARD_LIMIT}`;

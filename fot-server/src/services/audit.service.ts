@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { execute, query, queryOne } from '../config/postgres.js';
 import type { Request } from 'express';
 
 export const AUDIT_ACTIONS = {
@@ -104,20 +104,37 @@ interface AuditEntry {
   user_agent?: string;
 }
 
+const AUDIT_SELECT_COLUMNS =
+  'id, user_id, action, entity_type, entity_id, details, ip_address, created_at';
+
+interface IAuditLogRow {
+  id: string;
+  user_id: string | null;
+  action: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  details: Record<string, unknown> | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
 export const auditService = {
   async log(entry: AuditEntry): Promise<void> {
     try {
-      await supabase.from('audit_logs').insert({
-        user_id: entry.user_id || null,
-        action: entry.action,
-        entity_type: entry.entity_type || null,
-        entity_id: entry.entity_id || null,
-        details: entry.details || null,
-        ip_address: entry.ip_address || null,
-        user_agent: entry.user_agent || null,
-      });
+      await execute(
+        `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details, ip_address, user_agent)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)`,
+        [
+          entry.user_id || null,
+          entry.action,
+          entry.entity_type || null,
+          entry.entity_id || null,
+          entry.details ? JSON.stringify(entry.details) : null,
+          entry.ip_address || null,
+          entry.user_agent || null,
+        ],
+      );
     } catch (error) {
-      // Не прерываем основную операцию из-за ошибки логирования
       console.error('Audit log failed:', error);
     }
   },
@@ -146,47 +163,45 @@ export const auditService = {
     });
   },
 
-  /**
-   * Получает логи для конкретного пользователя
-   */
   async getByUser(userId: string, limit = 100) {
-    const { data, error } = await supabase
-      .from('audit_logs')
-      .select('id, user_id, action, entity_type, entity_id, details, ip_address, created_at')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(limit);
-
-    if (error) throw error;
-    return data;
+    return query<IAuditLogRow>(
+      `SELECT ${AUDIT_SELECT_COLUMNS}
+         FROM audit_logs
+        WHERE user_id = $1::uuid
+        ORDER BY created_at DESC
+        LIMIT $2`,
+      [userId, limit],
+    );
   },
 
-  /**
-   * Получает логи по типу действия
-   */
   async getByAction(action: AuditAction, limit = 100) {
-    const { data, error } = await supabase
-      .from('audit_logs')
-      .select('id, user_id, action, entity_type, entity_id, details, ip_address, created_at')
-      .eq('action', action)
-      .order('created_at', { ascending: false })
-      .limit(limit);
-
-    if (error) throw error;
-    return data;
+    return query<IAuditLogRow>(
+      `SELECT ${AUDIT_SELECT_COLUMNS}
+         FROM audit_logs
+        WHERE action = $1
+        ORDER BY created_at DESC
+        LIMIT $2`,
+      [action, limit],
+    );
   },
 
-  /**
-   * Получает все логи (только для super_admin)
-   */
   async getAll(limit = 100, offset = 0) {
-    const { data, error, count } = await supabase
-      .from('audit_logs')
-      .select('id, user_id, action, entity_type, entity_id, details, ip_address, created_at', { count: 'exact' })
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
-
-    if (error) throw error;
-    return { data, count };
+    const rows = await query<IAuditLogRow & { total_count: number }>(
+      `SELECT ${AUDIT_SELECT_COLUMNS},
+              count(*) OVER ()::int AS total_count
+         FROM audit_logs
+        ORDER BY created_at DESC
+        LIMIT $1 OFFSET $2`,
+      [limit, offset],
+    );
+    const total = rows.length > 0 ? rows[0].total_count : 0;
+    const data = rows.map(({ total_count: _t, ...rest }) => rest as IAuditLogRow);
+    if (data.length === 0) {
+      const totalRow = await queryOne<{ total: number }>(
+        'SELECT count(*)::int AS total FROM audit_logs',
+      );
+      return { data, count: totalRow?.total ?? 0 };
+    }
+    return { data, count: total };
   },
 };

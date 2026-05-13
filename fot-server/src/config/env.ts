@@ -13,8 +13,6 @@ const optionalString = z.preprocess(v => (v === '' || v === undefined) ? undefin
 const optionalUrl = z.preprocess(v => (v === '' || v === undefined) ? undefined : v, z.string().url().optional());
 
 const envSchema = z.object({
-  SUPABASE_URL: z.string().url(),
-  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   ENCRYPTION_KEY: z.string().length(64, 'ENCRYPTION_KEY must be 64 hex characters (32 bytes)'),
   JWT_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32).optional(),

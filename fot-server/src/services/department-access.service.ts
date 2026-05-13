@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 
 export interface IUserManagedDepartmentSeed {
   user_id: string;
@@ -13,12 +13,10 @@ export interface IUserManagedDepartments {
 
 let missingEmployeeDepartmentAccessTableWarned = false;
 
-function isMissingTableError(error: unknown, tableName: string): boolean {
+function isMissingTableError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const code = 'code' in error ? String((error as { code?: unknown }).code || '') : '';
-  const message = 'message' in error ? String((error as { message?: unknown }).message || '') : '';
-  return code === 'PGRST205'
-    || message.includes(`Could not find the table 'public.${tableName}'`);
+  return code === '42P01';
 }
 
 function warnMissingEmployeeDepartmentAccessTable(): void {
@@ -37,26 +35,23 @@ async function listEmployeeAccessDepartmentIds(
   employeeId: number,
   options: { excludeSource?: string } = {},
 ): Promise<string[]> {
-  let query = supabase
-    .from('employee_department_access')
-    .select('department_id')
-    .eq('employee_id', employeeId)
-    .eq('is_active', true);
-  if (options.excludeSource) {
-    query = query.neq('source', options.excludeSource);
-  }
+  try {
+    const params: unknown[] = [employeeId];
+    let sql = 'SELECT department_id FROM employee_department_access WHERE employee_id = $1 AND is_active = true';
+    if (options.excludeSource) {
+      params.push(options.excludeSource);
+      sql += ` AND source <> $${params.length}`;
+    }
 
-  const { data, error } = await query;
-
-  if (error) {
-    if (isMissingTableError(error, 'employee_department_access')) {
+    const rows = await query<{ department_id: string | null }>(sql, params);
+    return uniqueDepartmentIds(rows.map(row => row.department_id));
+  } catch (err) {
+    if (isMissingTableError(err)) {
       warnMissingEmployeeDepartmentAccessTable();
       return [];
     }
-    throw error;
+    throw err;
   }
-
-  return uniqueDepartmentIds((data || []).map(row => row.department_id as string | null));
 }
 
 const IN_FILTER_THRESHOLD = 300;
@@ -75,34 +70,36 @@ export async function loadEmployeeAccessMap(
   if (unique.length === 0) return result;
 
   const useInFilter = unique.length <= IN_FILTER_THRESHOLD;
-  let query = supabase
-    .from('employee_department_access')
-    .select('employee_id, department_id')
-    .eq('is_active', true);
-  if (options.excludeSource) {
-    query = query.neq('source', options.excludeSource);
-  }
 
-  const { data, error } = useInFilter
-    ? await query.in('employee_id', unique)
-    : await query;
+  try {
+    const params: unknown[] = [];
+    let sql = 'SELECT employee_id, department_id FROM employee_department_access WHERE is_active = true';
+    if (options.excludeSource) {
+      params.push(options.excludeSource);
+      sql += ` AND source <> $${params.length}`;
+    }
+    if (useInFilter) {
+      params.push(unique);
+      sql += ` AND employee_id = ANY($${params.length}::int[])`;
+    }
 
-  if (error) {
-    if (isMissingTableError(error, 'employee_department_access')) {
+    const rows = await query<{ employee_id: number; department_id: string | null }>(sql, params);
+
+    for (const row of rows) {
+      const employeeId = row.employee_id;
+      const departmentId = row.department_id;
+      if (!departmentId || !result.has(employeeId)) continue;
+      result.set(employeeId, uniqueDepartmentIds([...(result.get(employeeId) || []), departmentId]));
+    }
+
+    return result;
+  } catch (err) {
+    if (isMissingTableError(err)) {
       warnMissingEmployeeDepartmentAccessTable();
       return result;
     }
-    throw error;
+    throw err;
   }
-
-  for (const row of data || []) {
-    const employeeId = row.employee_id as number;
-    const departmentId = row.department_id as string | null;
-    if (!departmentId || !result.has(employeeId)) continue;
-    result.set(employeeId, uniqueDepartmentIds([...(result.get(employeeId) || []), departmentId]));
-  }
-
-  return result;
 }
 
 /**
@@ -147,41 +144,36 @@ export async function loadExplicitManagerAssignmentMap(
 export async function listUserIdsAssignedToDepartment(departmentId: string): Promise<string[]> {
   if (!departmentId) return [];
 
-  const { data: accessRows, error: accessError } = await supabase
-    .from('employee_department_access')
-    .select('employee_id')
-    .eq('department_id', departmentId)
-    .eq('is_active', true);
-
-  if (accessError) {
-    if (isMissingTableError(accessError, 'employee_department_access')) {
+  let accessRows: Array<{ employee_id: number | null }>;
+  try {
+    accessRows = await query<{ employee_id: number | null }>(
+      'SELECT employee_id FROM employee_department_access WHERE department_id = $1 AND is_active = true',
+      [departmentId],
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
       warnMissingEmployeeDepartmentAccessTable();
       return [];
     }
-    throw accessError;
+    throw err;
   }
 
   const employeeIds = [...new Set(
-    (accessRows || [])
-      .map(row => row.employee_id as number | null)
+    accessRows
+      .map(row => row.employee_id)
       .filter((id): id is number => Number.isInteger(id)),
   )];
 
   if (employeeIds.length === 0) return [];
 
-  const { data: profiles, error: profileError } = await supabase
-    .from('user_profiles')
-    .select('id')
-    .in('employee_id', employeeIds)
-    .eq('is_approved', true);
-
-  if (profileError) {
-    throw profileError;
-  }
+  const profiles = await query<{ id: string | null }>(
+    'SELECT id FROM user_profiles WHERE employee_id = ANY($1::int[]) AND is_approved = true',
+    [employeeIds],
+  );
 
   return [...new Set(
-    (profiles || [])
-      .map(row => row.id as string | null)
+    profiles
+      .map(row => row.id)
       .filter((id): id is string => typeof id === 'string' && id.length > 0),
   )];
 }

@@ -7,7 +7,7 @@
  * Перед запуском должна быть применена миграция 066 (raw_response JSONB → TEXT),
  * иначе INSERT шифр-текста в jsonb колонку упадёт.
  */
-import { supabase } from '../src/config/database.js';
+import { query, execute } from '../src/config/postgres.js';
 import {
   encryptReceiptFields,
   encryptRawResponse,
@@ -17,13 +17,10 @@ import {
 const SELECT_COLUMNS = ['id', 'raw_response', ...ENCRYPTED_FIELDS].join(', ');
 
 const main = async (): Promise<void> => {
-  const { data, error } = await supabase
-    .from('patent_payment_receipts')
-    .select(SELECT_COLUMNS);
+  const rows = await query<Record<string, unknown> & { id: number; raw_response: unknown }>(
+    `SELECT ${SELECT_COLUMNS} FROM patent_payment_receipts`,
+  );
 
-  if (error) throw error;
-
-  const rows = (data || []) as Array<Record<string, unknown> & { id: number; raw_response: unknown }>;
   console.log(`[migrate] всего записей: ${rows.length}`);
 
   let updated = 0;
@@ -32,19 +29,34 @@ const main = async (): Promise<void> => {
     const encryptedFields = encryptReceiptFields(fields);
     const encryptedRaw = encryptRawResponse(raw_response);
 
-    const update = { ...encryptedFields, raw_response: encryptedRaw };
+    const setClauses: string[] = [];
+    const params: unknown[] = [];
+    const addParam = (value: unknown): string => {
+      params.push(value);
+      return `$${params.length}`;
+    };
 
-    const { error: upErr } = await supabase
-      .from('patent_payment_receipts')
-      .update(update)
-      .eq('id', id);
+    for (const [key, value] of Object.entries(encryptedFields)) {
+      // Allowlist: ключи получены из ENCRYPTED_FIELDS (статический список).
+      if (!ENCRYPTED_FIELDS.includes(key as (typeof ENCRYPTED_FIELDS)[number])) continue;
+      setClauses.push(`${key} = ${addParam(value)}`);
+    }
+    setClauses.push(`raw_response = ${addParam(encryptedRaw)}`);
 
-    if (upErr) {
-      console.error(`[migrate] id=${id} ошибка:`, upErr);
+    if (setClauses.length === 0) continue;
+    const idPlaceholder = addParam(id);
+
+    try {
+      await execute(
+        `UPDATE patent_payment_receipts SET ${setClauses.join(', ')} WHERE id = ${idPlaceholder}`,
+        params,
+      );
+      updated += 1;
+      console.log(`[migrate] id=${id} OK`);
+    } catch (err) {
+      console.error(`[migrate] id=${id} ошибка:`, (err as Error).message);
       continue;
     }
-    updated += 1;
-    console.log(`[migrate] id=${id} OK`);
   }
 
   console.log(`[migrate] готово, обновлено ${updated}/${rows.length}`);

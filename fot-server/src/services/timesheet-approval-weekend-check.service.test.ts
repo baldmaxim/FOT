@@ -1,7 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('../config/database.js', () => ({
-  supabase: {},
+const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgExecute: vi.fn(),
+  pgTx: vi.fn(),
+}));
+
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
 }));
 vi.mock('./schedule.service.js', () => ({
   loadCalendarMonth: vi.fn(),

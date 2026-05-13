@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query, queryOne } from '../config/postgres.js';
 import { collectDeptIds } from './skud-shared.service.js';
 
 export type TimesheetDisplayHalf = 'H1' | 'H2' | 'FULL';
@@ -156,17 +156,23 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
 
   // Все назначения, чей период пересекается с [startDate, endDate]:
   // effective_from <= endDate AND (effective_to IS NULL OR effective_to >= startDate).
-  const { data: assignments, error } = await supabase
-    .from('employee_assignments')
-    .select('employee_id, effective_from, effective_to, org_department_id')
-    .in('org_department_id', deptIds)
-    .lte('effective_from', endDate)
-    .or(`effective_to.is.null,effective_to.gte.${startDate}`);
-  if (error) throw error;
+  const assignments = await query<{
+    employee_id: number;
+    effective_from: string;
+    effective_to: string | null;
+    org_department_id: string | null;
+  }>(
+    `SELECT employee_id, effective_from, effective_to, org_department_id
+       FROM employee_assignments
+      WHERE org_department_id = ANY($1::uuid[])
+        AND effective_from <= $2
+        AND (effective_to IS NULL OR effective_to >= $3)`,
+    [deptIds, endDate, startDate],
+  );
 
   // Группируем: для каждого employee_id определяем, есть ли открытое назначение.
   const map = new Map<number, IDepartmentEmployeeMembership>();
-  for (const row of assignments || []) {
+  for (const row of assignments) {
     const empId = Number(row.employee_id);
     if (!Number.isFinite(empId)) continue;
     const effTo = (row.effective_to as string | null) ?? null;
@@ -189,12 +195,11 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
 
   // Также включаем тех, у кого employees.org_department_id уже указывает в поддерево
   // (snapshot), но assignment мог не успеть синхронизироваться — добавляем безопасным дефолтом.
-  const { data: snapshotEmployees, error: snapshotError } = await supabase
-    .from('employees')
-    .select('id')
-    .in('org_department_id', deptIds);
-  if (snapshotError) throw snapshotError;
-  for (const row of snapshotEmployees || []) {
+  const snapshotEmployees = await query<{ id: number }>(
+    'SELECT id FROM employees WHERE org_department_id = ANY($1::uuid[])',
+    [deptIds],
+  );
+  for (const row of snapshotEmployees) {
     const empId = Number(row.id);
     if (!Number.isFinite(empId)) continue;
     if (!map.has(empId)) {
@@ -210,21 +215,26 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
   if (candidateIds.length === 0) return [];
 
   // Финальный фильтр: активные, не архивные. Исключённых — оставляем, если дата исключения > startDate.
-  const { data: activeRows, error: activeError } = await supabase
-    .from('employees')
-    .select('id, excluded_from_timesheet, excluded_from_timesheet_date')
-    .in('id', candidateIds)
-    .eq('is_archived', false)
-    .eq('employment_status', 'active');
-  if (activeError) throw activeError;
+  const activeRows = await query<{
+    id: number;
+    excluded_from_timesheet: boolean;
+    excluded_from_timesheet_date: string | null;
+  }>(
+    `SELECT id, excluded_from_timesheet, excluded_from_timesheet_date
+       FROM employees
+      WHERE id = ANY($1::int[])
+        AND is_archived = false
+        AND employment_status = 'active'`,
+    [candidateIds],
+  );
 
   const result: IDepartmentEmployeeMembership[] = [];
-  for (const row of activeRows || []) {
+  for (const row of activeRows) {
     const empId = Number(row.id);
     const m = map.get(empId);
     if (!m) continue;
     const excluded = !!row.excluded_from_timesheet;
-    const excludedDate = (row.excluded_from_timesheet_date as string | null) ?? null;
+    const excludedDate = row.excluded_from_timesheet_date ?? null;
     if (excluded) {
       // Если дата исключения известна и она ПОСЛЕ начала периода — оставляем.
       // Иначе (дата неизвестна или раньше начала) — отбрасываем.
@@ -244,54 +254,62 @@ export async function isEmployeeAssignedToDepartmentOnDate(
   // Это нужно для руководителя родительского отдела с сотрудниками в под-отделах.
   const deptIds = await collectDeptIds(departmentId);
 
-  const { data, error } = await supabase
-    .from('employee_assignments')
-    .select('id, org_department_id, effective_from, effective_to')
-    .eq('employee_id', employeeId)
-    .in('org_department_id', deptIds)
-    .lte('effective_from', date)
-    .or(`effective_to.is.null,effective_to.gte.${date}`)
-    .order('effective_from', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const data = await queryOne<{
+    id: string;
+    org_department_id: string | null;
+    effective_from: string;
+    effective_to: string | null;
+  }>(
+    `SELECT id, org_department_id, effective_from, effective_to
+       FROM employee_assignments
+      WHERE employee_id = $1
+        AND org_department_id = ANY($2::uuid[])
+        AND effective_from <= $3
+        AND (effective_to IS NULL OR effective_to >= $3)
+      ORDER BY effective_from DESC
+      LIMIT 1`,
+    [employeeId, deptIds, date],
+  );
 
-  if (error) throw error;
   if (!data) {
-    const { data: employee, error: employeeError } = await supabase
-      .from('employees')
-      .select('org_department_id')
-      .eq('id', employeeId)
-      .maybeSingle();
-
-    if (employeeError) throw employeeError;
+    const employee = await queryOne<{ org_department_id: string | null }>(
+      'SELECT org_department_id FROM employees WHERE id = $1',
+      [employeeId],
+    );
     const empDept = String(employee?.org_department_id || '');
     return empDept.length > 0 && deptIds.includes(empDept);
   }
 
   return isAssignmentActiveOnDateInclusive(
-    data.effective_from as string | null | undefined,
-    data.effective_to as string | null | undefined,
+    data.effective_from ?? undefined,
+    data.effective_to ?? undefined,
     date,
   );
 }
 
 export async function getEmployeeAssignments(employeeId: number): Promise<IEmployeeDepartmentAssignment[]> {
-  const { data, error } = await supabase
-    .from('employee_assignments')
-    .select('id, employee_id, org_department_id, position_id, effective_from, effective_to')
-    .eq('employee_id', employeeId)
-    .order('effective_from', { ascending: true })
-    .order('created_at', { ascending: true });
+  const data = await query<{
+    id: string;
+    employee_id: number;
+    org_department_id: string | null;
+    position_id: string | null;
+    effective_from: string;
+    effective_to: string | null;
+  }>(
+    `SELECT id, employee_id, org_department_id, position_id, effective_from, effective_to
+       FROM employee_assignments
+      WHERE employee_id = $1
+      ORDER BY effective_from ASC, created_at ASC`,
+    [employeeId],
+  );
 
-  if (error) throw error;
-
-  return (data || []).map(row => ({
+  return data.map(row => ({
     id: String(row.id),
     employee_id: Number(row.employee_id),
-    org_department_id: (row.org_department_id as string | null) ?? null,
-    position_id: (row.position_id as string | null) ?? null,
+    org_department_id: row.org_department_id ?? null,
+    position_id: row.position_id ?? null,
     effective_from: String(row.effective_from),
-    effective_to: (row.effective_to as string | null) ?? null,
+    effective_to: row.effective_to ?? null,
   }));
 }
 

@@ -11,28 +11,34 @@
  * Идемпотентен — обновляет только записи, у которых failure_type матчит
  * паттерн `TYPE_<id>` и failure_type_id присутствует в новом справочнике.
  */
-import { supabase } from '../src/config/database.js';
+import { query, execute } from '../src/config/postgres.js';
 import { sigurService } from '../src/services/sigur.service.js';
+
+interface IFailureRow {
+  failure_type_id: number | null;
+  failure_type: string | null;
+}
 
 const main = async (): Promise<void> => {
   console.log('[backfill-types] загружаю справочник типов событий из Sigur...');
   await sigurService.loadEventTypes();
 
-  // Получим уникальные failure_type_id, у которых имя — TYPE_<id>.
-  const { data: rows, error } = await supabase
-    .from('skud_event_failures')
-    .select('failure_type_id, failure_type')
-    .like('failure_type', 'TYPE\\_%');
-
-  if (error) {
-    console.error('[backfill-types] ошибка SELECT:', error.message);
+  let rows: IFailureRow[];
+  try {
+    rows = await query<IFailureRow>(
+      `SELECT failure_type_id, failure_type
+         FROM skud_event_failures
+        WHERE failure_type LIKE 'TYPE\\_%' ESCAPE '\\'`,
+    );
+  } catch (err) {
+    console.error('[backfill-types] ошибка SELECT:', (err as Error).message);
     process.exit(1);
   }
 
   const idsToRename = new Map<number, { fallbackName: string; count: number }>();
-  for (const row of rows ?? []) {
-    const id = (row as { failure_type_id: number | null }).failure_type_id;
-    const name = (row as { failure_type: string | null }).failure_type;
+  for (const row of rows) {
+    const id = row.failure_type_id;
+    const name = row.failure_type;
     if (id == null || !name) continue;
     const entry = idsToRename.get(id);
     if (entry) entry.count += 1;
@@ -49,9 +55,6 @@ const main = async (): Promise<void> => {
   let renamedRows = 0;
   let skippedIds = 0;
   for (const [id, info] of idsToRename) {
-    // Используем приватный кеш через обёртку: getEventTypes уже вернул всё,
-    // а sigurService после loadEventTypes() кеширует в памяти. Но прямого
-    // геттера снаружи нет — повторяем тот же запрос вручную.
     const newName = await resolveTypeName(id);
     if (!newName) {
       console.warn(`[backfill-types] id=${id} (${info.count} записей) не найден в справочнике Sigur — пропускаю`);
@@ -62,27 +65,25 @@ const main = async (): Promise<void> => {
       console.log(`[backfill-types] id=${id}: имя совпадает (${newName}), пропускаю`);
       continue;
     }
-    const { error: updateErr, count } = await supabase
-      .from('skud_event_failures')
-      .update({ failure_type: newName }, { count: 'exact' })
-      .eq('failure_type_id', id)
-      .like('failure_type', 'TYPE\\_%');
-    if (updateErr) {
-      console.error(`[backfill-types] UPDATE для id=${id} упал:`, updateErr.message);
-      continue;
+    try {
+      const result = await execute(
+        `UPDATE skud_event_failures
+            SET failure_type = $1
+          WHERE failure_type_id = $2
+            AND failure_type LIKE 'TYPE\\_%' ESCAPE '\\'`,
+        [newName, id],
+      );
+      const affected = result.rowCount ?? info.count;
+      renamedRows += affected;
+      console.log(`[backfill-types] id=${id}: TYPE_${id} → ${newName} (${affected} записей)`);
+    } catch (err) {
+      console.error(`[backfill-types] UPDATE для id=${id} упал:`, (err as Error).message);
     }
-    const affected = count ?? info.count;
-    renamedRows += affected;
-    console.log(`[backfill-types] id=${id}: TYPE_${id} → ${newName} (${affected} записей)`);
   }
 
   console.log(`[backfill-types] готово: переименовано ${renamedRows} записей, пропущено id: ${skippedIds}`);
 };
 
-/**
- * Резолвит id в имя через прямой запрос к Sigur. Используется один раз для
- * каждого уникального id — кеш sigurService уже прогрет при старте скрипта.
- */
 let cachedTypes: Map<number, string> | null = null;
 async function resolveTypeName(id: number): Promise<string | null> {
   if (!cachedTypes) {

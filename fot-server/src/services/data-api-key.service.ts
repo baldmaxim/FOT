@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { supabase } from '../config/database.js';
+import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 
 // Формат токена: fot_<16-hex-prefix>_<48-hex-secret>.
 // Префикс хранится в открытом виде (UNIQUE-индекс для быстрого lookup),
@@ -61,106 +61,151 @@ export function hashSecret(secret: string): string {
   return sha256Hex(secret);
 }
 
+const KEY_PUBLIC_COLS =
+  'id, name, description, key_prefix, rate_limit_per_minute, created_by, created_at, expires_at, revoked_at, last_used_at';
+
 export const dataApiKeyService = {
   async createKey(input: CreateKeyInput): Promise<CreateKeyResult> {
     const { plaintext_token, prefix, secret } = generateRawToken();
-    const { data, error } = await supabase
-      .from('data_api_keys')
-      .insert({
-        name: input.name,
-        description: input.description ?? null,
-        key_prefix: prefix,
-        key_hash: hashSecret(secret),
-        rate_limit_per_minute: input.rate_limit_per_minute ?? 60,
-        expires_at: input.expires_at ?? null,
-        created_by: input.created_by,
-      })
-      .select('id')
-      .single();
-
-    if (error || !data) {
-      throw new Error(`Failed to create API key: ${error?.message ?? 'unknown'}`);
+    let row: { id: string } | null;
+    try {
+      row = await queryOne<{ id: string }>(
+        `INSERT INTO data_api_keys
+           (name, description, key_prefix, key_hash, rate_limit_per_minute, expires_at, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id`,
+        [
+          input.name,
+          input.description ?? null,
+          prefix,
+          hashSecret(secret),
+          input.rate_limit_per_minute ?? 60,
+          input.expires_at ?? null,
+          input.created_by,
+        ],
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      throw new Error(`Failed to create API key: ${msg}`);
     }
 
-    return { id: data.id as string, plaintext_token, prefix };
+    if (!row) {
+      throw new Error('Failed to create API key: unknown');
+    }
+
+    return { id: row.id, plaintext_token, prefix };
   },
 
   async listKeys(): Promise<Array<Omit<DataApiKeyRow, 'key_hash'>>> {
-    const { data, error } = await supabase
-      .from('data_api_keys')
-      .select('id, name, description, key_prefix, rate_limit_per_minute, created_by, created_at, expires_at, revoked_at, last_used_at')
-      .order('created_at', { ascending: false });
-    if (error) throw new Error(`Failed to list API keys: ${error.message}`);
-    return (data ?? []) as Array<Omit<DataApiKeyRow, 'key_hash'>>;
+    try {
+      return await query<Omit<DataApiKeyRow, 'key_hash'>>(
+        `SELECT ${KEY_PUBLIC_COLS}
+           FROM data_api_keys
+          ORDER BY created_at DESC`,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      throw new Error(`Failed to list API keys: ${msg}`);
+    }
   },
 
   async getKey(id: string): Promise<Omit<DataApiKeyRow, 'key_hash'> | null> {
-    const { data, error } = await supabase
-      .from('data_api_keys')
-      .select('id, name, description, key_prefix, rate_limit_per_minute, created_by, created_at, expires_at, revoked_at, last_used_at')
-      .eq('id', id)
-      .maybeSingle();
-    if (error) throw new Error(`Failed to load API key: ${error.message}`);
-    return (data ?? null) as Omit<DataApiKeyRow, 'key_hash'> | null;
+    try {
+      return await queryOne<Omit<DataApiKeyRow, 'key_hash'>>(
+        `SELECT ${KEY_PUBLIC_COLS}
+           FROM data_api_keys
+          WHERE id = $1`,
+        [id],
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      throw new Error(`Failed to load API key: ${msg}`);
+    }
   },
 
-  async updateKey(id: string, patch: Partial<Pick<DataApiKeyRow, 'name' | 'description' | 'rate_limit_per_minute' | 'expires_at'>>): Promise<void> {
-    const update: Record<string, unknown> = {};
-    if (patch.name !== undefined) update.name = patch.name;
-    if (patch.description !== undefined) update.description = patch.description;
-    if (patch.rate_limit_per_minute !== undefined) update.rate_limit_per_minute = patch.rate_limit_per_minute;
-    if (patch.expires_at !== undefined) update.expires_at = patch.expires_at;
-    if (Object.keys(update).length === 0) return;
+  async updateKey(
+    id: string,
+    patch: Partial<Pick<DataApiKeyRow, 'name' | 'description' | 'rate_limit_per_minute' | 'expires_at'>>,
+  ): Promise<void> {
+    const setClauses: string[] = [];
+    const params: unknown[] = [];
+    const addParam = (v: unknown): string => {
+      params.push(v);
+      return `$${params.length}`;
+    };
 
-    const { error } = await supabase
-      .from('data_api_keys')
-      .update(update)
-      .eq('id', id);
-    if (error) throw new Error(`Failed to update API key: ${error.message}`);
+    if (patch.name !== undefined) setClauses.push(`name = ${addParam(patch.name)}`);
+    if (patch.description !== undefined) setClauses.push(`description = ${addParam(patch.description)}`);
+    if (patch.rate_limit_per_minute !== undefined)
+      setClauses.push(`rate_limit_per_minute = ${addParam(patch.rate_limit_per_minute)}`);
+    if (patch.expires_at !== undefined) setClauses.push(`expires_at = ${addParam(patch.expires_at)}`);
+
+    if (setClauses.length === 0) return;
+
+    const idPlaceholder = addParam(id);
+    try {
+      await execute(
+        `UPDATE data_api_keys SET ${setClauses.join(', ')} WHERE id = ${idPlaceholder}`,
+        params,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      throw new Error(`Failed to update API key: ${msg}`);
+    }
   },
 
   async revokeKey(id: string): Promise<void> {
-    const { error } = await supabase
-      .from('data_api_keys')
-      .update({ revoked_at: new Date().toISOString() })
-      .eq('id', id)
-      .is('revoked_at', null);
-    if (error) throw new Error(`Failed to revoke API key: ${error.message}`);
+    try {
+      await execute(
+        `UPDATE data_api_keys SET revoked_at = now()
+          WHERE id = $1 AND revoked_at IS NULL`,
+        [id],
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      throw new Error(`Failed to revoke API key: ${msg}`);
+    }
   },
 
   async getKeyTables(keyId: string): Promise<Array<{ table_name: string; allowed_fields: string[] }>> {
-    const { data, error } = await supabase
-      .from('data_api_key_tables')
-      .select('table_name, allowed_fields')
-      .eq('key_id', keyId)
-      .order('table_name', { ascending: true });
-    if (error) throw new Error(`Failed to load key tables: ${error.message}`);
-    return (data ?? []) as Array<{ table_name: string; allowed_fields: string[] }>;
+    try {
+      return await query<{ table_name: string; allowed_fields: string[] }>(
+        `SELECT table_name, allowed_fields
+           FROM data_api_key_tables
+          WHERE key_id = $1
+          ORDER BY table_name ASC`,
+        [keyId],
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      throw new Error(`Failed to load key tables: ${msg}`);
+    }
   },
 
-  // Полная замена whitelist для ключа: удаляем всё и вставляем заново.
-  // Порядок важен из-за UNIQUE(key_id, table_name) — Supabase не делает upsert по составному ключу простым путём.
+  // Полная замена whitelist для ключа: удаляем всё и вставляем заново в одной
+  // транзакции (UNIQUE(key_id, table_name) и нет нативного upsert по композитному ключу).
   async replaceKeyTables(
     keyId: string,
     entries: Array<{ table_name: string; allowed_fields: string[] }>,
   ): Promise<void> {
-    const { error: deleteError } = await supabase
-      .from('data_api_key_tables')
-      .delete()
-      .eq('key_id', keyId);
-    if (deleteError) throw new Error(`Failed to clear key tables: ${deleteError.message}`);
+    try {
+      await withTransaction(async (client) => {
+        await client.query('DELETE FROM data_api_key_tables WHERE key_id = $1', [keyId]);
+        if (entries.length === 0) return;
 
-    if (entries.length === 0) return;
-
-    const rows = entries.map(entry => ({
-      key_id: keyId,
-      table_name: entry.table_name,
-      allowed_fields: entry.allowed_fields,
-    }));
-    const { error: insertError } = await supabase
-      .from('data_api_key_tables')
-      .insert(rows);
-    if (insertError) throw new Error(`Failed to insert key tables: ${insertError.message}`);
+        const tableNames = entries.map(e => e.table_name);
+        const fields = entries.map(e => e.allowed_fields);
+        await client.query(
+          `INSERT INTO data_api_key_tables (key_id, table_name, allowed_fields)
+           SELECT $1, u.table_name, u.allowed_fields
+             FROM unnest($2::text[], $3::text[][]) AS u(table_name, allowed_fields)`,
+          [keyId, tableNames, fields],
+        );
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      throw new Error(`Failed to replace key tables: ${msg}`);
+    }
   },
 
   async getRequestLogs(keyId: string, limit = 100): Promise<Array<{
@@ -169,17 +214,22 @@ export const dataApiKeyService = {
     error_message: string | null; created_at: string;
   }>> {
     const safeLimit = Math.min(Math.max(limit, 1), 500);
-    const { data, error } = await supabase
-      .from('data_api_request_logs')
-      .select('id, key_id, table_name, ip, status_code, latency_ms, query_params, error_message, created_at')
-      .eq('key_id', keyId)
-      .order('created_at', { ascending: false })
-      .limit(safeLimit);
-    if (error) throw new Error(`Failed to load request logs: ${error.message}`);
-    return (data ?? []) as Array<{
-      id: number; key_id: string | null; table_name: string | null; ip: string | null;
-      status_code: number; latency_ms: number | null; query_params: unknown;
-      error_message: string | null; created_at: string;
-    }>;
+    try {
+      return await query<{
+        id: number; key_id: string | null; table_name: string | null; ip: string | null;
+        status_code: number; latency_ms: number | null; query_params: unknown;
+        error_message: string | null; created_at: string;
+      }>(
+        `SELECT id, key_id, table_name, ip, status_code, latency_ms, query_params, error_message, created_at
+           FROM data_api_request_logs
+          WHERE key_id = $1
+          ORDER BY created_at DESC
+          LIMIT $2`,
+        [keyId, safeLimit],
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      throw new Error(`Failed to load request logs: ${msg}`);
+    }
   },
 };

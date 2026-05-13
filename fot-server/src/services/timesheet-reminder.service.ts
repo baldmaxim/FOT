@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { execute, query, queryOne } from '../config/postgres.js';
 import { notificationService } from './notification.service.js';
 import { pushService } from './push.service.js';
 import { settingsService } from './settings.service.js';
@@ -73,34 +73,27 @@ function buildHrReminderMessage(period: string, departmentName: string): { title
 }
 
 async function loadActiveDepartmentIds(): Promise<string[]> {
-  const { data, error } = await supabase
-    .from('employees')
-    .select('org_department_id')
-    .eq('employment_status', 'active')
-    .eq('is_archived', false)
-    .eq('excluded_from_timesheet', false)
-    .not('org_department_id', 'is', null);
+  const data = await query<{ org_department_id: string | null }>(
+    `SELECT DISTINCT org_department_id
+       FROM employees
+      WHERE employment_status = 'active'
+        AND is_archived = false
+        AND excluded_from_timesheet = false
+        AND org_department_id IS NOT NULL`,
+  );
 
-  if (error) {
-    throw error;
-  }
-
-  return [...new Set((data || []).map(item => item.org_department_id as string).filter(Boolean))];
+  return [...new Set(data.map(item => item.org_department_id as string).filter(Boolean))];
 }
 
 async function loadDepartmentNameMap(departmentIds: string[]): Promise<Map<string, string>> {
   if (departmentIds.length === 0) return new Map();
 
-  const { data, error } = await supabase
-    .from('org_departments')
-    .select('id, name')
-    .in('id', departmentIds);
+  const data = await query<{ id: string; name: string | null }>(
+    'SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])',
+    [departmentIds],
+  );
 
-  if (error) {
-    throw error;
-  }
-
-  return new Map((data || []).map(item => [item.id as string, (item.name as string) || item.id]));
+  return new Map(data.map(item => [String(item.id), (item.name as string) || String(item.id)]));
 }
 
 async function loadApprovalStatusMap(period: string, departmentIds: string[]): Promise<Map<string, string>> {
@@ -112,42 +105,38 @@ async function loadApprovalStatusMap(period: string, departmentIds: string[]): P
   // Берём все submitted/approved диапазоны, которые полностью покрывают полумесячный период.
   // «Полностью» = approval.start_date <= range.start AND approval.end_date >= range.end.
   // Если покрытие частичное — напоминание отправляем: период не закрыт.
-  const { data, error } = await supabase
-    .from('timesheet_approvals')
-    .select('department_id, status, start_date, end_date')
-    .in('department_id', departmentIds)
-    .in('status', ['submitted', 'approved'])
-    .lte('start_date', range.startDate)
-    .gte('end_date', range.endDate);
-
-  if (error) {
-    throw error;
-  }
+  const data = await query<{ department_id: string; status: string; start_date: string; end_date: string }>(
+    `SELECT department_id, status, start_date, end_date
+       FROM timesheet_approvals
+      WHERE department_id = ANY($1::uuid[])
+        AND status = ANY($2::text[])
+        AND start_date <= $3
+        AND end_date >= $4`,
+    [departmentIds, ['submitted', 'approved'], range.startDate, range.endDate],
+  );
 
   const result = new Map<string, string>();
-  for (const item of data || []) {
-    const existing = result.get(item.department_id as string);
+  for (const item of data) {
+    const existing = result.get(String(item.department_id));
     // 'approved' приоритетнее 'submitted' — чтобы одно покрытие approved не перекрывалось submitted.
     if (!existing || existing === 'submitted') {
-      result.set(item.department_id as string, item.status as string);
+      result.set(String(item.department_id), String(item.status));
     }
   }
   return result;
 }
 
 async function hasReminderLog(departmentId: string, period: string, userId: string, stage: string): Promise<boolean> {
-  const { data, error } = await supabase
-    .from('timesheet_reminder_log')
-    .select('id')
-    .eq('department_id', departmentId)
-    .eq('period', period)
-    .eq('user_id', userId)
-    .eq('stage', stage)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
+  const data = await queryOne<{ id: number }>(
+    `SELECT id
+       FROM timesheet_reminder_log
+      WHERE department_id = $1
+        AND period = $2
+        AND user_id = $3
+        AND stage = $4
+      LIMIT 1`,
+    [departmentId, period, userId, stage],
+  );
 
   return !!data;
 }
@@ -161,12 +150,14 @@ async function persistReminderLog(items: Array<{
 }>): Promise<void> {
   if (items.length === 0) return;
 
-  const { error } = await supabase
-    .from('timesheet_reminder_log')
-    .upsert(items, { onConflict: 'department_id,period,user_id,stage' });
-
-  if (error) {
-    throw error;
+  for (const it of items) {
+    await execute(
+      `INSERT INTO timesheet_reminder_log (department_id, period, user_id, stage, metadata)
+       VALUES ($1, $2, $3, $4, $5::jsonb)
+       ON CONFLICT (department_id, period, user_id, stage) DO UPDATE SET
+         metadata = EXCLUDED.metadata`,
+      [it.department_id, it.period, it.user_id, it.stage, JSON.stringify(it.metadata)],
+    );
   }
 }
 

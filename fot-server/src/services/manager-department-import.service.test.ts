@@ -1,106 +1,45 @@
 import ExcelJS from 'exceljs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-type QueryRecord = {
-  table: string;
-  operations: Array<{ method: string; args: unknown[] }>;
-};
-
-type QueryResponse = {
-  data?: unknown;
-  error?: { message?: string } | null;
-};
-
-const mockedState = vi.hoisted(() => ({
-  departments: [] as Array<{
-    id: string;
-    name: string;
-    is_active: boolean;
-  }>,
-  employeeAliases: [] as Array<{
-    source_type: string;
-    section_name_normalized: string;
-    manager_name_normalized: string;
-    employee_id: number;
-    is_active: boolean;
-  }>,
-  brigadeAliases: [] as Array<{
-    source_type: string;
-    section_name_normalized: string;
-    brigade_name_normalized: string;
-    department_id: string;
-    is_active: boolean;
-  }>,
+const { pgQuery, pgQueryOne, pgExecute, pgTx, mockedState } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgExecute: vi.fn(),
+  pgTx: vi.fn(),
+  mockedState: {
+    departments: [] as Array<{
+      id: string;
+      name: string;
+      is_active: boolean;
+    }>,
+    employees: [] as Array<{
+      id: number;
+      full_name: string;
+      org_department_id: string | null;
+      is_archived: boolean;
+    }>,
+    employeeAliases: [] as Array<{
+      source_type: string;
+      section_name_normalized: string;
+      manager_name_normalized: string;
+      employee_id: number;
+      is_active: boolean;
+    }>,
+    brigadeAliases: [] as Array<{
+      source_type: string;
+      section_name_normalized: string;
+      brigade_name_normalized: string;
+      department_id: string;
+      is_active: boolean;
+    }>,
+  },
 }));
 
-function matchesQueryRecord<T extends Record<string, unknown>>(row: T, query: QueryRecord): boolean {
-  return query.operations.every((operation) => {
-    if (operation.method === 'eq') {
-      const [field, value] = operation.args;
-      return row[String(field)] === value;
-    }
-
-    if (operation.method === 'in') {
-      const [field, values] = operation.args;
-      return Array.isArray(values) && values.includes(row[String(field)]);
-    }
-
-    return true;
-  });
-}
-
-function resolveQuery(query: QueryRecord): QueryResponse {
-  if (query.table === 'org_departments') {
-    return {
-      data: mockedState.departments.filter(row => matchesQueryRecord(row, query)),
-      error: null,
-    };
-  }
-
-  if (query.table === 'manager_department_import_employee_aliases') {
-    return {
-      data: mockedState.employeeAliases.filter(row => matchesQueryRecord(row, query)),
-      error: null,
-    };
-  }
-
-  if (query.table === 'manager_department_import_brigade_aliases') {
-    return {
-      data: mockedState.brigadeAliases.filter(row => matchesQueryRecord(row, query)),
-      error: null,
-    };
-  }
-
-  throw new Error(`Unexpected query for table ${query.table}`);
-}
-
-function createBuilder(table: string) {
-  const query: QueryRecord = { table, operations: [] };
-
-  const builder = {
-    select: (...args: unknown[]) => {
-      query.operations.push({ method: 'select', args });
-      return builder;
-    },
-    eq: (...args: unknown[]) => {
-      query.operations.push({ method: 'eq', args });
-      return builder;
-    },
-    in: (...args: unknown[]) => {
-      query.operations.push({ method: 'in', args });
-      return builder;
-    },
-    then: (onFulfilled: (value: QueryResponse) => unknown, onRejected?: (reason: unknown) => unknown) =>
-      Promise.resolve(resolveQuery(query)).then(onFulfilled, onRejected),
-  };
-
-  return builder;
-}
-
-vi.mock('../config/database.js', () => ({
-  supabase: {
-    from: vi.fn((table: string) => createBuilder(table)),
-  },
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
 }));
 
 import { buildManagerDepartmentImportPreviewFromBuffer } from './manager-department-import.service.js';
@@ -127,9 +66,37 @@ async function buildWorkbookBuffer(): Promise<Buffer> {
 
 describe('manager-department-import.service', () => {
   beforeEach(() => {
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
     mockedState.departments = [];
+    mockedState.employees = [];
     mockedState.employeeAliases = [];
     mockedState.brigadeAliases = [];
+
+    // Dispatch by SQL fragment. Source service uses query<>() for all SELECTs.
+    pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (/FROM org_departments/i.test(sql)) {
+        return mockedState.departments.filter(row => row.is_active);
+      }
+      if (/FROM employees\b/i.test(sql)) {
+        return mockedState.employees;
+      }
+      if (/FROM manager_department_import_employee_aliases/i.test(sql)) {
+        const sourceType = params?.[0];
+        return mockedState.employeeAliases.filter(
+          row => row.source_type === sourceType && row.is_active,
+        );
+      }
+      if (/FROM manager_department_import_brigade_aliases/i.test(sql)) {
+        const sourceType = params?.[0];
+        return mockedState.brigadeAliases.filter(
+          row => row.source_type === sourceType && row.is_active,
+        );
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
   });
 
   it('reuses saved employee and brigade aliases on repeated preview', async () => {
@@ -171,5 +138,11 @@ describe('manager-department-import.service', () => {
       department_id: 'dept-1',
       department_name: 'Наше внутреннее название отдела',
     });
+
+    // Sanity: validate that service hit the new pg.Pool helpers (not legacy supabase).
+    const sqls = pgQuery.mock.calls.map(c => c[0] as string);
+    expect(sqls.some(s => /FROM org_departments/i.test(s))).toBe(true);
+    expect(sqls.some(s => /FROM manager_department_import_employee_aliases/i.test(s))).toBe(true);
+    expect(sqls.some(s => /FROM manager_department_import_brigade_aliases/i.test(s))).toBe(true);
   });
 });

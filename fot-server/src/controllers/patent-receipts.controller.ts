@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { supabase } from '../config/database.js';
+import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { r2Service } from '../services/r2.service.js';
 import { aiReceiptRecognitionService } from '../services/ai-receipt-recognition.service.js';
@@ -61,20 +61,6 @@ const PATCH_ALLOWED_FIELDS = new Set<keyof PatentPaymentReceiptPatch>([
   'period_end',
 ]);
 
-interface IDocumentListRow {
-  id: number;
-  employee_id: number | null;
-  file_name: string | null;
-  mime_type: string | null;
-  recognition_status: string | null;
-  recognition_attempts: number | null;
-  recognized_at: string | null;
-  recognition_error: string | null;
-  created_at: string;
-  employees: { full_name: string | null } | null;
-  patent_payment_receipts: Record<string, unknown> | Array<Record<string, unknown>> | null;
-}
-
 const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const {
@@ -85,50 +71,63 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       status,
     } = req.query as Record<string, string | undefined>;
 
-    let query = supabase
-      .from('documents')
-      .select(`
-        id,
-        employee_id,
-        file_name,
-        mime_type,
-        recognition_status,
-        recognition_attempts,
-        recognized_at,
-        recognition_error,
-        created_at,
-        employees:employee_id ( full_name ),
-        patent_payment_receipts:patent_payment_receipts!document_id (
-          id, document_id, employee_id,
-          payment_date, payment_amount, payer_full_name, payer_inn, payer_passport,
-          patent_number, kbk, oktmo, source_type, confidence,
-          needs_review, manually_edited, recognition_model, cost_usd,
-          period_start, period_end,
-          created_at
-        )
-      `)
-      .eq('category', 'patent_check')
-      .order('created_at', { ascending: false })
-      .limit(500);
+    const whereParts: string[] = [`d.category = 'patent_check'`];
+    const params: unknown[] = [];
+    const addParam = (v: unknown): string => {
+      params.push(v);
+      return `$${params.length}`;
+    };
 
     if (employee_id && /^\d+$/.test(employee_id)) {
-      query = query.eq('employee_id', Number(employee_id));
+      whereParts.push(`d.employee_id = ${addParam(Number(employee_id))}`);
     }
     if (status) {
-      query = query.eq('recognition_status', status);
+      whereParts.push(`d.recognition_status = ${addParam(status)}`);
     }
 
-    const { data, error } = await query;
-    if (error) throw error;
+    const whereSql = `WHERE ${whereParts.join(' AND ')}`;
 
-    const docs = (data || []) as unknown as IDocumentListRow[];
+    type DocRow = {
+      id: number;
+      employee_id: number | null;
+      file_name: string | null;
+      mime_type: string | null;
+      recognition_status: string | null;
+      recognition_attempts: number | null;
+      recognized_at: string | null;
+      recognition_error: string | null;
+      created_at: string;
+      employee_full_name: string | null;
+      receipt_id: number | null;
+      receipt_data: Record<string, unknown> | null;
+    };
+
+    const docs = await query<DocRow>(
+      `SELECT
+         d.id,
+         d.employee_id,
+         d.file_name,
+         d.mime_type,
+         d.recognition_status,
+         d.recognition_attempts,
+         d.recognized_at,
+         d.recognition_error,
+         d.created_at,
+         e.full_name AS employee_full_name,
+         r.id AS receipt_id,
+         CASE WHEN r.id IS NULL THEN NULL ELSE to_jsonb(r) END AS receipt_data
+       FROM documents d
+       LEFT JOIN employees e ON e.id = d.employee_id
+       LEFT JOIN patent_payment_receipts r ON r.document_id = d.id
+       ${whereSql}
+       ORDER BY d.created_at DESC
+       LIMIT 500`,
+      params,
+    );
 
     const result = docs
       .map(doc => {
-        const receiptsRaw = doc.patent_payment_receipts;
-        const rawReceipt = Array.isArray(receiptsRaw)
-          ? (receiptsRaw.length > 0 ? receiptsRaw[0] : null)
-          : (receiptsRaw ?? null);
+        const rawReceipt = doc.receipt_data;
         const receipt = rawReceipt
           ? (decryptReceiptRow(rawReceipt as Record<string, unknown>) as Record<string, unknown>)
           : null;
@@ -160,7 +159,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
             recognition_status: doc.recognition_status,
             recognition_error: doc.recognition_error,
           },
-          employees: doc.employees ? { full_name: doc.employees.full_name } : null,
+          employees: doc.employee_full_name !== null ? { full_name: doc.employee_full_name } : null,
         };
       })
       .filter(row => {
@@ -186,29 +185,53 @@ const getOne = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const { data, error } = await supabase
-      .from('patent_payment_receipts')
-      .select(`${RECEIPT_COLUMNS}, documents:document_id ( file_name, mime_type, r2_key, recognition_status ), employees:employee_id ( full_name )`)
-      .eq('id', id)
-      .single();
+    const data = await queryOne<{
+      [k: string]: unknown;
+      documents_data: { file_name: string | null; mime_type: string | null; r2_key: string | null; recognition_status: string | null } | null;
+      employees_data: { full_name: string | null } | null;
+      raw_response: unknown;
+    }>(
+      `SELECT ${RECEIPT_COLUMNS},
+              CASE WHEN d.id IS NULL THEN NULL ELSE jsonb_build_object(
+                'file_name', d.file_name,
+                'mime_type', d.mime_type,
+                'r2_key', d.r2_key,
+                'recognition_status', d.recognition_status
+              ) END AS documents_data,
+              CASE WHEN e.id IS NULL THEN NULL ELSE jsonb_build_object(
+                'full_name', e.full_name
+              ) END AS employees_data
+         FROM patent_payment_receipts r
+         LEFT JOIN documents d ON d.id = r.document_id
+         LEFT JOIN employees e ON e.id = r.employee_id
+        WHERE r.id = $1`,
+      [id],
+    );
 
-    if (error || !data) {
+    if (!data) {
       res.status(404).json({ success: false, error: 'Чек не найден' });
       return;
     }
 
-    const row = data as unknown as { documents?: { r2_key?: string | null }; raw_response?: unknown };
+    const r2Key = data.documents_data?.r2_key ?? null;
     let download_url: string | null = null;
-    if (row.documents?.r2_key) {
+    if (r2Key) {
       try {
-        download_url = await r2Service.generateDownloadUrl(row.documents.r2_key);
+        download_url = await r2Service.generateDownloadUrl(r2Key);
       } catch (err) {
         console.warn('patent-receipts.getOne download_url failed:', err);
       }
     }
 
-    const decrypted = decryptReceiptRow(data as Record<string, unknown>);
-    decrypted.raw_response = decryptRawResponse(row.raw_response);
+    // Reshape: положить documents/employees как ожидает существующий клиент.
+    const flatRow: Record<string, unknown> = { ...data };
+    flatRow.documents = data.documents_data;
+    flatRow.employees = data.employees_data;
+    delete flatRow.documents_data;
+    delete flatRow.employees_data;
+
+    const decrypted = decryptReceiptRow(flatRow);
+    decrypted.raw_response = decryptRawResponse(data.raw_response);
 
     res.json({ success: true, data: { ...decrypted, download_url } });
   } catch (err) {
@@ -226,11 +249,12 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
 
     const body = (req.body || {}) as Record<string, unknown>;
+    const nowIso = new Date().toISOString();
     const patch: Record<string, unknown> = {
       manually_edited: true,
       reviewed_by: req.user.id,
-      reviewed_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      reviewed_at: nowIso,
+      updated_at: nowIso,
     };
 
     for (const [key, value] of Object.entries(body)) {
@@ -239,19 +263,38 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       }
     }
 
-    const { data, error } = await supabase
-      .from('patent_payment_receipts')
-      .update(encryptReceiptFields(patch))
-      .eq('id', id)
-      .select(RECEIPT_COLUMNS)
-      .single();
+    const encrypted = encryptReceiptFields(patch);
 
-    if (error || !data) {
+    // Динамический SET. Все ключи — известные имена колонок (из allow-list),
+    // но всё равно используем placeholder только для значений.
+    const setClauses: string[] = [];
+    const params: unknown[] = [];
+    const addParam = (v: unknown): string => {
+      params.push(v);
+      return `$${params.length}`;
+    };
+    for (const [key, value] of Object.entries(encrypted)) {
+      setClauses.push(`${key} = ${addParam(value)}`);
+    }
+    if (setClauses.length === 0) {
+      res.status(400).json({ success: false, error: 'Нет полей для обновления' });
+      return;
+    }
+    const idPlaceholder = addParam(id);
+
+    const data = await queryOne<Record<string, unknown>>(
+      `UPDATE patent_payment_receipts SET ${setClauses.join(', ')}
+        WHERE id = ${idPlaceholder}
+        RETURNING ${RECEIPT_COLUMNS}`,
+      params,
+    );
+
+    if (!data) {
       res.status(404).json({ success: false, error: 'Чек не найден или ошибка обновления' });
       return;
     }
 
-    res.json({ success: true, data: decryptReceiptRow(data as Record<string, unknown>) });
+    res.json({ success: true, data: decryptReceiptRow(data) });
   } catch (err) {
     console.error('patent-receipts.update error:', err);
     res.status(500).json({ success: false, error: 'Ошибка обновления чека' });
@@ -266,16 +309,7 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
       return;
     }
 
-    const { data, error } = await supabase
-      .from('patent_payment_receipts')
-      .select('id, employee_id, payment_date, payment_amount, period_start, period_end, created_at, documents:document_id ( file_name, mime_type, r2_key, recognition_status )')
-      .eq('employee_id', employeeId)
-      .order('created_at', { ascending: false })
-      .limit(100);
-
-    if (error) throw error;
-
-    const rows = (data || []) as unknown as Array<{
+    const rows = await query<{
       id: number;
       employee_id: number | null;
       payment_date: string | null;
@@ -284,7 +318,21 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
       period_end: string | null;
       created_at: string;
       documents: { file_name: string | null; mime_type: string | null; r2_key: string | null; recognition_status: string | null } | null;
-    }>;
+    }>(
+      `SELECT r.id, r.employee_id, r.payment_date, r.payment_amount, r.period_start, r.period_end, r.created_at,
+              CASE WHEN d.id IS NULL THEN NULL ELSE jsonb_build_object(
+                'file_name', d.file_name,
+                'mime_type', d.mime_type,
+                'r2_key', d.r2_key,
+                'recognition_status', d.recognition_status
+              ) END AS documents
+         FROM patent_payment_receipts r
+         LEFT JOIN documents d ON d.id = r.document_id
+        WHERE r.employee_id = $1
+        ORDER BY r.created_at DESC
+        LIMIT 100`,
+      [employeeId],
+    );
 
     const result = await Promise.all(rows.map(async row => {
       const decrypted = decryptReceiptRow(row as unknown as Record<string, unknown>) as typeof row;
@@ -354,44 +402,47 @@ const uploadMy = async (req: MulterRequest, res: Response): Promise<void> => {
     const r2Key = r2Service.generateKey(employeeId, safeFileName);
     await r2Service.uploadObject(r2Key, buffer, mimeType);
 
-    const { data, error } = await supabase
-      .from('documents')
-      .insert({
-        employee_id: employeeId,
-        category: 'patent_check',
-        file_name: safeFileName,
-        file_size: fileSize,
-        mime_type: mimeType,
-        r2_key: r2Key,
-        uploaded_by: req.user.id,
-      })
-      .select()
-      .single();
-
-    if (error || !data) {
+    let data: Record<string, unknown> | null = null;
+    try {
+      data = await queryOne<Record<string, unknown>>(
+        `INSERT INTO documents (employee_id, category, file_name, file_size, mime_type, r2_key, uploaded_by)
+         VALUES ($1, 'patent_check', $2, $3, $4, $5, $6)
+         RETURNING *`,
+        [employeeId, safeFileName, fileSize, mimeType, r2Key, req.user.id],
+      );
+    } catch (err) {
       try { await r2Service.deleteObject(r2Key); } catch { /* best-effort */ }
-      throw error || new Error('Insert failed');
+      throw err;
+    }
+    if (!data) {
+      try { await r2Service.deleteObject(r2Key); } catch { /* best-effort */ }
+      throw new Error('Insert failed');
     }
 
     const documentId = Number(data.id);
-    const { error: linkError } = await supabase
-      .from('document_links')
-      .upsert(
-        [{ document_id: documentId, entity_type: 'employee', entity_id: String(employeeId), purpose: 'patent_check' }],
-        { onConflict: 'document_id,entity_type,entity_id,purpose' },
+    try {
+      await execute(
+        `INSERT INTO document_links (document_id, entity_type, entity_id, purpose)
+         VALUES ($1, 'employee', $2, 'patent_check')
+         ON CONFLICT (document_id, entity_type, entity_id, purpose) DO NOTHING`,
+        [documentId, String(employeeId)],
       );
-    if (linkError) {
-      console.warn('patent-receipts.uploadMy document_links upsert failed:', linkError);
+    } catch (err) {
+      console.warn('patent-receipts.uploadMy document_links upsert failed:', err);
     }
 
-    const { error: receiptInsertError } = await supabase
-      .from('patent_payment_receipts')
-      .upsert(
-        [{ document_id: documentId, employee_id: employeeId, period_start: periodStart, period_end: periodEnd }],
-        { onConflict: 'document_id' },
+    try {
+      await execute(
+        `INSERT INTO patent_payment_receipts (document_id, employee_id, period_start, period_end)
+         VALUES ($1, $2, $3::date, $4::date)
+         ON CONFLICT (document_id) DO UPDATE SET
+           employee_id = EXCLUDED.employee_id,
+           period_start = EXCLUDED.period_start,
+           period_end = EXCLUDED.period_end`,
+        [documentId, employeeId, periodStart, periodEnd],
       );
-    if (receiptInsertError) {
-      console.warn('patent-receipts.uploadMy patent_payment_receipts upsert failed:', receiptInsertError);
+    } catch (err) {
+      console.warn('patent-receipts.uploadMy patent_payment_receipts upsert failed:', err);
     }
 
     res.json({ success: true, data });
@@ -411,13 +462,12 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const { data: doc, error: fetchError } = await supabase
-      .from('documents')
-      .select('id, r2_key, category')
-      .eq('id', documentId)
-      .single();
+    const doc = await queryOne<{ id: number; r2_key: string | null; category: string }>(
+      `SELECT id, r2_key, category FROM documents WHERE id = $1`,
+      [documentId],
+    );
 
-    if (fetchError || !doc) {
+    if (!doc) {
       res.status(404).json({ success: false, error: 'Документ не найден' });
       return;
     }
@@ -426,7 +476,7 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const r2Key = (doc as { r2_key?: string | null }).r2_key ?? null;
+    const r2Key = doc.r2_key ?? null;
     if (r2Key) {
       try {
         await r2Service.deleteObject(r2Key);
@@ -435,23 +485,12 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       }
     }
 
-    const { error: receiptDelError } = await supabase
-      .from('patent_payment_receipts')
-      .delete()
-      .eq('document_id', documentId);
-    if (receiptDelError) throw receiptDelError;
-
-    const { error: linkDelError } = await supabase
-      .from('document_links')
-      .delete()
-      .eq('document_id', documentId);
-    if (linkDelError) throw linkDelError;
-
-    const { error: docDelError } = await supabase
-      .from('documents')
-      .delete()
-      .eq('id', documentId);
-    if (docDelError) throw docDelError;
+    // Удаляем связанные записи в одной транзакции.
+    await withTransaction(async (client) => {
+      await client.query('DELETE FROM patent_payment_receipts WHERE document_id = $1', [documentId]);
+      await client.query('DELETE FROM document_links WHERE document_id = $1', [documentId]);
+      await client.query('DELETE FROM documents WHERE id = $1', [documentId]);
+    });
 
     res.json({ success: true });
   } catch (err) {

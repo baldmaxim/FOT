@@ -1,4 +1,4 @@
-import { supabase } from '../config/database.js';
+import { query, queryOne } from '../config/postgres.js';
 import { loadCalendarMonth, resolveSchedulesForPeriod } from './schedule.service.js';
 import type { IProductionCalendarMonth, IResolvedSchedule } from '../types/index.js';
 import { buildAttendanceEntries, type IAttendanceEntry } from './attendance.service.js';
@@ -97,11 +97,10 @@ export async function fetchTimesheetDataForDepartment(
   // Имя отдела
   let departmentName = 'Все отделы';
   if (departmentId) {
-    const { data: dept } = await supabase
-      .from('org_departments')
-      .select('name')
-      .eq('id', departmentId)
-      .single();
+    const dept = await queryOne<{ name: string }>(
+      `SELECT name FROM org_departments WHERE id = $1 LIMIT 1`,
+      [departmentId],
+    );
     if (dept?.name) departmentName = dept.name;
   }
 
@@ -111,20 +110,27 @@ export async function fetchTimesheetDataForDepartment(
     : [];
   let employees: Array<Record<string, unknown>> = [];
   if (!departmentId || assignedEmployeeIds.length > 0) {
-    let empQuery = supabase
-      .from('employees')
-      .select('id, full_name, position_id, org_department_id, sigur_employee_id')
-      .eq('employment_status', 'active')
-      .eq('is_archived', false)
-      .eq('excluded_from_timesheet', false)
-      .order('full_name');
-
     if (departmentId) {
-      empQuery = empQuery.in('id', assignedEmployeeIds);
+      employees = await query<Record<string, unknown>>(
+        `SELECT id, full_name, position_id, org_department_id, sigur_employee_id
+           FROM employees
+           WHERE employment_status = 'active'
+             AND is_archived = false
+             AND excluded_from_timesheet = false
+             AND id = ANY($1::int[])
+           ORDER BY full_name`,
+        [assignedEmployeeIds],
+      );
+    } else {
+      employees = await query<Record<string, unknown>>(
+        `SELECT id, full_name, position_id, org_department_id, sigur_employee_id
+           FROM employees
+           WHERE employment_status = 'active'
+             AND is_archived = false
+             AND excluded_from_timesheet = false
+           ORDER BY full_name`,
+      );
     }
-
-    const { data } = await empQuery;
-    employees = (data || []) as Array<Record<string, unknown>>;
   }
   const empArr: IExportEmployee[] = (employees || []).map(e => ({
     id: e.id as number,
@@ -182,8 +188,11 @@ export async function fetchTimesheetDataForDepartment(
   const positionIds = [...new Set(empArr.map(e => e.position_id).filter(Boolean))] as string[];
   const posMap = new Map<string, string>();
   if (positionIds.length > 0) {
-    const { data: positions } = await supabase.from('positions').select('id, name').in('id', positionIds);
-    (positions || []).forEach((p: { id: string; name: string }) => posMap.set(p.id, p.name));
+    const positions = await query<{ id: string; name: string }>(
+      `SELECT id, name FROM positions WHERE id = ANY($1::uuid[])`,
+      [positionIds],
+    );
+    positions.forEach(p => posMap.set(p.id, p.name));
   }
 
   return {
@@ -240,15 +249,16 @@ export async function fetchTimesheetDataForEmployees(
   const uniqueIds = [...new Set(employeeIds.filter(id => Number.isInteger(id) && id > 0))];
   let employees: Array<Record<string, unknown>> = [];
   if (uniqueIds.length > 0) {
-    const { data } = await supabase
-      .from('employees')
-      .select('id, full_name, position_id, org_department_id, sigur_employee_id')
-      .in('id', uniqueIds)
-      .eq('employment_status', 'active')
-      .eq('is_archived', false)
-      .eq('excluded_from_timesheet', false)
-      .order('full_name');
-    employees = (data || []) as Array<Record<string, unknown>>;
+    employees = await query<Record<string, unknown>>(
+      `SELECT id, full_name, position_id, org_department_id, sigur_employee_id
+         FROM employees
+         WHERE id = ANY($1::int[])
+           AND employment_status = 'active'
+           AND is_archived = false
+           AND excluded_from_timesheet = false
+         ORDER BY full_name`,
+      [uniqueIds],
+    );
   }
   const empArr: IExportEmployee[] = employees.map(e => ({
     id: e.id as number,
@@ -303,8 +313,11 @@ export async function fetchTimesheetDataForEmployees(
   const positionIds = [...new Set(empArr.map(e => e.position_id).filter(Boolean))] as string[];
   const posMap = new Map<string, string>();
   if (positionIds.length > 0) {
-    const { data: positions } = await supabase.from('positions').select('id, name').in('id', positionIds);
-    (positions || []).forEach((p: { id: string; name: string }) => posMap.set(p.id, p.name));
+    const positions = await query<{ id: string; name: string }>(
+      `SELECT id, name FROM positions WHERE id = ANY($1::uuid[])`,
+      [positionIds],
+    );
+    positions.forEach(p => posMap.set(p.id, p.name));
   }
 
   return {

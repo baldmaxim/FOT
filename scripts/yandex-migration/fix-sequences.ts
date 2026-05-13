@@ -9,8 +9,11 @@
 //
 // Запуск из fot-server:
 //   npm run migrate:yandex:fix-sequences
+//   npm run migrate:yandex:fix-sequences -- --dry-run
+//   npm run migrate:yandex:fix-sequences -- --help
 //
-// Зависимостей нет (psql shell-out).
+// Зависимостей нет (psql shell-out через stdin, не через -c, чтобы избежать
+// проблем с Windows escape для double-quoted идентификаторов).
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -27,19 +30,27 @@ interface IArgs {
 const HELP = `fix-sequences — обновить SERIAL-counter'ы после pg_restore --data-only
 
 Usage:
-  npm run migrate:yandex:fix-sequences -- [--dry-run] [--report PATH]
+  npm run migrate:yandex:fix-sequences -- [--dry-run] [--report PATH] [--help]
 
 ENV:
-  TARGET_DATABASE_URL   postgres://...  (required) — Yandex Managed PG
+  TARGET_DATABASE_URL   postgres://...  (required) — Yandex Managed PG.
+
+Опции:
+  --dry-run             печатает план без выполнения setval. apply по default.
+  --report PATH         markdown-отчёт (default: ${REPORT_DEFAULT}).
+  --help, -h            эта справка.
 
 Что делает:
   1. Перечисляет public sequences, привязанные к колонкам через pg_depend
      (т. е. сгенерированные через SERIAL/BIGSERIAL/GENERATED AS IDENTITY).
-  2. Для каждой: SELECT GREATEST(COALESCE(MAX(<col>), 0), 1) FROM public.<t>.
-  3. Если данные есть — setval(seq, max, true); если пусто — setval(seq, 1, false).
+  2. Для каждой: SELECT COALESCE(MAX(<col>), 0) FROM public.<t>.
+  3. Если данные есть — setval(seq, max, true); иначе setval(seq, 1, false).
   4. Сохраняет markdown-отчёт.
 
---dry-run печатает SQL без выполнения. По умолчанию — apply.
+Технические детали:
+  SQL передаётся в psql через stdin (\`-f -\`), а не через \`-c "..."\` —
+  это обходит баг Windows spawnSync escape, при котором двойные кавычки
+  внутри SQL-идентификаторов рвут команду.
 
 Exit codes:
   0 — все sequences обработаны
@@ -59,20 +70,25 @@ function parseArgs(argv: readonly string[]): IArgs {
   return out;
 }
 
-function psqlScalar(url: string, sql: string): string {
-  const r = spawnSync('psql', [url, '-tA', '--no-psqlrc', '-c', sql], { encoding: 'utf8' });
+/**
+ * Запускает psql, передавая SQL через stdin (через `-f -`).
+ * Это обходит Windows spawnSync арг-эскейпинг для double-quoted идентификаторов.
+ */
+function psqlStdin(url: string, sql: string, extraArgs: string[] = []): string {
+  const args = [url, '-tA', '--no-psqlrc', '--single-transaction', '-v', 'ON_ERROR_STOP=1', ...extraArgs, '-f', '-'];
+  const r = spawnSync('psql', args, { input: sql, encoding: 'utf8' });
   if (r.status !== 0) {
     throw new Error(`psql failed (exit ${r.status}): ${(r.stderr || '').trim()}`);
   }
   return (r.stdout || '').trim();
 }
 
+function psqlScalar(url: string, sql: string): string {
+  return psqlStdin(url, sql);
+}
+
 function psqlRows(url: string, sql: string, sep = '\t'): string[][] {
-  const r = spawnSync('psql', [url, '-tA', `-F${sep}`, '--no-psqlrc', '-c', sql], { encoding: 'utf8' });
-  if (r.status !== 0) {
-    throw new Error(`psql failed (exit ${r.status}): ${(r.stderr || '').trim()}`);
-  }
-  const out = (r.stdout || '').trim();
+  const out = psqlStdin(url, sql, [`-F${sep}`]);
   if (!out) return [];
   return out.split('\n').map(l => l.split(sep));
 }
@@ -93,7 +109,7 @@ interface ISeqResult extends ISeqInfo {
   maxValue: number | null;
   newSetval: number;
   isCalled: boolean;
-  status: 'ok' | 'error';
+  status: 'ok' | 'error' | 'planned';
   error?: string;
 }
 
@@ -157,6 +173,8 @@ async function main(): Promise<void> {
 
   const results: ISeqResult[] = [];
   for (const s of sequences) {
+    // Все идентификаторы — exactly как pg_depend их вернул (validated).
+    // SQL генерируется как одна строка, ничего не concatenating с user-input.
     const safeTbl = s.table.replace(/"/g, '""');
     const safeCol = s.column.replace(/"/g, '""');
     const maxQ = `SELECT COALESCE(MAX("${safeCol}")::text, '') FROM "${s.schema}"."${safeTbl}";`;
@@ -169,60 +187,57 @@ async function main(): Promise<void> {
       continue;
     }
 
-    const hasData = maxValue !== null && Number.isFinite(maxValue) && maxValue > 0;
-    const setvalArg = hasData ? maxValue : 1;
+    const hasData = maxValue !== null && maxValue > 0;
     const isCalled = hasData;
+    const setvalArg = hasData ? maxValue : 1;
+
     // setval(seq, n, true)  → следующее nextval вернёт n+1
     // setval(seq, 1, false) → следующее nextval вернёт 1
-    const setvalSql = `SELECT pg_catalog.setval(pg_get_serial_sequence('"${s.schema}"."${safeTbl}"', '${safeCol}'), ${setvalArg}, ${isCalled ? 'true' : 'false'});`;
-
+    const safeSeq = s.sequence.replace(/"/g, '""');
+    const setvalSql = `SELECT pg_catalog.setval('"${s.schema}"."${safeSeq}"', ${setvalArg}, ${isCalled ? 'true' : 'false'});`;
     if (args.dryRun) {
-      console.log(`-- ${s.schema}.${s.sequence} (max=${maxValue ?? 'null'})`);
-      console.log(setvalSql);
-      results.push({ ...s, maxValue, newSetval: setvalArg, isCalled, status: 'ok' });
+      console.log('[DRY] ' + setvalSql);
+      results.push({ ...s, maxValue, newSetval: setvalArg, isCalled, status: 'planned' });
       continue;
     }
-
     try {
       psqlScalar(url, setvalSql);
       results.push({ ...s, maxValue, newSetval: setvalArg, isCalled, status: 'ok' });
       console.log(`✓ ${s.schema}.${s.sequence} → setval(${setvalArg}, ${isCalled}) (table=${s.table}.${s.column} max=${maxValue ?? 'null'})`);
     } catch (err) {
       results.push({ ...s, maxValue, newSetval: setvalArg, isCalled, status: 'error', error: (err as Error).message });
-      console.error(`✗ ${s.schema}.${s.sequence}: ${(err as Error).message}`);
     }
   }
 
-  ensureDir(args.report);
-  writeFileSync(args.report, renderMd(results, args.dryRun), 'utf8');
-
+  // Markdown report
   const okCount = results.filter(r => r.status === 'ok').length;
-  const errCount = results.filter(r => r.status === 'error').length;
-  console.log(`\nok=${okCount} error=${errCount} report=${args.report}`);
+  const plannedCount = results.filter(r => r.status === 'planned').length;
+  const errorCount = results.filter(r => r.status === 'error').length;
 
-  process.exit(errCount > 0 ? 1 : 0);
-}
-
-function renderMd(rows: ISeqResult[], dryRun: boolean): string {
   const lines: string[] = [];
   lines.push('# fix-sequences report');
   lines.push('');
   lines.push(`- Started: ${new Date().toISOString()}`);
-  lines.push(`- Mode: ${dryRun ? 'dry-run' : 'apply'}`);
-  lines.push(`- Total sequences: ${rows.length}`);
-  lines.push(`- OK: ${rows.filter(r => r.status === 'ok').length}`);
-  lines.push(`- Errors: ${rows.filter(r => r.status === 'error').length}`);
+  lines.push(`- Mode: ${args.dryRun ? 'dry-run' : 'apply'}`);
+  lines.push(`- Total sequences: ${sequences.length}`);
+  lines.push(`- OK: ${okCount}`);
+  if (args.dryRun) lines.push(`- Planned (dry-run): ${plannedCount}`);
+  lines.push(`- Errors: ${errorCount}`);
   lines.push('');
   lines.push('| Schema | Sequence | Table | Column | max(col) | setval | is_called | Status | Error |');
   lines.push('|---|---|---|---|---:|---:|---|---|---|');
-  for (const r of rows) {
+  for (const r of results) {
+    const statusIcon = r.status === 'ok' ? '✓' : r.status === 'planned' ? '⏸' : '✗';
     lines.push(
-      `| ${r.schema} | ${r.sequence} | ${r.table} | ${r.column} | ` +
-        `${r.maxValue ?? '-'} | ${r.newSetval} | ${r.isCalled} | ` +
-        `${r.status === 'ok' ? '✓' : '✗'} | ${r.error ?? ''} |`,
+      `| ${r.schema} | ${r.sequence} | ${r.table} | ${r.column} | ${r.maxValue ?? '-'} | ${r.newSetval} | ${r.isCalled ? 'true' : 'false'} | ${statusIcon} | ${(r.error ?? '').replace(/\|/g, '\\|')} |`,
     );
   }
-  return lines.join('\n') + '\n';
+  ensureDir(args.report);
+  writeFileSync(args.report, lines.join('\n') + '\n', 'utf8');
+
+  console.log('');
+  console.log(`ok=${okCount} ${args.dryRun ? `planned=${plannedCount} ` : ''}error=${errorCount} report=${args.report}`);
+  process.exit(errorCount > 0 ? 1 : 0);
 }
 
 main().catch(err => {

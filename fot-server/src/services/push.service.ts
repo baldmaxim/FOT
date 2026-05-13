@@ -1,5 +1,5 @@
 import webpush from 'web-push';
-import { supabase } from '../config/database.js';
+import { execute, query, queryOne } from '../config/postgres.js';
 import { env } from '../config/env.js';
 
 const vapidReady = !!(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY && env.VAPID_SUBJECT);
@@ -28,6 +28,13 @@ interface IGenericNotificationPayload {
   [key: string]: unknown;
 }
 
+interface ISubscriptionRow {
+  user_id?: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}
+
 const LEAVE_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск',
   sick_leave: 'Больничный',
@@ -36,48 +43,50 @@ const LEAVE_TYPE_LABELS: Record<string, string> = {
   certificate: 'Справка',
 };
 
+async function deleteStaleSubscriptionByEndpoint(endpoint: string): Promise<void> {
+  try {
+    await execute('DELETE FROM push_subscriptions WHERE endpoint = $1', [endpoint]);
+  } catch (err) {
+    console.error('push.deleteStaleSubscription failed:', err);
+  }
+}
+
 export const pushService = {
   async saveSubscription(userId: string, subscription: IPushSubscription): Promise<void> {
-    await supabase
-      .from('push_subscriptions')
-      .upsert(
-        { user_id: userId, ...subscription },
-        { onConflict: 'user_id,endpoint' },
-      );
+    await execute(
+      `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
+       VALUES ($1::uuid, $2, $3, $4)
+       ON CONFLICT (user_id, endpoint) DO UPDATE SET
+         p256dh = EXCLUDED.p256dh,
+         auth = EXCLUDED.auth`,
+      [userId, subscription.endpoint, subscription.p256dh, subscription.auth],
+    );
   },
 
   async deleteSubscription(userId: string, endpoint: string): Promise<void> {
-    await supabase
-      .from('push_subscriptions')
-      .delete()
-      .eq('user_id', userId)
-      .eq('endpoint', endpoint);
+    await execute(
+      'DELETE FROM push_subscriptions WHERE user_id = $1::uuid AND endpoint = $2',
+      [userId, endpoint],
+    );
   },
 
-  /** Возвращает user_id непосредственного руководителя (supervisor_id) */
   async sendLeaveRequestNotification(
     employeeId: number,
     requestType: string,
     submitterUserId: string,
   ): Promise<string[]> {
-    // Находим непосредственного руководителя через supervisor_id
-    const { data: profile } = await supabase
-      .from('user_profiles')
-      .select('supervisor_id')
-      .eq('employee_id', employeeId)
-      .single();
+    const profile = await queryOne<{ supervisor_id: string | null }>(
+      'SELECT supervisor_id FROM user_profiles WHERE employee_id = $1 LIMIT 1',
+      [employeeId],
+    );
 
     const recipientIds = new Set<string>();
-
     if (profile?.supervisor_id) {
       recipientIds.add(profile.supervisor_id);
     }
-
-    // Исключаем самого отправителя (на случай если сам себе руководитель)
     recipientIds.delete(submitterUserId);
 
     const ids = Array.from(recipientIds);
-
     if (!vapidReady || ids.length === 0) return ids;
 
     const label = LEAVE_TYPE_LABELS[requestType] || requestType;
@@ -86,13 +95,14 @@ export const pushService = {
       body: `Сотрудник подал заявление: ${label}`,
     });
 
-    const { data: subscriptions } = await supabase
-      .from('push_subscriptions')
-      .select('user_id, endpoint, p256dh, auth')
-      .in('user_id', ids);
+    const subscriptions = await query<ISubscriptionRow>(
+      `SELECT user_id, endpoint, p256dh, auth FROM push_subscriptions
+        WHERE user_id = ANY($1::uuid[])`,
+      [ids],
+    );
 
     await Promise.allSettled(
-      (subscriptions || []).map(async (sub: { user_id: string; endpoint: string; p256dh: string; auth: string }) => {
+      subscriptions.map(async (sub) => {
         try {
           await webpush.sendNotification(
             { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
@@ -100,7 +110,7 @@ export const pushService = {
           );
         } catch (err: unknown) {
           if (err && typeof err === 'object' && 'statusCode' in err && (err as { statusCode: number }).statusCode === 410) {
-            await supabase.from('push_subscriptions').delete().eq('endpoint', sub.endpoint);
+            await deleteStaleSubscriptionByEndpoint(sub.endpoint);
           }
         }
       }),
@@ -109,7 +119,6 @@ export const pushService = {
     return ids;
   },
 
-  /** Отправить уведомление о заявке на повышение по списку user_ids */
   async sendSalaryRaiseNotification(
     targetUserIds: string[],
     title: string,
@@ -119,13 +128,14 @@ export const pushService = {
 
     const notification = JSON.stringify({ title, body });
 
-    const { data: subscriptions } = await supabase
-      .from('push_subscriptions')
-      .select('user_id, endpoint, p256dh, auth')
-      .in('user_id', targetUserIds);
+    const subscriptions = await query<ISubscriptionRow>(
+      `SELECT user_id, endpoint, p256dh, auth FROM push_subscriptions
+        WHERE user_id = ANY($1::uuid[])`,
+      [targetUserIds],
+    );
 
     await Promise.allSettled(
-      (subscriptions || []).map(async (sub: { user_id: string; endpoint: string; p256dh: string; auth: string }) => {
+      subscriptions.map(async (sub) => {
         try {
           await webpush.sendNotification(
             { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
@@ -133,7 +143,7 @@ export const pushService = {
           );
         } catch (err: unknown) {
           if (err && typeof err === 'object' && 'statusCode' in err && (err as { statusCode: number }).statusCode === 410) {
-            await supabase.from('push_subscriptions').delete().eq('endpoint', sub.endpoint);
+            await deleteStaleSubscriptionByEndpoint(sub.endpoint);
           }
         }
       }),
@@ -145,12 +155,12 @@ export const pushService = {
   async sendChatNotification(recipientId: string, payload: IChatNotificationPayload): Promise<void> {
     if (!vapidReady) return;
 
-    const { data: subscriptions } = await supabase
-      .from('push_subscriptions')
-      .select('endpoint, p256dh, auth')
-      .eq('user_id', recipientId);
+    const subscriptions = await query<ISubscriptionRow>(
+      'SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1::uuid',
+      [recipientId],
+    );
 
-    if (!subscriptions || subscriptions.length === 0) return;
+    if (subscriptions.length === 0) return;
 
     const notification = JSON.stringify({
       title: payload.senderName,
@@ -166,12 +176,8 @@ export const pushService = {
             notification,
           );
         } catch (err: unknown) {
-          // Подписка устарела — удаляем
           if (err && typeof err === 'object' && 'statusCode' in err && (err as { statusCode: number }).statusCode === 410) {
-            await supabase
-              .from('push_subscriptions')
-              .delete()
-              .eq('endpoint', sub.endpoint);
+            await deleteStaleSubscriptionByEndpoint(sub.endpoint);
           }
         }
       }),
@@ -192,13 +198,14 @@ export const pushService = {
       ...payload,
     });
 
-    const { data: subscriptions } = await supabase
-      .from('push_subscriptions')
-      .select('endpoint, p256dh, auth')
-      .in('user_id', targetUserIds);
+    const subscriptions = await query<ISubscriptionRow>(
+      `SELECT endpoint, p256dh, auth FROM push_subscriptions
+        WHERE user_id = ANY($1::uuid[])`,
+      [targetUserIds],
+    );
 
     await Promise.allSettled(
-      (subscriptions || []).map(async (sub) => {
+      subscriptions.map(async (sub) => {
         try {
           await webpush.sendNotification(
             { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
@@ -206,10 +213,7 @@ export const pushService = {
           );
         } catch (err: unknown) {
           if (err && typeof err === 'object' && 'statusCode' in err && (err as { statusCode: number }).statusCode === 410) {
-            await supabase
-              .from('push_subscriptions')
-              .delete()
-              .eq('endpoint', sub.endpoint);
+            await deleteStaleSubscriptionByEndpoint(sub.endpoint);
           }
         }
       }),

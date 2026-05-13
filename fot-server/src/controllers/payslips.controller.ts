@@ -1,8 +1,11 @@
 import type { Response } from 'express';
-import { supabase } from '../config/database.js';
+import { query, queryOne } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { generatePayslipsForMonth } from '../services/payslip-generation.service.js';
 import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
+
+const PAYSLIP_COLUMNS =
+  'id, employee_id, period, gross_amount, net_amount, deductions, details, document_id, created_by, created_at';
 
 /** Мои расчётные листки (worker) */
 const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -13,14 +16,14 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
       return;
     }
 
-    const { data, error } = await supabase
-      .from('payslips')
-      .select('id, employee_id, period, gross_amount, net_amount, deductions, details, document_id, created_by, created_at')
-      .eq('employee_id', employeeId)
-      .order('period', { ascending: false });
-
-    if (error) throw error;
-    res.json({ success: true, data: data || [] });
+    const data = await query(
+      `SELECT ${PAYSLIP_COLUMNS}
+         FROM payslips
+        WHERE employee_id = $1
+        ORDER BY period DESC`,
+      [employeeId],
+    );
+    res.json({ success: true, data });
   } catch (err) {
     console.error('payslips.getMy error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения расчётных листков' });
@@ -37,14 +40,14 @@ const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<
       return;
     }
 
-    const { data, error } = await supabase
-      .from('payslips')
-      .select('id, employee_id, period, gross_amount, net_amount, deductions, details, document_id, created_by, created_at')
-      .eq('employee_id', employeeId)
-      .order('period', { ascending: false });
-
-    if (error) throw error;
-    res.json({ success: true, data: data || [] });
+    const data = await query(
+      `SELECT ${PAYSLIP_COLUMNS}
+         FROM payslips
+        WHERE employee_id = $1
+        ORDER BY period DESC`,
+      [employeeId],
+    );
+    res.json({ success: true, data });
   } catch (err) {
     console.error('payslips.getByEmployee error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения расчётных листков' });
@@ -64,22 +67,29 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const { data, error } = await supabase
-      .from('payslips')
-      .upsert({
+    const data = await queryOne(
+      `INSERT INTO payslips
+         (employee_id, period, gross_amount, net_amount, deductions, details, document_id, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+       ON CONFLICT (employee_id, period) DO UPDATE SET
+         gross_amount = EXCLUDED.gross_amount,
+         net_amount = EXCLUDED.net_amount,
+         deductions = EXCLUDED.deductions,
+         details = EXCLUDED.details,
+         document_id = EXCLUDED.document_id,
+         created_by = EXCLUDED.created_by
+       RETURNING *`,
+      [
         employee_id,
         period,
-        gross_amount: gross_amount || null,
-        net_amount: net_amount || null,
-        deductions: deductions || null,
-        details: details || null,
-        document_id: document_id || null,
-        created_by: req.user.id,
-      }, { onConflict: 'employee_id,period' })
-      .select()
-      .single();
-
-    if (error) throw error;
+        gross_amount || null,
+        net_amount || null,
+        deductions || null,
+        details ? JSON.stringify(details) : null,
+        document_id || null,
+        req.user.id,
+      ],
+    );
     res.json({ success: true, data });
   } catch (err) {
     console.error('payslips.create error:', err);
@@ -102,22 +112,40 @@ const importBatch = async (req: AuthenticatedRequest, res: Response): Promise<vo
       }
     }
 
-    const records = items.map((item: { employee_id: number; period: string; gross_amount?: number; net_amount?: number; deductions?: number }) => ({
-      employee_id: item.employee_id,
-      period: item.period,
-      gross_amount: item.gross_amount || null,
-      net_amount: item.net_amount || null,
-      deductions: item.deductions || null,
-      created_by: req.user.id,
-    }));
+    type Item = {
+      employee_id: number;
+      period: string;
+      gross_amount?: number;
+      net_amount?: number;
+      deductions?: number;
+    };
+    const list = items as Item[];
 
-    const { data, error } = await supabase
-      .from('payslips')
-      .upsert(records, { onConflict: 'employee_id,period' })
-      .select();
+    let imported = 0;
+    for (const item of list) {
+      await queryOne(
+        `INSERT INTO payslips
+           (employee_id, period, gross_amount, net_amount, deductions, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (employee_id, period) DO UPDATE SET
+           gross_amount = EXCLUDED.gross_amount,
+           net_amount = EXCLUDED.net_amount,
+           deductions = EXCLUDED.deductions,
+           created_by = EXCLUDED.created_by
+         RETURNING id`,
+        [
+          item.employee_id,
+          item.period,
+          item.gross_amount || null,
+          item.net_amount || null,
+          item.deductions || null,
+          req.user.id,
+        ],
+      );
+      imported += 1;
+    }
 
-    if (error) throw error;
-    res.json({ success: true, data: { imported: (data || []).length } });
+    res.json({ success: true, data: { imported } });
   } catch (err) {
     console.error('payslips.importBatch error:', err);
     res.status(500).json({ success: false, error: 'Ошибка импорта расчётных листков' });
@@ -137,7 +165,7 @@ const generate = async (req: AuthenticatedRequest, res: Response): Promise<void>
     res.json({ success: true, data: result });
   } catch (err) {
     console.error('payslips.generate error:', err);
-    res.status(500).json({ success: false, error: 'Оши��ка генерации расчётных листков' });
+    res.status(500).json({ success: false, error: 'Ошибка генерации расчётных листков' });
   }
 };
 

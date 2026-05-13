@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { supabase } from '../config/database.js';
+import { query, queryOne, withTransaction } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { pushService } from '../services/push.service.js';
 import { notificationService } from '../services/notification.service.js';
@@ -28,17 +28,13 @@ function isTimeStatus(value: unknown): value is TimeStatus {
 }
 
 async function loadEmployeeIdsByDepartment(departmentId: string): Promise<Array<{ id: number; full_name: string | null }>> {
-  const { data, error } = await supabase
-    .from('employees')
-    .select('id, full_name')
-    .eq('org_department_id', departmentId)
-    .eq('employment_status', 'active');
-
-  if (error) {
-    throw error;
-  }
-
-  return data || [];
+  return query<{ id: number; full_name: string | null }>(
+    `SELECT id, full_name
+       FROM employees
+      WHERE org_department_id = $1
+        AND employment_status = 'active'`,
+    [departmentId],
+  );
 }
 
 async function loadEmployeeIdsByDepartments(
@@ -48,17 +44,13 @@ async function loadEmployeeIdsByDepartments(
     return [];
   }
 
-  const { data, error } = await supabase
-    .from('employees')
-    .select('id, full_name, org_department_id')
-    .in('org_department_id', departmentIds)
-    .eq('employment_status', 'active');
-
-  if (error) {
-    throw error;
-  }
-
-  return data || [];
+  return query<{ id: number; full_name: string | null; org_department_id: string | null }>(
+    `SELECT id, full_name, org_department_id
+       FROM employees
+      WHERE org_department_id = ANY($1::uuid[])
+        AND employment_status = 'active'`,
+    [departmentIds],
+  );
 }
 
 /** Создание заявления (worker+) */
@@ -100,59 +92,60 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
 
     if (attachmentIds.length > 0) {
-      const { data: docs, error: docsErr } = await supabase
-        .from('documents')
-        .select('id, employee_id')
-        .in('id', attachmentIds);
-      if (docsErr) throw docsErr;
-      const owned = (docs || []).filter((d) => Number(d.employee_id) === Number(employeeId));
+      const docs = await query<{ id: number; employee_id: number | null }>(
+        `SELECT id, employee_id FROM documents WHERE id = ANY($1::bigint[])`,
+        [attachmentIds],
+      );
+      const owned = docs.filter(d => Number(d.employee_id) === Number(employeeId));
       if (owned.length !== attachmentIds.length) {
         res.status(400).json({ success: false, error: 'Файл-вложение не принадлежит этому сотруднику' });
         return;
       }
     }
 
-    const insertData: Record<string, unknown> = {
-      employee_id: employeeId,
-      request_type,
-      start_date,
-      end_date,
-      reason: reason || null,
-    };
-
-    if (request_type === 'time_correction') {
-      insertData.correction_date = correction_date;
-      insertData.correction_status = correction_status;
-      insertData.correction_hours = correction_hours ?? null;
-    }
-
-    const { data, error } = await supabase
-      .from('leave_requests')
-      .insert(insertData)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    if (attachmentIds.length > 0) {
-      const links = attachmentIds.map((documentId) => ({
-        document_id: documentId,
-        entity_type: 'leave_request',
-        entity_id: String(data.id),
-        purpose: 'leave_request_attachment',
-      }));
-      const { error: linkError } = await supabase
-        .from('document_links')
-        .upsert(links, { onConflict: 'document_id,entity_type,entity_id,purpose' });
-      if (linkError) {
-        console.error('leave-requests.create: link attachments error', linkError);
+    // Многошаговая операция: insert заявления + связь с документами в одной TX.
+    const data = await withTransaction(async (client) => {
+      const insertCols: string[] = ['employee_id', 'request_type', 'start_date', 'end_date', 'reason'];
+      const insertVals: unknown[] = [employeeId, request_type, start_date, end_date, reason || null];
+      if (request_type === 'time_correction') {
+        insertCols.push('correction_date', 'correction_status', 'correction_hours');
+        insertVals.push(correction_date, correction_status, correction_hours ?? null);
       }
-      await supabase
-        .from('documents')
-        .update({ leave_request_id: data.id })
-        .in('id', attachmentIds)
-        .is('leave_request_id', null);
-    }
+      const placeholders = insertVals.map((_, i) => `$${i + 1}`).join(', ');
+
+      const insRes = await client.query(
+        `INSERT INTO leave_requests (${insertCols.join(', ')})
+         VALUES (${placeholders})
+         RETURNING *`,
+        insertVals,
+      );
+      const row = insRes.rows[0];
+      if (!row) throw new Error('Failed to create leave_request');
+
+      if (attachmentIds.length > 0) {
+        const docIds = attachmentIds;
+        const entityIds = attachmentIds.map(() => String(row.id));
+        const entityTypes = attachmentIds.map(() => 'leave_request');
+        const purposes = attachmentIds.map(() => 'leave_request_attachment');
+
+        await client.query(
+          `INSERT INTO document_links (document_id, entity_type, entity_id, purpose)
+           SELECT u.document_id, u.entity_type, u.entity_id, u.purpose
+             FROM unnest($1::bigint[], $2::text[], $3::text[], $4::text[])
+               AS u(document_id, entity_type, entity_id, purpose)
+           ON CONFLICT (document_id, entity_type, entity_id, purpose) DO NOTHING`,
+          [docIds, entityTypes, entityIds, purposes],
+        );
+
+        await client.query(
+          `UPDATE documents SET leave_request_id = $1
+            WHERE id = ANY($2::bigint[]) AND leave_request_id IS NULL`,
+          [row.id, docIds],
+        );
+      }
+
+      return row;
+    });
 
     // Уведомляем руководителя отдела и админов (fire-and-forget)
     const label = LEAVE_TYPE_LABELS[request_type] || request_type;
@@ -193,14 +186,13 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
       return;
     }
 
-    const { data, error } = await supabase
-      .from('leave_requests')
-      .select('*')
-      .eq('employee_id', employeeId)
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-    res.json({ success: true, data: data || [] });
+    const data = await query(
+      `SELECT * FROM leave_requests
+        WHERE employee_id = $1
+        ORDER BY created_at DESC`,
+      [employeeId],
+    );
+    res.json({ success: true, data });
   } catch (err) {
     console.error('leave-requests.getMy error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения заявлений' });
@@ -217,23 +209,22 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
     }
 
     const employees = await loadEmployeeIdsByDepartments(departmentIds);
-    const empIds = (employees || []).map(e => e.id);
+    const empIds = employees.map(e => e.id);
     if (empIds.length === 0) {
       res.json({ success: true, data: [] });
       return;
     }
 
-    const nameMap = new Map((employees || []).map((e: { id: number; full_name: string | null }) => [e.id, e.full_name]));
+    const nameMap = new Map(employees.map(e => [e.id, e.full_name]));
 
-    const { data, error } = await supabase
-      .from('leave_requests')
-      .select('*')
-      .in('employee_id', empIds)
-      .order('created_at', { ascending: false });
+    const data = await query<{ employee_id: number; [k: string]: unknown }>(
+      `SELECT * FROM leave_requests
+        WHERE employee_id = ANY($1::bigint[])
+        ORDER BY created_at DESC`,
+      [empIds],
+    );
 
-    if (error) throw error;
-
-    const enriched = (data || []).map(r => ({
+    const enriched = data.map(r => ({
       ...r,
       employee_name: nameMap.get(r.employee_id) || null,
     }));
@@ -249,14 +240,17 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   try {
     const scopedDepartmentId = await resolveScopedDepartmentId(req, null);
     const managedDepartmentIds = await resolveManagedDepartmentIds(req);
-    let query = supabase
-      .from('leave_requests')
-      .select('*')
-      .order('created_at', { ascending: false });
+
+    const whereParts: string[] = [];
+    const params: unknown[] = [];
+    const addParam = (v: unknown): string => {
+      params.push(v);
+      return `$${params.length}`;
+    };
 
     const status = req.query.status as string | undefined;
     if (status) {
-      query = query.eq('status', status);
+      whereParts.push(`status = ${addParam(status)}`);
     }
 
     if (managedDepartmentIds.length > 0) {
@@ -268,24 +262,30 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         res.json({ success: true, data: [] });
         return;
       }
-      query = query.in('employee_id', employeeIds);
+      whereParts.push(`employee_id = ANY(${addParam(employeeIds)}::bigint[])`);
     }
 
-    const { data, error } = await query;
-    if (error) throw error;
+    const whereSql = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
+
+    const data = await query<{ employee_id: number; [k: string]: unknown }>(
+      `SELECT * FROM leave_requests
+        ${whereSql}
+        ORDER BY created_at DESC`,
+      params,
+    );
 
     // Подгружаем ФИО сотрудников
-    const empIds = [...new Set((data || []).map(r => r.employee_id))];
+    const empIds = [...new Set(data.map(r => r.employee_id))];
     let nameMap = new Map<number, string | null>();
     if (empIds.length > 0) {
-      const { data: emps } = await supabase
-        .from('employees')
-        .select('id, full_name')
-        .in('id', empIds);
-      nameMap = new Map((emps || []).map((e: { id: number; full_name: string | null }) => [e.id, e.full_name]));
+      const emps = await query<{ id: number; full_name: string | null }>(
+        `SELECT id, full_name FROM employees WHERE id = ANY($1::bigint[])`,
+        [empIds],
+      );
+      nameMap = new Map(emps.map(e => [e.id, e.full_name]));
     }
 
-    const enriched = (data || []).map(r => ({
+    const enriched = data.map(r => ({
       ...r,
       employee_name: nameMap.get(r.employee_id) || null,
     }));
@@ -301,13 +301,16 @@ const getById = async (req: AuthenticatedRequest, res: Response): Promise<void> 
   try {
     const { id } = req.params;
 
-    const { data: request, error } = await supabase
-      .from('leave_requests')
-      .select('*')
-      .eq('id', id)
-      .single();
+    const request = await queryOne<{
+      employee_id: number;
+      reviewer_id: string | null;
+      [k: string]: unknown;
+    }>(
+      `SELECT * FROM leave_requests WHERE id = $1`,
+      [id],
+    );
 
-    if (error || !request) {
+    if (!request) {
       res.status(404).json({ success: false, error: 'Заявление не найдено' });
       return;
     }
@@ -320,20 +323,18 @@ const getById = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     }
 
     // ФИО сотрудника
-    const { data: emp } = await supabase
-      .from('employees')
-      .select('id, full_name')
-      .eq('id', request.employee_id)
-      .maybeSingle();
+    const emp = await queryOne<{ id: number; full_name: string | null }>(
+      `SELECT id, full_name FROM employees WHERE id = $1`,
+      [request.employee_id],
+    );
 
     // Данные ревьюера
     let reviewer: { id: string; full_name: string | null } | null = null;
     if (request.reviewer_id) {
-      const { data: reviewerProfile } = await supabase
-        .from('user_profiles')
-        .select('id, full_name')
-        .eq('id', request.reviewer_id)
-        .maybeSingle();
+      const reviewerProfile = await queryOne<{ id: string; full_name: string | null }>(
+        `SELECT id, full_name FROM user_profiles WHERE id = $1`,
+        [request.reviewer_id],
+      );
       if (reviewerProfile) reviewer = reviewerProfile;
     }
 
@@ -358,13 +359,23 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     const { comment } = req.body;
 
     // Проверяем заявление
-    const { data: request, error: fetchErr } = await supabase
-      .from('leave_requests')
-      .select('*')
-      .eq('id', id)
-      .single();
+    const request = await queryOne<{
+      id: number;
+      employee_id: number;
+      status: string;
+      request_type: string;
+      start_date: string;
+      end_date: string;
+      correction_date: string | null;
+      correction_status: string | null;
+      correction_hours: number | null;
+      reason: string | null;
+    }>(
+      `SELECT * FROM leave_requests WHERE id = $1`,
+      [id],
+    );
 
-    if (fetchErr || !request) {
+    if (!request) {
       res.status(404).json({ success: false, error: 'Заявление не найдено' });
       return;
     }
@@ -379,20 +390,18 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
       return;
     }
 
-    const { data, error } = await supabase
-      .from('leave_requests')
-      .update({
-        status: 'approved',
-        reviewer_id: req.user.id,
-        reviewed_at: new Date().toISOString(),
-        review_comment: comment || null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) throw error;
+    const nowIso = new Date().toISOString();
+    const data = await queryOne(
+      `UPDATE leave_requests SET
+         status = 'approved',
+         reviewer_id = $1,
+         reviewed_at = $2,
+         review_comment = $3,
+         updated_at = $2
+       WHERE id = $4
+       RETURNING *`,
+      [req.user.id, nowIso, comment || null, id],
+    );
 
     // Создаём attendance adjustments как канонический источник ручных статусов
     const timesheetStatus = Object.prototype.hasOwnProperty.call(LEAVE_TO_TIMESHEET, request.request_type)
@@ -447,13 +456,12 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     const { id } = req.params;
     const { comment } = req.body;
 
-    const { data: request, error: fetchErr } = await supabase
-      .from('leave_requests')
-      .select('*')
-      .eq('id', id)
-      .single();
+    const request = await queryOne<{ id: number; employee_id: number; status: string }>(
+      `SELECT * FROM leave_requests WHERE id = $1`,
+      [id],
+    );
 
-    if (fetchErr || !request) {
+    if (!request) {
       res.status(404).json({ success: false, error: 'Заявление не найдено' });
       return;
     }
@@ -468,20 +476,19 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const { data, error } = await supabase
-      .from('leave_requests')
-      .update({
-        status: 'rejected',
-        reviewer_id: req.user.id,
-        reviewed_at: new Date().toISOString(),
-        review_comment: comment || null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .single();
+    const nowIso = new Date().toISOString();
+    const data = await queryOne(
+      `UPDATE leave_requests SET
+         status = 'rejected',
+         reviewer_id = $1,
+         reviewed_at = $2,
+         review_comment = $3,
+         updated_at = $2
+       WHERE id = $4
+       RETURNING *`,
+      [req.user.id, nowIso, comment || null, id],
+    );
 
-    if (error) throw error;
     res.json({ success: true, data });
   } catch (err) {
     console.error('leave-requests.reject error:', err);
@@ -494,13 +501,12 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   try {
     const { id } = req.params;
 
-    const { data: request, error: fetchErr } = await supabase
-      .from('leave_requests')
-      .select('*')
-      .eq('id', id)
-      .single();
+    const request = await queryOne<{ id: number; employee_id: number; status: string }>(
+      `SELECT * FROM leave_requests WHERE id = $1`,
+      [id],
+    );
 
-    if (fetchErr || !request) {
+    if (!request) {
       res.status(404).json({ success: false, error: 'Заявление не найдено' });
       return;
     }
@@ -516,17 +522,14 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const { data, error } = await supabase
-      .from('leave_requests')
-      .update({
-        status: 'cancelled',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .single();
+    const nowIso = new Date().toISOString();
+    const data = await queryOne(
+      `UPDATE leave_requests SET status = 'cancelled', updated_at = $1
+        WHERE id = $2
+        RETURNING *`,
+      [nowIso, id],
+    );
 
-    if (error) throw error;
     res.json({ success: true, data });
   } catch (err) {
     console.error('leave-requests.cancel error:', err);

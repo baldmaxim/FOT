@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { readExcelRows } from '../utils/excel-reader.js';
-import { supabase } from '../config/database.js';
+import { execute, query, withTransaction } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { cleanCell } from '../utils/import-cells.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -202,18 +202,22 @@ export const employeeSalaryHistoryController = {
       const PAGE_SIZE = 1000;
       let from = 0;
       while (true) {
-        const { data, error: empError } = await supabase
-          .from('employees')
-          .select('id, full_name, last_name, first_name, middle_name')
-          .eq('is_archived', false)
-          .range(from, from + PAGE_SIZE - 1);
-
-        if (empError) {
+        let data: Array<{ id: number; full_name: string; last_name: string | null; first_name: string | null; middle_name: string | null }>;
+        try {
+          data = await query<{ id: number; full_name: string; last_name: string | null; first_name: string | null; middle_name: string | null }>(
+            `SELECT id, full_name, last_name, first_name, middle_name
+               FROM employees
+              WHERE is_archived = false
+              ORDER BY id
+              LIMIT $1 OFFSET $2`,
+            [PAGE_SIZE, from],
+          );
+        } catch {
           res.status(500).json({ success: false, error: 'Ошибка загрузки сотрудников' });
           return;
         }
 
-        if (!data || data.length === 0) break;
+        if (data.length === 0) break;
         dbEmployees.push(...data);
         if (data.length < PAGE_SIZE) break;
         from += PAGE_SIZE;
@@ -309,36 +313,36 @@ export const employeeSalaryHistoryController = {
         if (history.length === 0) continue;
 
         // Вставляем записи в salary_history (VIEW employee_history подхватит автоматически)
-        const inserts = history.map(entry => ({
-          employee_id: m.id,
-          salary: entry.salary,
-          effective_date: entry.effectiveDate,
-          change_reason: entry.changeType,
-          note: 'Импорт из Excel',
-          created_by: req.user.id,
-        }));
-
-        const { error: insertError } = await supabase
-          .from('salary_history')
-          .insert(inserts);
-
-        if (insertError) {
-          console.error('[enrich-salary-history] Insert error:', m.fullName, insertError.message);
-          errors.push(`${m.fullName}: ${insertError.message}`);
+        try {
+          await withTransaction(async (client) => {
+            for (const entry of history) {
+              await client.query(
+                `INSERT INTO salary_history (employee_id, salary, effective_date, change_reason, note, created_by)
+                 VALUES ($1, $2, $3, $4, $5, $6::uuid)`,
+                [m.id, entry.salary, entry.effectiveDate, entry.changeType, 'Импорт из Excel', req.user.id],
+              );
+            }
+          });
+        } catch (insertError) {
+          const msg = insertError instanceof Error ? insertError.message : String(insertError);
+          console.error('[enrich-salary-history] Insert error:', m.fullName, msg);
+          errors.push(`${m.fullName}: ${msg}`);
           continue;
         }
 
         // Обновляем текущий оклад (последний = самый свежий)
         const latest = history[history.length - 1];
         if (latest) {
-          await supabase
-            .from('employees')
-            .update({
-              salary_actual: latest.salary,
-              current_salary: latest.salary,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', m.id);
+          try {
+            await execute(
+              `UPDATE employees
+                  SET salary_actual = $1, current_salary = $2, updated_at = $3
+                WHERE id = $4`,
+              [latest.salary, latest.salary, new Date().toISOString(), m.id],
+            );
+          } catch {
+            // ignore — основная вставка истории прошла, продолжаем
+          }
         }
 
         updated++;

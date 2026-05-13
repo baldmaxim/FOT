@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { supabase } from '../config/database.js';
+import { query } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { resolveScopedDepartmentId } from '../services/data-scope.service.js';
 import {
@@ -68,14 +68,15 @@ export const generateWeekendMemo = async (req: AuthenticatedRequest, res: Respon
       return;
     }
 
-    const adjRes = await supabase
-      .from('attendance_adjustments')
-      .select('employee_id, work_date')
-      .in('employee_id', employeeIds)
-      .in('work_date', weekend.weekendWorkDates)
-      .eq('status', 'work');
-    if (adjRes.error) throw adjRes.error;
-    const employeesWithWeekendWork = [...new Set((adjRes.data || []).map(r => Number(r.employee_id)))];
+    const adjRows = await query<{ employee_id: number; work_date: string }>(
+      `SELECT employee_id, work_date
+         FROM attendance_adjustments
+        WHERE employee_id = ANY($1::int[])
+          AND work_date = ANY($2::date[])
+          AND status = 'work'`,
+      [employeeIds, weekend.weekendWorkDates],
+    );
+    const employeesWithWeekendWork = [...new Set(adjRows.map(r => Number(r.employee_id)))];
 
     if (employeesWithWeekendWork.length === 0) {
       res.status(404).json({
