@@ -1712,7 +1712,7 @@ export const StaffControlPage: FC = () => {
               title="Добавить сотрудника"
               aria-label="Добавить сотрудника"
             >
-              <UserPlus size={14} />
+              <UserPlus size={isMobile ? 20 : 14} />
               {!isMobile && <span>Добавить</span>}
             </button>
           )}

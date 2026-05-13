@@ -313,6 +313,7 @@
   flex-basis: 100%;
   min-width: 200px;
   max-width: 360px;
+  align-self: flex-start;
 }
 
 .sc-bulk-bar {
@@ -1333,36 +1334,68 @@
 
   .sc-filters {
     gap: 8px;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
   }
 
   .sc-filters .sc-dept-select {
+    order: 1;
     flex: 1 1 0;
     min-width: 0;
   }
 
   .sc-schedule-filter {
+    order: 2;
     flex: 1 1 0;
     min-width: 0;
   }
 
   .sc-page-actions {
+    order: 3;
     margin-left: 0;
     flex: 0 0 auto;
+    gap: 6px;
   }
 
   .sc-page-actions .sc-btn.apply {
-    padding: 0 10px;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .sc-page-actions .sc-btn.apply > svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .sc-overflow-trigger {
+    width: 40px;
+    height: 40px;
+  }
+
+  .sc-overflow-trigger > svg {
+    width: 20px;
+    height: 20px;
   }
 
   .sc-filter-search {
-    flex: 1 1 100%;
+    order: 5;
+    flex: 0 0 100%;
+    width: 100%;
     min-width: 0;
     max-width: unset;
     margin-right: 0;
+    box-sizing: border-box;
+    align-self: auto;
   }
 
   .sc-segmented {
+    order: 4;
     flex: 0 0 100%;
+    box-sizing: border-box;
+    margin: 0;
   }
 
   .sc-segmented .sc-seg-btn {

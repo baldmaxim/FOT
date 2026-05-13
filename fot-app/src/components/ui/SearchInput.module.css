@@ -40,14 +40,17 @@
 }
 
 @media (max-width: 768px) {
+  .wrapper {
+    width: 100%;
+  }
+
   .input {
-    width: 160px;
+    width: 100%;
   }
 }
 
 @media (max-width: 430px) {
   .input {
-    width: 120px;
     height: 32px;
     font-size: 12px;
     padding: 0 8px 0 32px;
