@@ -1,18 +1,17 @@
 import { useMemo, useState, type FC } from 'react';
 import { usePresenceByObjectQuery } from '../../../hooks/useEmployeeDirectory';
-import { MapPinIcon, UsersIcon, SearchIcon, BuildingIcon } from '../../../components/ui/Icons';
+import { MapPinIcon, UsersIcon, SearchIcon } from '../../../components/ui/Icons';
 import type {
   IPresenceByObjectResponse,
   IPresenceObjectBucket,
   IPresenceObjectCompany,
   IPresenceObjectEmployee,
 } from '../../../types';
+import { CompanyGroup } from './CompanyGroup';
+import { ObjectDetailsModal } from './ObjectDetailsModal';
 import styles from './SkudPresencePage.module.css';
 
-const formatTime = (value: string | null): string => {
-  if (!value) return '—';
-  return value.slice(0, 5);
-};
+const TOP_COMPANIES_LIMIT = 5;
 
 const matchesEmployee = (emp: IPresenceObjectEmployee, query: string): boolean => {
   if (!query) return true;
@@ -65,104 +64,69 @@ const filterData = (
   return { buckets, totalOnline: data.total_online, filteredCount };
 };
 
-const EmployeeRow: FC<{ emp: IPresenceObjectEmployee }> = ({ emp }) => (
-  <li className={styles.employeeRow}>
-    <div className={styles.employeeName}>
-      <span className={styles.employeeNameText}>{emp.full_name}</span>
-      {emp.is_unsynced && (
-        <span
-          className={styles.unsyncedBadge}
-          title="Сотрудник не в нашем whitelist — данные получены напрямую из Sigur"
-        >
-          Sigur
-        </span>
-      )}
-    </div>
-    {emp.position_name && (
-      <div className={styles.employeePosition}>{emp.position_name}</div>
-    )}
-    {emp.department_name && (
-      <div className={styles.employeeDepartment}>{emp.department_name}</div>
-    )}
-    <div className={styles.employeeFooter}>
-      {emp.last_access_point && (
-        <span className={styles.employeeAp} title={emp.last_access_point}>
-          <MapPinIcon className={styles.tinyIcon} />
-          <span className={styles.employeeApText}>{emp.last_access_point}</span>
-        </span>
-      )}
-      <span className={styles.employeeTime}>с {formatTime(emp.first_entry)}</span>
-    </div>
-  </li>
-);
-
-const CompanyGroup: FC<{
-  company: IPresenceObjectCompany;
-  isExpanded: boolean;
-  onToggle: () => void;
-}> = ({ company, isExpanded, onToggle }) => {
-  const isClickable = company.online_count > 0;
-  return (
-    <div className={styles.company}>
-      <button
-        type="button"
-        className={`${styles.companyHeader} ${isExpanded ? styles.companyHeaderOpen : ''}`}
-        onClick={onToggle}
-        disabled={!isClickable}
-      >
-        <span className={styles.companyName}>
-          <BuildingIcon className={styles.companyIcon} />
-          {company.company_name}
-        </span>
-        <span className={styles.companyCount}>
-          {company.online_count}
-          <span className={styles.companyCountLabel}>чел.</span>
-        </span>
-      </button>
-      {isExpanded && company.employees.length > 0 && (
-        <ul className={styles.employeeList}>
-          {company.employees.map(emp => <EmployeeRow key={emp.employee_id} emp={emp} />)}
-        </ul>
-      )}
-    </div>
-  );
+const pluralCompanies = (n: number): string => {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'компания';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'компании';
+  return 'компаний';
 };
 
 const ObjectCard: FC<{
   bucket: IFilteredBucket;
   expanded: Set<string>;
   onToggleCompany: (key: string) => void;
-}> = ({ bucket, expanded, onToggleCompany }) => (
-  <article className={styles.card}>
-    <header className={styles.cardHeader}>
-      <div className={styles.cardTitle}>
-        <MapPinIcon className={styles.cardIcon} />
-        <span>{bucket.object_name}</span>
-      </div>
-      <div className={styles.cardCount}>
-        <span className={styles.cardCountValue}>{bucket.online_count}</span>
-        <span className={styles.cardCountLabel}>в моменте</span>
-      </div>
-    </header>
-    {bucket.companies.length === 0 ? (
-      <div className={styles.cardEmpty}>Сейчас никого нет</div>
-    ) : (
-      <div className={styles.cardBody}>
-        {bucket.companies.map(company => {
-          const key = `${bucket.object_id ?? '__no_object__'}::${company.company_id}`;
-          return (
-            <CompanyGroup
-              key={key}
-              company={company}
-              isExpanded={expanded.has(key)}
-              onToggle={() => onToggleCompany(key)}
-            />
-          );
-        })}
-      </div>
-    )}
-  </article>
-);
+  onOpenDetails: (bucket: IFilteredBucket) => void;
+}> = ({ bucket, expanded, onToggleCompany, onOpenDetails }) => {
+  const visibleCompanies = bucket.companies.slice(0, TOP_COMPANIES_LIMIT);
+  const restCompanies = bucket.companies.slice(TOP_COMPANIES_LIMIT);
+  const restEmployees = restCompanies.reduce((sum, c) => sum + c.online_count, 0);
+
+  return (
+    <article className={styles.card}>
+      <button
+        type="button"
+        className={`${styles.cardHeader} ${styles.cardHeaderClickable}`}
+        onClick={() => onOpenDetails(bucket)}
+      >
+        <div className={styles.cardTitle}>
+          <MapPinIcon className={styles.cardIcon} />
+          <span>{bucket.object_name}</span>
+        </div>
+        <div className={styles.cardCount}>
+          <span className={styles.cardCountValue}>{bucket.online_count}</span>
+          <span className={styles.cardCountLabel}>в моменте</span>
+        </div>
+      </button>
+      {bucket.companies.length === 0 ? (
+        <div className={styles.cardEmpty}>Сейчас никого нет</div>
+      ) : (
+        <div className={styles.cardBody}>
+          {visibleCompanies.map(company => {
+            const key = `${bucket.object_id ?? '__no_object__'}::${company.company_id}`;
+            return (
+              <CompanyGroup
+                key={key}
+                company={company}
+                isExpanded={expanded.has(key)}
+                onToggle={() => onToggleCompany(key)}
+              />
+            );
+          })}
+          {restCompanies.length > 0 && (
+            <button
+              type="button"
+              className={styles.othersBtn}
+              onClick={() => onOpenDetails(bucket)}
+            >
+              Прочие — {restCompanies.length} {pluralCompanies(restCompanies.length)}, {restEmployees} чел.
+            </button>
+          )}
+        </div>
+      )}
+    </article>
+  );
+};
 
 export const SkudPresencePage: FC = () => {
   const { data, isLoading, isError, refetch, isFetching } = usePresenceByObjectQuery();
@@ -170,6 +134,7 @@ export const SkudPresencePage: FC = () => {
   const [selectedCompanies, setSelectedCompanies] = useState<Set<string>>(new Set());
   const [hideEmpty, setHideEmpty] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [detailsBucket, setDetailsBucket] = useState<IFilteredBucket | null>(null);
 
   const allCompanies = useMemo(() => {
     if (!data) return [];
@@ -303,9 +268,17 @@ export const SkudPresencePage: FC = () => {
             bucket={bucket}
             expanded={expanded}
             onToggleCompany={toggleExpanded}
+            onOpenDetails={setDetailsBucket}
           />
         ))}
       </div>
+
+      {detailsBucket && (
+        <ObjectDetailsModal
+          bucket={detailsBucket}
+          onClose={() => setDetailsBucket(null)}
+        />
+      )}
     </div>
   );
 };

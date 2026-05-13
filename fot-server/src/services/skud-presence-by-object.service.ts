@@ -9,7 +9,7 @@
 import { getPresence } from './skud-presence.service.js';
 import { listTravelObjects } from './skud-travel.service.js';
 import { getCompanyResolveIndex, getInternalAccessPoints } from './skud-shared.service.js';
-import { resolveSigurEmployeesByNames, normalizeMatchName } from './sigur-presence-resolver.service.js';
+import { resolveSigurEmployeesByNames, resolveSigurEmployeesByIds, normalizeMatchName } from './sigur-presence-resolver.service.js';
 import { query } from '../config/postgres.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 
@@ -130,15 +130,31 @@ export async function getPresenceByObject(): Promise<IPresenceByObjectResponse> 
   const onlineIds = onlineEmployees.map(p => p.employee_id);
 
   const orgByEmpId = new Map<number, string | null>();
+  const sigurIdByEmpId = new Map<number, number | null>();
   if (onlineIds.length > 0) {
-    const rows = await query<{ id: number; org_department_id: string | null }>(
-      'SELECT id, org_department_id FROM employees WHERE id = ANY($1::bigint[])',
+    const rows = await query<{ id: number; org_department_id: string | null; sigur_employee_id: number | string | null }>(
+      'SELECT id, org_department_id, sigur_employee_id FROM employees WHERE id = ANY($1::bigint[])',
       [onlineIds],
     );
     for (const row of rows) {
       orgByEmpId.set(row.id, row.org_department_id);
+      // PG bigint часто приходит строкой — приводим к Number с гардом.
+      const raw = row.sigur_employee_id;
+      const sigurId = raw == null ? null : Number(raw);
+      sigurIdByEmpId.set(row.id, sigurId != null && Number.isFinite(sigurId) ? sigurId : null);
     }
   }
+
+  // Bulk-резолв department_name из Sigur API для synced сотрудников. Имена в локальной
+  // БД (`org_departments.name`) могут быть пусты/рассинхронизированы — Sigur API считаем
+  // источником истины. Fallback на presence.department_name при пустом матче.
+  const syncedSigurIds: number[] = [];
+  for (const sid of sigurIdByEmpId.values()) {
+    if (sid != null) syncedSigurIds.push(sid);
+  }
+  const sigurDeptByEmpSigurId = syncedSigurIds.length > 0
+    ? await resolveSigurEmployeesByIds(syncedSigurIds)
+    : new Map();
 
   // ─── Unsynced events: вычисляем «online» по последнему внешнему событию ───
   // events отсортированы по time DESC: first hit per physical_person = latest event.
@@ -238,12 +254,16 @@ export async function getPresenceByObject(): Promise<IPresenceByObjectResponse> 
       }
     }
 
+    const sigurEmpId = sigurIdByEmpId.get(emp.employee_id) ?? null;
+    const sigurMatch = sigurEmpId != null ? sigurDeptByEmpSigurId.get(sigurEmpId) : undefined;
+    const departmentName = sigurMatch?.department.name || emp.department_name || null;
+
     const company = ensureCompany(bucket, companyId, companyName);
     company.employees.push({
       employee_id: emp.employee_id,
       full_name: emp.full_name,
       position_name: emp.position_name,
-      department_name: emp.department_name,
+      department_name: departmentName,
       first_entry: emp.first_entry,
       last_access_point: emp.last_access_point,
       since: emp.since,

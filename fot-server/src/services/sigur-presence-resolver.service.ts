@@ -30,6 +30,8 @@ interface ICachedResolver {
   byName: Map<string, ISigurEmployeeResolution>;
   /** Prefix-индекс (lastname + firstname). null = коллизия, не используем. */
   byPrefix: Map<string, ISigurEmployeeResolution | null>;
+  /** Индекс по sigur_employee_id для резолва synced сотрудников. */
+  byEmployeeId: Map<number, ISigurEmployeeResolution>;
   expiresAt: number;
 }
 
@@ -76,7 +78,7 @@ function resolveEmployeeFullName(row: Record<string, unknown>): string {
   return parts.join(' ').trim();
 }
 
-async function loadAllSigurEmployees(): Promise<Array<{ name: string; departmentId: number | null }>> {
+async function loadAllSigurEmployees(): Promise<Array<{ id: number | null; name: string; departmentId: number | null }>> {
   const raw = await sigurService.fetchAllPaginated<Record<string, unknown>>(
     '/api/v1/employees',
     { excludeFields: 'photo' },
@@ -88,7 +90,7 @@ async function loadAllSigurEmployees(): Promise<Array<{ name: string; department
     logSampleAndWarn('sigur-presence-resolver', raw[0], ['id', 'name', 'departmentId']);
   }
 
-  const result: Array<{ name: string; departmentId: number | null }> = [];
+  const result: Array<{ id: number | null; name: string; departmentId: number | null }> = [];
   let skippedNoName = 0;
   let skippedNoDept = 0;
   for (const row of raw || []) {
@@ -106,7 +108,8 @@ async function loadAllSigurEmployees(): Promise<Array<{ name: string; department
       skippedNoDept += 1;
       continue;
     }
-    result.push({ name: fullName, departmentId });
+    const employeeId = pickNumber(rec.id ?? rec.ID ?? rec.Id);
+    result.push({ id: employeeId, name: fullName, departmentId });
   }
   console.log(
     `[sigur-presence-resolver] employees fetched=${raw?.length ?? 0} usable=${result.length} skipped_no_name=${skippedNoName} skipped_no_dept=${skippedNoDept}`,
@@ -140,11 +143,11 @@ function resolveRootNode(
 async function buildResolver(): Promise<ICachedResolver> {
   const isConfigured = await sigurService.isConfigured();
   if (!isConfigured) {
-    return { byName: new Map(), byPrefix: new Map(), expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
+    return { byName: new Map(), byPrefix: new Map(), byEmployeeId: new Map(), expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
   }
 
   let tree: Map<number, { id: number; parentId: number | null; name: string }>;
-  let employees: Array<{ name: string; departmentId: number | null }>;
+  let employees: Array<{ id: number | null; name: string; departmentId: number | null }>;
   try {
     [tree, employees] = await Promise.all([
       loadDepartmentsTree(),
@@ -155,11 +158,12 @@ async function buildResolver(): Promise<ICachedResolver> {
       '[sigur-presence-resolver] failed to load Sigur data, falling back to empty maps:',
       (error as Error).message,
     );
-    return { byName: new Map(), byPrefix: new Map(), expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
+    return { byName: new Map(), byPrefix: new Map(), byEmployeeId: new Map(), expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
   }
 
   const byName = new Map<string, ISigurEmployeeResolution>();
   const byPrefix = new Map<string, ISigurEmployeeResolution | null>();
+  const byEmployeeId = new Map<number, ISigurEmployeeResolution>();
 
   for (const employee of employees) {
     if (!employee.name) continue;
@@ -179,6 +183,11 @@ async function buildResolver(): Promise<ICachedResolver> {
     // First-wins по полному ФИО.
     if (!byName.has(normalized)) {
       byName.set(normalized, resolution);
+    }
+
+    // First-wins по sigur_employee_id — для синхронизированных сотрудников из БД.
+    if (employee.id != null && !byEmployeeId.has(employee.id)) {
+      byEmployeeId.set(employee.id, resolution);
     }
 
     // Prefix-индекс с защитой от коллизий: если уже есть запись с этим prefix
@@ -201,7 +210,7 @@ async function buildResolver(): Promise<ICachedResolver> {
 
   const usablePrefixes = [...byPrefix.values()].filter(v => v !== null).length;
   console.log(
-    `[sigur-presence-resolver] indexed ${byName.size} unique full names, ${usablePrefixes}/${byPrefix.size} usable prefix keys`,
+    `[sigur-presence-resolver] indexed ${byName.size} unique full names, ${usablePrefixes}/${byPrefix.size} usable prefix keys, ${byEmployeeId.size} by employee id`,
   );
   if (byName.size > 0) {
     console.log(
@@ -209,7 +218,7 @@ async function buildResolver(): Promise<ICachedResolver> {
       [...byName.keys()].slice(0, 10),
     );
   }
-  return { byName, byPrefix, expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
+  return { byName, byPrefix, byEmployeeId, expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
 }
 
 async function getResolver(): Promise<ICachedResolver> {
@@ -282,6 +291,25 @@ export async function resolveSigurEmployeesByNames(
     if (unresolvedSample.length > 0) {
       console.log('[sigur-presence-resolver] unresolved sample:', unresolvedSample);
     }
+  }
+  return result;
+}
+
+/**
+ * Bulk-резолв по sigur_employee_id (для synced сотрудников из БД).
+ * Делит общий кэш с `resolveSigurEmployeesByNames` — один fetch на 10 минут.
+ */
+export async function resolveSigurEmployeesByIds(
+  ids: number[],
+): Promise<Map<number, ISigurEmployeeResolution>> {
+  const result = new Map<number, ISigurEmployeeResolution>();
+  if (ids.length === 0) return result;
+  const resolver = await getResolver();
+  for (const id of ids) {
+    if (id == null || !Number.isFinite(id)) continue;
+    if (result.has(id)) continue;
+    const match = resolver.byEmployeeId.get(id);
+    if (match) result.set(id, match);
   }
   return result;
 }

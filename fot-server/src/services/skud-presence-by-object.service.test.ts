@@ -27,8 +27,10 @@ vi.mock('./skud-shared.service.js', () => ({
 }));
 
 const sigurResolveMock = vi.hoisted(() => vi.fn());
+const sigurResolveByIdMock = vi.hoisted(() => vi.fn());
 vi.mock('./sigur-presence-resolver.service.js', () => ({
   resolveSigurEmployeesByNames: sigurResolveMock,
+  resolveSigurEmployeesByIds: sigurResolveByIdMock,
   invalidateSigurPresenceResolverCache: vi.fn(),
   normalizeMatchName: (s: string) => s.toLowerCase().trim().replace(/\s+/g, ' ').replace(/ё/g, 'е'),
 }));
@@ -107,6 +109,8 @@ beforeEach(() => {
   });
   internalPointsMock.mockResolvedValue(new Set());
   sigurResolveMock.mockResolvedValue(new Map());
+  sigurResolveByIdMock.mockReset();
+  sigurResolveByIdMock.mockResolvedValue(new Map());
 });
 
 afterEach(() => {
@@ -178,6 +182,68 @@ describe('getPresenceByObject', () => {
     expect(sklad.companies[0].company_name).toBe('ООО Альфа');
     expect(sklad.companies[0].employees[0].full_name).toBe('Иванов');
     expect(sklad.companies[0].employees[0].is_unsynced).toBe(false);
+  });
+
+  it('overrides synced department_name with Sigur match when sigur_employee_id resolves', async () => {
+    travelMock.mockResolvedValue([makeTravelObject('obj-1', 'Склад', ['Турникет-1'])]);
+    presenceMock.mockResolvedValue([
+      makePresenceItem({
+        employee_id: 1,
+        full_name: 'Иванов',
+        status: 'online',
+        last_access_point: 'Турникет-1',
+        department_name: 'Старое имя из БД',
+      }),
+    ]);
+    pgQuery.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('FROM employees')
+        ? [{ id: 1, org_department_id: 'dept-A', sigur_employee_id: 777 }]
+        : []),
+    );
+    sigurResolveByIdMock.mockResolvedValue(new Map([
+      [777, makeSigurMatch(100, 'ООО Альфа', 50, 'Бригада из Sigur')],
+    ]));
+    companyResolveMock.mockResolvedValue({
+      rootId: 'root',
+      companyByDeptId: new Map([['dept-A', 'company-1']]),
+      companyMeta: new Map([['company-1', { id: 'company-1', name: 'ООО Альфа', sigur_department_id: 100 }]]),
+      companyBySigurId: new Map([[100, 'company-1']]),
+      companyByNormalizedName: new Map([['ооо альфа', 'company-1']]),
+    });
+
+    const data = await getPresenceByObject();
+    const emp = data.buckets[0].companies[0].employees[0];
+    expect(emp.department_name).toBe('Бригада из Sigur');
+  });
+
+  it('falls back to presence department_name when sigur_employee_id is null', async () => {
+    travelMock.mockResolvedValue([makeTravelObject('obj-1', 'Склад', ['Турникет-1'])]);
+    presenceMock.mockResolvedValue([
+      makePresenceItem({
+        employee_id: 1,
+        full_name: 'Иванов',
+        status: 'online',
+        last_access_point: 'Турникет-1',
+        department_name: 'Имя из org_departments',
+      }),
+    ]);
+    pgQuery.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('FROM employees')
+        ? [{ id: 1, org_department_id: 'dept-A', sigur_employee_id: null }]
+        : []),
+    );
+    // sigurResolveByIdMock возвращает пустую Map (default).
+    companyResolveMock.mockResolvedValue({
+      rootId: 'root',
+      companyByDeptId: new Map([['dept-A', 'company-1']]),
+      companyMeta: new Map([['company-1', { id: 'company-1', name: 'ООО Альфа', sigur_department_id: 100 }]]),
+      companyBySigurId: new Map([[100, 'company-1']]),
+      companyByNormalizedName: new Map([['ооо альфа', 'company-1']]),
+    });
+
+    const data = await getPresenceByObject();
+    const emp = data.buckets[0].companies[0].employees[0];
+    expect(emp.department_name).toBe('Имя из org_departments');
   });
 
   it('propagates department_name from synced presence into employee row', async () => {
