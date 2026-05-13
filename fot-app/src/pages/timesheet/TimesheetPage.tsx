@@ -262,9 +262,9 @@ export const TimesheetPage: FC = () => {
     // Группировка строк табеля: department → direct_report → self.
     // Внутри группы сохраняем порядок ответа (бэк сортирует по full_name).
     const sourceOrder: Record<NonNullable<TimesheetEmployee['source']>, number> = {
-      department: 0,
+      self: 0,
       direct_report: 1,
-      self: 2,
+      department: 2,
     };
     return [...raw].sort((a, b) => sourceOrder[a.source ?? 'department'] - sourceOrder[b.source ?? 'department']);
   }, [timesheetQuery.data]);

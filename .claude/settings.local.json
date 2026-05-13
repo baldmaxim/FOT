@@ -63,7 +63,8 @@
       "PowerShell(Set-Location C:\\\\Users\\\\Usrr\\\\VSCode\\\\Odintsov\\\\FOT\\\\fot-server; npx tsc --noEmit 2>&1 | Select-Object -First 30; \"EXIT=$LASTEXITCODE\")",
       "mcp__sentry__find_organizations",
       "PowerShell(npm --prefix C:\\\\Users\\\\Usrr\\\\VSCode\\\\Odintsov\\\\FOT\\\\fot-server test 2>&1)",
-      "Bash(grep -E \"Sidebar\\\\.\\(tsx|ts\\)|^$\")"
+      "Bash(grep -E \"Sidebar\\\\.\\(tsx|ts\\)|^$\")",
+      "Bash(npm test *)"
     ]
   }
 }
