@@ -122,23 +122,24 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
             доступы активируются автоматически.
           </p>
         </div>
-        <div className={styles.assignmentFilters}>
+      </div>
+
+      <div className={styles.assignmentFilters}>
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          className={styles.nameInput}
+          placeholder="Поиск по сотруднику, аккаунту или отделу..."
+        />
+        <label className={styles.assignmentToggle}>
           <input
-            type="text"
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            className={styles.nameInput}
-            placeholder="Поиск по сотруднику, аккаунту или отделу..."
+            type="checkbox"
+            checked={hideEmployeesWithoutAssignments}
+            onChange={(event) => setHideEmployeesWithoutAssignments(event.target.checked)}
           />
-          <label className={styles.assignmentToggle}>
-            <input
-              type="checkbox"
-              checked={hideEmployeesWithoutAssignments}
-              onChange={(event) => setHideEmployeesWithoutAssignments(event.target.checked)}
-            />
-            Скрыть сотрудников без назначений
-          </label>
-        </div>
+          Скрыть сотрудников без назначений
+        </label>
       </div>
 
       <div className={styles.importSummary}>

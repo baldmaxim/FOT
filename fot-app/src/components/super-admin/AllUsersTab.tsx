@@ -19,8 +19,6 @@ export interface IUserFromApi {
   email_confirmed?: boolean;
   full_name: string | null;
   assigned_department_ids: string[];
-  assigned_employee_ids: number[];
-  assigned_employees: IAssignedEmployeeOption[];
   is_site_supervisor: boolean;
   position_type: EmployeePositionType;
   imported_position: string | null;
@@ -31,11 +29,6 @@ export interface IUserFromApi {
   two_factor_enabled: boolean;
   approved_at: string | null;
   created_at: string;
-}
-
-interface IAssignedEmployeeOption {
-  id: number;
-  full_name: string;
 }
 
 interface ITwoFactorModal {
@@ -64,7 +57,6 @@ interface IUserRowExpandedProps {
   onChangeChatMode: (userId: string, mode: ChatInboundMode) => Promise<void>;
   onLinkEmployee: (userId: string, employeeId: number | null, empName?: string) => Promise<void>;
   onToggleSiteSupervisor: (userId: string, value: boolean) => Promise<void>;
-  onSaveEmployeeAccess: (userId: string, ids: number[]) => Promise<number[] | null>;
   onConfirmEmail: (userId: string) => Promise<void>;
   onGenerate2FA: (userId: string, userName: string) => Promise<void>;
   onDisable2FA: (userId: string) => Promise<void>;
@@ -80,7 +72,6 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   onChangeChatMode,
   onLinkEmployee,
   onToggleSiteSupervisor,
-  onSaveEmployeeAccess,
   onConfirmEmail,
   onGenerate2FA,
   onDisable2FA,
@@ -99,14 +90,7 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   const empSearchSeqRef = useRef(0);
   const skudSearchWrapRef = useRef<HTMLDivElement | null>(null);
 
-  // Прямые назначения сотрудников начальнику участка (миграция 090).
-  const [empAccessDraft, setEmpAccessDraft] = useState<IAssignedEmployeeOption[] | null>(null);
-  const [empAccessSearchQuery, setEmpAccessSearchQuery] = useState('');
-  const [empAccessSearchLoading, setEmpAccessSearchLoading] = useState(false);
-  const [empAccessSearchResults, setEmpAccessSearchResults] = useState<{ id: number; full_name: string }[]>([]);
-  const [savingEmpAccess, setSavingEmpAccess] = useState(false);
   const [savingSiteSupervisor, setSavingSiteSupervisor] = useState(false);
-  const empAccessSearchSeqRef = useRef(0);
 
   // Debounce поиска сотрудника СКУД (250 мс) + защита от устаревших ответов
   useEffect(() => {
@@ -163,79 +147,6 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
     await onLinkEmployee(user.id, employeeId, empName);
     setEmpSearchQuery('');
     setEmpSearchResults([]);
-  };
-
-  // ── Прямые сотрудники начальника участка ──────────────────────────────────
-  const assignedEmployees = useMemo<IAssignedEmployeeOption[]>(
-    () => empAccessDraft ?? user.assigned_employees ?? [],
-    [empAccessDraft, user.assigned_employees],
-  );
-  const initialAssignedIds = useMemo(
-    () => [...new Set((user.assigned_employees ?? []).map(e => e.id))].sort((a, b) => a - b),
-    [user.assigned_employees],
-  );
-  const currentAssignedIds = useMemo(
-    () => [...new Set(assignedEmployees.map(e => e.id))].sort((a, b) => a - b),
-    [assignedEmployees],
-  );
-  const hasEmpAccessChanges = useMemo(() => {
-    if (initialAssignedIds.length !== currentAssignedIds.length) return true;
-    return initialAssignedIds.some((id, i) => id !== currentAssignedIds[i]);
-  }, [initialAssignedIds, currentAssignedIds]);
-
-  useEffect(() => {
-    if (empAccessSearchQuery.length < 2) {
-      setEmpAccessSearchResults([]);
-      setEmpAccessSearchLoading(false);
-      return;
-    }
-    setEmpAccessSearchLoading(true);
-    const seq = ++empAccessSearchSeqRef.current;
-    const timer = setTimeout(async () => {
-      try {
-        const results = await adminService.searchAllEmployees(empAccessSearchQuery);
-        if (seq === empAccessSearchSeqRef.current) {
-          setEmpAccessSearchResults(results.map(r => ({ id: r.id, full_name: r.full_name })));
-          setEmpAccessSearchLoading(false);
-        }
-      } catch (err) {
-        console.error('Employee access search error:', err);
-        if (seq === empAccessSearchSeqRef.current) {
-          setEmpAccessSearchResults([]);
-          setEmpAccessSearchLoading(false);
-        }
-      }
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [empAccessSearchQuery]);
-
-  const handleEmpAccessToggle = useCallback((emp: IAssignedEmployeeOption) => {
-    setEmpAccessDraft(prev => {
-      const current = prev ?? assignedEmployees;
-      if (current.some(e => e.id === emp.id)) {
-        return current.filter(e => e.id !== emp.id);
-      }
-      return [...current, emp];
-    });
-  }, [assignedEmployees]);
-
-  const handleEmpAccessReset = () => {
-    setEmpAccessDraft(null);
-    setEmpAccessSearchQuery('');
-  };
-
-  const handleEmpAccessSave = async () => {
-    setSavingEmpAccess(true);
-    try {
-      const ids = assignedEmployees.map(e => e.id);
-      const saved = await onSaveEmployeeAccess(user.id, ids);
-      if (saved) {
-        // Оставляем только тех, кого сервер вернул (на случай частичной валидации).
-        setEmpAccessDraft(assignedEmployees.filter(e => saved.includes(e.id)));
-      }
-    } finally {
-      setSavingEmpAccess(false);
-    }
   };
 
   const handleSiteSupervisorChange = async (next: boolean) => {
@@ -371,88 +282,6 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
           />
         </label>
       </div>
-
-      {user.is_site_supervisor && (
-        <div className={styles.departmentAccessSection}>
-          <div className={styles.departmentAccessHeader}>
-            <div>
-              <div className={styles.departmentAccessTitle}>Прямые сотрудники участка</div>
-              <div className={styles.departmentAccessHint}>
-                Сотрудники, выгружаемые в табель отдельно от назначенных отделов/бригад.
-              </div>
-            </div>
-            <div className={styles.departmentAccessCount}>{assignedEmployees.length} выбрано</div>
-          </div>
-
-          <div className={styles.skudSearchWrap}>
-            <input
-              type="text"
-              placeholder="Поиск сотрудника по ФИО..."
-              value={empAccessSearchQuery}
-              onChange={(e) => setEmpAccessSearchQuery(e.target.value)}
-              className={`${styles.nameInput} ${styles.departmentAccessSearch}`}
-            />
-            {empAccessSearchLoading && (
-              <div className={styles.skudSearchLoading}>Поиск...</div>
-            )}
-            {empAccessSearchResults.length > 0 && (
-              <div className={styles.skudSearchResults}>
-                {empAccessSearchResults
-                  .filter(emp => !assignedEmployees.some(e => e.id === emp.id))
-                  .map(emp => (
-                    <div
-                      key={emp.id}
-                      className={styles.skudSearchItem}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => {
-                        handleEmpAccessToggle({ id: emp.id, full_name: emp.full_name });
-                        setEmpAccessSearchQuery('');
-                        setEmpAccessSearchResults([]);
-                      }}
-                    >
-                      {emp.full_name}
-                    </div>
-                  ))}
-              </div>
-            )}
-          </div>
-
-          {assignedEmployees.length > 0 && (
-            <div className={styles.departmentAccessTags}>
-              {assignedEmployees.map(emp => (
-                <button
-                  key={emp.id}
-                  type="button"
-                  className={styles.departmentAccessTag}
-                  onClick={() => handleEmpAccessToggle(emp)}
-                  title="Убрать из назначений"
-                >
-                  {emp.full_name || `#${emp.id}`} ×
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div className={styles.departmentAccessActions}>
-            <button
-              type="button"
-              className={styles.cancelBtn}
-              onClick={handleEmpAccessReset}
-              disabled={!hasEmpAccessChanges || savingEmpAccess}
-            >
-              Сбросить
-            </button>
-            <button
-              type="button"
-              className={styles.saveBtn}
-              onClick={handleEmpAccessSave}
-              disabled={!hasEmpAccessChanges || savingEmpAccess}
-            >
-              {savingEmpAccess ? 'Сохраняю...' : 'Сохранить сотрудников'}
-            </button>
-          </div>
-        </div>
-      )}
 
       <div className={styles.controlActions}>
         {!user.email_confirmed && (
@@ -634,18 +463,6 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAl
     }
   }, [patchAllUsersCache, toast]);
 
-  const handleEmployeeAccessSave = useCallback(async (userId: string, employeeIds: number[]): Promise<number[] | null> => {
-    try {
-      const response = await adminService.updateUserEmployeeAccess(userId, employeeIds);
-      toast.success('Прямые сотрудники сохранены');
-      await onReload();
-      return response.assigned_employee_ids;
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Ошибка сохранения сотрудников');
-      return null;
-    }
-  }, [onReload, toast]);
-
   const handleDeleteUser = useCallback(async (userId: string) => {
     if (!confirm('Удалить пользователя из системы? Это действие необратимо.')) return;
     try {
@@ -825,7 +642,6 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAl
                   onChangeChatMode={handleChatInboundModeChange}
                   onLinkEmployee={handleEmpLink}
                   onToggleSiteSupervisor={handleSiteSupervisorToggle}
-                  onSaveEmployeeAccess={handleEmployeeAccessSave}
                   onConfirmEmail={handleConfirmEmail}
                   onGenerate2FA={handleGenerate2FA}
                   onDisable2FA={handleDisable2FA}

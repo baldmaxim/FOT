@@ -102,9 +102,15 @@
 
 .assignmentFilters {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 320px;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+}
+
+.assignmentFilters .nameInput {
+  flex: 0 1 360px;
+  max-width: 100%;
 }
 
 .assignmentToggle {

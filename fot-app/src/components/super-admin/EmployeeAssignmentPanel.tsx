@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FC } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   adminService,
@@ -9,6 +9,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { directReportsService, type IDirectReport } from '../../services/directReportsService';
 import { ApiError } from '../../api/client';
 import { getTreeFlatDepartments, type IFlatDepartmentOption } from '../../utils/departmentUtils';
+import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
 
 interface IEmployeeAssignmentPanelProps {
@@ -125,6 +126,16 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const hasDirectChanges = !numbersEqual(draftDirectIds, initialDirectIds);
   const hasChanges = hasDepartmentChanges || hasDirectChanges;
 
+  const handleRequestClose = useCallback(() => {
+    if (hasChanges) {
+      const ok = window.confirm('Есть несохранённые изменения. Закрыть без сохранения?');
+      if (!ok) return;
+    }
+    onClose();
+  }, [hasChanges, onClose]);
+
+  const overlayHandlers = useOverlayDismiss(handleRequestClose);
+
   const toggleDepartment = (departmentId: string) => {
     setDraftDepartmentIds(prev => (prev.includes(departmentId)
       ? prev.filter(id => id !== departmentId)
@@ -200,10 +211,9 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   if (!isOpen || !employee) return null;
 
   return (
-    <div className={styles.assignmentPanelOverlay} onClick={onClose}>
+    <div className={styles.assignmentPanelOverlay} {...overlayHandlers}>
       <aside
         className={styles.assignmentPanel}
-        onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
       >
@@ -218,7 +228,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
           <button
             type="button"
             className={styles.assignmentPanelClose}
-            onClick={onClose}
+            onClick={handleRequestClose}
             aria-label="Закрыть"
           >
             ×
