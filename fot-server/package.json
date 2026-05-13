@@ -12,6 +12,7 @@
     "audit:routes": "tsx scripts/audit-route-protection.ts",
     "start": "node dist/index.js",
     "migrate:yandex:preflight": "tsx scripts/yandex-migration/preflight-yandex-db.ts",
+    "migrate:yandex:assert-env": "tsx scripts/yandex-migration/assert-env.ts",
     "migrate:yandex:auth-users": "tsx scripts/yandex-migration/migrate-auth-users.ts",
     "migrate:yandex:validate-auth-fk": "tsx scripts/yandex-migration/validate-auth-fk.ts",
     "migrate:yandex:validate-auth-fks": "tsx scripts/yandex-migration/validate-auth-fks.ts",
