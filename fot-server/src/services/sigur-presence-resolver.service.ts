@@ -8,8 +8,16 @@
  * вызывающий код кладёт unsynced людей в bucket «Без компании».
  */
 import { sigurService } from './sigur.service.js';
+import { normalizeEmployee, logSampleAndWarn } from './sigur-sync-shared.js';
 
 const RESOLVER_CACHE_TTL_MS = 10 * 60_000;
+
+/** Нормализация ФИО для матчинга: lowercase + trim + collapse spaces + ё→е.
+ *  В Sigur events.physical_person и employees.name могут расходиться по ё/е, поэтому
+ *  схлопываем их к одному варианту перед сравнением. */
+export function normalizeMatchName(value: string): string {
+  return value.toLowerCase().trim().replace(/\s+/g, ' ').replace(/ё/g, 'е');
+}
 
 export interface ISigurDeptRef {
   sigur_department_id: number;
@@ -28,12 +36,6 @@ interface ICachedResolver {
 
 let cache: ICachedResolver | null = null;
 let inflight: Promise<ICachedResolver> | null = null;
-
-function normalizeName(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim().toLowerCase();
-  return trimmed || null;
-}
 
 function pickNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -62,18 +64,54 @@ async function loadDepartmentsTree(): Promise<Map<number, { id: number; parentId
   return map;
 }
 
+/** Fallback-извлечение ФИО склейкой отдельных полей, если в employee нет `name`/`fullName`.
+ *  В Sigur у части записей могут лежать раздельно lastName/firstName/middleName. */
+function resolveEmployeeFullName(row: Record<string, unknown>): string {
+  const norm = normalizeEmployee(row);
+  if (norm.name) return norm.name;
+
+  const last = pickString(row.lastName) || pickString(row.last_name) || pickString(row.surname) || pickString(row.familyName);
+  const first = pickString(row.firstName) || pickString(row.first_name) || pickString(row.givenName);
+  const middle = pickString(row.middleName) || pickString(row.middle_name) || pickString(row.patronymic);
+  const parts = [last, first, middle].filter(Boolean);
+  return parts.join(' ').trim();
+}
+
 async function loadAllSigurEmployees(): Promise<Array<{ name: string; departmentId: number | null }>> {
   const raw = await sigurService.fetchAllPaginated<Record<string, unknown>>(
     '/api/v1/employees',
     { excludeFields: 'photo' },
   );
-  const result: Array<{ name: string; departmentId: number | null }> = [];
-  for (const row of raw || []) {
-    const name = pickString(row?.name);
-    if (!name) continue;
-    const departmentId = pickNumber(row?.departmentId ?? row?.department_id);
-    result.push({ name, departmentId });
+
+  if (raw && raw.length > 0) {
+    // Разовый sample-лог при rebuild кэша — помогает диагностировать, в каких полях
+    // Sigur отдаёт ФИО (name / NAME / fullName / lastName+firstName+middleName / ...).
+    logSampleAndWarn('sigur-presence-resolver', raw[0], ['id', 'name', 'departmentId']);
   }
+
+  const result: Array<{ name: string; departmentId: number | null }> = [];
+  let skippedNoName = 0;
+  let skippedNoDept = 0;
+  for (const row of raw || []) {
+    if (!row || typeof row !== 'object') continue;
+    const rec = row as Record<string, unknown>;
+    const fullName = resolveEmployeeFullName(rec);
+    if (!fullName) {
+      skippedNoName += 1;
+      continue;
+    }
+    const departmentId = pickNumber(
+      rec.departmentId ?? rec.department_id ?? rec.DEPARTMENTID ?? rec.DepartmentId,
+    );
+    if (departmentId == null) {
+      skippedNoDept += 1;
+      continue;
+    }
+    result.push({ name: fullName, departmentId });
+  }
+  console.log(
+    `[sigur-presence-resolver] employees fetched=${raw?.length ?? 0} usable=${result.length} skipped_no_name=${skippedNoName} skipped_no_dept=${skippedNoDept}`,
+  );
   return result;
 }
 
@@ -118,9 +156,10 @@ async function buildResolver(): Promise<ICachedResolver> {
   const byName = new Map<string, ISigurEmployeeResolution>();
 
   for (const employee of employees) {
-    const normalized = normalizeName(employee.name);
-    if (!normalized) continue;
+    if (!employee.name) continue;
     if (employee.departmentId == null) continue;
+    const normalized = normalizeMatchName(employee.name);
+    if (!normalized) continue;
     const deptNode = tree.get(employee.departmentId);
     if (!deptNode) continue;
     const root = resolveRootNode(employee.departmentId, tree);
@@ -134,6 +173,7 @@ async function buildResolver(): Promise<ICachedResolver> {
     });
   }
 
+  console.log(`[sigur-presence-resolver] indexed ${byName.size} unique names`);
   return { byName, expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
 }
 
@@ -166,12 +206,23 @@ export async function resolveSigurEmployeesByNames(
   const result = new Map<string, ISigurEmployeeResolution>();
   if (names.length === 0) return result;
   const resolver = await getResolver();
+  let unresolved = 0;
   for (const name of names) {
-    const normalized = normalizeName(name);
+    if (!name) continue;
+    const normalized = normalizeMatchName(name);
     if (!normalized) continue;
     if (result.has(normalized)) continue;
     const match = resolver.byName.get(normalized);
-    if (match) result.set(normalized, match);
+    if (match) {
+      result.set(normalized, match);
+    } else {
+      unresolved += 1;
+    }
+  }
+  if (unresolved > 0) {
+    console.log(
+      `[sigur-presence-resolver] resolved ${result.size}/${names.length} (index size=${resolver.byName.size}, unresolved=${unresolved})`,
+    );
   }
   return result;
 }

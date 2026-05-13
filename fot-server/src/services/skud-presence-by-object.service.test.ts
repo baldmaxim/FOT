@@ -30,6 +30,7 @@ const sigurResolveMock = vi.hoisted(() => vi.fn());
 vi.mock('./sigur-presence-resolver.service.js', () => ({
   resolveSigurEmployeesByNames: sigurResolveMock,
   invalidateSigurPresenceResolverCache: vi.fn(),
+  normalizeMatchName: (s: string) => s.toLowerCase().trim().replace(/\s+/g, ' ').replace(/ё/g, 'е'),
 }));
 
 import {

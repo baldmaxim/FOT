@@ -9,7 +9,7 @@
 import { getPresence } from './skud-presence.service.js';
 import { listTravelObjects } from './skud-travel.service.js';
 import { getCompanyResolveIndex, getInternalAccessPoints } from './skud-shared.service.js';
-import { resolveSigurEmployeesByNames } from './sigur-presence-resolver.service.js';
+import { resolveSigurEmployeesByNames, normalizeMatchName } from './sigur-presence-resolver.service.js';
 import { query } from '../config/postgres.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 
@@ -261,7 +261,7 @@ export async function getPresenceByObject(): Promise<IPresenceByObjectResponse> 
     let companyId = NO_COMPANY_ID;
     let companyName = 'Без компании';
     let departmentName: string | null = null;
-    const sigurMatch = sigurResolved.get(state.physical_person.toLowerCase());
+    const sigurMatch = sigurResolved.get(normalizeMatchName(state.physical_person));
     if (sigurMatch) {
       departmentName = sigurMatch.department.name || null;
       // Если у local-каталога уже есть компания с этим sigur_department_id —
