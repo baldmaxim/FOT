@@ -66,7 +66,17 @@ const filterData = (
 
 const EmployeeRow: FC<{ emp: IPresenceObjectEmployee }> = ({ emp }) => (
   <li className={styles.employeeRow}>
-    <div className={styles.employeeName}>{emp.full_name}</div>
+    <div className={styles.employeeName}>
+      {emp.full_name}
+      {emp.is_unsynced && (
+        <span
+          className={styles.unsyncedBadge}
+          title="Сотрудник не в нашем whitelist — данные получены напрямую из Sigur"
+        >
+          Sigur
+        </span>
+      )}
+    </div>
     <div className={styles.employeeMeta}>
       {emp.position_name && <span>{emp.position_name}</span>}
       <span className={styles.employeeTime}>с {formatTime(emp.first_entry)}</span>

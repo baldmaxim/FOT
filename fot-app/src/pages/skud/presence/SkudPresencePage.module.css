@@ -342,6 +342,23 @@
   font-size: 0.88rem;
   font-weight: 500;
   color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.unsyncedBadge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--warning-muted, rgba(245, 158, 11, 0.15));
+  color: var(--warning, #f59e0b);
+  border: 1px solid var(--warning, #f59e0b);
+  white-space: nowrap;
 }
 
 .employeeMeta {

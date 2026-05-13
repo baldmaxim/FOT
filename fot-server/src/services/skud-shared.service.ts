@@ -9,18 +9,19 @@ export interface IDeptTreeRow {
   id: string;
   parent_id: string | null;
   name: string | null;
+  sigur_department_id: number | null;
 }
 
 const DEPT_TREE_CACHE_TTL = 5 * 60_000;
 let deptTreeCache: { data: IDeptTreeRow[]; expiresAt: number } | null = null;
 
-/** Кэшированная загрузка всех отделов (id, parent_id, name). TTL 5 мин. */
+/** Кэшированная загрузка всех отделов (id, parent_id, name, sigur_department_id). TTL 5 мин. */
 export async function getAllDepartmentsTree(): Promise<IDeptTreeRow[]> {
   const now = Date.now();
   if (deptTreeCache && deptTreeCache.expiresAt > now) return deptTreeCache.data;
 
   const data = await query<IDeptTreeRow>(
-    'SELECT id, parent_id, name FROM org_departments',
+    'SELECT id, parent_id, name, sigur_department_id FROM org_departments',
   );
   deptTreeCache = { data: data || [], expiresAt: now + DEPT_TREE_CACHE_TTL };
   return deptTreeCache.data;
@@ -37,10 +38,17 @@ export function invalidateDeptTreeCache(): void {
 const COMPANY_RESOLVE_CACHE_TTL = 5 * 60_000;
 const OBJECT_ROOT_NAME = 'Объект';
 
+export interface ICompanyResolveMeta {
+  id: string;
+  name: string;
+  sigur_department_id: number | null;
+}
+
 interface ICompanyResolveIndex {
   rootId: string | null;
   companyByDeptId: Map<string, string>;
-  companyMeta: Map<string, { id: string; name: string }>;
+  companyMeta: Map<string, ICompanyResolveMeta>;
+  companyBySigurId: Map<number, string>;
 }
 
 let companyResolveCache: { data: ICompanyResolveIndex; expiresAt: number } | null = null;
@@ -59,15 +67,24 @@ export async function getCompanyResolveIndex(): Promise<ICompanyResolveIndex> {
   const allDepts = await getAllDepartmentsTree();
   const root = allDepts.find(d => d.parent_id === null && d.name === OBJECT_ROOT_NAME) || null;
   const companyByDeptId = new Map<string, string>();
-  const companyMeta = new Map<string, { id: string; name: string }>();
+  const companyMeta = new Map<string, ICompanyResolveMeta>();
+  const companyBySigurId = new Map<number, string>();
 
   if (root) {
     const childrenByParent = buildChildrenIndex(allDepts);
     const directChildren = childrenByParent.get(root.id) || [];
-    const nameById = new Map(allDepts.map(d => [d.id, d.name || '']));
+    const metaById = new Map(allDepts.map(d => [d.id, d]));
 
     for (const companyId of directChildren) {
-      companyMeta.set(companyId, { id: companyId, name: nameById.get(companyId) || '' });
+      const node = metaById.get(companyId);
+      companyMeta.set(companyId, {
+        id: companyId,
+        name: node?.name || '',
+        sigur_department_id: node?.sigur_department_id ?? null,
+      });
+      if (node?.sigur_department_id != null) {
+        companyBySigurId.set(node.sigur_department_id, companyId);
+      }
       // BFS вниз: всех потомков этой компании привязываем к ней.
       const stack: string[] = [companyId];
       while (stack.length > 0) {
@@ -84,6 +101,7 @@ export async function getCompanyResolveIndex(): Promise<ICompanyResolveIndex> {
     rootId: root?.id ?? null,
     companyByDeptId,
     companyMeta,
+    companyBySigurId,
   };
   companyResolveCache = { data, expiresAt: now + COMPANY_RESOLVE_CACHE_TTL };
   return data;

@@ -51,6 +51,7 @@ export interface IPresenceObjectEmployee {
   first_entry: string | null;
   last_access_point: string | null;
   since: string | null;
+  is_unsynced: boolean;
 }
 
 export interface IPresenceObjectCompany {
