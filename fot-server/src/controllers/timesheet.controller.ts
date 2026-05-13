@@ -43,6 +43,7 @@ import {
 } from '../services/timesheet-department-assignments.service.js';
 import { fetchTimesheetDataForDepartment, fetchTimesheetDataForEmployees } from '../services/timesheet-export.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
+import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
 import {
   loadEmployeeFullName as loadEmployeeFullNameForAudit,
   loadEmployeeFullNamesMap,
@@ -991,8 +992,11 @@ export const timesheetController = {
       let selfTimesheetId: number | null = null;
       if (shouldApplyDeptFilter && scope === 'department' && req.user.employee_id) {
         directReportIds = await listDirectSubordinates(req.user.employee_id);
-        const managedDepartmentIds = await resolveManagedDepartmentIds(req);
-        if (managedDepartmentIds.length > 0 || directReportIds.length > 0) {
+        // Только ручные назначения (employee_department_access с source != 'sigur_sync'),
+        // а не весь scope-подсеть компании: иначе админ компании видит себя «Руководителем»
+        // в любом отделе своего поддерева.
+        const explicitlyManagedDepartmentIds = await listExplicitDepartmentIdsForUser(req.user.id, req.user.employee_id);
+        if (explicitlyManagedDepartmentIds.length > 0 || directReportIds.length > 0) {
           selfTimesheetId = req.user.employee_id;
         }
       }
