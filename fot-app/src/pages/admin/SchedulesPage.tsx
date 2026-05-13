@@ -10,6 +10,7 @@ import type {
   ScheduleType,
   PatternType,
 } from '../../types/schedule';
+import { WEEKDAY_LABELS } from '../../types/schedule';
 import type { ITravelObject } from '../../types/travel';
 import { parseHMToMinutes, minutesToHM } from '../../utils/scheduleUtils';
 import styles from './SchedulesPage.module.css';
@@ -70,6 +71,12 @@ interface IFormState {
   lunch_minutes: number;
   /** Особые рабочие дни цикла (для простой N/M-модели): ключ — индекс рабочего слота 0..N-1. */
   slot_overrides: Partial<Record<number, ISlotOverride>>;
+  /**
+   * Обед в выходные дни цикла (N/M-модель): ключ — индекс выходного слота 0..M-1
+   * (т.е. day-of-week N+i при anchor=понедельник). Значение в минутах. undefined = наследовать
+   * глобальный lunch_minutes. Нужен, чтобы для 5+2/5+0 можно было поставить lunch=0 на Сб/Вс.
+   */
+  off_slot_overrides: Partial<Record<number, number>>;
   respects_holidays: boolean;
   late_threshold_minutes: number;
   full_day_threshold: string;          // "HH:MM", "" = авто (чистое время)
@@ -84,6 +91,7 @@ const buildCustomDaysFromPrefix = (
   baseEnd: string,
   lunch: number,
   slotOverrides: Partial<Record<number, ISlotOverride>>,
+  offSlotOverrides: Partial<Record<number, number>> = {},
 ): ICustomDay[] => {
   const out: ICustomDay[] = [];
   for (let i = 0; i < workCount; i++) {
@@ -97,12 +105,13 @@ const buildCustomDaysFromPrefix = (
     });
   }
   for (let i = 0; i < offCount; i++) {
+    const offLunch = offSlotOverrides[i];
     out.push({
       is_work: false,
       work_start: baseStart,
       work_end: baseEnd,
-      lunch_minutes: lunch,
-      inherits_base: true,
+      lunch_minutes: offLunch ?? lunch,
+      inherits_base: offLunch === undefined,
     });
   }
   return out;
@@ -147,6 +156,7 @@ const EMPTY_FORM: IFormState = {
   work_end: '18:00',
   lunch_minutes: 60,
   slot_overrides: {},
+  off_slot_overrides: {},
   respects_holidays: true,
   late_threshold_minutes: 0,
   full_day_threshold: '',
@@ -156,6 +166,7 @@ const EMPTY_FORM: IFormState = {
 const createEmptyForm = (): IFormState => ({
   ...EMPTY_FORM,
   slot_overrides: {},
+  off_slot_overrides: {},
   custom_cycle_days: [],
   anchor_date: nearestMondayOnOrBefore(getLocalISODate()),
 });
@@ -241,6 +252,15 @@ const tplToFormState = (tpl: IWorkSchedule, today: string): IFormState => {
           };
         }
       }
+      // Off-day lunch override: для каждого выходного слота, у которого в БД
+      // явно задан lunch_minutes отличный от глобального — сохраняем в форму.
+      const offSlotOverrides: IFormState['off_slot_overrides'] = {};
+      for (let i = 0; i < m; i++) {
+        const slot = days[n + i];
+        if (slot && slot.lunch_minutes != null && slot.lunch_minutes !== lunch) {
+          offSlotOverrides[i] = slot.lunch_minutes;
+        }
+      }
       return {
         id: tpl.id,
         name: tpl.name,
@@ -256,6 +276,7 @@ const tplToFormState = (tpl: IWorkSchedule, today: string): IFormState => {
         work_end: baseEnd,
         lunch_minutes: lunch,
         slot_overrides: slotOverrides,
+        off_slot_overrides: offSlotOverrides,
         respects_holidays: tpl.respects_holidays,
         late_threshold_minutes: tpl.late_threshold_minutes,
         full_day_threshold: minutesToHM(tpl.full_day_threshold_minutes),
@@ -293,6 +314,7 @@ const tplToFormState = (tpl: IWorkSchedule, today: string): IFormState => {
       work_end: baseEnd,
       lunch_minutes: lunch,
       slot_overrides: {},
+      off_slot_overrides: {},
       respects_holidays: tpl.respects_holidays,
       late_threshold_minutes: tpl.late_threshold_minutes,
       full_day_threshold: minutesToHM(tpl.full_day_threshold_minutes),
@@ -337,6 +359,7 @@ const tplToFormState = (tpl: IWorkSchedule, today: string): IFormState => {
     work_end: baseEnd,
     lunch_minutes: lunch,
     slot_overrides: slotOverrides,
+    off_slot_overrides: {},
     respects_holidays: tpl.respects_holidays,
     late_threshold_minutes: tpl.late_threshold_minutes,
     full_day_threshold: minutesToHM(tpl.full_day_threshold_minutes),
@@ -474,6 +497,9 @@ export const SchedulesPage: FC = () => {
       slot_overrides: Object.fromEntries(
         Object.entries(f.slot_overrides).filter(([k]) => Number(k) < work),
       ),
+      off_slot_overrides: Object.fromEntries(
+        Object.entries(f.off_slot_overrides).filter(([k]) => Number(k) < off),
+      ),
     }));
   };
 
@@ -506,6 +532,7 @@ export const SchedulesPage: FC = () => {
           f.work_end,
           f.lunch_minutes,
           f.slot_overrides,
+          f.off_slot_overrides,
         );
         return { ...f, is_custom_cycle: true, custom_cycle_days: days };
       }
@@ -531,6 +558,14 @@ export const SchedulesPage: FC = () => {
           };
         }
       }
+      // Off-day lunch overrides → off_slot_overrides
+      const offSlotOverrides: IFormState['off_slot_overrides'] = {};
+      for (let i = 0; i < m; i++) {
+        const d = days[n + i];
+        if (!d.inherits_base) {
+          offSlotOverrides[i] = d.lunch_minutes;
+        }
+      }
       return {
         ...f,
         is_custom_cycle: false,
@@ -538,6 +573,7 @@ export const SchedulesPage: FC = () => {
         work_days_count: Math.max(1, n),
         off_days_count: m,
         slot_overrides: slotOverrides,
+        off_slot_overrides: offSlotOverrides,
       };
     });
   };
@@ -704,7 +740,14 @@ export const SchedulesPage: FC = () => {
             });
           }
         }
-        for (let i = 0; i < m; i++) cycleDays.push({ work_hours: 0 });
+        for (let i = 0; i < m; i++) {
+          const offLunch = form.off_slot_overrides[i];
+          if (offLunch !== undefined) {
+            cycleDays.push({ work_hours: 0, lunch_minutes: offLunch });
+          } else {
+            cycleDays.push({ work_hours: 0 });
+          }
+        }
       }
 
       // schedule_type: cycle всегда 'shift', либо 'remote' если is_remote.
@@ -913,7 +956,16 @@ export const SchedulesPage: FC = () => {
                             min={0}
                             max={28}
                             value={form.off_days_count}
-                            onChange={e => setForm({ ...form, off_days_count: Math.max(0, Math.min(28, parseInt(e.target.value) || 0)) })}
+                            onChange={e => {
+                              const v = Math.max(0, Math.min(28, parseInt(e.target.value) || 0));
+                              setForm(f => ({
+                                ...f,
+                                off_days_count: v,
+                                off_slot_overrides: Object.fromEntries(
+                                  Object.entries(f.off_slot_overrides).filter(([k]) => Number(k) < v),
+                                ),
+                              }));
+                            }}
                           />
                         </label>
                       </>
@@ -1060,6 +1112,77 @@ export const SchedulesPage: FC = () => {
                           <div className={styles.dayOverrideSummary}>
                             {start}-{end}, чистое: <strong>{slotNetHours}</strong>
                           </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+
+              {/* ─── Обед в выходные дни цикла (N/M-режим) ─────────────── */}
+              {!form.is_custom_cycle && form.off_days_count > 0 && (
+                <section className={styles.formSection}>
+                  <div className={styles.sectionTitle}>
+                    Обед в выходные дни цикла {Object.keys(form.off_slot_overrides).length > 0 ? `(${Object.keys(form.off_slot_overrides).length})` : ''}
+                  </div>
+                  <div className={styles.patternHint}>
+                    Если сотрудник всё-таки выходит на работу в выходной — здесь задаётся, сколько обеда вычитать из времени присутствия по СКУД. Не задано → используется общий обед сверху. 0 = не вычитать вовсе.
+                  </div>
+                  <div className={styles.slotsGrid}>
+                    {Array.from({ length: form.off_days_count }).map((_, idx) => {
+                      // Привязка к дням недели: при anchor=Пн и префиксной раскладке
+                      // выходной слот i ⇒ день недели form.work_days_count + i (0-индекс).
+                      const dowIndex = form.work_days_count + idx;
+                      const dowLabel = WEEKDAY_LABELS[dowIndex] ?? '';
+                      const lunchValue = form.off_slot_overrides[idx];
+                      const isOverridden = lunchValue !== undefined;
+                      return (
+                        <div key={idx} className={styles.dayOverrideCard}>
+                          <div className={styles.dayOverrideHeader}>
+                            <div>
+                              <div className={styles.dayOverrideTitle}>
+                                Вых. день {idx + 1}{dowLabel ? ` (${dowLabel})` : ''}
+                              </div>
+                              <div className={styles.dayOverrideMeta}>
+                                {isOverridden ? `Обед: ${lunchValue} мин` : `Общий: ${form.lunch_minutes} мин`}
+                              </div>
+                            </div>
+                            <label className={styles.dayOverrideToggle}>
+                              <input
+                                type="checkbox"
+                                checked={isOverridden}
+                                onChange={e => {
+                                  setForm(f => {
+                                    const next = { ...f.off_slot_overrides };
+                                    if (e.target.checked) next[idx] = f.lunch_minutes;
+                                    else delete next[idx];
+                                    return { ...f, off_slot_overrides: next };
+                                  });
+                                }}
+                              />
+                              Свой обед
+                            </label>
+                          </div>
+                          {isOverridden && (
+                            <div className={styles.dayOverrideFields}>
+                              <label>
+                                Обед (мин)
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={240}
+                                  value={lunchValue}
+                                  onChange={e => {
+                                    const val = parseInt(e.target.value);
+                                    setForm(f => ({
+                                      ...f,
+                                      off_slot_overrides: { ...f.off_slot_overrides, [idx]: Number.isFinite(val) ? Math.max(0, Math.min(240, val)) : 0 },
+                                    }));
+                                  }}
+                                />
+                              </label>
+                            </div>
+                          )}
                         </div>
                       );
                     })}
