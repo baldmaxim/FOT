@@ -48,7 +48,11 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ success: false, error: parsed.error.issues });
+      console.error('production-calendar.update validation failed:', JSON.stringify(parsed.error.issues), 'body:', JSON.stringify(req.body));
+      const summary = parsed.error.issues
+        .map(i => `${i.path.join('.') || '<root>'}: ${i.message}`)
+        .join('; ');
+      res.status(400).json({ success: false, error: `Невалидные данные: ${summary}`, issues: parsed.error.issues });
       return;
     }
 
