@@ -326,9 +326,59 @@ const DepartmentList: FC<{
     );
   }
 
+  const selectedLeaves = filtered.filter(d => !d.hasChildren && selectedSet.has(d.id));
+  const restRaw = filtered.filter(d => d.hasChildren || !selectedSet.has(d.id));
+
+  // Прячем заголовки-родители, у которых после выноса выбранных не осталось видимых листьев.
+  const restItems: IFlatDepartmentOption[] = [];
+  for (let i = 0; i < restRaw.length; i++) {
+    const item = restRaw[i];
+    if (!item.hasChildren) {
+      restItems.push(item);
+      continue;
+    }
+    let hasLeafDescendant = false;
+    for (let j = i + 1; j < restRaw.length; j++) {
+      const next = restRaw[j];
+      if (next.level <= item.level) break;
+      if (!next.hasChildren) { hasLeafDescendant = true; break; }
+    }
+    if (hasLeafDescendant) restItems.push(item);
+  }
+
+  const renderLeaf = (dept: IFlatDepartmentOption, keyPrefix: string, indent: number) => {
+    const checked = selectedSet.has(dept.id);
+    return (
+      <label
+        key={`${keyPrefix}-${dept.id}`}
+        className={`${styles.departmentAccessItem} ${checked ? styles.departmentAccessItemChecked : ''}`}
+      >
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={() => onToggle(dept.id)}
+        />
+        <span
+          className={styles.departmentAccessItemLabel}
+          style={{ paddingLeft: `${indent * 14}px` }}
+        >
+          {dept.name}
+        </span>
+      </label>
+    );
+  };
+
   return (
     <div className={styles.assignmentPanelList}>
-      {filtered.map(dept => {
+      {selectedLeaves.length > 0 && (
+        <>
+          <div className={styles.departmentAccessGroupHeader}>
+            Назначенные ({selectedLeaves.length})
+          </div>
+          {selectedLeaves.map(dept => renderLeaf(dept, 'selected', 0))}
+        </>
+      )}
+      {restItems.map(dept => {
         if (dept.hasChildren) {
           return (
             <div
@@ -340,25 +390,7 @@ const DepartmentList: FC<{
             </div>
           );
         }
-        const checked = selectedSet.has(dept.id);
-        return (
-          <label
-            key={dept.id}
-            className={`${styles.departmentAccessItem} ${checked ? styles.departmentAccessItemChecked : ''}`}
-          >
-            <input
-              type="checkbox"
-              checked={checked}
-              onChange={() => onToggle(dept.id)}
-            />
-            <span
-              className={styles.departmentAccessItemLabel}
-              style={{ paddingLeft: `${dept.level * 14}px` }}
-            >
-              {dept.name}
-            </span>
-          </label>
-        );
+        return renderLeaf(dept, 'rest', dept.level);
       })}
     </div>
   );
@@ -373,30 +405,43 @@ const PersonList: FC<{
     return <div className={styles.departmentAccessEmpty}>Сотрудники не найдены</div>;
   }
 
+  const selected = candidates.filter(c => selectedIdsSet.has(c.employee_id));
+  const rest = candidates.filter(c => !selectedIdsSet.has(c.employee_id));
+
+  const renderItem = (candidate: EmployeeDepartmentAssignmentFromApi, keyPrefix: string) => {
+    const checked = selectedIdsSet.has(candidate.employee_id);
+    return (
+      <label
+        key={`${keyPrefix}-${candidate.employee_id}`}
+        className={`${styles.assignmentPanelPerson} ${checked ? styles.departmentAccessItemChecked : ''}`}
+      >
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={() => onToggle(candidate.employee_id)}
+        />
+        <div className={styles.assignmentPanelPersonInfo}>
+          <div className={styles.assignmentPanelPersonName}>{candidate.full_name}</div>
+          <div className={styles.assignmentPanelPersonMeta}>
+            {candidate.position_name || 'Должность не указана'}
+            {candidate.department_name ? ` · ${candidate.department_name}` : ''}
+          </div>
+        </div>
+      </label>
+    );
+  };
+
   return (
     <div className={styles.assignmentPanelList}>
-      {candidates.map(candidate => {
-        const checked = selectedIdsSet.has(candidate.employee_id);
-        return (
-          <label
-            key={candidate.employee_id}
-            className={`${styles.assignmentPanelPerson} ${checked ? styles.departmentAccessItemChecked : ''}`}
-          >
-            <input
-              type="checkbox"
-              checked={checked}
-              onChange={() => onToggle(candidate.employee_id)}
-            />
-            <div className={styles.assignmentPanelPersonInfo}>
-              <div className={styles.assignmentPanelPersonName}>{candidate.full_name}</div>
-              <div className={styles.assignmentPanelPersonMeta}>
-                {candidate.position_name || 'Должность не указана'}
-                {candidate.department_name ? ` · ${candidate.department_name}` : ''}
-              </div>
-            </div>
-          </label>
-        );
-      })}
+      {selected.length > 0 && (
+        <>
+          <div className={styles.departmentAccessGroupHeader}>
+            Назначенные ({selected.length})
+          </div>
+          {selected.map(c => renderItem(c, 'selected'))}
+        </>
+      )}
+      {rest.map(c => renderItem(c, 'rest'))}
     </div>
   );
 };
