@@ -22,6 +22,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { env } from '../config/env.js';
+import { settingsService } from './settings.service.js';
 
 export const SKUD_OBJECT_MAPS_BUCKET = 'skud-object-maps';
 
@@ -39,24 +40,36 @@ interface IResolvedClient {
 let cachedClient: S3Client | null = null;
 let cachedHash = '';
 
-function getResolvedClient(bucketAlias: string): IResolvedClient {
+// `bucketAlias` остаётся guard'ом на стороне вызывающего кода (валидируем что
+// нас не зовут с произвольным именем), но реальный bucket для STS-операций
+// берём из settingsService.getR2Config() — единого источника storage-конфига
+// (тот же, что для документов/чеков/пэйслипов). Это устраняет дубликат
+// конфигурации `OBJECT_STORAGE_*` и автоматически подхватывает Cloud.ru/R2,
+// который пользователь подключил в UI «Настройки → S3-хранилище».
+// Legacy-fallback на OBJECT_STORAGE_* env оставлен на случай раннего старта
+// до прогрева кэша настроек.
+async function getResolvedClient(bucketAlias: string): Promise<IResolvedClient> {
   if (!ALLOWED_BUCKET_ALIASES.has(bucketAlias)) {
     throw new Error(`object-map-storage: неизвестный bucketAlias "${bucketAlias}"`);
   }
 
-  const endpoint = env.OBJECT_STORAGE_ENDPOINT;
-  const accessKeyId = env.OBJECT_STORAGE_ACCESS_KEY_ID;
-  const secretAccessKey = env.OBJECT_STORAGE_SECRET_ACCESS_KEY;
+  const cfg = await settingsService.getR2Config();
+  const endpoint = cfg.endpoint || env.OBJECT_STORAGE_ENDPOINT || '';
+  const accessKeyId = cfg.accessKeyId || env.OBJECT_STORAGE_ACCESS_KEY_ID || '';
+  const secretAccessKey = cfg.secretAccessKey || env.OBJECT_STORAGE_SECRET_ACCESS_KEY || '';
+  const region = cfg.region || env.OBJECT_STORAGE_REGION || 'ru-central1';
+  const forcePathStyle = cfg.forcePathStyle
+    || (env.OBJECT_STORAGE_FORCE_PATH_STYLE || 'false').toLowerCase() === 'true';
+  const bucket = cfg.bucketName || bucketAlias;
+
   if (!endpoint || !accessKeyId || !secretAccessKey) {
     throw new Error(
-      'Object storage не настроен. Заполните OBJECT_STORAGE_ENDPOINT, ' +
-        'OBJECT_STORAGE_ACCESS_KEY_ID, OBJECT_STORAGE_SECRET_ACCESS_KEY в .env.',
+      'Object storage не настроен. Заполните в UI «Настройки → S3-хранилище» ' +
+        '(или OBJECT_STORAGE_ENDPOINT/ACCESS_KEY_ID/SECRET_ACCESS_KEY в .env).',
     );
   }
-  const region = env.OBJECT_STORAGE_REGION || 'ru-central1';
-  const forcePathStyle = (env.OBJECT_STORAGE_FORCE_PATH_STYLE || 'false').toLowerCase() === 'true';
 
-  const hash = `${endpoint}|${region}|${accessKeyId}|${secretAccessKey}|${forcePathStyle}`;
+  const hash = `${endpoint}|${region}|${accessKeyId}|${secretAccessKey}|${forcePathStyle}|${bucket}`;
   if (!cachedClient || hash !== cachedHash) {
     cachedClient = new S3Client({
       endpoint,
@@ -66,7 +79,7 @@ function getResolvedClient(bucketAlias: string): IResolvedClient {
     });
     cachedHash = hash;
   }
-  return { client: cachedClient, bucket: bucketAlias };
+  return { client: cachedClient, bucket };
 }
 
 const isNotFoundError = (err: unknown): boolean => {
@@ -84,7 +97,7 @@ export const objectMapStorageService = {
     bucketAlias: string,
     storagePath: string,
   ): Promise<{ signedUrl: string; path: string; token: string }> {
-    const { client, bucket } = getResolvedClient(bucketAlias);
+    const { client, bucket } = await getResolvedClient(bucketAlias);
     const Key = normalizeStoragePath(storagePath);
     const command = new PutObjectCommand({ Bucket: bucket, Key });
     const signedUrl = await getSignedUrl(client, command, { expiresIn: DEFAULT_SIGNED_URL_TTL_SECONDS });
@@ -98,14 +111,14 @@ export const objectMapStorageService = {
     storagePath: string,
     expiresIn: number = DEFAULT_SIGNED_URL_TTL_SECONDS,
   ): Promise<string> {
-    const { client, bucket } = getResolvedClient(bucketAlias);
+    const { client, bucket } = await getResolvedClient(bucketAlias);
     const Key = normalizeStoragePath(storagePath);
     const command = new GetObjectCommand({ Bucket: bucket, Key });
     return getSignedUrl(client, command, { expiresIn });
   },
 
   async ensureObjectExists(bucketAlias: string, storagePath: string): Promise<void> {
-    const { client, bucket } = getResolvedClient(bucketAlias);
+    const { client, bucket } = await getResolvedClient(bucketAlias);
     const Key = normalizeStoragePath(storagePath);
     try {
       await client.send(new HeadObjectCommand({ Bucket: bucket, Key }));
@@ -120,7 +133,7 @@ export const objectMapStorageService = {
   async removeObject(bucketAlias: string, storagePath: string | null | undefined): Promise<void> {
     const normalized = normalizeStoragePath(storagePath || '');
     if (!normalized) return;
-    const { client, bucket } = getResolvedClient(bucketAlias);
+    const { client, bucket } = await getResolvedClient(bucketAlias);
     try {
       await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: normalized }));
     } catch (err) {
