@@ -25,6 +25,17 @@ import { env } from './env.js';
 // — там у нас работа с Date уже отлажена.
 types.setTypeParser(1082, (val: string) => val);
 
+// Supabase REST (PostgREST) сериализовал INT8 (bigint) как JSON number.
+// pg-node по умолчанию возвращает bigint как string (из-за риска переполнения
+// Number.MAX_SAFE_INTEGER). У нас все bigint-колонки (employee_department_access.
+// employee_id, employee_direct_reports.manager_employee_id, skud_events.id,
+// documents.id, leave_requests.id и т.п.) — это последовательности; реальные
+// значения < 2^53. Без этого парсера ломаются сравнения вроде
+// `result.has(row.employee_id)` в Map<number, ...> и фильтры `id === employee.id`.
+// 20 = INT8 OID. Если когда-то появится колонка с реально большими bigint —
+// сменить локально через `SELECT bigcol::text` в нужном запросе.
+types.setTypeParser(20, (val: string) => Number.parseInt(val, 10));
+
 const parseBool = (raw: string | undefined, fallback: boolean): boolean => {
   if (raw === undefined || raw === '') return fallback;
   return raw.trim().toLowerCase() !== 'false';
