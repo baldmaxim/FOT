@@ -13,9 +13,17 @@
 //   bcrypt-хеши паролей, токены и т. п.
 
 import fs from 'node:fs';
-import { Pool, type PoolClient, type PoolConfig, type QueryResultRow } from 'pg';
+import { Pool, types, type PoolClient, type PoolConfig, type QueryResultRow } from 'pg';
 
 import { env } from './env.js';
+
+// Supabase REST отдавал `date`-колонки как ISO-строки `YYYY-MM-DD`.
+// pg-node по умолчанию парсит их в JS Date — это ломает код в schedule/timesheet
+// сервисах, которые делают `anchor.split('-')` или строковое сравнение
+// `effectiveFrom > date`. Возвращаем поведение Supabase: keep date as string.
+// 1082 = DATE OID в pg_type. Не трогаем 1114 (timestamp) и 1184 (timestamptz)
+// — там у нас работа с Date уже отлажена.
+types.setTypeParser(1082, (val: string) => val);
 
 const parseBool = (raw: string | undefined, fallback: boolean): boolean => {
   if (raw === undefined || raw === '') return fallback;

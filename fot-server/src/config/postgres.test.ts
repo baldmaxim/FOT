@@ -22,7 +22,10 @@ const { PoolCtor, mockQuery, mockConnect, mockEnd, mockOn } = vi.hoisted(() => {
   };
 });
 
-vi.mock('pg', () => ({ Pool: PoolCtor }));
+vi.mock('pg', () => ({
+  Pool: PoolCtor,
+  types: { setTypeParser: vi.fn() },
+}));
 
 import {
   checkDbConnection,

@@ -70,8 +70,19 @@ export const getCycleSlot = (
   if (schedule.pattern_type !== 'cycle') return null;
   const cycleLength = schedule.cycle_length;
   const cycleDays = schedule.cycle_days;
-  const anchor = schedule.assignment_anchor_date ?? schedule.anchor_date;
-  if (!cycleLength || !cycleDays || cycleDays.length !== cycleLength || !anchor) {
+  const anchorRaw: unknown = schedule.assignment_anchor_date ?? schedule.anchor_date;
+  if (!cycleLength || !cycleDays || cycleDays.length !== cycleLength || !anchorRaw) {
+    return null;
+  }
+  // Поддержка обоих форматов: string `YYYY-MM-DD` (Supabase REST + pg с DATE
+  // type-parser в config/postgres.ts) И JS Date (fallback / тесты, где конфиг
+  // может отсутствовать).
+  let anchor: string;
+  if (typeof anchorRaw === 'string') {
+    anchor = anchorRaw.slice(0, 10);
+  } else if (anchorRaw instanceof Date) {
+    anchor = `${anchorRaw.getUTCFullYear()}-${String(anchorRaw.getUTCMonth() + 1).padStart(2, '0')}-${String(anchorRaw.getUTCDate()).padStart(2, '0')}`;
+  } else {
     return null;
   }
 
