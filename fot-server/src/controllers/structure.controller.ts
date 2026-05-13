@@ -193,18 +193,30 @@ function assertInScope(scope: Set<string> | 'all', departmentId: string | null):
 }
 
 /**
- * Фильтрует дерево по company-scope. Возвращает корневой синтетический «Объект»
- * только с детьми, входящими в scope. Если scope='all', возвращает дерево как есть.
+ * Фильтрует дерево по scope. Нода остаётся в дереве, если её id в scope
+ * ИЛИ если в её поддереве есть нода из scope (чтобы сохранить иерархический
+ * путь от корня к назначенному отделу).
+ *
+ * Корневой синтетический «Объект» (parent_id=null) всегда сохраняется
+ * как контейнер, но его дети-компании фильтруются.
+ *
+ * scope='all' — возвращаем дерево как есть.
  */
 function filterTreeByScope(tree: OrgDepartmentNode[], scope: Set<string> | 'all'): OrgDepartmentNode[] {
   if (scope === 'all') return tree;
+
+  const filterRecursive = (nodes: OrgDepartmentNode[]): OrgDepartmentNode[] =>
+    nodes.reduce<OrgDepartmentNode[]>((acc, node) => {
+      const children = filterRecursive(node.children);
+      if (scope.has(node.id) || children.length > 0) {
+        acc.push({ ...node, children });
+      }
+      return acc;
+    }, []);
+
   return tree.map(node => {
     if (node.parent_id === null) {
-      // Корневой узел («Объект»): сохраняем, но фильтруем детей по scope
-      return {
-        ...node,
-        children: node.children.filter(child => scope.has(child.id)),
-      };
+      return { ...node, children: filterRecursive(node.children) };
     }
     return node;
   });
