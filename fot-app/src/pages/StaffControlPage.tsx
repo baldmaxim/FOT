@@ -1671,25 +1671,6 @@ export const StaffControlPage: FC = () => {
           <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
         ))}
       </select>
-      {isAdmin && (
-        <div className="sc-page-actions">
-          {statusFilter === 'active' && (
-            <button
-              className="sc-btn apply"
-              onClick={() => setShowAddModal(true)}
-              title="Добавить сотрудника"
-              aria-label="Добавить сотрудника"
-            >
-              <UserPlus size={14} />
-              {!isMobile && <span>Добавить</span>}
-            </button>
-          )}
-          {overflowItems.length > 0 && <OverflowMenu items={overflowItems} />}
-        </div>
-      )}
-      <div className="sc-filter-search">
-        <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
-      </div>
       {isAdmin && statusFilter !== 'excluded' && (
         <div className="sc-segmented" role="tablist" aria-label="Статус сотрудников">
           <button
@@ -1719,6 +1700,25 @@ export const StaffControlPage: FC = () => {
           </button>
         </div>
       )}
+      {isAdmin && (
+        <div className="sc-page-actions">
+          {statusFilter === 'active' && (
+            <button
+              className="sc-btn apply"
+              onClick={() => setShowAddModal(true)}
+              title="Добавить сотрудника"
+              aria-label="Добавить сотрудника"
+            >
+              <UserPlus size={14} />
+              {!isMobile && <span>Добавить</span>}
+            </button>
+          )}
+          {overflowItems.length > 0 && <OverflowMenu items={overflowItems} />}
+        </div>
+      )}
+      <div className="sc-filter-search">
+        <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
+      </div>
     </div>
   );
 
