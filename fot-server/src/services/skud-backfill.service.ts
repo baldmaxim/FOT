@@ -12,6 +12,12 @@ import { normalizePersonName } from './sigur-sync-shared.js';
 
 const BACKFILL_WINDOW_DAYS = 7;
 const BACKFILL_BATCH_LIMIT = 500;
+// Warning «none matched by name» нормален когда в Sigur много карточек
+// чужих компаний/гостей вне whitelist отделов — их события легитимно
+// остаются с employee_id=NULL. Throttle, чтобы не спамить логи каждым
+// поллинг-циклом, но всё равно ловить регрессию нормализации.
+const WARN_THROTTLE_MS = 60 * 60 * 1000;
+let lastDriftWarnAt = 0;
 
 export async function backfillUnmatchedEvents(): Promise<void> {
   const today = formatDateToISO(new Date());
@@ -70,9 +76,13 @@ export async function backfillUnmatchedEvents(): Promise<void> {
 
   if (backfillEventIds.length === 0) {
     if (unmatchedEvents.length === BACKFILL_BATCH_LIMIT) {
-      console.warn(
-        `[backfill] ${unmatchedEvents.length} unmatched events in window, none matched by name — possible name normalization drift`,
-      );
+      const now = Date.now();
+      if (now - lastDriftWarnAt >= WARN_THROTTLE_MS) {
+        lastDriftWarnAt = now;
+        console.warn(
+          `[backfill] ${unmatchedEvents.length} unmatched events in window, none matched by name — events likely belong to people outside whitelist (this warning throttled to 1/hour)`,
+        );
+      }
     }
     return;
   }
