@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import { AxiosError } from 'axios';
+import * as Sentry from '@sentry/node';
 import { query, queryOne, execute } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { loadEmployeeFullName } from '../services/audit-context.helpers.js';
@@ -392,7 +393,7 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
               department_locked = false
         WHERE id = $2
       RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
-      [targetDepartmentId, id],
+      [targetDepartmentId, employeeId],
     );
 
     if (!data) {
@@ -400,13 +401,13 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
       return;
     }
 
-    employeeCache.invalidate(id);
+    employeeCache.invalidate(employeeId);
 
     await execute(
       `UPDATE employee_assignments
           SET effective_to = $1
         WHERE employee_id = $2 AND effective_to IS NULL`,
-      [today, id],
+      [today, employeeId],
     );
 
     await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE', {
@@ -423,7 +424,14 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
     res.json({ success: true, data: updatedEmployee });
   } catch (error) {
     console.error('Fire employee error:', error);
-    res.status(500).json({ success: false, error: 'Failed to fire employee' });
+    Sentry.captureException(error, {
+      tags: { route: 'employees.fire' },
+      extra: { employeeId: req.params.id },
+    });
+    res.status(500).json({
+      success: false,
+      error: getErrorMessage(error, 'Failed to fire employee'),
+    });
   }
 }
 

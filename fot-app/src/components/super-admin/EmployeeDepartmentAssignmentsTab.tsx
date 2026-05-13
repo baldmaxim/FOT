@@ -35,7 +35,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
   const queryClient = useQueryClient();
   const structureQuery = useStructureTree();
   const [searchQuery, setSearchQuery] = useState('');
-  const [showAllEmployees, setShowAllEmployees] = useState(false);
+  const [hideEmployeesWithoutAssignments, setHideEmployeesWithoutAssignments] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<EmployeeDepartmentAssignmentFromApi | null>(null);
 
   const employeesQuery = useQuery<EmployeeDepartmentAssignmentFromApi[]>({
@@ -70,7 +70,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
     const normalizedSearch = normalizeText(searchQuery);
     return employees.filter(employee => {
       const additionalDepartmentIds = normalizeAdditionalDepartmentIds(employee.assigned_department_ids || []);
-      if (!showAllEmployees && additionalDepartmentIds.length === 0) {
+      if (hideEmployeesWithoutAssignments && additionalDepartmentIds.length === 0) {
         return false;
       }
 
@@ -90,7 +90,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
 
       return searchableParts.some(part => normalizeText(part).includes(normalizedSearch));
     });
-  }, [departmentMap, employees, linkedUserByEmployeeId, searchQuery, showAllEmployees]);
+  }, [departmentMap, employees, hideEmployeesWithoutAssignments, linkedUserByEmployeeId, searchQuery]);
 
   if (employeesQuery.isPending || structureQuery.isPending) {
     return <div className={styles.loading}>Загрузка назначений сотрудников...</div>;
@@ -133,10 +133,10 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
           <label className={styles.assignmentToggle}>
             <input
               type="checkbox"
-              checked={showAllEmployees}
-              onChange={(event) => setShowAllEmployees(event.target.checked)}
+              checked={hideEmployeesWithoutAssignments}
+              onChange={(event) => setHideEmployeesWithoutAssignments(event.target.checked)}
             />
-            Показать всех сотрудников
+            Скрыть сотрудников без назначений
           </label>
         </div>
       </div>
@@ -149,7 +149,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
 
       {filteredEmployees.length === 0 ? (
         <div className={styles.empty}>
-          {showAllEmployees || searchQuery.trim()
+          {!hideEmployeesWithoutAssignments || searchQuery.trim()
             ? 'По текущему фильтру сотрудники не найдены'
             : 'Пока нет сотрудников с дополнительными назначениями'}
         </div>

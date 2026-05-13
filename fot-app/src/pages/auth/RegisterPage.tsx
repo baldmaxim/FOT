@@ -31,8 +31,8 @@ export const RegisterPage: React.FC = () => {
 
   const passwordStrength = useMemo(() => {
     if (!password) return 0;
-    let strength = 0;
-    if (password.length >= 8) strength++;
+    if (password.length < 8) return 1;
+    let strength = 1;
     if (password.match(/[a-z]/) && password.match(/[A-Z]/)) strength++;
     if (password.match(/\d/)) strength++;
     if (password.match(/[^a-zA-Z\d]/)) strength++;
@@ -256,6 +256,11 @@ export const RegisterPage: React.FC = () => {
                   <div className={`${styles.strengthText} ${strengthLabel.class}`}>
                     {strengthLabel.text}
                   </div>
+                </div>
+              )}
+              {password && password.length < 8 && (
+                <div className={`${styles.formHint} ${styles.error}`}>
+                  Минимум 8 символов (сейчас {password.length})
                 </div>
               )}
             </div>

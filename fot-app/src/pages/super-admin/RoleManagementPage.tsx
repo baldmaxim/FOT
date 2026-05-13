@@ -520,7 +520,6 @@ export const RoleManagementPage: FC = () => {
                     <th>Название</th>
                     <th>Админ</th>
                     <th title="Включено — пользователи роли видят часы по СКУД без урезания под плановую норму дня">Часы</th>
-                    <th title="Если включено — у пользователей роли полностью скрывается боковое меню (для админа игнорируется)">Меню</th>
                     <th title="Какой личный кабинет открывается у пользователей этой роли на /employee">Кабинет</th>
                     <th>Статус</th>
                     <th></th>
@@ -561,23 +560,6 @@ export const RoleManagementPage: FC = () => {
                           }}
                           withLabels={false}
                         />
-                      </td>
-                      <td title={role.hide_sidebar ? 'боковое меню скрыто (админу игнорируется)' : 'боковое меню видно'}>
-                        <label className={styles.hoursToggle}>
-                          <input
-                            type="checkbox"
-                            checked={editState?.code === role.code ? editState.hide_sidebar : role.hide_sidebar}
-                            onChange={e => {
-                              const v = e.target.checked;
-                              if (editState?.code === role.code) {
-                                setEditState(s => (s ? { ...s, hide_sidebar: v } : s));
-                              } else {
-                                void handleToggleHideSidebar(role, v);
-                              }
-                            }}
-                          />
-                          <span className={styles.hoursToggleTrack} />
-                        </label>
                       </td>
                       <td>
                         {editState?.code === role.code ? (
@@ -788,6 +770,31 @@ export const RoleManagementPage: FC = () => {
                         <h3 className={styles.cardTitle}>{group.label}</h3>
                       </div>
                       <div className={styles.pageRows}>
+                        {group.code === 'ops' && (
+                          <div className={styles.pageRow}>
+                            <div className={styles.pageInfo}>
+                              <div className={styles.pageLabelRow}>
+                                <span className={styles.pageLabel}>Боковое меню (Sidebar)</span>
+                                {selectedRole.is_admin && (
+                                  <span className={styles.readOnlyBadge}>Для админа игнорируется</span>
+                                )}
+                              </div>
+                              <code className={styles.pagePath}>system_roles.hide_sidebar</code>
+                            </div>
+                            <div className={styles.segmentedControl}>
+                              <button
+                                type="button"
+                                className={`${styles.segmentedButton} ${!selectedRole.hide_sidebar ? styles.segmentedButtonActive : ''}`}
+                                onClick={() => { if (selectedRole.hide_sidebar) void handleToggleHideSidebar(selectedRole, false); }}
+                              >Видно</button>
+                              <button
+                                type="button"
+                                className={`${styles.segmentedButton} ${selectedRole.hide_sidebar ? styles.segmentedButtonActive : ''}`}
+                                onClick={() => { if (!selectedRole.hide_sidebar) void handleToggleHideSidebar(selectedRole, true); }}
+                              >Скрыто</button>
+                            </div>
+                          </div>
+                        )}
                         {group.pages.map(page => (
                           <div key={page.key} className={styles.pageRow}>
                             <div className={styles.pageInfo}>
