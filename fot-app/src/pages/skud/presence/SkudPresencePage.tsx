@@ -1,4 +1,4 @@
-import { useMemo, useState, type FC } from 'react';
+import { useMemo, useState, useRef, useEffect, type FC } from 'react';
 import { usePresenceByObjectQuery } from '../../../hooks/useEmployeeDirectory';
 import { MapPinIcon, UsersIcon, SearchIcon, BuildingIcon } from '../../../components/ui/Icons';
 import type {
@@ -9,6 +9,8 @@ import type {
 } from '../../../types';
 import { ObjectDetailsModal } from './ObjectDetailsModal';
 import styles from './SkudPresencePage.module.css';
+
+const TOP_COMPANIES_LIMIT = 5;
 
 const matchesEmployee = (emp: IPresenceObjectEmployee, query: string): boolean => {
   if (!query) return true;
@@ -61,52 +63,152 @@ const filterData = (
   return { buckets, totalOnline: data.total_online, filteredCount };
 };
 
+const pluralCompanies = (n: number): string => {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'компания';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'компании';
+  return 'компаний';
+};
+
 const ObjectCard: FC<{
   bucket: IFilteredBucket;
   onOpenDetails: (bucket: IFilteredBucket) => void;
-}> = ({ bucket, onOpenDetails }) => (
-  <article
-    className={`${styles.card} ${styles.cardClickable}`}
-    onClick={() => onOpenDetails(bucket)}
-    role="button"
-    tabIndex={0}
-    onKeyDown={e => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        onOpenDetails(bucket);
+}> = ({ bucket, onOpenDetails }) => {
+  const visibleCompanies = bucket.companies.slice(0, TOP_COMPANIES_LIMIT);
+  const restCompanies = bucket.companies.slice(TOP_COMPANIES_LIMIT);
+  const restEmployees = restCompanies.reduce((sum, c) => sum + c.online_count, 0);
+
+  return (
+    <article
+      className={`${styles.card} ${styles.cardClickable}`}
+      onClick={() => onOpenDetails(bucket)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpenDetails(bucket);
+        }
+      }}
+    >
+      <div className={styles.cardHeader}>
+        <div className={styles.cardTitle}>
+          <MapPinIcon className={styles.cardIcon} />
+          <span>{bucket.object_name}</span>
+        </div>
+        <div className={styles.cardCount}>
+          <span className={styles.cardCountValue}>{bucket.online_count}</span>
+          <span className={styles.cardCountLabel}>в моменте</span>
+        </div>
+      </div>
+      {bucket.companies.length === 0 ? (
+        <div className={styles.cardEmpty}>Сейчас никого нет</div>
+      ) : (
+        <div className={styles.cardBody}>
+          {visibleCompanies.map(company => (
+            <div key={company.company_id} className={styles.companyStatic}>
+              <span className={styles.companyName}>
+                <BuildingIcon className={styles.companyIcon} />
+                {company.company_name}
+              </span>
+              <span className={styles.companyCount}>
+                {company.online_count}
+                <span className={styles.companyCountLabel}>чел.</span>
+              </span>
+            </div>
+          ))}
+          {restCompanies.length > 0 && (
+            <div className={styles.companyStaticMore}>
+              Прочие — {restCompanies.length} {pluralCompanies(restCompanies.length)}, {restEmployees} чел.
+            </div>
+          )}
+        </div>
+      )}
+    </article>
+  );
+};
+
+const CompanyFilter: FC<{
+  allCompanies: { id: string; name: string }[];
+  selected: Set<string>;
+  onToggle: (id: string) => void;
+  onClear: () => void;
+}> = ({ allCompanies, selected, onToggle, onClear }) => {
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+        setOpen(false);
       }
-    }}
-  >
-    <div className={styles.cardHeader}>
-      <div className={styles.cardTitle}>
-        <MapPinIcon className={styles.cardIcon} />
-        <span>{bucket.object_name}</span>
-      </div>
-      <div className={styles.cardCount}>
-        <span className={styles.cardCountValue}>{bucket.online_count}</span>
-        <span className={styles.cardCountLabel}>в моменте</span>
-      </div>
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const selectedList = useMemo(
+    () => allCompanies.filter(c => selected.has(c.id)),
+    [allCompanies, selected],
+  );
+
+  return (
+    <div className={styles.companyFilter} ref={wrapperRef}>
+      <button
+        type="button"
+        className={`${styles.companyFilterToggle} ${open ? styles.companyFilterToggleOpen : ''}`}
+        onClick={() => setOpen(prev => !prev)}
+      >
+        Фильтр по компаниям
+        {selected.size > 0 && <span className={styles.companyFilterBadge}>{selected.size}</span>}
+        <span className={styles.companyFilterCaret} aria-hidden>▾</span>
+      </button>
+
+      {selectedList.map(company => (
+        <button
+          key={company.id}
+          type="button"
+          className={`${styles.chip} ${styles.chipActive}`}
+          onClick={() => onToggle(company.id)}
+          title="Убрать из фильтра"
+        >
+          {company.name}
+          <span className={styles.chipRemove} aria-hidden>×</span>
+        </button>
+      ))}
+
+      {selected.size > 0 && (
+        <button type="button" className={styles.chipClear} onClick={onClear}>
+          Сбросить
+        </button>
+      )}
+
+      {open && (
+        <div className={styles.companyFilterPanel}>
+          {allCompanies.length === 0 ? (
+            <div className={styles.companyFilterEmpty}>Компании не найдены</div>
+          ) : (
+            allCompanies.map(company => {
+              const isActive = selected.has(company.id);
+              return (
+                <label key={company.id} className={styles.companyFilterRow}>
+                  <input
+                    type="checkbox"
+                    checked={isActive}
+                    onChange={() => onToggle(company.id)}
+                  />
+                  <span>{company.name}</span>
+                </label>
+              );
+            })
+          )}
+        </div>
+      )}
     </div>
-    {bucket.companies.length === 0 ? (
-      <div className={styles.cardEmpty}>Сейчас никого нет</div>
-    ) : (
-      <div className={styles.cardBody}>
-        {bucket.companies.map(company => (
-          <div key={company.company_id} className={styles.companyStatic}>
-            <span className={styles.companyName}>
-              <BuildingIcon className={styles.companyIcon} />
-              {company.company_name}
-            </span>
-            <span className={styles.companyCount}>
-              {company.online_count}
-              <span className={styles.companyCountLabel}>чел.</span>
-            </span>
-          </div>
-        ))}
-      </div>
-    )}
-  </article>
-);
+  );
+};
 
 export const SkudPresencePage: FC = () => {
   const { data, isLoading, isError, refetch, isFetching } = usePresenceByObjectQuery();
@@ -190,30 +292,12 @@ export const SkudPresencePage: FC = () => {
       </div>
 
       {allCompanies.length > 0 && (
-        <div className={styles.companyFilter}>
-          {allCompanies.map(company => {
-            const isActive = selectedCompanies.has(company.id);
-            return (
-              <button
-                key={company.id}
-                type="button"
-                className={`${styles.chip} ${isActive ? styles.chipActive : ''}`}
-                onClick={() => toggleCompanyFilter(company.id)}
-              >
-                {company.name}
-              </button>
-            );
-          })}
-          {selectedCompanies.size > 0 && (
-            <button
-              type="button"
-              className={styles.chipClear}
-              onClick={() => setSelectedCompanies(new Set())}
-            >
-              Сбросить
-            </button>
-          )}
-        </div>
+        <CompanyFilter
+          allCompanies={allCompanies}
+          selected={selectedCompanies}
+          onToggle={toggleCompanyFilter}
+          onClear={() => setSelectedCompanies(new Set())}
+        />
       )}
 
       {isLoading && <div className={styles.state}>Загрузка…</div>}
