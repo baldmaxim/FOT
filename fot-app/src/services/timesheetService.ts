@@ -36,6 +36,17 @@ interface ApiResponse<T> {
   error?: string;
 }
 
+export interface IWeekendMemoEntry {
+  employee_id: number;
+  full_name: string;
+  work_dates: string[];
+}
+
+export interface IWeekendMemoPreview {
+  entries: IWeekendMemoEntry[];
+  weekend_dates: string[];
+}
+
 interface BulkTimesheetCorrectionResult {
   processed: number;
   employees: number;
@@ -436,6 +447,29 @@ export const timesheetService = {
     const res = await apiClient.get<ApiResponse<IAssignedEmployeeSummary[]>>('/timesheet/assigned-employees');
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки назначенных сотрудников');
     return res.data;
+  },
+
+  /**
+   * Превью: кто и за какие даты попадёт в шаблон служебной записки.
+   * Источник тот же, что и у generateWeekendMemo — корректировки status='work' на выходные.
+   */
+  async getWeekendMemoPreview(params: {
+    department_id: string;
+    start_date: string;
+    end_date: string;
+  }): Promise<IWeekendMemoPreview> {
+    const qs = new URLSearchParams({
+      department_id: params.department_id,
+      start_date: params.start_date,
+      end_date: params.end_date,
+    });
+    const res = await apiClient.get<{ entries: IWeekendMemoEntry[]; weekend_dates: string[]; success?: boolean }>(
+      `/timesheet/weekend-memo/preview?${qs.toString()}`,
+    );
+    return {
+      entries: res.entries ?? [],
+      weekend_dates: res.weekend_dates ?? [],
+    };
   },
 
   /**

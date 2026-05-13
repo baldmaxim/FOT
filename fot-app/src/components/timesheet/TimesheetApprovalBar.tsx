@@ -1,6 +1,9 @@
-import { type FC, useRef, useState } from 'react';
+import { type FC, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Check, X, Send, Clock, CheckCircle, XCircle, RotateCcw, AlertCircle, Download, Upload, FileText } from 'lucide-react';
+import {
+  Check, X, Send, Clock, CheckCircle, XCircle, RotateCcw, AlertCircle,
+  Download, Upload, FileText, ChevronDown,
+} from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   timesheetApprovalService,
@@ -10,7 +13,11 @@ import {
 } from '../../services/timesheetApprovalService';
 import { timesheetService } from '../../services/timesheetService';
 import { ApiError } from '../../api/client';
-import { useTimesheetApprovalStatus, useTimesheetDepartmentApprovals } from '../../hooks/useTimesheetApprovalData';
+import {
+  useTimesheetApprovalStatus,
+  useTimesheetDepartmentApprovals,
+  useWeekendMemoPreview,
+} from '../../hooks/useTimesheetApprovalData';
 import { formatTimesheetRangeLabel } from '../../utils/timesheetApprovalPeriod';
 
 const MANAGER_OBJ_ROLE_CODE = 'manager_obj';
@@ -53,6 +60,11 @@ const formatDayLabel = (iso: string): string => {
   return `${Number(d)}.${m}`;
 };
 
+const formatRu = (iso: string): string => {
+  const [, m, d] = iso.split('-');
+  return `${d}.${m}`;
+};
+
 interface IActiveCardProps {
   approval: ITimesheetApproval | null;
   canSubmitDepartment: boolean;
@@ -62,9 +74,12 @@ interface IActiveCardProps {
   startDate: string;
   endDate: string;
   loading: boolean;
+  showMemoToggle: boolean;
+  memoOpen: boolean;
   onApprove: () => Promise<void>;
   onReject: () => Promise<void>;
   onSubmit: () => Promise<void>;
+  onToggleMemo: () => void;
   onCommentChange: (value: string) => void;
 }
 
@@ -77,15 +92,19 @@ const ActiveCard: FC<IActiveCardProps> = ({
   startDate,
   endDate,
   loading,
+  showMemoToggle,
+  memoOpen,
   onApprove,
   onReject,
   onSubmit,
+  onToggleMemo,
   onCommentChange,
 }) => {
   const status = approval?.status || 'draft';
   const Icon = STATUS_ICONS[status];
   const [showComment, setShowComment] = useState(false);
   const submitLabel = status === 'returned' || status === 'rejected' ? 'Переподать' : 'Подать';
+  const canShowSubmit = canSubmitDepartment && (status === 'draft' || status === 'rejected' || status === 'returned');
 
   return (
     <div className={`ts-approval-card${compact ? ' ts-approval-card--compact' : ''}`}>
@@ -101,10 +120,29 @@ const ActiveCard: FC<IActiveCardProps> = ({
         )}
       </div>
 
-      {canSubmitDepartment && (status === 'draft' || status === 'rejected' || status === 'returned') && (
-        <button className="ts-btn" onClick={onSubmit} disabled={loading} type="button">
-          <Send size={14} /> {submitLabel}
-        </button>
+      {canShowSubmit && (
+        <div className="ts-btn-split">
+          <button
+            className="ts-btn ts-btn-split-main"
+            onClick={onSubmit}
+            disabled={loading}
+            type="button"
+          >
+            <Send size={14} /> {submitLabel}
+          </button>
+          {showMemoToggle && (
+            <button
+              className={`ts-btn ts-btn-split-toggle${memoOpen ? ' ts-btn-split-toggle--open' : ''}`}
+              onClick={onToggleMemo}
+              type="button"
+              aria-label="Открыть служебную записку о работе в выходные"
+              aria-expanded={memoOpen}
+              title="Служебная записка о работе в выходные"
+            >
+              <ChevronDown size={14} />
+            </button>
+          )}
+        </div>
       )}
 
       {canReviewApproval && status === 'submitted' && (
@@ -145,6 +183,154 @@ const ActiveCard: FC<IActiveCardProps> = ({
   );
 };
 
+interface IWeekendMemoPopoverProps {
+  departmentId: string | null;
+  startDate: string;
+  endDate: string;
+  memoReason: string;
+  loading: boolean;
+  downloading: boolean;
+  errorText: string | null;
+  onChangeReason: (value: string) => void;
+  onDownload: () => Promise<void>;
+  onUploadClick: () => void;
+  onFileSelected: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
+  onClose: () => void;
+  fileInputRef: React.RefObject<HTMLInputElement | null>;
+}
+
+const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
+  departmentId,
+  startDate,
+  endDate,
+  memoReason,
+  loading,
+  downloading,
+  errorText,
+  onChangeReason,
+  onDownload,
+  onUploadClick,
+  onFileSelected,
+  onClose,
+  fileInputRef,
+}) => {
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const preview = useWeekendMemoPreview(departmentId, startDate, endDate, true);
+  const entries = preview.data?.entries ?? [];
+  const weekendDates = preview.data?.weekend_dates ?? [];
+  const hasEntries = entries.length > 0;
+  const hasWeekendDays = weekendDates.length > 0;
+
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onClose();
+    };
+    const handlePointer = (e: MouseEvent): void => {
+      if (!popoverRef.current) return;
+      if (popoverRef.current.contains(e.target as Node)) return;
+      // Не закрывать если клик пришёлся на toggle-шеврон — он сам зарелейтил toggle
+      const toggle = (e.target as HTMLElement | null)?.closest('.ts-btn-split-toggle');
+      if (toggle) return;
+      onClose();
+    };
+    document.addEventListener('keydown', handleKey);
+    document.addEventListener('mousedown', handlePointer);
+    return () => {
+      document.removeEventListener('keydown', handleKey);
+      document.removeEventListener('mousedown', handlePointer);
+    };
+  }, [onClose]);
+
+  return (
+    <div className="ts-memo-popover" role="dialog" aria-label="Служебная записка о работе в выходные" ref={popoverRef}>
+      <div className="ts-memo-popover-header">
+        <div className="ts-memo-popover-title">
+          <FileText size={14} /> Служебная записка о работе в выходные
+        </div>
+        <button type="button" className="ts-memo-popover-close" onClick={onClose} aria-label="Закрыть">
+          <X size={14} />
+        </button>
+      </div>
+
+      <div className="ts-memo-popover-hint">
+        В шаблон попадут сотрудники, у которых в «Режиме корректировок» выходной/праздничный день
+        помечен статусом «работа». Чтобы добавить или убрать — выделите ячейки в табеле.
+      </div>
+
+      <div className="ts-memo-popover-list">
+        {preview.isLoading && <div className="ts-memo-popover-empty">Загрузка…</div>}
+        {!preview.isLoading && !hasWeekendDays && (
+          <div className="ts-memo-popover-empty">В выбранном диапазоне нет выходных/праздничных дней.</div>
+        )}
+        {!preview.isLoading && hasWeekendDays && !hasEntries && (
+          <div className="ts-memo-popover-empty">
+            Пока нет корректировок «работа» на выходные дни диапазона.
+          </div>
+        )}
+        {hasEntries && (
+          <ul className="ts-memo-popover-items">
+            {entries.map((entry) => (
+              <li key={entry.employee_id} className="ts-memo-popover-item">
+                <span className="ts-memo-popover-name">{entry.full_name || `#${entry.employee_id}`}</span>
+                <span className="ts-memo-popover-dates">
+                  {entry.work_dates.map(formatRu).join(', ')}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <textarea
+        ref={textareaRef}
+        className="ts-memo-popover-reason"
+        placeholder="Кратко обоснуйте необходимость работы в выходные (попадёт в шаблон)"
+        value={memoReason}
+        onChange={e => onChangeReason(e.target.value)}
+        rows={2}
+      />
+
+      {errorText && (
+        <div className="ts-memo-popover-error">
+          <AlertCircle size={12} /> {errorText}
+        </div>
+      )}
+
+      <div className="ts-memo-popover-actions">
+        <button
+          type="button"
+          className="ts-btn"
+          onClick={onDownload}
+          disabled={downloading || !departmentId || !hasEntries}
+          title={!hasEntries ? 'Сначала отметьте корректировкой выходные дни как «работа»' : undefined}
+        >
+          <Download size={14} /> Скачать шаблон
+        </button>
+        <button
+          type="button"
+          className="ts-btn"
+          onClick={onUploadClick}
+          disabled={loading || !departmentId}
+        >
+          <Upload size={14} /> Загрузить подписанную
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pdf,.png,.jpg,.jpeg,.xlsx"
+          style={{ display: 'none' }}
+          onChange={onFileSelected}
+        />
+      </div>
+    </div>
+  );
+};
+
 export const TimesheetApprovalBar: FC<IProps> = ({
   departmentId,
   month,
@@ -167,6 +353,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const [memoRequired, setMemoRequired] = useState(false);
   const [memoReason, setMemoReason] = useState('');
   const [memoDownloading, setMemoDownloading] = useState(false);
+  const [memoOpen, setMemoOpen] = useState(false);
   const memoFileInputRef = useRef<HTMLInputElement>(null);
 
   const invalidate = () => Promise.all([
@@ -202,6 +389,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
       } else if (err instanceof ApiError && err.code === 'WEEKEND_MEMO_REQUIRED') {
         setMemoRequired(true);
         setSubmitError(err.message);
+        setMemoOpen(true);
       } else {
         const message = err instanceof Error ? err.message : 'Ошибка подачи табеля';
         setSubmitError(message);
@@ -296,27 +484,50 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const memoSectionAllowed = isManagerObj && canSubmitDepartment && (
     !activeApproval || activeApproval.status === 'draft' || activeApproval.status === 'rejected' || activeApproval.status === 'returned'
   );
+  const memoErrorText = memoRequired ? submitError : null;
 
   return (
     <div className={`ts-approval-bar${compact ? ' ts-approval-bar--compact' : ''}`}>
       <div className="ts-approval-title">
         {compact ? 'Согласование диапазона' : 'Согласование табеля'}
       </div>
-      <ActiveCard
-        approval={activeStatus.data ?? null}
-        canSubmitDepartment={canSubmitDepartment}
-        canReviewApproval={canReviewApproval}
-        comment={comment}
-        compact={compact}
-        startDate={startDate}
-        endDate={endDate}
-        loading={loading}
-        onApprove={handleApprove}
-        onReject={handleReject}
-        onSubmit={handleSubmit}
-        onCommentChange={setComment}
-      />
-      {(submitError || missingDays.length > 0 || memoRequired) && (
+      <div className="ts-approval-card-wrap">
+        <ActiveCard
+          approval={activeStatus.data ?? null}
+          canSubmitDepartment={canSubmitDepartment}
+          canReviewApproval={canReviewApproval}
+          comment={comment}
+          compact={compact}
+          startDate={startDate}
+          endDate={endDate}
+          loading={loading}
+          showMemoToggle={memoSectionAllowed}
+          memoOpen={memoOpen}
+          onApprove={handleApprove}
+          onReject={handleReject}
+          onSubmit={handleSubmit}
+          onToggleMemo={() => setMemoOpen(o => !o)}
+          onCommentChange={setComment}
+        />
+        {memoOpen && memoSectionAllowed && (
+          <WeekendMemoPopover
+            departmentId={departmentId}
+            startDate={startDate}
+            endDate={endDate}
+            memoReason={memoReason}
+            loading={loading}
+            downloading={memoDownloading}
+            errorText={memoErrorText}
+            onChangeReason={setMemoReason}
+            onDownload={handleDownloadMemo}
+            onUploadClick={handleUploadMemoClick}
+            onFileSelected={handleMemoFileSelected}
+            onClose={() => setMemoOpen(false)}
+            fileInputRef={memoFileInputRef}
+          />
+        )}
+      </div>
+      {(submitError || missingDays.length > 0) && !memoRequired && (
         <div className="ts-approval-submit-error">
           <div className="ts-approval-submit-error-header">
             <AlertCircle size={14} />
@@ -341,45 +552,6 @@ export const TimesheetApprovalBar: FC<IProps> = ({
               ))}
             </ul>
           )}
-        </div>
-      )}
-      {memoSectionAllowed && (
-        <div className="ts-approval-memo">
-          <div className="ts-approval-memo-title">
-            <FileText size={14} /> Служебная записка о работе в выходные
-          </div>
-          <textarea
-            className="ts-approval-memo-reason"
-            placeholder="Кратко обоснуйте необходимость работы в выходные (попадёт в шаблон)"
-            value={memoReason}
-            onChange={e => setMemoReason(e.target.value)}
-            rows={2}
-          />
-          <div className="ts-approval-memo-actions">
-            <button
-              type="button"
-              className="ts-btn"
-              onClick={handleDownloadMemo}
-              disabled={memoDownloading || !departmentId}
-            >
-              <Download size={14} /> Скачать шаблон
-            </button>
-            <button
-              type="button"
-              className="ts-btn"
-              onClick={handleUploadMemoClick}
-              disabled={loading || !departmentId}
-            >
-              <Upload size={14} /> Загрузить подписанную
-            </button>
-            <input
-              ref={memoFileInputRef}
-              type="file"
-              accept=".pdf,.png,.jpg,.jpeg,.xlsx"
-              style={{ display: 'none' }}
-              onChange={handleMemoFileSelected}
-            />
-          </div>
         </div>
       )}
       {otherApprovals.length > 0 && (

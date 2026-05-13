@@ -1,18 +1,75 @@
 import type { Response } from 'express';
-import { query } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { resolveScopedDepartmentId } from '../services/data-scope.service.js';
-import {
-  checkWeekendWorkRequirement,
-  MANAGER_OBJ_ROLE_CODE,
-} from '../services/timesheet-approval-weekend-check.service.js';
-import { listEmployeeIdsAssignedToDepartmentPeriod } from '../services/timesheet-department-assignments.service.js';
+import { MANAGER_OBJ_ROLE_CODE } from '../services/timesheet-approval-weekend-check.service.js';
 import {
   generateWeekendMemoXlsx,
+  getWeekendWorkEntries,
   loadWeekendMemoData,
 } from '../services/timesheet-weekend-memo.service.js';
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+interface IResolvedScope {
+  departmentId: string;
+  startDate: string;
+  endDate: string;
+}
+
+async function resolveCommonScope(
+  req: AuthenticatedRequest,
+  res: Response,
+  source: 'body' | 'query',
+): Promise<IResolvedScope | null> {
+  if (req.user.role_code !== MANAGER_OBJ_ROLE_CODE) {
+    res.status(403).json({ success: false, error: 'Доступно только руководителям объектов (manager_obj)' });
+    return null;
+  }
+
+  const raw = source === 'body' ? req.body ?? {} : req.query ?? {};
+  const requestedDeptId = typeof raw.department_id === 'string' && raw.department_id ? raw.department_id : null;
+  const startDate = typeof raw.start_date === 'string' ? raw.start_date : '';
+  const endDate = typeof raw.end_date === 'string' ? raw.end_date : '';
+
+  if (!ISO_DATE.test(startDate) || !ISO_DATE.test(endDate) || endDate < startDate) {
+    res.status(400).json({
+      success: false,
+      error: 'start_date и end_date обязательны (формат YYYY-MM-DD, end_date >= start_date)',
+    });
+    return null;
+  }
+
+  const departmentId = await resolveScopedDepartmentId(req, requestedDeptId);
+  if (requestedDeptId && !departmentId) {
+    res.status(403).json({ success: false, error: 'Нет доступа к отделу', code: 'DEPARTMENT_ACCESS_DENIED' });
+    return null;
+  }
+  if (!departmentId) {
+    res.status(400).json({ success: false, error: 'department_id обязателен' });
+    return null;
+  }
+
+  return { departmentId, startDate, endDate };
+}
+
+/**
+ * GET /api/timesheet/weekend-memo/preview
+ * Query: ?department_id=...&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
+ * Возвращает превью того, кто попадёт в шаблон служебной записки и за какие даты.
+ * Список — read-only: «выбор» сотрудников происходит через корректировки в табеле.
+ */
+export const getWeekendMemoPreview = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const scope = await resolveCommonScope(req, res, 'query');
+    if (!scope) return;
+
+    const { entries, weekend_dates } = await getWeekendWorkEntries(scope);
+    res.json({ success: true, entries, weekend_dates });
+  } catch (err) {
+    console.error('timesheet-weekend-memo.preview error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка загрузки превью служебной записки' });
+  }
+};
 
 /**
  * POST /api/timesheet/weekend-memo/generate
@@ -20,81 +77,43 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
  * Генерирует .xlsx-шаблон служебной записки. Список сотрудников и дат
  * собирается автоматически: те, у кого в attendance_adjustments статус 'work'
  * на календарный выходной в указанном диапазоне.
- * Доступ только для роли manager_obj.
  */
 export const generateWeekendMemo = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    if (req.user.role_code !== MANAGER_OBJ_ROLE_CODE) {
-      res.status(403).json({ success: false, error: 'Доступно только руководителям объектов (manager_obj)' });
-      return;
-    }
+    const scope = await resolveCommonScope(req, res, 'body');
+    if (!scope) return;
 
-    const requestedDeptId = typeof req.body?.department_id === 'string' && req.body.department_id ? req.body.department_id : null;
-    const startDate = typeof req.body?.start_date === 'string' ? req.body.start_date : '';
-    const endDate = typeof req.body?.end_date === 'string' ? req.body.end_date : '';
     const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
 
-    if (!ISO_DATE.test(startDate) || !ISO_DATE.test(endDate) || endDate < startDate) {
+    const { entries, weekend_dates } = await getWeekendWorkEntries(scope);
+
+    if (weekend_dates.length === 0) {
       res.status(400).json({
         success: false,
-        error: 'start_date и end_date обязательны (формат YYYY-MM-DD, end_date >= start_date)',
+        error: 'В выбранном диапазоне нет выходных/праздничных дней',
+        code: 'NO_WEEKEND_DAYS',
       });
       return;
     }
 
-    const departmentId = await resolveScopedDepartmentId(req, requestedDeptId);
-    if (requestedDeptId && !departmentId) {
-      res.status(403).json({ success: false, error: 'Нет доступа к отделу', code: 'DEPARTMENT_ACCESS_DENIED' });
-      return;
-    }
-    if (!departmentId) {
-      res.status(400).json({ success: false, error: 'department_id обязателен' });
-      return;
-    }
-
-    const weekend = await checkWeekendWorkRequirement({ departmentId, startDate, endDate });
-    if (!weekend.requires) {
-      res.status(400).json({
-        success: false,
-        error: 'В выбранном диапазоне нет работы в выходные',
-        code: 'NO_WEEKEND_WORK',
-      });
-      return;
-    }
-
-    const employeeIds = await listEmployeeIdsAssignedToDepartmentPeriod(departmentId, startDate, endDate);
-    if (employeeIds.length === 0) {
-      res.status(404).json({ success: false, error: 'Нет сотрудников в отделе на выбранный период' });
-      return;
-    }
-
-    const adjRows = await query<{ employee_id: number; work_date: string }>(
-      `SELECT employee_id, work_date
-         FROM attendance_adjustments
-        WHERE employee_id = ANY($1::int[])
-          AND work_date = ANY($2::date[])
-          AND status = 'work'`,
-      [employeeIds, weekend.weekendWorkDates],
-    );
-    const employeesWithWeekendWork = [...new Set(adjRows.map(r => Number(r.employee_id)))];
-
-    if (employeesWithWeekendWork.length === 0) {
+    if (entries.length === 0) {
       res.status(404).json({
         success: false,
         error: 'Не найдено сотрудников с работой в выходные. Сначала создайте корректировку статуса «работа» на выходной день.',
+        code: 'NO_WEEKEND_WORK',
       });
       return;
     }
 
     const data = await loadWeekendMemoData({
       managerUserId: req.user.id,
-      employeeIds: employeesWithWeekendWork,
-      weekendDates: weekend.weekendWorkDates,
+      employeeIds: entries.map(e => e.employee_id),
+      weekendDates: weekend_dates,
       reason,
     });
 
     const buffer = await generateWeekendMemoXlsx(data);
-    const fileName = `weekend-memo-${startDate}_${endDate}.xlsx`;
+    const fileName = `weekend-memo-${scope.startDate}_${scope.endDate}.xlsx`;
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);

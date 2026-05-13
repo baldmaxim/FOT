@@ -218,6 +218,13 @@ router.post(
   timesheetController.emailAssigned
 );
 
+// GET /api/timesheet/weekend-memo/preview — превью списка сотрудников/дат для служебки
+router.get(
+  '/weekend-memo/preview',
+  requirePageAccess('/timesheet', 'view'),
+  timesheetController.getWeekendMemoPreview
+);
+
 // POST /api/timesheet/weekend-memo/generate — служебная записка о работе в выходные (manager_obj)
 router.post(
   '/weekend-memo/generate',

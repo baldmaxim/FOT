@@ -1,12 +1,90 @@
 import ExcelJS from 'exceljs';
 import { query, queryOne } from '../config/postgres.js';
 import { writeTimesheetWorkbookBuffer } from './timesheet-excel.service.js';
+import { checkWeekendWorkRequirement } from './timesheet-approval-weekend-check.service.js';
+import { listEmployeeIdsAssignedToDepartmentPeriod } from './timesheet-department-assignments.service.js';
 
 export interface IWeekendMemoEmployee {
   id: number;
   full_name: string;
   position_name: string | null;
   weekend_dates: string[];
+}
+
+export interface IWeekendWorkEntry {
+  employee_id: number;
+  full_name: string;
+  work_dates: string[];
+}
+
+export interface IWeekendWorkEntriesResult {
+  entries: IWeekendWorkEntry[];
+  weekend_dates: string[];
+}
+
+/**
+ * Возвращает сотрудников отдела, у которых в attendance_adjustments проставлен
+ * статус 'work' на выходные/праздничные дни выбранного диапазона, с их датами выхода.
+ * Используется и preview-эндпоинтом, и генерацией .xlsx.
+ */
+export async function getWeekendWorkEntries(params: {
+  departmentId: string;
+  startDate: string;
+  endDate: string;
+}): Promise<IWeekendWorkEntriesResult> {
+  const { departmentId, startDate, endDate } = params;
+  const weekend = await checkWeekendWorkRequirement({ departmentId, startDate, endDate });
+  if (weekend.weekendDates.length === 0) {
+    return { entries: [], weekend_dates: [] };
+  }
+
+  const employeeIds = await listEmployeeIdsAssignedToDepartmentPeriod(departmentId, startDate, endDate);
+  if (employeeIds.length === 0) {
+    return { entries: [], weekend_dates: weekend.weekendDates };
+  }
+
+  const adjRows = await query<{ employee_id: number; work_date: string }>(
+    `SELECT employee_id, work_date
+       FROM attendance_adjustments
+      WHERE employee_id = ANY($1::int[])
+        AND work_date = ANY($2::date[])
+        AND status = 'work'`,
+    [employeeIds, weekend.weekendDates],
+  );
+  if (adjRows.length === 0) {
+    return { entries: [], weekend_dates: weekend.weekendDates };
+  }
+
+  const datesByEmployee = new Map<number, Set<string>>();
+  for (const row of adjRows) {
+    const empId = Number(row.employee_id);
+    const set = datesByEmployee.get(empId) ?? new Set<string>();
+    set.add(String(row.work_date));
+    datesByEmployee.set(empId, set);
+  }
+
+  const targetIds = [...datesByEmployee.keys()];
+  const empRows = await query<{ id: number; full_name: string | null }>(
+    'SELECT id, full_name FROM employees WHERE id = ANY($1::int[])',
+    [targetIds],
+  );
+  const nameById = new Map<number, string>();
+  for (const row of empRows) {
+    nameById.set(Number(row.id), String(row.full_name ?? ''));
+  }
+
+  const entries: IWeekendWorkEntry[] = targetIds
+    .map((empId) => ({
+      employee_id: empId,
+      full_name: nameById.get(empId) ?? '',
+      work_dates: [...(datesByEmployee.get(empId) ?? new Set<string>())].sort(),
+    }))
+    .sort((a, b) => a.full_name.localeCompare(b.full_name, 'ru'));
+
+  return {
+    entries,
+    weekend_dates: weekend.weekendDates,
+  };
 }
 
 export interface IWeekendMemoInitiator {

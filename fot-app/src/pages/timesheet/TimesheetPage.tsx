@@ -89,6 +89,7 @@ export const TimesheetPage: FC = () => {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const isSuperAdmin = profile?.is_admin === true;
+  const isManagerObj = profile?.role_code === 'manager_obj';
   const canEditTimesheet = canEditPage('/timesheet') || canEditPage('/timesheet-hr');
   const canViewManagedTimesheet = canEditTimesheet || canViewPage('/timesheet') || canViewPage('/timesheet-hr');
   const canEditTeamManagement = isSuperAdmin
@@ -1821,6 +1822,11 @@ export const TimesheetPage: FC = () => {
                 <div className="ts-bulk-hint">
                   Зажмите левую кнопку мыши и протяните по таблице нужный диапазон. Новая протяжка добавит дни к уже выбранным. Раскройте объекты у сотрудника с несколькими объектами, чтобы массово править часы по конкретному объекту. {bulkSelectionSummary}
                 </div>
+                {isManagerObj && (
+                  <div className="ts-bulk-hint ts-bulk-hint--memo">
+                    Выходные/праздничные дни со статусом «работа» автоматически попадут в служебную записку — доступна в кнопке «Подать ▾».
+                  </div>
+                )}
               </div>
               <div className="ts-bulk-actions">
                 <button

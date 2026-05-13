@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { timesheetApprovalService, type TimesheetApprovalStatus } from '../services/timesheetApprovalService';
+import { timesheetService, type IWeekendMemoPreview } from '../services/timesheetService';
 
 export const getTimesheetApprovalStatusQueryKey = (
   departmentId: string | null,
@@ -68,6 +69,30 @@ export const useTimesheetApprovalHistory = (approvalId: number | null, enabled =
   queryKey: getTimesheetApprovalHistoryQueryKey(approvalId),
   queryFn: () => timesheetApprovalService.getHistory(approvalId as number),
   enabled: enabled && !!approvalId,
+  staleTime: 30_000,
+  placeholderData: previousData => previousData,
+});
+
+export const getWeekendMemoPreviewQueryKey = (
+  departmentId: string | null,
+  startDate: string,
+  endDate: string,
+) => ['timesheet-approval', 'weekend-memo-preview', departmentId, startDate, endDate] as const;
+
+/** Превью кто/за-какие-даты попадёт в служебку. Источник — корректировки в табеле. */
+export const useWeekendMemoPreview = (
+  departmentId: string | null,
+  startDate: string,
+  endDate: string,
+  enabled = true,
+) => useQuery<IWeekendMemoPreview>({
+  queryKey: getWeekendMemoPreviewQueryKey(departmentId, startDate, endDate),
+  queryFn: () => timesheetService.getWeekendMemoPreview({
+    department_id: departmentId as string,
+    start_date: startDate,
+    end_date: endDate,
+  }),
+  enabled: enabled && !!departmentId && !!startDate && !!endDate,
   staleTime: 30_000,
   placeholderData: previousData => previousData,
 });
