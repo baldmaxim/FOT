@@ -21,11 +21,11 @@ export const EmployeeRow: FC<{ emp: IPresenceObjectEmployee }> = ({ emp }) => (
         </span>
       )}
     </div>
-    {emp.position_name && (
-      <div className={styles.employeePosition}>{emp.position_name}</div>
-    )}
     {emp.department_name && (
       <div className={styles.employeeDepartment}>{emp.department_name}</div>
+    )}
+    {emp.position_name && (
+      <div className={styles.employeePosition}>{emp.position_name}</div>
     )}
     <div className={styles.employeeFooter}>
       {emp.last_access_point && (

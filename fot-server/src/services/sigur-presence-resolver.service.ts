@@ -78,7 +78,14 @@ function resolveEmployeeFullName(row: Record<string, unknown>): string {
   return parts.join(' ').trim();
 }
 
-async function loadAllSigurEmployees(): Promise<Array<{ id: number | null; name: string; departmentId: number | null }>> {
+interface ISigurEmployeeRaw {
+  id: number | null;
+  name: string;
+  departmentId: number | null;
+  departmentName: string | null;
+}
+
+async function loadAllSigurEmployees(): Promise<ISigurEmployeeRaw[]> {
   const raw = await sigurService.fetchAllPaginated<Record<string, unknown>>(
     '/api/v1/employees',
     { excludeFields: 'photo' },
@@ -87,12 +94,12 @@ async function loadAllSigurEmployees(): Promise<Array<{ id: number | null; name:
   if (raw && raw.length > 0) {
     // Разовый sample-лог при rebuild кэша — помогает диагностировать, в каких полях
     // Sigur отдаёт ФИО (name / NAME / fullName / lastName+firstName+middleName / ...).
-    logSampleAndWarn('sigur-presence-resolver', raw[0], ['id', 'name', 'departmentId']);
+    logSampleAndWarn('sigur-presence-resolver', raw[0], ['id', 'name', 'departmentId', 'departmentName']);
   }
 
-  const result: Array<{ id: number | null; name: string; departmentId: number | null }> = [];
+  const result: ISigurEmployeeRaw[] = [];
   let skippedNoName = 0;
-  let skippedNoDept = 0;
+  let skippedNoDeptInfo = 0;
   for (const row of raw || []) {
     if (!row || typeof row !== 'object') continue;
     const rec = row as Record<string, unknown>;
@@ -104,20 +111,25 @@ async function loadAllSigurEmployees(): Promise<Array<{ id: number | null; name:
     const departmentId = pickNumber(
       rec.departmentId ?? rec.department_id ?? rec.DEPARTMENTID ?? rec.DepartmentId,
     );
-    if (departmentId == null) {
-      skippedNoDept += 1;
+    const departmentName = pickString(
+      rec.departmentName ?? rec.department_name ?? rec.DEPARTMENTNAME ?? rec.DepartmentName,
+    );
+    // Допускаем сотрудников без departmentId, если у них хотя бы есть departmentName
+    // (Sigur API часто отдаёт имя отдела даже когда id отсутствует/null).
+    if (departmentId == null && !departmentName) {
+      skippedNoDeptInfo += 1;
       continue;
     }
     const employeeId = pickNumber(rec.id ?? rec.ID ?? rec.Id);
-    result.push({ id: employeeId, name: fullName, departmentId });
+    result.push({ id: employeeId, name: fullName, departmentId, departmentName });
   }
   console.log(
-    `[sigur-presence-resolver] employees fetched=${raw?.length ?? 0} usable=${result.length} skipped_no_name=${skippedNoName} skipped_no_dept=${skippedNoDept}`,
+    `[sigur-presence-resolver] employees fetched=${raw?.length ?? 0} usable=${result.length} skipped_no_name=${skippedNoName} skipped_no_dept_info=${skippedNoDeptInfo}`,
   );
   if (result.length > 0) {
     console.log(
       '[sigur-presence-resolver] sample names:',
-      result.slice(0, 10).map(e => `"${e.name}" → dept ${e.departmentId}`),
+      result.slice(0, 10).map(e => `"${e.name}" → dept ${e.departmentId} / ${e.departmentName || '∅'}`),
     );
   }
   return result;
@@ -147,7 +159,7 @@ async function buildResolver(): Promise<ICachedResolver> {
   }
 
   let tree: Map<number, { id: number; parentId: number | null; name: string }>;
-  let employees: Array<{ id: number | null; name: string; departmentId: number | null }>;
+  let employees: ISigurEmployeeRaw[];
   try {
     [tree, employees] = await Promise.all([
       loadDepartmentsTree(),
@@ -161,24 +173,45 @@ async function buildResolver(): Promise<ICachedResolver> {
     return { byName: new Map(), byPrefix: new Map(), byEmployeeId: new Map(), expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
   }
 
+  console.log(`[sigur-presence-resolver] departments tree size=${tree.size}, employees usable=${employees.length}`);
+
   const byName = new Map<string, ISigurEmployeeResolution>();
   const byPrefix = new Map<string, ISigurEmployeeResolution | null>();
   const byEmployeeId = new Map<number, ISigurEmployeeResolution>();
 
+  let indexedViaTree = 0;
+  let indexedViaFallback = 0;
+
   for (const employee of employees) {
     if (!employee.name) continue;
-    if (employee.departmentId == null) continue;
     const normalized = normalizeMatchName(employee.name);
     if (!normalized) continue;
-    const deptNode = tree.get(employee.departmentId);
-    if (!deptNode) continue;
-    const root = resolveRootNode(employee.departmentId, tree);
-    if (!root) continue;
 
-    const resolution: ISigurEmployeeResolution = {
-      root: { sigur_department_id: root.id, name: root.name },
-      department: { sigur_department_id: deptNode.id, name: deptNode.name },
-    };
+    // Источник имени отдела: tree (если есть deptId и нашёлся узел) → fallback на employee.departmentName.
+    let resolution: ISigurEmployeeResolution | null = null;
+    if (employee.departmentId != null) {
+      const deptNode = tree.get(employee.departmentId);
+      const root = deptNode ? resolveRootNode(employee.departmentId, tree) : null;
+      if (deptNode && root) {
+        resolution = {
+          root: { sigur_department_id: root.id, name: root.name },
+          department: { sigur_department_id: deptNode.id, name: deptNode.name },
+        };
+        indexedViaTree += 1;
+      }
+    }
+    if (!resolution && employee.departmentName) {
+      // Fallback: dept tree пустое или не содержит этот id, но у Sigur API
+      // departmentName есть в самом /api/v1/employees → используем его.
+      // sigur_department_id = departmentId || 0 (0 = сентинел для «нет id»).
+      const deptId = employee.departmentId ?? 0;
+      resolution = {
+        root: { sigur_department_id: deptId, name: employee.departmentName },
+        department: { sigur_department_id: deptId, name: employee.departmentName },
+      };
+      indexedViaFallback += 1;
+    }
+    if (!resolution) continue;
 
     // First-wins по полному ФИО.
     if (!byName.has(normalized)) {
@@ -210,7 +243,7 @@ async function buildResolver(): Promise<ICachedResolver> {
 
   const usablePrefixes = [...byPrefix.values()].filter(v => v !== null).length;
   console.log(
-    `[sigur-presence-resolver] indexed ${byName.size} unique full names, ${usablePrefixes}/${byPrefix.size} usable prefix keys, ${byEmployeeId.size} by employee id`,
+    `[sigur-presence-resolver] indexed ${byName.size} unique full names (via_tree=${indexedViaTree} via_fallback=${indexedViaFallback}), ${usablePrefixes}/${byPrefix.size} usable prefix keys, ${byEmployeeId.size} by employee id`,
   );
   if (byName.size > 0) {
     console.log(
