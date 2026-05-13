@@ -39,10 +39,14 @@ venv/
 yandex.env
 docs/yandex-postgres-migration/yandex.env
 # .migration/ содержит миграционные артефакты (dumps, креды, CA, отчёты).
-# Игнорируем всё кроме .example-шаблона и README.
-.migration/*
-!.migration/yandex.env.example
-!.migration/README.md
+# Игнорируем всё кроме .example-шаблона и README — на любом уровне дерева
+# (корень репо и fot-server/, скрипты пишут отчёты в свой ./. migration).
+**/.migration/*
+!**/.migration/yandex.env.example
+!**/.migration/README.md
+
+# Claude Code session artifacts (lock-файлы scheduled tasks и т.п.)
+.claude/scheduled_tasks.lock
 
 # Build output
 dist/
