@@ -4,7 +4,7 @@
 .ec-content {
   max-width: 100%;
   margin: 0;
-  padding: 12px 28px 28px;
+  padding: 0 28px 28px;
   overflow-x: hidden;
 }
 
@@ -60,12 +60,48 @@
   margin: 0 -52px 18px;
   padding: 24px clamp(20px, 4vw, 56px);
   background: linear-gradient(135deg,
-    color-mix(in oklab, var(--surface) 90%, var(--primary) 10%) 0%,
-    var(--surface) 60%,
-    var(--bg-secondary) 100%);
+    color-mix(in oklab, var(--surface) 70%, var(--primary) 30%) 0%,
+    color-mix(in oklab, var(--surface) 80%, var(--primary) 20%) 50%,
+    color-mix(in oklab, var(--surface) 80%, #a855f7 20%) 100%);
   border: none;
   border-bottom: 1px solid var(--border);
   border-radius: 0;
+}
+
+/* Микроэлемент алертов внутри hero (опоздания/прогулы за месяц) */
+.ec-hero-alerts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ec-hero-alert {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.ec-hero-alert.warning {
+  background: var(--warning-muted);
+  color: var(--warning);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.ec-hero-alert.error {
+  background: var(--error-muted);
+  color: var(--error);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
+.ec-hero-alert svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
 }
 
 .ec-hero-inner {
@@ -526,6 +562,17 @@
 /* Sidebar cards flow into grid columns */
 .ec-attendance-3col > .ec-right-col {
   display: contents;
+}
+
+/* Информация о сотруднике в правом столбце 3-col: стекуем 4 секции вертикально */
+.ec-attendance-3col > .ec-info-sections-grid {
+  grid-template-columns: 1fr;
+  gap: 12px;
+  align-self: start;
+}
+
+.ec-attendance-3col > .ec-info-sections-grid .ec-info-section {
+  padding: 12px 14px;
 }
 
 /* Sidebar stack for 4th column */
@@ -1818,7 +1865,7 @@
 
 @media (max-width: 768px) {
   .ec-content {
-    padding: 16px;
+    padding: 0 16px 16px;
   }
   .ec-back-row {
     margin-bottom: 12px;
@@ -1918,7 +1965,7 @@
 
 @media (max-width: 430px) {
   .ec-content {
-    padding: 6px 8px;
+    padding: 0 8px 8px;
   }
   .ec-back-row {
     margin-bottom: 10px;

@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Edit3, Archive, RotateCcw, Trash2,
   Briefcase, FolderOpen, CalendarDays, CheckCircle,
-  Clock, DollarSign, BarChart3, ShieldCheck,
+  Clock, DollarSign, BarChart3, ShieldCheck, CalendarX,
 } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
 import { skudService } from '../../services/skudService';
@@ -22,19 +22,6 @@ import '../../styles/EmployeeCardV2.css';
 const EmployeeAttendanceSection = lazy(() => import('../../components/employees/EmployeeAttendanceSection').then(module => ({
   default: module.EmployeeAttendanceSection,
 })));
-const EmployeeSkudControls = lazy(() => import('../../components/employees/EmployeeSkudControls').then(module => ({
-  default: module.EmployeeSkudControls,
-})));
-const EmployeeSkudSection = lazy(() => import('../../components/employees/EmployeeSkudSection').then(module => ({
-  default: module.EmployeeSkudSection,
-})));
-
-type Tab = 'attendance' | 'skud';
-type SkudViewMode = 'day' | 'week' | 'month' | 'range';
-const TABS: { key: Tab; label: string }[] = [
-  { key: 'attendance', label: 'Посещаемость' },
-  { key: 'skud', label: 'СКУД' },
-];
 
 const getInitials = (name: string) => {
   const parts = name.split(' ').filter(Boolean);
@@ -53,11 +40,6 @@ const MONTH_LABELS_GEN = [
   'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
 ];
 
-const MONTH_NAMES_NOM = [
-  'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
-];
-
 const EMPTY_ATTENDANCE_STATS = {
   attendancePercent: 0,
   lateCount: 0,
@@ -74,43 +56,6 @@ const EMPTY_WEEKLY_PATTERN = [
   { day: 'Чт', avgTime: null, heightPercent: 0 },
   { day: 'Пт', avgTime: null, heightPercent: 0 },
 ];
-
-const toLocalISO = (d: Date) => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-};
-
-const parseISO = (s: string) => {
-  const [y, m, d] = s.split('-').map(Number);
-  return new Date(y, m - 1, d);
-};
-
-const navigateViewDate = (period: SkudViewMode, dateStr: string, dir: number): string => {
-  const d = parseISO(dateStr);
-  if (period === 'day') d.setDate(d.getDate() + dir);
-  else if (period === 'week') d.setDate(d.getDate() + dir * 7);
-  else d.setMonth(d.getMonth() + dir);
-  return toLocalISO(d);
-};
-
-const getViewLabel = (period: SkudViewMode, dateStr: string): string => {
-  const d = parseISO(dateStr);
-  if (period === 'day') {
-    return d.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' });
-  }
-  if (period === 'week') {
-    const start = new Date(d);
-    const dow = start.getDay() || 7;
-    start.setDate(start.getDate() - dow + 1);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 6);
-    const fmt = (dt: Date) => dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
-    return `${fmt(start)} — ${fmt(end)}`;
-  }
-  return `${MONTH_NAMES_NOM[d.getMonth()]} ${d.getFullYear()}`;
-};
 
 export const EmployeeCardPage: FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -157,25 +102,14 @@ export const EmployeeCardPage: FC = () => {
   const { canEditPage, showActualHours } = useAuth();
   const canEdit = canEditPage('/employees') || canEditPage('/staff-control');
 
-  // Deep-link: ?tab=skud&date=2026-03-18
-  const urlTab = searchParams.get('tab') as string | null;
+  // Deep-link: ?date=2026-03-18 — открыть календарь на конкретный месяц
   const urlDate = searchParams.get('date');
 
   const queryClient = useQueryClient();
   const empIdNum = Number(id);
   const [error, setError] = useState('');
-  const [activeTab, setActiveTab] = useState<Tab>(() => {
-    if (urlTab === 'skud') return 'skud';
-    return 'attendance';
-  });
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<Partial<EmployeeInput>>({});
-  const [skudViewMode, setSkudViewMode] = useState<SkudViewMode>(urlDate ? 'day' : 'month');
-  const [skudRangeStart, setSkudRangeStart] = useState(() => new Date().toISOString().slice(0, 10));
-  const [skudRangeEnd, setSkudRangeEnd] = useState(() => new Date().toISOString().slice(0, 10));
-  const [skudViewDate, setSkudViewDate] = useState(() => urlDate || new Date().toISOString().slice(0, 10));
-  const skudFocusDate = urlDate || null;
-  const skudFocusKey = urlDate ? 1 : 0;
 
   // Calendar month — если есть urlDate, начинаем с его месяца
   const now = new Date();
@@ -268,12 +202,6 @@ export const EmployeeCardPage: FC = () => {
     }
     return [...todayEventsFromMonth].sort((a, b) => a.event_time.localeCompare(b.event_time));
   }, [todayEventsQuery.data, todayEventsFromMonth]);
-
-  const reloadSkudEvents = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['skud-employee-events', empIdNum] });
-    queryClient.invalidateQueries({ queryKey: ['skud-employee-events-today', empIdNum] });
-    queryClient.invalidateQueries({ queryKey: ['skud-employee-events-day', empIdNum] });
-  }, [queryClient, empIdNum]);
 
   const reloadEmployee = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['employee', empIdNum] });
@@ -382,7 +310,7 @@ export const EmployeeCardPage: FC = () => {
   const selectedDayEventsQuery = useQuery({
     queryKey: ['skud-employee-events-day', empIdNum, selectedCalDay],
     queryFn: () => fetchDayEvents(selectedCalDay!),
-    enabled: !!empIdNum && !Number.isNaN(empIdNum) && !!selectedCalDay && activeTab === 'attendance',
+    enabled: !!empIdNum && !Number.isNaN(empIdNum) && !!selectedCalDay,
     staleTime: selectedCalDay ? getDayEventsStaleTime(selectedCalDay) : 30_000,
   });
   // Ошибочные события Sigur (PASS_DENY и т.п.) за выбранный день — отдельный лёгкий
@@ -393,7 +321,7 @@ export const EmployeeCardPage: FC = () => {
       .getEventFailures({ employeeId: empIdNum, startDate: selectedCalDay!, endDate: selectedCalDay! })
       .then(r => r.data)
       .catch(() => []),
-    enabled: !!empIdNum && !Number.isNaN(empIdNum) && !!selectedCalDay && activeTab === 'attendance',
+    enabled: !!empIdNum && !Number.isNaN(empIdNum) && !!selectedCalDay,
     staleTime: selectedCalDay ? getDayEventsStaleTime(selectedCalDay) : 30_000,
   });
   const prefetchDayEvents = useCallback((day: number) => {
@@ -430,7 +358,6 @@ export const EmployeeCardPage: FC = () => {
       }),
     });
     setIsEditing(true);
-    setActiveTab('attendance');
   };
 
   const saveEditing = async () => {
@@ -513,7 +440,7 @@ export const EmployeeCardPage: FC = () => {
   if (!employee) return null;
 
   const { stats: pStats } = periodData;
-  const attendanceViewModel = activeTab === 'attendance' ? (() => {
+  const attendanceViewModel = (() => {
     const currentDate = new Date();
     const todayLocalStr = currentDate.toISOString().slice(0, 10);
     const showDate = selectedCalDay || todayLocalStr;
@@ -535,7 +462,7 @@ export const EmployeeCardPage: FC = () => {
       showEventsLoading,
       dayLabel,
     };
-  })() : null;
+  })();
 
   return (
     <div className="ec-content">
@@ -648,92 +575,50 @@ export const EmployeeCardPage: FC = () => {
               <div className="ec-stat-value">{attendanceLoading ? '—' : (pStats.avgArrivalTime || '—')}</div>
             </div>
           </div>
+
+          {!attendanceLoading && (attendance?.alerts.length ?? 0) > 0 && (
+            <div className="ec-hero-alerts">
+              {attendance!.alerts.map((a, i) => (
+                <span
+                  key={i}
+                  className={`ec-hero-alert ${a.type}`}
+                  title={a.description}
+                >
+                  {a.type === 'warning' ? <Clock size={12} /> : <CalendarX size={12} />}
+                  {a.title}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </header>
 
-      {/* ===== Period + Tabs ===== */}
-      <div className="ec-controls-bar">
-        <div className="ec-tabs">
-          {TABS.map(t => (
-            <button
-              key={t.key}
-              className={`ec-tab ${activeTab === t.key ? 'active' : ''}`}
-              onClick={() => setActiveTab(t.key)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-        {activeTab === 'skud' && (
-          <Suspense fallback={<div className="ec-loading">Загрузка фильтров...</div>}>
-            <EmployeeSkudControls
-              viewMode={skudViewMode}
-              onViewModeChange={(mode) => {
-                setSkudViewMode(mode);
-                if (mode !== 'range') {
-                  setSkudViewDate(skudFocusDate || `${calYear}-${String(calMonth + 1).padStart(2, '0')}-01`);
-                }
-              }}
-              rangeStart={skudRangeStart}
-              rangeEnd={skudRangeEnd}
-              onRangeStartChange={setSkudRangeStart}
-              onRangeEndChange={setSkudRangeEnd}
-              viewLabel={getViewLabel(skudViewMode, skudViewDate)}
-              onPrev={() => setSkudViewDate(s => navigateViewDate(skudViewMode, s, -1))}
-              onNext={() => setSkudViewDate(s => navigateViewDate(skudViewMode, s, 1))}
-            />
-          </Suspense>
-        )}
-      </div>
-
-
-      {/* ===== Tab Content ===== */}
-      {activeTab === 'attendance' && attendanceViewModel && (
-        <Suspense fallback={<div className="ec-loading">Загрузка посещаемости...</div>}>
-          <EmployeeAttendanceSection
-            employee={employee}
-            attendanceDays={attendance?.days ?? []}
-            attendanceLoading={attendanceLoading}
-            year={calYear}
-            month={calMonth}
-            onPrevMonth={prevMonth}
-            onNextMonth={nextMonth}
-            onDayClick={handleDayClick}
-            onDayPrefetch={prefetchDayEvents}
-            selectedDay={selectedCalDayNumber}
-            dayLabel={attendanceViewModel.dayLabel}
-            showDate={attendanceViewModel.showDate}
-            showEvents={attendanceViewModel.showEvents}
-            showFailures={attendanceViewModel.showFailures}
-            showEventsLoading={attendanceViewModel.showEventsLoading}
-            alerts={attendance?.alerts ?? []}
-            internalPoints={internalPoints}
-            isEditing={isEditing}
-            isSigurLinked={employee.sigur_employee_id != null}
-            editData={editData}
-            onEditDataChange={setEditData}
-            onSave={saveEditing}
-            onCancel={() => { setIsEditing(false); setEditData({}); }}
-          />
-        </Suspense>
-      )}
-
-      {activeTab === 'skud' && (
-        <Suspense fallback={<div className="ec-loading">Загрузка СКУД...</div>}>
-          <EmployeeSkudSection
-            employeeId={employee.id}
-            employeeName={employee.full_name}
-            departmentId={employee.org_department_id || undefined}
-            onSync={reloadSkudEvents}
-            focusDate={skudFocusDate}
-            focusKey={skudFocusKey}
-            externalViewMode={skudViewMode}
-            externalRangeStart={skudRangeStart}
-            externalRangeEnd={skudRangeEnd}
-            externalViewDate={skudViewDate}
-          />
-        </Suspense>
-      )}
+      <Suspense fallback={<div className="ec-loading">Загрузка посещаемости...</div>}>
+        <EmployeeAttendanceSection
+          employee={employee}
+          attendanceDays={attendance?.days ?? []}
+          attendanceLoading={attendanceLoading}
+          year={calYear}
+          month={calMonth}
+          onPrevMonth={prevMonth}
+          onNextMonth={nextMonth}
+          onDayClick={handleDayClick}
+          onDayPrefetch={prefetchDayEvents}
+          selectedDay={selectedCalDayNumber}
+          dayLabel={attendanceViewModel.dayLabel}
+          showDate={attendanceViewModel.showDate}
+          showEvents={attendanceViewModel.showEvents}
+          showFailures={attendanceViewModel.showFailures}
+          showEventsLoading={attendanceViewModel.showEventsLoading}
+          internalPoints={internalPoints}
+          isEditing={isEditing}
+          isSigurLinked={employee.sigur_employee_id != null}
+          editData={editData}
+          onEditDataChange={setEditData}
+          onSave={saveEditing}
+          onCancel={() => { setIsEditing(false); setEditData({}); }}
+        />
+      </Suspense>
 
       {rehireModalOpen && (
         <div className="ec-overlay" onClick={closeRehireModal}>

@@ -4,7 +4,7 @@ import { Check, Clock, LogIn, LogOut, XCircle } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
 import type { Employee, EmployeeInput, SkudEvent, SkudEventFailure } from '../../types';
-import type { IAlert, IDayAttendance } from '../../utils/attendanceCalc';
+import type { IDayAttendance } from '../../utils/attendanceCalc';
 import { formatSecondsLabel } from '../../utils/hoursDisplay';
 import {
   buildDisplayItems,
@@ -15,7 +15,6 @@ import {
 } from '../../utils/skudDisplay';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 import { AttendanceCalendar } from './AttendanceCalendar';
-import { EmployeeCardSidebar } from './EmployeeCardSidebar';
 import { EmployeeInfoSection } from './EmployeeInfoSection';
 
 interface IEmployeeAttendanceSectionProps {
@@ -35,7 +34,6 @@ interface IEmployeeAttendanceSectionProps {
   showEvents: SkudEvent[];
   showFailures?: SkudEventFailure[];
   showEventsLoading: boolean;
-  alerts: IAlert[];
   internalPoints: Set<string>;
   isEditing: boolean;
   isSigurLinked: boolean;
@@ -75,7 +73,6 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
   showEvents,
   showFailures = [],
   showEventsLoading,
-  alerts,
   internalPoints,
   isEditing,
   isSigurLinked,
@@ -241,18 +238,17 @@ export const EmployeeAttendanceSection: FC<IEmployeeAttendanceSectionProps> = ({
           />
         </div>
 
-        <EmployeeCardSidebar alerts={alerts} />
+        <EmployeeInfoSection
+          employee={employee}
+          isEditing={isEditing}
+          isSigurLinked={isSigurLinked}
+          editData={editData}
+          onEditDataChange={onEditDataChange}
+          onSave={onSave}
+          onCancel={onCancel}
+        />
       </div>
 
-      <EmployeeInfoSection
-        employee={employee}
-        isEditing={isEditing}
-        isSigurLinked={isSigurLinked}
-        editData={editData}
-        onEditDataChange={onEditDataChange}
-        onSave={onSave}
-        onCancel={onCancel}
-      />
       {accessPointMapModal}
     </div>
   );
