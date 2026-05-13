@@ -65,7 +65,7 @@ export async function exportTimesheet(req: AuthenticatedRequest, res: Response) 
       deptId,
       rangeArg,
       displayMode,
-      req.user.show_actual_hours,
+      displayMode === 'actual',
     );
 
     const wb = new ExcelJS.Workbook();

@@ -489,7 +489,7 @@ export async function exportTimesheetAssigned(req: AuthenticatedRequest, res: Re
           templateSuffix,
           presentationSuffix,
           displayMode,
-          showActualHours: req.user.show_actual_hours,
+          showActualHours: displayMode === 'actual',
         });
         return { employee, files };
       }));
@@ -620,7 +620,7 @@ export async function emailTimesheetAssigned(req: AuthenticatedRequest, res: Res
           templateSuffix,
           presentationSuffix,
           displayMode,
-          showActualHours: req.user.show_actual_hours,
+          showActualHours: displayMode === 'actual',
         });
         if (files.length === 0) return;
 
