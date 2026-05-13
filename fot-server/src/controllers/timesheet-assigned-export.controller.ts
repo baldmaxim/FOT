@@ -70,9 +70,8 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
   }
 
   // 1) Назначения отделов через employee_department_access.
-  // Любой kind (brigade/department/object) — раньше фильтр на 'brigade' резал
-  // отделы и компании из выгрузки начальника участка (миграция 090).
-  // Источники: всё кроме 'sigur_sync' (членство).
+  // Только пользователи с явным флагом user_profiles.is_site_supervisor = true
+  // считаются «начальниками участка» и попадают в выгрузку.
   const edaWhere: string[] = [
     `eda.is_active = true`,
     `eda.source <> 'sigur_sync'`,
@@ -80,6 +79,7 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
     `e.is_archived = false`,
     `e.excluded_from_timesheet = false`,
     `od.is_active = true`,
+    `up.is_site_supervisor = true`,
   ];
   const edaParams: unknown[] = [];
   if (managedIds) {
@@ -100,6 +100,7 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
        FROM employee_department_access eda
        INNER JOIN employees e ON e.id = eda.employee_id
        INNER JOIN org_departments od ON od.id = eda.department_id
+       INNER JOIN user_profiles up ON up.employee_id = e.id
       WHERE ${edaWhere.join(' AND ')}`,
     edaParams,
   );
@@ -109,6 +110,7 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
   // Department-scope: подчинённый должен попадать по primary org_department_id.
   const ueaWhere: string[] = [
     'uea.is_active = true',
+    `up.is_site_supervisor = true`,
     `leader.employment_status = 'active'`,
     `leader.is_archived = false`,
     `direct.employment_status = 'active'`,

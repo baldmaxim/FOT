@@ -41,9 +41,9 @@ export const UserManagementPage: React.FC = () => {
   const reloadUsers = async () => {
     try {
       await Promise.all([
-        queryClient.refetchQueries({ queryKey: ['admin-users', 'pending'] }),
-        queryClient.refetchQueries({ queryKey: ['admin-users', 'all'] }),
-        queryClient.refetchQueries({ queryKey: ['admin-employees', 'department-access'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-users', 'pending'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-users', 'all'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-employees', 'department-access'] }),
       ]);
     } catch {
       toast.error('Ошибка загрузки данных');

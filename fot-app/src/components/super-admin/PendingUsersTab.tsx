@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { FC } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { adminService } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -36,7 +37,18 @@ interface IPendingUsersTabProps {
 export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onReload, patchPendingCache }) => {
   const toast = useToast();
   const { roles } = useAuth();
+  const queryClient = useQueryClient();
   const [approvalModal, setApprovalModal] = useState<IApprovalModal | null>(null);
+
+  // Отменяем in-flight рефечи перед мутацией, иначе ответ старого запроса
+  // (запущенного на mount/refocus) может прийти после setQueryData и перезатереть
+  // оптимистичный кэш — карточка одобренного пользователя «висит» до F5.
+  const cancelUserListQueries = async () => {
+    await Promise.all([
+      queryClient.cancelQueries({ queryKey: ['admin-users', 'pending'] }),
+      queryClient.cancelQueries({ queryKey: ['admin-users', 'all'] }),
+    ]);
+  };
 
   // /roles/labels уже отдаёт только активные роли — дополнительный фильтр не нужен.
   const availableRoles = [...roles]
@@ -81,6 +93,7 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onRel
 
     try {
       const userId = approvalModal.userId;
+      await cancelUserListQueries();
       await adminService.approveUser(userId, {
         position_type: approvalModal.positionType,
         employee_id: approvalModal.employeeId || undefined,
@@ -98,6 +111,7 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onRel
     if (!confirm('Отклонить заявку пользователя?')) return;
 
     try {
+      await cancelUserListQueries();
       await adminService.rejectUser(userId);
       toast.success('Заявка отклонена');
       patchPendingCache((prev) => prev.filter((u) => u.id !== userId));
@@ -109,6 +123,7 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onRel
 
   const handleConfirmEmail = async (userId: string) => {
     try {
+      await cancelUserListQueries();
       await adminService.confirmUserEmail(userId);
       toast.success('Email подтверждён');
       patchPendingCache((prev) => prev.map((u) => u.id === userId ? { ...u, email_confirmed: true } : u));

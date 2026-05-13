@@ -8,7 +8,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
 import type { ChatInboundMode, EmployeePositionType, SystemRole, TwoFactorData } from '../../types';
 import type { OrgDepartmentNode } from '../../types/organization';
-import { collectDescendantIds, getTreeFlatDepartments, type IFlatDepartmentOption } from '../../utils/departmentUtils';
+import { getTreeFlatDepartments } from '../../utils/departmentUtils';
 import { SearchInput } from '../ui/SearchInput';
 import { UserCompanyAccessSection } from './UserCompanyAccessSection';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
@@ -54,22 +54,8 @@ interface IAllUsersTabProps {
 
 type IRoleOption = SystemRole;
 
-const normalizeAssignedDepartmentIds = (departmentIds: string[]): string[] => (
-  [...new Set(departmentIds.filter(Boolean))]
-);
-
-const areDepartmentSelectionsEqual = (left: string[], right: string[]): boolean => {
-  if (left.length !== right.length) return false;
-  const normalizedLeft = [...left].sort();
-  const normalizedRight = [...right].sort();
-  return normalizedLeft.every((value, index) => value === normalizedRight[index]);
-};
-
 interface IUserRowExpandedProps {
   user: IUserFromApi;
-  flatDepts: IFlatDepartmentOption[];
-  departmentMap: Map<string, IFlatDepartmentOption>;
-  departmentTree: OrgDepartmentNode[];
   assignableRoles: IRoleOption[];
   /** true, если viewer — системный админ. Только он может править companies. */
   canManageCompanies: boolean;
@@ -77,7 +63,6 @@ interface IUserRowExpandedProps {
   onChangePosition: (userId: string, position: EmployeePositionType) => Promise<void>;
   onChangeChatMode: (userId: string, mode: ChatInboundMode) => Promise<void>;
   onLinkEmployee: (userId: string, employeeId: number | null, empName?: string) => Promise<void>;
-  onSaveDepartmentAccess: (userId: string, ids: string[]) => Promise<string[] | null>;
   onToggleSiteSupervisor: (userId: string, value: boolean) => Promise<void>;
   onSaveEmployeeAccess: (userId: string, ids: number[]) => Promise<number[] | null>;
   onConfirmEmail: (userId: string) => Promise<void>;
@@ -88,16 +73,12 @@ interface IUserRowExpandedProps {
 
 const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   user,
-  flatDepts,
-  departmentMap,
-  departmentTree,
   assignableRoles,
   canManageCompanies,
   onUpdateName,
   onChangePosition,
   onChangeChatMode,
   onLinkEmployee,
-  onSaveDepartmentAccess,
   onToggleSiteSupervisor,
   onSaveEmployeeAccess,
   onConfirmEmail,
@@ -112,9 +93,6 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   const isUserAdmin = !!userRole?.is_admin;
   const showCompanySection = canManageCompanies && isUserAdmin;
   const [editingName, setEditingName] = useState<string | null>(null);
-  const [departmentSearchQuery, setDepartmentSearchQuery] = useState('');
-  const [departmentDraft, setDepartmentDraft] = useState<string[] | null>(null);
-  const [savingDepartments, setSavingDepartments] = useState(false);
   const [empSearchQuery, setEmpSearchQuery] = useState('');
   const [empSearchLoading, setEmpSearchLoading] = useState(false);
   const [empSearchResults, setEmpSearchResults] = useState<{ id: number; full_name: string; org_department_id: string | null }[]>([]);
@@ -129,70 +107,6 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   const [savingEmpAccess, setSavingEmpAccess] = useState(false);
   const [savingSiteSupervisor, setSavingSiteSupervisor] = useState(false);
   const empAccessSearchSeqRef = useRef(0);
-
-  // Тот же queryKey, что в UserCompanyAccessSection — react-query дедуплицирует
-  // запрос. Используем результат для фильтра отделов по выбранным компаниям.
-  const userCompaniesQuery = useQuery({
-    queryKey: ['admin-user-companies', user.id],
-    queryFn: () => adminService.getUserCompanies(user.id),
-    enabled: showCompanySection,
-    staleTime: 30_000,
-  });
-  const companyRootIds = useMemo(
-    () => userCompaniesQuery.data?.company_root_ids ?? [],
-    [userCompaniesQuery.data?.company_root_ids],
-  );
-
-  const assignedDepartmentIds = useMemo(
-    () => normalizeAssignedDepartmentIds(departmentDraft ?? user.assigned_department_ids ?? []),
-    [departmentDraft, user.assigned_department_ids],
-  );
-
-  const initialDepartmentIds = useMemo(
-    () => normalizeAssignedDepartmentIds(user.assigned_department_ids ?? []),
-    [user.assigned_department_ids],
-  );
-
-  const hasDepartmentAccessChanges = useMemo(
-    () => !areDepartmentSelectionsEqual(assignedDepartmentIds, initialDepartmentIds),
-    [assignedDepartmentIds, initialDepartmentIds],
-  );
-
-  const normalizedSearch = useMemo(
-    () => departmentSearchQuery.trim().toLowerCase(),
-    [departmentSearchQuery],
-  );
-
-  // Если у админ-пользователя выбраны конкретные компании — показываем только
-  // их потомков. Если ничего не выбрано (системный админ) или секция компаний
-  // не применима — показываем всё дерево.
-  const allowedDepartmentSet = useMemo<Set<string> | null>(() => {
-    if (!showCompanySection) return null;
-    if (companyRootIds.length === 0) return null;
-    return collectDescendantIds(departmentTree, new Set(companyRootIds));
-  }, [showCompanySection, companyRootIds, departmentTree]);
-
-  const scopedFlatDepts = useMemo(() => (
-    allowedDepartmentSet
-      ? flatDepts.filter(d => allowedDepartmentSet.has(d.id))
-      : flatDepts
-  ), [flatDepts, allowedDepartmentSet]);
-
-  const filteredDepartments = useMemo(() => (
-    !normalizedSearch
-      ? scopedFlatDepts
-      : scopedFlatDepts.filter(d => d.name.toLowerCase().includes(normalizedSearch))
-  ), [scopedFlatDepts, normalizedSearch]);
-
-  const selectedDepartments = useMemo(() => (
-    assignedDepartmentIds.map(id => departmentMap.get(id) || {
-      id,
-      name: `Не найденный отдел (${id.slice(0, 8)})`,
-      level: 0,
-      hasChildren: false,
-      kind: 'department' as IFlatDepartmentOption['kind'],
-    })
-  ), [assignedDepartmentIds, departmentMap]);
 
   // Debounce поиска сотрудника СКУД (250 мс) + защита от устаревших ответов
   useEffect(() => {
@@ -243,33 +157,6 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
     if (editingName === null || !editingName.trim()) return;
     await onUpdateName(user.id, editingName.trim());
     setEditingName(null);
-  };
-
-  const handleDepartmentToggle = useCallback((departmentId: string) => {
-    setDepartmentDraft(() => {
-      const current = assignedDepartmentIds;
-      const next = current.includes(departmentId)
-        ? current.filter(id => id !== departmentId)
-        : [...current, departmentId];
-      return normalizeAssignedDepartmentIds(next);
-    });
-  }, [assignedDepartmentIds]);
-
-  const handleDepartmentReset = () => {
-    setDepartmentDraft(null);
-    setDepartmentSearchQuery('');
-  };
-
-  const handleDepartmentSave = async () => {
-    setSavingDepartments(true);
-    try {
-      const response = await onSaveDepartmentAccess(user.id, assignedDepartmentIds);
-      if (response) {
-        setDepartmentDraft(normalizeAssignedDepartmentIds(response));
-      }
-    } finally {
-      setSavingDepartments(false);
-    }
   };
 
   const handleEmpPick = async (employeeId: number, empName: string) => {
@@ -482,108 +369,9 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
             disabled={savingSiteSupervisor}
             onChange={(e) => { void handleSiteSupervisorChange(e.target.checked); }}
           />
-          <span>{user.is_site_supervisor ? 'Да — выгружает табели по назначенным элементам' : 'Нет'}</span>
+          <span>{user.is_site_supervisor ? 'Начальник участка' : 'Сотрудник'}</span>
         </label>
       </div>
-
-      {!user.employee_id ? (
-        <div className={styles.departmentAccessSection}>
-          <div className={styles.departmentAccessHint}>
-            Чтобы назначить отделы, сначала выберите сотрудника СКУД и сохраните привязку.
-          </div>
-        </div>
-      ) : (
-        <div className={styles.departmentAccessSection}>
-          <div className={styles.departmentAccessHeader}>
-            <div>
-              <div className={styles.departmentAccessTitle}>Назначенные отделы и бригады</div>
-              <div className={styles.departmentAccessHint}>
-                Выберите все отделы и бригады, за которые отвечает пользователь. Все назначения равноправны.
-                {allowedDepartmentSet && ' Список ограничен компаниями администратора.'}
-              </div>
-            </div>
-            <div className={styles.departmentAccessCount}>
-              {assignedDepartmentIds.length} выбрано
-            </div>
-          </div>
-
-          <input
-            type="text"
-            placeholder="Поиск отдела или бригады..."
-            value={departmentSearchQuery}
-            onChange={(e) => setDepartmentSearchQuery(e.target.value)}
-            className={`${styles.nameInput} ${styles.departmentAccessSearch}`}
-          />
-
-          {selectedDepartments.length > 0 && (
-            <div className={styles.departmentAccessTags}>
-              {selectedDepartments.map(department => (
-                <button
-                  key={department.id}
-                  type="button"
-                  className={styles.departmentAccessTag}
-                  onClick={() => handleDepartmentToggle(department.id)}
-                >
-                  {department.name}
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div className={styles.departmentAccessList}>
-            {filteredDepartments.length > 0 ? (
-              filteredDepartments.map(department => {
-                const checked = assignedDepartmentIds.includes(department.id);
-                return (
-                  <label
-                    key={department.id}
-                    className={`${styles.departmentAccessItem} ${checked ? styles.departmentAccessItemChecked : ''}`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => handleDepartmentToggle(department.id)}
-                    />
-                    <span
-                      className={styles.departmentAccessItemLabel}
-                      style={{ paddingLeft: `${department.level * 14}px` }}
-                    >
-                      {department.name}
-                    </span>
-                  </label>
-                );
-              })
-            ) : (
-              <div className={styles.departmentAccessEmpty}>
-                {normalizedSearch
-                  ? 'По запросу ничего не найдено'
-                  : allowedDepartmentSet
-                    ? 'В выбранных компаниях нет подразделений'
-                    : 'Нет доступных подразделений'}
-              </div>
-            )}
-          </div>
-
-          <div className={styles.departmentAccessActions}>
-            <button
-              type="button"
-              className={styles.cancelBtn}
-              onClick={handleDepartmentReset}
-              disabled={!hasDepartmentAccessChanges || savingDepartments}
-            >
-              Сбросить
-            </button>
-            <button
-              type="button"
-              className={styles.saveBtn}
-              onClick={handleDepartmentSave}
-              disabled={!hasDepartmentAccessChanges || savingDepartments}
-            >
-              {savingDepartments ? 'Сохраняю...' : 'Сохранить назначения'}
-            </button>
-          </div>
-        </div>
-      )}
 
       {user.is_site_supervisor && (
         <div className={styles.departmentAccessSection}>
@@ -837,21 +625,6 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAl
     }
   }, [onReload, toast]);
 
-  const handleDepartmentAccessSave = useCallback(async (userId: string, assignedDepartmentIds: string[]): Promise<string[] | null> => {
-    try {
-      const response = await adminService.updateUserDepartmentAccess(userId, assignedDepartmentIds);
-      toast.success('Назначения сохранены');
-      await onReload();
-      if (profile?.id === userId) {
-        await refreshProfile();
-      }
-      return response.assigned_department_ids;
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Ошибка сохранения назначений');
-      return null;
-    }
-  }, [onReload, profile, refreshProfile, toast]);
-
   const handleSiteSupervisorToggle = useCallback(async (userId: string, value: boolean) => {
     try {
       await adminService.setSiteSupervisor(userId, value);
@@ -949,6 +722,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAl
         employee_variant: null,
         is_active: false,
         show_actual_hours: false,
+        hide_sidebar: false,
         created_at: '',
         updated_at: '',
       });
@@ -1045,16 +819,12 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAl
               {isExpanded && (
                 <UserRowExpanded
                   user={user}
-                  flatDepts={flatDepts}
-                  departmentMap={departmentMap}
-                  departmentTree={departmentTree}
                   assignableRoles={buildAssignableRoles(user)}
                   canManageCompanies={canManageCompanies}
                   onUpdateName={handleNameSave}
                   onChangePosition={handlePositionChange}
                   onChangeChatMode={handleChatInboundModeChange}
                   onLinkEmployee={handleEmpLink}
-                  onSaveDepartmentAccess={handleDepartmentAccessSave}
                   onToggleSiteSupervisor={handleSiteSupervisorToggle}
                   onSaveEmployeeAccess={handleEmployeeAccessSave}
                   onConfirmEmail={handleConfirmEmail}
