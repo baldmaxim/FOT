@@ -94,6 +94,8 @@ export interface IEmployeeStats {
   deviation_hours: number;
 }
 
+export type TimesheetEmployeeSource = 'department' | 'direct_report' | 'self';
+
 export interface TimesheetEmployee {
   id: number;
   full_name: string;
@@ -105,6 +107,8 @@ export interface TimesheetEmployee {
   excluded_from_timesheet_date?: string | null;
   /** Дата (включительно), с которой сотрудник переведён в другой отдел — после неё дни рендерятся как inactive с бейджем «Переведён». */
   transferred_out_date?: string | null;
+  /** Источник появления в табеле: membership выбранного отдела, прямой подчинённый, либо сам руководитель. */
+  source?: TimesheetEmployeeSource;
 }
 
 export interface IProductionCalendarMonth {

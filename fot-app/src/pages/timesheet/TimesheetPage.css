@@ -4621,3 +4621,30 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Разделитель секций табеля: "Прямые подчинённые", "Руководитель". */
+.ts-section-divider-row {
+  background: var(--surface-muted, #f5f6f8);
+}
+.ts-section-divider-cell {
+  padding: 8px 12px !important;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary, #5b6573);
+  border-top: 1px solid var(--border-subtle, #e3e5ea);
+  border-bottom: 1px solid var(--border-subtle, #e3e5ea);
+  background: var(--surface-muted, #f5f6f8);
+}
+.ts-section-divider-mobile {
+  margin: 12px 4px 4px;
+  padding: 6px 10px;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary, #5b6573);
+  background: var(--surface-muted, #f5f6f8);
+  border-radius: 6px;
+}

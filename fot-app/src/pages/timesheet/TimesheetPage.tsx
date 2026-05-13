@@ -256,10 +256,17 @@ export const TimesheetPage: FC = () => {
     gcTime: 15 * 60_000,
     placeholderData: previousData => previousData,
   });
-  const employees = useMemo<TimesheetEmployee[]>(
-    () => timesheetQuery.data?.employees || [],
-    [timesheetQuery.data],
-  );
+  const employees = useMemo<TimesheetEmployee[]>(() => {
+    const raw = timesheetQuery.data?.employees || [];
+    // Группировка строк табеля: department → direct_report → self.
+    // Внутри группы сохраняем порядок ответа (бэк сортирует по full_name).
+    const sourceOrder: Record<NonNullable<TimesheetEmployee['source']>, number> = {
+      department: 0,
+      direct_report: 1,
+      self: 2,
+    };
+    return [...raw].sort((a, b) => sourceOrder[a.source ?? 'department'] - sourceOrder[b.source ?? 'department']);
+  }, [timesheetQuery.data]);
   const entries = useMemo<TimesheetEntry[]>(
     () => timesheetQuery.data?.entries || [],
     [timesheetQuery.data],

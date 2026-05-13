@@ -982,7 +982,30 @@ export const timesheetController = {
       const transferredOutByEmployeeId = new Map<number, string | null>(
         departmentMemberships.map(m => [m.employee_id, m.transferred_out_date]),
       );
-      if (shouldApplyDeptFilter && departmentEmployeeIds.length === 0) {
+
+      // Универсальный табель руководителя: помимо membership выбранного отдела,
+      // подмешиваем прямых подчинённых (employee_direct_reports) — их видно
+      // независимо от выбранного отдела — и самого руководителя отдельной строкой,
+      // если у него есть назначенные отделы или direct_reports.
+      let directReportIds: number[] = [];
+      let selfTimesheetId: number | null = null;
+      if (shouldApplyDeptFilter && scope === 'department' && req.user.employee_id) {
+        directReportIds = await listDirectSubordinates(req.user.employee_id);
+        const managedDepartmentIds = await resolveManagedDepartmentIds(req);
+        if (managedDepartmentIds.length > 0 || directReportIds.length > 0) {
+          selfTimesheetId = req.user.employee_id;
+        }
+      }
+      const additionalEmployeeIds = [...new Set([
+        ...directReportIds,
+        ...(selfTimesheetId != null ? [selfTimesheetId] : []),
+      ])];
+
+      if (
+        shouldApplyDeptFilter
+        && departmentEmployeeIds.length === 0
+        && additionalEmployeeIds.length === 0
+      ) {
         return res.json(emptyResponse);
       }
 
@@ -1000,7 +1023,11 @@ export const timesheetController = {
       const empParams: unknown[] = [];
 
       if (shouldApplyDeptFilter) {
-        empParams.push(departmentEmployeeIds);
+        const unionEmployeeIds = [...new Set([
+          ...departmentEmployeeIds,
+          ...additionalEmployeeIds,
+        ])];
+        empParams.push(unionEmployeeIds);
         empWhere.push(`id = ANY($${empParams.length}::int[])`);
       } else {
         // Без deptFilter (self/employee-filter) сохраняем прежнее поведение: исключённые не видны.
@@ -1183,12 +1210,28 @@ export const timesheetController = {
         }
       }
 
-      const employeesWithNames = (employees || []).map(e => ({
-        ...e,
-        position_name: e.position_id ? posMap.get(e.position_id) || null : null,
-        transferred_out_date: transferredOutByEmployeeId.get(Number(e.id)) ?? null,
-        excluded_from_timesheet_date: (e.excluded_from_timesheet_date as string | null) ?? null,
-      }));
+      const departmentMembershipSet = new Set<number>(departmentEmployeeIds);
+      const directReportSet = new Set<number>(directReportIds);
+      const employeesWithNames = (employees || []).map(e => {
+        const empId = Number(e.id);
+        // self > department > direct_report. Если человек одновременно в выбранном
+        // отделе и в direct_reports — оставляем в основной секции, не дублируем.
+        let source: 'department' | 'direct_report' | 'self' = 'department';
+        if (selfTimesheetId != null && selfTimesheetId === empId) {
+          source = 'self';
+        } else if (departmentMembershipSet.has(empId)) {
+          source = 'department';
+        } else if (directReportSet.has(empId)) {
+          source = 'direct_report';
+        }
+        return {
+          ...e,
+          position_name: e.position_id ? posMap.get(e.position_id) || null : null,
+          transferred_out_date: transferredOutByEmployeeId.get(empId) ?? null,
+          excluded_from_timesheet_date: (e.excluded_from_timesheet_date as string | null) ?? null,
+          source,
+        };
+      });
 
       // Сериализация графиков для фронтенда
       const schedulesObj: Record<number, IResolvedSchedule> = {};

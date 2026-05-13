@@ -189,6 +189,12 @@ const formatCellHM = (decimal: number): string => {
   return `${h}:${String(m).padStart(2, '0')}`;
 };
 
+const SOURCE_GROUP_LABELS: Record<NonNullable<TimesheetEmployee['source']>, string | null> = {
+  department: null,
+  direct_report: 'Прямые подчинённые',
+  self: 'Руководитель',
+};
+
 const STATUS_CELL_TEXT: Record<TimesheetStatus, string> = {
   work: '',
   sick: 'Б',
@@ -913,10 +919,18 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
             const employeeIndex = index + 1;
             const displayName = formatTimesheetEmployeeName(row.employee.full_name);
             const stat = employeeStatsMap.get(row.employee.id);
+            const currentSource = row.employee.source ?? 'department';
+            const prevSource = index > 0
+              ? (employeeRows[index - 1].employee.source ?? 'department')
+              : null;
+            const sectionLabel = currentSource !== prevSource ? SOURCE_GROUP_LABELS[currentSource] : null;
 
             return (
+              <Fragment key={row.employee.id}>
+                {sectionLabel && (
+                  <div className="ts-section-divider-mobile">{sectionLabel}</div>
+                )}
               <article
-                key={row.employee.id}
                 className={`ts-mobile-card${expanded ? ' ts-mobile-card--expanded' : ''}`}
               >
                 <div className="ts-mobile-card-header">
@@ -1043,6 +1057,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   );
                 })()}
               </article>
+              </Fragment>
             );
           })}
 
@@ -1251,9 +1266,24 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
               const employeeIndex = index + 1;
               const displayName = formatTimesheetEmployeeName(row.employee.full_name);
               const expanded = activeExpandedEmployeeIds.has(row.employee.id);
+              const currentSource = row.employee.source ?? 'department';
+              const prevSource = index > 0
+                ? (employeeRows[index - 1].employee.source ?? 'department')
+                : null;
+              const sectionLabel = currentSource !== prevSource ? SOURCE_GROUP_LABELS[currentSource] : null;
 
               return (
                 <Fragment key={row.employee.id}>
+                  {sectionLabel && (
+                    <tr className="ts-section-divider-row">
+                      <td
+                        className="ts-col-sticky ts-section-divider-cell"
+                        colSpan={days.length + 1 + (showDeviationColumn ? 1 : 0)}
+                      >
+                        {sectionLabel}
+                      </td>
+                    </tr>
+                  )}
                   <tr>
                     <td
                       className={`ts-col-sticky ts-employee-cell${bulkEditMode ? ' ts-employee-cell--bulk' : ''}`}
