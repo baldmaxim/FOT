@@ -10,6 +10,8 @@ import { ensureCriticalAdminAccess } from '../services/critical-admin-access.ser
 import {
   loadEmployeeManagerAssignmentMap,
   loadExplicitManagerAssignmentMap,
+  loadAssignedEmployeeMap,
+  replaceUserEmployeeAccess,
 } from '../services/department-access.service.js';
 import {
   canAccessEmployeeInScope,
@@ -46,6 +48,14 @@ const approveUserSchema = z.object({
 
 const updateDepartmentAccessSchema = z.object({
   department_ids: z.array(z.string().uuid()).default([]),
+});
+
+const updateEmployeeAccessSchema = z.object({
+  employee_ids: z.array(z.number().int().positive()).default([]),
+});
+
+const setSiteSupervisorSchema = z.object({
+  is_site_supervisor: z.boolean(),
 });
 
 const applyBrigadeWorkerTransfersSchema = z.object({
@@ -302,6 +312,19 @@ export const adminUsersController = {
         })),
       );
 
+      const assignedEmployeeMap = await loadAssignedEmployeeMap(
+        users.map((u: UserProfile) => u.id),
+      );
+
+      // Подгрузим ФИО назначенных сотрудников одним батчем — фронт показывает
+      // их сразу в карточке начальника участка, без отдельного fetch на id→name.
+      const allAssignedEmployeeIds = [...new Set(
+        Array.from(assignedEmployeeMap.values()).flat(),
+      )];
+      const assignedEmployeeNames = allAssignedEmployeeIds.length > 0
+        ? await loadEmployeeFullNamesMap(allAssignedEmployeeIds)
+        : new Map<number, string>();
+
       const allRoles = await getAllRoles();
       const roleCodeById = new Map(allRoles.map(r => [r.id, r.code]));
 
@@ -322,6 +345,11 @@ export const adminUsersController = {
 
       const sanitizedUsers = users.map((u: UserProfile) => {
         const assignedDepartmentIds = (assignedDepartmentMap.get(u.id) || []);
+        const assignedEmployeeIds = (assignedEmployeeMap.get(u.id) || []);
+        const assignedEmployees = assignedEmployeeIds.map(eid => ({
+          id: eid,
+          full_name: assignedEmployeeNames.get(eid) || '',
+        }));
         const authInfo = authEmailMap[u.id];
         return {
           id: u.id,
@@ -329,6 +357,9 @@ export const adminUsersController = {
           email_confirmed: authInfo?.email_confirmed ?? false,
           full_name: u.full_name,
           assigned_department_ids: assignedDepartmentIds,
+          assigned_employee_ids: assignedEmployeeIds,
+          assigned_employees: assignedEmployees,
+          is_site_supervisor: Boolean(u.is_site_supervisor),
           position_type: roleCodeById.get(u.system_role_id) ?? '',
           imported_position: u.imported_position,
           employee_id: u.employee_id,
@@ -1431,6 +1462,142 @@ export const adminUsersController = {
     }
   },
 
+  /**
+   * PATCH /api/admin/users/:id/site-supervisor
+   * Toggle is_site_supervisor флага на user_profiles.
+   */
+  async setSiteSupervisor(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { is_site_supervisor } = setSiteSupervisorSchema.parse(req.body);
+
+      const scopeCheck = await assertTargetUserInScope(req, id);
+      if (!scopeCheck.ok) {
+        res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
+        return;
+      }
+
+      const updated = await queryOne<{ id: string; is_site_supervisor: boolean }>(
+        `UPDATE user_profiles
+            SET is_site_supervisor = $1::boolean, updated_at = NOW()
+          WHERE id = $2::uuid
+        RETURNING id, is_site_supervisor`,
+        [is_site_supervisor, id],
+      );
+
+      if (!updated) {
+        res.status(404).json({ success: false, error: 'Пользователь не найден' });
+        return;
+      }
+
+      await auditService.logFromRequest(req, req.user.id, 'USER_SITE_SUPERVISOR_CHANGED', {
+        entityType: 'user',
+        entityId: id,
+        details: { is_site_supervisor },
+      });
+
+      emitDepartmentAccessChanged(id);
+
+      res.json({ success: true, data: { id: updated.id, is_site_supervisor: updated.is_site_supervisor } });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Set site supervisor error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось обновить флаг начальника участка' });
+    }
+  },
+
+  /**
+   * PATCH /api/admin/users/:id/employee-access
+   * Полная замена списка сотрудников, прямо назначенных начальнику участка.
+   */
+  async updateUserEmployeeAccess(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { employee_ids } = updateEmployeeAccessSchema.parse(req.body);
+      const normalized = [...new Set(employee_ids)];
+
+      const profile = await queryOne<{ id: string }>(
+        'SELECT id FROM user_profiles WHERE id = $1::uuid',
+        [id],
+      );
+      if (!profile) {
+        res.status(404).json({ success: false, error: 'Пользователь не найден' });
+        return;
+      }
+
+      const targetScopeCheck = await assertTargetUserInScope(req, id);
+      if (!targetScopeCheck.ok) {
+        res.status(targetScopeCheck.status).json({ success: false, error: targetScopeCheck.error });
+        return;
+      }
+
+      // Каждый назначаемый сотрудник должен быть в scope.
+      for (const employeeId of normalized) {
+        const allowed = await canAccessEmployeeInScope(req, employeeId);
+        if (!allowed) {
+          res.status(403).json({ success: false, error: 'Некоторые сотрудники вне вашей зоны доступа' });
+          return;
+        }
+      }
+
+      if (normalized.length > 0) {
+        const existing = await query<{ id: number }>(
+          'SELECT id FROM employees WHERE id = ANY($1::int[])',
+          [normalized],
+        );
+        const foundIds = new Set(existing.map(row => Number(row.id)));
+        const missing = normalized.filter(eid => !foundIds.has(eid));
+        if (missing.length > 0) {
+          res.status(400).json({
+            success: false,
+            error: 'Некоторые сотрудники не найдены',
+            details: { missing_employee_ids: missing },
+          });
+          return;
+        }
+      }
+
+      const savedEmployeeIds = await replaceUserEmployeeAccess({
+        userId: id,
+        employeeIds: normalized,
+        actorUserId: req.user.id,
+      });
+
+      const assignedEmployeeNames = savedEmployeeIds.length > 0
+        ? await loadEmployeeFullNamesMap(savedEmployeeIds)
+        : new Map<number, string>();
+
+      const userFullName = await loadUserFullName(id);
+
+      await auditService.logFromRequest(req, req.user.id, 'USER_EMPLOYEE_ACCESS_CHANGED', {
+        entityType: 'user',
+        entityId: id,
+        details: {
+          assigned_employee_ids: savedEmployeeIds,
+          assigned_employee_count: savedEmployeeIds.length,
+          full_name: userFullName,
+          assigned_employee_names: savedEmployeeIds
+            .map(eid => assignedEmployeeNames.get(eid))
+            .filter((name): name is string => Boolean(name)),
+        },
+      });
+
+      emitDepartmentAccessChanged(id);
+
+      res.json({ success: true, data: { assigned_employee_ids: savedEmployeeIds } });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Update user employee access error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось обновить назначения сотрудников' });
+    }
+  },
+
   async updateEmployeeDepartmentAccess(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const employeeId = z.coerce.number().int().positive().parse(req.params.id);
@@ -1523,6 +1690,9 @@ export const adminUsersController = {
   async searchUnlinkedEmployees(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const q = (req.query.q as string || '').trim();
+      // include_linked=true — снять фильтр «только без user_profile». Используется
+      // при поиске сотрудников для назначения начальнику участка (миграция 090).
+      const includeLinked = req.query.include_linked === 'true' || req.query.include_linked === '1';
 
       if (!q || q.length < 2) {
         res.json({ success: true, data: [] });
@@ -1535,13 +1705,13 @@ export const adminUsersController = {
         return;
       }
 
-      const linkedProfiles = await query<{ employee_id: number | null }>(
-        'SELECT employee_id FROM user_profiles WHERE employee_id IS NOT NULL',
-      );
-
-      const linkedIds = linkedProfiles
-        .map(p => p.employee_id)
-        .filter((id): id is number => id !== null);
+      const linkedIds = includeLinked
+        ? []
+        : (await query<{ employee_id: number | null }>(
+            'SELECT employee_id FROM user_profiles WHERE employee_id IS NOT NULL',
+          ))
+            .map(p => p.employee_id)
+            .filter((id): id is number => id !== null);
 
       const params: unknown[] = [`%${escapeLike(q)}%`];
       let sql = `SELECT id, full_name, org_department_id

@@ -283,7 +283,11 @@ export const MassTimesheetExportAssignedTab: FC<IMassTimesheetExportAssignedTabP
                     </span>
                   )}
                 </span>
-                <span className="mte-assigned-badge">{employee.department_count} бр.</span>
+                <span className="mte-assigned-badge">
+                  {employee.department_count > 0 && `${employee.department_count} бр./отд.`}
+                  {employee.department_count > 0 && employee.direct_employee_count > 0 && ' + '}
+                  {employee.direct_employee_count > 0 && `${employee.direct_employee_count} сотр.`}
+                </span>
                 <span
                   className={`mte-email-indicator ${employee.email ? 'mte-email-indicator--ok' : 'mte-email-indicator--missing'}`}
                   title={employee.email ?? 'Email не указан'}

@@ -8,6 +8,7 @@ import { localAuthService } from '../services/local-auth.service.js';
 import { resolveRequestDataScope, resolveManagedDepartmentIds } from '../services/data-scope.service.js';
 import {
   fetchTimesheetDataForDepartment,
+  fetchTimesheetDataForEmployees,
   type TimesheetExportGrouping,
   type TimesheetExportHalf,
   type TimesheetExportPresentation,
@@ -48,6 +49,7 @@ interface IAssignedEmployee {
   full_name: string;
   email: string | null;
   department_ids: string[];
+  direct_employee_ids: number[];
 }
 
 async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
@@ -59,31 +61,33 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
     return { error: { status: 403, message: 'Недостаточно прав для экспорта назначенных' } };
   }
 
-  // Источники в employee_department_access:
-  //   'sigur_sync' — членство (миграция 049 + employee-lifecycle), в HR-список не включаем.
-  //   остальные (manual_admin_ui, excel_admin_ui, manager_excel_admin_ui, …) — ручные
-  //   назначения начальников участков, их и показываем.
-  const whereParts: string[] = [
+  let managedIds: string[] | null = null;
+  if (scope === 'department') {
+    managedIds = await resolveManagedDepartmentIds(req);
+    if (managedIds.length === 0) {
+      return { error: { status: 403, message: 'Нет доступных отделов в области видимости' } };
+    }
+  }
+
+  // 1) Назначения отделов через employee_department_access.
+  // Любой kind (brigade/department/object) — раньше фильтр на 'brigade' резал
+  // отделы и компании из выгрузки начальника участка (миграция 090).
+  // Источники: всё кроме 'sigur_sync' (членство).
+  const edaWhere: string[] = [
     `eda.is_active = true`,
     `eda.source <> 'sigur_sync'`,
     `e.employment_status = 'active'`,
     `e.is_archived = false`,
     `e.excluded_from_timesheet = false`,
-    `od.kind = 'brigade'`,
     `od.is_active = true`,
   ];
-  const params: unknown[] = [];
-
-  if (scope === 'department') {
-    const managed = await resolveManagedDepartmentIds(req);
-    if (managed.length === 0) {
-      return { error: { status: 403, message: 'Нет доступных отделов в области видимости' } };
-    }
-    params.push(managed);
-    whereParts.push(`eda.department_id = ANY($${params.length}::uuid[])`);
+  const edaParams: unknown[] = [];
+  if (managedIds) {
+    edaParams.push(managedIds);
+    edaWhere.push(`eda.department_id = ANY($${edaParams.length}::uuid[])`);
   }
 
-  const accessRows = await query<{
+  const edaRows = await query<{
     employee_id: number;
     department_id: string;
     full_name: string | null;
@@ -96,12 +100,54 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
        FROM employee_department_access eda
        INNER JOIN employees e ON e.id = eda.employee_id
        INNER JOIN org_departments od ON od.id = eda.department_id
-      WHERE ${whereParts.join(' AND ')}`,
-    params,
+      WHERE ${edaWhere.join(' AND ')}`,
+    edaParams,
   );
 
-  const byEmployee = new Map<number, { full_name: string; email: string | null; department_ids: string[] }>();
-  for (const row of accessRows) {
+  // 2) Прямые назначения сотрудников через user_employee_access (миграция 090).
+  // leader = user_profile.employee_id, подчинённый = uea.employee_id.
+  // Department-scope: подчинённый должен попадать по primary org_department_id.
+  const ueaWhere: string[] = [
+    'uea.is_active = true',
+    `leader.employment_status = 'active'`,
+    `leader.is_archived = false`,
+    `direct.employment_status = 'active'`,
+    `direct.is_archived = false`,
+    `direct.excluded_from_timesheet = false`,
+  ];
+  const ueaParams: unknown[] = [];
+  if (managedIds) {
+    ueaParams.push(managedIds);
+    ueaWhere.push(`direct.org_department_id = ANY($${ueaParams.length}::uuid[])`);
+  }
+
+  const ueaRows = await query<{
+    leader_employee_id: number;
+    direct_employee_id: number;
+    leader_full_name: string | null;
+    leader_email: string | null;
+  }>(
+    `SELECT leader.id   AS leader_employee_id,
+            direct.id   AS direct_employee_id,
+            leader.full_name AS leader_full_name,
+            leader.email     AS leader_email
+       FROM user_employee_access uea
+       INNER JOIN user_profiles up ON up.id = uea.user_id
+       INNER JOIN employees leader ON leader.id = up.employee_id
+       INNER JOIN employees direct ON direct.id = uea.employee_id
+      WHERE ${ueaWhere.join(' AND ')}`,
+    ueaParams,
+  );
+
+  type Entry = {
+    full_name: string;
+    email: string | null;
+    department_ids: string[];
+    direct_employee_ids: number[];
+  };
+  const byEmployee = new Map<number, Entry>();
+
+  for (const row of edaRows) {
     const id = Number(row.employee_id);
     const departmentId = row.department_id;
     const fullName = String(row.full_name ?? '').trim();
@@ -111,7 +157,26 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
     if (entry) {
       if (!entry.department_ids.includes(departmentId)) entry.department_ids.push(departmentId);
     } else {
-      byEmployee.set(id, { full_name: fullName, email, department_ids: [departmentId] });
+      byEmployee.set(id, { full_name: fullName, email, department_ids: [departmentId], direct_employee_ids: [] });
+    }
+  }
+
+  for (const row of ueaRows) {
+    const leaderId = Number(row.leader_employee_id);
+    const directId = Number(row.direct_employee_id);
+    const fullName = String(row.leader_full_name ?? '').trim();
+    const email = typeof row.leader_email === 'string' ? (row.leader_email || null) : null;
+    if (!Number.isFinite(leaderId) || !Number.isFinite(directId)) continue;
+    const entry = byEmployee.get(leaderId);
+    if (entry) {
+      if (!entry.direct_employee_ids.includes(directId)) entry.direct_employee_ids.push(directId);
+    } else {
+      byEmployee.set(leaderId, {
+        full_name: fullName,
+        email,
+        department_ids: [],
+        direct_employee_ids: [directId],
+      });
     }
   }
 
@@ -120,6 +185,7 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
     full_name: value.full_name,
     email: value.email,
     department_ids: value.department_ids,
+    direct_employee_ids: value.direct_employee_ids,
   }));
 
   employees.sort((a, b) => a.full_name.localeCompare(b.full_name, 'ru'));
@@ -227,6 +293,31 @@ async function buildFilesForAssignedEmployee(params: {
     files.push({ name: `${unique}.xlsx`, data: buf });
   }
 
+  // Прямые сотрудники (миграция 090, user_employee_access).
+  // Один сводный xlsx — fetchTimesheetDataForEmployees собирает по
+  // явному списку id, без привязки к одному отделу.
+  if (employee.direct_employee_ids.length > 0) {
+    const directName = 'Прямые сотрудники';
+    const directData = await fetchTimesheetDataForEmployees(
+      month, employee.direct_employee_ids, directName, rangeArg, displayMode, showActualHours,
+    );
+    if (directData.employees.length > 0) {
+      const wb = exportAs1C
+        ? await build1CTimesheetWorkbook(sanitizeSheetName(directName), directData)
+        : new ExcelJS.Workbook();
+      if (!exportAs1C) {
+        buildTimesheetSheet(wb, sanitizeSheetName(directName), directData);
+      }
+      const buf = await writeTimesheetWorkbookBuffer(wb);
+      let base = sanitizeFileName(`${directName}_${MONTH_NAMES[mon]}_${year}_${leaderFio || 'Руководитель'}`);
+      base += rangeSuffix;
+      base += templateSuffix;
+      base += presentationSuffix;
+      const unique = dedupeName(usedNames, base);
+      files.push({ name: `${unique}.xlsx`, data: buf });
+    }
+  }
+
   return files;
 }
 
@@ -289,6 +380,7 @@ export async function listAssignedEmployees(req: AuthenticatedRequest, res: Resp
         id: employee.id,
         full_name: employee.full_name,
         department_count: employee.department_ids.length,
+        direct_employee_count: employee.direct_employee_ids.length,
         email: emailByEmployeeId.get(employee.id) ?? employee.email ?? null,
         departments,
       };

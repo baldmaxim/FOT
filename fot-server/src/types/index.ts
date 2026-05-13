@@ -61,6 +61,7 @@ export interface UserProfile {
   chat_inbound_mode: ChatInboundMode;
   imported_position: string | null;
   is_approved: boolean;
+  is_site_supervisor: boolean;
   approved_by: string | null;
   approved_at: string | null;
   totp_secret: string | null;

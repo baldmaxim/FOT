@@ -1,4 +1,4 @@
-import { query } from '../config/postgres.js';
+import { execute, query } from '../config/postgres.js';
 
 export interface IUserManagedDepartmentSeed {
   user_id: string;
@@ -200,6 +200,106 @@ export async function listManagedDepartmentIdsForUser(
 ): Promise<string[]> {
   const explicit = await listExplicitDepartmentIdsForUser(userId, employeeId);
   return uniqueDepartmentIds(explicit);
+}
+
+/**
+ * Прямые назначения «начальник участка → отдельный сотрудник».
+ * Хранятся в user_employee_access (миграция 090). В отличие от
+ * employee_department_access, здесь ключ (user_id, employee_id) —
+ * семантика «этот юзер видит/выгружает табель конкретного сотрудника».
+ */
+export async function listAssignedEmployeeIdsForUser(userId: string): Promise<number[]> {
+  if (!userId) return [];
+  try {
+    const rows = await query<{ employee_id: number | string | null }>(
+      'SELECT employee_id FROM user_employee_access WHERE user_id = $1::uuid AND is_active = true',
+      [userId],
+    );
+    return [...new Set(
+      rows
+        .map(row => (row.employee_id == null ? NaN : Number(row.employee_id)))
+        .filter((id): id is number => Number.isFinite(id)),
+    )];
+  } catch (err) {
+    if (isMissingTableError(err)) return [];
+    throw err;
+  }
+}
+
+export async function loadAssignedEmployeeMap(
+  userIds: string[],
+): Promise<Map<string, number[]>> {
+  const unique = [...new Set(userIds.filter(v => typeof v === 'string' && v.length > 0))];
+  const result = new Map<string, number[]>(unique.map(id => [id, []]));
+  if (unique.length === 0) return result;
+  try {
+    const rows = await query<{ user_id: string; employee_id: number | string | null }>(
+      'SELECT user_id, employee_id FROM user_employee_access WHERE is_active = true AND user_id = ANY($1::uuid[])',
+      [unique],
+    );
+    for (const row of rows) {
+      const id = row.employee_id == null ? NaN : Number(row.employee_id);
+      if (!Number.isFinite(id)) continue;
+      const list = result.get(row.user_id);
+      if (!list) continue;
+      if (!list.includes(id)) list.push(id);
+    }
+    return result;
+  } catch (err) {
+    if (isMissingTableError(err)) return result;
+    throw err;
+  }
+}
+
+export async function replaceUserEmployeeAccess(params: {
+  userId: string;
+  employeeIds: number[];
+  actorUserId: string;
+}): Promise<number[]> {
+  const nextEmployeeIds = [...new Set(
+    params.employeeIds.filter((id): id is number => Number.isInteger(id) && id > 0),
+  )];
+
+  const existingRows = await query<{ employee_id: number | string; is_active: boolean }>(
+    'SELECT employee_id, is_active FROM user_employee_access WHERE user_id = $1::uuid',
+    [params.userId],
+  );
+
+  const nextSet = new Set(nextEmployeeIds);
+  const activeIds = existingRows
+    .filter(row => row.is_active)
+    .map(row => Number(row.employee_id))
+    .filter((id): id is number => Number.isFinite(id));
+  const idsToDeactivate = activeIds.filter(id => !nextSet.has(id));
+
+  const now = new Date().toISOString();
+
+  if (nextEmployeeIds.length > 0) {
+    await execute(
+      `INSERT INTO user_employee_access
+         (user_id, employee_id, is_active, created_by, updated_at)
+       SELECT $1::uuid, emp_id, true, $2::uuid, $3::timestamptz
+         FROM unnest($4::bigint[]) AS emp_id
+       ON CONFLICT (user_id, employee_id)
+       DO UPDATE SET
+         is_active = true,
+         created_by = COALESCE(user_employee_access.created_by, EXCLUDED.created_by),
+         updated_at = EXCLUDED.updated_at`,
+      [params.userId, params.actorUserId, now, nextEmployeeIds],
+    );
+  }
+
+  if (idsToDeactivate.length > 0) {
+    await execute(
+      `UPDATE user_employee_access
+          SET is_active = false, updated_at = $1::timestamptz
+        WHERE user_id = $2::uuid
+          AND employee_id = ANY($3::bigint[])`,
+      [now, params.userId, idsToDeactivate],
+    );
+  }
+
+  return nextEmployeeIds;
 }
 
 export async function loadManagedDepartmentMap(

@@ -101,6 +101,10 @@ router.patch('/users/:id/employee', requirePageAccess('/admin/users', 'edit'), a
 router.put('/users/:id/department-access', requirePageAccess('/admin/users', 'edit'), adminController.updateUserDepartmentAccess);
 router.put('/employees/:id/department-access', requirePageAccess('/admin/users', 'edit'), adminController.updateEmployeeDepartmentAccess);
 
+// Начальник участка: флаг + прямые назначения сотрудников (миграция 090).
+router.patch('/users/:id/site-supervisor', requirePageAccess('/admin/users', 'edit'), adminController.setSiteSupervisor);
+router.put('/users/:id/employee-access', requirePageAccess('/admin/users', 'edit'), adminController.updateUserEmployeeAccess);
+
 // Привязка администраторов к «компаниям» (корневым узлам Sigur). Только системный админ.
 router.get('/companies', requirePageAccess('/admin/users', 'view'), adminController.listCompanies);
 router.get('/users/:id/companies', requirePageAccess('/admin/users', 'view'), adminController.getUserCompanies);

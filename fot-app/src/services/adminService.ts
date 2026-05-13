@@ -183,6 +183,22 @@ export const adminService = {
     return response.data;
   },
 
+  async setSiteSupervisor(userId: string, value: boolean): Promise<{ id: string; is_site_supervisor: boolean }> {
+    const response = await apiClient.patch<ApiResponse<{ id: string; is_site_supervisor: boolean }>>(
+      `/admin/users/${userId}/site-supervisor`,
+      { is_site_supervisor: value },
+    );
+    return response.data;
+  },
+
+  async updateUserEmployeeAccess(userId: string, employeeIds: number[]): Promise<{ assigned_employee_ids: number[] }> {
+    const response = await apiClient.put<ApiResponse<{ assigned_employee_ids: number[] }>>(
+      `/admin/users/${userId}/employee-access`,
+      { employee_ids: employeeIds },
+    );
+    return response.data;
+  },
+
   // ─── Привязка администраторов к «компаниям» (корневым узлам Sigur) ───
   async listCompanies(): Promise<Array<{ id: string; name: string }>> {
     const response = await apiClient.get<ApiResponse<Array<{ id: string; name: string }>>>('/admin/companies');
@@ -272,6 +288,12 @@ export const adminService = {
   // Employee search (for linking)
   async searchUnlinkedEmployees(query: string): Promise<{ id: number; full_name: string; org_department_id: string | null }[]> {
     const params = new URLSearchParams({ q: query });
+    const response = await apiClient.get<ApiResponse<{ id: number; full_name: string; org_department_id: string | null }[]>>(`/admin/employees/search?${params}`);
+    return response.data || [];
+  },
+
+  async searchAllEmployees(query: string): Promise<{ id: number; full_name: string; org_department_id: string | null }[]> {
+    const params = new URLSearchParams({ q: query, include_linked: 'true' });
     const response = await apiClient.get<ApiResponse<{ id: number; full_name: string; org_department_id: string | null }[]>>(`/admin/employees/search?${params}`);
     return response.data || [];
   },

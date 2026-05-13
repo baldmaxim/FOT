@@ -152,6 +152,7 @@ export interface IAssignedEmployeeSummary {
   id: number;
   full_name: string;
   department_count: number;
+  direct_employee_count: number;
   email: string | null;
   departments?: IAssignedEmployeeDepartment[];
 }
