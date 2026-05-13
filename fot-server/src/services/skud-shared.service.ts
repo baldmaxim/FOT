@@ -2,6 +2,7 @@
  * СКУД: общие хелперы и кэши, используемые несколькими сервисами.
  */
 import { query } from '../config/postgres.js';
+import { normalizeMatchName } from './name-match.utils.js';
 
 // ─── Кэш дерева отделов ───
 
@@ -49,6 +50,12 @@ interface ICompanyResolveIndex {
   companyByDeptId: Map<string, string>;
   companyMeta: Map<string, ICompanyResolveMeta>;
   companyBySigurId: Map<number, string>;
+  /**
+   * Fallback-индекс: нормализованное имя локальной компании → её id.
+   * Нужен чтобы мерджить unsynced людей в local company по имени, когда
+   * `sigur_department_id` у local company пуст или не совпадает с Sigur root.
+   */
+  companyByNormalizedName: Map<string, string>;
 }
 
 let companyResolveCache: { data: ICompanyResolveIndex; expiresAt: number } | null = null;
@@ -69,6 +76,7 @@ export async function getCompanyResolveIndex(): Promise<ICompanyResolveIndex> {
   const companyByDeptId = new Map<string, string>();
   const companyMeta = new Map<string, ICompanyResolveMeta>();
   const companyBySigurId = new Map<number, string>();
+  const companyByNormalizedName = new Map<string, string>();
 
   if (root) {
     const childrenByParent = buildChildrenIndex(allDepts);
@@ -84,6 +92,12 @@ export async function getCompanyResolveIndex(): Promise<ICompanyResolveIndex> {
       });
       if (node?.sigur_department_id != null) {
         companyBySigurId.set(node.sigur_department_id, companyId);
+      }
+      if (node?.name) {
+        const key = normalizeMatchName(node.name);
+        if (key && !companyByNormalizedName.has(key)) {
+          companyByNormalizedName.set(key, companyId);
+        }
       }
       // BFS вниз: всех потомков этой компании привязываем к ней.
       const stack: string[] = [companyId];
@@ -102,6 +116,7 @@ export async function getCompanyResolveIndex(): Promise<ICompanyResolveIndex> {
     companyByDeptId,
     companyMeta,
     companyBySigurId,
+    companyByNormalizedName,
   };
   companyResolveCache = { data, expiresAt: now + COMPANY_RESOLVE_CACHE_TTL };
   return data;

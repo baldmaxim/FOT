@@ -264,9 +264,15 @@ export async function getPresenceByObject(): Promise<IPresenceByObjectResponse> 
     const sigurMatch = sigurResolved.get(normalizeMatchName(state.physical_person));
     if (sigurMatch) {
       departmentName = sigurMatch.department.name || null;
-      // Если у local-каталога уже есть компания с этим sigur_department_id —
-      // мерджим в её bucket (чтобы synced и unsynced одной компании показывались вместе).
-      const localCompanyId = companyIndex.companyBySigurId.get(sigurMatch.root.sigur_department_id);
+      // Мердж в локальную компанию по двум каналам:
+      // 1) По sigur_department_id (точное совпадение).
+      // 2) Fallback по нормализованному имени компании (если у local company
+      //    sigur_department_id пуст или не совпадает, но имя то же — это та же
+      //    компания, просто данные не обновлены).
+      let localCompanyId = companyIndex.companyBySigurId.get(sigurMatch.root.sigur_department_id);
+      if (!localCompanyId && sigurMatch.root.name) {
+        localCompanyId = companyIndex.companyByNormalizedName.get(normalizeMatchName(sigurMatch.root.name));
+      }
       if (localCompanyId) {
         const meta = companyIndex.companyMeta.get(localCompanyId);
         companyId = localCompanyId;

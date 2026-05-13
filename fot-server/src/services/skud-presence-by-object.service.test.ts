@@ -103,6 +103,7 @@ beforeEach(() => {
     companyByDeptId: new Map(),
     companyMeta: new Map(),
     companyBySigurId: new Map(),
+    companyByNormalizedName: new Map(),
   });
   internalPointsMock.mockResolvedValue(new Set());
   sigurResolveMock.mockResolvedValue(new Map());
@@ -157,6 +158,7 @@ describe('getPresenceByObject', () => {
         ['company-2', { id: 'company-2', name: 'ООО Бета', sigur_department_id: 200 }],
       ]),
       companyBySigurId: new Map([[100, 'company-1'], [200, 'company-2']]),
+      companyByNormalizedName: new Map([['ооо альфа', 'company-1'], ['ооо бета', 'company-2']]),
     });
 
     const data = await getPresenceByObject();
@@ -197,6 +199,7 @@ describe('getPresenceByObject', () => {
       companyByDeptId: new Map([['dept-A', 'company-1']]),
       companyMeta: new Map([['company-1', { id: 'company-1', name: 'ООО Альфа', sigur_department_id: 100 }]]),
       companyBySigurId: new Map([[100, 'company-1']]),
+      companyByNormalizedName: new Map([['ооо альфа', 'company-1']]),
     });
 
     const data = await getPresenceByObject();
@@ -283,6 +286,7 @@ describe('getPresenceByObject', () => {
       companyByDeptId: new Map([['dept-A', 'company-1']]),
       companyMeta: new Map([['company-1', { id: 'company-1', name: 'ООО Альфа', sigur_department_id: 100 }]]),
       companyBySigurId: new Map([[100, 'company-1']]),
+      companyByNormalizedName: new Map([['ооо альфа', 'company-1']]),
     });
     sigurResolveMock.mockResolvedValue(new Map([
       ['чужой иван', makeSigurMatch(100, 'ООО Альфа', 110, 'Бригада №2')],
@@ -299,6 +303,45 @@ describe('getPresenceByObject', () => {
     const syncedFlags = sklad.companies[0].employees.map(e => e.is_unsynced);
     expect(syncedFlags).toContain(true);
     expect(syncedFlags).toContain(false);
+  });
+
+  it('merges unsynced into local company by name when sigur_department_id does not match (Bug #1 fix)', async () => {
+    // Сценарий из прода: у local company sigur_department_id отличается от Sigur root,
+    // но имена идентичны → раньше получали два блока «(СУ-10) ООО СУ-10», теперь один.
+    travelMock.mockResolvedValue([makeTravelObject('obj-1', 'ЖК Инжой', ['Турникет-1'])]);
+    presenceMock.mockResolvedValue([
+      makePresenceItem({ employee_id: 1, full_name: 'Synced One', status: 'online', last_access_point: 'Турникет-1' }),
+    ]);
+    pgQuery.mockImplementation((sql: string) => {
+      if (sql.includes('FROM employees')) {
+        return Promise.resolve([{ id: 1, org_department_id: 'dept-A' }]);
+      }
+      if (sql.includes('FROM skud_events') && sql.includes('employee_id IS NULL')) {
+        return Promise.resolve([
+          { physical_person: 'Чужой Иван', event_time: '09:00:00', direction: 'entry', access_point: 'Турникет-1' },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    companyResolveMock.mockResolvedValue({
+      rootId: 'root',
+      companyByDeptId: new Map([['dept-A', 'company-1']]),
+      companyMeta: new Map([['company-1', { id: 'company-1', name: '(СУ-10) ООО СУ-10', sigur_department_id: 100 }]]),
+      companyBySigurId: new Map([[100, 'company-1']]),
+      companyByNormalizedName: new Map([['(су-10) ооо су-10', 'company-1']]),
+    });
+    // ВАЖНО: Sigur root id (999) НЕ совпадает с local sigur_department_id (100),
+    // но имя совпадает → должны мерджить.
+    sigurResolveMock.mockResolvedValue(new Map([
+      ['чужой иван', makeSigurMatch(999, '(СУ-10) ООО СУ-10', 110, 'Бригада №2')],
+    ]));
+
+    const data = await getPresenceByObject();
+    const sklad = data.buckets.find(b => b.object_id === 'obj-1')!;
+    // Один блок, не два.
+    expect(sklad.companies).toHaveLength(1);
+    expect(sklad.companies[0].company_id).toBe('company-1');
+    expect(sklad.companies[0].online_count).toBe(2);
   });
 
   it('puts unsynced person into __no_company__ when Sigur did not resolve', async () => {

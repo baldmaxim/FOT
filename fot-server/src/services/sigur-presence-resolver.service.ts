@@ -9,15 +9,12 @@
  */
 import { sigurService } from './sigur.service.js';
 import { normalizeEmployee, logSampleAndWarn } from './sigur-sync-shared.js';
+import { normalizeMatchName, nameMatchPrefix } from './name-match.utils.js';
+
+// Re-export для обратной совместимости с прежними импортами (skud-presence-by-object и тесты).
+export { normalizeMatchName };
 
 const RESOLVER_CACHE_TTL_MS = 10 * 60_000;
-
-/** Нормализация ФИО для матчинга: lowercase + trim + collapse spaces + ё→е.
- *  В Sigur events.physical_person и employees.name могут расходиться по ё/е, поэтому
- *  схлопываем их к одному варианту перед сравнением. */
-export function normalizeMatchName(value: string): string {
-  return value.toLowerCase().trim().replace(/\s+/g, ' ').replace(/ё/g, 'е');
-}
 
 export interface ISigurDeptRef {
   sigur_department_id: number;
@@ -31,6 +28,8 @@ export interface ISigurEmployeeResolution {
 
 interface ICachedResolver {
   byName: Map<string, ISigurEmployeeResolution>;
+  /** Prefix-индекс (lastname + firstname). null = коллизия, не используем. */
+  byPrefix: Map<string, ISigurEmployeeResolution | null>;
   expiresAt: number;
 }
 
@@ -112,6 +111,12 @@ async function loadAllSigurEmployees(): Promise<Array<{ name: string; department
   console.log(
     `[sigur-presence-resolver] employees fetched=${raw?.length ?? 0} usable=${result.length} skipped_no_name=${skippedNoName} skipped_no_dept=${skippedNoDept}`,
   );
+  if (result.length > 0) {
+    console.log(
+      '[sigur-presence-resolver] sample names:',
+      result.slice(0, 10).map(e => `"${e.name}" → dept ${e.departmentId}`),
+    );
+  }
   return result;
 }
 
@@ -135,7 +140,7 @@ function resolveRootNode(
 async function buildResolver(): Promise<ICachedResolver> {
   const isConfigured = await sigurService.isConfigured();
   if (!isConfigured) {
-    return { byName: new Map(), expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
+    return { byName: new Map(), byPrefix: new Map(), expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
   }
 
   let tree: Map<number, { id: number; parentId: number | null; name: string }>;
@@ -150,10 +155,11 @@ async function buildResolver(): Promise<ICachedResolver> {
       '[sigur-presence-resolver] failed to load Sigur data, falling back to empty maps:',
       (error as Error).message,
     );
-    return { byName: new Map(), expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
+    return { byName: new Map(), byPrefix: new Map(), expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
   }
 
   const byName = new Map<string, ISigurEmployeeResolution>();
+  const byPrefix = new Map<string, ISigurEmployeeResolution | null>();
 
   for (const employee of employees) {
     if (!employee.name) continue;
@@ -165,16 +171,45 @@ async function buildResolver(): Promise<ICachedResolver> {
     const root = resolveRootNode(employee.departmentId, tree);
     if (!root) continue;
 
-    // First-wins: один человек может встречаться многократно — берём первое попадание.
-    if (byName.has(normalized)) continue;
-    byName.set(normalized, {
+    const resolution: ISigurEmployeeResolution = {
       root: { sigur_department_id: root.id, name: root.name },
       department: { sigur_department_id: deptNode.id, name: deptNode.name },
-    });
+    };
+
+    // First-wins по полному ФИО.
+    if (!byName.has(normalized)) {
+      byName.set(normalized, resolution);
+    }
+
+    // Prefix-индекс с защитой от коллизий: если уже есть запись с этим prefix
+    // и она ссылается на другого человека (другой department), помечаем null —
+    // нельзя резолвить, чтобы не приписать чужого.
+    const prefix = nameMatchPrefix(normalized);
+    if (prefix) {
+      const existing = byPrefix.get(prefix);
+      if (existing === undefined) {
+        byPrefix.set(prefix, resolution);
+      } else if (existing !== null) {
+        const sameRoot = existing.root.sigur_department_id === resolution.root.sigur_department_id
+          && existing.department.sigur_department_id === resolution.department.sigur_department_id;
+        if (!sameRoot) {
+          byPrefix.set(prefix, null);
+        }
+      }
+    }
   }
 
-  console.log(`[sigur-presence-resolver] indexed ${byName.size} unique names`);
-  return { byName, expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
+  const usablePrefixes = [...byPrefix.values()].filter(v => v !== null).length;
+  console.log(
+    `[sigur-presence-resolver] indexed ${byName.size} unique full names, ${usablePrefixes}/${byPrefix.size} usable prefix keys`,
+  );
+  if (byName.size > 0) {
+    console.log(
+      '[sigur-presence-resolver] sample index keys:',
+      [...byName.keys()].slice(0, 10),
+    );
+  }
+  return { byName, byPrefix, expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
 }
 
 async function getResolver(): Promise<ICachedResolver> {
@@ -198,7 +233,12 @@ export function invalidateSigurPresenceResolverCache(): void {
 
 /**
  * Bulk-резолв для массива physical_person за один вызов — share-cache.
- * Возвращает Map по lowercase-имени.
+ * Возвращает Map по нормализованному имени.
+ *
+ * Алгоритм lookup:
+ * 1. Точное совпадение по полному ФИО (`byName`).
+ * 2. Fallback по prefix (lastname + firstname) — если в `byPrefix` уникальный матч.
+ *    При коллизии (null в индексе) — не резолвим, чтобы не приписать чужого.
  */
 export async function resolveSigurEmployeesByNames(
   names: string[],
@@ -206,23 +246,42 @@ export async function resolveSigurEmployeesByNames(
   const result = new Map<string, ISigurEmployeeResolution>();
   if (names.length === 0) return result;
   const resolver = await getResolver();
-  let unresolved = 0;
+  const unresolvedSample: string[] = [];
+
   for (const name of names) {
     if (!name) continue;
     const normalized = normalizeMatchName(name);
     if (!normalized) continue;
     if (result.has(normalized)) continue;
-    const match = resolver.byName.get(normalized);
-    if (match) {
-      result.set(normalized, match);
-    } else {
-      unresolved += 1;
+
+    const exact = resolver.byName.get(normalized);
+    if (exact) {
+      result.set(normalized, exact);
+      continue;
+    }
+
+    const prefix = nameMatchPrefix(normalized);
+    if (prefix) {
+      const byPrefix = resolver.byPrefix.get(prefix);
+      if (byPrefix) {
+        result.set(normalized, byPrefix);
+        continue;
+      }
+    }
+
+    if (unresolvedSample.length < 5) {
+      unresolvedSample.push(normalized);
     }
   }
-  if (unresolved > 0) {
+
+  const unresolvedCount = names.length - result.size;
+  if (unresolvedCount > 0) {
     console.log(
-      `[sigur-presence-resolver] resolved ${result.size}/${names.length} (index size=${resolver.byName.size}, unresolved=${unresolved})`,
+      `[sigur-presence-resolver] resolved ${result.size}/${names.length} (index size=${resolver.byName.size}, prefix size=${resolver.byPrefix.size}, unresolved=${unresolvedCount})`,
     );
+    if (unresolvedSample.length > 0) {
+      console.log('[sigur-presence-resolver] unresolved sample:', unresolvedSample);
+    }
   }
   return result;
 }
