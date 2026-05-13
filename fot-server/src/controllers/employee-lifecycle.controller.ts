@@ -551,16 +551,14 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       }
     }
 
-    if (existing.org_department_id !== targetDepartment.id) {
-      await employeeChangesService.changeDepartment(employeeId, targetDepartment.id, {
-        reason: sigurDetached
-          ? 'Восстановление (отвязка от Sigur — сотрудник удалён в Sigur)'
-          : 'Восстановление — перевод в отдел',
-        lockDepartment: sigurDetached,
-        createdBy: req.user.id,
-        effectiveDate: today,
-      });
-    }
+    await employeeChangesService.changeDepartment(employeeId, targetDepartment.id, {
+      reason: sigurDetached
+        ? 'Восстановление (отвязка от Sigur — сотрудник удалён в Sigur)'
+        : 'Восстановление на работу',
+      lockDepartment: sigurDetached,
+      createdBy: req.user.id,
+      effectiveDate: today,
+    });
 
     await upsertTechnicalDepartmentAccess(
       employeeId,
@@ -601,32 +599,6 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
     employeeCache.invalidate(id);
 
     try {
-      try {
-        await execute(
-          `UPDATE employee_assignments
-              SET effective_to = $1
-            WHERE employee_id = $2 AND effective_to IS NULL`,
-          [today, employeeId],
-        );
-      } catch (closeErr) {
-        console.warn('[rehire] close previous assignments failed (non-critical):', closeErr);
-      }
-
-      try {
-        await execute(
-          `INSERT INTO employee_assignments
-             (employee_id, org_department_id, position_id, effective_from, is_primary, assignment_type, change_reason, created_by)
-           VALUES ($1, $2, $3, $4, true, 'main', 'Восстановление на работу', $5)`,
-          [employeeId, targetDepartment.id, data.position_id || null, today, req.user.id],
-        );
-      } catch (assignError) {
-        console.warn('[rehire] employee_assignments insert failed (non-critical):', assignError);
-      }
-    } catch (assignCatch) {
-      console.warn('[rehire] assignment block threw (non-critical):', assignCatch);
-    }
-
-    try {
       await auditService.logFromRequest(req, req.user.id, 'REHIRE_EMPLOYEE', {
         entityType: 'employee',
         entityId: id,
@@ -663,6 +635,10 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
     const message = getErrorMessage(error, 'Unknown error');
     const stack = error instanceof Error ? error.stack : undefined;
     console.error('[rehire] Unhandled error:', { employeeId: req.params.id, message, stack, error });
+    Sentry.captureException(error, {
+      tags: { route: 'employees.rehire' },
+      extra: { employeeId: req.params.id },
+    });
     res.status(500).json({ success: false, error: `Не удалось восстановить сотрудника: ${message}`, detail: message });
   }
 }

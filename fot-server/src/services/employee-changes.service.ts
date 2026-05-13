@@ -107,14 +107,43 @@ const applyFrozenAssignmentTx = async (
       );
     }
   } else {
-    const effectiveFrom = emp?.hire_date || '2020-01-01';
-    await client.query(
-      `INSERT INTO employee_assignments
-         (employee_id, org_department_id, position_id, effective_from,
-          is_primary, assignment_type, change_reason)
-       VALUES ($1, $2, $3, $4, true, 'main', $5)`,
-      [employeeId, nextDeptId, nextPositionId, effectiveFrom, reason],
+    // Открытых нет — у уволенного сотрудника все строки закрыты.
+    // Слепой INSERT с hire_date перекрыл бы все закрытые периоды и
+    // упал бы по триггеру ensure_no_overlapping_employee_assignments.
+    // Поэтому ре-открываем самую свежую закрытую запись (MAX(effective_to)).
+    const latestResult = await client.query<{ id: string }>(
+      `SELECT id
+         FROM employee_assignments
+        WHERE employee_id = $1 AND effective_to IS NOT NULL
+        ORDER BY effective_to DESC, effective_from DESC
+        LIMIT 1`,
+      [employeeId],
     );
+    const latest = latestResult.rows[0] ?? null;
+
+    if (latest) {
+      await client.query(
+        `UPDATE employee_assignments
+            SET org_department_id = $1,
+                position_id = $2,
+                effective_to = NULL,
+                is_primary = true,
+                assignment_type = 'main',
+                change_reason = $3,
+                updated_at = $4
+          WHERE id = $5 AND employee_id = $6`,
+        [nextDeptId, nextPositionId, reason, nowIso, latest.id, employeeId],
+      );
+    } else {
+      const effectiveFrom = emp?.hire_date || today();
+      await client.query(
+        `INSERT INTO employee_assignments
+           (employee_id, org_department_id, position_id, effective_from,
+            is_primary, assignment_type, change_reason)
+         VALUES ($1, $2, $3, $4, true, 'main', $5)`,
+        [employeeId, nextDeptId, nextPositionId, effectiveFrom, reason],
+      );
+    }
   }
 };
 
