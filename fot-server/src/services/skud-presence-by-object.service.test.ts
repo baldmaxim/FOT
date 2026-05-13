@@ -305,7 +305,7 @@ describe('getPresenceByObject', () => {
     expect(sklad!.online_count).toBe(0);
   });
 
-  it('includes unsynced events with Sigur company resolved into virtual company', async () => {
+  it('groups unsynced by Sigur department (direct folder), not root', async () => {
     travelMock.mockResolvedValue([makeTravelObject('obj-1', 'Склад', ['Турникет-1'])]);
     presenceMock.mockResolvedValue([]);
     pgQuery.mockImplementation((sql: string) => {
@@ -324,14 +324,44 @@ describe('getPresenceByObject', () => {
     expect(data.total_online).toBe(1);
     const sklad = data.buckets.find(b => b.object_id === 'obj-1')!;
     expect(sklad.online_count).toBe(1);
-    expect(sklad.companies[0].company_id).toBe(`${SIGUR_COMPANY_ID_PREFIX}999`);
-    expect(sklad.companies[0].company_name).toBe('Подрядчик X');
+    // companyId/name теперь из непосредственного department (555/Электромонтаж),
+    // а не root (999/Подрядчик X).
+    expect(sklad.companies[0].company_id).toBe(`${SIGUR_COMPANY_ID_PREFIX}555`);
+    expect(sklad.companies[0].company_name).toBe('Электромонтаж');
     expect(sklad.companies[0].employees[0].is_unsynced).toBe(true);
     expect(sklad.companies[0].employees[0].full_name).toBe('Иванов Иван');
     expect(sklad.companies[0].employees[0].department_name).toBe('Электромонтаж');
   });
 
-  it('merges unsynced into local company when sigur_department_id matches', async () => {
+  it('splits unsynced with same root into separate groups by department', async () => {
+    travelMock.mockResolvedValue([makeTravelObject('obj-1', 'Склад', ['Турникет-1'])]);
+    presenceMock.mockResolvedValue([]);
+    pgQuery.mockImplementation((sql: string) => {
+      if (sql.includes('FROM skud_events') && sql.includes('employee_id IS NULL')) {
+        return Promise.resolve([
+          { physical_person: 'Первый Один', event_time: '09:00:00', direction: 'entry', access_point: 'Турникет-1' },
+          { physical_person: 'Второй Два', event_time: '09:05:00', direction: 'entry', access_point: 'Турникет-1' },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    // Оба под одним root «Подрядчик X», но в разных department.
+    sigurResolveMock.mockResolvedValue(new Map([
+      ['первый один', makeSigurMatch(999, 'Подрядчик X', 555, 'Электромонтаж')],
+      ['второй два', makeSigurMatch(999, 'Подрядчик X', 777, 'Сантехники')],
+    ]));
+
+    const data = await getPresenceByObject();
+    const sklad = data.buckets.find(b => b.object_id === 'obj-1')!;
+    expect(sklad.companies).toHaveLength(2);
+    const names = sklad.companies.map(c => c.company_name).sort();
+    expect(names).toEqual(['Сантехники', 'Электромонтаж']);
+  });
+
+  it('keeps unsynced and synced in separate groups (Sigur department is the new grouping key)', async () => {
+    // Раньше unsynced мерджился в local company по sigur_department_id.
+    // Сейчас unsynced группируется по Sigur department.name — это отдельный
+    // отдел, даже если он лежит под той же root-компанией.
     travelMock.mockResolvedValue([makeTravelObject('obj-1', 'Склад', ['Турникет-1'])]);
     presenceMock.mockResolvedValue([
       makePresenceItem({ employee_id: 1, full_name: 'Synced One', status: 'online', last_access_point: 'Турникет-1', first_entry: '08:00:00' }),
@@ -362,59 +392,20 @@ describe('getPresenceByObject', () => {
     expect(data.total_online).toBe(2);
     const sklad = data.buckets.find(b => b.object_id === 'obj-1')!;
     expect(sklad.online_count).toBe(2);
-    // Одна компания вместо двух — мердж по sigur_department_id.
-    expect(sklad.companies).toHaveLength(1);
-    expect(sklad.companies[0].company_id).toBe('company-1');
-    expect(sklad.companies[0].online_count).toBe(2);
-    const syncedFlags = sklad.companies[0].employees.map(e => e.is_unsynced);
-    expect(syncedFlags).toContain(true);
-    expect(syncedFlags).toContain(false);
-  });
-
-  it('merges unsynced into local company by name when sigur_department_id does not match (Bug #1 fix)', async () => {
-    // Сценарий из прода: у local company sigur_department_id отличается от Sigur root,
-    // но имена идентичны → раньше получали два блока «(СУ-10) ООО СУ-10», теперь один.
-    travelMock.mockResolvedValue([makeTravelObject('obj-1', 'ЖК Инжой', ['Турникет-1'])]);
-    presenceMock.mockResolvedValue([
-      makePresenceItem({ employee_id: 1, full_name: 'Synced One', status: 'online', last_access_point: 'Турникет-1' }),
-    ]);
-    pgQuery.mockImplementation((sql: string) => {
-      if (sql.includes('FROM employees')) {
-        return Promise.resolve([{ id: 1, org_department_id: 'dept-A' }]);
-      }
-      if (sql.includes('FROM skud_events') && sql.includes('employee_id IS NULL')) {
-        return Promise.resolve([
-          { physical_person: 'Чужой Иван', event_time: '09:00:00', direction: 'entry', access_point: 'Турникет-1' },
-        ]);
-      }
-      return Promise.resolve([]);
-    });
-    companyResolveMock.mockResolvedValue({
-      rootId: 'root',
-      companyByDeptId: new Map([['dept-A', 'company-1']]),
-      companyMeta: new Map([['company-1', { id: 'company-1', name: '(СУ-10) ООО СУ-10', sigur_department_id: 100 }]]),
-      companyBySigurId: new Map([[100, 'company-1']]),
-      companyByNormalizedName: new Map([['(су-10) ооо су-10', 'company-1']]),
-    });
-    // ВАЖНО: Sigur root id (999) НЕ совпадает с local sigur_department_id (100),
-    // но имя совпадает → должны мерджить.
-    sigurResolveMock.mockResolvedValue(new Map([
-      ['чужой иван', makeSigurMatch(999, '(СУ-10) ООО СУ-10', 110, 'Бригада №2')],
-    ]));
-
-    const data = await getPresenceByObject();
-    const sklad = data.buckets.find(b => b.object_id === 'obj-1')!;
-    // Один блок, не два.
-    expect(sklad.companies).toHaveLength(1);
-    expect(sklad.companies[0].company_id).toBe('company-1');
-    expect(sklad.companies[0].online_count).toBe(2);
+    // Две группы: local company-1 (synced) и Sigur department sigur::110 (unsynced).
+    expect(sklad.companies).toHaveLength(2);
+    const byId = new Map(sklad.companies.map(c => [c.company_id, c]));
+    expect(byId.get('company-1')!.online_count).toBe(1);
+    expect(byId.get('company-1')!.employees[0].is_unsynced).toBe(false);
+    expect(byId.get(`${SIGUR_COMPANY_ID_PREFIX}110`)!.online_count).toBe(1);
+    expect(byId.get(`${SIGUR_COMPANY_ID_PREFIX}110`)!.company_name).toBe('Бригада №2');
+    expect(byId.get(`${SIGUR_COMPANY_ID_PREFIX}110`)!.employees[0].is_unsynced).toBe(true);
   });
 
   it('post-merges company duplicates within bucket by normalized name (local + sigur::ID)', async () => {
-    // Сценарий из прода: companyByNormalizedName НЕ матчит «(СУ-10) ООО СУ-10»
-    // (например, не было раньше или индекс не успел перестроиться). Synced
-    // сотрудник попадает в local company-1, unsynced — в виртуальный `sigur::999`.
-    // Пост-merge на финализации должен слить их в одну запись (local выигрывает).
+    // Safety net: local company-1 «Бригада №2» (synced) и Sigur department «Бригада №2»
+    // (unsynced, sigur::110) имеют идентичное имя → post-merge на финализации
+    // сливает их в одну запись (local выигрывает).
     travelMock.mockResolvedValue([makeTravelObject('obj-1', 'ЖК Инжой', ['Турникет-1'])]);
     presenceMock.mockResolvedValue([
       makePresenceItem({ employee_id: 1, full_name: 'Synced One', status: 'online', last_access_point: 'Турникет-1' }),
@@ -433,18 +424,18 @@ describe('getPresenceByObject', () => {
     companyResolveMock.mockResolvedValue({
       rootId: 'root',
       companyByDeptId: new Map([['dept-A', 'company-1']]),
-      companyMeta: new Map([['company-1', { id: 'company-1', name: '(СУ-10) ООО СУ-10', sigur_department_id: null }]]),
-      // companyBySigurId и companyByNormalizedName пусты — оба канала merge не сработают
+      companyMeta: new Map([['company-1', { id: 'company-1', name: 'Бригада №2', sigur_department_id: null }]]),
       companyBySigurId: new Map(),
       companyByNormalizedName: new Map(),
     });
+    // Unsynced: Sigur department.name = «Бригада №2» (совпадает с local company-1.name).
     sigurResolveMock.mockResolvedValue(new Map([
-      ['чужой иван', makeSigurMatch(999, '(СУ-10) ООО СУ-10', 110, 'Бригада №2')],
+      ['чужой иван', makeSigurMatch(999, 'Подрядчик X', 110, 'Бригада №2')],
     ]));
 
     const data = await getPresenceByObject();
     const sklad = data.buckets.find(b => b.object_id === 'obj-1')!;
-    // Post-merge сливает sigur::999 в company-1 по имени.
+    // Post-merge сливает sigur::110 в company-1 по совпадению имени.
     expect(sklad.companies).toHaveLength(1);
     expect(sklad.companies[0].company_id).toBe('company-1');
     expect(sklad.companies[0].online_count).toBe(2);

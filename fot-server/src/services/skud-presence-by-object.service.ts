@@ -281,33 +281,15 @@ export async function getPresenceByObject(): Promise<IPresenceByObjectResponse> 
     let companyId = NO_COMPANY_ID;
     let companyName = 'Без компании';
     let departmentName: string | null = null;
-    // TODO: если sigurMatch === undefined — physical_person не нашёлся в кэше Sigur
-    // (resolveSigurEmployeesByNames). Пример: «Худойкулов Алишер Холмаматович»
-    // имеет в Sigur отдел «ИНЖСИСТЕМ ООО», но попадает в «Без компании».
-    // Причина в одном из: (a) normalize-несовпадение physical_person vs /api/v1/employees,
-    // (b) у сотрудника в Sigur нет departmentId → отбракован в loadAllSigurEmployees,
-    // (c) root-узел (parent=null) — служебная иерархия выше «компании».
-    // См. логи `[sigur-presence-resolver] unresolved sample (raw)` для диагностики.
     const sigurMatch = sigurResolved.get(normalizeMatchName(state.physical_person));
     if (sigurMatch) {
       departmentName = sigurMatch.department.name || null;
-      // Мердж в локальную компанию по двум каналам:
-      // 1) По sigur_department_id (точное совпадение).
-      // 2) Fallback по нормализованному имени компании (если у local company
-      //    sigur_department_id пуст или не совпадает, но имя то же — это та же
-      //    компания, просто данные не обновлены).
-      let localCompanyId = companyIndex.companyBySigurId.get(sigurMatch.root.sigur_department_id);
-      if (!localCompanyId && sigurMatch.root.name) {
-        localCompanyId = companyIndex.companyByNormalizedName.get(normalizeMatchName(sigurMatch.root.name));
-      }
-      if (localCompanyId) {
-        const meta = companyIndex.companyMeta.get(localCompanyId);
-        companyId = localCompanyId;
-        companyName = meta?.name || sigurMatch.root.name || '—';
-      } else {
-        companyId = `${SIGUR_COMPANY_ID_PREFIX}${sigurMatch.root.sigur_department_id}`;
-        companyName = sigurMatch.root.name || '—';
-      }
+      // Группа = непосредственный отдел в Sigur (папка, в которой лежит сотрудник).
+      // Не root, не local company из БД: этих компаний в БД может не быть, структуру
+      // unsynced тянем напрямую из Sigur. Если ФИО не сматчилось (sigurMatch===undefined) —
+      // остаёмся в NO_COMPANY_ID, см. логи `[sigur-presence-resolver] unresolved sample`.
+      companyId = `${SIGUR_COMPANY_ID_PREFIX}${sigurMatch.department.sigur_department_id}`;
+      companyName = sigurMatch.department.name || '—';
     }
 
     const company = ensureCompany(bucket, companyId, companyName);
