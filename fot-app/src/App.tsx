@@ -325,7 +325,7 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage="/staff-control" />}>
+        <Route element={<ProtectedRoute requiredPage="/employees" />}>
           <Route
             path="/employees/:id"
             element={

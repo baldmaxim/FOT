@@ -16,6 +16,7 @@ interface INewRoleForm {
   is_admin: boolean;
   employee_variant: EmployeeVariant | '';
   show_actual_hours: boolean;
+  hide_sidebar: boolean;
 }
 
 interface ICloneRoleForm {
@@ -25,6 +26,7 @@ interface ICloneRoleForm {
   is_admin: boolean;
   employee_variant: EmployeeVariant | '';
   show_actual_hours: boolean;
+  hide_sidebar: boolean;
 }
 
 interface IEditState {
@@ -33,6 +35,7 @@ interface IEditState {
   is_admin: boolean;
   employee_variant: EmployeeVariant | '';
   show_actual_hours: boolean;
+  hide_sidebar: boolean;
 }
 
 interface IPageGroup {
@@ -96,6 +99,7 @@ export const RoleManagementPage: FC = () => {
     is_admin: false,
     employee_variant: '',
     show_actual_hours: false,
+    hide_sidebar: false,
   });
   const [editState, setEditState] = useState<IEditState | null>(null);
   const [savingRole, setSavingRole] = useState(false);
@@ -112,6 +116,7 @@ export const RoleManagementPage: FC = () => {
     is_admin: false,
     employee_variant: '',
     show_actual_hours: false,
+    hide_sidebar: false,
   });
 
   const rolesQuery = useQuery<SystemRole[]>({
@@ -221,9 +226,10 @@ export const RoleManagementPage: FC = () => {
         is_admin: newForm.is_admin,
         employee_variant: newForm.employee_variant || null,
         show_actual_hours: newForm.show_actual_hours,
+        hide_sidebar: newForm.hide_sidebar,
       });
       toast.success('Роль создана');
-      setNewForm({ code: '', name: '', is_admin: false, employee_variant: '', show_actual_hours: false });
+      setNewForm({ code: '', name: '', is_admin: false, employee_variant: '', show_actual_hours: false, hide_sidebar: false });
       setShowNewForm(false);
       setSelectedRoleCode(createdRole.code);
       upsertRoleInCache(createdRole);
@@ -248,6 +254,7 @@ export const RoleManagementPage: FC = () => {
         is_admin: editState.is_admin,
         employee_variant: editState.employee_variant || null,
         show_actual_hours: editState.show_actual_hours,
+        hide_sidebar: editState.hide_sidebar,
       });
       toast.success('Роль обновлена');
       setEditState(null);
@@ -268,6 +275,7 @@ export const RoleManagementPage: FC = () => {
         employee_variant: role.employee_variant,
         is_active: role.is_active,
         show_actual_hours: next,
+        hide_sidebar: role.hide_sidebar,
       });
       toast.success(next ? 'Роль показывает факт по СКУД' : 'Роль показывает урезанные часы');
       upsertRoleInCache(updated);
@@ -280,6 +288,25 @@ export const RoleManagementPage: FC = () => {
     }
   };
 
+  const handleToggleHideSidebar = async (role: SystemRole, next: boolean) => {
+    try {
+      const updated = await rolesService.update(role.code, {
+        name: role.name,
+        description: role.description,
+        is_admin: role.is_admin,
+        employee_variant: role.employee_variant,
+        is_active: role.is_active,
+        show_actual_hours: role.show_actual_hours,
+        hide_sidebar: next,
+      });
+      toast.success(next ? 'Боковое меню скрыто для роли' : 'Боковое меню видно у роли');
+      upsertRoleInCache(updated);
+      await refreshProfile();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка изменения видимости меню');
+    }
+  };
+
   const handleToggleActive = async (role: SystemRole) => {
     try {
       const updated = await rolesService.update(role.code, {
@@ -289,6 +316,7 @@ export const RoleManagementPage: FC = () => {
         employee_variant: role.employee_variant,
         is_active: !role.is_active,
         show_actual_hours: role.show_actual_hours,
+        hide_sidebar: role.hide_sidebar,
       });
       toast.success(role.is_active ? 'Роль деактивирована' : 'Роль активирована');
       upsertRoleInCache(updated);
@@ -345,6 +373,7 @@ export const RoleManagementPage: FC = () => {
       is_admin: selectedRole.is_admin,
       employee_variant: selectedRole.employee_variant ?? '',
       show_actual_hours: selectedRole.show_actual_hours,
+      hide_sidebar: selectedRole.hide_sidebar,
     });
     setShowCloneForm(true);
   };
@@ -364,6 +393,7 @@ export const RoleManagementPage: FC = () => {
         is_admin: cloneForm.is_admin,
         employee_variant: cloneForm.employee_variant || null,
         show_actual_hours: cloneForm.show_actual_hours,
+        hide_sidebar: cloneForm.hide_sidebar,
       });
       toast.success('Роль-копия создана');
       setShowCloneForm(false);
@@ -451,6 +481,14 @@ export const RoleManagementPage: FC = () => {
                 onChange={v => setNewForm(s => ({ ...s, show_actual_hours: v }))}
                 title="Показывать часы по СКУД без обрезки до плановой нормы дня"
               />
+              <label className={styles.inlineCheckbox} title="Скрыть боковое меню у пользователей этой роли (админу игнорируется)">
+                <input
+                  type="checkbox"
+                  checked={newForm.hide_sidebar}
+                  onChange={e => setNewForm(s => ({ ...s, hide_sidebar: e.target.checked }))}
+                />
+                <span>Скрыть меню</span>
+              </label>
               <select
                 className={styles.input}
                 value={newForm.employee_variant}
@@ -482,6 +520,7 @@ export const RoleManagementPage: FC = () => {
                     <th>Название</th>
                     <th>Админ</th>
                     <th title="Включено — пользователи роли видят часы по СКУД без урезания под плановую норму дня">Часы</th>
+                    <th title="Если включено — у пользователей роли полностью скрывается боковое меню (для админа игнорируется)">Меню</th>
                     <th title="Какой личный кабинет открывается у пользователей этой роли на /employee">Кабинет</th>
                     <th>Статус</th>
                     <th></th>
@@ -522,6 +561,23 @@ export const RoleManagementPage: FC = () => {
                           }}
                           withLabels={false}
                         />
+                      </td>
+                      <td title={role.hide_sidebar ? 'боковое меню скрыто (админу игнорируется)' : 'боковое меню видно'}>
+                        <label className={styles.hoursToggle}>
+                          <input
+                            type="checkbox"
+                            checked={editState?.code === role.code ? editState.hide_sidebar : role.hide_sidebar}
+                            onChange={e => {
+                              const v = e.target.checked;
+                              if (editState?.code === role.code) {
+                                setEditState(s => (s ? { ...s, hide_sidebar: v } : s));
+                              } else {
+                                void handleToggleHideSidebar(role, v);
+                              }
+                            }}
+                          />
+                          <span className={styles.hoursToggleTrack} />
+                        </label>
                       </td>
                       <td>
                         {editState?.code === role.code ? (
@@ -565,6 +621,7 @@ export const RoleManagementPage: FC = () => {
                                   is_admin: role.is_admin,
                                   employee_variant: role.employee_variant ?? '',
                                   show_actual_hours: role.show_actual_hours,
+                                  hide_sidebar: role.hide_sidebar,
                                 })
                               }
                             >Изменить</button>
@@ -675,6 +732,14 @@ export const RoleManagementPage: FC = () => {
                       onChange={v => setCloneForm(s => ({ ...s, show_actual_hours: v }))}
                       title="Показывать часы по СКУД без обрезки до плановой нормы дня"
                     />
+                    <label className={styles.inlineCheckbox} title="Скрыть боковое меню у пользователей этой роли (для админа игнорируется)">
+                      <input
+                        type="checkbox"
+                        checked={cloneForm.hide_sidebar}
+                        onChange={e => setCloneForm(s => ({ ...s, hide_sidebar: e.target.checked }))}
+                      />
+                      <span>Скрыть меню</span>
+                    </label>
                     <select
                       className={styles.input}
                       value={cloneForm.employee_variant}

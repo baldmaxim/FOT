@@ -24,6 +24,7 @@ const createRoleSchema = z.object({
   is_admin: z.boolean().optional().default(false),
   employee_variant: employeeVariantSchema,
   show_actual_hours: z.boolean().optional().default(false),
+  hide_sidebar: z.boolean().optional().default(false),
 });
 
 const updateRoleSchema = z.object({
@@ -33,6 +34,7 @@ const updateRoleSchema = z.object({
   employee_variant: employeeVariantSchema,
   is_active: z.boolean().optional(),
   show_actual_hours: z.boolean().optional(),
+  hide_sidebar: z.boolean().optional(),
 });
 
 const updateAccessProfileSchema = z.object({
@@ -47,6 +49,7 @@ const cloneRoleSchema = z.object({
   employee_variant: employeeVariantSchema,
   is_active: z.boolean().optional(),
   show_actual_hours: z.boolean().optional(),
+  hide_sidebar: z.boolean().optional(),
 });
 
 function isMissingFunctionError(error: unknown): boolean {
@@ -224,16 +227,16 @@ export const rolesController = {
       return;
     }
 
-    const { code, name, description, is_admin, employee_variant, show_actual_hours } = parsed.data;
+    const { code, name, description, is_admin, employee_variant, show_actual_hours, hide_sidebar } = parsed.data;
 
     let data: SystemRole | null;
     try {
       data = await queryOne<SystemRole>(
         `INSERT INTO system_roles
-           (code, name, description, is_admin, employee_variant, show_actual_hours, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6, true)
+           (code, name, description, is_admin, employee_variant, show_actual_hours, hide_sidebar, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, true)
          RETURNING *`,
-        [code, name, description ?? null, !!is_admin, employee_variant ?? null, !!show_actual_hours],
+        [code, name, description ?? null, !!is_admin, employee_variant ?? null, !!show_actual_hours, !!hide_sidebar],
       );
     } catch (error) {
       const errCode = (error as { code?: string }).code;
@@ -284,8 +287,8 @@ export const rolesController = {
       try {
         createdRole = await queryOne<SystemRole>(
           `INSERT INTO system_roles
-             (code, name, description, is_admin, employee_variant, show_actual_hours, is_active)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+             (code, name, description, is_admin, employee_variant, show_actual_hours, hide_sidebar, is_active)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            RETURNING *`,
           [
             targetCode,
@@ -296,6 +299,7 @@ export const rolesController = {
               ? parsed.data.employee_variant
               : sourceRole.employee_variant,
             parsed.data.show_actual_hours ?? sourceRole.show_actual_hours,
+            parsed.data.hide_sidebar ?? sourceRole.hide_sidebar,
             parsed.data.is_active ?? true,
           ],
         );
@@ -370,6 +374,7 @@ export const rolesController = {
     if (parsed.data.is_admin !== undefined) setClauses.push(`is_admin = ${addParam(parsed.data.is_admin)}`);
     if (parsed.data.employee_variant !== undefined) setClauses.push(`employee_variant = ${addParam(parsed.data.employee_variant)}`);
     if (parsed.data.show_actual_hours !== undefined) setClauses.push(`show_actual_hours = ${addParam(parsed.data.show_actual_hours)}`);
+    if (parsed.data.hide_sidebar !== undefined) setClauses.push(`hide_sidebar = ${addParam(parsed.data.hide_sidebar)}`);
 
     const codePlaceholder = addParam(code);
 

@@ -45,6 +45,7 @@ export interface CreateRoleData {
   is_admin?: boolean;
   employee_variant?: EmployeeVariant | null;
   show_actual_hours?: boolean;
+  hide_sidebar?: boolean;
 }
 
 export interface UpdateRoleData {
@@ -54,6 +55,7 @@ export interface UpdateRoleData {
   employee_variant?: EmployeeVariant | null;
   is_active?: boolean;
   show_actual_hours?: boolean;
+  hide_sidebar?: boolean;
 }
 
 export interface CloneRoleData {
@@ -64,6 +66,7 @@ export interface CloneRoleData {
   employee_variant?: EmployeeVariant | null;
   is_active?: boolean;
   show_actual_hours?: boolean;
+  hide_sidebar?: boolean;
 }
 
 export interface UpdateAccessProfileData {

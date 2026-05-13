@@ -122,10 +122,10 @@ router.get(
   employeesController.getCounts
 );
 
-// GET /api/employees/:id/history - история событий сотрудника (worker+)
+// GET /api/employees/:id/history - история событий сотрудника (worker+, для полной карточки требуется /employees)
 router.get(
   '/:id/history',
-  requireAnyPageAccess(['/employee', '/staff-control'], 'view'),
+  requireAnyPageAccess(['/employee', '/employees'], 'view'),
   employeesController.getHistory
 );
 
@@ -145,10 +145,10 @@ router.delete(
   employeesController.deleteHistoryEvent
 );
 
-// GET /api/employees/:id - получение одного (worker+)
+// GET /api/employees/:id - получение одного (worker через /employee, остальные — через /employees)
 router.get(
   '/:id',
-  requireAnyPageAccess(['/employee', '/staff-control'], 'view'),
+  requireAnyPageAccess(['/employee', '/employees'], 'view'),
   employeesController.getById
 );
 
@@ -163,7 +163,7 @@ router.post(
 // POST /api/employees/batch-move - массовый перевод в отдел (header+, требуется 2FA)
 router.post(
   '/batch-move',
-  requirePageAccess('/staff-control', 'edit'),
+  requirePageAccess('/staff-control/department', 'edit'),
   requireCritical2FA,
   employeesController.batchMoveEmployees
 );
@@ -216,7 +216,7 @@ router.post(
 // POST /api/employees/:id/move-department - переместить в отдел (header+)
 router.post(
   '/:id/move-department',
-  requirePageAccess('/staff-control', 'edit'),
+  requirePageAccess('/staff-control/department', 'edit'),
   requireCritical2FA,
   employeesController.moveDepartment
 );
@@ -232,7 +232,7 @@ router.post(
 // POST /api/employees/:id/change-position - сменить должность (admin+, требуется 2FA)
 router.post(
   '/:id/change-position',
-  requirePageAccess('/staff-control', 'edit'),
+  requirePageAccess('/staff-control/position', 'edit'),
   requireCritical2FA,
   employeesController.changePosition
 );

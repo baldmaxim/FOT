@@ -14,6 +14,8 @@ export interface SystemRole {
   employee_variant: EmployeeVariant | null;
   is_active: boolean;
   show_actual_hours: boolean;
+  /** true → у пользователей роли полностью скрывается боковое меню. Для is_admin игнорируется на фронте. */
+  hide_sidebar: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -39,6 +41,7 @@ export interface UserProfileResponse {
   is_admin: boolean;
   employee_variant: EmployeeVariant | null;
   show_actual_hours: boolean;
+  hide_sidebar: boolean;
   employee_id: number | null;
   department_id: string | null;
   managed_department_ids: string[];

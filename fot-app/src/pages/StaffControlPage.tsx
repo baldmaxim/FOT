@@ -473,6 +473,10 @@ interface IVirtualTableProps {
   selectedIds: Set<number>;
   selectionMode: boolean;
   canManage: boolean;
+  canEditDept: boolean;
+  canEditPos: boolean;
+  canEditSch: boolean;
+  canOpenCard: boolean;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
   onToggleSelectAll: () => void;
@@ -492,6 +496,10 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   selectedIds,
   selectionMode,
   canManage,
+  canEditDept,
+  canEditPos,
+  canEditSch,
+  canOpenCard,
   onNavigate,
   onToggleSelect,
   onToggleSelectAll,
@@ -557,6 +565,10 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     selectedIds={selectedIds}
                     selectionMode={selectionMode}
                     canManage={canManage}
+                    canEditDept={canEditDept}
+                    canEditPos={canEditPos}
+                    canEditSch={canEditSch}
+                    canOpenCard={canOpenCard}
                     onNavigate={onNavigate}
                     onToggleSelect={onToggleSelect}
                     onOpenModal={onOpenModal}
@@ -590,6 +602,10 @@ interface IVirtualCardsProps {
   selectedIds: Set<number>;
   selectionMode: boolean;
   canManage: boolean;
+  canEditDept: boolean;
+  canEditPos: boolean;
+  canEditSch: boolean;
+  canOpenCard: boolean;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
   onOpenModal: (emp: Employee, type: ModalType) => void;
@@ -607,6 +623,10 @@ const MobileCard: FC<{
   selectedIds: Set<number>;
   selectionMode: boolean;
   canManage: boolean;
+  canEditDept: boolean;
+  canEditPos: boolean;
+  canEditSch: boolean;
+  canOpenCard: boolean;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
   onOpenModal: (emp: Employee, type: ModalType) => void;
@@ -614,7 +634,7 @@ const MobileCard: FC<{
   onRehire?: (emp: Employee) => void;
   onFire?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
-}> = memo(({ emp, scheduleViews, selectedIds, selectionMode, canManage, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
+}> = memo(({ emp, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
   const handleAuxClick = (e: ReactMouseEvent) => {
@@ -626,9 +646,10 @@ const MobileCard: FC<{
   return (
     <div
       className={`sc-card${isSelected ? ' sc-card--selected' : ''}`}
-      onClick={() => onNavigate(emp)}
-      onAuxClick={handleAuxClick}
-      onMouseDown={handleMiddleClickMouseDown}
+      style={canOpenCard ? undefined : { cursor: 'default' }}
+      onClick={canOpenCard ? () => onNavigate(emp) : undefined}
+      onAuxClick={canOpenCard ? handleAuxClick : undefined}
+      onMouseDown={canOpenCard ? handleMiddleClickMouseDown : undefined}
     >
       <div className="sc-card-head">
         <div className="sc-card-name">
@@ -704,20 +725,26 @@ const MobileCard: FC<{
                 <History size={14} />
               </button>
             )}
-            <button className="sc-btn-icon" title="Сменить должность" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'position'); }}>
-              <Pencil size={14} />
-            </button>
-            <button className="sc-btn-icon" title="Назначить график" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'schedule'); }}>
-              <Calendar size={14} />
-            </button>
+            {canEditPos && (
+              <button className="sc-btn-icon" title="Сменить должность" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'position'); }}>
+                <Pencil size={14} />
+              </button>
+            )}
+            {canEditSch && (
+              <button className="sc-btn-icon" title="Назначить график" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'schedule'); }}>
+                <Calendar size={14} />
+              </button>
+            )}
             {canManage && (
               <button className="sc-btn-icon" title="Изменить оклад" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'salary'); }}>
                 <TrendingUp size={14} />
               </button>
             )}
-            <button className="sc-btn-icon" title="Сменить отдел" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'department'); }}>
-              <ArrowRightLeft size={14} />
-            </button>
+            {canEditDept && (
+              <button className="sc-btn-icon" title="Сменить отдел" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'department'); }}>
+                <ArrowRightLeft size={14} />
+              </button>
+            )}
           </>
         )}
       </div>
@@ -725,7 +752,7 @@ const MobileCard: FC<{
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, selectionMode, canManage, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -753,6 +780,10 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, se
                 selectedIds={selectedIds}
                 selectionMode={selectionMode}
                 canManage={canManage}
+                canEditDept={canEditDept}
+                canEditPos={canEditPos}
+                canEditSch={canEditSch}
+                canOpenCard={canOpenCard}
                 onNavigate={onNavigate}
                 onToggleSelect={onToggleSelect}
                 onOpenModal={onOpenModal}
@@ -784,7 +815,11 @@ export const StaffControlPage: FC = () => {
   const debouncedSearch = useDebouncedValue(search, 300);
   const queryClient = useQueryClient();
   const toast = useToast();
-  const { isAdmin } = useAuth();
+  const { isAdmin, canEditPage, canViewPage } = useAuth();
+  const canEditDept = isAdmin || canEditPage('/staff-control/department');
+  const canEditPos = isAdmin || canEditPage('/staff-control/position');
+  const canEditSch = isAdmin || canEditPage('/staff-control/schedule');
+  const canOpenCard = isAdmin || canViewPage('/employees');
   const { isDepartmentScope, managedDepartmentIds, managedDepartmentNameById, mode: managedMode } = useManagedDepartments({ enabled: false });
   // Руководителям (`isDepartmentScope`) фильтруем всегда — даже при пустом списке
   // назначений (тогда дропдаун пуст). Без этого header без отделов видел все отделы.
@@ -1703,20 +1738,24 @@ export const StaffControlPage: FC = () => {
             )}
           </div>
           <div className="sc-bulk-actions">
-            <button
-              className="sc-btn secondary"
-              onClick={() => setBulkScheduleOpen(true)}
-              disabled={selectedEmployeeIds.length === 0}
-            >
-              <Calendar size={14} /> График
-            </button>
-            <button
-              className="sc-btn secondary"
-              onClick={() => setBulkMoveDeptOpen(true)}
-              disabled={selectedEmployeeIds.length === 0}
-            >
-              <ArrowRightLeft size={14} /> Сменить отдел
-            </button>
+            {canEditSch && (
+              <button
+                className="sc-btn secondary"
+                onClick={() => setBulkScheduleOpen(true)}
+                disabled={selectedEmployeeIds.length === 0}
+              >
+                <Calendar size={14} /> График
+              </button>
+            )}
+            {canEditDept && (
+              <button
+                className="sc-btn secondary"
+                onClick={() => setBulkMoveDeptOpen(true)}
+                disabled={selectedEmployeeIds.length === 0}
+              >
+                <ArrowRightLeft size={14} /> Сменить отдел
+              </button>
+            )}
             <button className="sc-btn cancel" onClick={toggleSelectionMode}>
               Готово
             </button>
@@ -1733,6 +1772,10 @@ export const StaffControlPage: FC = () => {
           selectedIds={selectedEmployeeIdSet}
           selectionMode={selectionMode}
           canManage={isAdmin}
+          canEditDept={canEditDept}
+          canEditPos={canEditPos}
+          canEditSch={canEditSch}
+          canOpenCard={canOpenCard}
           onNavigate={handleNavigate}
           onToggleSelect={toggleSelectEmployee}
           onOpenModal={openModal}
@@ -1748,6 +1791,10 @@ export const StaffControlPage: FC = () => {
           selectedIds={selectedEmployeeIdSet}
           selectionMode={selectionMode}
           canManage={isAdmin}
+          canEditDept={canEditDept}
+          canEditPos={canEditPos}
+          canEditSch={canEditSch}
+          canOpenCard={canOpenCard}
           onNavigate={handleNavigate}
           onToggleSelect={toggleSelectEmployee}
           onToggleSelectAll={toggleSelectAllVisible}

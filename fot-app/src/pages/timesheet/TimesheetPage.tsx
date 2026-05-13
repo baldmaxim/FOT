@@ -2019,6 +2019,7 @@ export const TimesheetPage: FC = () => {
             employeeId={modalEmployee?.id}
             workDate={modalWorkDate}
             allowAccessPointMap={canViewPage('/skud-settings')}
+            hideSkudTab={!canViewPage('/timesheet/events')}
             deleteLabel={modalMode === 'object' ? 'Снять корректировку' : undefined}
             timesheetEntry={modalEntry}
             maxHours={modalMaxHours}

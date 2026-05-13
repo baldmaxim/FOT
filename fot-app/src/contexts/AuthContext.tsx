@@ -43,6 +43,8 @@ interface AuthContextType extends AuthState {
   // true → роль настроена показывать фактические часы по СКУД
   // (hours_worked); false → текущее поведение, т.е. урезанные по графику.
   showActualHours: boolean;
+  /** true → у пользователя полностью скрыто боковое меню (Sidebar). Для is_admin форсируется false. */
+  hideSidebar: boolean;
   login: (credentials: LoginCredentials) => Promise<{ requires2FA: boolean }>;
   verify2FA: (code: string) => Promise<void>;
   register: (data: RegisterData) => Promise<RegisterResponse | null>;
@@ -261,6 +263,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const isAdmin = !!state.profile?.is_admin;
   const employeeVariant = state.profile?.employee_variant ?? null;
   const showActualHours = !!state.profile?.show_actual_hours;
+  // Защита от самоблокировки: админ всегда видит меню, даже если в его роли стоит флаг.
+  const hideSidebar = !!state.profile?.hide_sidebar && !isAdmin;
 
   const ready = state.isAuthenticated && state.isApproved && (!state.isTwoFactorEnabled || state.isTwoFactorVerified);
 
@@ -306,6 +310,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     isAdmin,
     employeeVariant,
     showActualHours,
+    hideSidebar,
     login,
     verify2FA,
     register,

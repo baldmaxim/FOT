@@ -38,11 +38,11 @@ router.delete('/:id', requireAnyPageAccess(['/admin/schedules', '/admin/schedule
 // Назначения сотрудникам / объектам — менеджеру доступны только через автодоступ /staff-control
 router.get('/employees', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'view'), scheduleController.listEmployeeAssignments);
 router.get('/objects', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'view'), scheduleController.listObjectAssignments);
-router.put('/employee/:employeeId', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.assignEmployee);
-router.put('/object/:objectId', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.assignObject);
-router.delete('/employee/:employeeId', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.removeEmployeeAssignment);
-router.delete('/object/:objectId', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.removeObjectAssignment);
-router.post('/brigades/bulk', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'edit'), scheduleController.bulkApplyToBrigades);
+router.put('/employee/:employeeId', requireAnyPageAccess(['/admin/schedules', '/staff-control/schedule'], 'edit'), scheduleController.assignEmployee);
+router.put('/object/:objectId', requireAnyPageAccess(['/admin/schedules', '/staff-control/schedule'], 'edit'), scheduleController.assignObject);
+router.delete('/employee/:employeeId', requireAnyPageAccess(['/admin/schedules', '/staff-control/schedule'], 'edit'), scheduleController.removeEmployeeAssignment);
+router.delete('/object/:objectId', requireAnyPageAccess(['/admin/schedules', '/staff-control/schedule'], 'edit'), scheduleController.removeObjectAssignment);
+router.post('/brigades/bulk', requireAnyPageAccess(['/admin/schedules', '/staff-control/schedule'], 'edit'), scheduleController.bulkApplyToBrigades);
 
 // Resolve
 router.get('/resolve/:empId', requireAnyPageAccess(['/employee', '/timesheet', '/timesheet-hr', '/staff-control'], 'view'), scheduleController.resolve);

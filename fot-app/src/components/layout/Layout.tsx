@@ -5,6 +5,7 @@ import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { useHeaderAddonState } from './HeaderAddonContext';
 import { HeaderAddonProvider } from './HeaderAddonProvider';
+import { useAuth } from '../../contexts/AuthContext';
 import { useMobileMenu } from '../../hooks/useMobileMenu';
 import { useSidebarCollapse } from '../../hooks/useSidebarCollapse';
 import { useSwipe } from '../../hooks/useSwipe';
@@ -37,6 +38,7 @@ export const Layout: FC<ILayoutProps> = ({
   const overlayHandlers = useOverlayDismiss(close);
   const queryClient = useQueryClient();
   const { addon: dynamicAddon, setAddon } = useHeaderAddonState();
+  const { hideSidebar } = useAuth();
 
   // Префетч структуры отделов: используется почти на всех админ-страницах
   // (selectорах отделов, дашборде, управлении кадрами). Загружаем сразу после
@@ -54,22 +56,30 @@ export const Layout: FC<ILayoutProps> = ({
     });
   }, [queryClient]);
 
+  const appClassName = [
+    styles.app,
+    isCollapsed ? styles.appCollapsed : '',
+    hideSidebar ? styles.appNoSidebar : '',
+  ].filter(Boolean).join(' ');
+
   return (
-    <div className={`${styles.app} ${isCollapsed ? styles.appCollapsed : ''}`} {...swipeHandlers}>
-      {isOpen && <div className={styles.overlay} {...overlayHandlers} />}
-      <Sidebar
-        theme={theme}
-        isOpen={isOpen}
-        onClose={close}
-        isCollapsed={isCollapsed}
-        onToggleCollapse={toggleCollapse}
-      />
+    <div className={appClassName} {...(hideSidebar ? {} : swipeHandlers)}>
+      {!hideSidebar && isOpen && <div className={styles.overlay} {...overlayHandlers} />}
+      {!hideSidebar && (
+        <Sidebar
+          theme={theme}
+          isOpen={isOpen}
+          onClose={close}
+          isCollapsed={isCollapsed}
+          onToggleCollapse={toggleCollapse}
+        />
+      )}
       <main className={styles.main}>
         <Header
           title={title}
           theme={theme}
           onToggleTheme={onToggleTheme}
-          onMenuOpen={open}
+          onMenuOpen={hideSidebar ? undefined : open}
           showPeriodTabs={showPeriodTabs}
           titleAddon={titleAddon ?? dynamicAddon}
         />

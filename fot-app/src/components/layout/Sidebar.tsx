@@ -83,8 +83,12 @@ interface ISidebarProps {
 export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose, isCollapsed = false, onToggleCollapse }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { profile, logout, canViewPage } = useAuth();
+  const { profile, logout, canViewPage, hideSidebar } = useAuth();
   const { data: myEmployee } = useMyEmployee(!profile?.imported_position);
+
+  // Defense in depth: если Layout по какой-то причине отрендерил Sidebar,
+  // а флаг hide_sidebar активен (и пользователь не админ), всё равно не показываем меню.
+  if (hideSidebar) return null;
 
   const logoSrc = theme === 'dark' ? '/fot-logo-dark.svg' : '/fot-logo-light.svg';
 
