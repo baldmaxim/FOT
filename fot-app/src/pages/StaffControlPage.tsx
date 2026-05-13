@@ -64,6 +64,10 @@ interface IStaffRowProps {
   selectedIds: Set<number>;
   selectionMode: boolean;
   canManage: boolean;
+  canEditDept: boolean;
+  canEditPos: boolean;
+  canEditSch: boolean;
+  canOpenCard: boolean;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
   onOpenModal: (emp: Employee, type: ModalType) => void;
@@ -73,7 +77,7 @@ interface IStaffRowProps {
   onReturn?: (emp: Employee) => void;
 }
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selectedIds, selectionMode, canManage, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
 
@@ -84,12 +88,16 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selected
     }
   };
 
+  const handleRowClick = canOpenCard ? () => onNavigate(emp) : undefined;
+  const rowStyle = canOpenCard ? undefined : { cursor: 'default' as const };
+
   return (
     <tr
       className={`sc-row${isSelected ? ' sc-row--selected' : ''}`}
-      onClick={() => onNavigate(emp)}
-      onAuxClick={handleAuxClick}
-      onMouseDown={handleMiddleClickMouseDown}
+      style={rowStyle}
+      onClick={handleRowClick}
+      onAuxClick={canOpenCard ? handleAuxClick : undefined}
+      onMouseDown={canOpenCard ? handleMiddleClickMouseDown : undefined}
     >
       {selectionMode && (
         <td className="sc-td-check" onClick={e => e.stopPropagation()}>
@@ -114,24 +122,30 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selected
       <td>
         <span className="sc-cell-with-btn">
           {emp.department || '—'}
-          <button className="sc-inline-btn" title="Сменить отдел" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'department'); }}>
-            <ArrowRightLeft size={12} />
-          </button>
+          {canEditDept && (
+            <button className="sc-inline-btn" title="Сменить отдел" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'department'); }}>
+              <ArrowRightLeft size={12} />
+            </button>
+          )}
         </span>
       </td>
       <td>
         <span className="sc-cell-with-btn">
-          <button className="sc-inline-btn" title="Сменить должность" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'position'); }}>
-            <Pencil size={12} />
-          </button>
+          {canEditPos && (
+            <button className="sc-inline-btn" title="Сменить должность" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'position'); }}>
+              <Pencil size={12} />
+            </button>
+          )}
           {emp.position_name || '—'}
         </span>
       </td>
       <td>
         <span className="sc-cell-with-btn">
-          <button className="sc-inline-btn" title="Назначить график" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'schedule'); }}>
-            <Calendar size={12} />
-          </button>
+          {canEditSch && (
+            <button className="sc-inline-btn" title="Назначить график" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'schedule'); }}>
+              <Calendar size={12} />
+            </button>
+          )}
           <span className="sc-schedule-cell">
             <span className="sc-schedule-name">{scheduleView?.scheduleName || '—'}</span>
             {scheduleView && scheduleView.source !== 'default' && <span className={`sc-schedule-badge ${scheduleView.source}`}>{SCHEDULE_SOURCE_LABELS[scheduleView.source]}</span>}
@@ -585,7 +599,7 @@ interface IVirtualCardsProps {
   onReturn?: (emp: Employee) => void;
 }
 
-const CARD_HEIGHT = 270;
+const CARD_ESTIMATE = 220;
 
 const MobileCard: FC<{
   emp: Employee;
@@ -716,8 +730,9 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, se
   const virtualizer = useVirtualizer({
     count: filtered.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => CARD_HEIGHT,
+    estimateSize: () => CARD_ESTIMATE,
     overscan: 5,
+    gap: 4,
   });
 
   return (
@@ -726,7 +741,12 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, se
         {virtualizer.getVirtualItems().map(vRow => {
           const emp = filtered[vRow.index];
           return (
-            <div key={emp.id} style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vRow.start}px)` }}>
+            <div
+              key={emp.id}
+              ref={virtualizer.measureElement}
+              data-index={vRow.index}
+              style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vRow.start}px)` }}
+            >
               <MobileCard
                 emp={emp}
                 scheduleViews={scheduleViews}
@@ -1605,11 +1625,8 @@ export const StaffControlPage: FC = () => {
           onRetry={() => { void structureTree.refetch(); }}
         />
       )}
-      <div className="sc-filter-search">
-        <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
-      </div>
       <select
-        className={`sc-schedule-filter${isMobile ? ' sc-schedule-filter--mobile' : ''}`}
+        className="sc-schedule-filter"
         value={scheduleFilter}
         onChange={e => handleScheduleFilterChange(e.target.value)}
         title="Фильтр по графику работы"
@@ -1619,6 +1636,25 @@ export const StaffControlPage: FC = () => {
           <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
         ))}
       </select>
+      {isAdmin && (
+        <div className="sc-page-actions">
+          {statusFilter === 'active' && (
+            <button
+              className="sc-btn apply"
+              onClick={() => setShowAddModal(true)}
+              title="Добавить сотрудника"
+              aria-label="Добавить сотрудника"
+            >
+              <UserPlus size={14} />
+              {!isMobile && <span>Добавить</span>}
+            </button>
+          )}
+          {overflowItems.length > 0 && <OverflowMenu items={overflowItems} />}
+        </div>
+      )}
+      <div className="sc-filter-search">
+        <SearchInput value={search} onValueChange={handleSearchChange} placeholder="Поиск по ФИО..." />
+      </div>
       {isAdmin && statusFilter !== 'excluded' && (
         <div className="sc-segmented" role="tablist" aria-label="Статус сотрудников">
           <button
@@ -1646,16 +1682,6 @@ export const StaffControlPage: FC = () => {
           <button type="button" className="sc-seg-btn is-active" disabled>
             Без отдела (диагностика)
           </button>
-        </div>
-      )}
-      {isAdmin && (
-        <div className="sc-page-actions">
-          {statusFilter === 'active' && (
-            <button className="sc-btn apply" onClick={() => setShowAddModal(true)}>
-              <UserPlus size={14} /> Добавить
-            </button>
-          )}
-          {overflowItems.length > 0 && <OverflowMenu items={overflowItems} />}
         </div>
       )}
     </div>

@@ -215,10 +215,6 @@
   border-color: var(--text-muted);
 }
 
-.sc-schedule-filter--mobile {
-  width: 100%;
-}
-
 .sc-dept-dropdown {
   position: absolute;
   top: calc(100% + 4px);
@@ -1249,7 +1245,7 @@
 .sc-cards {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
   flex: 1;
   overflow: auto;
   padding-bottom: 20px;
@@ -1259,7 +1255,7 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 14px 16px;
+  padding: 12px 14px;
   cursor: pointer;
   transition: background var(--transition);
 }
@@ -1332,17 +1328,34 @@
 
 @media (max-width: 768px) {
   .sc-page {
-    gap: 12px;
+    gap: 10px;
+  }
+
+  .sc-filters {
+    gap: 8px;
   }
 
   .sc-filters .sc-dept-select {
-    flex: 0 0 auto;
-    width: clamp(110px, 36%, 170px);
+    flex: 1 1 0;
     min-width: 0;
   }
 
+  .sc-schedule-filter {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .sc-page-actions {
+    margin-left: 0;
+    flex: 0 0 auto;
+  }
+
+  .sc-page-actions .sc-btn.apply {
+    padding: 0 10px;
+  }
+
   .sc-filter-search {
-    flex: 1;
+    flex: 1 1 100%;
     min-width: 0;
     max-width: unset;
     margin-right: 0;
@@ -1355,11 +1368,6 @@
   .sc-segmented .sc-seg-btn {
     flex: 1;
     justify-content: center;
-  }
-
-  .sc-schedule-filter {
-    flex: 1 1 100%;
-    min-width: 0;
   }
 
   .sc-bulk-bar {
@@ -1376,10 +1384,6 @@
     min-width: unset;
   }
 
-  .sc-filter-search {
-    max-width: unset;
-  }
-
   .sc-panel {
     width: 100vw;
   }
@@ -1391,23 +1395,30 @@
 
 @media (max-width: 430px) {
   .sc-page {
-    gap: 10px;
+    gap: 8px;
+  }
+
+  .sc-filters {
+    gap: 6px;
   }
 
   .sc-card {
-    padding: 12px 14px;
+    padding: 10px 12px;
   }
 
   .sc-card-name {
     font-size: 13px;
+    margin-bottom: 4px;
   }
 
   .sc-card-row {
     font-size: 12px;
+    padding: 1px 0;
   }
 
-  .sc-filters .sc-dept-select {
-    width: clamp(100px, 34%, 150px);
+  .sc-card-actions {
+    margin-top: 6px;
+    padding-top: 6px;
   }
 }
 
