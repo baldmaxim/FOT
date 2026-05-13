@@ -466,7 +466,12 @@ export async function buildAttendanceEntries(params: {
 
   for (const summary of summaries) {
     const skudMapSchedule = dailySchedulesMap.get(summary.employee_id)?.get(summary.date);
-    const hours = computeSummaryPaidHours(summary, skudMapSchedule?.lunch_minutes || 0);
+    const [yearPart, monthPart, dayPart] = summary.date.split('-').map(Number);
+    const dateObject = new Date(yearPart, monthPart - 1, dayPart);
+    const effectiveLunchMinutes = skudMapSchedule
+      ? getScheduleForDate(skudMapSchedule, dateObject).lunch_minutes
+      : 0;
+    const hours = computeSummaryPaidHours(summary, effectiveLunchMinutes);
     if (!skudMap.has(summary.employee_id)) {
       skudMap.set(summary.employee_id, new Map());
     }
@@ -547,7 +552,10 @@ export async function buildAttendanceEntries(params: {
     const key = `${summary.employee_id}_${summary.date}`;
     const travelSummary = travelSummaries.get(key);
     const schedule = dailySchedulesMap.get(summary.employee_id)?.get(summary.date);
-    const baseHours = computeSummaryPaidHours(summary, schedule?.lunch_minutes || 0);
+    const [yearPart, monthPart, dayPart] = summary.date.split('-').map(Number);
+    const dateObject = new Date(yearPart, monthPart - 1, dayPart);
+    const effectiveLunchMinutes = schedule ? getScheduleForDate(schedule, dateObject).lunch_minutes : 0;
+    const baseHours = computeSummaryPaidHours(summary, effectiveLunchMinutes);
     const travelCreditedMinutes = travelSummary?.creditedMinutes || 0;
     const travelCreditedHours = roundHours(travelCreditedMinutes / 60);
     const hoursWorked = roundHours(baseHours + travelCreditedHours);
@@ -556,8 +564,6 @@ export async function buildAttendanceEntries(params: {
     if (!isPresent) {
       presenceCoversShift = false;
     } else if (schedule) {
-      const [yearPart, monthPart, dayPart] = summary.date.split('-').map(Number);
-      const dateObject = new Date(yearPart, monthPart - 1, dayPart);
       if (!isWorkingDay(schedule, dateObject, calendarMonth)) {
         // Выходной/праздник: смены нет, любое присутствие по определению покрывает «нулевую» смену.
         // Иначе для выхода в выходной span<work_start..work_end даст false и день покрасится underwork.
@@ -571,7 +577,7 @@ export async function buildAttendanceEntries(params: {
           lastExit: summary.last_exit,
           totalMinutes: getSummaryMinutes(summary),
           shiftDurationHours,
-          lunchMinutes: schedule.lunch_minutes || 0,
+          lunchMinutes: effectiveLunchMinutes,
           workDate: summary.date,
           todayStr,
           nowHMS,
@@ -626,8 +632,10 @@ export async function buildAttendanceEntries(params: {
         const travelCreditedHours = roundHours(travelCreditedMinutes / 60);
 
         if (rawSummary) {
-          const plannedHours = getScheduleForDate(schedule, dateObject).work_hours;
-          const baseHours = computeSummaryPaidHours(rawSummary, schedule.lunch_minutes || 0);
+          const dayParams = getScheduleForDate(schedule, dateObject);
+          const plannedHours = dayParams.work_hours;
+          const effectiveLunchMinutes = dayParams.lunch_minutes;
+          const baseHours = computeSummaryPaidHours(rawSummary, effectiveLunchMinutes);
           const hoursWorked = roundHours(Math.min(baseHours + travelCreditedHours, plannedHours));
           const isPresent = baseHours > 0 || rawSummary.first_entry !== null;
 
@@ -636,7 +644,7 @@ export async function buildAttendanceEntries(params: {
           }
           skudMap.get(employee.id)!.set(workDate, { hours: hoursWorked, corrected: false });
 
-          const baseShiftHours = getShiftDurationHours(getScheduleForDate(schedule, dateObject));
+          const baseShiftHours = getShiftDurationHours(dayParams);
           const shiftDurationHours = Math.max(0, baseShiftHours - (isPreHoliday(dateObject, schedule, calendarMonth) ? 1 : 0));
           const presenceCoversShift = isPresent
             ? computePresenceCoversShift({
@@ -644,7 +652,7 @@ export async function buildAttendanceEntries(params: {
               lastExit: rawSummary.last_exit,
               totalMinutes: getSummaryMinutes(rawSummary),
               shiftDurationHours,
-              lunchMinutes: schedule.lunch_minutes || 0,
+              lunchMinutes: effectiveLunchMinutes,
               workDate,
               todayStr,
               nowHMS,

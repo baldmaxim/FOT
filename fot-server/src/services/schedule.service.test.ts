@@ -339,13 +339,71 @@ describe('schedule.service cycle patterns', () => {
   it('getScheduleForDate: возвращает work_start/work_end из слота цикла', () => {
     const s = buildCycle22();
     const day = getScheduleForDate(s, new Date(2026, 4, 4));
-    expect(day).toEqual({ work_start: '08:00:00', work_end: '20:00:00', work_hours: 11 });
+    expect(day).toEqual({ work_start: '08:00:00', work_end: '20:00:00', work_hours: 11, lunch_minutes: 60 });
   });
 
   it('getScheduleForDate: для нерабочего дня цикла work_hours=0, время — fallback на schedule', () => {
     const s = buildCycle22();
     const day = getScheduleForDate(s, new Date(2026, 4, 6));
     expect(day.work_hours).toBe(0);
+  });
+
+  it('getScheduleForDate: cycle_days[i].lunch_minutes переопределяет глобальный schedule.lunch_minutes', () => {
+    const s = buildCycle22({
+      lunch_minutes: 60,
+      cycle_days: [
+        { work_hours: 11, work_start: '08:00:00', work_end: '20:00:00', lunch_minutes: 0 },
+        { work_hours: 11, work_start: '08:00:00', work_end: '20:00:00', lunch_minutes: 60 },
+        { work_hours: 0 },
+        { work_hours: 0 },
+      ],
+    });
+    expect(getScheduleForDate(s, new Date(2026, 4, 4)).lunch_minutes).toBe(0);
+    expect(getScheduleForDate(s, new Date(2026, 4, 5)).lunch_minutes).toBe(60);
+  });
+
+  it('getScheduleForDate: cycle_days без lunch_minutes — fallback на schedule.lunch_minutes', () => {
+    const s = buildCycle22({
+      lunch_minutes: 45,
+      cycle_days: [
+        { work_hours: 11, work_start: '08:00:00', work_end: '20:00:00' },
+        { work_hours: 0 },
+        { work_hours: 0 },
+        { work_hours: 0 },
+      ],
+    });
+    expect(getScheduleForDate(s, new Date(2026, 4, 4)).lunch_minutes).toBe(45);
+  });
+
+  it('getScheduleForDate: day_overrides[dow].lunch_minutes переопределяет schedule.lunch_minutes', () => {
+    const base: IResolvedSchedule = {
+      schedule_id: 'sched-5plus2',
+      schedule_type: 'office',
+      work_start: '09:00:00',
+      work_end: '18:00:00',
+      work_hours: 8,
+      work_days: [1, 2, 3, 4, 5, 6],
+      office_days: null,
+      late_threshold_minutes: 0,
+      day_overrides: {
+        '6': { work_start: '09:00:00', work_end: '13:00:00', work_hours: 4, lunch_minutes: 0 },
+      },
+      lunch_minutes: 60,
+      respects_holidays: true,
+      pattern_type: 'custom',
+      expected_saturdays_per_month: 0,
+      full_day_threshold_minutes: null,
+      weekend_full_day_threshold_minutes: null,
+      cycle_length: null,
+      cycle_days: null,
+      anchor_date: null,
+      assignment_anchor_date: null,
+      source: 'employee',
+    };
+    // Saturday 2026-05-09 (ISO dow=6) — override с lunch_minutes=0
+    expect(getScheduleForDate(base, new Date(2026, 4, 9)).lunch_minutes).toBe(0);
+    // Monday 2026-05-04 — fallback на schedule.lunch_minutes=60
+    expect(getScheduleForDate(base, new Date(2026, 4, 4)).lunch_minutes).toBe(60);
   });
 
   it('getDayNormHours: цикл 2/2 — 11ч в рабочий день, 0 в выходной', () => {

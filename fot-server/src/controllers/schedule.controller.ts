@@ -17,6 +17,7 @@ const dayOverrideSchema = z.object({
   work_start: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
   work_end: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
   work_hours: z.number().min(0).max(24).optional(),
+  lunch_minutes: z.number().int().min(0).max(240).optional(),
 });
 
 const cycleDaySchema = z.object({
@@ -160,21 +161,24 @@ const normalizeTime = (t: string): string => (t.length === 5 ? t + ':00' : t);
 
 /**
  * Нормализация day_overrides: time → HH:MM:SS, work_hours пересчитывается бэком как нетто
- * (shift − lunch_minutes/60) — что прислал клиент в work_hours, игнорируется.
+ * (shift − effectiveLunch/60). Если per-day lunch_minutes задан — используется он;
+ * иначе fallback на глобальный schedule.lunch_minutes.
  */
 const normalizeDayOverrides = (
-  overrides: Record<string, { work_start: string; work_end: string; work_hours?: number }> | null | undefined,
+  overrides: Record<string, { work_start: string; work_end: string; work_hours?: number; lunch_minutes?: number }> | null | undefined,
   lunchMinutes: number,
-): Record<string, { work_start: string; work_end: string; work_hours: number }> | null => {
+): Record<string, { work_start: string; work_end: string; work_hours: number; lunch_minutes?: number }> | null => {
   if (!overrides) return null;
-  const result: Record<string, { work_start: string; work_end: string; work_hours: number }> = {};
+  const result: Record<string, { work_start: string; work_end: string; work_hours: number; lunch_minutes?: number }> = {};
   for (const [key, val] of Object.entries(overrides)) {
     const start = normalizeTime(val.work_start);
     const end = normalizeTime(val.work_end);
+    const effectiveLunch = val.lunch_minutes ?? lunchMinutes;
     result[key] = {
       work_start: start,
       work_end: end,
-      work_hours: computeNetWorkHours(start, end, lunchMinutes),
+      work_hours: computeNetWorkHours(start, end, effectiveLunch),
+      ...(val.lunch_minutes !== undefined ? { lunch_minutes: val.lunch_minutes } : {}),
     };
   }
   return result;

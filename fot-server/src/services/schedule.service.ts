@@ -16,6 +16,7 @@ export interface IDayScheduleParams {
   work_start: string;
   work_end: string;
   work_hours: number;
+  lunch_minutes: number;
 }
 
 const DEFAULT_SCHEDULE: IResolvedSchedule = {
@@ -143,6 +144,7 @@ export const getScheduleForDate = (schedule: IResolvedSchedule, date: Date): IDa
       work_start: slot.work_start ?? schedule.work_start,
       work_end: slot.work_end ?? schedule.work_end,
       work_hours: slot.work_hours,
+      lunch_minutes: slot.lunch_minutes ?? schedule.lunch_minutes,
     };
   }
   if (schedule.day_overrides) {
@@ -153,6 +155,7 @@ export const getScheduleForDate = (schedule: IResolvedSchedule, date: Date): IDa
         work_start: override.work_start,
         work_end: override.work_end,
         work_hours: override.work_hours,
+        lunch_minutes: override.lunch_minutes ?? schedule.lunch_minutes,
       };
     }
   }
@@ -160,6 +163,7 @@ export const getScheduleForDate = (schedule: IResolvedSchedule, date: Date): IDa
     work_start: schedule.work_start,
     work_end: schedule.work_end,
     work_hours: schedule.work_hours,
+    lunch_minutes: schedule.lunch_minutes,
   };
 };
 
@@ -183,7 +187,7 @@ export const getShiftDurationHours = (daySchedule: IDayScheduleParams): number =
 
 /** Длительность смены по строкам времени (для нужд контроллера/миграции). */
 export const computeShiftDurationHours = (workStart: string, workEnd: string): number => {
-  return getShiftDurationHours({ work_start: workStart, work_end: workEnd, work_hours: 0 });
+  return getShiftDurationHours({ work_start: workStart, work_end: workEnd, work_hours: 0, lunch_minutes: 0 });
 };
 
 /**

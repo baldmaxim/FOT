@@ -5,6 +5,7 @@ export interface IDayOverride {
   work_start: string;
   work_end: string;
   work_hours: number;
+  lunch_minutes?: number;
 }
 
 /**

@@ -62,10 +62,11 @@ vi.mock('./skud-travel.service.js', () => ({
 }));
 
 vi.mock('./schedule.service.js', () => ({
-  getScheduleForDate: vi.fn((schedule?: { work_hours?: number }) => ({
+  getScheduleForDate: vi.fn((schedule?: { work_hours?: number; lunch_minutes?: number }) => ({
     work_hours: schedule?.work_hours ?? mockedState.scheduleWorkHours,
     work_start: '09:00',
     work_end: '18:00',
+    lunch_minutes: schedule?.lunch_minutes ?? 0,
   })),
   getShiftDurationHours: vi.fn(() => mockedState.scheduleShiftHours),
   isPreHoliday: vi.fn(() => false),
@@ -827,6 +828,39 @@ describe('attendance.service', () => {
       expect(result.entries[0]).toMatchObject({
         status: 'remote',
         presence_covers_shift: true,
+      });
+    });
+
+    it('per-day lunch_minutes=0 в графике даёт hours_worked без вычета обеда из time-in-office', async () => {
+      // Кейс из жизни: суббота, СКУД 09:25→12:25 = 3ч, day_overrides[6].lunch_minutes=0 →
+      // hours_worked = 3.0, без вычета обеда. До фикса вычитался schedule.lunch_minutes=60.
+      setSummary({
+        employee_id: 1,
+        date: '2026-02-21',
+        first_entry: '09:25:00',
+        last_exit: '12:25:00',
+        total_hours: 3,
+        total_minutes: 180,
+      });
+      // schedule имеет lunch_minutes=0 — мок getScheduleForDate возвращает его, как если бы
+      // day_overrides[6] или cycle_days[i] установил lunch_minutes=0 для этой даты.
+      mockedState.isWorkingDay = false;
+      const schedule = { work_hours: 8, lunch_minutes: 0 } as unknown as IResolvedSchedule;
+      const result = await buildAttendanceEntries({
+        employees: [{ id: 1, full_name: 'A' }],
+        startDate: '2026-02-21',
+        endDate: '2026-02-21',
+        dailySchedulesMap: new Map([[1, new Map([['2026-02-21', schedule]])]]),
+        calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 19 } as unknown as IProductionCalendarMonth,
+        todayStr: '2026-05-12',
+      });
+
+      expect(result.entries[0]).toMatchObject({
+        employee_id: 1,
+        work_date: '2026-02-21',
+        status: 'work',
+        hours_worked: 3,
+        base_hours_worked: 3,
       });
     });
 
