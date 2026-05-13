@@ -11,6 +11,9 @@ export interface IFlatDepartmentOption extends IDepartmentOption {
   level: number;
   hasChildren: boolean;
   kind: OrgDepartmentKind;
+  // true — узел в scope пользователя (selectable в дропдауне).
+  // false — узел оставлен только как контейнер-предок (рисуется серым заголовком).
+  inScope: boolean;
 }
 
 const departmentNameCollator = new Intl.Collator('ru', {
@@ -103,6 +106,7 @@ export const flattenDepartmentTree = (nodes: OrgDepartmentNode[], level = 0): IF
       level,
       hasChildren: (node.children?.length ?? 0) > 0,
       kind: node.kind,
+      inScope: node.in_scope ?? true,
     });
     if (node.children?.length) {
       result.push(...flattenDepartmentTree(node.children, level + 1));

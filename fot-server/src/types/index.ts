@@ -331,6 +331,10 @@ export interface OrgDepartment {
 
 export interface OrgDepartmentNode extends OrgDepartment {
   children: OrgDepartmentNode[];
+  // true — узел сам по себе входит в scope пользователя.
+  // false — узел оставлен только как контейнер-предок ассигнованного отдела.
+  // Отсутствует — клиент должен считать как `true` (совместимость).
+  in_scope?: boolean;
 }
 
 export interface OrgStructureTree {

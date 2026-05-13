@@ -944,15 +944,6 @@ export const StaffControlPage: FC = () => {
     return map;
   }, [employees, activeEmployeeScheduleAssignments, baseScheduleViews, defaultSchedule]);
 
-  // Если админ снял у руководителя один из отделов, profile:access_changed обновляет
-  // managedDepartmentIds — но в URL ещё может висеть ?dept= снятого отдела. Без сброса
-  // фронт продолжит слать его на бэк (теперь это 403). Чистим тихо.
-  useEffect(() => {
-    if (!restrictToManaged || !deptId) return;
-    if (managedDepartmentIds.includes(deptId)) return;
-    setDeptId('');
-  }, [restrictToManaged, deptId, managedDepartmentIds]);
-
   useEffect(() => {
     const p = new URLSearchParams();
     if (deptId) p.set('dept', deptId);
@@ -1063,12 +1054,24 @@ export const StaffControlPage: FC = () => {
 
   /* ─── memoized computations ─── */
 
-  const allDepts = useMemo(() => {
-    const flat = getTreeFlatDepartments(departments);
-    if (!restrictToManaged) return flat;
-    const allow = new Set(managedDepartmentIds);
-    return flat.filter(d => allow.has(d.id));
-  }, [departments, restrictToManaged, managedDepartmentIds]);
+  // Бэкенд (`filterTreeByScope` в structure.controller.ts) уже отдаёт дерево,
+  // обрезанное под scope пользователя, с пометкой `in_scope` на каждом узле.
+  // Дополнительная фронт-фильтрация через `profile.managed_department_ids`
+  // создавала рассинхрон: profile грузится один раз при логине, бэк отдаёт
+  // свежий scope на каждый запрос — после изменения назначений руководителю
+  // дропдаун показывал устаревший список (1 отдел вместо 3).
+  const allDepts = useMemo(() => getTreeFlatDepartments(departments), [departments]);
+
+  // Если админ снял у руководителя один из отделов, бэкенд перестаёт включать его
+  // в `allDepts` (в дереве флаг `in_scope=false` или отдел вырезан). В URL ещё может
+  // висеть ?dept= снятого отдела — без сброса фронт продолжит слать его на бэк
+  // (теперь это 403). Чистим тихо. Источник истины — `allDepts`, а не stale-profile.
+  useEffect(() => {
+    if (!restrictToManaged || !deptId) return;
+    if (allDepts.length === 0) return; // дерево ещё не загружено
+    if (allDepts.some(d => d.id === deptId && d.inScope)) return;
+    setDeptId('');
+  }, [restrictToManaged, deptId, allDepts]);
   const brigadeOptions = useMemo<IBrigadeOption[]>(
     () => allDepts
       .filter(department => department.kind === 'brigade' && (countsByDepartment[department.id] || 0) > 0)

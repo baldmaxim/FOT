@@ -27,6 +27,9 @@ export interface OrgDepartment {
 // Узел дерева отделов (рекурсивный)
 export interface OrgDepartmentNode extends OrgDepartment {
   children: OrgDepartmentNode[];
+  // true — узел сам по себе в scope пользователя; false — только контейнер-предок.
+  // Отсутствует — считаем как `true` (бэк до раскатки фикса дропдауна отделов).
+  in_scope?: boolean;
 }
 
 // Полная структура для дерева

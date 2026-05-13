@@ -197,26 +197,36 @@ function assertInScope(scope: Set<string> | 'all', departmentId: string | null):
  * ИЛИ если в её поддереве есть нода из scope (чтобы сохранить иерархический
  * путь от корня к назначенному отделу).
  *
+ * Дополнительно проставляем флаг `in_scope`:
+ *  - true — нода сама в scope (пользователь может фильтроваться по ней);
+ *  - false — нода оставлена только как контейнер-предок назначенного отдела.
+ * Фронтенд по этому флагу понимает, какие опции в дропдауне делать
+ * кликабельными (true) или серыми заголовками (false).
+ *
  * Корневой синтетический «Объект» (parent_id=null) всегда сохраняется
  * как контейнер, но его дети-компании фильтруются.
  *
- * scope='all' — возвращаем дерево как есть.
+ * scope='all' — отдаём дерево как есть и помечаем все узлы in_scope=true.
  */
 function filterTreeByScope(tree: OrgDepartmentNode[], scope: Set<string> | 'all'): OrgDepartmentNode[] {
-  if (scope === 'all') return tree;
+  const markAllInScope = (nodes: OrgDepartmentNode[]): OrgDepartmentNode[] =>
+    nodes.map(node => ({ ...node, in_scope: true, children: markAllInScope(node.children) }));
+
+  if (scope === 'all') return markAllInScope(tree);
 
   const filterRecursive = (nodes: OrgDepartmentNode[]): OrgDepartmentNode[] =>
     nodes.reduce<OrgDepartmentNode[]>((acc, node) => {
       const children = filterRecursive(node.children);
-      if (scope.has(node.id) || children.length > 0) {
-        acc.push({ ...node, children });
+      const self = scope.has(node.id);
+      if (self || children.length > 0) {
+        acc.push({ ...node, in_scope: self, children });
       }
       return acc;
     }, []);
 
   return tree.map(node => {
     if (node.parent_id === null) {
-      return { ...node, children: filterRecursive(node.children) };
+      return { ...node, in_scope: false, children: filterRecursive(node.children) };
     }
     return node;
   });

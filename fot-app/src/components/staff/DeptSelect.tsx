@@ -80,12 +80,20 @@ export const DeptSelect: FC<IDeptSelectProps> = memo(({ departments, value, onCh
             <div className={`sc-dept-option ${!value ? 'active' : ''}`} onClick={() => pick('')}>
               Все отделы
             </div>
-            {filtered.map(d => (
-              d.hasChildren ? (
-                <div key={d.id} className="sc-dept-option sc-dept-option--header">
-                  {d.name}
-                </div>
-              ) : (
+            {filtered.map(d => {
+              // Серый некликабельный заголовок — только для контейнеров-предков
+              // ассигнованного отдела (in_scope=false). Если отдел сам в scope
+              // пользователя, но при этом имеет дочерние узлы — он остаётся
+              // кликабельным (раньше такие отделы пропадали из выбора).
+              const isHeaderOnly = d.hasChildren && !d.inScope;
+              if (isHeaderOnly) {
+                return (
+                  <div key={d.id} className="sc-dept-option sc-dept-option--header">
+                    {d.name}
+                  </div>
+                );
+              }
+              return (
                 <div
                   key={d.id}
                   className={`sc-dept-option ${d.id === value ? 'active' : ''}`}
@@ -94,8 +102,8 @@ export const DeptSelect: FC<IDeptSelectProps> = memo(({ departments, value, onCh
                 >
                   {d.name}
                 </div>
-              )
-            ))}
+              );
+            })}
             {showLoadingState && <div className="sc-dept-empty">Загрузка отделов...</div>}
             {showErrorState && (
               <div className="sc-dept-empty">
