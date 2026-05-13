@@ -5,16 +5,22 @@ import { query } from '../config/postgres.js';
 
 // ─── Кэш дерева отделов ───
 
-const DEPT_TREE_CACHE_TTL = 5 * 60_000;
-let deptTreeCache: { data: { id: string; parent_id: string | null }[]; expiresAt: number } | null = null;
+export interface IDeptTreeRow {
+  id: string;
+  parent_id: string | null;
+  name: string | null;
+}
 
-/** Кэшированная загрузка всех отделов (id, parent_id). TTL 5 мин. */
-export async function getAllDepartmentsTree(): Promise<{ id: string; parent_id: string | null }[]> {
+const DEPT_TREE_CACHE_TTL = 5 * 60_000;
+let deptTreeCache: { data: IDeptTreeRow[]; expiresAt: number } | null = null;
+
+/** Кэшированная загрузка всех отделов (id, parent_id, name). TTL 5 мин. */
+export async function getAllDepartmentsTree(): Promise<IDeptTreeRow[]> {
   const now = Date.now();
   if (deptTreeCache && deptTreeCache.expiresAt > now) return deptTreeCache.data;
 
-  const data = await query<{ id: string; parent_id: string | null }>(
-    'SELECT id, parent_id FROM org_departments',
+  const data = await query<IDeptTreeRow>(
+    'SELECT id, parent_id, name FROM org_departments',
   );
   deptTreeCache = { data: data || [], expiresAt: now + DEPT_TREE_CACHE_TTL };
   return deptTreeCache.data;
@@ -23,6 +29,64 @@ export async function getAllDepartmentsTree(): Promise<{ id: string; parent_id: 
 /** Инвалидация кэша отделов (вызывать после sync/CRUD) */
 export function invalidateDeptTreeCache(): void {
   deptTreeCache = null;
+  companyResolveCache = null;
+}
+
+// ─── Резолв «компании» (= прямого ребёнка корневого узла «Объект») ───
+
+const COMPANY_RESOLVE_CACHE_TTL = 5 * 60_000;
+const OBJECT_ROOT_NAME = 'Объект';
+
+interface ICompanyResolveIndex {
+  rootId: string | null;
+  companyByDeptId: Map<string, string>;
+  companyMeta: Map<string, { id: string; name: string }>;
+}
+
+let companyResolveCache: { data: ICompanyResolveIndex; expiresAt: number } | null = null;
+
+/**
+ * Резолвит для каждого отдела ID его «компании» = прямого ребёнка корневого
+ * узла «Объект» (parent_id IS NULL AND name='Объект', см. sigur-sync-structure.service.ts).
+ * Кэш 5 мин, инвалидируется через invalidateDeptTreeCache().
+ */
+export async function getCompanyResolveIndex(): Promise<ICompanyResolveIndex> {
+  const now = Date.now();
+  if (companyResolveCache && companyResolveCache.expiresAt > now) {
+    return companyResolveCache.data;
+  }
+
+  const allDepts = await getAllDepartmentsTree();
+  const root = allDepts.find(d => d.parent_id === null && d.name === OBJECT_ROOT_NAME) || null;
+  const companyByDeptId = new Map<string, string>();
+  const companyMeta = new Map<string, { id: string; name: string }>();
+
+  if (root) {
+    const childrenByParent = buildChildrenIndex(allDepts);
+    const directChildren = childrenByParent.get(root.id) || [];
+    const nameById = new Map(allDepts.map(d => [d.id, d.name || '']));
+
+    for (const companyId of directChildren) {
+      companyMeta.set(companyId, { id: companyId, name: nameById.get(companyId) || '' });
+      // BFS вниз: всех потомков этой компании привязываем к ней.
+      const stack: string[] = [companyId];
+      while (stack.length > 0) {
+        const current = stack.pop()!;
+        if (companyByDeptId.has(current)) continue;
+        companyByDeptId.set(current, companyId);
+        const kids = childrenByParent.get(current);
+        if (kids) stack.push(...kids);
+      }
+    }
+  }
+
+  const data: ICompanyResolveIndex = {
+    rootId: root?.id ?? null,
+    companyByDeptId,
+    companyMeta,
+  };
+  companyResolveCache = { data, expiresAt: now + COMPANY_RESOLVE_CACHE_TTL };
+  return data;
 }
 
 // ─── Сбор ID отделов (включая дочерние) ───

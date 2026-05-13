@@ -4,6 +4,7 @@ import type {
   SkudEventFailure,
   SkudDailySummary,
   IEmployeePresence,
+  IPresenceByObjectResponse,
   IAccessPointSetting,
   IDashboardStats,
   AccessPointOption,
@@ -269,6 +270,14 @@ export const skudService = {
     const params = departmentId ? `?department_id=${departmentId}` : '';
     const response = await apiClient.get<ApiResponse<IEmployeePresence[]>>(`/skud/presence${params}`);
     return response.data || [];
+  },
+
+  async getPresenceByObject(signal?: AbortSignal): Promise<IPresenceByObjectResponse> {
+    const response = await apiClient.get<ApiResponse<IPresenceByObjectResponse>>(
+      '/skud/presence-by-object',
+      { signal },
+    );
+    return response.data;
   },
 
   async syncEmployee(

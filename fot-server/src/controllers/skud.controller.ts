@@ -8,6 +8,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 
 import { getDashboardStats } from '../services/skud-dashboard.service.js';
 import { getPresence } from '../services/skud-presence.service.js';
+import { getPresenceByObject } from '../services/skud-presence-by-object.service.js';
 import { getDisciplineViolations } from '../services/skud-discipline.service.js';
 import {
   buildDisciplineWorkbook,
@@ -1073,6 +1074,20 @@ const skudReadController = {
     } catch (error) {
       console.error('Get presence error:', error);
       res.status(500).json({ success: false, error: 'Ошибка получения статусов' });
+    }
+  },
+
+  /**
+   * GET /api/skud/presence-by-object
+   * Агрегированное присутствие по физическим объектам (travel_objects) и компаниям.
+   */
+  async getPresenceByObject(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const data = await getPresenceByObject();
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Get presence by object error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка получения присутствия по объектам' });
     }
   },
 };

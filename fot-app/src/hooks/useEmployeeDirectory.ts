@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { employeeService, type EmployeeCounts, type PaginatedMeta, type PaginatedParams, type PaginatedResponse } from '../services/employeeService';
 import { skudService } from '../services/skudService';
-import type { IEmployeePresence } from '../types';
+import type { IEmployeePresence, IPresenceByObjectResponse } from '../types';
 
 export const EMPTY_EMPLOYEE_COUNTS: EmployeeCounts = {
   byDepartment: {},
@@ -69,6 +69,23 @@ export const usePresenceQuery = (
     staleTime: 30_000,
   });
 };
+
+export const presenceByObjectQueryKey = () => ['presence-by-object'] as const;
+
+interface IUsePresenceByObjectQueryOptions {
+  enabled?: boolean;
+  refetchInterval?: number | false;
+}
+
+export const usePresenceByObjectQuery = (options?: IUsePresenceByObjectQueryOptions) =>
+  useQuery<IPresenceByObjectResponse>({
+    queryKey: presenceByObjectQueryKey(),
+    queryFn: ({ signal }) => skudService.getPresenceByObject(signal),
+    enabled: options?.enabled ?? true,
+    refetchInterval: options?.refetchInterval ?? 30_000,
+    refetchIntervalInBackground: false,
+    staleTime: 25_000,
+  });
 
 export const EMPTY_PAGINATED_RESPONSE: PaginatedResponse = {
   data: [],

@@ -2,6 +2,7 @@ import { invalidateCaches } from '../middleware/cacheResponse.js';
 import { getIo } from '../socket/io-instance.js';
 import { invalidateDashboardCache } from './skud-dashboard.service.js';
 import { invalidatePresenceCache } from './skud-presence.service.js';
+import { invalidatePresenceByObjectCache } from './skud-presence-by-object.service.js';
 
 export type SkudRealtimeSource = 'polling' | 'manual_sync' | 'employee_sync' | 'daily_sync' | 'timesheet_refresh';
 
@@ -17,6 +18,7 @@ export interface ISkudRealtimeNotification {
 
 const SKUD_REALTIME_CACHE_NAMES = [
   'skud-presence',
+  'skud-presence-by-object',
   'skud-dashboard',
   'timesheet',
   'timesheet:today',
@@ -27,6 +29,7 @@ const SKUD_REALTIME_CACHE_NAMES = [
 
 export function invalidateSkudRealtimeCaches(): void {
   invalidatePresenceCache();
+  invalidatePresenceByObjectCache();
   invalidateDashboardCache();
   invalidateCaches(...SKUD_REALTIME_CACHE_NAMES);
 }

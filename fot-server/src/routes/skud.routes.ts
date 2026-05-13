@@ -18,6 +18,12 @@ const presenceCache = registerCache(
   5_000,
 );
 
+const presenceByObjectCache = registerCache(
+  'skud-presence-by-object',
+  (req) => `presence-by-object:${req.user.id}`,
+  5_000,
+);
+
 const dashboardCache = registerCache(
   'skud-dashboard',
   (req) => {
@@ -306,6 +312,16 @@ router.get(
   serverTiming('skud_presence'),
   presenceCache,
   skudController.getPresence
+);
+
+// GET /api/skud/presence-by-object - агрегация присутствия по объектам и компаниям
+router.get(
+  '/presence-by-object',
+  requirePageAccess('/skud-presence', 'view'),
+  noStore,
+  serverTiming('skud_presence_by_object'),
+  presenceByObjectCache,
+  skudController.getPresenceByObject
 );
 
 // POST /api/skud/import - импорт (admin+, требуется 2FA)

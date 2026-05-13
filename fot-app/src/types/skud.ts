@@ -44,6 +44,36 @@ export interface IEmployeePresence {
   punctuality_percent: number | null;
 }
 
+export interface IPresenceObjectEmployee {
+  employee_id: number;
+  full_name: string;
+  position_name: string | null;
+  first_entry: string | null;
+  last_access_point: string | null;
+  since: string | null;
+}
+
+export interface IPresenceObjectCompany {
+  company_id: string;
+  company_name: string;
+  online_count: number;
+  employees: IPresenceObjectEmployee[];
+}
+
+export interface IPresenceObjectBucket {
+  object_id: string | null;
+  object_name: string;
+  has_map: boolean;
+  online_count: number;
+  companies: IPresenceObjectCompany[];
+}
+
+export interface IPresenceByObjectResponse {
+  generated_at: string;
+  total_online: number;
+  buckets: IPresenceObjectBucket[];
+}
+
 export interface SkudDailySummary {
   id: number;
   employee_id: number;
