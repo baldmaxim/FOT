@@ -5,6 +5,7 @@ import { useChatContext } from '../../contexts/ChatContext';
 import { useToast } from '../../contexts/ToastContext';
 import { chatService, type IChatContactRequest, type IChatUser } from '../../services/chatService';
 import { usePushNotifications } from '../../hooks/usePushNotifications';
+import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import styles from './ChatSidePanel.module.css';
 
 const CheckIcon: FC<{ double?: boolean; className?: string }> = ({ double, className }) => (
@@ -51,6 +52,7 @@ export const ChatSidePanel: FC = () => {
 
   const { isSupported: pushSupported, permission, isSubscribed, subscribe } = usePushNotifications();
   const showPushBanner = pushSupported && permission !== 'denied' && !isSubscribed;
+  const overlayHandlers = useOverlayDismiss(closeChat);
 
   const [activeTab, setActiveTab] = useState<PanelTab>('chats');
   const [requestBox, setRequestBox] = useState<RequestBox>('inbox');
@@ -289,7 +291,7 @@ export const ChatSidePanel: FC = () => {
 
   return (
     <>
-      {isOpen && <div className={styles.overlay} onClick={closeChat} />}
+      {isOpen && <div className={styles.overlay} {...overlayHandlers} />}
       <div
         ref={panelRef}
         className={`${styles.panel} ${isOpen ? styles.open : ''}`}

@@ -5,6 +5,7 @@ import type { TimesheetEntry, TimesheetEmployee, SkudEvent, SkudEventFailure, IP
 import type { IResolvedSchedule } from '../../types/schedule';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
+import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { skudService } from '../../services/skudService';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 import {
@@ -110,6 +111,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
   const [skudEvents, setSkudEvents] = useState<Map<string, IDayEvents>>(new Map());
   const [loadingSkud, setLoadingSkud] = useState(false);
   const [internalPoints, setInternalPoints] = useState<Set<string>>(new Set());
+  const overlayHandlers = useOverlayDismiss(onClose);
 
   useEffect(() => {
     skudService.getAccessPointSettings().then(settings => {
@@ -219,7 +221,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
     <>
       <div
         className={`ts-backdrop ${open ? 'ts-backdrop--open' : ''}`}
-        onClick={onClose}
+        {...overlayHandlers}
       />
       <div className={`ts-side-panel ${open ? 'ts-side-panel--open' : ''}`}>
         <div className="ts-panel-header">

@@ -8,6 +8,7 @@ import {
   type PaymentMethod,
 } from '../services/patentReceiptService';
 import { settingsService, type IOpenRouterModelInfo } from '../services/settingsService';
+import { useOverlayDismiss } from '../hooks/useOverlayDismiss';
 import styles from './PatentReceiptEditModal.module.css';
 
 interface IProps {
@@ -108,6 +109,7 @@ const parseAmount = (value: string): string => value.replace(/\s+/g, '').replace
 
 export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved }) => {
   const queryClient = useQueryClient();
+  const overlayHandlers = useOverlayDismiss(onClose);
   const { data, isLoading } = useQuery({
     queryKey: ['patent-receipt', receiptId],
     queryFn: () => patentReceiptService.get(receiptId),
@@ -164,8 +166,8 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
   const readOnly = !editing;
 
   return (
-    <div className={styles.overlay} onClick={onClose}>
-      <div className={styles.modal} onClick={e => e.stopPropagation()}>
+    <div className={styles.overlay} {...overlayHandlers}>
+      <div className={styles.modal}>
         <div className={styles.header}>
           <h3>
             Чек НДФЛ за патент

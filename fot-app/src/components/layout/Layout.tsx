@@ -8,6 +8,7 @@ import { HeaderAddonProvider } from './HeaderAddonProvider';
 import { useMobileMenu } from '../../hooks/useMobileMenu';
 import { useSidebarCollapse } from '../../hooks/useSidebarCollapse';
 import { useSwipe } from '../../hooks/useSwipe';
+import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { structureApi } from '../../api/structure';
 import { STRUCTURE_QUERY_KEY } from '../../hooks/useStructure';
 import { sortDepartmentTree } from '../../utils/departmentUtils';
@@ -33,6 +34,7 @@ export const Layout: FC<ILayoutProps> = ({
   const { isOpen, open, close } = useMobileMenu();
   const { isCollapsed, toggle: toggleCollapse } = useSidebarCollapse();
   const swipeHandlers = useSwipe({ isOpen, onOpen: open, onClose: close });
+  const overlayHandlers = useOverlayDismiss(close);
   const queryClient = useQueryClient();
   const { addon: dynamicAddon, setAddon } = useHeaderAddonState();
 
@@ -54,7 +56,7 @@ export const Layout: FC<ILayoutProps> = ({
 
   return (
     <div className={`${styles.app} ${isCollapsed ? styles.appCollapsed : ''}`} {...swipeHandlers}>
-      {isOpen && <div className={styles.overlay} onClick={close} />}
+      {isOpen && <div className={styles.overlay} {...overlayHandlers} />}
       <Sidebar
         theme={theme}
         isOpen={isOpen}

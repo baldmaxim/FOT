@@ -5,6 +5,7 @@ import styles from './EmployeeLayout.module.css';
 import { useMobileMenu } from '../../hooks/useMobileMenu';
 import { useSidebarCollapse } from '../../hooks/useSidebarCollapse';
 import { useSwipe } from '../../hooks/useSwipe';
+import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useTheme } from '../../hooks/useTheme';
 import { useMyPresence } from '../../hooks/useMyPresence';
 import dropdownStyles from '../ui/NotificationDropdown.module.css';
@@ -24,6 +25,7 @@ export const EmployeeLayout: FC<IEmployeeLayoutProps> = ({ children, title }) =>
   const { theme, toggleTheme } = useTheme();
   const { status: presenceStatus } = useMyPresence();
   const swipeHandlers = useSwipe({ isOpen, onOpen: open, onClose: close });
+  const overlayHandlers = useOverlayDismiss(close);
   const [bellOpen, setBellOpen] = useState(false);
   const [notificationsActivated, setNotificationsActivated] = useState(false);
   const { unreadCount, setUnreadCount } = useUnreadNotificationsCount();
@@ -39,7 +41,7 @@ export const EmployeeLayout: FC<IEmployeeLayoutProps> = ({ children, title }) =>
 
   return (
     <div className={`${styles.app} ${isCollapsed ? styles.appCollapsed : ''}`} {...swipeHandlers}>
-      {isOpen && <div className={styles.overlay} onClick={close} />}
+      {isOpen && <div className={styles.overlay} {...overlayHandlers} />}
       <EmployeeSidebar
         isOpen={isOpen}
         onClose={close}

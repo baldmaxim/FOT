@@ -1,4 +1,5 @@
 import { type FC } from 'react';
+import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 
 type ViolationType = 'late' | 'underwork' | 'early' | 'absence';
 
@@ -42,9 +43,10 @@ interface IDisciplineDetailPanelProps {
 }
 
 export const DisciplineDetailPanel: FC<IDisciplineDetailPanelProps> = ({ employee, onClose }) => {
+  const overlayHandlers = useOverlayDismiss(onClose);
   return (
     <>
-      {employee && <div className="da-backdrop" onClick={onClose} />}
+      {employee && <div className="da-backdrop" {...overlayHandlers} />}
       <div className={`da-panel ${employee ? 'open' : ''}`}>
         {employee && (
           <>

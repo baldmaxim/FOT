@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { FC } from 'react';
 import type { INotification } from '../../services/notificationService';
+import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import styles from './NotificationDropdown.module.css';
 
 interface INotificationDropdownProps {
@@ -92,6 +93,7 @@ export const NotificationDropdown: FC<INotificationDropdownProps> = ({
   onNavigate,
 }) => {
   const ref = useRef<HTMLDivElement>(null);
+  const overlayHandlers = useOverlayDismiss(onClose);
 
   useEffect(() => {
     onLoad();
@@ -105,7 +107,7 @@ export const NotificationDropdown: FC<INotificationDropdownProps> = ({
 
   return (
     <>
-      <div className={styles.overlay} onClick={onClose} />
+      <div className={styles.overlay} {...overlayHandlers} />
       <div className={styles.dropdown} ref={ref}>
         <div className={styles.header}>
           <span className={styles.headerTitle}>Уведомления</span>
