@@ -29,7 +29,6 @@ const getByYear = async (req: AuthenticatedRequest, res: Response): Promise<void
         ORDER BY month ASC`,
       [year],
     );
-    res.setHeader('Cache-Control', 'private, max-age=3600');
     res.json({ success: true, data });
   } catch (err) {
     console.error('production-calendar.getByYear error:', err);
@@ -55,27 +54,21 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     const updatedBy = req.user.employee_id ?? null;
     const nowIso = new Date().toISOString();
-    const holidays = parsed.data.holidays ?? null;
-    const mandatoryHolidays = parsed.data.mandatory_holidays ?? null;
-    const preHolidays = parsed.data.pre_holidays ?? null;
 
     const data = await queryOne(
       `INSERT INTO production_calendar
          (year, month, norm_days, norm_hours, is_custom, updated_by, updated_at,
           holidays, mandatory_holidays, pre_holidays)
-       VALUES ($1, $2, $3, $4, true, $5, $6,
-               COALESCE($7::date[], '{}'::date[]),
-               COALESCE($8::date[], '{}'::date[]),
-               COALESCE($9::date[], '{}'::date[]))
+       VALUES ($1, $2, $3, $4, true, $5, $6, $7::date[], $8::date[], $9::date[])
        ON CONFLICT (year, month) DO UPDATE SET
          norm_days = EXCLUDED.norm_days,
          norm_hours = EXCLUDED.norm_hours,
          is_custom = EXCLUDED.is_custom,
          updated_by = EXCLUDED.updated_by,
          updated_at = EXCLUDED.updated_at,
-         holidays = CASE WHEN $7::date[] IS NULL THEN production_calendar.holidays ELSE EXCLUDED.holidays END,
-         mandatory_holidays = CASE WHEN $8::date[] IS NULL THEN production_calendar.mandatory_holidays ELSE EXCLUDED.mandatory_holidays END,
-         pre_holidays = CASE WHEN $9::date[] IS NULL THEN production_calendar.pre_holidays ELSE EXCLUDED.pre_holidays END
+         holidays = EXCLUDED.holidays,
+         mandatory_holidays = EXCLUDED.mandatory_holidays,
+         pre_holidays = EXCLUDED.pre_holidays
        RETURNING *`,
       [
         year,
@@ -84,9 +77,9 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         parsed.data.norm_hours,
         updatedBy,
         nowIso,
-        holidays,
-        mandatoryHolidays,
-        preHolidays,
+        parsed.data.holidays ?? [],
+        parsed.data.mandatory_holidays ?? [],
+        parsed.data.pre_holidays ?? [],
       ],
     );
 

@@ -24,7 +24,7 @@ const { PoolCtor, mockQuery, mockConnect, mockEnd, mockOn } = vi.hoisted(() => {
 
 vi.mock('pg', () => ({
   Pool: PoolCtor,
-  types: { setTypeParser: vi.fn() },
+  types: { setTypeParser: vi.fn(), getTypeParser: vi.fn(() => (val: string) => val) },
 }));
 
 import {

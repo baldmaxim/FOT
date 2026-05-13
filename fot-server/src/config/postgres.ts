@@ -25,6 +25,17 @@ import { env } from './env.js';
 // — там у нас работа с Date уже отлажена.
 types.setTypeParser(1082, (val: string) => val);
 
+// pg-types' parseDateArray (textParsers.js) хардкодит parseDate и игнорирует
+// наш override для OID 1082 — поэтому date[] (OID 1182) приходил как Date[],
+// а Express сериализовал элементы в '2026-01-01T00:00:00.000Z'. Это ломало
+// production_calendar.holidays/mandatory_holidays/pre_holidays и сравнения
+// по 'YYYY-MM-DD' в schedule/timesheet (в т.ч. учёт праздников в нормах часов).
+// Перевешиваем на parseStringArray, который уже зарегистрирован для text[] (1009).
+// (@types/pg's TypeId enum не покрывает 1182/1009 — приходится приводить.)
+const TEXT_ARRAY_OID = 1009 as Parameters<typeof types.getTypeParser>[0];
+const DATE_ARRAY_OID = 1182 as Parameters<typeof types.setTypeParser>[0];
+types.setTypeParser(DATE_ARRAY_OID, types.getTypeParser(TEXT_ARRAY_OID));
+
 // Supabase REST (PostgREST) сериализовал INT8 (bigint) как JSON number.
 // pg-node по умолчанию возвращает bigint как string (из-за риска переполнения
 // Number.MAX_SAFE_INTEGER). У нас все bigint-колонки (employee_department_access.

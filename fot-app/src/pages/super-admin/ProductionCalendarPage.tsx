@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Save, RotateCcw } from 'lucide-react';
 import { productionCalendarService, type IProductionCalendarEntry } from '../../services/productionCalendarService';
 import { getProductionCalendarQueryKey, useProductionCalendar } from '../../hooks/useSettingsData';
+import { useToast } from '../../contexts/ToastContext';
 import { computeWorkingNorm } from '../../utils/calendarUtils';
 import { MonthCalendar, type CalendarMode } from './MonthCalendar';
 import styles from './ProductionCalendarPage.module.css';
@@ -32,6 +33,7 @@ export const ProductionCalendarPage: FC = () => {
   const [saving, setSaving] = useState<number | null>(null);
   const [editing, setEditing] = useState<IEditingRow | null>(null);
   const queryClient = useQueryClient();
+  const toast = useToast();
   const { data, isLoading } = useProductionCalendar(year);
   const entries = data ?? EMPTY_ENTRIES;
 
@@ -94,8 +96,9 @@ export const ProductionCalendarPage: FC = () => {
         },
       );
       setEditing(null);
-    } catch {
-      // ignore
+      toast.success('Сохранено');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка сохранения календаря');
     } finally {
       setSaving(null);
     }
