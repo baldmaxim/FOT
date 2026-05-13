@@ -740,6 +740,7 @@ function mapToResolved(
   const cycleLength = ws.cycle_length == null ? null : Number(ws.cycle_length);
   return {
     schedule_id: ws.id as string,
+    name: (ws.name as string | null) ?? null,
     schedule_type: (ws.schedule_type as ScheduleType) || 'office',
     work_start: (ws.work_start as string) || '09:00:00',
     work_end: (ws.work_end as string) || '18:00:00',

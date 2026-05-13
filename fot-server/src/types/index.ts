@@ -521,6 +521,7 @@ export interface IObjectScheduleAssignment {
 
 export interface IResolvedSchedule {
   schedule_id: string;
+  name?: string | null;
   schedule_type: ScheduleType;
   work_start: string;
   work_end: string;

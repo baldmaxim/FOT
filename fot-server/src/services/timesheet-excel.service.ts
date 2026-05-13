@@ -4,6 +4,7 @@ import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { getFullDayThresholdHoursForDate, getDayNormHours, isWorkingDay } from './schedule.service.js';
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
+import type { IResolvedSchedule } from '../types/index.js';
 import { defangCsvCell } from '../utils/file-validation.utils.js';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -232,26 +233,49 @@ const createOneCTemplateWorkbook = async (sheetName: string): Promise<ExcelJS.Wo
   return workbook;
 };
 
-// Стандартная 1С-ставка за полностью отработанный по графику день (Т-13):
-// 8 ч для обычного дня, 7 ч для предпраздничного. Не зависит от длины личного графика —
-// если сотрудник на 6-часовом графике отработал свои 6 ч, в 1С уходит 8 (или 7).
-const ONE_C_FULL_DAY_HOURS = 8;
-const ONE_C_PRE_HOLIDAY_FULL_DAY_HOURS = 7;
+// Студенческие графики (имя содержит «(студент…») — особый случай: при выполнении нормы
+// в 1С уходит фиксированная ставка Т-13 (8 ч / 7 ч на предпраздник), а не реальная длина смены.
+// Для остальных графиков выгружаем округлённую дневную норму графика (например, 11 ч на 6+0).
+const ONE_C_STUDENT_FULL_DAY_HOURS = 8;
+const ONE_C_STUDENT_PRE_HOLIDAY_FULL_DAY_HOURS = 7;
+const STUDENT_SCHEDULE_NAME_PATTERN = /\(студент/i;
+
+const isStudentSchedule = (schedule?: IResolvedSchedule | null): boolean =>
+  Boolean(schedule?.name && STUDENT_SCHEDULE_NAME_PATTERN.test(schedule.name));
+
+const getEffectiveScheduleForDate = (
+  data: IDepartmentTimesheetData,
+  employeeId: number,
+  dateStr: string,
+  fallback?: IResolvedSchedule,
+): IResolvedSchedule | undefined => (
+  data.dailySchedulesMap.get(employeeId)?.get(dateStr)
+    || fallback
+    || data.schedulesMap.get(employeeId)
+);
 
 /**
  * Целые часы для 1С на конкретный день:
- *  - факт ≥ личной нормы дня → стандартная 1С-ставка (8 ч / 7 ч на предпраздник);
- *  - факт < личной нормы дня → факт, округлённый ВНИЗ до целого часа.
- * Допуск 0.001 ч ≈ 4 секунды — компенсирует потери точности при хранении total_hours без total_minutes.
+ *  - факт ≥ личной нормы дня:
+ *      • студенческий график → 8 ч (7 ч на предпраздник);
+ *      • остальные → round(dayNormHours) — реальная норма дня (учитывает предпраздник через getDayNormHours).
+ *  - факт < нормы → факт, округлённый ВНИЗ до целого часа.
+ * Допуск 0.001 ч ≈ 4 секунды компенсирует потери точности при хранении total_hours без total_minutes.
  */
 const compute1CDayHours = (
   factHours: number,
   dayNormHours: number,
   isPreHoliday: boolean,
+  isStudent: boolean,
 ): number => {
   if (!hasPositiveHours(factHours)) return 0;
   if (dayNormHours > 0 && factHours + 0.001 >= dayNormHours) {
-    return isPreHoliday ? ONE_C_PRE_HOLIDAY_FULL_DAY_HOURS : ONE_C_FULL_DAY_HOURS;
+    if (isStudent) {
+      return isPreHoliday
+        ? ONE_C_STUDENT_PRE_HOLIDAY_FULL_DAY_HOURS
+        : ONE_C_STUDENT_FULL_DAY_HOURS;
+    }
+    return Math.round(dayNormHours);
   }
   return Math.max(0, Math.floor(factHours));
 };
@@ -312,7 +336,13 @@ const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCExportRo
       }
       if (!hasPositiveHours(entry.hours)) continue;
       const dayNormHours = getDayNormForEmployeeOnDate(data, employee.id, dateStr, schedule);
-      const roundedHours = compute1CDayHours(entry.hours, dayNormHours, isPreHolidayDate(data, dateStr));
+      const effectiveSchedule = getEffectiveScheduleForDate(data, employee.id, dateStr, schedule);
+      const roundedHours = compute1CDayHours(
+        entry.hours,
+        dayNormHours,
+        isPreHolidayDate(data, dateStr),
+        isStudentSchedule(effectiveSchedule),
+      );
       if (!roundedHours) continue;
       const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);
       dayValues.set(day, {
@@ -364,7 +394,13 @@ const buildObjectRowsForOneC = (
         const hours = employeeDays.get(dateStr) ?? 0;
         if (hasPositiveHours(hours)) {
           const dayNormHours = getDayNormForEmployeeOnDate(data, employee.id, dateStr, schedule);
-          const roundedHours = compute1CDayHours(hours, dayNormHours, isPreHolidayDate(data, dateStr));
+          const effectiveSchedule = getEffectiveScheduleForDate(data, employee.id, dateStr, schedule);
+          const roundedHours = compute1CDayHours(
+            hours,
+            dayNormHours,
+            isPreHolidayDate(data, dateStr),
+            isStudentSchedule(effectiveSchedule),
+          );
           if (!roundedHours) continue;
           const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);
           dayValues.set(day, {

@@ -273,10 +273,11 @@ describe('timesheet-excel.service', () => {
     expect(ws!.getCell(5, 3).value).toBe(8);
   });
 
-  it('1C export: график 6 ч/день при выполнении нормы выгружает стандартные 8 ч', async () => {
+  it('1C export: студенческий график 6 ч/день при выполнении нормы выгружает стандартные 8 ч', async () => {
     const data = makeBaseData();
     const sched: IResolvedSchedule = {
       ...makeSchedule(),
+      name: '(студенты) 6/0',
       work_hours: 6,
     };
     data.schedulesMap = new Map([[1, sched], [2, sched]]);
@@ -284,8 +285,8 @@ describe('timesheet-excel.service', () => {
       [1, new Map([['2026-04-01', sched]])],
       [2, new Map([['2026-04-01', sched]])],
     ]);
-    // Иван отработал ровно 6 ч (норма) → должно быть 8
-    // Пётр отработал 4 ч (меньше нормы) → должно быть 4 (floor) + underwork
+    // Иван отработал ровно 6 ч (норма) → студенту 8
+    // Пётр отработал 4 ч (меньше нормы) → 4 (floor) + underwork
     data.dataMap = new Map([
       [1, new Map([['2026-04-01', { status: 'work', hours: 6, corrected: false }]])],
       [2, new Map([['2026-04-01', { status: 'work', hours: 4, corrected: false }]])],
@@ -302,10 +303,11 @@ describe('timesheet-excel.service', () => {
     });
   });
 
-  it('1C export: предпраздничный день при норме 6 ч → выгружается 7 ч', async () => {
+  it('1C export: студенческий 6 ч, предпраздничный день → выгружается 7 ч', async () => {
     const data = makeBaseData();
     const sched: IResolvedSchedule = {
       ...makeSchedule(),
+      name: '(студенты)',
       work_hours: 6,
     };
     data.schedulesMap = new Map([[1, sched]]);
@@ -321,6 +323,60 @@ describe('timesheet-excel.service', () => {
     };
     data.dataMap = new Map([
       [1, new Map([['2026-04-01', { status: 'work', hours: 6, corrected: false }]])],
+    ]);
+
+    const wb = await build1CTimesheetWorkbook('Табель 1С', data);
+    const ws = wb.getWorksheet('Табель 1С');
+    expect(ws!.getCell(4, 3).value).toBe(7);
+  });
+
+  it('1C export: не-студенческий 11 ч график при выполнении нормы → 11 ч в 1С', async () => {
+    const data = makeBaseData();
+    const sched: IResolvedSchedule = {
+      ...makeSchedule(),
+      name: '6/0 12 часов',
+      work_hours: 11,
+      work_days: [1, 2, 3, 4, 5, 6],
+    };
+    data.schedulesMap = new Map([[1, sched], [2, sched]]);
+    data.dailySchedulesMap = new Map([
+      [1, new Map([['2026-04-01', sched]])],
+      [2, new Map([['2026-04-01', sched]])],
+    ]);
+    // Иван отработал ровно 11 ч (норма) → 11 (round(11)).
+    // Пётр отработал 10:45 (10.75) — на минуты меньше нормы → floor = 10, underwork.
+    data.dataMap = new Map([
+      [1, new Map([['2026-04-01', { status: 'work', hours: 11, corrected: false }]])],
+      [2, new Map([['2026-04-01', { status: 'work', hours: 10.75, corrected: false }]])],
+    ]);
+
+    const wb = await build1CTimesheetWorkbook('Табель 1С', data);
+    const ws = wb.getWorksheet('Табель 1С');
+    expect(ws).toBeTruthy();
+    expect(ws!.getCell(4, 3).value).toBe(11);
+    expect(ws!.getCell(5, 3).value).toBe(10);
+  });
+
+  it('1C export: не-студенческий 5+0 в предпраздник → норма дня 7, факт 7 → 7 в 1С', async () => {
+    const data = makeBaseData();
+    const sched: IResolvedSchedule = {
+      ...makeSchedule(),
+      name: 'Стандартный 5/2',
+      work_hours: 8,
+    };
+    data.schedulesMap = new Map([[1, sched]]);
+    data.dailySchedulesMap = new Map([[1, new Map([['2026-04-01', sched]])]]);
+    data.calendarMonth = {
+      year: 2026,
+      month: 4,
+      norm_days: 22,
+      norm_hours: 175,
+      holidays: [],
+      mandatory_holidays: [],
+      pre_holidays: ['2026-04-01'],
+    };
+    data.dataMap = new Map([
+      [1, new Map([['2026-04-01', { status: 'work', hours: 7, corrected: false }]])],
     ]);
 
     const wb = await build1CTimesheetWorkbook('Табель 1С', data);
