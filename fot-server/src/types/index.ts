@@ -16,6 +16,10 @@ export interface SystemRole {
   show_actual_hours: boolean;
   /** true → у пользователей роли полностью скрывается боковое меню. Для is_admin игнорируется на фронте. */
   hide_sidebar: boolean;
+  /** Окно доступных месяцев табеля: сколько месяцев назад от текущего. Применяется когда is_admin=false. Дефолт 1. */
+  timesheet_months_back: number;
+  /** Окно доступных месяцев табеля: сколько месяцев вперёд от текущего. Применяется когда is_admin=false. Дефолт 1. */
+  timesheet_months_forward: number;
   created_at: string;
   updated_at: string;
 }
@@ -42,6 +46,8 @@ export interface UserProfileResponse {
   employee_variant: EmployeeVariant | null;
   show_actual_hours: boolean;
   hide_sidebar: boolean;
+  timesheet_months_back: number;
+  timesheet_months_forward: number;
   employee_id: number | null;
   department_id: string | null;
   managed_department_ids: string[];
@@ -92,6 +98,8 @@ export interface AuthenticatedRequest extends Request {
     is_admin: boolean;
     employee_variant: EmployeeVariant | null;
     show_actual_hours: boolean;
+    timesheet_months_back: number;
+    timesheet_months_forward: number;
     employee_id: number | null;
     department_id: string | null;
     is_approved: boolean;
@@ -291,6 +299,8 @@ export interface JWTPayload {
   is_admin: boolean;
   employee_variant: EmployeeVariant | null;
   show_actual_hours: boolean;
+  timesheet_months_back: number;
+  timesheet_months_forward: number;
   employee_id: number | null;
   department_id: string | null;
   is_approved: boolean;

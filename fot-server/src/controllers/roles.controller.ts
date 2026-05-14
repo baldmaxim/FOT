@@ -16,6 +16,7 @@ import {
 import { ensureCriticalAdminAccess } from '../services/critical-admin-access.service.js';
 
 const employeeVariantSchema = z.enum(['object', 'office']).nullable().optional();
+const timesheetMonthsSchema = z.number().int().min(0).max(12);
 
 const createRoleSchema = z.object({
   code: z.string().min(1).max(50).regex(/^[a-z_]+$/, 'Только строчные буквы и подчёркивание'),
@@ -25,6 +26,8 @@ const createRoleSchema = z.object({
   employee_variant: employeeVariantSchema,
   show_actual_hours: z.boolean().optional().default(false),
   hide_sidebar: z.boolean().optional().default(false),
+  timesheet_months_back: timesheetMonthsSchema.optional().default(1),
+  timesheet_months_forward: timesheetMonthsSchema.optional().default(1),
 });
 
 const updateRoleSchema = z.object({
@@ -35,6 +38,8 @@ const updateRoleSchema = z.object({
   is_active: z.boolean().optional(),
   show_actual_hours: z.boolean().optional(),
   hide_sidebar: z.boolean().optional(),
+  timesheet_months_back: timesheetMonthsSchema.optional(),
+  timesheet_months_forward: timesheetMonthsSchema.optional(),
 });
 
 const updateAccessProfileSchema = z.object({
@@ -50,6 +55,8 @@ const cloneRoleSchema = z.object({
   is_active: z.boolean().optional(),
   show_actual_hours: z.boolean().optional(),
   hide_sidebar: z.boolean().optional(),
+  timesheet_months_back: timesheetMonthsSchema.optional(),
+  timesheet_months_forward: timesheetMonthsSchema.optional(),
 });
 
 function isMissingFunctionError(error: unknown): boolean {
@@ -227,16 +234,37 @@ export const rolesController = {
       return;
     }
 
-    const { code, name, description, is_admin, employee_variant, show_actual_hours, hide_sidebar } = parsed.data;
+    const {
+      code,
+      name,
+      description,
+      is_admin,
+      employee_variant,
+      show_actual_hours,
+      hide_sidebar,
+      timesheet_months_back,
+      timesheet_months_forward,
+    } = parsed.data;
 
     let data: SystemRole | null;
     try {
       data = await queryOne<SystemRole>(
         `INSERT INTO system_roles
-           (code, name, description, is_admin, employee_variant, show_actual_hours, hide_sidebar, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+           (code, name, description, is_admin, employee_variant, show_actual_hours, hide_sidebar,
+            timesheet_months_back, timesheet_months_forward, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true)
          RETURNING *`,
-        [code, name, description ?? null, !!is_admin, employee_variant ?? null, !!show_actual_hours, !!hide_sidebar],
+        [
+          code,
+          name,
+          description ?? null,
+          !!is_admin,
+          employee_variant ?? null,
+          !!show_actual_hours,
+          !!hide_sidebar,
+          timesheet_months_back ?? 1,
+          timesheet_months_forward ?? 1,
+        ],
       );
     } catch (error) {
       const errCode = (error as { code?: string }).code;
@@ -287,8 +315,9 @@ export const rolesController = {
       try {
         createdRole = await queryOne<SystemRole>(
           `INSERT INTO system_roles
-             (code, name, description, is_admin, employee_variant, show_actual_hours, hide_sidebar, is_active)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             (code, name, description, is_admin, employee_variant, show_actual_hours, hide_sidebar,
+              timesheet_months_back, timesheet_months_forward, is_active)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING *`,
           [
             targetCode,
@@ -300,6 +329,8 @@ export const rolesController = {
               : sourceRole.employee_variant,
             parsed.data.show_actual_hours ?? sourceRole.show_actual_hours,
             parsed.data.hide_sidebar ?? sourceRole.hide_sidebar,
+            parsed.data.timesheet_months_back ?? sourceRole.timesheet_months_back ?? 1,
+            parsed.data.timesheet_months_forward ?? sourceRole.timesheet_months_forward ?? 1,
             parsed.data.is_active ?? true,
           ],
         );
@@ -375,6 +406,8 @@ export const rolesController = {
     if (parsed.data.employee_variant !== undefined) setClauses.push(`employee_variant = ${addParam(parsed.data.employee_variant)}`);
     if (parsed.data.show_actual_hours !== undefined) setClauses.push(`show_actual_hours = ${addParam(parsed.data.show_actual_hours)}`);
     if (parsed.data.hide_sidebar !== undefined) setClauses.push(`hide_sidebar = ${addParam(parsed.data.hide_sidebar)}`);
+    if (parsed.data.timesheet_months_back !== undefined) setClauses.push(`timesheet_months_back = ${addParam(parsed.data.timesheet_months_back)}`);
+    if (parsed.data.timesheet_months_forward !== undefined) setClauses.push(`timesheet_months_forward = ${addParam(parsed.data.timesheet_months_forward)}`);
 
     const codePlaceholder = addParam(code);
 

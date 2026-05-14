@@ -5,6 +5,7 @@ import { usePresence } from '../hooks/usePresence';
 import { useDashboardStats } from '../hooks/useDashboardStats';
 import { usePresenceRealtime } from '../hooks/usePresenceRealtime';
 import { useManagedDepartments } from '../hooks/useManagedDepartments';
+import { useAuth } from '../contexts/AuthContext';
 import type { DashboardPeriod } from '../types';
 import { filterDepartmentTreeByIds, getTreeFlatDepartments } from '../utils/departmentUtils';
 import '../styles/DashboardPage.css';
@@ -43,6 +44,7 @@ export const DashboardPage: React.FC = () => {
     primaryDepartmentId,
     structureQuery,
   } = useManagedDepartments();
+  const { timesheetMonthsBack, timesheetMonthsForward } = useAuth();
   const isSingleManagedDept = isDepartmentScope && managedDepartmentIds.length === 1;
 
   const today = new Date().toLocaleDateString('ru-RU', {
@@ -138,25 +140,34 @@ export const DashboardPage: React.FC = () => {
     }
   }, [period, searchParams, selectedMonth, setSearchParams]);
 
-  const getPrevMonth = () => {
+  const monthBoundaries = useMemo(() => {
     const now = new Date();
-    const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  };
-  const prevMonthLimit = getPrevMonth();
+    const minDate = new Date(now.getFullYear(), now.getMonth() - timesheetMonthsBack, 1);
+    const maxDate = new Date(now.getFullYear(), now.getMonth() + timesheetMonthsForward, 1);
+    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    return { minMonth: fmt(minDate), maxMonth: fmt(maxDate) };
+  }, [timesheetMonthsBack, timesheetMonthsForward]);
+  const prevMonthLimit = monthBoundaries.minMonth;
+  const nextMonthLimit = monthBoundaries.maxMonth;
   const isTooOldMonth = isDepartmentScope && selectedMonth <= prevMonthLimit;
 
   useEffect(() => {
-    if (isDepartmentScope && selectedMonth < prevMonthLimit) {
+    if (!isDepartmentScope) return;
+    if (selectedMonth < prevMonthLimit) {
       queueMicrotask(() => setSelectedMonth(prevMonthLimit));
+    } else if (selectedMonth > nextMonthLimit) {
+      queueMicrotask(() => setSelectedMonth(nextMonthLimit));
     }
-  }, [isDepartmentScope, prevMonthLimit, selectedMonth]);
+  }, [isDepartmentScope, prevMonthLimit, nextMonthLimit, selectedMonth]);
 
   const shiftMonth = (delta: number) => {
     const [y, m] = selectedMonth.split('-').map(Number);
     const d = new Date(y, m - 1 + delta, 1);
     const next = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    if (isDepartmentScope && delta < 0 && next < prevMonthLimit) return;
+    if (isDepartmentScope) {
+      if (delta < 0 && next < prevMonthLimit) return;
+      if (delta > 0 && next > nextMonthLimit) return;
+    }
     setSelectedMonth(next);
   };
 
@@ -166,7 +177,7 @@ export const DashboardPage: React.FC = () => {
     return `${MONTH_NAMES[m - 1]} ${y}`;
   };
 
-  const isFutureMonth = selectedMonth >= getCurrentMonth();
+  const isFutureMonth = isDepartmentScope ? selectedMonth >= nextMonthLimit : selectedMonth >= getCurrentMonth();
   const employeeCardBackState = useMemo(() => {
     const params = new URLSearchParams();
     if (effectiveSelectedDeptId) params.set('dept', effectiveSelectedDeptId);
@@ -398,7 +409,7 @@ export const DashboardPage: React.FC = () => {
                       className="month-picker-btn"
                       onClick={() => shiftMonth(-1)}
                       disabled={isTooOldMonth}
-                      title={isTooOldMonth ? 'Доступны только текущий и прошлый месяц' : undefined}
+                      title={isTooOldMonth ? 'Месяц вне доступного окна для вашей роли' : undefined}
                     >
                       <ChevronLeft size={16} />
                     </button>

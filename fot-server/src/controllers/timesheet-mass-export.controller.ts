@@ -19,7 +19,7 @@ import {
   sanitizeSheetName,
   writeTimesheetWorkbookBuffer,
 } from '../services/timesheet-excel.service.js';
-import { isDepartmentMonthAllowed, DEPARTMENT_MONTH_FORBIDDEN_MESSAGE } from '../utils/timesheet-month-access.js';
+import { isDepartmentMonthAllowed, monthAccessFromUser, DEPARTMENT_MONTH_FORBIDDEN_MESSAGE } from '../utils/timesheet-month-access.js';
 
 const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
   'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -71,7 +71,7 @@ export async function exportTimesheetMass(req: AuthenticatedRequest, res: Respon
     const [yearStr, monthStr] = month.split('-');
     const year = parseInt(yearStr);
     const mon = parseInt(monthStr);
-    if (scope === 'department' && Number.isFinite(year) && Number.isFinite(mon) && !isDepartmentMonthAllowed(year, mon)) {
+    if (scope === 'department' && Number.isFinite(year) && Number.isFinite(mon) && !isDepartmentMonthAllowed(year, mon, monthAccessFromUser(req.user))) {
       return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
     }
     const isoDate = /^\d{4}-\d{2}-\d{2}$/;

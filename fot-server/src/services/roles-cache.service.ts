@@ -16,7 +16,9 @@ async function loadRolesCache(): Promise<void> {
   let rows: SystemRole[];
   try {
     rows = await query<SystemRole>(
-      `SELECT id, code, name, description, is_admin, employee_variant, is_active, show_actual_hours, created_at, updated_at
+      `SELECT id, code, name, description, is_admin, employee_variant, is_active,
+              show_actual_hours, hide_sidebar, timesheet_months_back, timesheet_months_forward,
+              created_at, updated_at
          FROM system_roles
         WHERE is_active = true`,
     );

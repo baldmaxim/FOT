@@ -84,7 +84,7 @@ import {
 } from './timesheetPage.helpers';
 
 export const TimesheetPage: FC = () => {
-  const { hasPermission, profile, canEditPage, canViewPage, showActualHours } = useAuth();
+  const { hasPermission, profile, canEditPage, canViewPage, showActualHours, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
   const toast = useToast();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -124,14 +124,15 @@ export const TimesheetPage: FC = () => {
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
   const currentMonthIndex = toMonthIndex(currentYear, currentMonth);
-  const previousMonthIndex = currentMonthIndex - 1;
+  const minAllowedMonthIndex = currentMonthIndex - timesheetMonthsBack;
+  const maxAllowedMonthIndex = currentMonthIndex + timesheetMonthsForward;
   const isRestrictedManagerView = isTimesheetDepartmentScope;
   const requestedMonth = useMemo(() => parseMonthParam(queryMonth), [queryMonth]);
   const requestedMonthIndex = requestedMonth
     ? toMonthIndex(requestedMonth.year, requestedMonth.month)
     : currentMonthIndex;
   const resolvedMonthIndex = isRestrictedManagerView
-    ? Math.min(currentMonthIndex, Math.max(previousMonthIndex, requestedMonthIndex))
+    ? Math.min(maxAllowedMonthIndex, Math.max(minAllowedMonthIndex, requestedMonthIndex))
     : requestedMonthIndex;
   const { year, month } = useMemo(() => fromMonthIndex(resolvedMonthIndex), [resolvedMonthIndex]);
 
@@ -396,8 +397,8 @@ export const TimesheetPage: FC = () => {
     }
     updateMonthParam(year, month + 1);
   };
-  const canGoPrevMonth = !isRestrictedManagerView || resolvedMonthIndex > previousMonthIndex;
-  const canGoNextMonth = !isRestrictedManagerView || resolvedMonthIndex < currentMonthIndex;
+  const canGoPrevMonth = !isRestrictedManagerView || resolvedMonthIndex > minAllowedMonthIndex;
+  const canGoNextMonth = !isRestrictedManagerView || resolvedMonthIndex < maxAllowedMonthIndex;
 
   // Employee click -> side panel
   const handleEmployeeClick = (emp: TimesheetEmployee) => {

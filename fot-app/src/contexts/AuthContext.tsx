@@ -46,6 +46,10 @@ interface AuthContextType extends AuthState {
   showActualHours: boolean;
   /** true → у пользователя полностью скрыто боковое меню (Sidebar). Для is_admin форсируется false. */
   hideSidebar: boolean;
+  /** Сколько месяцев назад от текущего доступно для табеля. Применяется только когда is_admin=false. */
+  timesheetMonthsBack: number;
+  /** Сколько месяцев вперёд от текущего доступно для табеля. Применяется только когда is_admin=false. */
+  timesheetMonthsForward: number;
   login: (credentials: LoginCredentials) => Promise<{ requires2FA: boolean }>;
   verify2FA: (code: string) => Promise<void>;
   register: (data: RegisterData) => Promise<RegisterResponse | null>;
@@ -269,6 +273,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const showActualHours = !!state.profile?.show_actual_hours;
   // Защита от самоблокировки: админ всегда видит меню, даже если в его роли стоит флаг.
   const hideSidebar = !!state.profile?.hide_sidebar && !isAdmin;
+  // Дефолт 1/1 если поле не пришло (старый JWT/кэш) — соответствует поведению после миграции 094.
+  const timesheetMonthsBack = typeof state.profile?.timesheet_months_back === 'number'
+    && Number.isFinite(state.profile.timesheet_months_back)
+    && state.profile.timesheet_months_back >= 0
+    ? Math.floor(state.profile.timesheet_months_back)
+    : 1;
+  const timesheetMonthsForward = typeof state.profile?.timesheet_months_forward === 'number'
+    && Number.isFinite(state.profile.timesheet_months_forward)
+    && state.profile.timesheet_months_forward >= 0
+    ? Math.floor(state.profile.timesheet_months_forward)
+    : 1;
 
   const ready = state.isAuthenticated && state.isApproved && (!state.isTwoFactorEnabled || state.isTwoFactorVerified);
 
@@ -315,6 +330,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     employeeVariant,
     showActualHours,
     hideSidebar,
+    timesheetMonthsBack,
+    timesheetMonthsForward,
     login,
     verify2FA,
     register,

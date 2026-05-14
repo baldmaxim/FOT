@@ -17,6 +17,10 @@ export interface SystemRole {
   show_actual_hours: boolean;
   /** true → у пользователей роли скрывается боковое меню. Для is_admin игнорируется. */
   hide_sidebar: boolean;
+  /** Окно доступных месяцев табеля: сколько месяцев назад от текущего. Применяется когда is_admin=false. */
+  timesheet_months_back: number;
+  /** Окно доступных месяцев табеля: сколько месяцев вперёд от текущего. Применяется когда is_admin=false. */
+  timesheet_months_forward: number;
   created_at: string;
   updated_at: string;
 }
@@ -53,6 +57,8 @@ export interface UserProfile {
   employee_variant: EmployeeVariant | null;
   show_actual_hours: boolean;
   hide_sidebar: boolean;
+  timesheet_months_back: number;
+  timesheet_months_forward: number;
   employee_id: number | null;
   department_id: string | null;
   managed_department_ids: string[];

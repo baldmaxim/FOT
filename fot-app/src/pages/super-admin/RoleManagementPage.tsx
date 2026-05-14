@@ -17,6 +17,8 @@ interface INewRoleForm {
   employee_variant: EmployeeVariant | '';
   show_actual_hours: boolean;
   hide_sidebar: boolean;
+  timesheet_months_back: number;
+  timesheet_months_forward: number;
 }
 
 interface ICloneRoleForm {
@@ -27,6 +29,8 @@ interface ICloneRoleForm {
   employee_variant: EmployeeVariant | '';
   show_actual_hours: boolean;
   hide_sidebar: boolean;
+  timesheet_months_back: number;
+  timesheet_months_forward: number;
 }
 
 interface IEditState {
@@ -36,7 +40,18 @@ interface IEditState {
   employee_variant: EmployeeVariant | '';
   show_actual_hours: boolean;
   hide_sidebar: boolean;
+  timesheet_months_back: number;
+  timesheet_months_forward: number;
 }
+
+const TIMESHEET_MONTHS_MIN = 0;
+const TIMESHEET_MONTHS_MAX = 12;
+
+const clampTimesheetMonths = (value: unknown): number => {
+  const num = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(num)) return 1;
+  return Math.max(TIMESHEET_MONTHS_MIN, Math.min(TIMESHEET_MONTHS_MAX, Math.floor(num)));
+};
 
 interface IPageGroup {
   code: string;
@@ -100,6 +115,8 @@ export const RoleManagementPage: FC = () => {
     employee_variant: '',
     show_actual_hours: false,
     hide_sidebar: false,
+    timesheet_months_back: 1,
+    timesheet_months_forward: 1,
   });
   const [editState, setEditState] = useState<IEditState | null>(null);
   const [savingRole, setSavingRole] = useState(false);
@@ -117,6 +134,8 @@ export const RoleManagementPage: FC = () => {
     employee_variant: '',
     show_actual_hours: false,
     hide_sidebar: false,
+    timesheet_months_back: 1,
+    timesheet_months_forward: 1,
   });
 
   const rolesQuery = useQuery<SystemRole[]>({
@@ -227,9 +246,15 @@ export const RoleManagementPage: FC = () => {
         employee_variant: newForm.employee_variant || null,
         show_actual_hours: newForm.show_actual_hours,
         hide_sidebar: newForm.hide_sidebar,
+        timesheet_months_back: clampTimesheetMonths(newForm.timesheet_months_back),
+        timesheet_months_forward: clampTimesheetMonths(newForm.timesheet_months_forward),
       });
       toast.success('Роль создана');
-      setNewForm({ code: '', name: '', is_admin: false, employee_variant: '', show_actual_hours: false, hide_sidebar: false });
+      setNewForm({
+        code: '', name: '', is_admin: false, employee_variant: '',
+        show_actual_hours: false, hide_sidebar: false,
+        timesheet_months_back: 1, timesheet_months_forward: 1,
+      });
       setShowNewForm(false);
       setSelectedRoleCode(createdRole.code);
       upsertRoleInCache(createdRole);
@@ -255,6 +280,8 @@ export const RoleManagementPage: FC = () => {
         employee_variant: editState.employee_variant || null,
         show_actual_hours: editState.show_actual_hours,
         hide_sidebar: editState.hide_sidebar,
+        timesheet_months_back: clampTimesheetMonths(editState.timesheet_months_back),
+        timesheet_months_forward: clampTimesheetMonths(editState.timesheet_months_forward),
       });
       toast.success('Роль обновлена');
       setEditState(null);
@@ -374,6 +401,8 @@ export const RoleManagementPage: FC = () => {
       employee_variant: selectedRole.employee_variant ?? '',
       show_actual_hours: selectedRole.show_actual_hours,
       hide_sidebar: selectedRole.hide_sidebar,
+      timesheet_months_back: clampTimesheetMonths(selectedRole.timesheet_months_back),
+      timesheet_months_forward: clampTimesheetMonths(selectedRole.timesheet_months_forward),
     });
     setShowCloneForm(true);
   };
@@ -394,6 +423,8 @@ export const RoleManagementPage: FC = () => {
         employee_variant: cloneForm.employee_variant || null,
         show_actual_hours: cloneForm.show_actual_hours,
         hide_sidebar: cloneForm.hide_sidebar,
+        timesheet_months_back: clampTimesheetMonths(cloneForm.timesheet_months_back),
+        timesheet_months_forward: clampTimesheetMonths(cloneForm.timesheet_months_forward),
       });
       toast.success('Роль-копия создана');
       setShowCloneForm(false);
@@ -446,7 +477,7 @@ export const RoleManagementPage: FC = () => {
             <div>
               <h2 className={styles.sectionTitle}>Роли</h2>
               <p className={styles.sectionHint}>
-                Флаг «Админ» — видит все данные, обходит фильтр по отделам. «Кабинет» — какой личный кабинет открывается на /employee. «Часы» — показывать пользователям фактическое время по СКУД (факт) или урезанное под плановую норму дня (урезано).
+                Флаг «Админ» — видит все данные, обходит фильтр по отделам. «Кабинет» — какой личный кабинет открывается на /employee. «Часы» — показывать пользователям фактическое время по СКУД (факт) или урезанное под плановую норму дня (урезано). «Окно ← / Окно →» — сколько месяцев назад и вперёд от текущего доступно для табеля; для админа не применяется.
               </p>
             </div>
             <button className={styles.primaryButton} onClick={() => setShowNewForm(v => !v)}>
@@ -498,6 +529,28 @@ export const RoleManagementPage: FC = () => {
                 <option value="office">Офис</option>
                 <option value="object">Рабочий (объект)</option>
               </select>
+              <label className={styles.inlineCheckbox} title="Сколько месяцев назад от текущего доступно для табеля. Для админов окно не применяется.">
+                <span>Окно назад, мес.</span>
+                <input
+                  type="number"
+                  min={TIMESHEET_MONTHS_MIN}
+                  max={TIMESHEET_MONTHS_MAX}
+                  className={styles.inputInline}
+                  value={newForm.timesheet_months_back}
+                  onChange={e => setNewForm(s => ({ ...s, timesheet_months_back: clampTimesheetMonths(e.target.value) }))}
+                />
+              </label>
+              <label className={styles.inlineCheckbox} title="Сколько месяцев вперёд от текущего доступно для табеля. Для админов окно не применяется.">
+                <span>Окно вперёд, мес.</span>
+                <input
+                  type="number"
+                  min={TIMESHEET_MONTHS_MIN}
+                  max={TIMESHEET_MONTHS_MAX}
+                  className={styles.inputInline}
+                  value={newForm.timesheet_months_forward}
+                  onChange={e => setNewForm(s => ({ ...s, timesheet_months_forward: clampTimesheetMonths(e.target.value) }))}
+                />
+              </label>
               <div className={styles.formActions}>
                 <button className={styles.successButton} onClick={handleCreateRole} disabled={savingRole}>
                   Создать
@@ -521,6 +574,8 @@ export const RoleManagementPage: FC = () => {
                     <th>Админ</th>
                     <th title="Включено — пользователи роли видят часы по СКУД без урезания под плановую норму дня">Часы</th>
                     <th title="Какой личный кабинет открывается у пользователей этой роли на /employee">Кабинет</th>
+                    <th title="Сколько месяцев назад от текущего доступно для табеля (0–12). Для админов не применяется.">Окно ←</th>
+                    <th title="Сколько месяцев вперёд от текущего доступно для табеля (0–12). Для админов не применяется.">Окно →</th>
                     <th>Статус</th>
                     <th></th>
                   </tr>
@@ -575,6 +630,30 @@ export const RoleManagementPage: FC = () => {
                         ) : employeeVariantLabel(role.employee_variant)}
                       </td>
                       <td>
+                        {editState?.code === role.code ? (
+                          <input
+                            type="number"
+                            min={TIMESHEET_MONTHS_MIN}
+                            max={TIMESHEET_MONTHS_MAX}
+                            className={styles.inputInline}
+                            value={editState.timesheet_months_back}
+                            onChange={e => setEditState(s => (s ? { ...s, timesheet_months_back: clampTimesheetMonths(e.target.value) } : s))}
+                          />
+                        ) : (clampTimesheetMonths(role.timesheet_months_back))}
+                      </td>
+                      <td>
+                        {editState?.code === role.code ? (
+                          <input
+                            type="number"
+                            min={TIMESHEET_MONTHS_MIN}
+                            max={TIMESHEET_MONTHS_MAX}
+                            className={styles.inputInline}
+                            value={editState.timesheet_months_forward}
+                            onChange={e => setEditState(s => (s ? { ...s, timesheet_months_forward: clampTimesheetMonths(e.target.value) } : s))}
+                          />
+                        ) : (clampTimesheetMonths(role.timesheet_months_forward))}
+                      </td>
+                      <td>
                         <button
                           className={role.is_active ? styles.statusActive : styles.statusInactive}
                           onClick={() => handleToggleActive(role)}
@@ -604,6 +683,8 @@ export const RoleManagementPage: FC = () => {
                                   employee_variant: role.employee_variant ?? '',
                                   show_actual_hours: role.show_actual_hours,
                                   hide_sidebar: role.hide_sidebar,
+                                  timesheet_months_back: clampTimesheetMonths(role.timesheet_months_back),
+                                  timesheet_months_forward: clampTimesheetMonths(role.timesheet_months_forward),
                                 })
                               }
                             >Изменить</button>
@@ -737,6 +818,28 @@ export const RoleManagementPage: FC = () => {
                       value={cloneForm.description}
                       onChange={e => setCloneForm(s => ({ ...s, description: e.target.value }))}
                     />
+                    <label className={styles.inlineCheckbox} title="Сколько месяцев назад от текущего доступно для табеля. Для админов окно не применяется.">
+                      <span>Окно назад, мес.</span>
+                      <input
+                        type="number"
+                        min={TIMESHEET_MONTHS_MIN}
+                        max={TIMESHEET_MONTHS_MAX}
+                        className={styles.inputInline}
+                        value={cloneForm.timesheet_months_back}
+                        onChange={e => setCloneForm(s => ({ ...s, timesheet_months_back: clampTimesheetMonths(e.target.value) }))}
+                      />
+                    </label>
+                    <label className={styles.inlineCheckbox} title="Сколько месяцев вперёд от текущего доступно для табеля. Для админов окно не применяется.">
+                      <span>Окно вперёд, мес.</span>
+                      <input
+                        type="number"
+                        min={TIMESHEET_MONTHS_MIN}
+                        max={TIMESHEET_MONTHS_MAX}
+                        className={styles.inputInline}
+                        value={cloneForm.timesheet_months_forward}
+                        onChange={e => setCloneForm(s => ({ ...s, timesheet_months_forward: clampTimesheetMonths(e.target.value) }))}
+                      />
+                    </label>
                     <div className={styles.formActions}>
                       <button className={styles.successButton} onClick={handleCloneRole} disabled={savingRole}>
                         Создать копию

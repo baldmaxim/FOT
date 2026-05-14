@@ -40,7 +40,7 @@ const toMonthIndex = (year: number, month: number): number => year * 12 + month 
 
 export const MassTimesheetExportPage: FC = () => {
   const now = useMemo(() => new Date(), []);
-  const { hasPermission, profile } = useAuth();
+  const { hasPermission, profile, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
   const { isDepartmentScope } = useManagedDepartments();
   const isSuperAdmin = profile?.is_admin === true;
   const canManageAllDepartments = isSuperAdmin || hasPermission('data.scope.all');
@@ -62,21 +62,23 @@ export const MassTimesheetExportPage: FC = () => {
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
   const currentMonthIndex = toMonthIndex(currentYear, currentMonth);
-  const previousMonthIndex = currentMonthIndex - 1;
+  const minAllowedMonthIndex = currentMonthIndex - timesheetMonthsBack;
+  const maxAllowedMonthIndex = currentMonthIndex + timesheetMonthsForward;
   const selectedMonthIndex = toMonthIndex(year, month);
 
-  const canGoPrev = !isRestrictedManagerView || selectedMonthIndex > previousMonthIndex;
-  const canGoNext = !isRestrictedManagerView || selectedMonthIndex < currentMonthIndex;
+  const canGoPrev = !isRestrictedManagerView || selectedMonthIndex > minAllowedMonthIndex;
+  const canGoNext = !isRestrictedManagerView || selectedMonthIndex < maxAllowedMonthIndex;
 
   useEffect(() => {
     if (!isRestrictedManagerView) return;
-    if (selectedMonthIndex > currentMonthIndex) {
-      queueMicrotask(() => { setYear(currentYear); setMonth(currentMonth); });
-    } else if (selectedMonthIndex < previousMonthIndex) {
-      const d = new Date(currentYear, currentMonth - 2, 1);
+    if (selectedMonthIndex > maxAllowedMonthIndex) {
+      const d = new Date(currentYear, currentMonth - 1 + timesheetMonthsForward, 1);
+      queueMicrotask(() => { setYear(d.getFullYear()); setMonth(d.getMonth() + 1); });
+    } else if (selectedMonthIndex < minAllowedMonthIndex) {
+      const d = new Date(currentYear, currentMonth - 1 - timesheetMonthsBack, 1);
       queueMicrotask(() => { setYear(d.getFullYear()); setMonth(d.getMonth() + 1); });
     }
-  }, [isRestrictedManagerView, selectedMonthIndex, currentMonthIndex, previousMonthIndex, currentYear, currentMonth]);
+  }, [isRestrictedManagerView, selectedMonthIndex, minAllowedMonthIndex, maxAllowedMonthIndex, currentYear, currentMonth, timesheetMonthsBack, timesheetMonthsForward]);
 
   useEffect(() => {
     saveStoredActiveTab(activeTab);

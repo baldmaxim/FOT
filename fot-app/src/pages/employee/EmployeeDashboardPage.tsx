@@ -132,7 +132,7 @@ const buildDayGroup = (
 
 export const EmployeeDashboardPage: React.FC = () => {
 
-  const { user, profile, refreshProfile, isTwoFactorEnabled } = useAuth();
+  const { user, profile, refreshProfile, isTwoFactorEnabled, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
   const { showToast } = useToast();
   const [showRequestModal, setShowRequestModal] = useState(false);
 
@@ -147,16 +147,17 @@ export const EmployeeDashboardPage: React.FC = () => {
 
   const employeeId = profile?.employee_id ?? null;
 
-  // Always load current + previous month
+  // Загружаем окно [now - monthsBack .. now + monthsForward], настроенное per-role
+  // (см. system_roles.timesheet_months_back / timesheet_months_forward, миграция 094).
   const timesheetMonthKeys = useMemo(() => {
     const today = new Date();
-    const prev = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-    const curr = new Date(today.getFullYear(), today.getMonth(), 1);
-    return [
-      `${prev.getFullYear()}-${pad2(prev.getMonth() + 1)}`,
-      `${curr.getFullYear()}-${pad2(curr.getMonth() + 1)}`,
-    ];
-  }, []);
+    const result: string[] = [];
+    for (let offset = -timesheetMonthsBack; offset <= timesheetMonthsForward; offset += 1) {
+      const d = new Date(today.getFullYear(), today.getMonth() + offset, 1);
+      result.push(`${d.getFullYear()}-${pad2(d.getMonth() + 1)}`);
+    }
+    return result;
+  }, [timesheetMonthsBack, timesheetMonthsForward]);
 
   useEffect(() => {
     if (!employeeId && refreshProfile) {

@@ -46,6 +46,8 @@ export interface CreateRoleData {
   employee_variant?: EmployeeVariant | null;
   show_actual_hours?: boolean;
   hide_sidebar?: boolean;
+  timesheet_months_back?: number;
+  timesheet_months_forward?: number;
 }
 
 export interface UpdateRoleData {
@@ -56,6 +58,8 @@ export interface UpdateRoleData {
   is_active?: boolean;
   show_actual_hours?: boolean;
   hide_sidebar?: boolean;
+  timesheet_months_back?: number;
+  timesheet_months_forward?: number;
 }
 
 export interface CloneRoleData {
@@ -67,6 +71,8 @@ export interface CloneRoleData {
   is_active?: boolean;
   show_actual_hours?: boolean;
   hide_sidebar?: boolean;
+  timesheet_months_back?: number;
+  timesheet_months_forward?: number;
 }
 
 export interface UpdateAccessProfileData {
