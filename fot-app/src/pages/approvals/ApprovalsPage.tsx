@@ -1,7 +1,6 @@
-import { type FC, useState, useMemo, useEffect, useRef, lazy, Suspense } from 'react';
+import { type FC, useState, useMemo, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check, X, RotateCcw, ChevronDown, ChevronUp, Clock } from 'lucide-react';
-import { PeriodPicker } from './PeriodPicker';
+import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Clock } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee } from '../../types';
 import {
   timesheetApprovalService,
@@ -23,7 +22,16 @@ const TimesheetCorrectionModal = lazy(() => import('../../components/timesheet/T
 })));
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
-import { getMonthBounds, listDatesInRange } from '../../utils/timesheetApprovalPeriod';
+import {
+  getMonthBounds,
+  listDatesInRange,
+  getHalfRange,
+  formatHalfLabel,
+  getCurrentHalf,
+  type TimesheetHalf,
+  type ITimesheetDateRange,
+} from '../../utils/timesheetApprovalPeriod';
+import { getMonthLabel } from '../../utils/calendarUtils';
 import './ApprovalsPage.css';
 
 type Tab = 'corrections' | 'timesheets';
@@ -97,13 +105,6 @@ const formatHM = (decimal: number | null): string => {
   return `${h}ч ${m}м`;
 };
 
-function monthRange(year: number, month: number): { startDate: string; endDate: string } {
-  const start = new Date(year, month - 1, 1);
-  const end = new Date(year, month, 0);
-  const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  return { startDate: fmt(start), endDate: fmt(end) };
-}
-
 interface IGroupCheckboxProps {
   state: 'none' | 'partial' | 'all';
   onChange: (checked: boolean) => void;
@@ -133,14 +134,16 @@ const formatBulkToast = (verb: 'Утверждено' | 'Отклонено', da
   return `${verb}: ${data.processed_count}`;
 };
 
-const CorrectionsTab: FC = () => {
+interface ICorrectionsTabProps {
+  period: ITimesheetDateRange;
+}
+
+const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
   const { hasPermission } = useAuth();
   const canReview = hasPermission('timesheet.workflow.review');
   const queryClient = useQueryClient();
   const toast = useToast();
 
-  const now = useMemo(() => new Date(), []);
-  const [period, setPeriod] = useState(() => monthRange(now.getFullYear(), now.getMonth() + 1));
   const [view, setView] = useState<'pending' | 'history'>('pending');
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
@@ -291,7 +294,6 @@ const CorrectionsTab: FC = () => {
   return (
     <>
       <div className="approvals-toolbar">
-        <PeriodPicker period={period} onChange={setPeriod} />
         <div className="cor-view-tabs" role="tablist" aria-label="Раздел согласования">
           <button
             type="button"
@@ -749,7 +751,11 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
   );
 };
 
-const TimesheetsTab: FC = () => {
+interface ITimesheetsTabProps {
+  period: ITimesheetDateRange;
+}
+
+const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
   const { hasPermission } = useAuth();
   const canReview = hasPermission('timesheet.workflow.review');
   const queryClient = useQueryClient();
@@ -759,9 +765,11 @@ const TimesheetsTab: FC = () => {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [commentModal, setCommentModal] = useState<{ row: IApprovalReviewItem; mode: 'rework' | 'return' } | null>(null);
 
+  useEffect(() => { setExpandedId(null); }, [period.startDate, period.endDate]);
+
   const query = useQuery({
-    queryKey: ['approvals-review-list', status],
-    queryFn: () => timesheetApprovalService.getReviewList(status),
+    queryKey: ['approvals-review-list', status, period.startDate, period.endDate],
+    queryFn: () => timesheetApprovalService.getReviewList(status, period.startDate, period.endDate),
   });
 
   const invalidate = () => Promise.all([
@@ -901,6 +909,31 @@ const TimesheetsTab: FC = () => {
 export const ApprovalsPage: FC = () => {
   const [tab, setTab] = useState<Tab>('corrections');
 
+  const initial = useMemo(() => getCurrentHalf(new Date()), []);
+  const [year, setYear] = useState<number>(initial.year);
+  const [month, setMonth] = useState<number>(initial.month);
+  const [half, setHalf] = useState<TimesheetHalf>(initial.half);
+
+  const period = useMemo(() => getHalfRange(year, month, half), [year, month, half]);
+
+  const goPrevMonth = useCallback(() => {
+    if (month === 1) {
+      setYear(y => y - 1);
+      setMonth(12);
+    } else {
+      setMonth(m => m - 1);
+    }
+  }, [month]);
+
+  const goNextMonth = useCallback(() => {
+    if (month === 12) {
+      setYear(y => y + 1);
+      setMonth(1);
+    } else {
+      setMonth(m => m + 1);
+    }
+  }, [month]);
+
   return (
     <div className="approvals-page">
       <div className="approvals-tabs">
@@ -920,7 +953,52 @@ export const ApprovalsPage: FC = () => {
         </button>
       </div>
 
-      {tab === 'corrections' ? <CorrectionsTab /> : <TimesheetsTab />}
+      <div className="approvals-period">
+        <div className="approvals-period-month-nav" role="group" aria-label="Месяц">
+          <button
+            type="button"
+            className="approvals-period-month-btn"
+            onClick={goPrevMonth}
+            aria-label="Предыдущий месяц"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <span className="approvals-period-month-label">{getMonthLabel(year, month)}</span>
+          <button
+            type="button"
+            className="approvals-period-month-btn"
+            onClick={goNextMonth}
+            aria-label="Следующий месяц"
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+        <section className="approvals-period-half-toggle" aria-label="Период согласования">
+          <button
+            type="button"
+            className={`approvals-period-half-chip${half === 'H1' ? ' approvals-period-half-chip--active' : ''}`}
+            onClick={() => setHalf('H1')}
+          >
+            {formatHalfLabel(year, month, 'H1')}
+          </button>
+          <button
+            type="button"
+            className={`approvals-period-half-chip${half === 'H2' ? ' approvals-period-half-chip--active' : ''}`}
+            onClick={() => setHalf('H2')}
+          >
+            {formatHalfLabel(year, month, 'H2')}
+          </button>
+          <button
+            type="button"
+            className={`approvals-period-half-chip${half === 'FULL' ? ' approvals-period-half-chip--active' : ''}`}
+            onClick={() => setHalf('FULL')}
+          >
+            {formatHalfLabel(year, month, 'FULL')}
+          </button>
+        </section>
+      </div>
+
+      {tab === 'corrections' ? <CorrectionsTab period={period} /> : <TimesheetsTab period={period} />}
     </div>
   );
 };

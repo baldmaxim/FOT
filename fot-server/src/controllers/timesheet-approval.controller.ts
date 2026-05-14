@@ -1060,6 +1060,14 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
       return;
     }
 
+    const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+    const periodStart = typeof req.query.start_date === 'string' && ISO_DATE.test(req.query.start_date)
+      ? req.query.start_date
+      : null;
+    const periodEnd = typeof req.query.end_date === 'string' && ISO_DATE.test(req.query.end_date)
+      ? req.query.end_date
+      : null;
+
     const scope = await resolveRequestDataScope(req);
     const whereParts: string[] = [];
     const params: unknown[] = [];
@@ -1069,6 +1077,15 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
     } else {
       params.push(status);
       whereParts.push(`status = $${params.length}`);
+    }
+
+    if (periodStart) {
+      params.push(periodStart);
+      whereParts.push(`end_date >= $${params.length}`);
+    }
+    if (periodEnd) {
+      params.push(periodEnd);
+      whereParts.push(`start_date <= $${params.length}`);
     }
 
     if (scope === 'department') {

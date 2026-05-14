@@ -27,6 +27,97 @@
   color: var(--primary);
   border-bottom-color: var(--primary);
 }
+
+/* === Общий блок периода (над вкладками) === */
+.approvals-period {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.approvals-period-month-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.approvals-period-month-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  transition: all var(--transition);
+}
+.approvals-period-month-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.approvals-period-month-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: var(--surface);
+  color: var(--text-tertiary);
+}
+.approvals-period-month-label {
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 122px;
+  text-align: center;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+.approvals-period-half-toggle {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.approvals-period-half-chip {
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition);
+  white-space: nowrap;
+}
+.approvals-period-half-chip:hover {
+  border-color: rgba(59, 130, 246, 0.25);
+  color: var(--text-primary);
+}
+.approvals-period-half-chip--active {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--primary);
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.12);
+}
+@media (max-width: 768px) {
+  .approvals-period {
+    gap: 8px;
+  }
+  .approvals-period-half-toggle {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .approvals-period-half-toggle .approvals-period-half-chip {
+    flex: 1 1 auto;
+    text-align: center;
+  }
+}
+
 .approvals-empty {
   padding: 40px;
   text-align: center;

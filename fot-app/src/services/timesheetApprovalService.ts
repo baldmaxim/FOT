@@ -218,8 +218,15 @@ export const timesheetApprovalService = {
     await apiClient.delete(`/timesheet-approvals/attachments/${documentId}`);
   },
 
-  getReviewList: async (status: TimesheetApprovalStatus = 'submitted') => {
-    const res = await apiClient.get<ApiResponse<IApprovalReviewItem[]>>(`/timesheet-approvals/review-list?status=${encodeURIComponent(status)}`);
+  getReviewList: async (
+    status: TimesheetApprovalStatus = 'submitted',
+    start_date?: string,
+    end_date?: string,
+  ) => {
+    const qs = new URLSearchParams({ status });
+    if (start_date) qs.set('start_date', start_date);
+    if (end_date) qs.set('end_date', end_date);
+    const res = await apiClient.get<ApiResponse<IApprovalReviewItem[]>>(`/timesheet-approvals/review-list?${qs.toString()}`);
     return res.data;
   },
 };
