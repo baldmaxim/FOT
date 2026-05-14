@@ -3,6 +3,7 @@ import { ArrowLeft, Scan, Settings } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { CardReaderModal } from '../../components/skud/CardReaderModal';
+import { SigurHelpPopover } from '../../components/skud/SigurHelpPopover';
 import '../../styles/SigurSettingsPage.css';
 
 const SigurEmployeesTab = lazy(() => import('../../components/skud/employees/SigurEmployeesTab').then(module => ({
@@ -60,6 +61,7 @@ export const SigurPage = () => {
           <span>Считать пропуск</span>
         </button>
       )}
+      {canUseReader && <SigurHelpPopover />}
       <button
         className="ep-toolbar-btn secondary sigur-fullpage__action"
         onClick={() => setView('settings')}
