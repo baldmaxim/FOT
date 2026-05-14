@@ -46,6 +46,7 @@ interface ITimesheetGridProps {
   highlightedCell?: { employeeId: number; date: string } | null;
   canManageTeam?: boolean;
   pendingEmployeeId?: number | null;
+  departmentName?: string;
   onBulkSelectionChange?: (cellKeys: Set<string>) => void;
   onBulkBlockedSelectionAttempt?: () => void;
   onEmployeeClick: (employee: TimesheetEmployee) => void;
@@ -189,10 +190,13 @@ const formatCellHM = (decimal: number): string => {
   return `${h}:${String(m).padStart(2, '0')}`;
 };
 
-const SOURCE_GROUP_LABELS: Record<NonNullable<TimesheetEmployee['source']>, string | null> = {
-  department: null,
-  direct_report: 'Прямые подчинённые',
-  self: 'Руководитель',
+const getSectionLabel = (
+  source: NonNullable<TimesheetEmployee['source']>,
+  departmentName?: string,
+): string | null => {
+  if (source === 'self') return 'Руководитель';
+  if (source === 'direct_report') return 'Прямые подчинённые';
+  return departmentName ?? 'Сотрудники отдела';
 };
 
 const STATUS_CELL_TEXT: Record<TimesheetStatus, string> = {
@@ -329,6 +333,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   highlightedCell = null,
   canManageTeam = false,
   pendingEmployeeId = null,
+  departmentName,
   onBulkSelectionChange,
   onBulkBlockedSelectionAttempt,
   onEmployeeClick,
@@ -923,7 +928,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
             const prevSource = index > 0
               ? (employeeRows[index - 1].employee.source ?? 'department')
               : null;
-            const sectionLabel = currentSource !== prevSource ? SOURCE_GROUP_LABELS[currentSource] : null;
+            const sectionLabel = currentSource !== prevSource ? getSectionLabel(currentSource, departmentName) : null;
 
             return (
               <Fragment key={row.employee.id}>
@@ -1270,7 +1275,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
               const prevSource = index > 0
                 ? (employeeRows[index - 1].employee.source ?? 'department')
                 : null;
-              const sectionLabel = currentSource !== prevSource ? SOURCE_GROUP_LABELS[currentSource] : null;
+              const sectionLabel = currentSource !== prevSource ? getSectionLabel(currentSource, departmentName) : null;
 
               return (
                 <Fragment key={row.employee.id}>

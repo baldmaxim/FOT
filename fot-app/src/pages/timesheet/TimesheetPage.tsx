@@ -1908,6 +1908,7 @@ export const TimesheetPage: FC = () => {
             splitDayKeys={splitDayKeys}
             canManageTeam={canManageTeam}
             pendingEmployeeId={teamPendingEmployeeId}
+            departmentName={selectedDeptName}
             onBulkSelectionChange={handleBulkSelectionChange}
             onBulkBlockedSelectionAttempt={handleBulkBlockedSelectionAttempt}
             onEmployeeClick={handleEmployeeClick}
@@ -1943,6 +1944,7 @@ export const TimesheetPage: FC = () => {
           splitDayKeys={splitDayKeys}
           canManageTeam={canManageTeam}
           pendingEmployeeId={teamPendingEmployeeId}
+          departmentName={selectedDeptName}
           onBulkSelectionChange={handleBulkSelectionChange}
           onBulkBlockedSelectionAttempt={handleBulkBlockedSelectionAttempt}
           onEmployeeClick={handleEmployeeClick}
