@@ -1,7 +1,7 @@
 const FAILURE_TYPE_LABELS: Record<string, string> = {
   PASS_DENY: 'Доступ запрещён',
-  ACCESS_ABORTED: 'Проход отменён (таймаут)',
-  ACCESSABORTED: 'Проход отменён (таймаут)',
+  ACCESS_ABORTED: 'Проход не совершён. Истек таймаут ожидания прохода',
+  ACCESSABORTED: 'Проход не совершён. Истек таймаут ожидания прохода',
   READER_ERROR: 'Ошибка считывателя',
   FIRE_UNLOCK_BEGIN: 'Пожарная разблокировка (начало)',
   FIRE_UNLOCK_END: 'Пожарная разблокировка (конец)',
@@ -31,8 +31,12 @@ const FAILURE_TYPE_LABELS: Record<string, string> = {
   passDeny: 'Доступ запрещён',
   passDeny2: 'Доступ запрещён',
   passDetected: 'Проход зафиксирован',
-  accessAborted: 'Проход отменён (таймаут)',
+  accessAborted: 'Проход не совершён. Истек таймаут ожидания прохода',
   readerError: 'Ошибка считывателя',
+  TYPE_7: 'Доступ запрещён',
+  TYPE_12: 'Доступ запрещён',
+  TYPE_24: 'Проход не совершён. Истек таймаут ожидания прохода',
+  TYPE_36: 'Проход не совершён. Истек таймаут ожидания прохода',
 };
 
 export const formatFailureType = (code: string | null | undefined): string => {
@@ -40,8 +44,7 @@ export const formatFailureType = (code: string | null | undefined): string => {
   const exact = FAILURE_TYPE_LABELS[code];
   if (exact) return exact;
   if (/^pass_?deny\d*$/i.test(code)) return 'Доступ запрещён';
-  if (/^access_?aborted\d*$/i.test(code)) return 'Проход отменён (таймаут)';
+  if (/^access_?aborted\d*$/i.test(code)) return 'Проход не совершён. Истек таймаут ожидания прохода';
   if (/^pass_?detected\d*$/i.test(code)) return 'Проход зафиксирован';
-  if (/^TYPE_\d+$/i.test(code)) return 'Сигнал СКУД';
   return code;
 };
