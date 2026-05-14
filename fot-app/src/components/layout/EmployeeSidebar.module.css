@@ -6,6 +6,7 @@
   flex-direction: column;
   position: fixed;
   height: 100vh;
+  padding-top: env(safe-area-inset-top, 0px);
   z-index: 100;
   transition: width 0.2s ease;
 }

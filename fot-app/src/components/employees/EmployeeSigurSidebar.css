@@ -1247,7 +1247,7 @@ textarea.ep-sigur-field-input {
   }
 
   .ep-sigur-panel-header {
-    padding: 12px;
+    padding: calc(12px + env(safe-area-inset-top, 0px)) 12px 12px;
   }
 
   .ep-sigur-scroll {
