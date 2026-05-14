@@ -38,6 +38,7 @@ const createObjectSchema = z.object({
 
 const updateObjectSchema = z.object({
   name: z.string().trim().min(2).max(120),
+  alt_name: z.string().trim().max(120).nullable().optional(),
   access_points: z.array(z.string().trim().min(1).max(255)).max(500).default([]),
 });
 
@@ -184,6 +185,7 @@ export const skudTravelController = {
       const data = await updateTravelObject({
         objectId,
         name: parsed.name,
+        altName: parsed.alt_name,
         accessPoints: parsed.access_points,
       });
       res.json({ success: true, data });

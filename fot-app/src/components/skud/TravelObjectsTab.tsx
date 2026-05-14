@@ -22,6 +22,7 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
   const [accessPoints, setAccessPoints] = useState<AccessPointOption[]>([]);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
+  const [draftAltName, setDraftAltName] = useState('');
   const [draftAccessPoints, setDraftAccessPoints] = useState<string[]>([]);
   const [newObjectName, setNewObjectName] = useState('');
   const [search, setSearch] = useState('');
@@ -63,10 +64,12 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
   useEffect(() => {
     if (!selectedObject) {
       setDraftName('');
+      setDraftAltName('');
       setDraftAccessPoints([]);
       return;
     }
     setDraftName(selectedObject.name);
+    setDraftAltName(selectedObject.alt_name ?? '');
     setDraftAccessPoints(selectedObject.access_points);
   }, [selectedObject]);
 
@@ -143,6 +146,11 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
     () => !!selectedObject && draftName.trim() !== selectedObject.name,
     [draftName, selectedObject],
   );
+  const selectedObjectAltNameChanged = useMemo(
+    () => !!selectedObject && draftAltName.trim() !== (selectedObject.alt_name ?? ''),
+    [draftAltName, selectedObject],
+  );
+  const selectedObjectNamesChanged = selectedObjectNameChanged || selectedObjectAltNameChanged;
   const selectedObjectAccessPointsChanged = useMemo(
     () => !!selectedObject && !arraysEqual(draftAccessPoints, selectedObject.access_points),
     [draftAccessPoints, selectedObject],
@@ -200,19 +208,20 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
   };
 
   const handleRenameObject = async () => {
-    if (!selectedObject || !draftName.trim() || !selectedObjectNameChanged) return;
+    if (!selectedObject || !draftName.trim() || !selectedObjectNamesChanged) return;
     setSaving(true);
     setError('');
     try {
       await travelTimeService.updateObject(selectedObject.id, {
         name: draftName.trim(),
+        alt_name: draftAltName.trim() === '' ? null : draftAltName.trim(),
         access_points: selectedObject.access_points,
       });
       const refreshedObjects = await travelTimeService.getObjects();
       setObjects(refreshedObjects);
       setSelectedObjectId(selectedObject.id);
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'Ошибка переименования объекта');
+      setError(error instanceof Error ? error.message : 'Ошибка сохранения названий объекта');
     } finally {
       setSaving(false);
     }
@@ -220,7 +229,7 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
 
   const handleRenameObjectKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key !== 'Enter') return;
-    if (!canEdit || saving || !selectedObjectNameChanged || !draftName.trim()) return;
+    if (!canEdit || saving || !selectedObjectNamesChanged || !draftName.trim()) return;
 
     event.preventDefault();
     void handleRenameObject();
@@ -311,24 +320,34 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
             ) : (
               <>
                 <div className="travel-config-hint" style={{ marginBottom: '0.75rem' }}>
-                  Переименование объекта выполняется отдельно. Точки доступа сохраняются отдельной кнопкой ниже.
+                  Названия объекта сохраняются одной кнопкой. Точки доступа сохраняются отдельной кнопкой ниже.
                 </div>
                 <div className="travel-config-actions">
                   <input
                     type="text"
                     className="travel-config-input"
+                    placeholder="Название объекта"
                     value={draftName}
                     onChange={event => setDraftName(event.target.value)}
+                    onKeyDown={handleRenameObjectKeyDown}
+                    disabled={!canEdit || saving}
+                  />
+                  <input
+                    type="text"
+                    className="travel-config-input"
+                    placeholder="Альтернативное обозначение (внутренний код)"
+                    value={draftAltName}
+                    onChange={event => setDraftAltName(event.target.value)}
                     onKeyDown={handleRenameObjectKeyDown}
                     disabled={!canEdit || saving}
                   />
                   <button
                     className="sigur-btn"
                     onClick={handleRenameObject}
-                    disabled={!canEdit || saving || !draftName.trim() || !selectedObjectNameChanged}
+                    disabled={!canEdit || saving || !draftName.trim() || !selectedObjectNamesChanged}
                   >
                     <Pencil size={14} />
-                    Переименовать
+                    Сохранить названия
                   </button>
                   <button
                     className="sigur-btn sigur-btn-primary"

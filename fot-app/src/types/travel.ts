@@ -13,6 +13,8 @@ export interface ITravelConfig {
 export interface ITravelObject {
   id: string;
   name: string;
+  /** Альтернативное (внутреннее) обозначение объекта для связи с внешним учётом. */
+  alt_name: string | null;
   is_active: boolean;
   access_points: string[];
   has_map: boolean;

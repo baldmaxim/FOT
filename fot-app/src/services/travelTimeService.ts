@@ -68,7 +68,10 @@ export const travelTimeService = {
     return res.data;
   },
 
-  async updateObject(id: string, data: { name: string; access_points: string[] }): Promise<ITravelObject> {
+  async updateObject(
+    id: string,
+    data: { name: string; alt_name?: string | null; access_points: string[] },
+  ): Promise<ITravelObject> {
     const res = await apiClient.put<ApiResponse<ITravelObject>>(`/skud/travel-objects/${id}`, data);
     if (!res.data) throw new Error(res.error || 'Ошибка сохранения объекта');
     return res.data;

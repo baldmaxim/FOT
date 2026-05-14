@@ -30,6 +30,7 @@ export const TRAVEL_SEGMENT_STATUSES: TravelSegmentStatus[] = [
 interface ITravelObjectRow {
   id: string;
   name: string;
+  alt_name: string | null;
   is_active: boolean;
   map_storage_path: string | null;
   map_file_name: string | null;
@@ -111,6 +112,8 @@ interface ITravelEventRow {
 export interface ITravelObject {
   id: string;
   name: string;
+  /** Альтернативное (внутреннее) обозначение объекта для связи с внешним учётом. */
+  alt_name: string | null;
   is_active: boolean;
   access_points: string[];
   has_map: boolean;
@@ -440,7 +443,7 @@ export const invalidateTravelSegmentsCache = (): void => {
   travelSegmentsInFlight.clear();
 };
 
-const TRAVEL_OBJECT_COLUMNS = 'id, name, is_active, map_storage_path, map_file_name, map_mime_type, map_file_size, map_uploaded_at, created_at, updated_at';
+const TRAVEL_OBJECT_COLUMNS = 'id, name, alt_name, is_active, map_storage_path, map_file_name, map_mime_type, map_file_size, map_uploaded_at, created_at, updated_at';
 const TRAVEL_SEGMENT_COLUMNS = 'id, employee_id, work_date, from_object_id, to_object_id, from_access_point_name, to_access_point_name, exit_time, entry_time, actual_minutes, norm_minutes, max_credit_minutes, credited_minutes, delay_minutes, status, approved_by, approved_at, approval_comment, created_at, updated_at';
 
 export const fetchTravelObjectsRaw = async (): Promise<ITravelObjectRow[]> => {
@@ -999,8 +1002,7 @@ export const createTravelObject = async (name: string): Promise<ITravelObject> =
   try {
     const inserted = await queryOne<ITravelObjectRow>(
       `INSERT INTO skud_objects (name, is_active) VALUES ($1, true)
-       RETURNING id, name, is_active, created_at, updated_at,
-                 map_storage_path, map_file_name, map_mime_type, map_file_size, map_uploaded_at`,
+       RETURNING ${TRAVEL_OBJECT_COLUMNS}`,
       [normalizedName],
     );
     if (!inserted) throw new Error('Не удалось создать объект');
@@ -1021,22 +1023,37 @@ export const createTravelObject = async (name: string): Promise<ITravelObject> =
 export const updateTravelObject = async ({
   objectId,
   name,
+  altName,
   accessPoints,
 }: {
   objectId: string;
   name: string;
+  altName?: string | null;
   accessPoints: string[];
 }): Promise<ITravelObject> => {
   const currentMappings = await fetchTravelMappingsRaw();
   const normalizedName = name.trim();
   const normalizedAccessPoints = dedupeAccessPoints(accessPoints);
+  // altName: undefined → не трогаем поле, null/'' → очищаем (NULL в БД), строка → trim.
+  const normalizedAltName: string | null | undefined = altName === undefined
+    ? undefined
+    : altName == null || altName.trim() === ''
+      ? null
+      : altName.trim();
   const updatedAt = new Date().toISOString();
 
   try {
-    await execute(
-      'UPDATE skud_objects SET name = $1, updated_at = $2 WHERE id = $3',
-      [normalizedName, updatedAt, objectId],
-    );
+    if (normalizedAltName === undefined) {
+      await execute(
+        'UPDATE skud_objects SET name = $1, updated_at = $2 WHERE id = $3',
+        [normalizedName, updatedAt, objectId],
+      );
+    } else {
+      await execute(
+        'UPDATE skud_objects SET name = $1, alt_name = $2, updated_at = $3 WHERE id = $4',
+        [normalizedName, normalizedAltName, updatedAt, objectId],
+      );
+    }
   } catch (error) {
     throw formatTravelFeatureError(error);
   }
