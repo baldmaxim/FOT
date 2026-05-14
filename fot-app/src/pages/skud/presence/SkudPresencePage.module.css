@@ -195,6 +195,54 @@
   text-align: center;
 }
 
+.companyFilterSearch {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-primary);
+  padding: 4px 4px 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.companyFilterSearchIcon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+.companyFilterSearchInput {
+  flex: 1 1 auto;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  box-sizing: border-box;
+  outline: none;
+}
+
+.companyFilterSearchInput:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-muted, rgba(59, 130, 246, 0.15));
+}
+
+.companyFilterRowSynced {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.chipSynced {
+  font-weight: 700;
+}
+
 .companyFilterRow {
   display: flex;
   align-items: center;

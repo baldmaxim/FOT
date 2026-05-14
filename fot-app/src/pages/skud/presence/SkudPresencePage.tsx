@@ -130,6 +130,10 @@ const ObjectCard: FC<{
   );
 };
 
+/** Synced-компании имеют local UUID. Unsynced = `sigur::ID`, fallback = `__no_company__`. */
+const isSyncedCompanyId = (id: string): boolean =>
+  !id.startsWith('sigur::') && id !== '__no_company__';
+
 const CompanyFilter: FC<{
   allCompanies: { id: string; name: string }[];
   selected: Set<string>;
@@ -137,6 +141,7 @@ const CompanyFilter: FC<{
   onClear: () => void;
 }> = ({ allCompanies, selected, onToggle, onClear }) => {
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -150,10 +155,21 @@ const CompanyFilter: FC<{
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
+  // Сброс поиска при закрытии — чтобы в следующий раз был чистый список.
+  useEffect(() => {
+    if (!open) setSearch('');
+  }, [open]);
+
   const selectedList = useMemo(
     () => allCompanies.filter(c => selected.has(c.id)),
     [allCompanies, selected],
   );
+
+  const visibleCompanies = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return allCompanies;
+    return allCompanies.filter(c => c.name.toLowerCase().includes(q));
+  }, [allCompanies, search]);
 
   return (
     <div className={styles.companyFilter} ref={wrapperRef}>
@@ -167,18 +183,21 @@ const CompanyFilter: FC<{
         <span className={styles.companyFilterCaret} aria-hidden>▾</span>
       </button>
 
-      {selectedList.map(company => (
-        <button
-          key={company.id}
-          type="button"
-          className={`${styles.chip} ${styles.chipActive}`}
-          onClick={() => onToggle(company.id)}
-          title="Убрать из фильтра"
-        >
-          {company.name}
-          <span className={styles.chipRemove} aria-hidden>×</span>
-        </button>
-      ))}
+      {selectedList.map(company => {
+        const isSynced = isSyncedCompanyId(company.id);
+        return (
+          <button
+            key={company.id}
+            type="button"
+            className={`${styles.chip} ${styles.chipActive} ${isSynced ? styles.chipSynced : ''}`}
+            onClick={() => onToggle(company.id)}
+            title="Убрать из фильтра"
+          >
+            {company.name}
+            <span className={styles.chipRemove} aria-hidden>×</span>
+          </button>
+        );
+      })}
 
       {selected.size > 0 && (
         <button type="button" className={styles.chipClear} onClick={onClear}>
@@ -188,11 +207,25 @@ const CompanyFilter: FC<{
 
       {open && (
         <div className={styles.companyFilterPanel}>
-          {allCompanies.length === 0 ? (
-            <div className={styles.companyFilterEmpty}>Компании не найдены</div>
+          <div className={styles.companyFilterSearch}>
+            <SearchIcon className={styles.companyFilterSearchIcon} />
+            <input
+              type="search"
+              className={styles.companyFilterSearchInput}
+              placeholder="Поиск компании"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              autoFocus
+            />
+          </div>
+          {visibleCompanies.length === 0 ? (
+            <div className={styles.companyFilterEmpty}>
+              {allCompanies.length === 0 ? 'Компании не найдены' : 'Ничего не найдено'}
+            </div>
           ) : (
-            allCompanies.map(company => {
+            visibleCompanies.map(company => {
               const isActive = selected.has(company.id);
+              const isSynced = isSyncedCompanyId(company.id);
               return (
                 <label key={company.id} className={styles.companyFilterRow}>
                   <input
@@ -200,7 +233,12 @@ const CompanyFilter: FC<{
                     checked={isActive}
                     onChange={() => onToggle(company.id)}
                   />
-                  <span>{company.name}</span>
+                  <span
+                    className={isSynced ? styles.companyFilterRowSynced : undefined}
+                    title={isSynced ? 'Синхронизирована с ФОТ' : 'Только в Sigur'}
+                  >
+                    {company.name}
+                  </span>
                 </label>
               );
             })
