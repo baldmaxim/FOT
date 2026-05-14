@@ -28,9 +28,20 @@ const FAILURE_TYPE_LABELS: Record<string, string> = {
   FACE_MASK_VERIFICATION_FAILED: 'Маска отсутствует',
   FACE_MASK_VERIFICATION_PASSED: 'Маска присутствует',
   UNKNOWN: 'Неизвестное событие',
+  passDeny: 'Доступ запрещён',
+  passDeny2: 'Доступ запрещён',
+  passDetected: 'Проход зафиксирован',
+  accessAborted: 'Проход отменён (таймаут)',
+  readerError: 'Ошибка считывателя',
 };
 
 export const formatFailureType = (code: string | null | undefined): string => {
   if (!code) return 'Неизвестно';
-  return FAILURE_TYPE_LABELS[code] ?? code;
+  const exact = FAILURE_TYPE_LABELS[code];
+  if (exact) return exact;
+  if (/^pass_?deny\d*$/i.test(code)) return 'Доступ запрещён';
+  if (/^access_?aborted\d*$/i.test(code)) return 'Проход отменён (таймаут)';
+  if (/^pass_?detected\d*$/i.test(code)) return 'Проход зафиксирован';
+  if (/^TYPE_\d+$/i.test(code)) return 'Сигнал СКУД';
+  return code;
 };
