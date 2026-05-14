@@ -295,6 +295,18 @@
   gap: 14px;
 }
 
+/* Full-page-вид для пользователя с приписанным единственным объектом. */
+.singleObjectView {
+  max-width: none;
+  max-height: none;
+  box-shadow: none;
+}
+
+.singleObjectView .modalBody {
+  /* Скролл-контейнер не нужен — пусть страница сама скроллится. */
+  overflow-y: visible;
+}
+
 .card {
   background: var(--bg-secondary);
   border: 1px solid var(--border);

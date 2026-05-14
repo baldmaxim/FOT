@@ -99,6 +99,7 @@ export interface AuthenticatedRequest extends Request {
     two_factor_verified: boolean;
     company_scope?: CompanyScope;
     __company_subtree_ids?: string[];
+    __skud_object_scope?: { is_unrestricted: boolean; object_ids: string[] };
   };
 }
 

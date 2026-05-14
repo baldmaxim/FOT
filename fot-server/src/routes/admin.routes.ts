@@ -101,6 +101,11 @@ router.patch('/users/:id/employee', requirePageAccess('/admin/users', 'edit'), a
 router.put('/users/:id/department-access', requirePageAccess('/admin/users', 'edit'), adminController.updateUserDepartmentAccess);
 router.put('/employees/:id/department-access', requirePageAccess('/admin/users', 'edit'), adminController.updateEmployeeDepartmentAccess);
 
+// Приписка сотрудника к объектам строительства (миграция 092).
+router.get('/skud-objects', requirePageAccess('/admin/users', 'view'), adminController.listSkudObjectsForAssignment);
+router.get('/employees/:id/skud-objects', requirePageAccess('/admin/users', 'view'), adminController.getEmployeeSkudObjects);
+router.put('/employees/:id/skud-objects', requirePageAccess('/admin/users', 'edit'), adminController.updateEmployeeSkudObjectAccess);
+
 // Начальник участка: флаг + прямые назначения сотрудников (миграция 090).
 router.patch('/users/:id/site-supervisor', requirePageAccess('/admin/users', 'edit'), adminController.setSiteSupervisor);
 router.put('/users/:id/employee-access', requirePageAccess('/admin/users', 'edit'), adminController.updateUserEmployeeAccess);

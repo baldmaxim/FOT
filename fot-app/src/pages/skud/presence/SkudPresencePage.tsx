@@ -8,6 +8,7 @@ import type {
   IPresenceObjectEmployee,
 } from '../../../types';
 import { ObjectDetailsModal } from './ObjectDetailsModal';
+import { ObjectDetailView } from './ObjectDetailView';
 import styles from './SkudPresencePage.module.css';
 
 const TOP_COMPANIES_LIMIT = 5;
@@ -247,6 +248,13 @@ export const SkudPresencePage: FC = () => {
   const isFiltering = search.trim() !== '' || selectedCompanies.size > 0;
   const displayedTotal = isFiltering ? filtered.filteredCount : filtered.totalOnline;
 
+  // Detail-view: ровно 1 приписанный объект (бэк отдаст ровно 1 bucket).
+  // При is_unrestricted рендерим обычную сетку даже если backend случайно
+  // вернул 1 bucket (например, осталась всего одна стройка в системе).
+  const isSingleObjectView = !!data
+    && !data.is_unrestricted
+    && data.assigned_object_ids.length === 1;
+
   return (
     <div className={styles.page}>
       <div className={styles.toolbar}>
@@ -315,15 +323,19 @@ export const SkudPresencePage: FC = () => {
         </div>
       )}
 
-      <div className={styles.grid}>
-        {filtered.buckets.map(bucket => (
-          <ObjectCard
-            key={bucket.object_id ?? '__no_object__'}
-            bucket={bucket}
-            onOpenDetails={setDetailsBucket}
-          />
-        ))}
-      </div>
+      {isSingleObjectView && filtered.buckets[0] ? (
+        <ObjectDetailView bucket={filtered.buckets[0]} className={styles.singleObjectView} />
+      ) : (
+        <div className={styles.grid}>
+          {filtered.buckets.map(bucket => (
+            <ObjectCard
+              key={bucket.object_id ?? '__no_object__'}
+              bucket={bucket}
+              onOpenDetails={setDetailsBucket}
+            />
+          ))}
+        </div>
+      )}
 
       {detailsBucket && (
         <ObjectDetailsModal

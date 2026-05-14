@@ -191,6 +191,28 @@ export const adminService = {
     return response.data;
   },
 
+  async listSkudObjectsForAssignment(): Promise<Array<{ id: string; name: string }>> {
+    const response = await apiClient.get<ApiResponse<Array<{ id: string; name: string }>>>(
+      '/admin/skud-objects',
+    );
+    return response.data;
+  },
+
+  async getEmployeeSkudObjects(employeeId: number): Promise<{ object_ids: string[] }> {
+    const response = await apiClient.get<ApiResponse<{ object_ids: string[] }>>(
+      `/admin/employees/${employeeId}/skud-objects`,
+    );
+    return response.data;
+  },
+
+  async updateEmployeeSkudObjectAccess(employeeId: number, objectIds: string[]): Promise<{ object_ids: string[] }> {
+    const response = await apiClient.put<ApiResponse<{ object_ids: string[] }>>(
+      `/admin/employees/${employeeId}/skud-objects`,
+      { object_ids: objectIds },
+    );
+    return response.data;
+  },
+
   async setSiteSupervisor(userId: string, value: boolean): Promise<{ id: string; is_site_supervisor: boolean }> {
     const response = await apiClient.patch<ApiResponse<{ id: string; is_site_supervisor: boolean }>>(
       `/admin/users/${userId}/site-supervisor`,

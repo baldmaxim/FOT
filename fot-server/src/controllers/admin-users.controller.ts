@@ -14,6 +14,11 @@ import {
   replaceUserEmployeeAccess,
 } from '../services/department-access.service.js';
 import {
+  listObjectIdsForEmployee,
+  replaceEmployeeObjectAccess,
+} from '../services/employee-skud-object-access.service.js';
+import { invalidatePresenceByObjectCache } from '../services/skud-presence-by-object.service.js';
+import {
   canAccessEmployeeInScope,
   resolveAccessibleDepartmentIds,
   resolveCompanyScope,
@@ -52,6 +57,10 @@ const updateDepartmentAccessSchema = z.object({
 
 const updateEmployeeAccessSchema = z.object({
   employee_ids: z.array(z.number().int().positive()).default([]),
+});
+
+const updateEmployeeSkudObjectsSchema = z.object({
+  object_ids: z.array(z.string().uuid()).default([]),
 });
 
 const setSiteSupervisorSchema = z.object({
@@ -1684,6 +1693,135 @@ export const adminUsersController = {
       }
       console.error('Update employee department access error:', error);
       res.status(500).json({ success: false, error: 'Не удалось обновить назначения сотрудника' });
+    }
+  },
+
+  /**
+   * GET /api/admin/skud-objects
+   * Плоский список активных объектов для UI назначений (только id + name).
+   */
+  async listSkudObjectsForAssignment(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const rows = await query<{ id: string; name: string }>(
+        `SELECT id, name FROM skud_objects WHERE is_active = true ORDER BY name`,
+      );
+      res.json({ success: true, data: rows });
+    } catch (error) {
+      console.error('List skud-objects for assignment error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить объекты' });
+    }
+  },
+
+  /**
+   * GET /api/admin/employees/:id/skud-objects
+   * Возвращает список skud_object_id, к которым приписан сотрудник.
+   */
+  async getEmployeeSkudObjects(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const employeeId = z.coerce.number().int().positive().parse(req.params.id);
+
+      const employee = await queryOne<{ id: number }>(
+        'SELECT id FROM employees WHERE id = $1',
+        [employeeId],
+      );
+      if (!employee) {
+        res.status(404).json({ success: false, error: 'Сотрудник не найден' });
+        return;
+      }
+
+      const allowed = await canAccessEmployeeInScope(req, employeeId);
+      if (!allowed) {
+        res.status(403).json({ success: false, error: 'Сотрудник вне вашей зоны доступа' });
+        return;
+      }
+
+      const objectIds = await listObjectIdsForEmployee(employeeId);
+      res.json({ success: true, data: { object_ids: objectIds } });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Get employee skud-objects error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить объекты сотрудника' });
+    }
+  },
+
+  /**
+   * PUT /api/admin/employees/:id/skud-objects
+   * Полная замена списка объектов, к которым приписан сотрудник.
+   */
+  async updateEmployeeSkudObjectAccess(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const employeeId = z.coerce.number().int().positive().parse(req.params.id);
+      const { object_ids } = updateEmployeeSkudObjectsSchema.parse(req.body);
+      const normalizedObjectIds = [...new Set(object_ids.map(value => value.trim()))];
+
+      const employee = await queryOne<{ id: number; full_name: string | null }>(
+        'SELECT id, full_name FROM employees WHERE id = $1',
+        [employeeId],
+      );
+      if (!employee) {
+        res.status(404).json({ success: false, error: 'Сотрудник не найден' });
+        return;
+      }
+
+      const employeeAllowed = await canAccessEmployeeInScope(req, employeeId);
+      if (!employeeAllowed) {
+        res.status(403).json({ success: false, error: 'Сотрудник вне вашей зоны доступа' });
+        return;
+      }
+
+      if (normalizedObjectIds.length > 0) {
+        const existing = await query<{ id: string }>(
+          'SELECT id FROM skud_objects WHERE id = ANY($1::uuid[])',
+          [normalizedObjectIds],
+        );
+        const foundIds = new Set(existing.map(row => row.id));
+        const missing = normalizedObjectIds.filter(oid => !foundIds.has(oid));
+        if (missing.length > 0) {
+          res.status(400).json({
+            success: false,
+            error: 'Некоторые объекты не найдены',
+            details: { missing_object_ids: missing },
+          });
+          return;
+        }
+      }
+
+      const savedObjectIds = await replaceEmployeeObjectAccess({
+        employeeId,
+        objectIds: normalizedObjectIds,
+        actorUserId: req.user.id,
+      });
+
+      await auditService.logFromRequest(req, req.user.id, 'EMPLOYEE_SKUD_OBJECT_ACCESS_CHANGED', {
+        entityType: 'employee',
+        entityId: String(employeeId),
+        details: {
+          employee_id: employeeId,
+          employee_full_name: employee.full_name,
+          assigned_object_ids: savedObjectIds,
+          assigned_object_count: savedObjectIds.length,
+        },
+      });
+
+      invalidatePresenceByObjectCache();
+
+      const linkedProfile = await queryOne<{ id: string }>(
+        'SELECT id FROM user_profiles WHERE employee_id = $1 LIMIT 1',
+        [employeeId],
+      );
+      emitDepartmentAccessChanged(linkedProfile?.id);
+
+      res.json({ success: true, data: { object_ids: savedObjectIds } });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Update employee skud-object access error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось обновить объекты сотрудника' });
     }
   },
 

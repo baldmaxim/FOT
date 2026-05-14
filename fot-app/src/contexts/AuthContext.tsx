@@ -10,6 +10,7 @@ import {
   timesheetKeys,
 } from '../api/queryKeys';
 import { wsService } from '../services/websocket';
+import { presenceByObjectQueryKey } from '../hooks/useEmployeeDirectory';
 import type { RoleLabel } from '../services/rolesService';
 import type {
   User,
@@ -249,6 +250,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       void refreshProfileRef.current();
       void queryClient.invalidateQueries({ queryKey: structureKeys.all });
       void queryClient.invalidateQueries({ queryKey: employeesKeys.all });
+      // Приписка сотрудника к объектам изменилась → /skud-presence должен
+      // перетянуть свежий scope (вкл. is_unrestricted и assigned_object_ids).
+      void queryClient.invalidateQueries({ queryKey: presenceByObjectQueryKey() });
     });
     return () => {
       unsubscribe();

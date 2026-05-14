@@ -50,10 +50,17 @@ export interface IPresenceByObjectResponse {
 }
 
 const CACHE_TTL_MS = 30_000;
-let cache: { data: IPresenceByObjectResponse; expiresAt: number } | null = null;
+// Кеш ключуется по отсортированному списку allowedObjectIds (или '__all__'),
+// чтобы юзер с приписками к конкретным объектам не получал общий кеш с админом.
+const cache = new Map<string, { data: IPresenceByObjectResponse; expiresAt: number }>();
+
+function buildCacheKey(allowedObjectIds: string[] | 'all'): string {
+  if (allowedObjectIds === 'all') return '__all__';
+  return [...allowedObjectIds].sort().join(',');
+}
 
 export function invalidatePresenceByObjectCache(): void {
-  cache = null;
+  cache.clear();
 }
 
 const collator = new Intl.Collator('ru', { sensitivity: 'base' });
@@ -93,13 +100,18 @@ interface IUnsyncedEvent {
   access_point: string | null;
 }
 
-export async function getPresenceByObject(): Promise<IPresenceByObjectResponse> {
+export async function getPresenceByObject(
+  opts: { allowedObjectIds?: string[] | 'all' } = {},
+): Promise<IPresenceByObjectResponse> {
+  const allowedObjectIds: string[] | 'all' = opts.allowedObjectIds ?? 'all';
+  const cacheKey = buildCacheKey(allowedObjectIds);
   const now = Date.now();
-  if (cache && cache.expiresAt > now) return cache.data;
+  const cached = cache.get(cacheKey);
+  if (cached && cached.expiresAt > now) return cached.data;
 
   const today = formatDateToISO(new Date());
 
-  const [presence, travelObjects, companyIndex, internalPoints, unsyncedEvents] = await Promise.all([
+  const [presence, travelObjectsAll, companyIndex, internalPoints, unsyncedEvents] = await Promise.all([
     getPresence({ departmentId: null }),
     listTravelObjects(),
     getCompanyResolveIndex(),
@@ -112,6 +124,14 @@ export async function getPresenceByObject(): Promise<IPresenceByObjectResponse> 
       [today],
     ),
   ]);
+
+  // Если задан scope — оставляем только разрешённые объекты. Сотрудники,
+  // пробившиеся на access_points чужих объектов, попадут в null (см. ниже)
+  // и потом будут отброшены из выдачи вместе с bucket'ом «Без объекта».
+  const allowedSet = allowedObjectIds === 'all' ? null : new Set(allowedObjectIds);
+  const travelObjects = allowedSet
+    ? travelObjectsAll.filter(obj => allowedSet.has(obj.id))
+    : travelObjectsAll;
 
   // Map access_point_name → travel_object_id.
   const accessPointToObjectId = new Map<string, string>();
@@ -307,6 +327,9 @@ export async function getPresenceByObject(): Promise<IPresenceByObjectResponse> 
   }
 
   // ─── Финализация ───
+  // При scoped-доступе (allowedSet !== null) bucket «Без объекта» содержит
+  // сотрудников, пробившихся на access_points ЧУЖИХ объектов — их видеть нельзя.
+  if (allowedSet) buckets.delete(NO_OBJECT_BUCKET_ID);
   const finalBuckets: IPresenceObjectBucket[] = [];
   for (const bucket of buckets.values()) {
     // Пост-merge: компании с одинаковым normalized именем (но разными id —
@@ -356,13 +379,17 @@ export async function getPresenceByObject(): Promise<IPresenceByObjectResponse> 
   }
   finalBuckets.sort((a, b) => compareByCountThenName(a.online_count, b.online_count, a.object_name, b.object_name));
 
-  const totalOnline = onlineEmployees.length + onlineUnsynced.length;
+  // При scoped-доступе считаем total по финальным buckets (без чужих объектов);
+  // без скоупа — глобальный счётчик онлайн.
+  const totalOnline = allowedSet
+    ? finalBuckets.reduce((sum, bucket) => sum + bucket.online_count, 0)
+    : onlineEmployees.length + onlineUnsynced.length;
   const response: IPresenceByObjectResponse = {
     generated_at: new Date().toISOString(),
     total_online: totalOnline,
     buckets: finalBuckets,
   };
 
-  cache = { data: response, expiresAt: Date.now() + CACHE_TTL_MS };
+  cache.set(cacheKey, { data: response, expiresAt: Date.now() + CACHE_TTL_MS });
   return response;
 }

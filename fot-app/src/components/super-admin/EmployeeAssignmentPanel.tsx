@@ -20,7 +20,7 @@ interface IEmployeeAssignmentPanelProps {
   onSaved: () => void;
 }
 
-type Tab = 'department' | 'brigade' | 'person';
+type Tab = 'department' | 'brigade' | 'person' | 'object';
 
 const normalizeText = (value: string | null | undefined): string => (
   String(value || '')
@@ -59,12 +59,30 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [draftDepartmentIds, setDraftDepartmentIds] = useState<string[]>([]);
   const [draftDirectIds, setDraftDirectIds] = useState<number[]>([]);
+  const [draftObjectIds, setDraftObjectIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
   const directReportsQueryKey = ['admin-direct-reports', employee?.employee_id ?? 0];
   const directReportsQuery = useQuery<IDirectReport[]>({
     queryKey: directReportsQueryKey,
     queryFn: () => (employee ? directReportsService.list({ managerEmployeeId: employee.employee_id }) : Promise.resolve([])),
+    enabled: !!employee && isOpen,
+    staleTime: 30_000,
+  });
+
+  const skudObjectsQuery = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ['admin-skud-objects-list'],
+    queryFn: () => adminService.listSkudObjectsForAssignment(),
+    enabled: isOpen,
+    staleTime: 5 * 60_000,
+  });
+
+  const employeeObjectsQueryKey = ['admin-employee-skud-objects', employee?.employee_id ?? 0];
+  const employeeObjectsQuery = useQuery<{ object_ids: string[] }>({
+    queryKey: employeeObjectsQueryKey,
+    queryFn: () => (employee
+      ? adminService.getEmployeeSkudObjects(employee.employee_id)
+      : Promise.resolve({ object_ids: [] })),
     enabled: !!employee && isOpen,
     staleTime: 30_000,
   });
@@ -76,6 +94,10 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const initialDirectIds = useMemo(
     () => (directReportsQuery.data || []).map(r => r.subordinate_employee_id),
     [directReportsQuery.data],
+  );
+  const initialObjectIds = useMemo(
+    () => [...(employeeObjectsQuery.data?.object_ids || [])],
+    [employeeObjectsQuery.data?.object_ids],
   );
 
   // Сброс drafts при открытии новой панели/обновлении источников.
@@ -92,6 +114,12 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
       setDraftDirectIds(initialDirectIds);
     }
   }, [isOpen, initialDirectIds]);
+
+  useEffect(() => {
+    if (isOpen) {
+      setDraftObjectIds(initialObjectIds);
+    }
+  }, [isOpen, initialObjectIds]);
 
   const flatDepts = useMemo<IFlatDepartmentOption[]>(
     () => getTreeFlatDepartments(structureQuery.data?.departments || []),
@@ -124,7 +152,8 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
 
   const hasDepartmentChanges = !arraysEqual(draftDepartmentIds, initialDepartmentIds);
   const hasDirectChanges = !numbersEqual(draftDirectIds, initialDirectIds);
-  const hasChanges = hasDepartmentChanges || hasDirectChanges;
+  const hasObjectChanges = !arraysEqual(draftObjectIds, initialObjectIds);
+  const hasChanges = hasDepartmentChanges || hasDirectChanges || hasObjectChanges;
 
   const handleRequestClose = useCallback(() => {
     if (hasChanges) {
@@ -148,9 +177,16 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
       : [...prev, subordinateEmployeeId]));
   };
 
+  const toggleObject = (objectId: string) => {
+    setDraftObjectIds(prev => (prev.includes(objectId)
+      ? prev.filter(id => id !== objectId)
+      : [...prev, objectId]));
+  };
+
   const handleReset = () => {
     setDraftDepartmentIds(initialDepartmentIds);
     setDraftDirectIds(initialDirectIds);
+    setDraftObjectIds(initialObjectIds);
     setSearchQuery('');
   };
 
@@ -194,10 +230,15 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
           toast.error(errors.join('; '));
         }
       }
+      // 3) Объекты — единый PUT.
+      if (hasObjectChanges) {
+        await adminService.updateEmployeeSkudObjectAccess(employee.employee_id, draftObjectIds);
+      }
       toast.success('Назначения сохранены');
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['admin-employees', 'department-access'] }),
         queryClient.invalidateQueries({ queryKey: directReportsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: employeeObjectsQueryKey }),
       ]);
       onSaved();
       onClose();
@@ -257,6 +298,13 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
           >
             Человек ({draftDirectIds.length})
           </button>
+          <button
+            type="button"
+            className={`${styles.assignmentPanelTab} ${activeTab === 'object' ? styles.assignmentPanelTabActive : ''}`}
+            onClick={() => { setActiveTab('object'); setSearchQuery(''); }}
+          >
+            Объекты ({draftObjectIds.length})
+          </button>
         </nav>
 
         <div className={styles.assignmentPanelBody}>
@@ -291,6 +339,16 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               candidates={personCandidates}
               selectedIdsSet={directIdsSet}
               onToggle={toggleDirect}
+            />
+          )}
+
+          {activeTab === 'object' && (
+            <ObjectList
+              objects={skudObjectsQuery.data || []}
+              search={searchQuery}
+              selectedIds={draftObjectIds}
+              onToggle={toggleObject}
+              loading={skudObjectsQuery.isLoading || employeeObjectsQuery.isLoading}
             />
           )}
         </div>
@@ -452,6 +510,63 @@ const PersonList: FC<{
         </>
       )}
       {rest.map(c => renderItem(c, 'rest'))}
+    </div>
+  );
+};
+
+const ObjectList: FC<{
+  objects: Array<{ id: string; name: string }>;
+  search: string;
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+  loading: boolean;
+}> = ({ objects, search, selectedIds, onToggle, loading }) => {
+  const normalizedSearch = normalizeText(search);
+  const filtered = objects.filter(o => !normalizedSearch || normalizeText(o.name).includes(normalizedSearch));
+  const selectedSet = new Set(selectedIds);
+
+  if (loading) {
+    return <div className={styles.departmentAccessEmpty}>Загрузка...</div>;
+  }
+  if (filtered.length === 0) {
+    return (
+      <div className={styles.departmentAccessEmpty}>
+        {normalizedSearch ? 'По запросу ничего не найдено' : 'Нет доступных объектов'}
+      </div>
+    );
+  }
+
+  const selected = filtered.filter(o => selectedSet.has(o.id));
+  const rest = filtered.filter(o => !selectedSet.has(o.id));
+
+  const renderItem = (obj: { id: string; name: string }, keyPrefix: string) => {
+    const checked = selectedSet.has(obj.id);
+    return (
+      <label
+        key={`${keyPrefix}-${obj.id}`}
+        className={`${styles.departmentAccessItem} ${checked ? styles.departmentAccessItemChecked : ''}`}
+      >
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={() => onToggle(obj.id)}
+        />
+        <span className={styles.departmentAccessItemLabel}>{obj.name}</span>
+      </label>
+    );
+  };
+
+  return (
+    <div className={styles.assignmentPanelList}>
+      {selected.length > 0 && (
+        <>
+          <div className={styles.departmentAccessGroupHeader}>
+            Назначенные ({selected.length})
+          </div>
+          {selected.map(o => renderItem(o, 'selected'))}
+        </>
+      )}
+      {rest.map(o => renderItem(o, 'rest'))}
     </div>
   );
 };

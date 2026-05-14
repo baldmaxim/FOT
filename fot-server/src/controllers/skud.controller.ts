@@ -9,6 +9,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { getDashboardStats } from '../services/skud-dashboard.service.js';
 import { getPresence } from '../services/skud-presence.service.js';
 import { getPresenceByObject } from '../services/skud-presence-by-object.service.js';
+import { resolveAccessibleObjectIdsForRequest } from '../services/employee-skud-object-access.service.js';
 import { getDisciplineViolations } from '../services/skud-discipline.service.js';
 import {
   buildDisciplineWorkbook,
@@ -1080,11 +1081,23 @@ const skudReadController = {
   /**
    * GET /api/skud/presence-by-object
    * Агрегированное присутствие по физическим объектам (travel_objects) и компаниям.
+   * Для пользователей с приписками в employee_skud_object_access выдача
+   * фильтруется по их разрешённым object_ids; для админов/тех-юзеров без
+   * приписок возвращается полная картина.
    */
-  async getPresenceByObject(_req: AuthenticatedRequest, res: Response): Promise<void> {
+  async getPresenceByObject(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const data = await getPresenceByObject();
-      res.json({ success: true, data });
+      const scope = await resolveAccessibleObjectIdsForRequest(req);
+      const allowedObjectIds = scope.is_unrestricted ? 'all' as const : scope.object_ids;
+      const data = await getPresenceByObject({ allowedObjectIds });
+      res.json({
+        success: true,
+        data: {
+          ...data,
+          is_unrestricted: scope.is_unrestricted,
+          assigned_object_ids: scope.object_ids,
+        },
+      });
     } catch (error) {
       console.error('Get presence by object error:', error);
       res.status(500).json({ success: false, error: 'Ошибка получения присутствия по объектам' });
