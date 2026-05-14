@@ -2183,6 +2183,8 @@
   }
   .ec-cal-nav {
     gap: 6px;
+    width: 100%;
+    justify-content: space-between;
   }
   .ec-cal-nav-btn {
     width: 24px;
