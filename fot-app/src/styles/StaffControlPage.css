@@ -310,10 +310,8 @@
 }
 
 .sc-filter-search {
-  flex-basis: 100%;
-  min-width: 200px;
-  max-width: 360px;
-  align-self: flex-start;
+  order: -1;
+  flex: 0 0 auto;
 }
 
 .sc-bulk-bar {
