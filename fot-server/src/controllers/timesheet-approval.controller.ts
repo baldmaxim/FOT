@@ -70,8 +70,9 @@ function parseRangeFromQuery(query: Record<string, unknown>): ITimesheetDateRang
   return { startDate, endDate };
 }
 
-function buildRangeRedirectPath(root: string, range: ITimesheetDateRange): string {
-  return `${root}?from=${range.startDate}&to=${range.endDate}`;
+function buildRangeRedirectPath(root: string, range: ITimesheetDateRange, departmentId?: string): string {
+  const base = `${root}?from=${range.startDate}&to=${range.endDate}`;
+  return departmentId ? `${base}&dept=${departmentId}` : base;
 }
 
 async function loadDepartmentName(departmentId: string): Promise<string> {
@@ -174,7 +175,7 @@ async function notifyDepartmentAboutReview(
   const departmentName = await loadDepartmentName(departmentId);
   const rangeLabel = formatTimesheetRangeLabel(range.startDate, range.endDate);
   const commentSuffix = comment ? ` Комментарий: ${comment}` : '';
-  const path = buildRangeRedirectPath('/timesheet', range);
+  const path = buildRangeRedirectPath('/timesheet', range, departmentId);
 
   let title = 'Статус табеля изменён';
   let body = `Отдел ${departmentName}: статус табеля за ${rangeLabel} изменён.${commentSuffix}`;

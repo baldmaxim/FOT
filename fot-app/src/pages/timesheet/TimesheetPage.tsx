@@ -212,6 +212,17 @@ export const TimesheetPage: FC = () => {
     setSelectedDeptId(primaryDepartmentId || managedDepartmentIds[0] || null);
   }, [effectiveSelectedDeptId, isMultiDepartmentManager, managedDepartmentIds, primaryDepartmentId]);
 
+  useEffect(() => {
+    if (timesheetMode !== 'department') return;
+    if (!queryAssignedDept) return;
+    if (selectedDeptId === queryAssignedDept) return;
+    const hasAccess = canManageAllDepartments
+      || managedDepartmentIds.includes(queryAssignedDept);
+    if (hasAccess) {
+      setSelectedDeptId(queryAssignedDept);
+    }
+  }, [queryAssignedDept, timesheetMode, canManageAllDepartments, managedDepartmentIds, selectedDeptId]);
+
   // Close dept/assignee/brigade dropdown on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
