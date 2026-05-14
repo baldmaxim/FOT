@@ -1,4 +1,5 @@
 import type { Response } from 'express';
+import * as Sentry from '@sentry/node';
 import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { r2Service } from '../services/r2.service.js';
@@ -18,16 +19,16 @@ interface MulterRequest extends AuthenticatedRequest {
 }
 
 const RECEIPT_COLUMNS = `
-  id, document_id, employee_id,
-  payment_date, payment_amount, commission, total_amount,
-  payer_full_name, payer_inn, payer_passport, document_number,
-  payment_purpose, patent_number, patent_issue_date, kbk, oktmo, uin,
-  recipient_name, recipient_inn, recipient_kpp, recipient_bank_name, recipient_bank_bic, recipient_account, recipient_corr_account,
-  payer_bank_name, payer_bank_bic, payer_account, payment_method,
-  source_type, raw_response, confidence, recognition_model, prompt_tokens, completion_tokens, cost_usd,
-  needs_review, reviewed_by, reviewed_at, manually_edited,
-  period_start, period_end,
-  created_at, updated_at
+  r.id, r.document_id, r.employee_id,
+  r.payment_date, r.payment_amount, r.commission, r.total_amount,
+  r.payer_full_name, r.payer_inn, r.payer_passport, r.document_number,
+  r.payment_purpose, r.patent_number, r.patent_issue_date, r.kbk, r.oktmo, r.uin,
+  r.recipient_name, r.recipient_inn, r.recipient_kpp, r.recipient_bank_name, r.recipient_bank_bic, r.recipient_account, r.recipient_corr_account,
+  r.payer_bank_name, r.payer_bank_bic, r.payer_account, r.payment_method,
+  r.source_type, r.raw_response, r.confidence, r.recognition_model, r.prompt_tokens, r.completion_tokens, r.cost_usd,
+  r.needs_review, r.reviewed_by, r.reviewed_at, r.manually_edited,
+  r.period_start, r.period_end,
+  r.created_at, r.updated_at
 `;
 
 const PATCH_ALLOWED_FIELDS = new Set<keyof PatentPaymentReceiptPatch>([
@@ -173,6 +174,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     res.json({ success: true, data: result });
   } catch (err) {
     console.error('patent-receipts.list error:', err);
+    Sentry.captureException(err, { tags: { route: 'GET /api/patent-receipts' } });
     res.status(500).json({ success: false, error: 'Ошибка загрузки списка чеков' });
   }
 };
@@ -236,6 +238,7 @@ const getOne = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     res.json({ success: true, data: { ...decrypted, download_url } });
   } catch (err) {
     console.error('patent-receipts.getOne error:', err);
+    Sentry.captureException(err, { tags: { route: 'GET /api/patent-receipts/:id' } });
     res.status(500).json({ success: false, error: 'Ошибка загрузки чека' });
   }
 };
@@ -283,8 +286,8 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     const idPlaceholder = addParam(id);
 
     const data = await queryOne<Record<string, unknown>>(
-      `UPDATE patent_payment_receipts SET ${setClauses.join(', ')}
-        WHERE id = ${idPlaceholder}
+      `UPDATE patent_payment_receipts AS r SET ${setClauses.join(', ')}
+        WHERE r.id = ${idPlaceholder}
         RETURNING ${RECEIPT_COLUMNS}`,
       params,
     );
@@ -297,6 +300,7 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     res.json({ success: true, data: decryptReceiptRow(data) });
   } catch (err) {
     console.error('patent-receipts.update error:', err);
+    Sentry.captureException(err, { tags: { route: 'PATCH /api/patent-receipts/:id' } });
     res.status(500).json({ success: false, error: 'Ошибка обновления чека' });
   }
 };
@@ -355,6 +359,7 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
     res.json({ success: true, data: result });
   } catch (err) {
     console.error('patent-receipts.getMy error:', err);
+    Sentry.captureException(err, { tags: { route: 'GET /api/patent-receipts/my' } });
     res.status(500).json({ success: false, error: 'Ошибка загрузки чеков' });
   }
 };
@@ -450,6 +455,7 @@ const uploadMy = async (req: MulterRequest, res: Response): Promise<void> => {
     void aiReceiptRecognitionService.enqueueRecognition(documentId);
   } catch (err) {
     console.error('patent-receipts.uploadMy error:', err);
+    Sentry.captureException(err, { tags: { route: 'POST /api/patent-receipts/my/upload' } });
     res.status(500).json({ success: false, error: 'Ошибка загрузки чека' });
   }
 };
@@ -495,6 +501,7 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     res.json({ success: true });
   } catch (err) {
     console.error('patent-receipts.remove error:', err);
+    Sentry.captureException(err, { tags: { route: 'DELETE /api/patent-receipts/by-document/:documentId' } });
     const message = err instanceof Error ? err.message : 'Ошибка удаления чека';
     res.status(500).json({ success: false, error: message });
   }
@@ -521,6 +528,7 @@ const recognize = async (req: AuthenticatedRequest, res: Response): Promise<void
     res.json({ success: true, data: result });
   } catch (err) {
     console.error('patent-receipts.recognize error:', err);
+    Sentry.captureException(err, { tags: { route: 'POST /api/patent-receipts/:documentId/recognize' } });
     res.status(500).json({ success: false, error: err instanceof Error ? err.message : 'Ошибка распознавания' });
   }
 };
