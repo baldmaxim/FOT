@@ -539,6 +539,8 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAl
         is_active: false,
         show_actual_hours: false,
         hide_sidebar: false,
+        timesheet_months_back: 1,
+        timesheet_months_forward: 1,
         created_at: '',
         updated_at: '',
       });
