@@ -5,18 +5,18 @@ import {
   type ManagerDepartmentImportBrigadePreview,
   type ManagerDepartmentImportGroupPreview,
   type ManagerDepartmentImportPreview,
+  type IUserSlim,
 } from '../../services/adminService';
 import { employeeService } from '../../services/employeeService';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useToast } from '../../contexts/ToastContext';
 import type { Employee } from '../../types';
-import type { IUserFromApi } from './AllUsersTab';
 import { getTreeFlatDepartments } from '../../utils/departmentUtils';
 import { BrigadeWorkerTransferPanel } from './BrigadeWorkerTransferPanel';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
 
 interface IDepartmentAccessImportTabProps {
-  allUsers: IUserFromApi[];
+  allUsers: IUserSlim[];
   onReload: () => Promise<void>;
 }
 

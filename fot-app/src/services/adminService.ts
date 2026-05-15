@@ -29,6 +29,21 @@ interface UserFromApi {
   created_at: string;
 }
 
+export interface IUserSlim {
+  id: string;
+  full_name: string | null;
+  email?: string;
+  employee_id: number | null;
+}
+
+export interface IUsersPaginationMeta {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  roleCounts: Record<string, number>;
+}
+
 interface PendingUserFromApi {
   id: string;
   email: string;
@@ -136,6 +151,29 @@ export const adminService = {
   async getAllUsers(): Promise<UserFromApi[]> {
     const response = await apiClient.get<ApiResponse<UserFromApi[]>>('/admin/users');
     return response.data || [];
+  },
+
+  async getAllUsersSlim(): Promise<IUserSlim[]> {
+    const response = await apiClient.get<ApiResponse<IUserSlim[]>>('/admin/users?slim=1');
+    return response.data || [];
+  },
+
+  async getUsersPaginated(params: {
+    page: number;
+    pageSize: number;
+    search?: string;
+    role?: string;
+  }): Promise<{ data: UserFromApi[]; meta: IUsersPaginationMeta }> {
+    const qs = new URLSearchParams({
+      page: String(params.page),
+      pageSize: String(params.pageSize),
+      ...(params.search ? { search: params.search } : {}),
+      ...(params.role ? { role: params.role } : {}),
+    }).toString();
+    const response = await apiClient.get<
+      ApiResponse<UserFromApi[]> & { meta: IUsersPaginationMeta }
+    >(`/admin/users?${qs}`);
+    return { data: response.data || [], meta: response.meta };
   },
 
   async getEmployeeDepartmentAssignments(): Promise<EmployeeDepartmentAssignmentFromApi[]> {

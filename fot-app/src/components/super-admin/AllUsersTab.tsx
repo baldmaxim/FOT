@@ -1,9 +1,10 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FC } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { adminService } from '../../services/adminService';
 import { rolesService } from '../../services/rolesService';
 import { useStructureTree } from '../../hooks/useStructure';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
 import type { ChatInboundMode, EmployeePositionType, SystemRole, TwoFactorData } from '../../types';
@@ -40,11 +41,10 @@ interface ITwoFactorModal {
 }
 
 interface IAllUsersTabProps {
-  allUsers: IUserFromApi[];
-  loading?: boolean;
   onReload: () => Promise<void>;
-  patchAllUsersCache: (updater: (prev: IUserFromApi[]) => IUserFromApi[]) => void;
 }
+
+const PAGE_SIZE = 50;
 
 type IRoleOption = SystemRole;
 
@@ -323,7 +323,7 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
 
 UserRowExpanded.displayName = 'UserRowExpanded';
 
-export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, loading = false, onReload, patchAllUsersCache }) => {
+export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
   const toast = useToast();
   const queryClient = useQueryClient();
   const { getRoleLabel, profile, refreshProfile } = useAuth();
@@ -339,7 +339,9 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, loading = false, 
   const roles = useMemo(() => rolesQuery.data ?? [], [rolesQuery.data]);
   const structureQuery = useStructureTree();
   const [roleFilter, setRoleFilter] = useState<EmployeePositionType | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const debouncedSearch = useDebouncedValue(searchInput, 300);
+  const [page, setPage] = useState(1);
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
   const [twoFactorModal, setTwoFactorModal] = useState<ITwoFactorModal>({
     visible: false,
@@ -365,32 +367,76 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, loading = false, 
   const canManageCompanies = !!profile?.is_admin
     && (profile?.company_scope?.roots === 'all' || profile?.company_scope === undefined);
 
+  // Порядок ролей не зависит от counts (сортировка по is_admin + label),
+  // поэтому считаем его только из списка ролей — без цикла с pageQuery.
+  const sortedRoleCodes = useMemo(() => {
+    return [...roles]
+      .sort((a, b) => {
+        const adminDiff = Number(b.is_admin ? 1 : 0) - Number(a.is_admin ? 1 : 0);
+        if (adminDiff !== 0) return adminDiff;
+        return getRoleLabel(a.code).localeCompare(getRoleLabel(b.code), 'ru');
+      })
+      .map(role => role.code);
+  }, [getRoleLabel, roles]);
+
+  const effectiveRoleFilter = useMemo(() => {
+    if (roleFilter && sortedRoleCodes.includes(roleFilter)) {
+      return roleFilter;
+    }
+    return sortedRoleCodes[0] ?? null;
+  }, [roleFilter, sortedRoleCodes]);
+
+  const pageQuery = useQuery({
+    queryKey: ['admin-users', 'page', {
+      page,
+      pageSize: PAGE_SIZE,
+      search: debouncedSearch,
+      role: effectiveRoleFilter,
+    }],
+    queryFn: () => adminService.getUsersPaginated({
+      page,
+      pageSize: PAGE_SIZE,
+      search: debouncedSearch || undefined,
+      role: effectiveRoleFilter || undefined,
+    }),
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
+
+  const users = useMemo(() => pageQuery.data?.data ?? [], [pageQuery.data]);
+  const meta = pageQuery.data?.meta;
+  const totalPages = meta?.totalPages ?? 1;
+  const roleCounts = useMemo(() => meta?.roleCounts ?? {}, [meta]);
+
   const roleOptions = useMemo(() => {
     const codeSet = new Set<string>([
-      ...roles.map(role => role.code),
-      ...allUsers.map(user => user.position_type).filter(Boolean),
+      ...sortedRoleCodes,
+      ...Object.keys(roleCounts),
     ]);
-
     return Array.from(codeSet)
       .map(code => ({
         code,
         role: roles.find(role => role.code === code) ?? null,
-        count: allUsers.filter(user => user.position_type === code).length,
+        count: roleCounts[code] ?? 0,
       }))
       .sort((a, b) => {
         const adminDiff = Number(b.role?.is_admin ?? 0) - Number(a.role?.is_admin ?? 0);
         if (adminDiff !== 0) return adminDiff;
         return getRoleLabel(a.code).localeCompare(getRoleLabel(b.code), 'ru');
       });
-  }, [allUsers, getRoleLabel, roles]);
+  }, [getRoleLabel, roleCounts, roles, sortedRoleCodes]);
 
-  const effectiveRoleFilter = useMemo(() => {
-    if (!roleOptions.length) return null;
-    if (roleFilter && roleOptions.some(option => option.code === roleFilter)) {
-      return roleFilter;
-    }
-    return roleOptions[0].code;
-  }, [roleFilter, roleOptions]);
+  // Сброс на первую страницу при смене фильтра/поиска — корректировка
+  // состояния во время рендера (паттерн React для "reset on prop change"),
+  // чтобы не плодить каскадные ре-рендеры через эффект.
+  const [prevFilterKey, setPrevFilterKey] = useState(
+    `${debouncedSearch} ${effectiveRoleFilter ?? ''}`,
+  );
+  const filterKey = `${debouncedSearch} ${effectiveRoleFilter ?? ''}`;
+  if (filterKey !== prevFilterKey) {
+    setPrevFilterKey(filterKey);
+    setPage(1);
+  }
 
   const toggleExpand = useCallback((userId: string) => {
     setExpandedUserId(prev => prev === userId ? null : userId);
@@ -411,17 +457,13 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, loading = false, 
   const handleEmpLink = useCallback(async (userId: string, employeeId: number | null, empName?: string) => {
     try {
       await adminService.updateUserEmployee(userId, employeeId);
-      // Сначала оптимистичный патч — UI обновляется мгновенно. Затем фоновая
-      // инвалидация связанных кешей, чтобы подтянулись производные поля
-      // (email/2FA из auth, employee-department-access).
-      patchAllUsersCache((prev) => prev.map((u) => u.id === userId ? { ...u, employee_id: employeeId } : u));
       toast.success(employeeId ? `Привязан: ${empName ?? ''}` : 'Сотрудник отвязан');
-      void queryClient.invalidateQueries({ queryKey: ['admin-users', 'all'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
       void queryClient.invalidateQueries({ queryKey: ['admin-employees', 'department-access'] });
     } catch {
       toast.error('Ошибка привязки сотрудника');
     }
-  }, [patchAllUsersCache, queryClient, toast]);
+  }, [queryClient, toast]);
 
   const handleNameSave = useCallback(async (userId: string, name: string) => {
     try {
@@ -459,12 +501,12 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, loading = false, 
   const handleSiteSupervisorToggle = useCallback(async (userId: string, value: boolean) => {
     try {
       await adminService.setSiteSupervisor(userId, value);
-      patchAllUsersCache(prev => prev.map(u => u.id === userId ? { ...u, is_site_supervisor: value } : u));
+      void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
       toast.success(value ? 'Назначен начальником участка' : 'Снят с роли начальника участка');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка изменения флага');
     }
-  }, [patchAllUsersCache, toast]);
+  }, [queryClient, toast]);
 
   const handleDeleteUser = useCallback(async (userId: string) => {
     if (!confirm('Удалить пользователя из системы? Это действие необратимо.')) return;
@@ -515,18 +557,6 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, loading = false, 
     setTwoFactorModal({ visible: false, userId: '', userName: '', data: null, loading: false });
   };
 
-  const filteredUsers = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return allUsers.filter(u => {
-      if (effectiveRoleFilter && u.position_type !== effectiveRoleFilter) return false;
-      if (!q) return true;
-      return (
-        (u.full_name || '').toLowerCase().includes(q) ||
-        (u.email || '').toLowerCase().includes(q)
-      );
-    });
-  }, [allUsers, effectiveRoleFilter, searchQuery]);
-
   const buildAssignableRoles = useCallback((user: IUserFromApi): IRoleOption[] => {
     const list: IRoleOption[] = roles
       .filter(role => role.is_active || role.code === user.position_type)
@@ -568,8 +598,8 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, loading = false, 
 
       <div className={styles.userSearchRow}>
         <SearchInput
-          value={searchQuery}
-          onValueChange={setSearchQuery}
+          value={searchInput}
+          onValueChange={setSearchInput}
           placeholder="Найти пользователя по ФИО или email..."
         />
       </div>
@@ -583,11 +613,15 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, loading = false, 
           <span></span>
         </div>
 
-        {loading && allUsers.length === 0 && (
+        {pageQuery.isPending && (
           <div className={styles.loading}>Загрузка списка пользователей...</div>
         )}
 
-        {filteredUsers.map(user => {
+        {!pageQuery.isPending && users.length === 0 && (
+          <div className={styles.loading}>Пользователи не найдены</div>
+        )}
+
+        {users.map(user => {
           const isExpanded = expandedUserId === user.id;
 
           return (
@@ -661,6 +695,29 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, loading = false, 
           );
         })}
       </div>
+
+      {meta && totalPages > 1 && (
+        <div className={styles.pagination}>
+          <button
+            className={styles.paginationBtn}
+            disabled={page <= 1 || pageQuery.isFetching}
+            onClick={() => setPage(p => Math.max(1, p - 1))}
+          >
+            ← Назад
+          </button>
+          <span className={styles.paginationInfo}>
+            {page} / {totalPages}
+            {pageQuery.isFetching ? ' …' : ''}
+          </span>
+          <button
+            className={styles.paginationBtn}
+            disabled={page >= totalPages || pageQuery.isFetching}
+            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+          >
+            Вперёд →
+          </button>
+        </div>
+      )}
 
       {twoFactorModal.visible && (
         <div className={styles.modalOverlay} onClick={closeTwoFactorModal}>

@@ -74,7 +74,20 @@ router.use(authenticate);
 // /users/* инвалидирует кеш ниже. SWR-окно даёт мгновенный повторный ответ.
 const usersListCache = registerCache(
   'admin:users:list',
-  (req: Request) => `users:${(req as AuthenticatedRequest).user?.id ?? 'anon'}`,
+  (req: Request) => {
+    const userId = (req as AuthenticatedRequest).user?.id ?? 'anon';
+    const q = req.query;
+    let variant: string;
+    if (q.slim === '1') {
+      variant = 'slim';
+    } else if (q.page !== undefined) {
+      const search = ((q.search as string) || '').trim().toLowerCase();
+      variant = `p:${q.page}:${q.pageSize ?? ''}:${search}:${q.role ?? ''}`;
+    } else {
+      variant = 'legacy';
+    }
+    return `users:${userId}:${variant}`;
+  },
   30_000,
   { staleMs: 60_000, max: 200 },
 );

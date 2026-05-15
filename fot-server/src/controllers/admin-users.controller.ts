@@ -300,9 +300,244 @@ async function upsertEmployeeDepartmentAccess(params: {
   return additionalDepartmentIds;
 }
 
+/**
+ * Лёгкий список всех пользователей для cross-tab map'ов
+ * (EmployeeDepartmentAssignmentsTab / DepartmentAccessImportTab им нужны
+ * только id/full_name/email/employee_id). Без дорогих join'ов.
+ */
+async function respondSlimUsers(req: AuthenticatedRequest, res: Response): Promise<void> {
+  let rawUsers: Array<Pick<UserProfile, 'id' | 'full_name' | 'employee_id'>>;
+  try {
+    rawUsers = await query<Pick<UserProfile, 'id' | 'full_name' | 'employee_id'>>(
+      'SELECT id, full_name, employee_id FROM user_profiles ORDER BY created_at DESC',
+    );
+  } catch (usersError) {
+    logSupabaseError('GetUsersSlim', usersError);
+    res.status(500).json({ success: false, error: 'Failed to fetch users' });
+    return;
+  }
+
+  const users = await filterUsersByCompanyScope(req, rawUsers);
+  const userIds = users.map(u => u.id);
+  const authUsersById = await localAuthService.getUsersByIds(userIds).catch((err: unknown) => {
+    console.error('[GetUsersSlim] Auth fetch error:', err);
+    return new Map() as Awaited<ReturnType<typeof localAuthService.getUsersByIds>>;
+  });
+
+  const data = users.map(u => ({
+    id: u.id,
+    full_name: u.full_name,
+    email: authUsersById.get(u.id)?.email || '',
+    employee_id: u.employee_id,
+  }));
+
+  res.json({ success: true, data });
+}
+
+/**
+ * Пагинированный список с server-side поиском и фильтром по роли.
+ * Enrichment (departments / assigned employees / email / 2FA) считается
+ * только для слайса страницы. roleCounts — по тем же scope+search фильтрам,
+ * но БЕЗ фильтра по роли, чтобы табы ролей показывали корректные тоталы.
+ */
+async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize as string) || 50));
+  const search = ((req.query.search as string) || '').trim();
+  const roleCode = ((req.query.role as string) || '').trim();
+  const offset = (page - 1) * pageSize;
+
+  const accessible = await resolveAccessibleDepartmentIds(req);
+
+  const allRoles = await getAllRoles();
+  const roleCodeById = new Map(allRoles.map(r => [r.id, r.code]));
+  const roleIdByCode = new Map(allRoles.map(r => [r.code, r.id]));
+  const roleId = roleCode ? roleIdByCode.get(roleCode) : undefined;
+
+  // Базовый фильтр (scope + search) — общий для roleCounts и списка.
+  const baseParams: unknown[] = [];
+  const baseWhere: string[] = [];
+
+  if (accessible !== 'all') {
+    if (accessible.length === 0) {
+      res.json({
+        success: true,
+        data: [],
+        meta: { page, pageSize, total: 0, totalPages: 0, roleCounts: {} },
+      });
+      return;
+    }
+    baseParams.push(accessible);
+    baseWhere.push(
+      `up.employee_id IN (SELECT id FROM employees WHERE org_department_id = ANY($${baseParams.length}::uuid[]))`,
+    );
+  }
+  if (search) {
+    baseParams.push(`%${escapeLike(search)}%`);
+    const idx = baseParams.length;
+    baseWhere.push(
+      `(up.full_name ILIKE $${idx} OR EXISTS (SELECT 1 FROM app_auth.users au WHERE au.id = up.id AND au.email ILIKE $${idx}))`,
+    );
+  }
+
+  const baseWhereSql = baseWhere.length ? `WHERE ${baseWhere.join(' AND ')}` : '';
+
+  let roleCountRows: Array<{ system_role_id: string | null; cnt: number }>;
+  try {
+    roleCountRows = await query<{ system_role_id: string | null; cnt: number }>(
+      `SELECT system_role_id, COUNT(*)::int AS cnt
+         FROM user_profiles up
+         ${baseWhereSql}
+        GROUP BY system_role_id`,
+      baseParams,
+    );
+  } catch (err) {
+    console.error('Get users roleCounts error:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch users' });
+    return;
+  }
+  const roleCounts: Record<string, number> = {};
+  for (const row of roleCountRows) {
+    const code = roleCodeById.get(row.system_role_id ?? '') ?? '';
+    if (!code) continue;
+    roleCounts[code] = (roleCounts[code] ?? 0) + Number(row.cnt);
+  }
+
+  // Список: базовый фильтр + опциональный фильтр по роли + пагинация.
+  const listParams = [...baseParams];
+  const listWhere = [...baseWhere];
+  if (roleCode) {
+    if (!roleId) {
+      res.json({
+        success: true,
+        data: [],
+        meta: { page, pageSize, total: 0, totalPages: 0, roleCounts },
+      });
+      return;
+    }
+    listParams.push(roleId);
+    listWhere.push(`up.system_role_id = $${listParams.length}`);
+  }
+  const listWhereSql = listWhere.length ? `WHERE ${listWhere.join(' AND ')}` : '';
+  listParams.push(pageSize);
+  const limitIdx = listParams.length;
+  listParams.push(offset);
+  const offsetIdx = listParams.length;
+
+  let rows: Array<UserProfile & { total_count: number }>;
+  try {
+    rows = await query<UserProfile & { total_count: number }>(
+      `SELECT up.*, count(*) OVER ()::int AS total_count
+         FROM user_profiles up
+         ${listWhereSql}
+        ORDER BY up.created_at DESC
+        LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      listParams,
+    );
+  } catch (err) {
+    console.error('Get users paginated error:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch users' });
+    return;
+  }
+
+  const total = rows.length > 0 ? Number(rows[0].total_count) : 0;
+  const totalPages = Math.ceil(total / pageSize);
+
+  const usersSlice = rows as UserProfile[];
+  const userIds = usersSlice.map(u => u.id);
+  const userEmployeePairs = usersSlice.map(u => ({ user_id: u.id, employee_id: u.employee_id }));
+
+  const [assignedDepartmentMap, assignedEmployeeMap, authUsersById] = await Promise.all([
+    loadExplicitManagerAssignmentMap(userEmployeePairs),
+    loadAssignedEmployeeMap(userIds),
+    localAuthService.getUsersByIds(userIds).catch((err: unknown) => {
+      console.error('[GetUsers] Auth fetch error:', err);
+      return new Map() as Awaited<ReturnType<typeof localAuthService.getUsersByIds>>;
+    }),
+  ]);
+
+  const allAssignedEmployeeIds = [...new Set(
+    Array.from(assignedEmployeeMap.values()).flat(),
+  )];
+  const assignedEmployeeNames = allAssignedEmployeeIds.length > 0
+    ? await loadEmployeeFullNamesMap(allAssignedEmployeeIds)
+    : new Map<number, string>();
+
+  const authEmailMap: Record<string, { email: string; email_confirmed: boolean }> = {};
+  for (const [userId, authUser] of authUsersById.entries()) {
+    authEmailMap[userId] = {
+      email: authUser.email || '',
+      email_confirmed: !!authUser.email_confirmed_at,
+    };
+  }
+
+  const data = usersSlice.map((u: UserProfile) => {
+    const assignedDepartmentIds = (assignedDepartmentMap.get(u.id) || []);
+    const assignedEmployeeIds = (assignedEmployeeMap.get(u.id) || []);
+    const assignedEmployees = assignedEmployeeIds.map(eid => ({
+      id: eid,
+      full_name: assignedEmployeeNames.get(eid) || '',
+    }));
+    const authInfo = authEmailMap[u.id];
+    return {
+      id: u.id,
+      email: authInfo?.email || '',
+      email_confirmed: authInfo?.email_confirmed ?? false,
+      full_name: u.full_name,
+      assigned_department_ids: assignedDepartmentIds,
+      assigned_employee_ids: assignedEmployeeIds,
+      assigned_employees: assignedEmployees,
+      is_site_supervisor: Boolean(u.is_site_supervisor),
+      position_type: roleCodeById.get(u.system_role_id) ?? '',
+      imported_position: u.imported_position,
+      employee_id: u.employee_id,
+      supervisor_id: u.supervisor_id,
+      chat_inbound_mode: (u.chat_inbound_mode || 'open') as ChatInboundMode,
+      is_approved: u.is_approved,
+      two_factor_enabled: u.two_factor_enabled,
+      approved_at: u.approved_at,
+      created_at: u.created_at,
+    };
+  });
+
+  res.json({
+    success: true,
+    data,
+    meta: { page, pageSize, total, totalPages, roleCounts },
+  });
+}
+
+async function hardDeleteUserCascade(id: string): Promise<void> {
+  await withTransaction(async (client) => {
+    // user_profiles.id → app_auth.users CASCADE + миграция 097 каскадят
+    // user_profiles → дочерние. Одно удаление чистит всё.
+    const r = await client.query(
+      'DELETE FROM app_auth.users WHERE id = $1::uuid',
+      [id],
+    );
+    if (r.rowCount === 0) {
+      // legacy-профиль без app_auth.users — добиваем напрямую (дочерние
+      // всё равно каскадят после 097).
+      await client.query(
+        'DELETE FROM user_profiles WHERE id = $1::uuid',
+        [id],
+      );
+    }
+  });
+}
+
 export const adminUsersController = {
   async getAllUsers(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      if (req.query.slim === '1') {
+        await respondSlimUsers(req, res);
+        return;
+      }
+      if (req.query.page !== undefined) {
+        await respondPaginatedUsers(req, res);
+        return;
+      }
+
       let rawUsers: UserProfile[];
       try {
         rawUsers = await query<UserProfile>(
@@ -1095,17 +1330,11 @@ export const adminUsersController = {
       }
 
       try {
-        await execute('DELETE FROM user_profiles WHERE id = $1::uuid', [id]);
-      } catch (profileError) {
-        console.error('Delete profile error:', profileError);
+        await hardDeleteUserCascade(id);
+      } catch (deleteError) {
+        console.error('Reject user delete error:', deleteError);
         res.status(500).json({ success: false, error: 'Failed to reject user' });
         return;
-      }
-
-      try {
-        await localAuthService.deleteUser(id);
-      } catch (authError) {
-        console.error('Delete auth user error:', authError);
       }
 
       await auditService.logFromRequest(req, req.user.id, 'USER_REJECTED', {
@@ -1141,17 +1370,11 @@ export const adminUsersController = {
       }
 
       try {
-        await execute('DELETE FROM user_profiles WHERE id = $1::uuid', [id]);
-      } catch (profileError) {
-        console.error('Delete profile error:', profileError);
+        await hardDeleteUserCascade(id);
+      } catch (deleteError) {
+        console.error('Delete user error:', deleteError);
         res.status(500).json({ success: false, error: 'Failed to delete user' });
         return;
-      }
-
-      try {
-        await localAuthService.deleteUser(id);
-      } catch (authError) {
-        console.error('Delete auth user error:', authError);
       }
 
       await auditService.logFromRequest(req, req.user.id, 'USER_DELETED', {

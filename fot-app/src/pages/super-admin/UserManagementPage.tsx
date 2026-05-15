@@ -1,9 +1,8 @@
 import React, { lazy, Suspense, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { adminService } from '../../services/adminService';
+import { adminService, type IUserSlim } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
 import type { IPendingUser } from '../../components/super-admin/PendingUsersTab';
-import type { IUserFromApi } from '../../components/super-admin/AllUsersTab';
 import styles from './SuperAdmin.module.css';
 
 const PendingUsersTab = lazy(() => import('../../components/super-admin/PendingUsersTab').then(module => ({
@@ -28,22 +27,21 @@ export const UserManagementPage: React.FC = () => {
     queryFn: () => adminService.getPendingUsers(),
     staleTime: 30_000,
   });
-  const allUsersQuery = useQuery<IUserFromApi[]>({
-    queryKey: ['admin-users', 'all'],
-    queryFn: () => adminService.getAllUsers(),
+  const allUsersSlimQuery = useQuery<IUserSlim[]>({
+    queryKey: ['admin-users', 'slim'],
+    queryFn: () => adminService.getAllUsersSlim(),
     staleTime: 30_000,
   });
   const pendingUsers = pendingUsersQuery.data || [];
-  const allUsers = allUsersQuery.data || [];
+  const allUsersSlim = allUsersSlimQuery.data || [];
   const pendingLoading = pendingUsersQuery.isPending;
-  const allLoading = allUsersQuery.isPending;
-  const hasQueryError = pendingUsersQuery.isError || allUsersQuery.isError;
+  const allLoading = allUsersSlimQuery.isPending;
+  const hasQueryError = pendingUsersQuery.isError || allUsersSlimQuery.isError;
 
   const reloadUsers = async () => {
     try {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['admin-users', 'pending'] }),
-        queryClient.invalidateQueries({ queryKey: ['admin-users', 'all'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-users'] }),
         queryClient.invalidateQueries({ queryKey: ['admin-employees', 'department-access'] }),
       ]);
     } catch {
@@ -53,10 +51,6 @@ export const UserManagementPage: React.FC = () => {
 
   const patchPendingCache = (updater: (prev: IPendingUser[]) => IPendingUser[]) => {
     queryClient.setQueryData<IPendingUser[]>(['admin-users', 'pending'], (old) => updater(old || []));
-  };
-
-  const patchAllUsersCache = (updater: (prev: IUserFromApi[]) => IUserFromApi[]) => {
-    queryClient.setQueryData<IUserFromApi[]>(['admin-users', 'all'], (old) => updater(old || []));
   };
 
   return (
@@ -80,7 +74,7 @@ export const UserManagementPage: React.FC = () => {
           className={`${styles.tab} ${activeTab === 'all' ? styles.active : ''}`}
           onClick={() => setActiveTab('all')}
         >
-          Все пользователи ({allLoading ? '…' : allUsers.length})
+          Все пользователи ({allLoading ? '…' : allUsersSlim.length})
         </button>
         <button
           className={`${styles.tab} ${activeTab === 'employee-access' ? styles.active : ''}`}
@@ -109,19 +103,14 @@ export const UserManagementPage: React.FC = () => {
 
       {activeTab === 'all' && (
         <Suspense fallback={<div className={styles.loading}>Загрузка вкладки...</div>}>
-          <AllUsersTab
-            allUsers={allUsers}
-            loading={allLoading}
-            onReload={reloadUsers}
-            patchAllUsersCache={patchAllUsersCache}
-          />
+          <AllUsersTab onReload={reloadUsers} />
         </Suspense>
       )}
 
       {activeTab === 'employee-access' && (
         <Suspense fallback={<div className={styles.loading}>Загрузка вкладки...</div>}>
           <EmployeeDepartmentAssignmentsTab
-            allUsers={allUsers}
+            allUsers={allUsersSlim}
             allUsersLoading={allLoading}
             onReload={reloadUsers}
           />
@@ -131,7 +120,7 @@ export const UserManagementPage: React.FC = () => {
       {activeTab === 'import' && (
         <Suspense fallback={<div className={styles.loading}>Загрузка вкладки...</div>}>
           <DepartmentAccessImportTab
-            allUsers={allUsers}
+            allUsers={allUsersSlim}
             onReload={reloadUsers}
           />
         </Suspense>

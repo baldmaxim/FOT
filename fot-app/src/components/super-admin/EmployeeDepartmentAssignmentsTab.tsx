@@ -3,16 +3,16 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   adminService,
   type EmployeeDepartmentAssignmentFromApi,
+  type IUserSlim,
 } from '../../services/adminService';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useToast } from '../../contexts/ToastContext';
-import type { IUserFromApi } from './AllUsersTab';
 import { getTreeFlatDepartments } from '../../utils/departmentUtils';
 import { EmployeeAssignmentPanel } from './EmployeeAssignmentPanel';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
 
 interface IEmployeeDepartmentAssignmentsTabProps {
-  allUsers: IUserFromApi[];
+  allUsers: IUserSlim[];
   allUsersLoading?: boolean;
   onReload: () => Promise<void>;
 }
