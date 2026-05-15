@@ -83,6 +83,10 @@ import {
   type TimesheetViewMode,
 } from './timesheetPage.helpers';
 
+// Псевдо-id отдела для руководителя без managed-отделов (только employee_direct_reports):
+// активирует timesheet-запрос без department_id; бэк сам резолвит direct_reports по токену.
+const DIRECT_REPORTS_DEPT = '__direct_reports__';
+
 export const TimesheetPage: FC = () => {
   const { hasPermission, profile, canEditPage, canViewPage, showActualHours, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
   const toast = useToast();
@@ -96,6 +100,7 @@ export const TimesheetPage: FC = () => {
   const canManageAllDepartments = isSuperAdmin || hasPermission('data.scope.all');
   const {
     isDepartmentScope,
+    isDirectReportsOnly,
     managedDepartmentIds,
     primaryDepartmentId,
     structureQuery,
@@ -249,13 +254,16 @@ export const TimesheetPage: FC = () => {
   const activeRange = useMemo(() => getHalfRange(year, month, selectedHalf), [year, month, selectedHalf]);
   const rangeStart = activeRange.startDate;
   const rangeEnd = activeRange.endDate;
-  const activeGridDeptId = timesheetMode === 'assigned' ? assignedExpandedDeptId : effectiveSelectedDeptId;
+  const activeGridDeptId = timesheetMode === 'assigned'
+    ? assignedExpandedDeptId
+    : (effectiveSelectedDeptId || (isDirectReportsOnly && !selectedDeptId ? DIRECT_REPORTS_DEPT : null));
+  const isDirectReportsMarker = activeGridDeptId === DIRECT_REPORTS_DEPT;
   const includeObjectDetails = viewMode === 'objects';
   const timesheetQuery = useQuery({
     queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none', includeObjectDetails ? 'objects' : 'employees'],
     queryFn: () => timesheetService.getAll({
       month: monthStr,
-      department_id: activeGridDeptId || undefined,
+      department_id: (activeGridDeptId && !isDirectReportsMarker) ? activeGridDeptId : undefined,
       from: rangeStart,
       to: rangeEnd,
       include_objects: includeObjectDetails,
@@ -290,7 +298,7 @@ export const TimesheetPage: FC = () => {
   const schedules = timesheetQuery.data?.schedules || EMPTY_SCHEDULES;
   const dailySchedules = timesheetQuery.data?.daily_schedules || EMPTY_DAILY_SCHEDULES;
   const calendar = timesheetQuery.data?.calendar || null;
-  const loading = Boolean(effectiveSelectedDeptId) && timesheetQuery.isLoading;
+  const loading = (Boolean(effectiveSelectedDeptId) || isDirectReportsOnly) && timesheetQuery.isLoading;
   const deferredTeamSearch = useDeferredValue(teamSearch.trim());
   const teamSearchQuery = useQuery({
     queryKey: ['timesheet-team-search', activeGridDeptId ?? 'none', deferredTeamSearch],
@@ -298,7 +306,7 @@ export const TimesheetPage: FC = () => {
       department_id: activeGridDeptId as string,
       q: deferredTeamSearch,
     }),
-    enabled: teamManagementOpen && Boolean(activeGridDeptId) && deferredTeamSearch.length >= 2,
+    enabled: teamManagementOpen && Boolean(activeGridDeptId) && !isDirectReportsMarker && deferredTeamSearch.length >= 2,
     staleTime: 2 * 60_000,
     placeholderData: previousData => previousData,
   });
@@ -344,7 +352,7 @@ export const TimesheetPage: FC = () => {
   const employeeMap = useMemo(() => (
     new Map(employees.map(employee => [employee.id, employee]))
   ), [employees]);
-  const canManageTeam = Boolean(activeGridDeptId && canEditTeamManagement);
+  const canManageTeam = Boolean(activeGridDeptId && !isDirectReportsMarker && canEditTeamManagement);
   const canUseTeamManagement = Boolean(canEditTeamManagement);
   const bulkModeEnabled = bulkMode && !isMobile;
   const clearBulkState = useCallback(() => {
@@ -644,20 +652,22 @@ export const TimesheetPage: FC = () => {
   const assigneeDeptName = activeGridDeptId && selectedAssigneeId
     ? assigneesQuery.data?.find(emp => emp.id === selectedAssigneeId)?.departments?.find(d => d.id === activeGridDeptId)?.name
     : undefined;
-  const selectedDeptName = activeGridDeptId
-    ? deptOptions.find(d => d.id === activeGridDeptId)?.name
-      || assigneeDeptName
-      || 'Отдел'
-    : 'Все отделы';
+  const selectedDeptName = isDirectReportsMarker
+    ? 'Мои подчинённые'
+    : activeGridDeptId
+      ? deptOptions.find(d => d.id === activeGridDeptId)?.name
+        || assigneeDeptName
+        || 'Отдел'
+      : 'Все отделы';
   const teamSearchResults = teamSearchQuery.data || [];
   const openTeamManagement = useCallback(() => {
-    if (!canUseTeamManagement || !activeGridDeptId) return;
+    if (!canUseTeamManagement || !activeGridDeptId || isDirectReportsMarker) return;
     setPanelOpen(false);
     setModalOpen(false);
     clearBulkState();
     setTeamSearch('');
     setTeamManagementOpen(true);
-  }, [canUseTeamManagement, activeGridDeptId, clearBulkState]);
+  }, [canUseTeamManagement, activeGridDeptId, isDirectReportsMarker, clearBulkState]);
 
   const closeTeamManagement = useCallback(() => {
     setTeamManagementOpen(false);
@@ -669,7 +679,7 @@ export const TimesheetPage: FC = () => {
     candidate: TimesheetTeamManagementCandidate,
     effectiveFrom: string,
   ) => {
-    if (!activeGridDeptId) return;
+    if (!activeGridDeptId || isDirectReportsMarker) return;
     setTeamPendingEmployeeId(candidate.id);
     try {
       await timesheetService.addEmployeeToDepartment({
@@ -690,17 +700,17 @@ export const TimesheetPage: FC = () => {
     } finally {
       setTeamPendingEmployeeId(null);
     }
-  }, [rangeStart, rangeEnd, activeGridDeptId, monthStr, queryClient, selectedDeptName, toast, closeTeamManagement]);
+  }, [rangeStart, rangeEnd, activeGridDeptId, isDirectReportsMarker, monthStr, queryClient, selectedDeptName, toast, closeTeamManagement]);
 
   const [excludeModalEmployee, setExcludeModalEmployee] = useState<TimesheetEmployee | null>(null);
 
   const handleExcludeEmployeeFromDepartment = useCallback((employee: TimesheetEmployee) => {
-    if (!activeGridDeptId) return;
+    if (!activeGridDeptId || isDirectReportsMarker) return;
     setExcludeModalEmployee(employee);
-  }, [activeGridDeptId]);
+  }, [activeGridDeptId, isDirectReportsMarker]);
 
   const handleConfirmExclude = useCallback(async (effectiveDate: string) => {
-    if (!excludeModalEmployee || !activeGridDeptId) return;
+    if (!excludeModalEmployee || !activeGridDeptId || isDirectReportsMarker) return;
     const employee = excludeModalEmployee;
     setTeamPendingEmployeeId(employee.id);
     try {
@@ -726,7 +736,7 @@ export const TimesheetPage: FC = () => {
     } finally {
       setTeamPendingEmployeeId(null);
     }
-  }, [excludeModalEmployee, rangeStart, rangeEnd, activeGridDeptId, monthStr, panelEmployee?.id, queryClient, toast]);
+  }, [excludeModalEmployee, rangeStart, rangeEnd, activeGridDeptId, isDirectReportsMarker, monthStr, panelEmployee?.id, queryClient, toast]);
 
   const modalDefaultHours = useMemo(() => {
     if (modalMode === 'object') {
@@ -1346,7 +1356,7 @@ export const TimesheetPage: FC = () => {
 
   const departmentControl = (
     <div className="ts-dept-wrap" ref={deptRef}>
-      {isSingleDeptManager ? (
+      {(isSingleDeptManager || isDirectReportsOnly) ? (
         <button type="button" className="ts-dept-btn" style={{ cursor: 'default', opacity: 0.8 }}>
           {selectedDeptName}
         </button>
@@ -1944,7 +1954,7 @@ export const TimesheetPage: FC = () => {
         <div className="ts-table-container">
           <div className="ts-loading">Загрузка табеля...</div>
         </div>
-      ) : !effectiveSelectedDeptId ? (
+      ) : (!effectiveSelectedDeptId && !isDirectReportsOnly) ? (
         <div className="ts-table-container">
           <div className="ts-loading">Выберите отдел для отображения табеля</div>
         </div>

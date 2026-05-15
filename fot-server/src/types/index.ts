@@ -51,6 +51,7 @@ export interface UserProfileResponse {
   employee_id: number | null;
   department_id: string | null;
   managed_department_ids: string[];
+  has_direct_reports?: boolean;
   supervisor_id: string | null;
   chat_inbound_mode: ChatInboundMode;
   imported_position: string | null;

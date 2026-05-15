@@ -481,14 +481,24 @@ async function canAccessEmployeeForTimesheetDate(
   }
 
   const managedDepartmentIds = await resolveManagedDepartmentIds(req);
-  if (managedDepartmentIds.length === 0) {
-    return false;
+  if (managedDepartmentIds.length > 0) {
+    const matches = await Promise.all(
+      managedDepartmentIds.map(departmentId => isEmployeeAssignedToDepartmentOnDate(employeeId, departmentId, workDate)),
+    );
+    if (matches.some(Boolean)) {
+      return true;
+    }
   }
 
-  const matches = await Promise.all(
-    managedDepartmentIds.map(departmentId => isEmployeeAssignedToDepartmentOnDate(employeeId, departmentId, workDate)),
-  );
-  return matches.some(Boolean);
+  // Прямые подчинённые (employee_direct_reports) — псевдо-ячейка руководителя.
+  if (req.user.employee_id) {
+    const directSubs = await listDirectSubordinates(req.user.employee_id);
+    if (directSubs.includes(employeeId)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function canAccessEmployeeForTimesheetPeriod(
@@ -591,13 +601,16 @@ export async function resolveTimesheetScope(req: AuthenticatedRequest): Promise<
     if (managedDepartmentIds.length > 0) {
       return 'department';
     }
-    // Псевдо-ячейка: у руководителя нет управляемых отделов, но есть прямые
-    // подчинённые в employee_direct_reports — он всё ещё ведёт табель.
-    if (req.user.employee_id) {
-      const directSubs = await listDirectSubordinates(req.user.employee_id);
-      if (directSubs.length > 0) {
-        return 'department';
-      }
+  }
+
+  // Псевдо-ячейка: у руководителя есть прямые подчинённые в employee_direct_reports —
+  // он ведёт их табель даже без явного доступа к странице /timesheet и без
+  // managed-отделов. getAll и canAccessEmployeeForTimesheet* ограничивают выборку
+  // и редактирование строго его подчинёнными + им самим.
+  if (req.user.employee_id) {
+    const directSubs = await listDirectSubordinates(req.user.employee_id);
+    if (directSubs.length > 0) {
+      return 'department';
     }
   }
 
@@ -972,7 +985,29 @@ export const timesheetController = {
         return res.json(emptyResponse);
       }
 
-      if (scope !== 'self' && !hasDeptFilter && !hasEmployeeFilter) {
+      // Прямые подчинённые (employee_direct_reports) + сам руководитель отдельной
+      // строкой. Вычисляем ДО ранних return: руководитель без managed-отделов, но
+      // с direct_reports, ведёт табель без выбора отдела (isDirectReportsOnlyScope).
+      let directReportIds: number[] = [];
+      let selfTimesheetId: number | null = null;
+      if (scope === 'department' && !hasEmployeeFilter && req.user.employee_id) {
+        directReportIds = await listDirectSubordinates(req.user.employee_id);
+        // Только ручные назначения (employee_department_access с source != 'sigur_sync'),
+        // а не весь scope-подсеть компании: иначе админ компании видит себя «Руководителем»
+        // в любом отделе своего поддерева.
+        const explicitlyManagedDepartmentIds = await listExplicitDepartmentIdsForUser(req.user.id, req.user.employee_id);
+        if (explicitlyManagedDepartmentIds.length > 0 || directReportIds.length > 0) {
+          selfTimesheetId = req.user.employee_id;
+        }
+      }
+      const isDirectReportsOnlyScope =
+        scope === 'department' && !hasDeptFilter && !hasEmployeeFilter && directReportIds.length > 0;
+      const additionalEmployeeIds = [...new Set([
+        ...directReportIds,
+        ...(selfTimesheetId != null ? [selfTimesheetId] : []),
+      ])];
+
+      if (scope !== 'self' && !hasDeptFilter && !hasEmployeeFilter && !isDirectReportsOnlyScope) {
         return res.json(emptyResponse);
       }
 
@@ -989,29 +1024,8 @@ export const timesheetController = {
         departmentMemberships.map(m => [m.employee_id, m.transferred_out_date]),
       );
 
-      // Универсальный табель руководителя: помимо membership выбранного отдела,
-      // подмешиваем прямых подчинённых (employee_direct_reports) — их видно
-      // независимо от выбранного отдела — и самого руководителя отдельной строкой,
-      // если у него есть назначенные отделы или direct_reports.
-      let directReportIds: number[] = [];
-      let selfTimesheetId: number | null = null;
-      if (shouldApplyDeptFilter && scope === 'department' && req.user.employee_id) {
-        directReportIds = await listDirectSubordinates(req.user.employee_id);
-        // Только ручные назначения (employee_department_access с source != 'sigur_sync'),
-        // а не весь scope-подсеть компании: иначе админ компании видит себя «Руководителем»
-        // в любом отделе своего поддерева.
-        const explicitlyManagedDepartmentIds = await listExplicitDepartmentIdsForUser(req.user.id, req.user.employee_id);
-        if (explicitlyManagedDepartmentIds.length > 0 || directReportIds.length > 0) {
-          selfTimesheetId = req.user.employee_id;
-        }
-      }
-      const additionalEmployeeIds = [...new Set([
-        ...directReportIds,
-        ...(selfTimesheetId != null ? [selfTimesheetId] : []),
-      ])];
-
       if (
-        shouldApplyDeptFilter
+        (shouldApplyDeptFilter || isDirectReportsOnlyScope)
         && departmentEmployeeIds.length === 0
         && additionalEmployeeIds.length === 0
       ) {
@@ -1020,6 +1034,8 @@ export const timesheetController = {
 
       // Для approvals при запросе конкретного сотрудника берём его фактический отдел в managed-поддереве,
       // иначе approval_locked_dates прилетят от чужого отдела.
+      // Для isDirectReportsOnlyScope department_id === null → effectiveApprovalDeptId null:
+      // у direct_reports нет общего отдела согласования (department-workflow), это by design.
       let effectiveApprovalDeptId: string | null = department_id ?? null;
       if (hasEmployeeFilter && scope === 'department') {
         effectiveApprovalDeptId =
@@ -1037,6 +1053,10 @@ export const timesheetController = {
           ...additionalEmployeeIds,
         ])];
         empParams.push(unionEmployeeIds);
+        empWhere.push(`id = ANY($${empParams.length}::int[])`);
+      } else if (isDirectReportsOnlyScope) {
+        // Руководитель без managed-отделов: только прямые подчинённые + он сам.
+        empParams.push(additionalEmployeeIds);
         empWhere.push(`id = ANY($${empParams.length}::int[])`);
       } else {
         // Без deptFilter (self/employee-filter) сохраняем прежнее поведение: исключённые не видны.

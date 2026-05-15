@@ -10,6 +10,7 @@ import { LOGIN_2FA_ENABLED } from '../config/features.js';
 import { getRolePageAccess } from '../services/access-control.service.js';
 import { getRoleByCode, getRoleById } from '../services/roles-cache.service.js';
 import { listManagedDepartmentIdsForUser } from '../services/department-access.service.js';
+import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { verify2FA, useRecoveryCode } from './auth-2fa.controller.js';
 import {
   clearSessionCookies,
@@ -89,8 +90,18 @@ async function buildProfileResponse(
     profile.employee_id,
   );
 
+  const has_direct_reports = profile.employee_id != null
+    && (await listDirectSubordinates(profile.employee_id)).length > 0;
+
   if (!role.is_admin && managed_department_ids.length > 0 && !page_access['/staff-control']?.can_view) {
     page_access['/staff-control'] = { can_view: true, can_edit: true };
+  }
+
+  // Руководитель без managed-отделов, но с прямыми подчинёнными (employee_direct_reports)
+  // ведёт их табель — даём доступ к странице, если роль его не выдала (бэк всё равно
+  // ограничивает выборку/редактирование только его подчинёнными + им самим).
+  if (!role.is_admin && managed_department_ids.length === 0 && has_direct_reports && !page_access['/timesheet']?.can_view) {
+    page_access['/timesheet'] = { can_view: true, can_edit: true };
   }
 
   const response: UserProfileResponse = {
@@ -109,6 +120,7 @@ async function buildProfileResponse(
     employee_id: profile.employee_id,
     department_id: departmentId,
     managed_department_ids,
+    has_direct_reports,
     supervisor_id: profile.supervisor_id,
     chat_inbound_mode: profile.chat_inbound_mode || 'open',
     imported_position: profile.imported_position,
