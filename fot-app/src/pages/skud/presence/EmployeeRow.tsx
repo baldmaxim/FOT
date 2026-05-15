@@ -26,7 +26,13 @@ const computeDuration = (firstEntry: string | null): string | null => {
   return `${hours} ч ${String(minutes).padStart(2, '0')} мин`;
 };
 
-export const EmployeeRow: FC<{ emp: IPresenceObjectEmployee }> = ({ emp }) => {
+interface IEmployeeRowProps {
+  emp: IPresenceObjectEmployee;
+  /** Скрыть строку с department_name — когда сотрудник уже сгруппирован под заголовком отдела. */
+  hideDepartment?: boolean;
+}
+
+export const EmployeeRow: FC<IEmployeeRowProps> = ({ emp, hideDepartment = false }) => {
   const duration = computeDuration(emp.first_entry);
   return (
     <li className={styles.employeeRow}>
@@ -49,7 +55,7 @@ export const EmployeeRow: FC<{ emp: IPresenceObjectEmployee }> = ({ emp }) => {
           </span>
         )}
       </div>
-      {emp.department_name && (
+      {!hideDepartment && emp.department_name && (
         <div className={styles.employeeDepartment}>{emp.department_name}</div>
       )}
       {emp.position_name && (

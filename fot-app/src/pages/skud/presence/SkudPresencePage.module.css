@@ -343,16 +343,20 @@
   gap: 14px;
 }
 
-/* Full-page-вид для пользователя с приписанным единственным объектом. */
-.singleObjectView {
+/* Full-page-вид для пользователя с приписанным единственным объектом.
+ * Компаунд-селектор `.modal.singleObjectView` нужен для специфичности 0,2,0 —
+ * иначе `.modal` (объявлен ниже в файле) перекроет одиночный `.singleObjectView`. */
+.modal.singleObjectView {
   max-width: none;
   max-height: none;
   box-shadow: none;
+  border-radius: 12px;
 }
 
-.singleObjectView .modalBody {
+.modal.singleObjectView .modalBody {
   /* Скролл-контейнер не нужен — пусть страница сама скроллится. */
   overflow-y: visible;
+  max-height: none;
 }
 
 .card {
@@ -551,6 +555,63 @@
   background: var(--bg-secondary);
 }
 
+/* Группы отделов внутри synced-компании */
+.departmentList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px 8px 24px;
+  background: var(--bg-secondary);
+}
+
+.departmentGroup {
+  border-left: 2px solid var(--border);
+  background: var(--bg-primary);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.departmentHeader {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-align: left;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.departmentHeader:hover {
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.05));
+  color: var(--text-primary);
+}
+
+.departmentHeaderOpen {
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.05));
+  color: var(--text-primary);
+}
+
+.departmentName {
+  font-weight: 500;
+  letter-spacing: 0.1px;
+}
+
+.departmentCount {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-weight: 600;
+  color: var(--accent);
+  opacity: 0.8;
+  flex-shrink: 0;
+}
+
 .employeeRow {
   padding: 10px 14px;
   display: flex;
@@ -688,6 +749,10 @@
 
   .summaryValue {
     font-size: 1.4rem;
+  }
+
+  .departmentList {
+    padding-left: 12px;
   }
 }
 

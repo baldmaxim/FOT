@@ -9,6 +9,7 @@ import type {
 } from '../../../types';
 import { ObjectDetailsModal } from './ObjectDetailsModal';
 import { ObjectDetailView } from './ObjectDetailView';
+import { isSyncedCompanyId } from './companyId.utils';
 import styles from './SkudPresencePage.module.css';
 
 const TOP_COMPANIES_LIMIT = 5;
@@ -129,10 +130,6 @@ const ObjectCard: FC<{
     </article>
   );
 };
-
-/** Synced-компании имеют local UUID. Unsynced = `sigur::ID`, fallback = `__no_company__`. */
-const isSyncedCompanyId = (id: string): boolean =>
-  !id.startsWith('sigur::') && id !== '__no_company__';
 
 const CompanyFilter: FC<{
   allCompanies: { id: string; name: string }[];
