@@ -3,9 +3,12 @@ import multer from 'multer';
 import { skudController } from '../controllers/skud.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess, requireCritical2FA } from '../middleware/auth.js';
 import { importLimiter } from '../middleware/rateLimit.js';
-import { registerCache } from '../middleware/cacheResponse.js';
+import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { noStore } from '../middleware/noStore.js';
 import { serverTiming } from '../middleware/serverTiming.js';
+import { invalidatePresenceCache } from '../services/skud-presence.service.js';
+import { invalidatePresenceByObjectCache } from '../services/skud-presence-by-object.service.js';
+import { invalidateDashboardCache } from '../services/skud-dashboard.service.js';
 
 // req.user.id обязателен в ключах: иначе ответ, прогретый одним пользователем
 // (например, админом без department_id → данные по всем отделам), отдавался бы
@@ -59,6 +62,23 @@ const upload = multer({
 
 // Все роуты требуют аутентификации
 router.use(authenticate);
+
+// Write-through invalidation: после мутаций (импорт, sync-employee, rebuild сегментов,
+// CRUD объектов/маршрутов) сбрасываем HTTP-кэши per-user и in-memory кэши сервисов,
+// иначе presence/dashboard продолжат отдавать stale-данные до TTL 5-10 сек.
+router.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.on('finish', () => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        invalidateCaches('skud-presence', 'skud-presence-by-object', 'skud-dashboard');
+        invalidatePresenceCache();
+        invalidatePresenceByObjectCache();
+        invalidateDashboardCache();
+      }
+    });
+  }
+  next();
+});
 
 // GET /api/skud/dashboard-stats - аналитика дашборда (header+, кэш 60с)
 router.get(

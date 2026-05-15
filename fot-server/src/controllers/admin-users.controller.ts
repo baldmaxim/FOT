@@ -18,6 +18,7 @@ import {
   replaceEmployeeObjectAccess,
 } from '../services/employee-skud-object-access.service.js';
 import { invalidatePresenceByObjectCache } from '../services/skud-presence-by-object.service.js';
+import { invalidateDashboardCache } from '../services/skud-dashboard.service.js';
 import {
   canAccessEmployeeInScope,
   resolveAccessibleDepartmentIds,
@@ -1249,6 +1250,9 @@ export const adminUsersController = {
         },
       });
 
+      invalidateDepartmentScopeCaches();
+      emitDepartmentAccessChanged(id);
+
       res.json({ success: true, message: 'Position updated successfully' });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -1336,6 +1340,9 @@ export const adminUsersController = {
         res.status(500).json({ success: false, error: 'Failed to update employee link' });
         return;
       }
+
+      invalidateDepartmentScopeCaches();
+      emitDepartmentAccessChanged(id);
 
       res.json({ success: true });
     } catch (error) {
@@ -1822,6 +1829,7 @@ export const adminUsersController = {
       });
 
       invalidatePresenceByObjectCache();
+      invalidateDashboardCache();
 
       const linkedProfile = await queryOne<{ id: string }>(
         'SELECT id FROM user_profiles WHERE employee_id = $1 LIMIT 1',

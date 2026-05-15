@@ -257,6 +257,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Приписка сотрудника к объектам изменилась → /skud-presence должен
       // перетянуть свежий scope (вкл. is_unrestricted и assigned_object_ids).
       void queryClient.invalidateQueries({ queryKey: presenceByObjectQueryKey() });
+      // Списки на /timesheet (mode=assigned), админ-панели прямых подчинённых,
+      // объектов СКУД и назначений отделов — staleTime до 5 мин, без инвалидации
+      // показывают отозванного сотрудника/объект до истечения окна.
+      void queryClient.invalidateQueries({ queryKey: ['assigned-employees'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-direct-reports'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-employee-skud-objects'] });
+      void queryClient.invalidateQueries({ queryKey: employeesKeys.departmentAccess() });
     });
     return () => {
       unsubscribe();
