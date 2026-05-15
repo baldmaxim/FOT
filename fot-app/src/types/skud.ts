@@ -74,9 +74,9 @@ export interface IPresenceByObjectResponse {
   generated_at: string;
   total_online: number;
   buckets: IPresenceObjectBucket[];
-  /** true → у пользователя нет приписок (или их нет в принципе), показываем все объекты. */
+  /** true → пользователь видит все объекты без ограничений (админ или тех-юзер без employee_id). */
   is_unrestricted: boolean;
-  /** Список skud_object_id, к которым приписан текущий пользователь (пустой если is_unrestricted). */
+  /** Список skud_object_id, к которым приписан текущий пользователь (пустой если is_unrestricted или нет приписок). */
   assigned_object_ids: string[];
 }
 

@@ -355,9 +355,11 @@ export const SkudPresencePage: FC = () => {
 
       {!isLoading && !isError && filtered.buckets.length === 0 && (
         <div className={styles.state}>
-          {(data?.total_online ?? 0) === 0
-            ? 'Сейчас на объектах никого нет'
-            : 'Под выбранные фильтры никто не подходит'}
+          {data && !data.is_unrestricted && data.assigned_object_ids.length === 0
+            ? 'У вас нет привязанных объектов. Обратитесь к администратору.'
+            : (data?.total_online ?? 0) === 0
+              ? 'Сейчас на объектах никого нет'
+              : 'Под выбранные фильтры никто не подходит'}
         </div>
       )}
 

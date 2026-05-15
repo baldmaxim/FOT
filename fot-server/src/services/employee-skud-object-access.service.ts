@@ -122,8 +122,9 @@ export async function replaceEmployeeObjectAccess(params: {
  * Резолв scoped-доступа к объектам для текущего запроса.
  *
  * Логика:
- * - employee_id отсутствует            → is_unrestricted=true  (тех-юзер, нет приписки)
- * - employee_id + 0 активных записей   → is_unrestricted=true  (fallback: «текущее поведение»)
+ * - employee_id отсутствует            → is_unrestricted=true  (тех-юзер / system-аккаунт)
+ * - is_admin=true                      → is_unrestricted=true  (админу приписки опциональны)
+ * - employee_id + 0 активных записей   → is_unrestricted=false, object_ids=[]  (видит пусто)
  * - employee_id + есть активные записи → is_unrestricted=false, object_ids=[...]
  *
  * Кешируется в req.user.__skud_object_scope на время одного запроса.
@@ -134,16 +135,14 @@ export async function resolveAccessibleObjectIdsForRequest(
   if (req.user.__skud_object_scope) return req.user.__skud_object_scope;
 
   const employeeId = req.user.employee_id;
-  if (employeeId == null) {
+  if (employeeId == null || req.user.is_admin === true) {
     const scope = { is_unrestricted: true, object_ids: [] as string[] };
     req.user.__skud_object_scope = scope;
     return scope;
   }
 
   const objectIds = await listObjectIdsForEmployee(employeeId);
-  const scope = objectIds.length === 0
-    ? { is_unrestricted: true, object_ids: [] as string[] }
-    : { is_unrestricted: false, object_ids: objectIds };
+  const scope = { is_unrestricted: false, object_ids: objectIds };
 
   req.user.__skud_object_scope = scope;
   return scope;
