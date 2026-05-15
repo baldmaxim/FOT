@@ -117,11 +117,23 @@ router.use((req, res, next) => {
     next();
     return;
   }
-  res.on('finish', () => {
+  // Инвалидируем СИНХРОННО, до отправки тела ответа: иначе клиент сразу
+  // после мутации шлёт refetch GET, который на low-latency (localhost/dev)
+  // успевает прочитать ещё не очищенный кеш (res.on('finish') выполняется
+  // уже после flush). Перехват res.json гарантирует clear до того, как
+  // клиент получит ответ и инициирует refetch. finish — fallback для
+  // редких не-json 2xx ответов (повторный clear идемпотентен).
+  const invalidateOnSuccess = () => {
     if (res.statusCode >= 200 && res.statusCode < 300) {
       invalidateCaches('admin:users:list', 'admin:users:pending');
     }
-  });
+  };
+  const originalJson = res.json.bind(res);
+  res.json = (body: object) => {
+    invalidateOnSuccess();
+    return originalJson(body);
+  };
+  res.on('finish', invalidateOnSuccess);
   next();
 });
 
