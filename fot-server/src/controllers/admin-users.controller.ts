@@ -23,6 +23,7 @@ import {
   resolveAccessibleDepartmentIds,
   resolveCompanyScope,
 } from '../services/data-scope.service.js';
+import { invalidateDepartmentScopeCaches } from '../services/scope-cache.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
 import { escapeLike } from '../utils/search.utils.js';
@@ -729,6 +730,10 @@ export const adminUsersController = {
         brigade_aliases: normalizedBrigadeAliases,
       });
 
+      if (appliedUsers > 0 || appliedLinks > 0) {
+        invalidateDepartmentScopeCaches();
+      }
+
       res.json({
         success: true,
         data: {
@@ -770,6 +775,10 @@ export const adminUsersController = {
         entityId: 'all',
         details: { deleted_count: deletedCount },
       });
+
+      if (deletedCount > 0) {
+        invalidateDepartmentScopeCaches();
+      }
 
       res.json({ success: true, data: { deleted: deletedCount } });
     } catch (error) {
@@ -935,6 +944,10 @@ export const adminUsersController = {
             error: transferError instanceof Error ? transferError.message : 'unknown_error',
           });
         }
+      }
+
+      if (applied > 0 || restored > 0) {
+        invalidateDepartmentScopeCaches();
       }
 
       res.json({
@@ -1453,6 +1466,7 @@ export const adminUsersController = {
         },
       });
 
+      invalidateDepartmentScopeCaches();
       emitDepartmentAccessChanged(id);
 
       res.json({
@@ -1678,6 +1692,7 @@ export const adminUsersController = {
         'SELECT id FROM user_profiles WHERE employee_id = $1 LIMIT 1',
         [employeeId],
       );
+      invalidateDepartmentScopeCaches();
       emitDepartmentAccessChanged(linkedProfile?.id);
 
       res.json({

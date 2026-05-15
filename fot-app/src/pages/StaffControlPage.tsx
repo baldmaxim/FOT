@@ -33,7 +33,7 @@ import { OverflowMenu, type IOverflowMenuItem } from '../components/staff/Overfl
 import type { Employee, EmployeeHistoryEvent, EnrichPreview, ContactsEnrichPreview } from '../types';
 import { structureApi } from '../api/structure';
 import type { IFlatDepartmentOption } from '../utils/departmentUtils';
-import { getTreeFlatDepartments } from '../utils/departmentUtils';
+import { filterDepartmentTreeByIds, getTreeFlatDepartments } from '../utils/departmentUtils';
 import '../styles/StaffControlPage.css';
 
 const HistoryPanel = lazy(() => import('../components/staff/HistoryPanel').then(m => ({ default: m.HistoryPanel })));
@@ -1060,7 +1060,13 @@ export const StaffControlPage: FC = () => {
   // создавала рассинхрон: profile грузится один раз при логине, бэк отдаёт
   // свежий scope на каждый запрос — после изменения назначений руководителю
   // дропдаун показывал устаревший список (1 отдел вместо 3).
-  const allDepts = useMemo(() => getTreeFlatDepartments(departments), [departments]);
+  // Доп. клиентский фильтр поверх scope, отданного бэком: страхует случай,
+  // когда /api/structure отдаёт stale-кэш с отозванным отделом до инвалидации.
+  const allDepts = useMemo(() => {
+    if (!restrictToManaged) return getTreeFlatDepartments(departments);
+    const filtered = filterDepartmentTreeByIds(departments, new Set(managedDepartmentIds));
+    return getTreeFlatDepartments(filtered);
+  }, [departments, restrictToManaged, managedDepartmentIds]);
 
   // Если админ снял у руководителя один из отделов, бэкенд перестаёт включать его
   // в `allDepts` (в дереве флаг `in_scope=false` или отдел вырезан). В URL ещё может
