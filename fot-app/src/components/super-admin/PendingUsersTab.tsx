@@ -2,10 +2,17 @@ import { useState } from 'react';
 import type { FC } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { adminService } from '../../services/adminService';
+import { ApiError } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
 import type { EmployeePositionType } from '../../types';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
+
+// Сервер отдаёт причину отказа в ApiError.message (напр. «Подтверждение
+// доступно только системному администратору»). Без этого провал одобрения
+// выглядел как успех — общий тост скрывал реальную ошибку.
+const errMsg = (e: unknown, fallback: string): string =>
+  e instanceof ApiError ? e.message : fallback;
 
 export interface IPendingUser {
   id: string;
@@ -103,8 +110,8 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
       setApprovalModal(null);
       patchPendingCache((prev) => prev.filter((u) => u.id !== userId));
       await onReload();
-    } catch {
-      toast.error('Ошибка одобрения пользователя');
+    } catch (e) {
+      toast.error(errMsg(e, 'Ошибка одобрения пользователя'));
     }
   };
 
@@ -117,8 +124,8 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
       toast.success('Заявка отклонена');
       patchPendingCache((prev) => prev.filter((u) => u.id !== userId));
       await onReload();
-    } catch {
-      toast.error('Ошибка отклонения пользователя');
+    } catch (e) {
+      toast.error(errMsg(e, 'Ошибка отклонения пользователя'));
     }
   };
 
@@ -129,8 +136,8 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
       toast.success('Email подтверждён');
       patchPendingCache((prev) => prev.map((u) => u.id === userId ? { ...u, email_confirmed: true } : u));
       await onReload();
-    } catch {
-      toast.error('Ошибка подтверждения email');
+    } catch (e) {
+      toast.error(errMsg(e, 'Ошибка подтверждения email'));
     }
   };
 

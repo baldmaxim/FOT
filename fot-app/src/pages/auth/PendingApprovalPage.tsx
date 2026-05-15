@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import styles from './TwoFactor.module.css';
@@ -8,12 +8,32 @@ export const PendingApprovalPage: React.FC = () => {
   const { logout, profile, isApproved, isTwoFactorEnabled, refreshProfile } = useAuth();
   const [loading, setLoading] = useState(false);
 
-  // Автоматический редирект когда 2FA выдан
+  // Когда статус стал «одобрен»: с 2FA — на ввод кода, без 2FA (2FA по
+  // умолчанию выключена) — сразу в приложение. Без ветки без-2FA approved-
+  // пользователь «залипал» бы здесь в состоянии «Ожидание 2FA».
   useEffect(() => {
-    if (isApproved && isTwoFactorEnabled) {
-      navigate('/verify-2fa', { replace: true });
-    }
+    if (!isApproved) return;
+    navigate(isTwoFactorEnabled ? '/verify-2fa' : '/', { replace: true });
   }, [isApproved, isTwoFactorEnabled, navigate]);
+
+  // Авто-обновление профиля, пока не одобрено: вкладка/PWA, открытая до
+  // одобрения, «отлипает» сама, без ручного «Проверить статус».
+  // refreshProfile в ref — чтобы интервал не пересоздавался на каждый рендер.
+  const refreshRef = useRef(refreshProfile);
+  refreshRef.current = refreshProfile;
+  useEffect(() => {
+    if (isApproved) return;
+    const tick = () => { void refreshRef.current(); };
+    const id = window.setInterval(tick, 15_000);
+    const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
+    window.addEventListener('focus', tick);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener('focus', tick);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [isApproved]);
 
   const handleLogout = () => {
     logout();
