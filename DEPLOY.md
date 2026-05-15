@@ -41,6 +41,84 @@ export FOT_ROOT=/srv/sites/fot.su10.ru
 export RELEASE=$(git rev-parse --short HEAD)
 ```
 
+## Автодеплой Скриптом
+
+Основной способ деплоя с локального компьютера:
+
+```bash
+bash scripts/deploy-production.sh --check
+bash scripts/deploy-production.sh both
+```
+
+Что делает скрипт:
+
+- проверяет, что локальная ветка `main` совпадает с `origin/main`;
+- проверяет, что в деплойной области нет незакоммиченных изменений;
+- проверяет сервер, env-файлы и чистоту git tree на сервере;
+- выполняет `git pull --ff-only origin main` на сервере;
+- собирает локально `fot-server/dist` и/или `fot-app/dist`;
+- загружает `dist` на сервер через SSH и атомарно заменяет текущую версию;
+- перезапускает PM2-процессы и выполняет health-checks.
+
+Доступные варианты:
+
+```bash
+bash scripts/deploy-production.sh frontend
+bash scripts/deploy-production.sh backend
+bash scripts/deploy-production.sh data-api
+bash scripts/deploy-production.sh both
+bash scripts/deploy-production.sh all
+```
+
+Старые короткие команды тоже работают и ведут на новый сервер:
+
+```bash
+bash scripts/deploy-frontend.sh
+bash scripts/deploy-backend.sh
+bash scripts/deploy-both.sh
+```
+
+Для frontend перед первым запуском нужен локальный
+`fot-app/.env.production.local` с production-переменными. Он не коммитится.
+
+Полезные флаги окружения:
+
+```bash
+FRONTEND_NPM_CI=1 bash scripts/deploy-production.sh frontend
+BACKEND_NPM_CI=1 bash scripts/deploy-production.sh backend
+BACKEND_SOURCEMAPS=1 bash scripts/deploy-production.sh backend
+DATA_API_PIP_INSTALL=1 bash scripts/deploy-production.sh data-api
+ALLOW_DIRTY=1 bash scripts/deploy-production.sh both
+SKIP_VERIFY=1 bash scripts/deploy-production.sh both
+```
+
+`ALLOW_DIRTY=1` используй только осознанно: скрипт всё равно деплоит код,
+который уже запушен в `origin/main`, а локальные незакоммиченные изменения в
+сборочной области могут попасть в локально собранный `dist`.
+
+Если удобнее работать прямо на сервере, есть отдельный серверный сценарий:
+
+```bash
+ssh root@45.80.128.254
+cd /srv/sites/fot.su10.ru
+bash scripts/deploy-server.sh --check
+bash scripts/deploy-server.sh both
+```
+
+Он делает тот же production-путь, но всё выполняет на сервере: проверяет, что
+это hostname `hub`, подтягивает `origin/main`, собирает backend/frontend,
+перезапускает PM2, делает `pm2 save` и прогоняет health-checks.
+
+Доступны те же scope:
+
+```bash
+bash scripts/deploy-server.sh frontend
+bash scripts/deploy-server.sh backend
+bash scripts/deploy-server.sh data-api
+bash scripts/deploy-server.sh both
+bash scripts/deploy-server.sh all
+```
+
 ## Перед Деплоем
 
 Проверь локальное состояние:
