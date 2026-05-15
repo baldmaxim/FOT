@@ -2,7 +2,6 @@ import { useState, type FC } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { CardReaderPanel } from '../../components/skud/CardReaderPanel';
-import { SigurDriverUploader } from '../../components/skud/SigurDriverUploader';
 import { SigurLiveEmployeeSidebar } from '../../components/skud/employees/SigurLiveEmployeeSidebar';
 import { sigurAdminService } from '../../services/sigurAdminService';
 import { useAuth } from '../../contexts/AuthContext';
@@ -40,7 +39,6 @@ export const SkudCardReaderPage: FC = () => {
       <header className="scr-header">
         <h1 className="scr-title">Считыватель пропусков</h1>
       </header>
-      {canEdit && <SigurDriverUploader />}
       <CardReaderPanel
         mode={{
           kind: 'lookup',
