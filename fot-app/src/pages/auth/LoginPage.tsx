@@ -59,7 +59,7 @@ export const LoginPage: React.FC = () => {
 
           <div className={styles.brandHeadline}>
             <h1>Управление персоналом <span>без сложностей</span></h1>
-            <p>Единая платформа для учёта рабочего времени, контроля доступа и расчёта заработной платы.</p>
+            <p>Единая платформа для учёта рабочего времени и контроля доступа.</p>
 
             <div className={styles.features}>
               <div className={styles.feature}>
