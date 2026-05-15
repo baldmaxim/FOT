@@ -41,10 +41,6 @@ export interface ITimesheetReminderSettings {
   overdueHour: number;
 }
 
-export interface ITimesheetTeamManagementSettings {
-  enabled: boolean;
-}
-
 export interface IEmployeeTransferSettings {
   freezeHistory: boolean;
 }
@@ -117,18 +113,6 @@ export const settingsService = {
 
   saveTimesheetReminderSettings: async (data: ITimesheetReminderSettings): Promise<ITimesheetReminderSettings> => {
     const res = await apiClient.put<ApiResponse<ITimesheetReminderSettings>>('/settings/timesheet-reminders', data);
-    return res.data;
-  },
-
-  getTimesheetTeamManagementSettings: async (): Promise<ITimesheetTeamManagementSettings> => {
-    const res = await apiClient.get<ApiResponse<ITimesheetTeamManagementSettings>>('/settings/timesheet-team-management');
-    return res.data;
-  },
-
-  saveTimesheetTeamManagementSettings: async (
-    data: ITimesheetTeamManagementSettings,
-  ): Promise<ITimesheetTeamManagementSettings> => {
-    const res = await apiClient.put<ApiResponse<ITimesheetTeamManagementSettings>>('/settings/timesheet-team-management', data);
     return res.data;
   },
 

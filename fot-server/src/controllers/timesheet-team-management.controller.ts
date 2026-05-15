@@ -118,7 +118,7 @@ async function isTimesheetTeamManagementAvailable(req: AuthenticatedRequest): Pr
     return hasManagedTimesheetAccess(req, 'view');
   }
 
-  return hasManagedTimesheetAccess(req, 'edit');
+  return false;
 }
 
 async function resolveManagedDepartmentId(

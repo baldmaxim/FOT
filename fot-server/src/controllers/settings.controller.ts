@@ -228,31 +228,6 @@ const saveTimesheetReminderSettings = async (req: AuthenticatedRequest, res: Res
   }
 };
 
-const getTimesheetTeamManagementSettings = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    const config = await settingsService.getTimesheetTeamManagementConfig();
-    res.json({ success: true, data: config });
-  } catch (err) {
-    console.error('settings.getTimesheetTeamManagementSettings error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка получения настроек управления составом табеля' });
-  }
-};
-
-const saveTimesheetTeamManagementSettings = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    const { enabled } = req.body as Record<string, unknown>;
-
-    const config = await settingsService.setTimesheetTeamManagementConfig({
-      enabled: typeof enabled === 'boolean' ? enabled : undefined,
-    }, req.user.id);
-
-    res.json({ success: true, data: config });
-  } catch (err) {
-    console.error('settings.saveTimesheetTeamManagementSettings error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка сохранения настроек управления составом табеля' });
-  }
-};
-
 const getEmployeeTransferSettings = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const config = await settingsService.getEmployeeTransferConfig();
@@ -333,8 +308,6 @@ export const settingsController = {
   saveSigurMonitorSettings,
   getTimesheetReminderSettings,
   saveTimesheetReminderSettings,
-  getTimesheetTeamManagementSettings,
-  saveTimesheetTeamManagementSettings,
   getEmployeeTransferSettings,
   saveEmployeeTransferSettings,
   getOpenRouterSettings,

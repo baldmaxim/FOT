@@ -92,10 +92,7 @@ export const TimesheetPage: FC = () => {
   const isManagerObj = profile?.role_code === 'manager_obj';
   const canEditTimesheet = canEditPage('/timesheet') || canEditPage('/timesheet-hr');
   const canViewManagedTimesheet = canEditTimesheet || canViewPage('/timesheet') || canViewPage('/timesheet-hr');
-  const canEditTeamManagement = isSuperAdmin
-    || canEditPage('timesheet-team-management')
-    || canEditPage('/timesheet')
-    || canEditPage('/timesheet-hr');
+  const canEditTeamManagement = isSuperAdmin || canEditPage('timesheet-team-management');
   const canManageAllDepartments = isSuperAdmin || hasPermission('data.scope.all');
   const {
     isDepartmentScope,
