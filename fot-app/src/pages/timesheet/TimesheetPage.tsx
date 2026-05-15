@@ -1,6 +1,6 @@
 import { type FC, Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowRightLeft, ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, UserPlus, Mail } from 'lucide-react';
+import { AlertTriangle, ArrowRightLeft, ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, RefreshCcwDot, UserPlus, Mail } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { TimesheetCorrectionsList } from '../../components/timesheet/TimesheetCorrectionsList';
@@ -1214,23 +1214,24 @@ export const TimesheetPage: FC = () => {
     });
   }, [clearBulkState, closeTeamManagement, setSearchParams]);
 
-  const handleRefreshTimesheet = useCallback(async () => {
+  const handleRefreshTimesheet = useCallback(async (syncMode: 'quick' | 'full' = 'quick') => {
     if (!rangeStart || !rangeEnd || refreshInFlight) return;
-    setRefreshState({ phase: 'syncing', message: 'Синхронизация СКУД…' });
+    const isFull = syncMode === 'full';
+    setRefreshState({
+      phase: 'syncing',
+      message: isFull ? 'Синхронизация СКУД…' : 'Обновление табеля…',
+    });
 
     const controller = new AbortController();
-    const timeoutMs = 90_000;
+    const timeoutMs = isFull ? 90_000 : 15_000;
     const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const result = await timesheetService.refresh(
         { start_date: rangeStart, end_date: rangeEnd },
-        { signal: controller.signal, sync_mode: 'full' },
+        { signal: controller.signal, sync_mode: syncMode },
       );
       setRefreshState({ phase: 'invalidating', message: 'Обновление данных табеля…' });
-      // Полное обновление: данные табеля + резолв расписаний + согласования.
-      // Без инвалидации schedules покраска полного дня (full_day_threshold) останется
-      // по старым значениям шаблона, если он был отредактирован в другой вкладке.
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
@@ -1258,7 +1259,8 @@ export const TimesheetPage: FC = () => {
         toast.error?.('Синхронизация уже идёт фоном, попробуйте через минуту');
         setRefreshState({ phase: 'idle', message: '' });
       } else if (aborted) {
-        toast.error?.('Сервер не ответил за 90 секунд, повторите попытку');
+        const seconds = Math.round(timeoutMs / 1000);
+        toast.error?.(`Сервер не ответил за ${seconds} секунд, повторите попытку`);
         setRefreshState({ phase: 'error', message: 'Таймаут' });
         setTimeout(() => setRefreshState({ phase: 'idle', message: '' }), 3000);
       } else {
@@ -1734,16 +1736,28 @@ export const TimesheetPage: FC = () => {
                   <Download size={16} />
                   Экспорт
                 </button>
-                <button
-                  type="button"
-                  className="ts-btn"
-                  onClick={handleRefreshTimesheet}
-                  disabled={refreshInFlight || !rangeStart || !rangeEnd}
-                  title="Пересинхронизировать события СКУД и обновить табель"
-                >
-                  <RefreshCw size={16} className={refreshInFlight ? 'ts-refresh-spinning' : undefined} />
-                  Обновить
-                </button>
+                <div className="ts-refresh-group">
+                  <button
+                    type="button"
+                    className="ts-btn ts-refresh-main"
+                    onClick={() => handleRefreshTimesheet('quick')}
+                    disabled={refreshInFlight || !rangeStart || !rangeEnd}
+                    title="Перечитать табель с текущим графиком (без СКУД-синхронизации)"
+                  >
+                    <RefreshCw size={16} className={refreshInFlight ? 'ts-refresh-spinning' : undefined} />
+                    Обновить
+                  </button>
+                  <button
+                    type="button"
+                    className="ts-btn ts-refresh-full"
+                    onClick={() => handleRefreshTimesheet('full')}
+                    disabled={refreshInFlight || !rangeStart || !rangeEnd}
+                    title="Полное обновление: синхронизация событий СКУД из Sigur"
+                    aria-label="Полное обновление с синхронизацией СКУД"
+                  >
+                    <RefreshCcwDot size={16} />
+                  </button>
+                </div>
                 {refreshState.phase !== 'idle' && (
                   <span
                     className={`ts-refresh-status${refreshState.phase === 'error' ? ' ts-refresh-status--error' : ''}`}

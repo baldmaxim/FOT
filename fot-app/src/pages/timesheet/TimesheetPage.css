@@ -2114,6 +2114,21 @@
 .ts-refresh-spinning {
   animation: ts-refresh-rotate 1s linear infinite;
 }
+.ts-refresh-group {
+  display: inline-flex;
+  align-items: stretch;
+}
+.ts-refresh-group .ts-refresh-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.ts-refresh-group .ts-refresh-full {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  margin-left: -1px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
 .ts-refresh-status {
   display: inline-flex;
   align-items: center;
