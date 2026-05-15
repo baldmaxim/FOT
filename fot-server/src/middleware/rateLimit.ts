@@ -15,7 +15,7 @@ const AUTH_RATE_LIMIT_MAX = readLimit('AUTH_RATE_LIMIT_MAX', IS_PRODUCTION ? 100
 const REFRESH_RATE_LIMIT_MAX = readLimit('REFRESH_RATE_LIMIT_MAX', IS_PRODUCTION ? 1000 : 300);
 const TWO_FACTOR_RATE_LIMIT_MAX = readLimit('TWO_FACTOR_RATE_LIMIT_MAX', IS_PRODUCTION ? 30 : 20);
 const IMPORT_RATE_LIMIT_MAX = readLimit('IMPORT_RATE_LIMIT_MAX', IS_PRODUCTION ? 5 : 10);
-const LOGIN_PER_EMAIL_RATE_LIMIT_MAX = readLimit('LOGIN_PER_EMAIL_RATE_LIMIT_MAX', IS_PRODUCTION ? 5 : 20);
+const LOGIN_PER_EMAIL_RATE_LIMIT_MAX = readLimit('LOGIN_PER_EMAIL_RATE_LIMIT_MAX', IS_PRODUCTION ? 12 : 20);
 const FORGOT_PASSWORD_PER_EMAIL_RATE_LIMIT_MAX = readLimit('FORGOT_PASSWORD_PER_EMAIL_RATE_LIMIT_MAX', IS_PRODUCTION ? 3 : 10);
 
 // Ключ для per-email лимитеров: нормализованный email из тела запроса +
@@ -77,13 +77,19 @@ export const importLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Targeted-bruteforce защита для login: 5/15min на конкретный email.
+// Targeted-bruteforce защита для login: 12/15min на конкретный email.
 // authLimiter (по IP) недостаточно — за NAT 50 человек делят IP-окно.
+// В счётчик попадает только настоящий неверный пароль (401 invalid_credentials):
+// контроллер login отдаёт 401 лишь на неверные креды; success/2FA — 200,
+// pending-approval — 403, валидация — 400, прочее — 404/500, 429 самого
+// лимитера — statusCode≠401. requestWasSuccessful=true декрементит hit, поэтому
+// PENDING_APPROVAL/валидация/успех не выжигают лимит реальному пользователю.
 export const loginPerEmailLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: LOGIN_PER_EMAIL_RATE_LIMIT_MAX,
   skip: skipInDev,
   skipSuccessfulRequests: true,
+  requestWasSuccessful: (_req, res) => res.statusCode !== 401,
   keyGenerator: emailKeyGenerator,
   message: { success: false, error: 'Слишком много попыток входа для этого email, попробуйте через 15 минут' },
   standardHeaders: true,
