@@ -8,6 +8,7 @@ import { settingsService } from '../src/services/settings.service.js';
 import { createS3Client } from '../src/services/r2.service.js';
 
 const ALLOWED_ORIGINS = [
+  'https://fot.su10.ru',
   'https://fotsu10.fvds.ru',
   'http://localhost:5173',
   'http://localhost:5174',
