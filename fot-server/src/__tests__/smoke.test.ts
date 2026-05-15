@@ -17,6 +17,18 @@ vi.mock('../services/access-control.service.js', async () => {
   };
 });
 
+// Мок БД для middleware/auth.ts: проверка token_version делает SELECT,
+// в тестах DATABASE_URL фейковый → реальный pg.Pool бросит ETIMEDOUT.
+// fresh.token_version=0 совпадает с decodedVersion=0 (makeToken не задаёт поле).
+vi.mock('../config/postgres.js', () => ({
+  queryOne: vi.fn().mockResolvedValue({ token_version: 0 }),
+  query: vi.fn().mockResolvedValue([]),
+  execute: vi.fn().mockResolvedValue(0),
+  withTransaction: vi.fn(),
+  getPool: vi.fn(),
+  pool: vi.fn(),
+}));
+
 const mockedResolve = vi.mocked(resolveEffectivePageAccess);
 
 interface TokenOverrides {

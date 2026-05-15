@@ -1231,7 +1231,7 @@ export const adminUsersController = {
 
       try {
         await execute(
-          'UPDATE user_profiles SET system_role_id = $1::uuid WHERE id = $2::uuid',
+          'UPDATE user_profiles SET system_role_id = $1::uuid, token_version = token_version + 1 WHERE id = $2::uuid',
           [roleAssignment.id, id],
         );
       } catch (error) {
@@ -1332,7 +1332,7 @@ export const adminUsersController = {
 
       try {
         await execute(
-          'UPDATE user_profiles SET employee_id = $1 WHERE id = $2::uuid',
+          'UPDATE user_profiles SET employee_id = $1, token_version = token_version + 1 WHERE id = $2::uuid',
           [employee_id, id],
         );
       } catch (error) {

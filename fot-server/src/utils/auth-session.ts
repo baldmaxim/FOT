@@ -57,7 +57,7 @@ export function parseCookieHeader(cookieHeader?: string | null): Record<string, 
 }
 
 export function generateAccessToken(
-  profile: Pick<UserProfile, 'id' | 'system_role_id' | 'employee_id' | 'is_approved' | 'two_factor_enabled'>,
+  profile: Pick<UserProfile, 'id' | 'system_role_id' | 'employee_id' | 'is_approved' | 'two_factor_enabled' | 'token_version'>,
   role: Pick<SystemRole, 'code' | 'is_admin' | 'employee_variant' | 'show_actual_hours' | 'timesheet_months_back' | 'timesheet_months_forward'>,
   email: string,
   twoFactorVerified: boolean,
@@ -79,6 +79,7 @@ export function generateAccessToken(
     is_approved: profile.is_approved,
     two_factor_enabled: profile.two_factor_enabled,
     two_factor_verified: twoFactorVerified,
+    token_version: Number.isFinite(profile.token_version) ? profile.token_version : 0,
   };
 
   return jwt.sign(payload, env.JWT_SECRET, { expiresIn: env.JWT_EXPIRES_IN } as jwt.SignOptions);

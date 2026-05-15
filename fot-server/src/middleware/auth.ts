@@ -7,6 +7,7 @@ import type { AccessAction } from '../config/access-control.js';
 import type { AuthenticatedRequest, JWTPayload } from '../types/index.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { getAccessTokenFromRequest } from '../utils/auth-session.js';
+import { queryOne } from '../config/postgres.js';
 
 export const authenticate = async (
   req: AuthenticatedRequest,
@@ -28,6 +29,27 @@ export const authenticate = async (
 
     if (!decoded.is_approved) {
       res.status(403).json({ success: false, error: 'Account not approved' });
+      return;
+    }
+
+    // N1.b session revocation: при смене system_role_id / employee_id у пользователя
+    // user_profiles.token_version инкрементируется. Если JWT выпущен до этого —
+    // его token_version отстаёт → 401 → клиент через api/client.ts:170 делает
+    // /auth/refresh и получает новый токен с актуальным is_admin/role_code.
+    // Старые JWT без поля (выпущенные до миграции 095) приходят как undefined →
+    // нормализуются в 0, fresh.token_version тоже 0 (DEFAULT) → совпадают.
+    const decodedVersion = Number.isFinite(decoded.token_version) ? decoded.token_version : 0;
+    const fresh = await queryOne<{ token_version: number }>(
+      'SELECT token_version FROM user_profiles WHERE id = $1::uuid',
+      [decoded.sub],
+    );
+    if (!fresh) {
+      res.status(401).json({ success: false, error: 'Profile not found' });
+      return;
+    }
+    const freshVersion = Number.isFinite(fresh.token_version) ? fresh.token_version : 0;
+    if (freshVersion !== decodedVersion) {
+      res.status(401).json({ success: false, error: 'Token revoked' });
       return;
     }
 

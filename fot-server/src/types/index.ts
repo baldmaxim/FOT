@@ -76,6 +76,7 @@ export interface UserProfile {
   totp_secret: string | null;
   recovery_codes: string[] | null;
   two_factor_enabled: boolean;
+  token_version: number;
   created_at: string;
   updated_at: string;
 }
@@ -306,6 +307,7 @@ export interface JWTPayload {
   is_approved: boolean;
   two_factor_enabled: boolean;
   two_factor_verified: boolean;
+  token_version: number;
   iat: number;
   exp: number;
 }
