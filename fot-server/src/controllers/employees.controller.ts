@@ -22,6 +22,7 @@ import {
   resolveRequestDataScope,
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
+import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
 import { collectDeptIds } from '../services/skud-shared.service.js';
 
 // Полный список колонок employees для getById / lifecycle-хэндлеров
@@ -115,6 +116,20 @@ export const employeesController = {
       const departmentFilterIds = requestedDepartmentId
         ? await resolveDepartmentFilterIds(departmentId)
         : (managedDepartmentIds.length > 0 ? managedDepartmentIds : await resolveDepartmentFilterIds(departmentId));
+      // Подмешиваем самого руководителя в список бригад, если у него есть явные назначения
+      // отделов (employee_department_access) — иначе он, сидящий в собственном отделе, не
+      // попадает под фильтр org_department_id и не виден в списке своих же бригад.
+      // Аналог поведения в табеле: timesheet.controller.ts selfTimesheetId.
+      let selfEmployeeIdToInclude: number | null = null;
+      if (scope === 'department' && req.user.employee_id) {
+        const explicitDeptIds = await listExplicitDepartmentIdsForUser(
+          req.user.id,
+          req.user.employee_id,
+        );
+        if (explicitDeptIds.length > 0) {
+          selfEmployeeIdToInclude = req.user.employee_id;
+        }
+      }
       const isListView = req.query.view === 'list';
       const listColumns = 'id, full_name, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at, excluded_from_timesheet, excluded_from_timesheet_at';
       const staffColumns = listColumns + ', salary_actual, salary_calculated, current_salary';
@@ -155,7 +170,13 @@ export const employeesController = {
           whereParts.push(`id = $${params.length}`);
         } else if (departmentFilterIds?.length) {
           params.push(departmentFilterIds);
-          whereParts.push(`org_department_id = ANY($${params.length}::uuid[])`);
+          const deptIdx = params.length;
+          if (selfEmployeeIdToInclude != null) {
+            params.push(selfEmployeeIdToInclude);
+            whereParts.push(`(org_department_id = ANY($${deptIdx}::uuid[]) OR id = $${params.length})`);
+          } else {
+            whereParts.push(`org_department_id = ANY($${deptIdx}::uuid[])`);
+          }
         }
         if (search) {
           params.push(`%${escapeLike(search)}%`);
