@@ -18,7 +18,7 @@ import {
 } from '../../utils/scheduleUtils';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { selectVisibleHours, selectVisibleObjectHours, formatHoursLabel } from '../../utils/hoursDisplay';
-import { getDayStatus, STATUS_TO_GRID_CLASS } from '../../utils/dayStatus';
+import { getDayStatus, STATUS_TO_GRID_CLASS, STATUS_LABEL_RU } from '../../utils/dayStatus';
 import { useAuth } from '../../contexts/AuthContext';
 import '../../pages/timesheet/TimesheetPage.css';
 
@@ -306,6 +306,44 @@ const getObjectCellTitle = (entry: TimesheetObjectEntry | null, objectName?: str
     }
   }
   return parts.join(' • ');
+};
+
+// Цвет ячейки в табеле по объектам определяется СУММАРНЫМ статусом дня сотрудника
+// (work/sick/vacation/...), а не часами конкретного объекта. Это нужно, чтобы все
+// строки одного сотрудника за один день были одного цвета — даже если он был на
+// нескольких объектах. dailyEntry приходит из row.dailyEntries — единая дневная
+// запись с агрегированными часами по сотруднику.
+const getObjectCellText = (
+  dailyEntry: TimesheetEntry | null,
+  objectEntry: TimesheetObjectEntry | null,
+  dayOff: boolean,
+): string => {
+  if (dailyEntry) {
+    const special = STATUS_CELL_TEXT[dailyEntry.status];
+    if (special) return special;
+  }
+  if (objectEntry) return formatCellHM(getObjectVisibleHours(objectEntry));
+  if (dayOff) return '—';
+  return '';
+};
+
+const getObjectCellTitleWithStatus = (
+  dailyEntry: TimesheetEntry | null,
+  objectEntry: TimesheetObjectEntry | null,
+  objectName: string | undefined,
+  dayOff: boolean,
+  threshold: number,
+  future: boolean,
+): string | undefined => {
+  const baseTitle = getObjectCellTitle(objectEntry, objectName);
+  const status = getDayStatus(dailyEntry, {
+    showActualHours: showActualHoursFlag,
+    fullDayThresholdHours: threshold,
+    isScheduledDayOff: dayOff,
+    isFuture: future,
+  });
+  const label = STATUS_LABEL_RU[status];
+  return [label, baseTitle].filter(Boolean).join(' • ') || undefined;
 };
 
 const compareEmployeeNames = (left: TimesheetEmployee, right: TimesheetEmployee): number => (
@@ -774,6 +812,52 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     );
   }, [buildBulkRangeSelection, bulkDragAnchor, bulkDragBaseKeys, bulkDragMode, bulkEditMode, mergeBulkSelections]);
 
+  // Единая легенда для табелей по сотрудникам и по объектам — раскраска ячеек
+  // одинаковая (см. getDayCellClass + dayStatus.ts), поэтому и легенда общая.
+  const tableLegend = (
+    <div className="ts-legend">
+      <div className="ts-legend-item">
+        <span className="ts-legend-dot ts-legend-dot--full">8</span>Полный день
+      </div>
+      <div className="ts-legend-item">
+        <span className="ts-legend-dot ts-legend-dot--partial">7</span>Неполный
+      </div>
+      <div className="ts-legend-item">
+        <span className="ts-legend-dot ts-legend-dot--sick">Б</span>Больничный
+      </div>
+      <div className="ts-legend-item">
+        <span className="ts-legend-dot ts-legend-dot--vacation">О</span>Отпуск
+      </div>
+      <div className="ts-legend-item">
+        <span className="ts-legend-dot ts-legend-dot--remote">У</span>Удалёнка
+      </div>
+      <div className="ts-legend-item">
+        <span className="ts-legend-dot ts-legend-dot--absent">Н</span>Неявка
+      </div>
+      <div className="ts-legend-item">
+        <span className="ts-legend-dot ts-legend-dot--incomplete-skud">Н</span>СКУД без пары
+      </div>
+      <div className="ts-legend-item">
+        <span className="ts-legend-dot ts-legend-dot--weekend">—</span>Выходной
+      </div>
+      <div className="ts-legend-item">
+        <span className="ts-legend-dot ts-legend-dot--corrected">К</span>Корректировка
+      </div>
+      <div className="ts-legend-item">
+        <span className="ts-legend-dot ts-legend-dot--approval-pending" />На согласовании
+      </div>
+      <div className="ts-legend-item">
+        <span className="ts-legend-dot ts-legend-dot--approval-approved" />Согласовано
+      </div>
+      <div className="ts-legend-item">
+        <span className="ts-legend-dot ts-legend-dot--approval-rejected" />Отклонено
+      </div>
+      <div className="ts-legend-item">
+        <span className="ts-legend-dot ts-legend-dot--travel-issue">!</span>Превышение лимита или проблема объекта
+      </div>
+    </div>
+  );
+
   if (compact && viewMode === 'objects') {
     const jsDow = new Date(year, month - 1, 1).getDay();
     const firstDayOffset = (jsDow + 6) % 7;
@@ -839,15 +923,16 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const bottomEntry = bottomObj ? bottomObj.days.get(day) || null : null;
                         const topHours = topEntry ? getObjectVisibleHours(topEntry) : 0;
                         const bottomHours = bottomEntry ? getObjectVisibleHours(bottomEntry) : 0;
-                        const hasAny = topHours > 0 || bottomHours > 0;
-                        const weekend = isWeekend(year, month, day);
+                        const dailyEntry = row.days.get(day) || null;
+                        const sched = getScheduleForTimesheetDay(schedules, dailySchedules, row.employee.id, year, month, day);
+                        const dayOff = isScheduleDayOff(sched, calendar, year, month, day);
                         const today = isToday(year, month, day);
+                        const future = isFutureDay(year, month, day);
+                        const threshold = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
                         const clickEntry = topEntry || bottomEntry;
                         const clickObj = topEntry ? topObj : bottomObj;
-                        const classes = ['ts-mobile-day-btn', 'ts-mobile-day-btn--dual'];
-                        if (weekend) classes.push('ts-day--weekend');
-                        if (today) classes.push('ts-day--today');
-                        if (hasAny) classes.push('ts-day--full');
+                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold);
+                        const classes = [baseCls, 'ts-mobile-day-btn', 'ts-mobile-day-btn--dual'];
 
                         return (
                           <button
@@ -1079,17 +1164,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       <div className="ts-table-container">
         <div className="ts-table-header-bar">
           <h3 className="ts-table-title">Табель по объектам</h3>
-          <div className="ts-legend">
-            <div className="ts-legend-item">
-              <span className="ts-legend-dot ts-legend-dot--full">8</span>Распределённые часы
-            </div>
-            <div className="ts-legend-item">
-              <span className="ts-legend-dot ts-legend-dot--corrected">К</span>Корректировка
-            </div>
-            <div className="ts-legend-item">
-              <span className="ts-legend-dot ts-legend-dot--weekend">—</span>Выходной
-            </div>
-          </div>
+          {tableLegend}
         </div>
 
         <div className="ts-table-scroll">
@@ -1133,22 +1208,27 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       </td>
                       {days.map(day => {
                         const objectEntry = row.days.get(day) || null;
+                        const dailyEntry = row.dailyEntries.get(day) || null;
                         const sched = getScheduleForTimesheetDay(schedules, dailySchedules, row.employee.id, year, month, day);
                         const dayOff = isScheduleDayOff(sched, calendar, year, month, day);
                         const future = isFutureDay(year, month, day);
-                        const text = objectEntry ? formatCellHM(getObjectVisibleHours(objectEntry)) : '';
+                        const today = isToday(year, month, day);
+                        const threshold = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
+                        const text = getObjectCellText(dailyEntry, objectEntry, dayOff);
                         const targeted = bulkEditMode && activeSelectedCellKeys.has(getObjectBulkCellKey(row.employee.id, row.object_key, day));
+                        const baseTitle = getObjectCellTitleWithStatus(dailyEntry, objectEntry, row.object_name, dayOff, threshold, future);
                         const title = bulkEditMode
-                          ? [getObjectCellTitle(objectEntry, row.object_name), 'Зажмите левую кнопку мыши и протяните диапазон для массовой корректировки по объектам']
+                          ? [baseTitle, 'Зажмите левую кнопку мыши и протяните диапазон для массовой корректировки по объектам']
                             .filter(Boolean)
                             .join(' • ')
-                          : getObjectCellTitle(objectEntry, row.object_name);
+                          : baseTitle;
                         const isClickable = !future && !dayOff;
                         const isBlocked = row.isSynthetic;
+                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold);
                         return (
                           <td
                             key={`${group.object_key}_${row.employee.id}_${day}`}
-                            className={`ts-day ts-day--object${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !isBlocked ? ' ts-day--bulk-selectable' : ''}`}
+                            className={`${baseCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !isBlocked ? ' ts-day--bulk-selectable' : ''}`}
                             title={title}
                             onMouseDown={bulkEditMode && isClickable ? (event) => handleBulkCellMouseDown(
                               event,
@@ -1198,47 +1278,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     <div className="ts-table-container">
       <div className="ts-table-header-bar">
         <h3 className="ts-table-title">Табель учёта рабочего времени</h3>
-        <div className="ts-legend">
-          <div className="ts-legend-item">
-            <span className="ts-legend-dot ts-legend-dot--full">8</span>Полный день
-          </div>
-          <div className="ts-legend-item">
-            <span className="ts-legend-dot ts-legend-dot--partial">7</span>Неполный
-          </div>
-          <div className="ts-legend-item">
-            <span className="ts-legend-dot ts-legend-dot--sick">Б</span>Больничный
-          </div>
-          <div className="ts-legend-item">
-            <span className="ts-legend-dot ts-legend-dot--vacation">О</span>Отпуск
-          </div>
-          <div className="ts-legend-item">
-            <span className="ts-legend-dot ts-legend-dot--remote">У</span>Удалёнка
-          </div>
-          <div className="ts-legend-item">
-            <span className="ts-legend-dot ts-legend-dot--absent">Н</span>Неявка
-          </div>
-          <div className="ts-legend-item">
-            <span className="ts-legend-dot ts-legend-dot--incomplete-skud">Н</span>СКУД без пары
-          </div>
-          <div className="ts-legend-item">
-            <span className="ts-legend-dot ts-legend-dot--weekend">—</span>Выходной
-          </div>
-          <div className="ts-legend-item">
-            <span className="ts-legend-dot ts-legend-dot--corrected">К</span>Корректировка
-          </div>
-          <div className="ts-legend-item">
-            <span className="ts-legend-dot ts-legend-dot--approval-pending" />На согласовании
-          </div>
-          <div className="ts-legend-item">
-            <span className="ts-legend-dot ts-legend-dot--approval-approved" />Согласовано
-          </div>
-          <div className="ts-legend-item">
-            <span className="ts-legend-dot ts-legend-dot--approval-rejected" />Отклонено
-          </div>
-          <div className="ts-legend-item">
-            <span className="ts-legend-dot ts-legend-dot--travel-issue">!</span>Превышение лимита или проблема объекта
-          </div>
-        </div>
+        {tableLegend}
       </div>
 
       <div className="ts-table-scroll">
@@ -1426,22 +1466,26 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       </td>
                       {days.map(day => {
                         const objectEntry = objectRow.days.get(day) || null;
+                        const dailyEntry = row.days.get(day) || null;
                         const sched = getScheduleForTimesheetDay(schedules, dailySchedules, row.employee.id, year, month, day);
                         const dayOff = isScheduleDayOff(sched, calendar, year, month, day);
                         const future = isFutureDay(year, month, day);
-                        const text = objectEntry ? formatCellHM(getObjectVisibleHours(objectEntry)) : '';
+                        const today = isToday(year, month, day);
+                        const threshold = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
+                        const text = getObjectCellText(dailyEntry, objectEntry, dayOff);
                         const targeted = bulkEditMode && activeSelectedCellKeys.has(getObjectBulkCellKey(row.employee.id, objectRow.object_key, day));
-                        const baseTitle = getObjectCellTitle(objectEntry, objectRow.object_name);
+                        const baseTitle = getObjectCellTitleWithStatus(dailyEntry, objectEntry, objectRow.object_name, dayOff, threshold, future);
                         const title = bulkEditMode
                           ? [baseTitle, 'Зажмите левую кнопку мыши и протяните диапазон для массовой корректировки по объектам']
                             .filter(Boolean)
                             .join(' • ')
                           : baseTitle;
                         const isClickable = !future && !dayOff;
+                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold);
                         return (
                           <td
                             key={`${objectRow.object_key}_${day}`}
-                            className={`ts-day ts-day--object${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode ? ' ts-day--bulk-selectable' : ''}`}
+                            className={`${baseCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode ? ' ts-day--bulk-selectable' : ''}`}
                             title={title}
                             onMouseDown={bulkEditMode && isClickable ? (event) => handleBulkCellMouseDown(
                               event,

@@ -2650,11 +2650,6 @@
   color: var(--warning);
 }
 
-.ts-day--object {
-  background: rgba(14, 165, 233, 0.08);
-  color: var(--text-primary);
-}
-
 .ts-day--sick {
   background: rgba(59, 130, 246, 0.12);
   color: var(--primary);
