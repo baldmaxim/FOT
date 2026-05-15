@@ -68,6 +68,7 @@ vi.mock('../services/data-scope.service.js', () => ({
   canAccessEmployeeInScope: vi.fn(async () => true),
   resolveScopedDepartmentId: vi.fn(async () => null),
   resolveRequestDataScope: vi.fn(async () => 'all'),
+  resolveManagedDepartmentIds: vi.fn(async () => []),
 }));
 
 vi.mock('./skud-write.controller.js', () => ({
@@ -79,6 +80,12 @@ vi.mock('./skud-travel.controller.js', () => ({
 }));
 
 import { skudController } from './skud.controller.js';
+import { getDisciplineViolations } from '../services/skud-discipline.service.js';
+import { resolveRequestDataScope, resolveManagedDepartmentIds } from '../services/data-scope.service.js';
+
+const mockGetDisciplineViolations = vi.mocked(getDisciplineViolations);
+const mockResolveRequestDataScope = vi.mocked(resolveRequestDataScope);
+const mockResolveManagedDepartmentIds = vi.mocked(resolveManagedDepartmentIds);
 
 function makeReq(overrides: Partial<AuthenticatedRequest> = {}): AuthenticatedRequest {
   return {
@@ -200,5 +207,72 @@ describe('skudController.getAccessPoints', () => {
       data: ['Боковой вход', 'Главный вход'],
     });
     expect(pgQuery).not.toHaveBeenCalled();
+  });
+});
+
+describe('skudController.getDisciplineViolations (data-scope)', () => {
+  const fullData = {
+    violations: [
+      { employee_id: 1, date: '2026-05-01', type: 'late', first_entry: '09:30:00', last_exit: '18:00:00', total_hours: 7, deviation: '-1' },
+      { employee_id: 2, date: '2026-05-02', type: 'late', first_entry: '09:40:00', last_exit: '18:00:00', total_hours: 6, deviation: '-2' },
+    ],
+    employees: {
+      1: { full_name: 'Иванов И.И.', position: null, department_id: 'dept-1' },
+      2: { full_name: 'Петров П.П.', position: null, department_id: 'dept-2' },
+    },
+    departments: { 'dept-1': 'Отдел 1', 'dept-2': 'Отдел 2' },
+  };
+
+  beforeEach(() => {
+    mockGetDisciplineViolations.mockReset();
+    mockGetDisciplineViolations.mockResolvedValue(structuredClone(fullData) as never);
+    mockResolveRequestDataScope.mockReset();
+    mockResolveManagedDepartmentIds.mockReset();
+    mockResolveManagedDepartmentIds.mockResolvedValue([]);
+  });
+
+  it('returns empty employees/violations for self scope (user without department)', async () => {
+    mockResolveRequestDataScope.mockResolvedValue('self');
+
+    const req = makeReq({ query: { startMonth: '2026-05' } });
+    const res = makeRes();
+
+    await skudController.getDisciplineViolations(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const payload = res.payload as { success: boolean; data: typeof fullData };
+    expect(payload.success).toBe(true);
+    expect(payload.data.employees).toEqual({});
+    expect(payload.data.violations).toEqual([]);
+    expect(payload.data.departments).toEqual(fullData.departments);
+  });
+
+  it('returns the full dataset for system admin (all scope)', async () => {
+    mockResolveRequestDataScope.mockResolvedValue('all');
+
+    const req = makeReq({ query: { startMonth: '2026-05' } });
+    const res = makeRes();
+
+    await skudController.getDisciplineViolations(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const payload = res.payload as { success: boolean; data: typeof fullData };
+    expect(Object.keys(payload.data.employees)).toEqual(['1', '2']);
+    expect(payload.data.violations).toHaveLength(2);
+  });
+
+  it('filters to managed departments for department scope', async () => {
+    mockResolveRequestDataScope.mockResolvedValue('department');
+    mockResolveManagedDepartmentIds.mockResolvedValue(['dept-1']);
+
+    const req = makeReq({ query: { startMonth: '2026-05' } });
+    const res = makeRes();
+
+    await skudController.getDisciplineViolations(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const payload = res.payload as { success: boolean; data: typeof fullData };
+    expect(Object.keys(payload.data.employees)).toEqual(['1']);
+    expect(payload.data.violations).toEqual([fullData.violations[0]]);
   });
 });

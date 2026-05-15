@@ -358,7 +358,10 @@ async function getScopedDisciplineData(
   const data = await getDisciplineViolations({ startMonth, endMonth });
   const scope = await resolveRequestDataScope(req);
 
-  if (scope !== 'department') {
+  // Полный набор данных — только системному админу ('all'). Для 'self'
+  // (пользователь без назначенного отдела/бригады) скоуп пуст: код ниже
+  // через resolveManagedDepartmentIds → [] вернёт пустой результат.
+  if (scope === 'all') {
     return data;
   }
 
