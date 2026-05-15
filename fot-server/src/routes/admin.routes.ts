@@ -3,7 +3,9 @@ import multer from 'multer';
 import { adminController } from '../controllers/admin.controller.js';
 import { adminSystemResourcesController } from '../controllers/admin-system-resources.controller.js';
 import { authenticate, requirePageAccess } from '../middleware/auth.js';
+import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { isExcelBuffer, sanitizeFileName } from '../utils/file-validation.utils.js';
+import type { AuthenticatedRequest } from '../types/index.js';
 
 const router = Router();
 
@@ -65,9 +67,54 @@ function uploadSingleFile(field: string) {
 
 router.use(authenticate);
 
+// Per-user кеш списка пользователей. company_scope ленивая (резолвится внутри
+// filterUsersByCompanyScope в самом контроллере), поэтому в keyFn её ещё нет —
+// используем per-userId ключ. Это безопасно: scope админа стабилен в рамках
+// одной сессии (изменения в user_company_access => перелогин), и любая мутация
+// /users/* инвалидирует кеш ниже. SWR-окно даёт мгновенный повторный ответ.
+const usersListCache = registerCache(
+  'admin:users:list',
+  (req: Request) => `users:${(req as AuthenticatedRequest).user?.id ?? 'anon'}`,
+  30_000,
+  { staleMs: 60_000, max: 200 },
+);
+
+const pendingUsersCache = registerCache(
+  'admin:users:pending',
+  (req: Request) => `pending:${(req as AuthenticatedRequest).user?.id ?? 'anon'}`,
+  30_000,
+  { staleMs: 60_000, max: 200 },
+);
+
+// Write-through invalidation: после успешной мутации /users/* или
+// /employees/.../department-access сбрасываем оба кеша. Регистронезависимо
+// проверяем /skud-objects и /companies — они тоже могут изменить агрегаты,
+// которые возвращает /admin/users (привязки сотрудников, компании админа).
+router.use((req, res, next) => {
+  const isMutation = req.method !== 'GET' && req.method !== 'HEAD';
+  if (!isMutation) {
+    next();
+    return;
+  }
+  const p = req.path;
+  const touchesUsers = p.startsWith('/users')
+    || p.startsWith('/employees/')
+    || p.startsWith('/companies');
+  if (!touchesUsers) {
+    next();
+    return;
+  }
+  res.on('finish', () => {
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      invalidateCaches('admin:users:list', 'admin:users:pending');
+    }
+  });
+  next();
+});
+
 // Пользователи — доступно admin + super_admin
-router.get('/users', requirePageAccess('/admin/users', 'view'), adminController.getAllUsers);
-router.get('/users/pending', requirePageAccess('/admin/users', 'view'), adminController.getPendingUsers);
+router.get('/users', requirePageAccess('/admin/users', 'view'), usersListCache, adminController.getAllUsers);
+router.get('/users/pending', requirePageAccess('/admin/users', 'view'), pendingUsersCache, adminController.getPendingUsers);
 router.get('/employees/department-access', requirePageAccess('/admin/users', 'view'), adminController.getEmployeeDepartmentAssignments);
 router.post(
   '/users/department-access-import/preview',

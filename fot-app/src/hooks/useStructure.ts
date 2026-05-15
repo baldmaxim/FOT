@@ -36,7 +36,7 @@ export const useStructureTree = (enabled = true) => {
     // gcTime > staleTime обязательно: иначе кеш выбрасывается из памяти раньше, чем считается stale,
     // и при возврате на страницу селектор пуст до завершения refetch (root-cause бага «пропадают отделы»).
     gcTime: 24 * 60 * 60_000,
-    refetchOnMount: 'always',
+    refetchOnMount: false,
     retry: 3,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
     // Игнорируем previousData с пустым departments: если бэк хоть раз отдал 200 OK

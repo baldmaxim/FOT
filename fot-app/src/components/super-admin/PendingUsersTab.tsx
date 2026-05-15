@@ -30,11 +30,12 @@ interface IApprovalModal {
 
 interface IPendingUsersTabProps {
   pendingUsers: IPendingUser[];
+  loading?: boolean;
   onReload: () => Promise<void>;
   patchPendingCache: (updater: (prev: IPendingUser[]) => IPendingUser[]) => void;
 }
 
-export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onReload, patchPendingCache }) => {
+export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loading = false, onReload, patchPendingCache }) => {
   const toast = useToast();
   const { roles } = useAuth();
   const queryClient = useQueryClient();
@@ -136,7 +137,9 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, onRel
   return (
     <>
       <div className={styles.userList}>
-        {pendingUsers.length === 0 ? (
+        {loading && pendingUsers.length === 0 ? (
+          <div className={styles.empty}>Загрузка...</div>
+        ) : pendingUsers.length === 0 ? (
           <div className={styles.empty}>Нет ожидающих заявок</div>
         ) : (
           pendingUsers.map(user => (

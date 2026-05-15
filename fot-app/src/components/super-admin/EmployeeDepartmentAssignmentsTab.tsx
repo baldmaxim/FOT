@@ -13,6 +13,7 @@ import styles from '../../pages/super-admin/SuperAdmin.module.css';
 
 interface IEmployeeDepartmentAssignmentsTabProps {
   allUsers: IUserFromApi[];
+  allUsersLoading?: boolean;
   onReload: () => Promise<void>;
 }
 
@@ -30,7 +31,7 @@ const normalizeText = (value: string | null | undefined): string => (
     .toLowerCase()
 );
 
-export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignmentsTabProps> = ({ allUsers, onReload }) => {
+export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignmentsTabProps> = ({ allUsers, allUsersLoading = false, onReload }) => {
   const toast = useToast();
   const queryClient = useQueryClient();
   const structureQuery = useStructureTree();
@@ -92,13 +93,11 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
     });
   }, [departmentMap, employees, hideEmployeesWithoutAssignments, linkedUserByEmployeeId, searchQuery]);
 
-  if (employeesQuery.isPending || structureQuery.isPending) {
-    return <div className={styles.loading}>Загрузка назначений сотрудников...</div>;
-  }
-
   if (employeesQuery.isError || structureQuery.isError) {
     return <div className={styles.error}>Не удалось загрузить назначения сотрудников</div>;
   }
+
+  const isLoadingList = employeesQuery.isPending || structureQuery.isPending || allUsersLoading;
 
   const handleSaved = async () => {
     try {
@@ -143,12 +142,14 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
       </div>
 
       <div className={styles.importSummary}>
-        <div>Всего сотрудников: <strong>{employees.length}</strong></div>
-        <div>С назначениями: <strong>{employeesWithAssignmentsCount}</strong></div>
-        <div>В текущем списке: <strong>{filteredEmployees.length}</strong></div>
+        <div>Всего сотрудников: <strong>{isLoadingList && employees.length === 0 ? '…' : employees.length}</strong></div>
+        <div>С назначениями: <strong>{isLoadingList && employees.length === 0 ? '…' : employeesWithAssignmentsCount}</strong></div>
+        <div>В текущем списке: <strong>{isLoadingList && employees.length === 0 ? '…' : filteredEmployees.length}</strong></div>
       </div>
 
-      {filteredEmployees.length === 0 ? (
+      {isLoadingList && employees.length === 0 ? (
+        <div className={styles.loading}>Загрузка назначений сотрудников...</div>
+      ) : filteredEmployees.length === 0 ? (
         <div className={styles.empty}>
           {!hideEmployeesWithoutAssignments || searchQuery.trim()
             ? 'По текущему фильтру сотрудники не найдены'

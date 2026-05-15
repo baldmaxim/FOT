@@ -41,6 +41,7 @@ interface ITwoFactorModal {
 
 interface IAllUsersTabProps {
   allUsers: IUserFromApi[];
+  loading?: boolean;
   onReload: () => Promise<void>;
   patchAllUsersCache: (updater: (prev: IUserFromApi[]) => IUserFromApi[]) => void;
 }
@@ -322,7 +323,7 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
 
 UserRowExpanded.displayName = 'UserRowExpanded';
 
-export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAllUsersCache }) => {
+export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, loading = false, onReload, patchAllUsersCache }) => {
   const toast = useToast();
   const queryClient = useQueryClient();
   const { getRoleLabel, profile, refreshProfile } = useAuth();
@@ -332,6 +333,8 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAl
   const rolesQuery = useQuery({
     queryKey: ['admin-roles-full'],
     queryFn: () => rolesService.getAll(),
+    staleTime: 10 * 60_000,
+    gcTime: 30 * 60_000,
   });
   const roles = useMemo(() => rolesQuery.data ?? [], [rolesQuery.data]);
   const structureQuery = useStructureTree();
@@ -579,6 +582,10 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ allUsers, onReload, patchAl
           <span>Статус</span>
           <span></span>
         </div>
+
+        {loading && allUsers.length === 0 && (
+          <div className={styles.loading}>Загрузка списка пользователей...</div>
+        )}
 
         {filteredUsers.map(user => {
           const isExpanded = expandedUserId === user.id;

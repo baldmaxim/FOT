@@ -35,7 +35,8 @@ export const UserManagementPage: React.FC = () => {
   });
   const pendingUsers = pendingUsersQuery.data || [];
   const allUsers = allUsersQuery.data || [];
-  const loading = pendingUsersQuery.isPending || allUsersQuery.isPending;
+  const pendingLoading = pendingUsersQuery.isPending;
+  const allLoading = allUsersQuery.isPending;
   const hasQueryError = pendingUsersQuery.isError || allUsersQuery.isError;
 
   const reloadUsers = async () => {
@@ -58,14 +59,6 @@ export const UserManagementPage: React.FC = () => {
     queryClient.setQueryData<IUserFromApi[]>(['admin-users', 'all'], (old) => updater(old || []));
   };
 
-  if (loading) {
-    return (
-      <div className={styles.container}>
-        <div className={styles.loading}>Загрузка...</div>
-      </div>
-    );
-  }
-
   return (
     <div className={styles.container}>
       <div className={styles.header}>
@@ -81,13 +74,13 @@ export const UserManagementPage: React.FC = () => {
           className={`${styles.tab} ${activeTab === 'pending' ? styles.active : ''}`}
           onClick={() => setActiveTab('pending')}
         >
-          Ожидающие ({pendingUsers.length})
+          Ожидающие ({pendingLoading ? '…' : pendingUsers.length})
         </button>
         <button
           className={`${styles.tab} ${activeTab === 'all' ? styles.active : ''}`}
           onClick={() => setActiveTab('all')}
         >
-          Все пользователи ({allUsers.length})
+          Все пользователи ({allLoading ? '…' : allUsers.length})
         </button>
         <button
           className={`${styles.tab} ${activeTab === 'employee-access' ? styles.active : ''}`}
@@ -107,6 +100,7 @@ export const UserManagementPage: React.FC = () => {
         <Suspense fallback={<div className={styles.loading}>Загрузка вкладки...</div>}>
           <PendingUsersTab
             pendingUsers={pendingUsers}
+            loading={pendingLoading}
             onReload={reloadUsers}
             patchPendingCache={patchPendingCache}
           />
@@ -117,6 +111,7 @@ export const UserManagementPage: React.FC = () => {
         <Suspense fallback={<div className={styles.loading}>Загрузка вкладки...</div>}>
           <AllUsersTab
             allUsers={allUsers}
+            loading={allLoading}
             onReload={reloadUsers}
             patchAllUsersCache={patchAllUsersCache}
           />
@@ -127,6 +122,7 @@ export const UserManagementPage: React.FC = () => {
         <Suspense fallback={<div className={styles.loading}>Загрузка вкладки...</div>}>
           <EmployeeDepartmentAssignmentsTab
             allUsers={allUsers}
+            allUsersLoading={allLoading}
             onReload={reloadUsers}
           />
         </Suspense>
