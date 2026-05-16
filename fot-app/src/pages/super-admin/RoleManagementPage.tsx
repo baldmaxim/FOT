@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FC } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Plus, X } from 'lucide-react';
 import { rolesService } from '../../services/rolesService';
 import type { AccessMode, PageCatalogItem } from '../../services/rolesService';
 import { useAuth } from '../../contexts/AuthContext';
@@ -480,8 +481,14 @@ export const RoleManagementPage: FC = () => {
                 Флаг «Админ» — видит все данные, обходит фильтр по отделам. «Кабинет» — какой личный кабинет открывается на /employee. «Часы» — показывать пользователям фактическое время по СКУД (факт) или урезанное под плановую норму дня (урезано). «Окно ← / Окно →» — сколько месяцев назад и вперёд от текущего доступно для табеля; для админа не применяется.
               </p>
             </div>
-            <button className={styles.primaryButton} onClick={() => setShowNewForm(v => !v)}>
-              {showNewForm ? 'Скрыть форму' : '+ Добавить роль'}
+            <button
+              type="button"
+              className={styles.iconButton}
+              onClick={() => setShowNewForm(v => !v)}
+              title={showNewForm ? 'Скрыть форму' : 'Добавить роль'}
+              aria-label={showNewForm ? 'Скрыть форму' : 'Добавить роль'}
+            >
+              {showNewForm ? <X size={18} /> : <Plus size={18} />}
             </button>
           </div>
 
@@ -873,7 +880,7 @@ export const RoleManagementPage: FC = () => {
                         <h3 className={styles.cardTitle}>{group.label}</h3>
                       </div>
                       <div className={styles.pageRows}>
-                        {group.code === 'ops' && (
+                        {group.code === 'mine' && (
                           <div className={styles.pageRow}>
                             <div className={styles.pageInfo}>
                               <div className={styles.pageLabelRow}>

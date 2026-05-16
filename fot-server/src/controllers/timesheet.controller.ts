@@ -59,6 +59,7 @@ import { isSigurRuntimeNotAllowedError } from '../services/sigur-runtime-guard.s
 import { notifySkudRealtimeChanged } from '../services/skud-realtime.service.js';
 import {
   isDepartmentMonthAllowed,
+  isTimesheetWindowExempt,
   monthAccessFromUser,
   DEPARTMENT_MONTH_FORBIDDEN_MESSAGE,
 } from '../utils/timesheet-month-access.js';
@@ -939,7 +940,7 @@ export const timesheetController = {
 
       const { year, month: mon, startDate, endDate } = periodRange;
       const today = new Date();
-      if (scope === 'department' && !isDepartmentMonthAllowed(year, mon, {
+      if (!isTimesheetWindowExempt(req.user, scope) && !isDepartmentMonthAllowed(year, mon, {
         monthsBack: req.user.timesheet_months_back,
         monthsForward: req.user.timesheet_months_forward,
         referenceDate: today,
@@ -1363,7 +1364,7 @@ export const timesheetController = {
     try {
       const parsed = createEntrySchema.parse(req.body);
       const scope = await resolveTimesheetScope(req);
-      if (scope === 'department') {
+      if (!isTimesheetWindowExempt(req.user, scope)) {
         const [yearStr, monthStr] = parsed.work_date.split('-');
         if (!isDepartmentMonthAllowed(Number(yearStr), Number(monthStr), monthAccessFromUser(req.user))) {
           return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
@@ -1463,7 +1464,7 @@ export const timesheetController = {
 	        });
 	      }
 	      const scope = await resolveTimesheetScope(req);
-	      if (scope === 'department') {
+	      if (!isTimesheetWindowExempt(req.user, scope)) {
 	        const workDate = String(existing.work_date ?? '');
 	        const [yearStr, monthStr] = workDate.split('-');
 	        if (!isDepartmentMonthAllowed(Number(yearStr), Number(monthStr), monthAccessFromUser(req.user))) {
@@ -1586,7 +1587,7 @@ export const timesheetController = {
           parsed.items.map(item => [`${item.employee_id}_${item.work_date}`, item] as const),
         ).values(),
       );
-      if (scope === 'department') {
+      if (!isTimesheetWindowExempt(req.user, scope)) {
         const hasForbiddenMonth = uniqueItems.some(item => {
           const [yearStr, monthStr] = item.work_date.split('-');
           return !isDepartmentMonthAllowed(Number(yearStr), Number(monthStr), monthAccessFromUser(req.user));
@@ -1718,7 +1719,7 @@ export const timesheetController = {
     try {
       const parsed = upsertObjectEntrySchema.parse(req.body);
       const scope = await resolveTimesheetScope(req);
-      if (scope === 'department') {
+      if (!isTimesheetWindowExempt(req.user, scope)) {
         const [yearStr, monthStr] = parsed.work_date.split('-');
         if (!isDepartmentMonthAllowed(Number(yearStr), Number(monthStr), monthAccessFromUser(req.user))) {
           return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
@@ -1803,7 +1804,7 @@ export const timesheetController = {
     try {
       const parsed = deleteObjectEntrySchema.parse(req.body);
       const scope = await resolveTimesheetScope(req);
-      if (scope === 'department') {
+      if (!isTimesheetWindowExempt(req.user, scope)) {
         const [yearStr, monthStr] = parsed.work_date.split('-');
         if (!isDepartmentMonthAllowed(Number(yearStr), Number(monthStr), monthAccessFromUser(req.user))) {
           return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
@@ -1955,7 +1956,7 @@ export const timesheetController = {
         return res.status(409).json({ success: false, error: 'Эта корректировка не удаляется' });
       }
 
-      if (scope === 'department') {
+      if (!isTimesheetWindowExempt(req.user, scope)) {
         const workDate = String(existing.work_date ?? '');
         const [yearStr, monthStr] = workDate.split('-');
         if (!isDepartmentMonthAllowed(Number(yearStr), Number(monthStr), monthAccessFromUser(req.user))) {

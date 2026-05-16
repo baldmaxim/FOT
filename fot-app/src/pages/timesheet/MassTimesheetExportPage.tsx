@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { getMonthLabel } from '../../utils/calendarUtils';
 import { useAuth } from '../../contexts/AuthContext';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
+import { isTimesheetWindowExempt } from '../../utils/timesheetMonthAccess';
 import {
   formatHalfLabel,
   getCurrentHalf,
@@ -44,7 +45,7 @@ export const MassTimesheetExportPage: FC = () => {
   const { isDepartmentScope } = useManagedDepartments();
   const isSuperAdmin = profile?.is_admin === true;
   const canManageAllDepartments = isSuperAdmin || hasPermission('data.scope.all');
-  const isRestrictedManagerView = !canManageAllDepartments && isDepartmentScope;
+  const isRestrictedManagerView = !isTimesheetWindowExempt({ isAdmin: isSuperAdmin, canManageAllDepartments }) && isDepartmentScope;
 
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);

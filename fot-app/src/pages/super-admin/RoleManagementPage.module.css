@@ -111,6 +111,37 @@
   color: #fff;
 }
 
+.iconButton {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--primary);
+  border: none;
+  border-radius: 10px;
+  color: #fff;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.iconButton:hover {
+  opacity: 0.9;
+}
+
+.iconButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 768px) {
+  .iconButton {
+    width: 44px;
+    height: 44px;
+  }
+}
+
 .successButton {
   background: var(--success);
   border: none;

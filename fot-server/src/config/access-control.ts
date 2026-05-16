@@ -70,40 +70,48 @@ export const PAGE_PATHS = {
 
 export type PagePath = typeof PAGE_PATHS[keyof typeof PAGE_PATHS];
 
+// Каталог зеркалит боковое меню (fot-app/src/components/layout/Sidebar.tsx):
+// блоки Моё / Работа / Администрирование + свёрнутый «Технические доступы».
+// key/surface/supports_edit неизменны (используются route-гардами и контракт-тестом);
+// под боковое меню приводятся только label/group_code/group_label/sort_order.
 export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
-  { key: '/employee',                   label: 'Личный кабинет',                 group_code: 'employee', group_label: 'Личный кабинет',       surface: 'page',      supports_edit: false, sort_order: 10,  is_active: true },
-  { key: '/employee/requests',          label: 'Мои заявления',                  group_code: 'employee', group_label: 'Личный кабинет',       surface: 'page',      supports_edit: true,  sort_order: 20,  is_active: true },
-  { key: '/employee/documents',         label: 'Мои документы',                  group_code: 'employee', group_label: 'Личный кабинет',       surface: 'page',      supports_edit: true,  sort_order: 50,  is_active: true },
-  { key: '/employee/tasks',             label: 'Мои задачи',                     group_code: 'employee', group_label: 'Личный кабинет',       surface: 'page',      supports_edit: true,  sort_order: 75,  is_active: true },
-  { key: '/employee/salary-raise',      label: 'Повышение оклада',               group_code: 'employee', group_label: 'Личный кабинет',       surface: 'page',      supports_edit: true,  sort_order: 80,  is_active: true },
-  { key: '/dashboard',                  label: 'Дашборд',                        group_code: 'ops',      group_label: 'Управление',           surface: 'page',      supports_edit: false, sort_order: 90,  is_active: true },
-  { key: '/timesheet',                  label: 'Табель',                         group_code: 'ops',      group_label: 'Управление',           surface: 'page',      supports_edit: true,  sort_order: 100, is_active: true },
-  { key: '/timesheet-hr',               label: 'Табели HR',                      group_code: 'ops',      group_label: 'Управление',           surface: 'page',      supports_edit: true,  sort_order: 110, is_active: true },
-  { key: '/leave-requests',             label: 'Заявления',                      group_code: 'ops',      group_label: 'Управление',           surface: 'page',      supports_edit: true,  sort_order: 120, is_active: true },
-  { key: '/salary-raise-review',        label: 'Проверка заявок на повышение',   group_code: 'ops',      group_label: 'Управление',           surface: 'page',      supports_edit: true,  sort_order: 130, is_active: true },
-  { key: '/discipline',                 label: 'Дисциплина',                     group_code: 'ops',      group_label: 'Управление',           surface: 'page',      supports_edit: false, sort_order: 140, is_active: true },
-  { key: '/staff-control',              label: 'Управление кадрами',             group_code: 'ops',      group_label: 'Управление',           surface: 'page',      supports_edit: true,  sort_order: 160, is_active: true },
-  { key: '/staff-control/department',   label: 'Кадры: смена отдела сотрудника', group_code: 'ops',      group_label: 'Управление',           surface: 'technical', supports_edit: true,  sort_order: 161, is_active: true },
-  { key: '/staff-control/position',     label: 'Кадры: смена должности сотрудника', group_code: 'ops',   group_label: 'Управление',           surface: 'technical', supports_edit: true,  sort_order: 162, is_active: true },
-  { key: '/staff-control/schedule',     label: 'Кадры: смена графика сотрудника',group_code: 'ops',      group_label: 'Управление',           surface: 'technical', supports_edit: true,  sort_order: 163, is_active: true },
-  { key: '/employees',                  label: 'Карточка сотрудника (детали + СКУД-проходы)', group_code: 'ops', group_label: 'Управление',    surface: 'page',      supports_edit: false, sort_order: 155, is_active: true },
-  { key: '/timesheet/events',           label: 'Табель: таб «События СКУД» в модалке дня',    group_code: 'ops', group_label: 'Управление',    surface: 'technical', supports_edit: false, sort_order: 105, is_active: true },
-  { key: '/skud-db',                    label: 'СКУД (база)',                    group_code: 'skud',     group_label: 'СКУД',                 surface: 'page',      supports_edit: false, sort_order: 190, is_active: true },
-  { key: '/skud-presence',              label: 'Кто на объектах',                group_code: 'skud',     group_label: 'СКУД',                 surface: 'page',      supports_edit: false, sort_order: 195, is_active: true },
-  { key: '/skud-settings',              label: 'Настройки СКУД',                 group_code: 'skud',     group_label: 'СКУД',                 surface: 'page',      supports_edit: true,  sort_order: 210, is_active: true },
-  { key: '/skud-card-reader',           label: 'Считыватель пропусков',          group_code: 'skud',     group_label: 'СКУД',                 surface: 'page',      supports_edit: true,  sort_order: 215, is_active: true },
-  { key: '/admin/users',                label: 'Управление пользователями',      group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 220, is_active: true },
-  { key: '/admin/audit',                label: 'Аудит данных',                   group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: false, sort_order: 230, is_active: true },
-  { key: '/admin/action-history',       label: 'История действий',               group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: false, sort_order: 231, is_active: true },
-  { key: '/admin/roles',                label: 'Управление ролями',              group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 240, is_active: true },
-  { key: '/admin/settings',             label: 'Системные настройки',            group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 250, is_active: true },
-  { key: '/admin/schedules',            label: 'Графики работы',                 group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 260, is_active: true },
-  { key: '/admin/schedules/templates',  label: 'Шаблоны графиков (только вкладка)', group_code: 'admin',  group_label: 'Администрирование',    surface: 'technical', supports_edit: true,  sort_order: 261, is_active: true },
-  { key: '/admin/payslips',             label: 'Управление расчётными листками', group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 270, is_active: true },
-  { key: '/admin/patent-receipts',      label: 'Чеки за патент',                 group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 275, is_active: true },
-  { key: '/admin/timesheet-transfers',  label: 'Переводы и исключения табеля',   group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 276, is_active: true },
-  { key: '/admin/data-api',             label: 'API-доступ к данным',            group_code: 'admin',    group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 290, is_active: true },
-  { key: 'timesheet-team-management',   label: 'Управление составом табеля',     group_code: 'technical', group_label: 'Технические доступы', surface: 'technical', supports_edit: true,  sort_order: 285, is_active: true },
+  // Блок «Моё»
+  { key: '/employee',                   label: 'Личный кабинет',                       group_code: 'mine',  group_label: 'Моё',                  surface: 'page',      supports_edit: false, sort_order: 10,  is_active: true },
+  { key: '/employee/requests',          label: 'Личный кабинет — Мои заявления',       group_code: 'mine',  group_label: 'Моё',                  surface: 'page',      supports_edit: true,  sort_order: 11,  is_active: true },
+  { key: '/employee/documents',         label: 'Личный кабинет — Мои документы',       group_code: 'mine',  group_label: 'Моё',                  surface: 'page',      supports_edit: true,  sort_order: 12,  is_active: true },
+  { key: '/employee/tasks',             label: 'Личный кабинет — Мои задачи',          group_code: 'mine',  group_label: 'Моё',                  surface: 'page',      supports_edit: true,  sort_order: 13,  is_active: true },
+  { key: '/employee/salary-raise',      label: 'Личный кабинет — Повышение оклада',    group_code: 'mine',  group_label: 'Моё',                  surface: 'page',      supports_edit: true,  sort_order: 14,  is_active: true },
+  { key: '/dashboard',                  label: 'Обзор',                                group_code: 'mine',  group_label: 'Моё',                  surface: 'page',      supports_edit: false, sort_order: 20,  is_active: true },
+  { key: '/leave-requests',             label: 'Заявления',                            group_code: 'mine',  group_label: 'Моё',                  surface: 'page',      supports_edit: true,  sort_order: 30,  is_active: true },
+  { key: '/salary-raise-review',        label: 'Заявления — Проверка повышений оклада', group_code: 'mine', group_label: 'Моё',                  surface: 'page',      supports_edit: true,  sort_order: 31,  is_active: true },
+  { key: '/skud-presence',              label: 'Сотрудники на объектах',               group_code: 'mine',  group_label: 'Моё',                  surface: 'page',      supports_edit: false, sort_order: 40,  is_active: true },
+  // Блок «Работа»
+  { key: '/staff-control',              label: 'Управление кадрами',                   group_code: 'work',  group_label: 'Работа',               surface: 'page',      supports_edit: true,  sort_order: 100, is_active: true },
+  { key: '/timesheet',                  label: 'Табель',                               group_code: 'work',  group_label: 'Работа',               surface: 'page',      supports_edit: true,  sort_order: 110, is_active: true },
+  { key: '/timesheet/events',           label: 'Табель — события СКУД (вкладка дня)',  group_code: 'work',  group_label: 'Работа',               surface: 'technical', supports_edit: false, sort_order: 115, is_active: true },
+  { key: '/timesheet-hr',               label: 'Согласования / Табели HR',             group_code: 'work',  group_label: 'Работа',               surface: 'page',      supports_edit: true,  sort_order: 120, is_active: true },
+  { key: '/discipline',                 label: 'Аналитика',                            group_code: 'work',  group_label: 'Работа',               surface: 'page',      supports_edit: false, sort_order: 130, is_active: true },
+  { key: '/employees',                  label: 'Карточка сотрудника',                  group_code: 'work',  group_label: 'Работа',               surface: 'page',      supports_edit: false, sort_order: 140, is_active: true },
+  { key: '/staff-control/department',   label: 'Управление кадрами — смена отдела',    group_code: 'work',  group_label: 'Работа',               surface: 'technical', supports_edit: true,  sort_order: 161, is_active: true },
+  { key: '/staff-control/position',     label: 'Управление кадрами — смена должности', group_code: 'work',  group_label: 'Работа',               surface: 'technical', supports_edit: true,  sort_order: 162, is_active: true },
+  { key: '/staff-control/schedule',     label: 'Управление кадрами — смена графика',   group_code: 'work',  group_label: 'Работа',               surface: 'technical', supports_edit: true,  sort_order: 163, is_active: true },
+  // Блок «Администрирование»
+  { key: '/admin/schedules',            label: 'Графики работы',                       group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 200, is_active: true },
+  { key: '/admin/schedules/templates',  label: 'Графики работы — шаблоны (вкладка)',   group_code: 'admin', group_label: 'Администрирование',    surface: 'technical', supports_edit: true,  sort_order: 205, is_active: true },
+  { key: '/admin/patent-receipts',      label: 'Чеки за патент',                       group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 210, is_active: true },
+  { key: '/admin/timesheet-transfers',  label: 'Переводы и исключения',                group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 220, is_active: true },
+  { key: '/skud-settings',              label: 'СКУД',                                 group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 230, is_active: true },
+  { key: '/skud-db',                    label: 'СКУД (база)',                          group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: false, sort_order: 235, is_active: true },
+  { key: '/skud-card-reader',           label: 'Считыватель пропусков',                group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 240, is_active: true },
+  { key: '/admin/users',                label: 'Система — Управление пользователями',  group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 250, is_active: true },
+  { key: '/admin/roles',                label: 'Система — Управление ролями',          group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 251, is_active: true },
+  { key: '/admin/audit',                label: 'Система — Аудит данных',               group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: false, sort_order: 252, is_active: true },
+  { key: '/admin/action-history',       label: 'Система — История действий',           group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: false, sort_order: 253, is_active: true },
+  { key: '/admin/settings',             label: 'Система — Системные настройки',        group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 254, is_active: true },
+  { key: '/admin/data-api',             label: 'Система — API-доступ к данным',        group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 255, is_active: true },
+  { key: '/admin/payslips',             label: 'Управление расчётными листками',       group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 260, is_active: true },
+  // Технический ключ без route-страницы
+  { key: 'timesheet-team-management',   label: 'Управление составом табеля',           group_code: 'technical', group_label: 'Технические доступы', surface: 'technical', supports_edit: true, sort_order: 285, is_active: true },
 ];
 
 export function normalizePageAccessEntry<T extends PageAccessEntry>(entry: T): T {

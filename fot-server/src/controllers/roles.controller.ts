@@ -14,6 +14,27 @@ import {
   validatePageAccessModes,
 } from '../services/access-catalog.service.js';
 import { ensureCriticalAdminAccess } from '../services/critical-admin-access.service.js';
+import { getIo } from '../socket/io-instance.js';
+
+// Правки роли (окно табеля, is_admin, доступ страниц) зашиты в JWT/state.profile
+// и не доходят до активной сессии без релогина. Шлём пользователям этой роли
+// существующее событие — фронт (AuthContext) дёрнет /auth/me и пересоберёт токен.
+async function emitRoleAccessChanged(roleId: string | null | undefined): Promise<void> {
+  if (!roleId) return;
+  const io = getIo();
+  if (!io) return;
+  try {
+    const rows = await query<{ id: string }>(
+      'SELECT id FROM user_profiles WHERE system_role_id = $1::uuid',
+      [roleId],
+    );
+    for (const { id } of rows) {
+      io.to(`user:${id}`).emit('profile:access_changed');
+    }
+  } catch (error) {
+    console.error('[emitRoleAccessChanged] error:', error);
+  }
+}
 
 const employeeVariantSchema = z.enum(['object', 'office']).nullable().optional();
 const timesheetMonthsSchema = z.number().int().min(0).max(12);
@@ -432,6 +453,7 @@ export const rolesController = {
     }
 
     invalidateRoleListCache();
+    await emitRoleAccessChanged(data.id);
     res.json({ success: true, data });
   },
 

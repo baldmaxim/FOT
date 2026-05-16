@@ -1,13 +1,14 @@
-import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useState, memo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { ChevronDown, ChevronLeft, ChevronRight, Search, Building2, LogOut, Users, Clock, ArrowDownRight, ArrowUpRight, X, RefreshCw } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Building2, LogOut, Users, Clock, ArrowDownRight, ArrowUpRight, X, RefreshCw } from 'lucide-react';
 import { usePresence } from '../hooks/usePresence';
 import { useDashboardStats } from '../hooks/useDashboardStats';
 import { usePresenceRealtime } from '../hooks/usePresenceRealtime';
 import { useManagedDepartments } from '../hooks/useManagedDepartments';
 import { useAuth } from '../contexts/AuthContext';
 import type { DashboardPeriod } from '../types';
-import { filterDepartmentTreeByIds, getTreeFlatDepartments } from '../utils/departmentUtils';
+import { filterDepartmentTreeByIds, findDepartmentName } from '../utils/departmentUtils';
+import { DepartmentTreeSelect } from '../components/staff/DepartmentTreeSelect';
 import '../styles/DashboardPage.css';
 
 const ActivityList = lazy(() => import('../components/dashboard/ActivityList').then(m => ({ default: m.ActivityList })));
@@ -63,10 +64,6 @@ export const DashboardPage: React.FC = () => {
   // (если URL пустой → null → показывается placeholder с меню выбора).
   const effectiveSelectedDeptId = selectedDeptId
     || (isSingleManagedDept ? primaryDepartmentId ?? managedDepartmentIds[0] ?? null : null);
-  const [deptDropdownOpen, setDeptDropdownOpen] = useState(false);
-  const [deptSearchQuery, setDeptSearchQuery] = useState('');
-  const deptDropdownRef = useRef<HTMLDivElement>(null);
-  const deptInputRef = useRef<HTMLInputElement>(null);
 
   // Для руководителя с одним отделом: фиксируем его в URL, чтобы остальные хуки
   // (presence, stats) видели стабильный dept и кэш не сбрасывался.
@@ -81,36 +78,18 @@ export const DashboardPage: React.FC = () => {
     setSearchParams(next, { replace: true });
   }, [isSingleManagedDept, primaryDepartmentId, managedDepartmentIds, searchParams, setSearchParams]);
 
-  const deptOptions = useMemo(() => {
+  const deptTree = useMemo(() => {
     const allNodes = structureQuery.data?.departments ?? [];
     if (isDepartmentScope) {
-      const filtered = filterDepartmentTreeByIds(allNodes, new Set(managedDepartmentIds));
-      return getTreeFlatDepartments(filtered);
+      return filterDepartmentTreeByIds(allNodes, new Set(managedDepartmentIds));
     }
-    return getTreeFlatDepartments(allNodes);
+    return allNodes;
   }, [structureQuery.data, isDepartmentScope, managedDepartmentIds]);
 
-  useEffect(() => {
-    if (!deptDropdownOpen) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (deptDropdownRef.current && !deptDropdownRef.current.contains(e.target as Node)) {
-        setDeptDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [deptDropdownOpen]);
-
-  const selectedDept = useMemo(
-    () => effectiveSelectedDeptId ? deptOptions.find(d => d.id === effectiveSelectedDeptId) : null,
-    [effectiveSelectedDeptId, deptOptions],
+  const selectedDeptName = useMemo(
+    () => (effectiveSelectedDeptId ? findDepartmentName(deptTree, effectiveSelectedDeptId) : null),
+    [effectiveSelectedDeptId, deptTree],
   );
-
-  const filteredDeptOptions = useMemo(() => {
-    if (!deptSearchQuery) return deptOptions;
-    const q = deptSearchQuery.toLowerCase();
-    return deptOptions.filter(d => d.name.toLowerCase().includes(q));
-  }, [deptOptions, deptSearchQuery]);
 
   // Month picker (YYYY-MM)
   const getCurrentMonth = () => {
@@ -237,29 +216,11 @@ export const DashboardPage: React.FC = () => {
   const [expandedLateId, setExpandedLateId] = useState<number | null>(null);
   const navigate = useNavigate();
 
-  const handleDeptInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setDeptSearchQuery(e.target.value);
-    if (!deptDropdownOpen) setDeptDropdownOpen(true);
-  };
-
-  const handleDeptTriggerClick = () => {
-    setDeptSearchQuery('');
-    setDeptDropdownOpen(prev => !prev);
-    deptInputRef.current?.focus();
-  };
-
-  const handleDeptInputFocus = () => {
-    setDeptSearchQuery('');
-    setDeptDropdownOpen(true);
-  };
-
   const handleDeptSelect = (deptId: string) => {
     const next = new URLSearchParams(searchParams);
-    next.set('dept', deptId);
+    if (deptId) next.set('dept', deptId);
+    else next.delete('dept');
     setSearchParams(next, { replace: true });
-    setDeptDropdownOpen(false);
-    setDeptSearchQuery('');
-    deptInputRef.current?.blur();
   };
 
   const deptSelector = isSingleManagedDept ? (
@@ -267,55 +228,19 @@ export const DashboardPage: React.FC = () => {
       <div className="dash-dept-trigger has-value" style={{ cursor: 'default' }}>
         <Building2 size={14} className="dash-dept-search-icon" />
         <span className="dash-dept-input" style={{ cursor: 'default' }}>
-          {selectedDept?.name ?? 'Мой отдел'}
+          {selectedDeptName ?? 'Мой отдел'}
         </span>
       </div>
     </div>
   ) : (
-    <div className="dash-dept-dropdown" ref={deptDropdownRef}>
-        <div
-          className={`dash-dept-trigger ${effectiveSelectedDeptId ? 'has-value' : ''} ${!effectiveSelectedDeptId ? 'dash-dept-trigger--large' : ''}`}
-          onClick={handleDeptTriggerClick}
-        >
-        <Search size={effectiveSelectedDeptId ? 14 : 16} className="dash-dept-search-icon" />
-        <input
-          ref={deptInputRef}
-          className="dash-dept-input"
-          type="text"
-          placeholder="Поиск отдела..."
-          value={deptDropdownOpen ? deptSearchQuery : (selectedDept?.name ?? '')}
-          onChange={handleDeptInputChange}
-          onFocus={handleDeptInputFocus}
-          onClick={e => e.stopPropagation()}
-        />
-        <ChevronDown size={effectiveSelectedDeptId ? 14 : 18} className={`dash-dept-chevron ${deptDropdownOpen ? 'open' : ''}`} />
-      </div>
-      {deptDropdownOpen && (
-        <div className={`dash-dept-menu ${!effectiveSelectedDeptId ? 'dash-dept-menu--center' : ''}`}>
-          <div className="dash-dept-list">
-            {filteredDeptOptions.map(dept => (
-              dept.hasChildren ? (
-                <div key={dept.id} className="dash-dept-item dash-dept-item--header">
-                  {dept.name}
-                </div>
-              ) : (
-                <div
-                  key={dept.id}
-                  className={`dash-dept-item ${effectiveSelectedDeptId === dept.id ? 'selected' : ''}`}
-                  style={{ paddingLeft: `${12 + dept.level * 12}px` }}
-                  onClick={() => handleDeptSelect(dept.id)}
-                >
-                  {dept.name}
-                </div>
-              )
-            ))}
-            {filteredDeptOptions.length === 0 && (
-              <div className="dash-dept-empty">Не найдено</div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
+    <DepartmentTreeSelect
+      departments={deptTree}
+      value={effectiveSelectedDeptId ?? ''}
+      onChange={handleDeptSelect}
+      isLoading={structureQuery.isPending}
+      isError={structureQuery.isError}
+      onRetry={() => { void structureQuery.refetch(); }}
+    />
   );
 
   return (

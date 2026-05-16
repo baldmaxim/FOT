@@ -48,3 +48,16 @@ export function monthAccessFromUser(user: {
     monthsForward: user.timesheet_months_forward,
   };
 }
+
+/**
+ * Единый признак освобождения от окна месяцев табеля.
+ * Освобождён, если scope не 'department' (админ/all уже без ограничений) ИЛИ
+ * у пользователя стоит признак «Админ» роли (is_admin) — гарантия, что истинный
+ * админ никогда не получит 403 по месяцу, даже при edge-case scope.
+ */
+export function isTimesheetWindowExempt(
+  user: { is_admin?: boolean },
+  scope: string | null | undefined,
+): boolean {
+  return scope !== 'department' || user.is_admin === true;
+}

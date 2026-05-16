@@ -21,7 +21,7 @@ import { useStructureTree } from '../hooks/useStructure';
 import { useManagedDepartments } from '../hooks/useManagedDepartments';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
-import { DeptSelect } from '../components/staff/DeptSelect';
+import { DepartmentTreeSelect } from '../components/staff/DepartmentTreeSelect';
 import { useHeaderAddon } from '../components/layout/HeaderAddonContext';
 import {
   BulkBrigadeScheduleModal,
@@ -1068,6 +1068,15 @@ export const StaffControlPage: FC = () => {
     return getTreeFlatDepartments(filtered);
   }, [departments, restrictToManaged, managedDepartmentIds]);
 
+  // Дерево для DepartmentTreeSelect: тот же scope-фильтр, что и allDepts,
+  // но БЕЗ расплющивания (компонент сам строит раскрывающееся дерево).
+  const deptTree = useMemo(
+    () => (restrictToManaged
+      ? filterDepartmentTreeByIds(departments, new Set(managedDepartmentIds))
+      : departments),
+    [departments, restrictToManaged, managedDepartmentIds],
+  );
+
   // Если админ снял у руководителя один из отделов, бэкенд перестаёт включать его
   // в `allDepts` (в дереве флаг `in_scope=false` или отдел вырезан). В URL ещё может
   // висеть ?dept= снятого отдела — без сброса фронт продолжит слать его на бэк
@@ -1660,8 +1669,8 @@ export const StaffControlPage: FC = () => {
           {singleManagedDeptName ?? 'Мой отдел'}
         </div>
       ) : (
-        <DeptSelect
-          departments={allDepts}
+        <DepartmentTreeSelect
+          departments={deptTree}
           value={deptId}
           onChange={handleDeptChange}
           isLoading={structureTree.isPending}

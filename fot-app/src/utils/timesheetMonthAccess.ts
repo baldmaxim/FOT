@@ -66,6 +66,15 @@ export const getTimesheetMonthAccess = (
   };
 };
 
+/**
+ * Единый признак освобождения от окна месяцев табеля (зеркало бэка).
+ * Освобождён, если видит все отделы ИЛИ роль помечена «Админ» (is_admin).
+ */
+export const isTimesheetWindowExempt = (opts: {
+  isAdmin: boolean;
+  canManageAllDepartments: boolean;
+}): boolean => opts.canManageAllDepartments || opts.isAdmin;
+
 export const parseMonthFromIso = (iso: string): { year: number; month: number } | null => {
   const match = /^(\d{4})-(\d{2})/.exec(iso);
   if (!match) return null;

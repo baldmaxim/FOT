@@ -1,6 +1,6 @@
 import { type FC, Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowRightLeft, ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, RefreshCcwDot, UserPlus, Mail } from 'lucide-react';
+import { ArrowRightLeft, ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, RefreshCcwDot, UserPlus, Mail } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { TimesheetCorrectionsList } from '../../components/timesheet/TimesheetCorrectionsList';
@@ -14,6 +14,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { getMonthLabel, formatDateRu, getDaysInMonth } from '../../utils/calendarUtils';
+import { isTimesheetWindowExempt } from '../../utils/timesheetMonthAccess';
 import type {
   TimesheetEntry,
   TimesheetEmployee,
@@ -41,7 +42,8 @@ import {
   type TimesheetHalf,
 } from '../../utils/timesheetApprovalPeriod';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
-import { type IFlatDepartmentOption, getTreeFlatDepartments, filterDepartmentTreeByIds } from '../../utils/departmentUtils';
+import { findDepartmentName, filterDepartmentTreeByIds } from '../../utils/departmentUtils';
+import { DepartmentTreeSelect } from '../../components/staff/DepartmentTreeSelect';
 import { useHeaderAddon } from '../../components/layout/HeaderAddonContext';
 import './TimesheetPage.css';
 
@@ -105,7 +107,7 @@ export const TimesheetPage: FC = () => {
     primaryDepartmentId,
     structureQuery,
   } = useManagedDepartments();
-  const isTimesheetDepartmentScope = !canManageAllDepartments && isDepartmentScope && canViewManagedTimesheet;
+  const isTimesheetDepartmentScope = !isTimesheetWindowExempt({ isAdmin: isSuperAdmin, canManageAllDepartments }) && isDepartmentScope && canViewManagedTimesheet;
   const isMultiDepartmentManager = isTimesheetDepartmentScope && managedDepartmentIds.length > 1;
   const queryMonth = searchParams.get('month');
   const queryFrom = searchParams.get('from');
@@ -146,9 +148,6 @@ export const TimesheetPage: FC = () => {
 
   // Department selector
   const [selectedDeptId, setSelectedDeptId] = useState<string | null>(null);
-  const [deptOpen, setDeptOpen] = useState(false);
-  const [deptSearch, setDeptSearch] = useState('');
-  const deptRef = useRef<HTMLDivElement>(null);
 
   // Assignee selector (assigned-mode)
   const [assigneeOpen, setAssigneeOpen] = useState(false);
@@ -190,13 +189,12 @@ export const TimesheetPage: FC = () => {
   }>({ phase: 'idle', message: '' });
   const refreshInFlight = refreshState.phase === 'syncing' || refreshState.phase === 'invalidating';
 
-  const deptOptions = useMemo<IFlatDepartmentOption[]>(() => {
+  const deptTree = useMemo(() => {
     const allNodes = structureQuery.data?.departments ?? [];
     if (isDepartmentScope) {
-      const filtered = filterDepartmentTreeByIds(allNodes, new Set(managedDepartmentIds));
-      return getTreeFlatDepartments(filtered);
+      return filterDepartmentTreeByIds(allNodes, new Set(managedDepartmentIds));
     }
-    return getTreeFlatDepartments(allNodes);
+    return allNodes;
   }, [structureQuery.data, isDepartmentScope, managedDepartmentIds]);
   const effectiveSelectedDeptId = isTimesheetDepartmentScope
     ? (selectedDeptId || primaryDepartmentId || null)
@@ -229,9 +227,6 @@ export const TimesheetPage: FC = () => {
   // Close dept/assignee/brigade dropdown on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (deptRef.current && !deptRef.current.contains(e.target as Node)) {
-        setDeptOpen(false);
-      }
       if (assigneeRef.current && !assigneeRef.current.contains(e.target as Node)) {
         setAssigneeOpen(false);
       }
@@ -642,20 +637,13 @@ export const TimesheetPage: FC = () => {
     return entries.filter(e => e.employee_id === panelEmployee.id);
   }, [panelEmployee, entries]);
 
-  // Filtered dept options
-  const filteredDepts = useMemo(() => {
-    if (!deptSearch) return deptOptions;
-    const q = deptSearch.toLowerCase();
-    return deptOptions.filter(d => d.name.toLowerCase().includes(q));
-  }, [deptOptions, deptSearch]);
-
   const assigneeDeptName = activeGridDeptId && selectedAssigneeId
     ? assigneesQuery.data?.find(emp => emp.id === selectedAssigneeId)?.departments?.find(d => d.id === activeGridDeptId)?.name
     : undefined;
   const selectedDeptName = isDirectReportsMarker
     ? 'Мои сотрудники'
     : activeGridDeptId
-      ? deptOptions.find(d => d.id === activeGridDeptId)?.name
+      ? findDepartmentName(deptTree, activeGridDeptId)
         || assigneeDeptName
         || 'Отдел'
       : 'Все отделы';
@@ -1185,7 +1173,6 @@ export const TimesheetPage: FC = () => {
     closeTeamManagement();
     setPanelOpen(false);
     setModalOpen(false);
-    setDeptOpen(false);
     setAssigneeOpen(false);
     setAssigneeSearch('');
     setSearchParams(current => {
@@ -1355,83 +1342,25 @@ export const TimesheetPage: FC = () => {
   const isSingleDeptManager = isTimesheetDepartmentScope && managedDepartmentIds.length === 1;
 
   const departmentControl = (
-    <div className="ts-dept-wrap" ref={deptRef}>
+    <div className="ts-dept-wrap">
       {(isSingleDeptManager || isDirectReportsOnly) ? (
         <button type="button" className="ts-dept-btn" style={{ cursor: 'default', opacity: 0.8 }}>
           {selectedDeptName}
         </button>
       ) : (
-        <>
-          <button type="button" className="ts-dept-btn" onClick={() => setDeptOpen(!deptOpen)}>
-            {selectedDeptName}
-            {structureQuery.isError && filteredDepts.length > 0 && (
-              <AlertTriangle size={12} aria-label="Данные могут быть устаревшими" />
-            )}
-            <ChevronDown size={16} />
-          </button>
-          {deptOpen && (
-            <div className="ts-dept-dropdown">
-              <input
-                className="ts-dept-search"
-                placeholder="Поиск отдела..."
-                value={deptSearch}
-                onChange={e => setDeptSearch(e.target.value)}
-                autoFocus
-              />
-              {structureQuery.isError && filteredDepts.length > 0 && (
-                <div className="ts-dept-item ts-dept-item--muted">
-                  Показаны последние данные.
-                  <button
-                    type="button"
-                    className="ts-dept-retry"
-                    onClick={() => { void structureQuery.refetch(); }}
-                  >
-                    Обновить
-                  </button>
-                </div>
-              )}
-              {!isTimesheetDepartmentScope && (
-                <div
-                  className={`ts-dept-item ${!selectedDeptId ? 'ts-dept-item--active' : ''}`}
-                  onClick={() => { clearBulkState(); closeTeamManagement(); setSelectedDeptId(null); setDeptOpen(false); setDeptSearch(''); }}
-                >
-                  Все отделы
-                </div>
-              )}
-              {filteredDepts.map(d =>
-                d.hasChildren ? (
-                  <div key={d.id} className="ts-dept-item ts-dept-item--header">
-                    {d.name}
-                  </div>
-                ) : (
-                  <div
-                    key={d.id}
-                    className={`ts-dept-item ${selectedDeptId === d.id ? 'ts-dept-item--active' : ''}`}
-                    style={{ paddingLeft: `${10 + d.level * 12}px` }}
-                    onClick={() => { clearBulkState(); closeTeamManagement(); setSelectedDeptId(d.id); setDeptOpen(false); setDeptSearch(''); }}
-                  >
-                    {d.name}
-                  </div>
-                )
-              )}
-              {structureQuery.isPending && filteredDepts.length === 0 && (
-                <div className="ts-dept-item ts-dept-item--muted">Загрузка отделов...</div>
-              )}
-              {structureQuery.isError && filteredDepts.length === 0 && (
-                <div className="ts-dept-item ts-dept-item--muted">
-                  Не удалось загрузить.
-                  <button
-                    type="button"
-                    className="ts-dept-retry"
-                    onClick={() => { void structureQuery.refetch(); }}
-                  >
-                    Повторить
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-        </>
+        <DepartmentTreeSelect
+          departments={deptTree}
+          value={selectedDeptId ?? ''}
+          onChange={id => {
+            clearBulkState();
+            closeTeamManagement();
+            setSelectedDeptId(id || null);
+          }}
+          showAllOption={!isTimesheetDepartmentScope}
+          isLoading={structureQuery.isPending}
+          isError={structureQuery.isError}
+          onRetry={() => { void structureQuery.refetch(); }}
+        />
       )}
     </div>
   );

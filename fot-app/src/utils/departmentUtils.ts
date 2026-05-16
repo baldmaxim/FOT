@@ -149,6 +149,32 @@ export const filterDepartmentTreeByIds = (nodes: OrgDepartmentNode[], ids: Set<s
     return acc;
   }, []);
 
+// Реальные видимые корни-компании: синтетический корень («Объект» /
+// «Структура YYYY») сворачивается, его дети становятся корнями списка.
+// Логика идентична flattenDepartmentTree (single source of truth — общая
+// приватная isHiddenRootFolderForLists).
+export const getVisibleRootNodes = (nodes: OrgDepartmentNode[]): OrgDepartmentNode[] => {
+  const result: OrgDepartmentNode[] = [];
+  for (const node of nodes) {
+    if (isHiddenRootFolderForLists(node, 0)) {
+      if (node.children?.length) result.push(...getVisibleRootNodes(node.children));
+      continue;
+    }
+    result.push(node);
+  }
+  return result;
+};
+
+// Имя отдела по id в дереве (для подписи статичных веток, где нет плоского списка).
+export const findDepartmentName = (nodes: OrgDepartmentNode[], id: string): string | null => {
+  for (const node of nodes) {
+    if (node.id === id) return node.name;
+    const found = node.children?.length ? findDepartmentName(node.children, id) : null;
+    if (found !== null) return found;
+  }
+  return null;
+};
+
 export const filterDepartmentTree = (nodes: OrgDepartmentNode[], query: string): OrgDepartmentNode[] => {
   const sortedNodes = sortDepartmentTree(nodes);
   const normalizedQuery = query.trim().toLowerCase();
