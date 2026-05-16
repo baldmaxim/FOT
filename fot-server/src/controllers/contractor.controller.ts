@@ -182,7 +182,8 @@ export const contractorController = {
       }
       const roster = await queryOne<{ id: string }>(
         `SELECT id FROM contractor_roster
-          WHERE id = $1::uuid AND org_department_id = $2::uuid AND state <> 'removed'
+          WHERE id = $1::uuid AND org_department_id = $2::uuid
+            AND state IN ('active', 'pending_add')
             AND submission_id IS NULL`,
         [roster_id, orgId],
       );

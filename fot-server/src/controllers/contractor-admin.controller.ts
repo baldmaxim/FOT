@@ -349,10 +349,19 @@ export const contractorAdminController = {
               if (!/not found|не найден|404/i.test(m)) throw delError;
             }
           }
-          await execute(
-            `UPDATE contractor_roster SET state = 'removed', updated_at = now() WHERE id = $1::uuid`,
-            [row.id],
-          );
+          await withTransaction(async client => {
+            await client.query(
+              `UPDATE contractor_roster SET state = 'removed', updated_at = now() WHERE id = $1::uuid`,
+              [row.id],
+            );
+            // Профиль в Sigur удалён — связанный пропуск (нумерованный профиль)
+            // больше не существует: помечаем revoked для консистентности.
+            await client.query(
+              `UPDATE contractor_passes SET status = 'revoked', updated_at = now()
+                WHERE sigur_employee_id = $1 AND status <> 'revoked'`,
+              [row.sigur_employee_id],
+            );
+          });
           applied += 1;
         } catch (e) {
           failures.push(`delete ${row.sigur_employee_id}: ${e instanceof Error ? e.message : String(e)}`);
