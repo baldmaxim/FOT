@@ -80,6 +80,14 @@ export const correctionApprovalService = {
     return res.data ?? { processed_count: 0, skipped_not_pending: 0, skipped_no_access: 0 };
   },
 
+  async bulkRevertByIds(ids: number[]): Promise<IBulkResult> {
+    const res = await apiClient.post<ApiResponse<IBulkResult>>(
+      '/correction-approvals/bulk-revert-by-ids',
+      { ids },
+    );
+    return res.data ?? { processed_count: 0, skipped_not_pending: 0, skipped_no_access: 0 };
+  },
+
   async getHistoryByDepartment(
     startDate: string,
     endDate: string,

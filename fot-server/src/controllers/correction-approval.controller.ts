@@ -425,6 +425,126 @@ const bulkRejectByIds = async (req: AuthenticatedRequest, res: Response): Promis
   }
 };
 
+async function bulkRevertByIdsImpl(
+  req: AuthenticatedRequest,
+  res: Response,
+  rawIds: unknown,
+): Promise<void> {
+  if (!Array.isArray(rawIds) || rawIds.length === 0 || rawIds.length > 500) {
+    res.status(400).json({ success: false, error: 'ids: непустой массив (до 500 значений)' });
+    return;
+  }
+  const ids: number[] = [];
+  for (const v of rawIds) {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n <= 0) {
+      res.status(400).json({ success: false, error: 'Некорректный id в списке' });
+      return;
+    }
+    ids.push(n);
+  }
+  const uniqueIds = [...new Set(ids)];
+
+  const adjustments = await query<{ id: number; employee_id: number; approval_status: string }>(
+    `SELECT id, employee_id, approval_status
+       FROM attendance_adjustments
+      WHERE id = ANY($1::bigint[])`,
+    [uniqueIds],
+  );
+
+  const revertable = adjustments.filter(
+    a => String(a.approval_status) === 'approved' || String(a.approval_status) === 'rejected',
+  );
+  const skippedNotPending = uniqueIds.length - revertable.length;
+
+  if (revertable.length === 0) {
+    res.json({
+      success: true,
+      data: { processed_count: 0, skipped_not_pending: skippedNotPending, skipped_no_access: 0 },
+    });
+    return;
+  }
+
+  const accessible = await resolveAccessibleDepartmentIds(req);
+  let allowedIds: number[] = revertable.map(a => Number(a.id));
+  let skippedNoAccess = 0;
+
+  if (accessible !== 'all') {
+    const allowedDeptSet = new Set(accessible);
+    const employeeIds = [...new Set(revertable.map(a => Number(a.employee_id)))];
+    const empRows = await query<{ id: number; org_department_id: string | null }>(
+      `SELECT id, org_department_id FROM employees WHERE id = ANY($1::bigint[])`,
+      [employeeIds],
+    );
+    const allowedEmpSet = new Set<number>();
+    for (const row of empRows) {
+      const deptId = row.org_department_id ? String(row.org_department_id) : null;
+      if (deptId && allowedDeptSet.has(deptId)) allowedEmpSet.add(Number(row.id));
+    }
+    const filteredIds: number[] = [];
+    for (const a of revertable) {
+      if (allowedEmpSet.has(Number(a.employee_id))) filteredIds.push(Number(a.id));
+    }
+    skippedNoAccess = revertable.length - filteredIds.length;
+    allowedIds = filteredIds;
+  }
+
+  if (allowedIds.length === 0) {
+    res.json({
+      success: true,
+      data: {
+        processed_count: 0,
+        skipped_not_pending: skippedNotPending,
+        skipped_no_access: skippedNoAccess,
+      },
+    });
+    return;
+  }
+
+  const updated = await query<{ id: number }>(
+    `UPDATE attendance_adjustments SET
+       approval_status = 'pending',
+       approved_by = NULL,
+       approved_at = NULL,
+       approval_comment = NULL
+     WHERE id = ANY($1::bigint[]) AND approval_status = ANY($2::text[])
+     RETURNING id`,
+    [allowedIds, ['approved', 'rejected']],
+  );
+
+  const processedCount = updated.length;
+
+  await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.UPDATE_TIMESHEET_ENTRY, {
+    entityType: 'attendance_adjustment',
+    entityId: 'bulk',
+    details: {
+      bulk_by_ids: true,
+      action: 'revert_to_pending',
+      ids: allowedIds,
+      to_status: 'pending',
+      processed_count: processedCount,
+    },
+  });
+
+  res.json({
+    success: true,
+    data: {
+      processed_count: processedCount,
+      skipped_not_pending: skippedNotPending,
+      skipped_no_access: skippedNoAccess,
+    },
+  });
+}
+
+const bulkRevertByIds = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    await bulkRevertByIdsImpl(req, res, req.body?.ids);
+  } catch (err) {
+    console.error('correction-approval.bulkRevertByIds error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка массового отката' });
+  }
+};
+
 const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const requestedDeptId = typeof req.body?.department_id === 'string' ? req.body.department_id : null;
@@ -711,4 +831,5 @@ export const correctionApprovalController = {
   bulkApprove,
   bulkApproveByIds,
   bulkRejectByIds,
+  bulkRevertByIds,
 };

@@ -75,4 +75,10 @@ router.post(
   correctionApprovalController.bulkRejectByIds,
 );
 
+router.post(
+  '/bulk-revert-by-ids',
+  requirePageAccess('/timesheet-hr', 'edit'),
+  correctionApprovalController.bulkRevertByIds,
+);
+
 export default router;
