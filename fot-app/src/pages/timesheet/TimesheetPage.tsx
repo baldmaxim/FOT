@@ -653,7 +653,7 @@ export const TimesheetPage: FC = () => {
     ? assigneesQuery.data?.find(emp => emp.id === selectedAssigneeId)?.departments?.find(d => d.id === activeGridDeptId)?.name
     : undefined;
   const selectedDeptName = isDirectReportsMarker
-    ? 'Мои подчинённые'
+    ? 'Мои сотрудники'
     : activeGridDeptId
       ? deptOptions.find(d => d.id === activeGridDeptId)?.name
         || assigneeDeptName

@@ -441,7 +441,7 @@ const AppRoutes = () => {
           <Route
             path="/skud-presence"
             element={
-              <Layout title="Кто на объектах" theme={theme} onToggleTheme={toggleTheme}>
+              <Layout title="Сотрудники на объектах" theme={theme} onToggleTheme={toggleTheme}>
                 <SkudPresencePage />
               </Layout>
             }

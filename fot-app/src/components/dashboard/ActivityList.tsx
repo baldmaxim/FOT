@@ -159,7 +159,7 @@ const EmployeeRow = memo<{
       {/* Статус + локация (выровнены) */}
       <div className={styles.badges}>
         <span className={`${styles.status} ${isOnline ? styles.in : isOffline ? styles.out : styles.unknown}`}>
-          {isOnline ? 'В офисе' : isOffline ? 'Вышел' : '—'}
+          {isOnline ? 'На месте' : isOffline ? 'Вышел' : '—'}
         </span>
         {employee.last_access_point && (
           <span className={styles.locationBadge}>
@@ -256,7 +256,7 @@ export const ActivityList: FC<IActivityListProps> = ({ employees, loading, emplo
             Все <span className={styles.tabCount}>{employees.length}</span>
           </button>
           <button className={`${styles.tab} ${tab === 'online' ? styles.tabActive : ''}`} onClick={() => setTab('online')}>
-            В офисе <span className={styles.tabCount}>{onlineCount}</span>
+            На месте <span className={styles.tabCount}>{onlineCount}</span>
           </button>
           <button className={`${styles.tab} ${tab === 'offline' ? styles.tabActive : ''}`} onClick={() => setTab('offline')}>
             Вышли <span className={styles.tabCount}>{offlineCount}</span>

@@ -22,7 +22,7 @@ export const PresenceTodayCard: FC<IPresenceTodayCardProps> = ({ online, total, 
         Присутствие сегодня
       </div>
       <div className={styles.mainValue}>
-        В офисе: <span className={styles.highlight}>{online}</span>
+        На месте: <span className={styles.highlight}>{online}</span>
         <span className={styles.total}> / {total}</span>
       </div>
       <div className={styles.sub}>

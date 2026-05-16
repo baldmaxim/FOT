@@ -195,7 +195,7 @@ const getSectionLabel = (
   departmentName?: string,
 ): string | null => {
   if (source === 'self') return 'Руководитель';
-  if (source === 'direct_report') return 'Прямые подчинённые';
+  if (source === 'direct_report') return 'Мои сотрудники';
   return departmentName ?? 'Сотрудники отдела';
 };
 

@@ -45,6 +45,7 @@ const navGroups: INavGroup[] = [
       { id: 'my-cabinet', path: '/employee', label: 'Личный кабинет', icon: UserIcon, requiredPage: '/employee' },
       { id: 'overview', path: '/', label: 'Обзор', icon: GridIcon, requiredPage: '/dashboard' },
       { id: 'leave-requests', path: '/leave-requests', label: 'Заявления', icon: ClipboardCheckIcon, requiredPage: ['/leave-requests', '/salary-raise-review'] },
+      { id: 'skud-presence', path: '/skud-presence', label: 'Сотрудники на объектах', icon: MapPinIcon, requiredPage: '/skud-presence' },
     ]
   },
   {
@@ -55,7 +56,6 @@ const navGroups: INavGroup[] = [
       { id: 'approvals', path: '/approvals', label: 'Согласования', icon: CalendarIcon, requiredPage: '/timesheet-hr' },
       { id: 'timesheet-hr', path: '/timesheet-hr', label: 'Табели HR', icon: CalendarIcon, requiredPage: '/timesheet-hr' },
       { id: 'discipline', path: '/discipline', label: 'Аналитика', icon: BarChartIcon, requiredPage: '/discipline' },
-      { id: 'skud-presence', path: '/skud-presence', label: 'Кто на объектах', icon: MapPinIcon, requiredPage: '/skud-presence' },
     ]
   },
   {
