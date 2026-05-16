@@ -46,6 +46,7 @@ const navGroups: INavGroup[] = [
       { id: 'overview', path: '/', label: 'Обзор', icon: GridIcon, requiredPage: '/dashboard' },
       { id: 'leave-requests', path: '/leave-requests', label: 'Заявления', icon: ClipboardCheckIcon, requiredPage: ['/leave-requests', '/salary-raise-review'] },
       { id: 'skud-presence', path: '/skud-presence', label: 'Сотрудники на объектах', icon: MapPinIcon, requiredPage: '/skud-presence' },
+      { id: 'contractor', path: '/contractor', label: 'Пропуска', icon: KeyIcon, requiredPage: '/contractor' },
     ]
   },
   {
@@ -66,7 +67,8 @@ const navGroups: INavGroup[] = [
       { id: 'timesheet-transfers', path: '/admin/timesheet-transfers', label: 'Переводы и исключения', icon: CalendarIcon, requiredPage: '/admin/timesheet-transfers' },
       { id: 'skud-hub', path: '/skud-settings', label: 'СКУД', icon: DatabaseIcon, requiredPage: '/skud-settings' },
       { id: 'sigur', path: '/sigur', label: 'SIGUR', icon: UsersIcon, requiredPage: '/skud-settings' },
-      { id: 'card-reader', path: '/skud-card-reader', label: 'Считыватель пропусков', icon: KeyIcon, requiredPage: '/skud-card-reader' },
+      { id: 'card-reader', path: '/skud-card-reader', label: 'Пропуск', icon: KeyIcon, requiredPage: '/skud-card-reader' },
+      { id: 'contractor-approvals', path: '/admin/contractor-approvals', label: 'Согласование подрядчиков', icon: ClipboardCheckIcon, requiredPage: '/admin/contractor-approvals' },
       { id: 'system-hub', path: '/admin/system', label: 'Система', icon: ShieldIcon, requiredPage: ['/admin/users', '/admin/roles', '/admin/audit', '/admin/action-history', '/admin/settings', '/admin/data-api'], systemAdminOnly: true },
     ]
   }

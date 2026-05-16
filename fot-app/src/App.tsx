@@ -69,6 +69,8 @@ const SigurSettingsPage = lazy(() => import('./pages/skud/SigurSettingsPage').th
 const SigurPage = lazy(() => import('./pages/skud/SigurPage').then(m => ({ default: m.SigurPage })));
 const SkudSupabasePage = lazy(() => import('./pages/skud/SkudSupabasePage').then(m => ({ default: m.SkudSupabasePage })));
 const SkudCardReaderPage = lazy(() => import('./pages/skud/SkudCardReaderPage').then(m => ({ default: m.SkudCardReaderPage })));
+const ContractorPage = lazy(() => import('./pages/contractor/ContractorPage').then(m => ({ default: m.ContractorPage })));
+const ContractorApprovalsPage = lazy(() => import('./pages/admin/ContractorApprovalsPage').then(m => ({ default: m.ContractorApprovalsPage })));
 const SkudPresencePage = lazy(() => import('./pages/skud/presence/SkudPresencePage').then(m => ({ default: m.SkudPresencePage })));
 
 // Timesheet
@@ -108,6 +110,9 @@ const PositionBasedRedirect = () => {
   }
   if (canViewPage('/employee')) {
     return <Navigate to="/employee" replace />;
+  }
+  if (canViewPage('/contractor')) {
+    return <Navigate to="/contractor" replace />;
   }
   return <Navigate to="/unauthorized" replace />;
 };
@@ -430,8 +435,30 @@ const AppRoutes = () => {
           <Route
             path="/skud-card-reader"
             element={
-              <Layout title="Считыватель пропусков" theme={theme} onToggleTheme={toggleTheme}>
+              <Layout title="Пропуск" theme={theme} onToggleTheme={toggleTheme}>
                 <SkudCardReaderPage />
+              </Layout>
+            }
+          />
+        </Route>
+
+        <Route element={<ProtectedRoute requiredPage="/contractor" />}>
+          <Route
+            path="/contractor"
+            element={
+              <Layout title="Подрядчик" theme={theme} onToggleTheme={toggleTheme}>
+                <ContractorPage />
+              </Layout>
+            }
+          />
+        </Route>
+
+        <Route element={<ProtectedRoute requiredPage="/admin/contractor-approvals" />}>
+          <Route
+            path="/admin/contractor-approvals"
+            element={
+              <Layout title="Согласование подрядчиков" theme={theme} onToggleTheme={toggleTheme}>
+                <ContractorApprovalsPage />
               </Layout>
             }
           />

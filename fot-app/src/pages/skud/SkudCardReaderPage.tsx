@@ -3,16 +3,22 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { CardReaderPanel } from '../../components/skud/CardReaderPanel';
 import { SigurLiveEmployeeSidebar } from '../../components/skud/employees/SigurLiveEmployeeSidebar';
+import { ContractorPassBatchPanel } from '../../components/skud/ContractorPassBatchPanel';
 import { sigurAdminService } from '../../services/sigurAdminService';
 import { useAuth } from '../../contexts/AuthContext';
 import { SIGUR_ADMIN_QUERY_KEY } from '../../api/queryKeys';
+import contractorStyles from '../contractor/Contractor.module.css';
 import '../../components/skud/CardReaderPanel.css';
+
+type Tab = 'reader' | 'batch';
 
 export const SkudCardReaderPage: FC = () => {
   const navigate = useNavigate();
   const { canEditPage } = useAuth();
   const canEdit = canEditPage('/skud-settings');
+  const canBatch = canEditPage('/skud-card-reader');
 
+  const [tab, setTab] = useState<Tab>('reader');
   const [selectedSigurEmployeeId, setSelectedSigurEmployeeId] = useState<number | null>(null);
 
   const departmentsQuery = useQuery({
@@ -36,32 +42,52 @@ export const SkudCardReaderPage: FC = () => {
 
   return (
     <div className="scr-page">
-      <header className="scr-header">
-        <h1 className="scr-title">Считыватель пропусков</h1>
-      </header>
-      <CardReaderPanel
-        mode={{
-          kind: 'lookup',
-          onEmployeeFound: (employeeId) => navigate(`/employees/${employeeId}`),
-          onSigurEmployeeFound: (sigurEmployeeId) => setSelectedSigurEmployeeId(sigurEmployeeId),
-        }}
-      />
-      {selectedSigurEmployeeId !== null && (
-        <SigurLiveEmployeeSidebar
-          sigurEmployeeId={selectedSigurEmployeeId}
-          employee={null}
-          canEdit={canEdit}
-          departments={departments}
-          positions={positions}
-          positionsLoading={positionsQuery.isLoading}
-          onClose={() => setSelectedSigurEmployeeId(null)}
-          onDirectoryChanged={async () => { await departmentsQuery.refetch(); }}
-          onPositionsChanged={async () => { await positionsQuery.refetch(); }}
-          onDeleted={(sigurEmployeeId) => {
-            if (selectedSigurEmployeeId === sigurEmployeeId) setSelectedSigurEmployeeId(null);
-          }}
-        />
+      <div className={contractorStyles.tabs}>
+        <button
+          className={`${contractorStyles.tab} ${tab === 'reader' ? contractorStyles.tabActive : ''}`}
+          onClick={() => setTab('reader')}
+        >
+          Считыватель
+        </button>
+        {canBatch && (
+          <button
+            className={`${contractorStyles.tab} ${tab === 'batch' ? contractorStyles.tabActive : ''}`}
+            onClick={() => setTab('batch')}
+          >
+            Массовое добавление пропусков
+          </button>
+        )}
+      </div>
+
+      {tab === 'reader' && (
+        <>
+          <CardReaderPanel
+            mode={{
+              kind: 'lookup',
+              onEmployeeFound: (employeeId) => navigate(`/employees/${employeeId}`),
+              onSigurEmployeeFound: (sigurEmployeeId) => setSelectedSigurEmployeeId(sigurEmployeeId),
+            }}
+          />
+          {selectedSigurEmployeeId !== null && (
+            <SigurLiveEmployeeSidebar
+              sigurEmployeeId={selectedSigurEmployeeId}
+              employee={null}
+              canEdit={canEdit}
+              departments={departments}
+              positions={positions}
+              positionsLoading={positionsQuery.isLoading}
+              onClose={() => setSelectedSigurEmployeeId(null)}
+              onDirectoryChanged={async () => { await departmentsQuery.refetch(); }}
+              onPositionsChanged={async () => { await positionsQuery.refetch(); }}
+              onDeleted={(sigurEmployeeId) => {
+                if (selectedSigurEmployeeId === sigurEmployeeId) setSelectedSigurEmployeeId(null);
+              }}
+            />
+          )}
+        </>
       )}
+
+      {tab === 'batch' && canBatch && <ContractorPassBatchPanel />}
     </div>
   );
 };
