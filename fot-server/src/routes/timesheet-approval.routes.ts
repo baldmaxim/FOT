@@ -13,6 +13,9 @@ router.put('/responsibles', requirePageAccess('/admin/settings', 'edit'), timesh
 // Подать табель — нужен edit на /timesheet.
 router.post('/submit', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.submit);
 
+// Отозвать поданный табель назад в draft (только из 'submitted') — edit на /timesheet.
+router.post('/recall', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.recall);
+
 router.get('/status', requirePageAccess('/timesheet', 'view'), timesheetApprovalController.getStatus);
 router.get('/department', requirePageAccess('/timesheet', 'view'), timesheetApprovalController.listDepartmentApprovals);
 

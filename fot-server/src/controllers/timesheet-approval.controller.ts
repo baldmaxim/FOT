@@ -391,6 +391,82 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
+/**
+ * Руководитель отзывает поданный табель назад в draft, пока HR его не рассмотрел.
+ * Доступно только из статуса 'submitted' — после approve/reject это домен HR.
+ */
+const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id ? req.body.department_id : null;
+    const deptId = await resolveScopedDepartmentId(req, requestedDeptId);
+    const range = parseRangeFromBody(req.body);
+
+    if (requestedDeptId && !deptId) {
+      res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
+      return;
+    }
+    if (!deptId) {
+      res.status(400).json({ success: false, error: 'department_id обязателен' });
+      return;
+    }
+    if (!range) {
+      res.status(400).json({
+        success: false,
+        error: 'start_date и end_date обязательны (формат YYYY-MM-DD, end_date >= start_date)',
+      });
+      return;
+    }
+
+    const existing = await queryOne<TimesheetApproval>(
+      `SELECT * FROM timesheet_approvals
+         WHERE department_id = $1 AND start_date = $2 AND end_date = $3
+         LIMIT 1`,
+      [deptId, range.startDate, range.endDate],
+    );
+
+    if (!existing || existing.status !== 'submitted') {
+      res.status(409).json({
+        success: false,
+        error: 'Отозвать можно только поданный, ещё не рассмотренный табель',
+      });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const approval = await queryOne<TimesheetApproval>(
+      `UPDATE timesheet_approvals
+         SET status = 'draft',
+             submitted_by = NULL,
+             submitted_at = NULL,
+             reviewed_by = NULL,
+             reviewed_at = NULL,
+             review_comment = NULL,
+             updated_at = $1
+         WHERE id = $2
+         RETURNING *`,
+      [now, existing.id],
+    );
+
+    if (!approval) {
+      res.status(500).json({ success: false, error: 'Ошибка отзыва табеля' });
+      return;
+    }
+
+    await logApprovalAudit(req, approval.id, 'TIMESHEET_APPROVAL_RECALLED', {
+      department_id: deptId,
+      start_date: range.startDate,
+      end_date: range.endDate,
+      from_status: existing.status,
+      to_status: 'draft',
+    });
+
+    res.json({ success: true, data: approval });
+  } catch (err) {
+    console.error('timesheet-approval.recall error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка отзыва табеля' });
+  }
+};
+
 /** Статус согласования по отделу и конкретному диапазону. */
 const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -1241,6 +1317,7 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
 
 export const timesheetApprovalController = {
   submit,
+  recall,
   getStatus,
   listDepartmentApprovals,
   approve,

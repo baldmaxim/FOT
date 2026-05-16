@@ -102,6 +102,15 @@ export const timesheetApprovalService = {
     return res.data;
   },
 
+  recall: async (department_id: string, start_date: string, end_date: string) => {
+    const res = await apiClient.post<ApiResponse<ITimesheetApproval>>('/timesheet-approvals/recall', {
+      department_id,
+      start_date,
+      end_date,
+    });
+    return res.data;
+  },
+
   getStatus: async (department_id: string, start_date: string, end_date: string) => {
     const params = new URLSearchParams({ department_id, start_date, end_date });
     const res = await apiClient.get<ApiResponse<ITimesheetApproval | null>>(`/timesheet-approvals/status?${params.toString()}`);

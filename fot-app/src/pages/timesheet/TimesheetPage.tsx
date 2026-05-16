@@ -24,7 +24,18 @@ import type {
   TimesheetTeamManagementCandidate,
 } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
-import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
+import {
+  TimesheetApprovalBar,
+  STATUS_COLORS,
+  STATUS_ICONS,
+} from '../../components/timesheet/TimesheetApprovalBar';
+import type {
+  ISubmitProblemEmployee,
+  ISubmitProblemDay,
+} from '../../components/timesheet/TimesheetSubmitConfirmModal';
+import { APPROVAL_STATUS_LABELS } from '../../services/timesheetApprovalService';
+import { useTimesheetApprovalStatus } from '../../hooks/useTimesheetApprovalData';
+import { getDayStatus, STATUS_LABEL_RU } from '../../utils/dayStatus';
 import {
   getFullDayThresholdHoursForDay,
   getScheduleForTimesheetDay,
@@ -1459,16 +1470,85 @@ export const TimesheetPage: FC = () => {
   const selectorControl = timesheetMode === 'assigned' ? assigneeControl : departmentControl;
   const isAssignedMode = timesheetMode === 'assigned';
 
+  // Проблемные сотрудники/дни для модалки подтверждения подачи.
+  // Только прошлые рабочие дни по графику: incomplete_skud («СКУД без часов»)
+  // и полностью незаполненные дни. Недоработки по графику и явные неявки исключены.
+  const submitProblems = useMemo<ISubmitProblemEmployee[]>(() => {
+    if (isAssignedMode || !activeGridDeptId || isDirectReportsMarker) return [];
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const dates: string[] = [];
+    const start = new Date(`${rangeStart}T00:00:00`);
+    const end = new Date(`${rangeEnd}T00:00:00`);
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (iso < todayIso) dates.push(iso);
+    }
+    if (dates.length === 0) return [];
+    const result: ISubmitProblemEmployee[] = [];
+    for (const emp of employees) {
+      const a = emp.transferred_out_date ?? null;
+      const b = emp.excluded_from_timesheet_date ?? null;
+      const cutoff = a && b ? (a < b ? a : b) : (a || b || null);
+      const days: ISubmitProblemDay[] = [];
+      for (const iso of dates) {
+        if (cutoff && iso >= cutoff) continue;
+        const [y, m, dd] = iso.split('-').map(Number);
+        const sched = getScheduleForTimesheetDay(schedules, dailySchedules, emp.id, y, m, dd);
+        if (isScheduleDayOff(sched, calendar, y, m, dd)) continue;
+        const entry = entryMap.get(`${emp.id}_${iso}`) ?? null;
+        if (!entry) {
+          days.push({ date: iso, reason: 'Не заполнен' });
+          continue;
+        }
+        const threshold = getFullDayThresholdHoursForDay(sched, calendar, y, m, dd);
+        const dayStatus = getDayStatus(entry, {
+          showActualHours,
+          fullDayThresholdHours: threshold,
+          isScheduledDayOff: false,
+        });
+        if (dayStatus === 'incomplete_skud') {
+          days.push({ date: iso, reason: STATUS_LABEL_RU.incomplete_skud });
+        }
+      }
+      if (days.length > 0) {
+        result.push({ employeeId: emp.id, employeeName: emp.full_name, days });
+      }
+    }
+    return result;
+  }, [
+    isAssignedMode, activeGridDeptId, isDirectReportsMarker, rangeStart, rangeEnd,
+    employees, schedules, dailySchedules, calendar, entryMap, showActualHours,
+  ]);
+
+  const headerApprovalDeptId = !isAssignedMode && !isDirectReportsMarker ? activeGridDeptId : null;
+  const headerApproval = useTimesheetApprovalStatus(headerApprovalDeptId, rangeStart, rangeEnd);
+  const headerApprovalStatus = headerApproval.data?.status ?? null;
+
   const headerEmployeeCounter = useMemo(() => {
     if (isAssignedMode) return null;
     if (!effectiveSelectedDeptId) return null;
-    if (!stats.employeeCount) return null;
+    const showCounter = Boolean(stats.employeeCount);
+    if (!showCounter && !headerApprovalStatus) return null;
+    const StatusIcon = headerApprovalStatus ? STATUS_ICONS[headerApprovalStatus] : null;
     return (
-      <span className="ts-header-counter">
-        {stats.employeeCount} <span className="ts-header-counter-label">сотр.</span>
+      <span className="ts-header-addon">
+        {showCounter && (
+          <span className="ts-header-counter">
+            {stats.employeeCount} <span className="ts-header-counter-label">сотр.</span>
+          </span>
+        )}
+        {headerApprovalStatus && StatusIcon && (
+          <span
+            className="ts-header-approval-chip"
+            style={{ color: STATUS_COLORS[headerApprovalStatus] }}
+            title="Статус согласования табеля"
+          >
+            <StatusIcon size={13} /> {APPROVAL_STATUS_LABELS[headerApprovalStatus]}
+          </span>
+        )}
       </span>
     );
-  }, [isAssignedMode, effectiveSelectedDeptId, stats.employeeCount]);
+  }, [isAssignedMode, effectiveSelectedDeptId, stats.employeeCount, headerApprovalStatus]);
   useHeaderAddon(headerEmployeeCounter);
 
   const segmentControl = (isAssignedMode ? selectedAssigneeId : effectiveSelectedDeptId) ? (
@@ -1630,6 +1710,7 @@ export const TimesheetPage: FC = () => {
                   endDate={rangeEnd}
                   compact
                   allowReview={false}
+                  submitProblems={submitProblems}
                 />
               </div>
             )}
@@ -1653,6 +1734,7 @@ export const TimesheetPage: FC = () => {
                   startDate={rangeStart}
                   endDate={rangeEnd}
                   allowReview={false}
+                  submitProblems={submitProblems}
                 />
               </div>
             </div>

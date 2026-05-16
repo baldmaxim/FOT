@@ -19,6 +19,10 @@ import {
   useWeekendMemoPreview,
 } from '../../hooks/useTimesheetApprovalData';
 import { formatTimesheetRangeLabel } from '../../utils/timesheetApprovalPeriod';
+import {
+  TimesheetSubmitConfirmModal,
+  type ISubmitProblemEmployee,
+} from './TimesheetSubmitConfirmModal';
 
 const MANAGER_OBJ_ROLE_CODE = 'manager_obj';
 
@@ -29,6 +33,7 @@ interface IProps {
   endDate: string;
   compact?: boolean;
   allowReview?: boolean;
+  submitProblems?: ISubmitProblemEmployee[];
 }
 
 interface IMissingDay {
@@ -39,7 +44,7 @@ interface IMissingDay {
   reason: string;
 }
 
-const STATUS_COLORS: Record<TimesheetApprovalStatus, string> = {
+export const STATUS_COLORS: Record<TimesheetApprovalStatus, string> = {
   draft: '#6b7280',
   submitted: '#f59e0b',
   approved: '#22c55e',
@@ -47,7 +52,7 @@ const STATUS_COLORS: Record<TimesheetApprovalStatus, string> = {
   returned: '#f59e0b',
 };
 
-const STATUS_ICONS: Record<TimesheetApprovalStatus, FC<{ size?: number }>> = {
+export const STATUS_ICONS: Record<TimesheetApprovalStatus, FC<{ size?: number }>> = {
   draft: Clock,
   submitted: Clock,
   approved: CheckCircle,
@@ -78,7 +83,8 @@ interface IActiveCardProps {
   memoOpen: boolean;
   onApprove: () => Promise<void>;
   onReject: () => Promise<void>;
-  onSubmit: () => Promise<void>;
+  onSubmit: () => void;
+  onRecall: () => void;
   onToggleMemo: () => void;
   onCommentChange: (value: string) => void;
 }
@@ -97,6 +103,7 @@ const ActiveCard: FC<IActiveCardProps> = ({
   onApprove,
   onReject,
   onSubmit,
+  onRecall,
   onToggleMemo,
   onCommentChange,
 }) => {
@@ -108,17 +115,23 @@ const ActiveCard: FC<IActiveCardProps> = ({
 
   return (
     <div className={`ts-approval-card${compact ? ' ts-approval-card--compact' : ''}`}>
-      <div className="ts-approval-card-info">
-        <strong className="ts-approval-period">
-          {formatTimesheetRangeLabel(startDate, endDate)}
-        </strong>
-        <span className="ts-approval-status" style={{ color: STATUS_COLORS[status] }}>
-          <Icon size={14} /> {APPROVAL_STATUS_LABELS[status]}
-        </span>
-        {approval?.review_comment && (
-          <span className="ts-approval-comment-preview">{approval.review_comment}</span>
-        )}
-      </div>
+      {(compact || approval?.review_comment) && (
+        <div className="ts-approval-card-info">
+          {compact && (
+            <>
+              <strong className="ts-approval-period">
+                {formatTimesheetRangeLabel(startDate, endDate)}
+              </strong>
+              <span className="ts-approval-status" style={{ color: STATUS_COLORS[status] }}>
+                <Icon size={14} /> {APPROVAL_STATUS_LABELS[status]}
+              </span>
+            </>
+          )}
+          {approval?.review_comment && (
+            <span className="ts-approval-comment-preview">{approval.review_comment}</span>
+          )}
+        </div>
+      )}
 
       {canShowSubmit && (
         <div className="ts-btn-split">
@@ -143,6 +156,18 @@ const ActiveCard: FC<IActiveCardProps> = ({
             </button>
           )}
         </div>
+      )}
+
+      {canSubmitDepartment && status === 'submitted' && (
+        <button
+          className="ts-btn"
+          onClick={onRecall}
+          disabled={loading}
+          type="button"
+          title="Отозвать поданный табель на доработку"
+        >
+          <RotateCcw size={14} /> Отозвать
+        </button>
       )}
 
       {canReviewApproval && status === 'submitted' && (
@@ -338,6 +363,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   endDate,
   compact = false,
   allowReview = true,
+  submitProblems = [],
 }) => {
   const { hasPermission, profile } = useAuth();
   const canSubmitDepartment = hasPermission('timesheet.workflow.submit');
@@ -354,6 +380,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const [memoReason, setMemoReason] = useState('');
   const [memoDownloading, setMemoDownloading] = useState(false);
   const [memoOpen, setMemoOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const memoFileInputRef = useRef<HTMLInputElement>(null);
 
   const invalidate = () => Promise.all([
@@ -396,7 +423,18 @@ export const TimesheetApprovalBar: FC<IProps> = ({
       }
     } finally {
       setLoading(false);
+      setConfirmOpen(false);
     }
+  };
+
+  const handleRecall = async () => {
+    if (!departmentId) return;
+    setSubmitError(null);
+    setMissingDays([]);
+    setMemoRequired(false);
+    await runAction(async () => {
+      await timesheetApprovalService.recall(departmentId, startDate, endDate);
+    });
   };
 
   const handleDownloadMemo = async () => {
@@ -505,9 +543,18 @@ export const TimesheetApprovalBar: FC<IProps> = ({
           memoOpen={memoOpen}
           onApprove={handleApprove}
           onReject={handleReject}
-          onSubmit={handleSubmit}
+          onSubmit={() => setConfirmOpen(true)}
+          onRecall={handleRecall}
           onToggleMemo={() => setMemoOpen(o => !o)}
           onCommentChange={setComment}
+        />
+        <TimesheetSubmitConfirmModal
+          open={confirmOpen}
+          period={formatTimesheetRangeLabel(startDate, endDate)}
+          problems={submitProblems}
+          loading={loading}
+          onConfirm={handleSubmit}
+          onClose={() => setConfirmOpen(false)}
         />
         {memoOpen && memoSectionAllowed && (
           <WeekendMemoPopover
