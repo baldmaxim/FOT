@@ -1,7 +1,9 @@
 import dotenv from 'dotenv';
 import { z } from 'zod';
 
-dotenv.config({ override: true });
+// В тестах НЕ перетираем заглушки из __tests__/setup.ts реальным .env
+// (иначе DATABASE_SSL_CA_PATH из .env ломает buildSsl с ENOENT).
+dotenv.config({ override: process.env.NODE_ENV !== 'test' });
 
 const DEFAULT_CORS_ORIGINS = [
   'http://localhost:5173',

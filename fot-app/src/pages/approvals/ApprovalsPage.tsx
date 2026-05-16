@@ -671,7 +671,15 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [commentModal, setCommentModal] = useState<{ row: IApprovalReviewItem; mode: 'rework' | 'return' } | null>(null);
 
-  useEffect(() => { setExpandedId(null); }, [period.startDate, period.endDate]);
+  // Сброс раскрытой строки при смене периода — паттерн «состояние из
+  // прошлого рендера» вместо setState-в-effect (react.dev «You Might Not
+  // Need an Effect»).
+  const periodKey = `${period.startDate}|${period.endDate}`;
+  const [prevPeriodKey, setPrevPeriodKey] = useState(periodKey);
+  if (prevPeriodKey !== periodKey) {
+    setPrevPeriodKey(periodKey);
+    setExpandedId(null);
+  }
 
   const query = useQuery({
     queryKey: ['approvals-review-list', status, period.startDate, period.endDate],

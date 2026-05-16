@@ -16,7 +16,7 @@ const computeDuration = (firstEntry: string | null): string | null => {
   const now = new Date();
   const entry = new Date();
   entry.setHours(h, m, s, 0);
-  let diffMs = now.getTime() - entry.getTime();
+  const diffMs = now.getTime() - entry.getTime();
   // first_entry — сегодня, но если оно в будущем (часы сдвинуты) — игнор.
   if (diffMs < 0) return null;
   const totalMin = Math.floor(diffMs / 60_000);

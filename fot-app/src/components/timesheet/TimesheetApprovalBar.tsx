@@ -1,7 +1,7 @@
 import { type FC, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  Check, X, Send, Clock, CheckCircle, XCircle, RotateCcw, AlertCircle,
+  Check, X, Send, RotateCcw, AlertCircle,
   Download, Upload, FileText, ChevronDown,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -9,7 +9,6 @@ import {
   timesheetApprovalService,
   APPROVAL_STATUS_LABELS,
   type ITimesheetApproval,
-  type TimesheetApprovalStatus,
 } from '../../services/timesheetApprovalService';
 import { timesheetService } from '../../services/timesheetService';
 import { ApiError } from '../../api/client';
@@ -23,6 +22,7 @@ import {
   TimesheetSubmitConfirmModal,
   type ISubmitProblemEmployee,
 } from './TimesheetSubmitConfirmModal';
+import { STATUS_COLORS, STATUS_ICONS } from './timesheetApprovalStatus';
 
 const MANAGER_OBJ_ROLE_CODE = 'manager_obj';
 
@@ -43,22 +43,6 @@ interface IMissingDay {
   kind: 'leave_request' | 'weekend_no_correction';
   reason: string;
 }
-
-export const STATUS_COLORS: Record<TimesheetApprovalStatus, string> = {
-  draft: '#6b7280',
-  submitted: '#f59e0b',
-  approved: '#22c55e',
-  rejected: '#ef4444',
-  returned: '#f59e0b',
-};
-
-export const STATUS_ICONS: Record<TimesheetApprovalStatus, FC<{ size?: number }>> = {
-  draft: Clock,
-  submitted: Clock,
-  approved: CheckCircle,
-  rejected: XCircle,
-  returned: RotateCcw,
-};
 
 const formatDayLabel = (iso: string): string => {
   const [, m, d] = iso.split('-');

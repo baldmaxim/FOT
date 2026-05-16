@@ -152,10 +152,13 @@ const CompanyFilter: FC<{
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  // Сброс поиска при закрытии — чтобы в следующий раз был чистый список.
-  useEffect(() => {
+  // Сброс поиска при закрытии — паттерн «состояние из прошлого рендера»
+  // вместо setState-в-effect (react.dev «You Might Not Need an Effect»).
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
     if (!open) setSearch('');
-  }, [open]);
+  }
 
   const selectedList = useMemo(
     () => allCompanies.filter(c => selected.has(c.id)),

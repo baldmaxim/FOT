@@ -126,8 +126,12 @@ export const ChatProvider: FC<{ children: ReactNode; initialOpen?: boolean }> = 
     const url = new URL(window.location.href);
     url.searchParams.delete('openChat');
     window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
-    setIsOpen(true);
-    void selectConversation(convId).catch(() => undefined);
+    // Разовая реакция на deep-link (?openChat=), не синхронизация рендера —
+    // открываем вне синхронного тела эффекта (react-hooks/set-state-in-effect).
+    void Promise.resolve().then(() => {
+      setIsOpen(true);
+      return selectConversation(convId);
+    }).catch(() => undefined);
   }, [isAuthenticated, isApproved, selectConversation]);
 
   // Сообщение от service worker при клике на уведомление в уже открытой вкладке

@@ -24,11 +24,8 @@ import type {
   TimesheetTeamManagementCandidate,
 } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
-import {
-  TimesheetApprovalBar,
-  STATUS_COLORS,
-  STATUS_ICONS,
-} from '../../components/timesheet/TimesheetApprovalBar';
+import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
+import { STATUS_COLORS, STATUS_ICONS } from '../../components/timesheet/timesheetApprovalStatus';
 import type {
   ISubmitProblemEmployee,
   ISubmitProblemDay,
