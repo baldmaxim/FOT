@@ -31,6 +31,7 @@
 
 .createBtn {
   padding: 10px 20px;
+  min-height: 40px;
   background: #3b82f6;
   color: #fff;
   border: none;
@@ -363,5 +364,19 @@
 
   .empty {
     padding: 40px 16px;
+  }
+}
+
+@media (max-width: 360px) {
+  .page {
+    padding: 10px;
+  }
+
+  .card {
+    padding: 12px 10px;
+  }
+
+  .title {
+    font-size: 15px;
   }
 }

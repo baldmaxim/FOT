@@ -149,6 +149,13 @@ body {
   background: var(--text-tertiary);
 }
 
+/* ===== Канон responsive-брейкпоинтов (max-width) =====
+   768px — десктоп→мобайл шелл (сайдбар→drawer)
+   430px — стандартный телефон
+   360px — Android-минимум, финальная компактизация
+   Новых брейкпоинтов (390/375/480…) не вводить.
+   360-тир — только CSS; JS-ветки только useIsMobile(768)/useIsMobile(430). */
+
 /* Mobile layout overrides */
 @media (max-width: 768px) {
   :root {
@@ -168,6 +175,19 @@ body {
 @media (max-width: 430px) {
   :root {
     --header-height: 52px;
+  }
+}
+
+/* Android-минимум: финальная компактизация. Только глобальные токены/типографика.
+   НЕ переопределять здесь input/textarea/select (<16px сломает iOS-гард 768px). */
+@media (max-width: 360px) {
+  :root {
+    --header-height: 50px;
+    --radius-lg: 10px;
+  }
+
+  body {
+    font-size: 14px;
   }
 }
 

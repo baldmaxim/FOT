@@ -22,6 +22,7 @@ const TimesheetCorrectionModal = lazy(() => import('../../components/timesheet/T
 })));
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import {
   getMonthBounds,
   listDatesInRange,
@@ -594,6 +595,7 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
   onSendToRework,
   onReturnApproved,
 }) => {
+  const isMobile = useIsMobile(768);
   const startDate = useMemo(() => new Date(row.start_date + 'T00:00:00'), [row.start_date]);
   const year = startDate.getFullYear();
   const month = startDate.getMonth() + 1;
@@ -687,6 +689,7 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
             schedules={tsQuery.data.schedules}
             dailySchedules={tsQuery.data.daily_schedules}
             calendar={tsQuery.data.calendar}
+            compact={isMobile}
             problemDates={problemDates}
             outOfPeriodDates={outOfPeriodDates}
             highlightedCell={null}

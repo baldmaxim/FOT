@@ -544,3 +544,26 @@
     height: 32px;
   }
 }
+
+@media (max-width: 360px) {
+  .page {
+    padding: 10px;
+  }
+
+  .card,
+  .hero {
+    padding: 14px;
+  }
+
+  .title {
+    font-size: 24px;
+  }
+
+  .salaryValue {
+    font-size: 22px;
+  }
+
+  .metricCount {
+    font-size: 24px;
+  }
+}

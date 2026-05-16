@@ -9,6 +9,7 @@ import type { Employee } from '../../types/employee';
 import { ApiError } from '../../api/client';
 import { formatFioShort } from '../../utils/formatFio';
 import { useTheme } from '../../hooks/useTheme';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import {
   WorkerLocaleProvider,
   WORKER_LOCALES,
@@ -17,9 +18,12 @@ import {
 } from '../../i18n/workerCabinet';
 
 const pageStyle: CSSProperties = {
-  minHeight: '100vh',
+  // dvh — корректная высота при мобильном адресбаре / mini-app webview
+  minHeight: '100dvh',
   background: 'var(--bg-primary)',
-  padding: '24px 16px 48px',
+  // страница рендерится вне EmployeeLayout — safe-area вручную
+  padding:
+    'max(24px, env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px)) max(48px, env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px))',
   display: 'flex',
   justifyContent: 'center',
 };
@@ -90,7 +94,8 @@ const langBarStyle: CSSProperties = {
 };
 
 const langButtonStyle = (active: boolean): CSSProperties => ({
-  padding: '6px 12px',
+  padding: '9px 14px',
+  minHeight: 40,
   borderRadius: 999,
   border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
   background: active ? 'var(--accent)' : 'transparent',
@@ -281,6 +286,7 @@ interface IUploadFormModalProps {
 
 const UploadReceiptFormModal: FC<IUploadFormModalProps> = ({ onClose, onSubmit }) => {
   const { t } = useWorkerLocale();
+  const isNarrow = useIsMobile(430);
   const [file, setFile] = useState<File | null>(null);
   const [periodStart, setPeriodStart] = useState('');
   const [periodEnd, setPeriodEnd] = useState('');
@@ -308,14 +314,15 @@ const UploadReceiptFormModal: FC<IUploadFormModalProps> = ({ onClose, onSubmit }
     border: '1px solid var(--border)',
     background: 'var(--bg-primary)',
     color: 'var(--text-primary)',
-    fontSize: 15,
+    // >=16px — иначе iOS Safari зумит при фокусе
+    fontSize: 16,
     boxSizing: 'border-box',
   };
 
   const labelText: CSSProperties = { fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 };
 
   return (
-    <div style={overlayStyle} role="dialog" aria-modal="true" onClick={onClose}>
+    <div style={{ ...overlayStyle, padding: isNarrow ? 12 : 20 }} role="dialog" aria-modal="true" onClick={onClose}>
       <div style={uploadModalCardStyle} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 18, fontWeight: 700 }}>{t('upload.modal.title')}</div>
 
@@ -339,7 +346,7 @@ const UploadReceiptFormModal: FC<IUploadFormModalProps> = ({ onClose, onSubmit }
           >
             {t('upload.modal.periodHint')}
           </legend>
-          <div style={{ display: 'grid', gap: 16, gridTemplateColumns: '1fr 1fr' }}>
+          <div style={{ display: 'grid', gap: isNarrow ? 12 : 16, gridTemplateColumns: isNarrow ? '1fr' : '1fr 1fr' }}>
             <label>
               <div style={labelText}>{t('upload.modal.periodFrom')}</div>
               <input
@@ -411,8 +418,8 @@ const UploadReceiptFormModal: FC<IUploadFormModalProps> = ({ onClose, onSubmit }
 };
 
 const themeToggleStyle: CSSProperties = {
-  width: 36,
-  height: 36,
+  width: 40,
+  height: 40,
   padding: 0,
   borderRadius: 12,
   border: '1px solid var(--border)',

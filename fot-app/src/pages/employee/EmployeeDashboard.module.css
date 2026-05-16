@@ -1598,7 +1598,8 @@
   .formSelect,
   .formTextarea {
     padding: 8px 10px;
-    font-size: 13px;
+    /* >=16px — иначе iOS Safari зумит при фокусе (класс бьёт глобальное правило) */
+    font-size: 16px;
     border-radius: 8px;
   }
 
@@ -1732,5 +1733,44 @@
   .modalFooter {
     padding: 16px;
     flex-direction: column;
+  }
+
+  .calendarPane {
+    padding: 14px;
+  }
+
+  .eventsPaneHeader {
+    padding: 12px 14px;
+  }
+
+  .eventsPaneFooter {
+    padding: 10px 14px;
+  }
+
+  .eventsPaneBody {
+    padding: 6px;
+  }
+
+  .periodNavBtn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .submitRequestBtn {
+    min-height: 40px;
+  }
+}
+
+@media (max-width: 360px) {
+  .content {
+    padding: 10px;
+  }
+
+  .calendarPane {
+    padding: 10px;
+  }
+
+  .sectionTitle {
+    font-size: 14px;
   }
 }

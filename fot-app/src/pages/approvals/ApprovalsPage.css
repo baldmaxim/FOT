@@ -1365,6 +1365,13 @@
 }
 
 @media (max-width: 768px) {
+  /* На мобиле грид рендерится карточками — горизонтальный скролл не нужен */
+  .approvals-timesheet-frame {
+    margin: 0 -12px;
+    padding: 10px 12px;
+    overflow-x: visible;
+  }
+
   .approvals-toolbar {
     position: sticky;
     top: 0;

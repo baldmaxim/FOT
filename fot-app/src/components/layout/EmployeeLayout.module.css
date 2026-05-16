@@ -1,6 +1,7 @@
 ﻿.app {
   display: flex;
   min-height: 100vh;
+  min-height: 100dvh; /* мобильный адресбар / Telegram webview */
 }
 
 .main {
@@ -154,8 +155,28 @@
     padding: env(safe-area-inset-top, 0px) calc(16px + env(safe-area-inset-right, 0px)) 0 calc(16px + env(safe-area-inset-left, 0px));
   }
 
+  .headerLeft {
+    flex: 1;
+    min-width: 0;
+    gap: 10px;
+  }
+
+  .pageTitle {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+
   .menuBtn {
     display: flex;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .headerBtn {
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .overlay {
@@ -170,5 +191,20 @@
 @media (max-width: 430px) {
   .pageTitle {
     font-size: 14px;
+  }
+}
+
+@media (max-width: 360px) {
+  .headerRight {
+    gap: 6px;
+  }
+
+  .headerLeft {
+    gap: 8px;
+  }
+
+  /* присутствие остаётся видимым в профиле сайдбара */
+  .presenceBadge {
+    display: none;
   }
 }

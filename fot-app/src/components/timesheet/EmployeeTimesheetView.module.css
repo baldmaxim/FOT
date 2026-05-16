@@ -344,6 +344,11 @@
 }
 
 /* ── Daily Breakdown Table ── */
+.tableScroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .breakdownTable {
   width: 100%;
   border-collapse: collapse;
@@ -581,5 +586,11 @@
 
   .salaryTotalValue {
     font-size: 20px;
+  }
+}
+
+@media (max-width: 360px) {
+  .section {
+    padding: 10px;
   }
 }

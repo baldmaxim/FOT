@@ -19,8 +19,10 @@
 .lr-create-btn {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 8px 16px;
+  min-height: 40px;
   border-radius: 8px;
   border: none;
   background: var(--accent);
@@ -57,6 +59,11 @@
 }
 
 .lr-form-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
   background: none;
   border: none;
   color: var(--text-secondary);
@@ -92,6 +99,8 @@
 .lr-form-select,
 .lr-form-input,
 .lr-form-textarea {
+  width: 100%;
+  box-sizing: border-box;
   padding: 8px 12px;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -190,6 +199,7 @@
 
 .lr-cancel-btn {
   padding: 4px 12px;
+  min-height: 40px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: none;
@@ -365,10 +375,14 @@
   background: transparent;
   border: 0;
   padding: 6px;
+  min-width: 40px;
+  min-height: 40px;
   border-radius: 6px;
   cursor: pointer;
   color: var(--text-secondary);
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .lr-attachment-download:hover {
@@ -437,5 +451,27 @@
 
   .lr-title {
     font-size: 17px;
+  }
+
+  .lr-form-body {
+    padding: 16px;
+  }
+
+  .lr-card {
+    padding: 14px;
+  }
+}
+
+@media (max-width: 360px) {
+  .lr-page {
+    padding: 10px;
+  }
+
+  .lr-title {
+    font-size: 16px;
+  }
+
+  .lr-detail-card {
+    padding: 14px;
   }
 }

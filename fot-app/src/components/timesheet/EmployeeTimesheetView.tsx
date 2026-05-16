@@ -331,6 +331,7 @@ export const EmployeeTimesheetView: FC<IEmployeeTimesheetViewProps> = ({ employe
 
       <div className={s.section}>
         <h3 className={s.sectionTitle}>Детализация по дням</h3>
+        <div className={s.tableScroll}>
         <table className={s.breakdownTable}>
           <thead>
             <tr>
@@ -385,6 +386,7 @@ export const EmployeeTimesheetView: FC<IEmployeeTimesheetViewProps> = ({ employe
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
 
       <TimesheetCorrectionModal

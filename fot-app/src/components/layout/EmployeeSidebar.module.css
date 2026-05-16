@@ -6,6 +6,7 @@
   flex-direction: column;
   position: fixed;
   height: 100vh;
+  height: 100dvh; /* мобильный адресбар / Telegram webview */
   padding-top: env(safe-area-inset-top, 0px);
   z-index: 100;
   transition: width 0.2s ease;
@@ -270,6 +271,7 @@
 /* Footer */
 .sidebarFooter {
   padding: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid var(--border);
 }
 
@@ -400,7 +402,7 @@
 
 @media (max-width: 768px) {
   .sidebar {
-    width: 260px;
+    width: min(260px, 86vw);
     transform: translateX(-100%);
     transition: transform 0.3s ease;
     box-shadow: none;

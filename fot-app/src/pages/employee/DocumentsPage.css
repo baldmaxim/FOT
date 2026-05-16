@@ -21,6 +21,8 @@
 }
 
 .docs-category-select {
+  width: 100%;
+  box-sizing: border-box;
   padding: 8px 12px;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -32,8 +34,10 @@
 .docs-upload-btn {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 8px 16px;
+  min-height: 40px;
   border-radius: 8px;
   border: none;
   background: var(--accent);
@@ -95,6 +99,11 @@
 }
 
 .docs-card-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
   padding: 6px;
   border-radius: 6px;
   border: none;
@@ -126,5 +135,15 @@
 
   .docs-title {
     font-size: 17px;
+  }
+}
+
+@media (max-width: 360px) {
+  .docs-page {
+    padding: 10px;
+  }
+
+  .docs-title {
+    font-size: 16px;
   }
 }

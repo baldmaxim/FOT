@@ -227,3 +227,23 @@
     display: none;
   }
 }
+
+@media (max-width: 360px) {
+  .root {
+    padding: 12px;
+  }
+
+  .cell {
+    font-size: 11px;
+    padding: 3px 1px;
+  }
+
+  .legend {
+    gap: 8px;
+    font-size: 10px;
+  }
+
+  .title {
+    font-size: 14px;
+  }
+}

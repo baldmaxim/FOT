@@ -81,6 +81,9 @@
   .iconButton {
     width: 32px;
     height: 32px;
+    /* визуально компактно, но тап-зона не меньше 44px (Android/iOS) */
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .iconButton svg {
