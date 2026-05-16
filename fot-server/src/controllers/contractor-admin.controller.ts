@@ -23,7 +23,11 @@ import {
   updateSigurEmployee,
   deleteSigurEmployee,
 } from '../services/sigur-live-employees-crud.service.js';
-import { assignSigurEmployeeCardBinding } from '../services/sigur-live-cards.service.js';
+import {
+  assignSigurEmployeeCardBinding,
+  replaceSigurEmployeeAccessPoints,
+} from '../services/sigur-live-cards.service.js';
+import { resolveObjectAccessPointIds } from '../services/contractor-access.service.js';
 
 /** Только системный админ (как approveUser/replaceUserCompanies). */
 const ensureSystemAdmin = async (
@@ -63,9 +67,24 @@ export const contractorAdminController = {
         from: z.number().int().positive().optional(),
         to: z.number().int().positive().optional(),
         card_uids: z.array(z.string().trim().min(1)).optional(),
+        skud_object_id: z.string().uuid().nullable().optional(),
       }).parse(req.body);
 
       const orgId = body.org_department_id;
+
+      // Объект (набор точек доступа) — опционально, применяется к пачке.
+      let skudObjectId: string | null = null;
+      if (body.skud_object_id) {
+        const obj = await queryOne<{ id: string }>(
+          'SELECT id FROM skud_objects WHERE id = $1::uuid AND is_active = true',
+          [body.skud_object_id],
+        );
+        if (!obj) {
+          res.status(400).json({ success: false, error: 'Объект не найден или неактивен' });
+          return;
+        }
+        skudObjectId = obj.id;
+      }
       let sigurDepartmentId: number;
       try {
         sigurDepartmentId = await getOrgSigurDepartmentId(orgId);
@@ -124,10 +143,10 @@ export const contractorAdminController = {
           }
           await execute(
             `INSERT INTO contractor_passes
-               (org_department_id, pass_number, sigur_employee_id, card_uid, status, created_by)
-             VALUES ($1::uuid, $2, $3, $4, 'issued', $5::uuid)
+               (org_department_id, pass_number, sigur_employee_id, card_uid, skud_object_id, status, created_by)
+             VALUES ($1::uuid, $2, $3, $4, $5, 'issued', $6::uuid)
              ON CONFLICT (org_department_id, pass_number) DO NOTHING`,
-            [orgId, passNumber, sigurEmployeeId, cardUid, req.user.id],
+            [orgId, passNumber, sigurEmployeeId, cardUid, skudObjectId, req.user.id],
           );
           created.push(passNumber);
         } catch (passError) {
@@ -330,6 +349,7 @@ export const contractorAdminController = {
       const dryRun = isContractorSigurDryRun();
       const connection = await sigurService.getBackgroundConnectionType();
       const failures: string[] = [];
+      const warnings: string[] = [];
       let applied = 0;
 
       // Шаг 1. Удаления.
@@ -372,9 +392,11 @@ export const contractorAdminController = {
       const toRename = await query<{
         roster_id: string; full_name: string;
         pass_id: string; pass_status: string; pass_sigur_id: number | null;
+        skud_object_id: string | null;
       }>(
         `SELECT r.id AS roster_id, r.full_name,
-                p.id AS pass_id, p.status AS pass_status, p.sigur_employee_id AS pass_sigur_id
+                p.id AS pass_id, p.status AS pass_status, p.sigur_employee_id AS pass_sigur_id,
+                p.skud_object_id AS skud_object_id
            FROM contractor_roster r
            JOIN contractor_passes p ON p.id = r.assigned_pass_id
           WHERE r.submission_id = $1::uuid
@@ -394,6 +416,22 @@ export const contractorAdminController = {
               { name: row.full_name, blocked: false },
               connection,
             );
+            // ЭТАП 2: бинд точек доступа объекта (если задан на пропуске).
+            if (row.skud_object_id) {
+              const resolved = await resolveObjectAccessPointIds(row.skud_object_id, connection);
+              if (resolved.accessPointIds.length > 0) {
+                await replaceSigurEmployeeAccessPoints(
+                  row.pass_sigur_id,
+                  resolved.accessPointIds,
+                  connection,
+                );
+              }
+              if (resolved.unmatchedNames.length > 0) {
+                warnings.push(
+                  `pass ${row.pass_id}: точки не сопоставлены в Sigur: ${resolved.unmatchedNames.join(', ')}`,
+                );
+              }
+            }
           }
           await withTransaction(async client => {
             await client.query(
@@ -413,24 +451,26 @@ export const contractorAdminController = {
         }
       }
 
+      // warnings (несопоставленные точки) — не блокируют применение.
       const finalStatus = failures.length === 0 ? 'approved' : 'partially_applied';
+      const applyError = [...failures, ...warnings];
       await execute(
         `UPDATE contractor_submissions
             SET status = $1, reviewed_by = $2::uuid, reviewed_at = now(),
                 apply_error = $3
           WHERE id = $4::uuid`,
-        [finalStatus, req.user.id, failures.length ? failures.join('; ') : null, submissionId],
+        [finalStatus, req.user.id, applyError.length ? applyError.join('; ') : null, submissionId],
       );
 
       await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_SUBMISSION_APPROVED, {
         entityType: 'contractor_submission',
         entityId: submissionId,
-        details: { status: finalStatus, applied, failed: failures.length, dryRun },
+        details: { status: finalStatus, applied, failed: failures.length, warnings: warnings.length, dryRun },
       });
 
       res.json({
         success: true,
-        data: { status: finalStatus, applied, failed: failures.length, errors: failures },
+        data: { status: finalStatus, applied, failed: failures.length, errors: failures, warnings },
       });
     } catch (error) {
       console.error('Contractor approveSubmission error:', error);

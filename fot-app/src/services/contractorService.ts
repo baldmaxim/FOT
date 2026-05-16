@@ -115,6 +115,7 @@ export const contractorAdminService = {
     from?: number;
     to?: number;
     card_uids?: string[];
+    skud_object_id?: string | null;
   }): Promise<{ requested: number; created: string[]; failed: Array<{ pass_number: string; error: string }> }> {
     const r = await apiClient.post<ApiResponse<{
       requested: number;

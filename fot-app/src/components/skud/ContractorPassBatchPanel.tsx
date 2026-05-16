@@ -2,11 +2,13 @@ import { useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
 import { contractorAdminService } from '../../services/contractorService';
+import { adminService } from '../../services/adminService';
 import styles from '../../pages/contractor/Contractor.module.css';
 
 export const ContractorPassBatchPanel: FC = () => {
   const toast = useToast();
   const [orgId, setOrgId] = useState('');
+  const [objectId, setObjectId] = useState('');
   const [count, setCount] = useState('10');
   const [cardUids, setCardUids] = useState('');
   const [busy, setBusy] = useState(false);
@@ -15,6 +17,12 @@ export const ContractorPassBatchPanel: FC = () => {
   const orgsQuery = useQuery({
     queryKey: ['contractor-admin-orgs'],
     queryFn: contractorAdminService.listOrgs,
+    staleTime: 5 * 60_000,
+  });
+
+  const objectsQuery = useQuery({
+    queryKey: ['skud-objects-for-assignment'],
+    queryFn: () => adminService.listSkudObjectsForAssignment(),
     staleTime: 5 * 60_000,
   });
 
@@ -30,6 +38,7 @@ export const ContractorPassBatchPanel: FC = () => {
         org_department_id: orgId,
         count: n,
         card_uids: uids.length ? uids : undefined,
+        skud_object_id: objectId || null,
       });
       setResult({ created: data.created, failed: data.failed });
       toast.success(`Создано пропусков: ${data.created.length}`);
@@ -55,6 +64,21 @@ export const ContractorPassBatchPanel: FC = () => {
             <option key={o.id} value={o.id} disabled={o.sigur_department_id == null}>
               {o.name}{o.sigur_department_id == null ? ' (нет в Sigur)' : ''}
             </option>
+          ))}
+        </select>
+      </div>
+
+      <div className={styles.field}>
+        <span className={styles.label}>Объект (точки доступа) — опционально</span>
+        <select
+          className={styles.select}
+          value={objectId}
+          onChange={e => setObjectId(e.target.value)}
+          disabled={busy || objectsQuery.isLoading}
+        >
+          <option value="">— без объекта —</option>
+          {(objectsQuery.data ?? []).map(o => (
+            <option key={o.id} value={o.id}>{o.name}</option>
           ))}
         </select>
       </div>

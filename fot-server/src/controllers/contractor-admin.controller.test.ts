@@ -13,6 +13,8 @@ const h = vi.hoisted(() => ({
   updEmp: vi.fn(),
   createEmp: vi.fn(),
   assignCard: vi.fn(),
+  replaceAP: vi.fn(),
+  resolveAP: vi.fn(),
 }));
 
 vi.mock('../config/postgres.js', () => ({
@@ -37,7 +39,13 @@ vi.mock('../services/sigur-live-employees-crud.service.js', () => ({
   updateSigurEmployee: h.updEmp,
   createSigurEmployee: h.createEmp,
 }));
-vi.mock('../services/sigur-live-cards.service.js', () => ({ assignSigurEmployeeCardBinding: h.assignCard }));
+vi.mock('../services/sigur-live-cards.service.js', () => ({
+  assignSigurEmployeeCardBinding: h.assignCard,
+  replaceSigurEmployeeAccessPoints: h.replaceAP,
+}));
+vi.mock('../services/contractor-access.service.js', () => ({
+  resolveObjectAccessPointIds: h.resolveAP,
+}));
 
 import { contractorAdminController } from './contractor-admin.controller.js';
 
@@ -148,5 +156,40 @@ describe('contractorAdminController.approveSubmission', () => {
     const body = res.body as { data: { status: string; applied: number } };
     expect(body.data.status).toBe('approved');
     expect(body.data.applied).toBe(1);
+  });
+
+  it('ЭТАП 2: объект на пропуске → бинд точек доступа, unmatched → warning (не блокирует)', async () => {
+    h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]);
+    h.query.mockResolvedValueOnce([
+      { roster_id: 'r1', full_name: 'A', pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, skud_object_id: 'obj-1' },
+    ]);
+    h.resolveAP.mockResolvedValue({ accessPointIds: [7, 8], unmatchedNames: ['КПП X'] });
+    const res = makeRes();
+    await contractorAdminController.approveSubmission(makeReq(), res as never);
+
+    expect(h.resolveAP).toHaveBeenCalledWith('obj-1', 'external');
+    expect(h.replaceAP).toHaveBeenCalledWith(11, [7, 8], 'external');
+    const body = res.body as { data: { status: string; applied: number; warnings: string[] } };
+    expect(body.data.status).toBe('approved');
+    expect(body.data.applied).toBe(1);
+    expect(body.data.warnings[0]).toContain('КПП X');
+  });
+
+  it('ЭТАП 2: сбой бинда точек доступа → partially_applied, pass не applied', async () => {
+    h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]);
+    h.query.mockResolvedValueOnce([
+      { roster_id: 'r1', full_name: 'A', pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, skud_object_id: 'obj-1' },
+    ]);
+    h.resolveAP.mockResolvedValue({ accessPointIds: [7], unmatchedNames: [] });
+    h.replaceAP.mockRejectedValueOnce(new Error('Sigur AP 500'));
+    const res = makeRes();
+    await contractorAdminController.approveSubmission(makeReq(), res as never);
+
+    const body = res.body as { data: { status: string; failed: number; errors: string[] } };
+    expect(body.data.status).toBe('partially_applied');
+    expect(body.data.failed).toBe(1);
+    expect(body.data.errors[0]).toContain('p1');
   });
 });
