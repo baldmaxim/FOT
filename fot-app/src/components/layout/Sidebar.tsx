@@ -50,7 +50,7 @@ const navGroups: INavGroup[] = [
     ]
   },
   {
-    label: 'Работа',
+    label: 'Управление',
     items: [
       { id: 'staff-control', path: '/staff-control', label: 'Управление кадрами', icon: UsersIcon, requiredPage: '/staff-control' },
       { id: 'timesheet', path: '/timesheet', label: 'Табель', icon: CalendarIcon, requiredPage: '/timesheet' },

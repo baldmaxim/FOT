@@ -73,7 +73,7 @@ export const PAGE_PATHS = {
 export type PagePath = typeof PAGE_PATHS[keyof typeof PAGE_PATHS];
 
 // Каталог зеркалит боковое меню (fot-app/src/components/layout/Sidebar.tsx):
-// блоки Моё / Работа / Администрирование + свёрнутый «Технические доступы».
+// блоки Моё / Управление / Администрирование + свёрнутый «Технические доступы».
 // key/surface/supports_edit неизменны (используются route-гардами и контракт-тестом);
 // под боковое меню приводятся только label/group_code/group_label/sort_order.
 export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
@@ -87,16 +87,16 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/leave-requests',             label: 'Заявления',                            group_code: 'mine',  group_label: 'Моё',                  surface: 'page',      supports_edit: true,  sort_order: 30,  is_active: true },
   { key: '/salary-raise-review',        label: 'Заявления — Проверка повышений оклада', group_code: 'mine', group_label: 'Моё',                  surface: 'page',      supports_edit: true,  sort_order: 31,  is_active: true },
   { key: '/skud-presence',              label: 'Сотрудники на объектах',               group_code: 'mine',  group_label: 'Моё',                  surface: 'page',      supports_edit: false, sort_order: 40,  is_active: true },
-  // Блок «Работа»
-  { key: '/staff-control',              label: 'Управление кадрами',                   group_code: 'work',  group_label: 'Работа',               surface: 'page',      supports_edit: true,  sort_order: 100, is_active: true },
-  { key: '/timesheet',                  label: 'Табель',                               group_code: 'work',  group_label: 'Работа',               surface: 'page',      supports_edit: true,  sort_order: 110, is_active: true },
-  { key: '/timesheet/events',           label: 'Табель — события СКУД (вкладка дня)',  group_code: 'work',  group_label: 'Работа',               surface: 'technical', supports_edit: false, sort_order: 115, is_active: true },
-  { key: '/timesheet-hr',               label: 'Согласования / Табели HR',             group_code: 'work',  group_label: 'Работа',               surface: 'page',      supports_edit: true,  sort_order: 120, is_active: true },
-  { key: '/discipline',                 label: 'Аналитика',                            group_code: 'work',  group_label: 'Работа',               surface: 'page',      supports_edit: false, sort_order: 130, is_active: true },
-  { key: '/employees',                  label: 'Карточка сотрудника',                  group_code: 'work',  group_label: 'Работа',               surface: 'page',      supports_edit: false, sort_order: 140, is_active: true },
-  { key: '/staff-control/department',   label: 'Управление кадрами — смена отдела',    group_code: 'work',  group_label: 'Работа',               surface: 'technical', supports_edit: true,  sort_order: 161, is_active: true },
-  { key: '/staff-control/position',     label: 'Управление кадрами — смена должности', group_code: 'work',  group_label: 'Работа',               surface: 'technical', supports_edit: true,  sort_order: 162, is_active: true },
-  { key: '/staff-control/schedule',     label: 'Управление кадрами — смена графика',   group_code: 'work',  group_label: 'Работа',               surface: 'technical', supports_edit: true,  sort_order: 163, is_active: true },
+  // Блок «Управление»
+  { key: '/staff-control',              label: 'Управление кадрами',                   group_code: 'work',  group_label: 'Управление',           surface: 'page',      supports_edit: true,  sort_order: 100, is_active: true },
+  { key: '/timesheet',                  label: 'Табель',                               group_code: 'work',  group_label: 'Управление',           surface: 'page',      supports_edit: true,  sort_order: 110, is_active: true },
+  { key: '/timesheet/events',           label: 'Табель — события СКУД (вкладка дня)',  group_code: 'work',  group_label: 'Управление',           surface: 'technical', supports_edit: false, sort_order: 115, is_active: true },
+  { key: '/timesheet-hr',               label: 'Согласования / Табели HR',             group_code: 'work',  group_label: 'Управление',           surface: 'page',      supports_edit: true,  sort_order: 120, is_active: true },
+  { key: '/discipline',                 label: 'Аналитика',                            group_code: 'work',  group_label: 'Управление',           surface: 'page',      supports_edit: false, sort_order: 130, is_active: true },
+  { key: '/employees',                  label: 'Карточка сотрудника',                  group_code: 'work',  group_label: 'Управление',           surface: 'page',      supports_edit: false, sort_order: 140, is_active: true },
+  { key: '/staff-control/department',   label: 'Управление кадрами — смена отдела',    group_code: 'work',  group_label: 'Управление',           surface: 'technical', supports_edit: true,  sort_order: 161, is_active: true },
+  { key: '/staff-control/position',     label: 'Управление кадрами — смена должности', group_code: 'work',  group_label: 'Управление',           surface: 'technical', supports_edit: true,  sort_order: 162, is_active: true },
+  { key: '/staff-control/schedule',     label: 'Управление кадрами — смена графика',   group_code: 'work',  group_label: 'Управление',           surface: 'technical', supports_edit: true,  sort_order: 163, is_active: true },
   // Блок «Администрирование»
   { key: '/admin/schedules',            label: 'Графики работы',                       group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 200, is_active: true },
   { key: '/admin/schedules/templates',  label: 'Графики работы — шаблоны (вкладка)',   group_code: 'admin', group_label: 'Администрирование',    surface: 'technical', supports_edit: true,  sort_order: 205, is_active: true },
