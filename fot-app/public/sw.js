@@ -25,12 +25,15 @@ self.addEventListener('notificationclick', (event) => {
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (clientList) => {
-      const targetPath = event.notification.data?.path || '/';
-      // Если окно уже открыто — фокусируем его
+      const convId = event.notification.data?.conversationId;
+      const targetPath = convId
+        ? `/?openChat=${convId}`
+        : (event.notification.data?.path || '/');
+      // Если окно уже открыто — фокусируем и просим открыть переписку без перезагрузки
       for (const client of clientList) {
         if ('focus' in client) {
-          if ('navigate' in client) {
-            await client.navigate(targetPath);
+          if (convId && 'postMessage' in client) {
+            client.postMessage({ type: 'OPEN_CHAT', conversationId: convId });
           }
           return client.focus();
         }

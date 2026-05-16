@@ -23,6 +23,7 @@ import {
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
 import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
+import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { collectDeptIds } from '../services/skud-shared.service.js';
 
 // Полный список колонок employees для getById / lifecycle-хэндлеров
@@ -116,20 +117,26 @@ export const employeesController = {
       const departmentFilterIds = requestedDepartmentId
         ? await resolveDepartmentFilterIds(departmentId)
         : (managedDepartmentIds.length > 0 ? managedDepartmentIds : await resolveDepartmentFilterIds(departmentId));
-      // Подмешиваем самого руководителя в список бригад, если у него есть явные назначения
-      // отделов (employee_department_access) — иначе он, сидящий в собственном отделе, не
-      // попадает под фильтр org_department_id и не виден в списке своих же бригад.
-      // Аналог поведения в табеле: timesheet.controller.ts selfTimesheetId.
+      // Подмешиваем самого руководителя + его прямых подчинённых (employee_direct_reports),
+      // иначе он, сидящий в собственном отделе, и назначенные ему люди из чужих отделов не
+      // попадают под фильтр org_department_id и не видны в «Управлении кадрами».
+      // Аналог поведения в табеле: timesheet.controller.ts selfTimesheetId/directReportIds.
       let selfEmployeeIdToInclude: number | null = null;
+      let directReportIds: number[] = [];
       if (scope === 'department' && req.user.employee_id) {
         const explicitDeptIds = await listExplicitDepartmentIdsForUser(
           req.user.id,
           req.user.employee_id,
         );
-        if (explicitDeptIds.length > 0) {
+        directReportIds = await listDirectSubordinates(req.user.employee_id);
+        if (explicitDeptIds.length > 0 || directReportIds.length > 0) {
           selfEmployeeIdToInclude = req.user.employee_id;
         }
       }
+      const additionalEmployeeIds = [...new Set([
+        ...directReportIds,
+        ...(selfEmployeeIdToInclude != null ? [selfEmployeeIdToInclude] : []),
+      ])];
       const isListView = req.query.view === 'list';
       const listColumns = 'id, full_name, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at, excluded_from_timesheet, excluded_from_timesheet_at';
       const staffColumns = listColumns + ', salary_actual, salary_calculated, current_salary';
@@ -171,12 +178,24 @@ export const employeesController = {
         } else if (departmentFilterIds?.length) {
           params.push(departmentFilterIds);
           const deptIdx = params.length;
-          if (selfEmployeeIdToInclude != null) {
-            params.push(selfEmployeeIdToInclude);
-            whereParts.push(`(org_department_id = ANY($${deptIdx}::uuid[]) OR id = $${params.length})`);
+          if (additionalEmployeeIds.length > 0) {
+            params.push(additionalEmployeeIds);
+            whereParts.push(`(org_department_id = ANY($${deptIdx}::uuid[]) OR id = ANY($${params.length}::int[]))`);
           } else {
             whereParts.push(`org_department_id = ANY($${deptIdx}::uuid[])`);
           }
+        } else if (additionalEmployeeIds.length > 0) {
+          // Руководитель без managed-отделов: только сам + прямые подчинённые.
+          params.push(additionalEmployeeIds);
+          whereParts.push(`id = ANY($${params.length}::int[])`);
+        } else if (scope === 'department') {
+          // department-scope без отделов и без назначений — не отдаём всю таблицу.
+          res.json({
+            success: true,
+            data: [],
+            meta: { page, pageSize, total: 0, totalPages: 0 },
+          });
+          return;
         }
         if (search) {
           params.push(`%${escapeLike(search)}%`);
@@ -318,7 +337,20 @@ export const employeesController = {
           whereParts.push(`id = $${params.length}`);
         } else if (departmentFilterIds?.length) {
           params.push(departmentFilterIds);
-          whereParts.push(`org_department_id = ANY($${params.length}::uuid[])`);
+          const deptIdx = params.length;
+          if (additionalEmployeeIds.length > 0) {
+            params.push(additionalEmployeeIds);
+            whereParts.push(`(org_department_id = ANY($${deptIdx}::uuid[]) OR id = ANY($${params.length}::int[]))`);
+          } else {
+            whereParts.push(`org_department_id = ANY($${deptIdx}::uuid[])`);
+          }
+        } else if (additionalEmployeeIds.length > 0) {
+          // Руководитель без managed-отделов: только сам + прямые подчинённые.
+          params.push(additionalEmployeeIds);
+          whereParts.push(`id = ANY($${params.length}::int[])`);
+        } else if (scope === 'department') {
+          // department-scope без отделов и без назначений — не отдаём всю таблицу.
+          break;
         }
 
         params.push(INTERNAL_PAGE);
@@ -388,6 +420,18 @@ export const employeesController = {
         ? await resolveManagedDepartmentIds(req)
         : await resolveDepartmentFilterIds(await resolveScopedDepartmentId(req, null));
 
+      // Сам руководитель + прямые подчинённые — чтобы счётчики совпадали со списком getAll.
+      let additionalEmployeeIds: number[] = [];
+      if (scope === 'department' && req.user.employee_id) {
+        const explicitDeptIds = await listExplicitDepartmentIdsForUser(req.user.id, req.user.employee_id);
+        const directReportIds = await listDirectSubordinates(req.user.employee_id);
+        const includeSelf = explicitDeptIds.length > 0 || directReportIds.length > 0;
+        additionalEmployeeIds = [...new Set([
+          ...directReportIds,
+          ...(includeSelf ? [req.user.employee_id] : []),
+        ])];
+      }
+
       const params: unknown[] = [];
       const whereParts: string[] = [];
       params.push(showArchived);
@@ -403,7 +447,21 @@ export const employeesController = {
         whereParts.push(`id = $${params.length}`);
       } else if (scopedDepartmentFilterIds?.length) {
         params.push(scopedDepartmentFilterIds);
-        whereParts.push(`org_department_id = ANY($${params.length}::uuid[])`);
+        const deptIdx = params.length;
+        if (additionalEmployeeIds.length > 0) {
+          params.push(additionalEmployeeIds);
+          whereParts.push(`(org_department_id = ANY($${deptIdx}::uuid[]) OR id = ANY($${params.length}::int[]))`);
+        } else {
+          whereParts.push(`org_department_id = ANY($${deptIdx}::uuid[])`);
+        }
+      } else if (additionalEmployeeIds.length > 0) {
+        params.push(additionalEmployeeIds);
+        whereParts.push(`id = ANY($${params.length}::int[])`);
+      } else if (scope === 'department') {
+        // department-scope без отделов и без назначений — не считаем всю таблицу.
+        res.setHeader('Cache-Control', 'private, max-age=30');
+        res.json({ success: true, data: { byDepartment: {}, byStatus: { active: 0, fired: 0 } } });
+        return;
       }
 
       const rows = await query<{ id: number; org_department_id: string | null; employment_status: string }>(

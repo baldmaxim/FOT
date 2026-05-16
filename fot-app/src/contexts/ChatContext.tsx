@@ -112,6 +112,38 @@ export const ChatProvider: FC<{ children: ReactNode; initialOpen?: boolean }> = 
     }
   }, [isAuthenticated, isApproved, loadConversations, loadRequests]);
 
+  // Открытие переписки по клику на push-уведомление.
+  // Захват ?openChat= синхронно на первом рендере: маршрут "/" сразу делает
+  // <Navigate to="/dashboard" replace> и теряет query — ref фиксирует id до этого.
+  const pendingOpenChatRef = useRef<string | null>(
+    new URLSearchParams(window.location.search).get('openChat'),
+  );
+  useEffect(() => {
+    if (!isAuthenticated || !isApproved) return;
+    const convId = pendingOpenChatRef.current;
+    if (!convId) return;
+    pendingOpenChatRef.current = null;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('openChat');
+    window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
+    setIsOpen(true);
+    void selectConversation(convId).catch(() => undefined);
+  }, [isAuthenticated, isApproved, selectConversation]);
+
+  // Сообщение от service worker при клике на уведомление в уже открытой вкладке
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; conversationId?: string } | null;
+      if (data?.type === 'OPEN_CHAT' && data.conversationId) {
+        setIsOpen(true);
+        void selectConversation(data.conversationId).catch(() => undefined);
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, [selectConversation]);
+
   const openChat = useCallback(() => {
     setIsOpen(true);
     void loadConversations().catch(() => undefined);
