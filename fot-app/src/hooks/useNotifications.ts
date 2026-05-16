@@ -32,12 +32,23 @@ export const useNotifications = (realtimeEnabled = true) => {
 
   // Подписка на Socket.IO
   useEffect(() => {
-    const unsub = wsService.on('notification_new', (payload: unknown) => {
+    const offNew = wsService.on('notification_new', (payload: unknown) => {
       const n = payload as INotification;
       setUnreadCount(prev => prev + 1);
       setNotifications(prev => loadedRef.current ? [n, ...prev] : prev);
     });
-    return unsub;
+    // Авторитетный счётчик с сервера (в т.ч. при прочтении переписки в
+    // другой вкладке) — синхронизирует бейдж без перезагрузки.
+    const offCount = wsService.on('notification_count', (payload: unknown) => {
+      const data = payload as { count?: number };
+      if (typeof data?.count === 'number') {
+        setUnreadCount(Math.max(0, data.count));
+      }
+    });
+    return () => {
+      offNew();
+      offCount();
+    };
   }, []);
 
   // Ленивая загрузка списка (при открытии дропдауна)

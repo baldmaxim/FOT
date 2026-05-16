@@ -178,6 +178,17 @@ export const Button: FC<IButtonProps> = ({ label, onClick, disabled = false }) =
 
 CSS media queries для всех целевых устройств.
 
+### Android-смартфоны
+
+- Брейкпоинты: 360px (Galaxy A0x/старые), 360–412px (основной Android-диапазон).
+- Высоты: только `100dvh`/`svh`, не `100vh` (адрес-бар Chrome съедает vh).
+- `env(safe-area-inset-*)` + `viewport-fit=cover` для шторок/жестов.
+- Тап-цели ≥ 44×44px (рекоменд. 48px Material).
+- `font-size` инпутов ≥ 16px (нет авто-зума и на Android-Chrome).
+- Нет горизонтального скролла на 360px; `overflow-wrap` вместо `word-break`.
+- Fixed-панели/модалки: высота через `dvh`, ресайз — `window.visualViewport`.
+- Проверять на Pixel (412px) и Galaxy A (360px) в DevTools.
+
 ## Документация
 
 - `DEPLOY.md` — инструкции по деплою на прод (PM2, nginx, Ubuntu)

@@ -68,19 +68,21 @@ export const Header: FC<IHeaderProps> = ({
         <ChatHeaderButton buttonClassName={buttonStyles.iconButton} />
 
         <div className={dropdownStyles.wrapper}>
-          <IconButton
-            onClick={toggleNotifications}
-            onMouseEnter={activateNotifications}
-            onFocus={activateNotifications}
-            title="Уведомления"
-          >
-            <BellIcon />
-            {unreadCount > 0 && (
-              <span className={dropdownStyles.badge}>
-                {unreadCount > 99 ? '99+' : unreadCount}
-              </span>
-            )}
-          </IconButton>
+          <div className={dropdownStyles.bellButton}>
+            <IconButton
+              onClick={toggleNotifications}
+              onMouseEnter={activateNotifications}
+              onFocus={activateNotifications}
+              title="Уведомления"
+            >
+              <BellIcon />
+              {unreadCount > 0 && (
+                <span className={dropdownStyles.badge}>
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              )}
+            </IconButton>
+          </div>
           {notificationsActivated && (
             <Suspense fallback={null}>
               <NotificationBellContent

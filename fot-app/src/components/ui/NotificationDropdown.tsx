@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FC } from 'react';
 import type { INotification } from '../../services/notificationService';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
@@ -94,10 +94,23 @@ export const NotificationDropdown: FC<INotificationDropdownProps> = ({
 }) => {
   const ref = useRef<HTMLDivElement>(null);
   const overlayHandlers = useOverlayDismiss(onClose);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     onLoad();
   }, [onLoad]);
+
+  const toggleExpand = (id: string) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   const handleItemClick = (n: INotification) => {
     if (!n.is_read) onMarkRead(n.id);
@@ -122,21 +135,42 @@ export const NotificationDropdown: FC<INotificationDropdownProps> = ({
           {!loading && notifications.length === 0 && (
             <div className={styles.empty}>Нет уведомлений</div>
           )}
-          {!loading && notifications.map(n => (
-            <div
-              key={n.id}
-              className={`${styles.item} ${!n.is_read ? styles.itemUnread : ''}`}
-              onClick={() => handleItemClick(n)}
-            >
-              <TypeIcon type={n.type} />
-              <div className={styles.itemContent}>
-                <div className={styles.itemTitle}>{n.title}</div>
-                <div className={styles.itemBody}>{n.body}</div>
-                <div className={styles.itemTime}>{formatRelativeTime(n.created_at)}</div>
+          {!loading && notifications.map(n => {
+            const expanded = expandedIds.has(n.id);
+            return (
+              <div
+                key={n.id}
+                className={`${styles.item} ${!n.is_read ? styles.itemUnread : ''}`}
+                onClick={() => handleItemClick(n)}
+              >
+                <TypeIcon type={n.type} />
+                <div className={styles.itemContent}>
+                  <div className={styles.itemTitle}>{n.title}</div>
+                  <div className={`${styles.itemBody} ${expanded ? styles.itemBodyExpanded : ''}`}>
+                    {n.body}
+                  </div>
+                  <div className={styles.itemTime}>{formatRelativeTime(n.created_at)}</div>
+                </div>
+                <div className={styles.itemAside}>
+                  {!n.is_read && <div className={styles.unreadDot} />}
+                  <button
+                    type="button"
+                    className={`${styles.expandBtn} ${expanded ? styles.expandBtnOpen : ''}`}
+                    aria-label={expanded ? 'Свернуть' : 'Развернуть'}
+                    aria-expanded={expanded}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleExpand(n.id);
+                    }}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                  </button>
+                </div>
               </div>
-              {!n.is_read && <div className={styles.unreadDot} />}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </>

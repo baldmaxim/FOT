@@ -8,6 +8,7 @@ import {
   type IChatPolicyDecision,
 } from './chat-policy.service.js';
 import { ChatError } from './chat.errors.js';
+import { notificationService } from './notification.service.js';
 
 export interface IChatConversation {
   id: string;
@@ -498,6 +499,12 @@ export const chatService = {
         WHERE conversation_id = $2 AND user_id = $3`,
       [new Date().toISOString(), conversationId, userId],
     );
+
+    // Чтение переписки гасит её chat_message-уведомления и шлёт
+    // авторитетный счётчик в шапку (не должно ронять чтение чата).
+    await notificationService
+      .markChatRead(userId, conversationId)
+      .catch(err => console.error('chat.markAsRead → markChatRead failed:', err));
   },
 
   async getUnreadCount(userId: string): Promise<number> {

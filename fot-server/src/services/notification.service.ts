@@ -20,6 +20,25 @@ interface ICreateNotification {
   metadata?: Record<string, unknown>;
 }
 
+// Шлёт получателю авторитетный счётчик непрочитанных. Вызывается после
+// любого изменения (создание/прочтение), чтобы бейдж в шапке был
+// консистентен во всех вкладках без перезагрузки.
+async function emitUnreadCount(userId: string): Promise<void> {
+  const io = getIo();
+  if (!io) return;
+  try {
+    const rows = await query<{ count: number }>(
+      `SELECT count(*)::int AS count
+         FROM notifications
+        WHERE user_id = $1 AND is_read = false`,
+      [userId],
+    );
+    io.to(`user:${userId}`).emit('notification_count', { count: rows[0]?.count ?? 0 });
+  } catch (err) {
+    console.error('notifications.emitUnreadCount error:', err);
+  }
+}
+
 export const notificationService = {
   async createMany(items: ICreateNotification[]): Promise<void> {
     if (items.length === 0) return;
@@ -55,6 +74,11 @@ export const notificationService = {
         io.to(`user:${notification.user_id}`).emit('notification_new', notification);
       }
     }
+
+    const recipients = new Set(data.map(n => n.user_id));
+    for (const uid of recipients) {
+      await emitUnreadCount(uid);
+    }
   },
 
   async getByUser(userId: string, limit = 50, offset = 0): Promise<INotification[]> {
@@ -84,6 +108,7 @@ export const notificationService = {
         WHERE id = $1 AND user_id = $2`,
       [notificationId, userId],
     );
+    await emitUnreadCount(userId);
   },
 
   async markAllRead(userId: string): Promise<void> {
@@ -92,5 +117,18 @@ export const notificationService = {
         WHERE user_id = $1 AND is_read = false`,
       [userId],
     );
+    await emitUnreadCount(userId);
+  },
+
+  // Гасит chat_message-уведомления конкретной переписки при её прочтении,
+  // чтобы бейдж не висел после открытия диалога.
+  async markChatRead(userId: string, conversationId: string): Promise<void> {
+    await execute(
+      `UPDATE notifications SET is_read = true
+        WHERE user_id = $1 AND type = 'chat_message'
+          AND metadata->>'conversationId' = $2 AND is_read = false`,
+      [userId, conversationId],
+    );
+    await emitUnreadCount(userId);
   },
 };

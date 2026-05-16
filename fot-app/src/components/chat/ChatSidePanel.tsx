@@ -50,7 +50,7 @@ export const ChatSidePanel: FC = () => {
     rejectRequest,
   } = useChatContext();
 
-  const { isSupported: pushSupported, permission, isSubscribed, subscribe } = usePushNotifications();
+  const { isSupported: pushSupported, permission, isSubscribed, subscribe, unsubscribe } = usePushNotifications();
   const showPushBanner = pushSupported && permission !== 'denied' && !isSubscribed;
   const overlayHandlers = useOverlayDismiss(closeChat);
 
@@ -61,6 +61,7 @@ export const ChatSidePanel: FC = () => {
   const [searchResults, setSearchResults] = useState<IChatUser[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [mobileShowChat, setMobileShowChat] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [requestActionId, setRequestActionId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -307,29 +308,74 @@ export const ChatSidePanel: FC = () => {
               </svg>
             </button>
             <h3 className={styles.listPaneTitle}>{activeTab === 'chats' ? (searchOpen ? 'Новый чат' : 'Чаты') : 'Запросы'}</h3>
-            <button
-              className={`${styles.iconBtn} ${activeTab === 'chats' && searchOpen ? styles.iconBtnActive : ''}`}
-              onClick={activeTab === 'chats' ? handleToggleSearch : () => handleSwitchTab('chats')}
-            >
-              {activeTab === 'chats' ? (
-                searchOpen ? (
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-                    <path d="M18 6L6 18M6 6l12 12" />
-                  </svg>
+            <div className={styles.headerActions}>
+              <button
+                className={`${styles.iconBtn} ${settingsOpen ? styles.iconBtnActive : ''}`}
+                onClick={() => setSettingsOpen(prev => !prev)}
+                aria-label="Настройки чата"
+                aria-expanded={settingsOpen}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+              </button>
+              <button
+                className={`${styles.iconBtn} ${activeTab === 'chats' && searchOpen ? styles.iconBtnActive : ''}`}
+                onClick={activeTab === 'chats' ? handleToggleSearch : () => handleSwitchTab('chats')}
+              >
+                {activeTab === 'chats' ? (
+                  searchOpen ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
+                      <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
+                      <path d="M12 5v14M5 12h14" />
+                    </svg>
+                  )
                 ) : (
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-                    <path d="M12 5v14M5 12h14" />
+                    <path d="M3 12h18" />
+                    <path d="M3 6h18" />
+                    <path d="M3 18h18" />
                   </svg>
-                )
-              ) : (
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-                  <path d="M3 12h18" />
-                  <path d="M3 6h18" />
-                  <path d="M3 18h18" />
-                </svg>
-              )}
-            </button>
+                )}
+              </button>
+            </div>
           </div>
+
+          {settingsOpen && (
+            <div className={styles.settingsPanel}>
+              {pushSupported ? (
+                <>
+                  <div className={styles.settingsRow}>
+                    <span className={styles.settingsLabel}>Уведомления о сообщениях</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={isSubscribed}
+                      aria-label="Уведомления о сообщениях"
+                      className={`${styles.switch} ${isSubscribed ? styles.switchOn : ''}`}
+                      disabled={permission === 'denied'}
+                      onClick={() => (isSubscribed ? unsubscribe() : subscribe())}
+                    >
+                      <span className={styles.switchThumb} />
+                    </button>
+                  </div>
+                  {permission === 'denied' && (
+                    <p className={styles.settingsHint}>
+                      Разрешите уведомления в настройках браузера
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className={styles.settingsHint}>
+                  Браузер не поддерживает push-уведомления
+                </p>
+              )}
+            </div>
+          )}
 
           <div className={styles.panelTabs}>
             <button

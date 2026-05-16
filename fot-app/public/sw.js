@@ -1,3 +1,13 @@
+// Активируем новый SW сразу, не дожидаясь закрытия всех вкладок —
+// иначе push может прийти раньше, чем SW станет активным, и потеряться.
+self.addEventListener('install', (event) => {
+  event.waitUntil(self.skipWaiting());
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
 self.addEventListener('push', (event) => {
   if (!event.data) return;
 

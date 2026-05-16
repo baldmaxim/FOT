@@ -1,6 +1,10 @@
 import webpush from 'web-push';
+import * as Sentry from '@sentry/node';
 import { execute, query, queryOne } from '../config/postgres.js';
 import { env } from '../config/env.js';
+
+// Лимит зашифрованного web-push payload у большинства провайдеров ~4КБ.
+const MAX_PAYLOAD_BYTES = 4000;
 
 const vapidReady = !!(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY && env.VAPID_SUBJECT);
 
@@ -49,6 +53,53 @@ async function deleteStaleSubscriptionByEndpoint(endpoint: string): Promise<void
   } catch (err) {
     console.error('push.deleteStaleSubscription failed:', err);
   }
+}
+
+// Единая отправка одной подписке: 404/410 → чистим протухшую подписку,
+// прочие ошибки больше НЕ глотаем тихо — логируем в Sentry/console,
+// иначе в проде невозможно понять, почему пуши не доходят.
+async function dispatchToSubscription(
+  sub: ISubscriptionRow,
+  notification: string,
+  context: string,
+): Promise<void> {
+  try {
+    await webpush.sendNotification(
+      { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+      notification,
+    );
+  } catch (err: unknown) {
+    const statusCode =
+      err && typeof err === 'object' && 'statusCode' in err
+        ? (err as { statusCode: number }).statusCode
+        : undefined;
+    if (statusCode === 404 || statusCode === 410) {
+      await deleteStaleSubscriptionByEndpoint(sub.endpoint);
+      return;
+    }
+    console.error(`push.send failed [${context}] status=${statusCode ?? 'n/a'}:`, err);
+    Sentry.captureException(err, {
+      tags: { push: context },
+      extra: { statusCode, endpoint: sub.endpoint.slice(0, 60) },
+    });
+  }
+}
+
+// Отправка списку подписок с защитой от слишком большого payload.
+async function dispatchToAll(
+  subscriptions: ISubscriptionRow[],
+  notification: string,
+  context: string,
+): Promise<void> {
+  const size = Buffer.byteLength(notification, 'utf8');
+  if (size > MAX_PAYLOAD_BYTES) {
+    console.error(`push.send skipped [${context}]: payload ${size}B > ${MAX_PAYLOAD_BYTES}B`);
+    Sentry.captureMessage(`push payload too large [${context}]: ${size}B`, 'warning');
+    return;
+  }
+  await Promise.allSettled(
+    subscriptions.map((sub) => dispatchToSubscription(sub, notification, context)),
+  );
 }
 
 export const pushService = {
@@ -101,20 +152,7 @@ export const pushService = {
       [ids],
     );
 
-    await Promise.allSettled(
-      subscriptions.map(async (sub) => {
-        try {
-          await webpush.sendNotification(
-            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-            notification,
-          );
-        } catch (err: unknown) {
-          if (err && typeof err === 'object' && 'statusCode' in err && (err as { statusCode: number }).statusCode === 410) {
-            await deleteStaleSubscriptionByEndpoint(sub.endpoint);
-          }
-        }
-      }),
-    );
+    await dispatchToAll(subscriptions, notification, 'leave-request');
 
     return ids;
   },
@@ -134,20 +172,7 @@ export const pushService = {
       [targetUserIds],
     );
 
-    await Promise.allSettled(
-      subscriptions.map(async (sub) => {
-        try {
-          await webpush.sendNotification(
-            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-            notification,
-          );
-        } catch (err: unknown) {
-          if (err && typeof err === 'object' && 'statusCode' in err && (err as { statusCode: number }).statusCode === 410) {
-            await deleteStaleSubscriptionByEndpoint(sub.endpoint);
-          }
-        }
-      }),
-    );
+    await dispatchToAll(subscriptions, notification, 'salary-raise');
 
     return targetUserIds;
   },
@@ -168,20 +193,7 @@ export const pushService = {
       conversationId: payload.conversationId,
     });
 
-    await Promise.allSettled(
-      subscriptions.map(async (sub) => {
-        try {
-          await webpush.sendNotification(
-            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-            notification,
-          );
-        } catch (err: unknown) {
-          if (err && typeof err === 'object' && 'statusCode' in err && (err as { statusCode: number }).statusCode === 410) {
-            await deleteStaleSubscriptionByEndpoint(sub.endpoint);
-          }
-        }
-      }),
-    );
+    await dispatchToAll(subscriptions, notification, 'chat-message');
   },
 
   async sendGenericNotification(
@@ -204,20 +216,7 @@ export const pushService = {
       [targetUserIds],
     );
 
-    await Promise.allSettled(
-      subscriptions.map(async (sub) => {
-        try {
-          await webpush.sendNotification(
-            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-            notification,
-          );
-        } catch (err: unknown) {
-          if (err && typeof err === 'object' && 'statusCode' in err && (err as { statusCode: number }).statusCode === 410) {
-            await deleteStaleSubscriptionByEndpoint(sub.endpoint);
-          }
-        }
-      }),
-    );
+    await dispatchToAll(subscriptions, notification, 'generic');
 
     return targetUserIds;
   },

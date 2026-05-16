@@ -2,6 +2,15 @@
   position: relative;
 }
 
+/* Колокольчик выше .overlay (99) и .dropdown (100), чтобы повторный
+   тап попадал в кнопку и корректно закрывал панель, а не уходил в
+   backdrop (close → ghost-click → reopen на тач-устройствах). */
+.bellButton {
+  position: relative;
+  z-index: 101;
+  display: inline-flex;
+}
+
 .overlay {
   position: fixed;
   inset: 0;
@@ -135,9 +144,18 @@
 .itemBody {
   font-size: 12px;
   color: var(--text-secondary);
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+}
+
+.itemBodyExpanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+  white-space: normal;
 }
 
 .itemTime {
@@ -153,6 +171,44 @@
   border-radius: 50%;
   flex-shrink: 0;
   margin-top: 4px;
+}
+
+.itemAside {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.expandBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, transform 0.15s;
+}
+
+.expandBtn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.expandBtn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.expandBtnOpen {
+  transform: rotate(180deg);
+  color: var(--accent);
 }
 
 .empty {
