@@ -46,6 +46,7 @@ export const DashboardPage: React.FC = () => {
   } = useManagedDepartments();
   const { timesheetMonthsBack, timesheetMonthsForward } = useAuth();
   const isSingleManagedDept = isDepartmentScope && managedDepartmentIds.length === 1;
+  const noDepartmentsAssigned = isDepartmentScope && managedDepartmentIds.length === 0;
 
   const today = new Date().toLocaleDateString('ru-RU', {
     weekday: 'long',
@@ -320,12 +321,20 @@ export const DashboardPage: React.FC = () => {
   return (
     <>
       {!effectiveSelectedDeptId ? (
-        <div className="dash-placeholder">
-          <Building2 size={48} strokeWidth={1.2} />
-          <h3>Выберите отдел</h3>
-          <p>Чтобы увидеть статистику присутствия</p>
-          {deptSelector}
-        </div>
+        noDepartmentsAssigned ? (
+          <div className="dash-placeholder">
+            <Building2 size={48} strokeWidth={1.2} />
+            <h3>Нет доступных отделов</h3>
+            <p>Для вашей роли ещё не настроен доступ к отделам. Обратитесь в администрацию.</p>
+          </div>
+        ) : (
+          <div className="dash-placeholder">
+            <Building2 size={48} strokeWidth={1.2} />
+            <h3>Выберите отдел</h3>
+            <p>Чтобы увидеть статистику присутствия</p>
+            {deptSelector}
+          </div>
+        )
       ) : (
         <div className="dashboard-wrap">
           <div className="content-header">
