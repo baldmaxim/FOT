@@ -1220,32 +1220,6 @@
 }
 
 /* Submit request button */
-.submitRequestBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 18px;
-  background: var(--accent);
-  color: white;
-  border: none;
-  border-radius: 10px;
-  font-size: 13px;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-  transition: background 0.15s;
-  flex-shrink: 0;
-}
-
-.submitRequestBtn:hover {
-  background: var(--accent-hover, #2563eb);
-}
-
-.submitRequestBtn svg {
-  width: 15px;
-  height: 15px;
-}
-
 /* Wide modal for unified request */
 .modalWide {
   max-width: 560px;
@@ -1754,10 +1728,6 @@
   .periodNavBtn {
     width: 40px;
     height: 40px;
-  }
-
-  .submitRequestBtn {
-    min-height: 40px;
   }
 }
 

@@ -26,10 +26,9 @@ export const SalaryRaisePage: FC = () => {
     <div className={styles.page}>
       <header className={styles.header}>
         <div>
-          <h1 className={styles.title}>Повышение оклада</h1>
           <p className={styles.subtitle}>Заявки на повышение для ваших прямых подчинённых.</p>
         </div>
-        <button className={styles.createBtn} onClick={() => navigate('/employee/salary-raise/new')}>
+        <button className="btn-primary" onClick={() => navigate('/employee/salary-raise/new')}>
           Новая заявка
         </button>
       </header>

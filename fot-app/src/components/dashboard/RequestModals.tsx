@@ -207,7 +207,7 @@ export const RequestModal: FC<IRequestModalProps> = ({ activeModal, onClose, emp
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
                   <button
                     type="button"
-                    className={styles.btnSecondary}
+                    className="btn-secondary"
                     onClick={() => fileInputRef.current?.click()}
                   >
                     Выбрать файлы
@@ -215,7 +215,7 @@ export const RequestModal: FC<IRequestModalProps> = ({ activeModal, onClose, emp
                   {isMobile && (
                     <button
                       type="button"
-                      className={styles.btnSecondary}
+                      className="btn-secondary"
                       onClick={() => cameraInputRef.current?.click()}
                     >
                       Сделать фото
@@ -282,10 +282,10 @@ export const RequestModal: FC<IRequestModalProps> = ({ activeModal, onClose, emp
           )}
         </div>
         <div className={styles.modalFooter}>
-          <button className={styles.btnSecondary} onClick={onClose} disabled={submitting}>
+          <button className="btn-secondary" onClick={onClose} disabled={submitting}>
             Отмена
           </button>
-          <button className={styles.btnPrimary} onClick={handleSubmit} disabled={submitting}>
+          <button className="btn-primary" onClick={handleSubmit} disabled={submitting}>
             {submitting ? 'Отправка...' : 'Отправить'}
           </button>
         </div>
@@ -301,6 +301,8 @@ const UNIFIED_TYPES: { value: LeaveRequestType; label: string }[] = [
   { value: 'remote', label: 'Удалённая работа' },
   { value: 'vacation', label: 'Отпуск' },
   { value: 'sick_leave', label: 'Больничный' },
+  { value: 'certificate', label: 'Справка' },
+  { value: 'time_correction', label: 'Корректировка табеля' },
 ];
 
 interface IUnifiedRequestModalProps {
@@ -325,6 +327,11 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
   const [reason, setReason] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [correctionDate, setCorrectionDate] = useState('');
+  const [correctionStatus, setCorrectionStatus] = useState('work');
+  const [correctionHours, setCorrectionHours] = useState<number>(8);
+
+  const isCorrection = requestType === 'time_correction';
 
   const todayDate = useMemo(() => new Date(), []);
   const [calYear, setCalYear] = useState(todayDate.getFullYear());
@@ -390,16 +397,33 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
 
   const handleSubmit = async () => {
     if (!employeeId) return showToast('error', 'Не найден ID сотрудника');
-    if (selectedDates.size === 0) return showToast('error', 'Выберите хотя бы один день');
-    if (requestType === 'sick_leave' && files.length === 0) return showToast('error', 'Для больничного приложите файл');
+    if (isCorrection) {
+      if (!correctionDate) return showToast('error', 'Укажите дату корректировки');
+      if (files.length === 0) return showToast('error', 'Для корректировки табеля приложите файл');
+    } else {
+      if (selectedDates.size === 0) return showToast('error', 'Выберите хотя бы один день');
+      if (requestType === 'sick_leave' && files.length === 0) return showToast('error', 'Для больничного приложите файл');
+    }
     setSubmitting(true);
     try {
-      const created = await leaveRequestService.create({
-        request_type: requestType,
-        start_date: sortedDates[0],
-        end_date: sortedDates[sortedDates.length - 1],
-        reason: reason.trim() || undefined,
-      });
+      const created = await leaveRequestService.create(
+        isCorrection
+          ? {
+              request_type: requestType,
+              start_date: correctionDate,
+              end_date: correctionDate,
+              reason: reason.trim() || undefined,
+              correction_date: correctionDate,
+              correction_status: correctionStatus,
+              correction_hours: correctionHours,
+            }
+          : {
+              request_type: requestType,
+              start_date: sortedDates[0],
+              end_date: sortedDates[sortedDates.length - 1],
+              reason: reason.trim() || undefined,
+            },
+      );
       if (files.length > 0) {
         const uploads = await Promise.allSettled(
           files.map(file => documentService.uploadFile(file, employeeId, 'scan', created.id)),
@@ -440,7 +464,47 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
             </select>
           </div>
 
-          {/* Calendar picker */}
+          {isCorrection ? (
+            <>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Дата корректировки <span className={styles.required}>*</span></label>
+                <input
+                  type="date"
+                  className={styles.formInput}
+                  value={correctionDate}
+                  onChange={e => setCorrectionDate(e.target.value)}
+                />
+              </div>
+              <div className={styles.formRow}>
+                <div className={styles.formGroup}>
+                  <label className={styles.formLabel}>Статус <span className={styles.required}>*</span></label>
+                  <select
+                    className={styles.formSelect}
+                    value={correctionStatus}
+                    onChange={e => setCorrectionStatus(e.target.value)}
+                  >
+                    <option value="work">Присутствие</option>
+                    <option value="remote">Удалёнка</option>
+                    <option value="sick">Больничный</option>
+                    <option value="vacation">Отпуск</option>
+                  </select>
+                </div>
+                <div className={styles.formGroup}>
+                  <label className={styles.formLabel}>Часы <span className={styles.required}>*</span></label>
+                  <input
+                    type="number"
+                    className={styles.formInput}
+                    value={correctionHours}
+                    onChange={e => setCorrectionHours(parseFloat(e.target.value) || 0)}
+                    min={0}
+                    max={24}
+                    step={0.5}
+                  />
+                </div>
+              </div>
+            </>
+          ) : (
+          /* Calendar picker */
           <div className={styles.formGroup}>
             <label className={styles.formLabel}>
               Выберите дни <span className={styles.required}>*</span>
@@ -497,6 +561,7 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
               </div>
             )}
           </div>
+          )}
 
           {/* Comment */}
           <div className={styles.formGroup}>
@@ -518,11 +583,11 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
               <span style={{ fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 6, fontSize: 12 }}>(PDF, JPG, PNG до 10 МБ)</span>
             </label>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-              <button type="button" className={styles.btnSecondary} onClick={() => fileInputRef.current?.click()}>
+              <button type="button" className="btn-secondary" onClick={() => fileInputRef.current?.click()}>
                 Выбрать файлы
               </button>
               {isMobile && (
-                <button type="button" className={styles.btnSecondary} onClick={() => cameraInputRef.current?.click()}>
+                <button type="button" className="btn-secondary" onClick={() => cameraInputRef.current?.click()}>
                   Сделать фото
                 </button>
               )}
@@ -549,8 +614,8 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
         </div>
 
         <div className={styles.modalFooter}>
-          <button className={styles.btnSecondary} onClick={onClose} disabled={submitting}>Отмена</button>
-          <button className={styles.btnPrimary} onClick={handleSubmit} disabled={submitting}>
+          <button className="btn-secondary" onClick={onClose} disabled={submitting}>Отмена</button>
+          <button className="btn-primary" onClick={handleSubmit} disabled={submitting}>
             {submitting ? 'Отправка...' : 'Отправить'}
           </button>
         </div>
@@ -588,8 +653,8 @@ export const TwoFAModal: FC<ITwoFAModalProps> = ({ twoFAData, verifyCode, setVer
         </div>
       </div>
       <div className={styles.modalFooter}>
-        <button className={styles.btnSecondary} onClick={onClose}>Отмена</button>
-        <button className={styles.btnPrimary} onClick={onEnable} disabled={isEnabling2FA}>
+        <button className="btn-secondary" onClick={onClose}>Отмена</button>
+        <button className="btn-primary" onClick={onEnable} disabled={isEnabling2FA}>
           {isEnabling2FA ? 'Проверка...' : 'Подтвердить'}
         </button>
       </div>

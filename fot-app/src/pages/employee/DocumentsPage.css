@@ -1,16 +1,7 @@
 ﻿.docs-page {
   padding: 24px;
-  max-width: 800px;
-}
-
-.docs-header {
-  margin-bottom: 16px;
-}
-
-.docs-title {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0;
+  width: 100%;
+  max-width: none;
 }
 
 .docs-upload-row {
@@ -29,26 +20,6 @@
   background: var(--bg-secondary);
   color: var(--text-primary);
   font-size: 14px;
-}
-
-.docs-upload-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 16px;
-  min-height: 40px;
-  border-radius: 8px;
-  border: none;
-  background: var(--accent);
-  color: white;
-  font-size: 14px;
-  cursor: pointer;
-}
-
-.docs-upload-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .docs-loading,
@@ -132,18 +103,10 @@
   .docs-page {
     padding: 12px;
   }
-
-  .docs-title {
-    font-size: 17px;
-  }
 }
 
 @media (max-width: 360px) {
   .docs-page {
     padding: 10px;
-  }
-
-  .docs-title {
-    font-size: 16px;
   }
 }

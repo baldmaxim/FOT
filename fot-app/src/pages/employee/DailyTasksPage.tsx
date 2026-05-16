@@ -21,14 +21,13 @@ export const DailyTasksPage: FC = () => {
 
   return (
     <div className="dt-page">
-      <div className="dt-header">
-        <h1 className="dt-title">Мои задачи</h1>
-      </div>
-
       {isLoading ? (
         <div className="dt-loading">Загрузка...</div>
       ) : tasks.length === 0 ? (
-        <div className="dt-empty">Нет записей. Заполняйте поле «Задачи на сегодня» на главной — записи будут попадать сюда.</div>
+        <div className="dt-empty">
+          <div className="dt-empty-title">Нет записей</div>
+          <div className="dt-empty-text">Заполняйте поле «Задачи на сегодня» на главной — записи будут попадать сюда.</div>
+        </div>
       ) : (
         <div className="dt-list">
           {tasks.map(task => (

@@ -65,17 +65,13 @@ export const DocumentsPage: FC = () => {
 
   return (
     <div className="docs-page">
-      <div className="docs-header">
-        <h1 className="docs-title">Мои документы</h1>
-      </div>
-
       <div className="docs-upload-row">
         <select className="docs-category-select" value={uploadCategory} onChange={e => setUploadCategory(e.target.value as DocumentCategory)}>
           {CATEGORIES.map(c => (
             <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
           ))}
         </select>
-        <button className="docs-upload-btn" onClick={() => fileRef.current?.click()} disabled={uploading}>
+        <button className="btn-primary" onClick={() => fileRef.current?.click()} disabled={uploading}>
           <Upload size={16} /> {uploading ? 'Загрузка...' : 'Загрузить'}
         </button>
         <input ref={fileRef} type="file" hidden onChange={handleUpload} />

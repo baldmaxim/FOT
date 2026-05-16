@@ -377,14 +377,14 @@ export const SalaryRaiseFormPage: FC = () => {
 
       <div className={styles.actions}>
         <button
-          className={styles.btnSecondary}
+          className="btn-secondary"
           onClick={() => save(false)}
           disabled={!isFormValid || saving}
         >
           {saving ? 'Сохранение...' : 'Сохранить черновик'}
         </button>
         <button
-          className={styles.btnPrimary}
+          className="btn-primary"
           onClick={() => save(true)}
           disabled={!isFormValid || saving}
         >

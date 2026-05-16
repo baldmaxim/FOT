@@ -19,7 +19,7 @@
 }
 
 .button.primary:hover {
-  background: #2563eb;
+  background: var(--primary-hover);
 }
 
 .button.secondary {

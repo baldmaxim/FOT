@@ -184,9 +184,7 @@
 }
 
 .addBtn,
-.removeBtn,
-.btnPrimary,
-.btnSecondary {
+.removeBtn {
   border: none;
   font: inherit;
   cursor: pointer;
@@ -201,9 +199,7 @@
   font-weight: 600;
 }
 
-.addBtn:hover,
-.btnPrimary:hover,
-.btnSecondary:hover {
+.addBtn:hover {
   transform: translateY(-1px);
 }
 
@@ -242,30 +238,6 @@
   margin-top: 22px;
 }
 
-.btnPrimary,
-.btnSecondary {
-  padding: 12px 18px;
-  border-radius: 12px;
-  font-weight: 700;
-}
-
-.btnPrimary {
-  background: var(--accent);
-  color: white;
-}
-
-.btnSecondary {
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  border: 1px solid var(--border);
-}
-
-.btnPrimary:disabled,
-.btnSecondary:disabled {
-  opacity: 0.55;
-  cursor: default;
-  transform: none;
-}
 
 @media (max-width: 768px) {
   .page {
@@ -302,11 +274,6 @@
 
   .title {
     font-size: 20px;
-  }
-
-  .btnPrimary,
-  .btnSecondary {
-    width: 100%;
   }
 
   .formInput,
