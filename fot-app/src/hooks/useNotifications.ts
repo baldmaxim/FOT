@@ -10,6 +10,7 @@ export const useNotifications = (realtimeEnabled = true) => {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const loadedRef = useRef(false);
+  const inFlightRef = useRef(false);
 
   // Загрузить счётчик при маунте
   useEffect(() => {
@@ -30,6 +31,29 @@ export const useNotifications = (realtimeEnabled = true) => {
     return undefined;
   }, [isApproved, isAuthenticated, realtimeEnabled, token]);
 
+  // Запрос списка. silent=true — фоновое обновление без спиннера
+  // (для рефетча по сокету). Гард inFlightRef защищает от шторма
+  // параллельных запросов, но НЕ кэширует навсегда: каждое открытие
+  // колокольчика грузит свежий список (актуальные is_read).
+  const fetchList = useCallback(async (silent = false) => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    if (!silent) setLoading(true);
+    try {
+      const res = await notificationApi.getAll(50, 0);
+      setNotifications(res.data);
+      loadedRef.current = true;
+    } catch {
+      // ignore
+    } finally {
+      inFlightRef.current = false;
+      if (!silent) setLoading(false);
+    }
+  }, []);
+
+  // Ленивая загрузка списка (при открытии дропдауна) — всегда свежая
+  const loadNotifications = useCallback(() => fetchList(false), [fetchList]);
+
   // Подписка на Socket.IO
   useEffect(() => {
     const offNew = wsService.on('notification_new', (payload: unknown) => {
@@ -44,25 +68,18 @@ export const useNotifications = (realtimeEnabled = true) => {
       if (typeof data?.count === 'number') {
         setUnreadCount(Math.max(0, data.count));
       }
+      // Колокольчик открыт и список уже загружен — подтянуть свежие
+      // is_read, чтобы строки гасли вживую (прочтение чата / в другой
+      // вкладке / на другом устройстве).
+      if (loadedRef.current && realtimeEnabled) {
+        void fetchList(true);
+      }
     });
     return () => {
       offNew();
       offCount();
     };
-  }, []);
-
-  // Ленивая загрузка списка (при открытии дропдауна)
-  const loadNotifications = useCallback(async () => {
-    if (loadedRef.current) return;
-    setLoading(true);
-    try {
-      const res = await notificationApi.getAll(50, 0);
-      setNotifications(res.data);
-      loadedRef.current = true;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  }, [fetchList, realtimeEnabled]);
 
   const markRead = useCallback(async (id: string) => {
     await notificationApi.markRead(id);
