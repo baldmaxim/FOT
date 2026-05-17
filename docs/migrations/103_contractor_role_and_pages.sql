@@ -11,18 +11,19 @@
 
 BEGIN;
 
--- 1. Роль «Подрядчик» (актуальная схема после 044_simplify_roles.sql).
+-- 1. Расширяем CHECK employee_variant (был IN ('object','office') из 044).
+--    Это должно идти ДО INSERT роли с employee_variant='contractor'.
+ALTER TABLE system_roles DROP CONSTRAINT IF EXISTS system_roles_employee_variant_check;
+ALTER TABLE system_roles ADD CONSTRAINT system_roles_employee_variant_check
+  CHECK (employee_variant IN ('object', 'office', 'contractor'));
+
+-- 2. Роль «Подрядчик» (актуальная схема после 044_simplify_roles.sql).
 --    employee_variant='contractor' — тип личного кабинета (как office/object).
 INSERT INTO system_roles (code, name, description, is_admin, employee_variant, is_active)
 VALUES ('contractor', 'Подрядчик', null, false, 'contractor', true)
 ON CONFLICT (code) DO UPDATE SET
   employee_variant = 'contractor',
   is_active = true;
-
--- 2. Расширяем CHECK employee_variant (был IN ('object','office') из 044).
-ALTER TABLE system_roles DROP CONSTRAINT IF EXISTS system_roles_employee_variant_check;
-ALTER TABLE system_roles ADD CONSTRAINT system_roles_employee_variant_check
-  CHECK (employee_variant IN ('object', 'office', 'contractor'));
 
 -- 3. Каталог страниц (формат как 079_skud_card_reader_page_access.sql).
 INSERT INTO access_pages (key, label, group_code, group_label, surface, supports_edit, sort_order, is_active)
