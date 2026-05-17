@@ -36,7 +36,7 @@ async function emitRoleAccessChanged(roleId: string | null | undefined): Promise
   }
 }
 
-const employeeVariantSchema = z.enum(['object', 'office']).nullable().optional();
+const employeeVariantSchema = z.enum(['object', 'office', 'contractor']).nullable().optional();
 const timesheetMonthsSchema = z.number().int().min(0).max(12);
 
 const createRoleSchema = z.object({

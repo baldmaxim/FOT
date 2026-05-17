@@ -1,6 +1,6 @@
 export type EmployeePositionType = string;
 export type ChatInboundMode = 'open' | 'requests_only' | 'disabled';
-export type EmployeeVariant = 'object' | 'office';
+export type EmployeeVariant = 'object' | 'office' | 'contractor';
 
 export type UserRole = EmployeePositionType;
 

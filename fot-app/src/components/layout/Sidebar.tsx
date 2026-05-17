@@ -31,6 +31,12 @@ interface INavItem {
    * Системный админ (company_scope.roots === 'all') всегда видит пункт.
    */
   systemAdminOnly?: boolean;
+  /**
+   * Пункт — личный кабинет конкретного типа. Виден только если у роли
+   * выбран этот тип кабинета (system_roles.employee_variant), а не по
+   * page-access (админ обходит page-access и иначе видел бы ЛК подрядчика).
+   */
+  personalCabinet?: 'contractor';
 }
 
 interface INavGroup {
@@ -46,7 +52,7 @@ const navGroups: INavGroup[] = [
       { id: 'overview', path: '/', label: 'Обзор', icon: GridIcon, requiredPage: '/dashboard' },
       { id: 'leave-requests', path: '/leave-requests', label: 'Заявления', icon: ClipboardCheckIcon, requiredPage: ['/leave-requests', '/salary-raise-review'] },
       { id: 'skud-presence', path: '/skud-presence', label: 'Сотрудники на объектах', icon: MapPinIcon, requiredPage: '/skud-presence' },
-      { id: 'contractor', path: '/contractor', label: 'Пропуска', icon: KeyIcon, requiredPage: '/contractor' },
+      { id: 'contractor', path: '/contractor', label: 'Пропуска', icon: KeyIcon, requiredPage: '/contractor', personalCabinet: 'contractor' },
     ]
   },
   {
@@ -85,7 +91,7 @@ interface ISidebarProps {
 export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose, isCollapsed = false, onToggleCollapse }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { profile, logout, canViewPage, hideSidebar } = useAuth();
+  const { profile, logout, canViewPage, hideSidebar, employeeVariant } = useAuth();
   const { data: myEmployee } = useMyEmployee(!profile?.imported_position);
 
   // Defense in depth: если Layout по какой-то причине отрендерил Sidebar,
@@ -189,6 +195,9 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose, is
         {navGroups.map(group => {
           const visibleItems = group.items.filter(item => {
             if (item.systemAdminOnly && isCompanyAdmin) return false;
+            // ЛК подрядчика виден только если у роли тип кабинета = contractor
+            // (админ обходит page-access, поэтому не по canViewPage).
+            if (item.personalCabinet === 'contractor') return employeeVariant === 'contractor';
             const pages = item.requiredPage ?? item.path;
             const pageList = Array.isArray(pages) ? pages : [pages];
             return pageList.some(page => canViewPage(page));

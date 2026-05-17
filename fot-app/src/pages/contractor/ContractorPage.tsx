@@ -79,17 +79,15 @@ export const ContractorPage: FC = () => {
   return (
     <div className={styles.page}>
       <div className={styles.headerRow}>
-        <h1 className={styles.title}>
-          {orgQuery.data ? orgQuery.data.name : 'Подрядчик'}
-        </h1>
-        <div>
-          {latest && (
-            <span className={styles.statusNote}>
-              Заявка: <b>{statusLabel[latest.status] ?? latest.status}</b>
-              {latest.comment ? ` — ${latest.comment}` : ''}
-            </span>
-          )}
-        </div>
+        {orgQuery.data && (
+          <span className={styles.orgName}>{orgQuery.data.name}</span>
+        )}
+        {latest && (
+          <span className={styles.statusNote}>
+            Заявка: <b>{statusLabel[latest.status] ?? latest.status}</b>
+            {latest.comment ? ` — ${latest.comment}` : ''}
+          </span>
+        )}
       </div>
 
       {latest?.apply_error && (
@@ -114,11 +112,11 @@ export const ContractorPage: FC = () => {
       {tab === 'roster' && (
         <>
           <div className={styles.toolbar}>
-            <button className={styles.btnPrimary} onClick={() => setAddOpen(true)} disabled={busy}>
-              + Добавить
+            <button className="btn-primary" onClick={() => setAddOpen(true)} disabled={busy}>
+              Добавить
             </button>
             <button
-              className={styles.btn}
+              className="btn-secondary"
               onClick={() => run(() => contractorService.submit(), 'Отправлено на согласование')}
               disabled={busy || hasPending}
               title={hasPending ? 'Уже есть заявка на согласовании' : ''}
@@ -147,7 +145,7 @@ export const ContractorPage: FC = () => {
                       <td>
                         {!locked && r.state === 'active' && (
                           <button
-                            className={styles.btnDanger + ' ' + styles.btn}
+                            className="btn-secondary"
                             onClick={() => run(() => contractorService.markRemoval(r.id))}
                             disabled={busy}
                           >
@@ -156,7 +154,7 @@ export const ContractorPage: FC = () => {
                         )}
                         {!locked && (r.state === 'pending_add' || r.state === 'pending_remove') && (
                           <button
-                            className={styles.btn}
+                            className="btn-secondary"
                             onClick={() => run(() => contractorService.unmark(r.id))}
                             disabled={busy}
                           >
@@ -241,8 +239,8 @@ export const ContractorPage: FC = () => {
               />
             </div>
             <div className={styles.modalActions}>
-              <button className={styles.btn} onClick={() => setAddOpen(false)} disabled={busy}>Отмена</button>
-              <button className={styles.btnPrimary} onClick={() => void handleAdd()} disabled={busy}>Добавить</button>
+              <button className="btn-secondary" onClick={() => setAddOpen(false)} disabled={busy}>Отмена</button>
+              <button className="btn-primary" onClick={() => void handleAdd()} disabled={busy}>Добавить</button>
             </div>
           </div>
         </div>

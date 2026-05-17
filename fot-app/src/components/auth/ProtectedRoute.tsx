@@ -56,6 +56,16 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     return <Navigate to="/employee" replace />;
   }
 
+  // ЛК подрядчика (/contractor) — только для роли с типом кабинета
+  // 'contractor'. Админ обходит page-access, поэтому гейт по employeeVariant,
+  // а не по requiredPage (иначе админ попадал бы в чужой ЛК).
+  if (
+    location.pathname.startsWith('/contractor')
+    && employeeVariant !== 'contractor'
+  ) {
+    return <Navigate to="/" replace />;
+  }
+
   if (requiredPage) {
     const pageList = Array.isArray(requiredPage) ? requiredPage : [requiredPage];
     if (!pageList.some(page => canViewPage(page))) {

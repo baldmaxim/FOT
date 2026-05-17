@@ -4,6 +4,7 @@ import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-quer
 import { Plus, X } from 'lucide-react';
 import { rolesService } from '../../services/rolesService';
 import type { AccessMode, PageCatalogItem } from '../../services/rolesService';
+import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import type { SystemRole, EmployeeVariant } from '../../types';
@@ -75,6 +76,7 @@ const toRoleCode = (value: string): string => value.toLowerCase().replace(/[^a-z
 const employeeVariantLabel = (variant: EmployeeVariant | null): string => {
   if (variant === 'object') return 'Рабочий';
   if (variant === 'office') return 'Офис';
+  if (variant === 'contractor') return 'Подрядчик';
   return '—';
 };
 
@@ -121,6 +123,7 @@ export const RoleManagementPage: FC = () => {
   });
   const [editState, setEditState] = useState<IEditState | null>(null);
   const [savingRole, setSavingRole] = useState(false);
+  const newRoleOverlay = useOverlayDismiss(() => setShowNewForm(false));
 
   const [roleSearch, setRoleSearch] = useState('');
   const [selectedRoleCode, setSelectedRoleCode] = useState<string | null>(null);
@@ -475,25 +478,42 @@ export const RoleManagementPage: FC = () => {
       {tab === 'roles' && (
         <div className={styles.section}>
           <div className={styles.sectionHeader}>
-            <div>
-              <h2 className={styles.sectionTitle}>Роли</h2>
-              <p className={styles.sectionHint}>
-                Флаг «Админ» — видит все данные, обходит фильтр по отделам. «Кабинет» — какой личный кабинет открывается на /employee. «Часы» — показывать пользователям фактическое время по СКУД (факт) или урезанное под плановую норму дня (урезано). «Окно ← / Окно →» — сколько месяцев назад и вперёд от текущего доступно для табеля; для админа не применяется.
-              </p>
-            </div>
+            <p className={styles.sectionHint}>
+              Флаг «Админ» — видит все данные, обходит фильтр по отделам. «Кабинет» — тип личного кабинета: «Офис»/«Рабочий» открываются на /employee, «Подрядчик» — на /contractor. «Часы» — показывать пользователям фактическое время по СКУД (факт) или урезанное под плановую норму дня (урезано). «Окно ← / Окно →» — сколько месяцев назад и вперёд от текущего доступно для табеля; для админа не применяется.
+            </p>
             <button
               type="button"
               className={styles.iconButton}
-              onClick={() => setShowNewForm(v => !v)}
-              title={showNewForm ? 'Скрыть форму' : 'Добавить роль'}
-              aria-label={showNewForm ? 'Скрыть форму' : 'Добавить роль'}
+              onClick={() => setShowNewForm(true)}
+              title="Добавить роль"
+              aria-label="Добавить роль"
             >
-              {showNewForm ? <X size={18} /> : <Plus size={18} />}
+              <Plus size={18} />
             </button>
           </div>
 
           {showNewForm && (
-            <div className={styles.inlineForm}>
+            <div
+              className={styles.modalOverlay}
+              onMouseDown={newRoleOverlay.onMouseDown}
+              onMouseUp={newRoleOverlay.onMouseUp}
+              onMouseLeave={newRoleOverlay.onMouseLeave}
+              onTouchStart={newRoleOverlay.onTouchStart}
+              onTouchEnd={newRoleOverlay.onTouchEnd}
+            >
+              <div className={styles.modal}>
+                <div className={styles.modalHeader}>
+                  <h2 className={styles.modalTitle}>Новая роль</h2>
+                  <button
+                    type="button"
+                    className={styles.iconButton}
+                    onClick={() => setShowNewForm(false)}
+                    aria-label="Закрыть"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+                <div className={styles.modalBody}>
               <input
                 className={styles.input}
                 placeholder="Код роли (латиница, _)"
@@ -532,9 +552,10 @@ export const RoleManagementPage: FC = () => {
                 value={newForm.employee_variant}
                 onChange={e => setNewForm(s => ({ ...s, employee_variant: e.target.value as EmployeeVariant | '' }))}
               >
-                <option value="">Без кабинета /employee</option>
+                <option value="">Без кабинета</option>
                 <option value="office">Офис</option>
                 <option value="object">Рабочий (объект)</option>
+                <option value="contractor">Подрядчик</option>
               </select>
               <label className={styles.inlineCheckbox} title="Сколько месяцев назад от текущего доступно для табеля. Для админов окно не применяется.">
                 <span>Окно назад, мес.</span>
@@ -558,13 +579,15 @@ export const RoleManagementPage: FC = () => {
                   onChange={e => setNewForm(s => ({ ...s, timesheet_months_forward: clampTimesheetMonths(e.target.value) }))}
                 />
               </label>
-              <div className={styles.formActions}>
-                <button className={styles.successButton} onClick={handleCreateRole} disabled={savingRole}>
-                  Создать
-                </button>
-                <button className={styles.secondaryButton} onClick={() => setShowNewForm(false)}>
-                  Отмена
-                </button>
+                </div>
+                <div className={styles.formActions}>
+                  <button className={styles.successButton} onClick={handleCreateRole} disabled={savingRole}>
+                    Создать
+                  </button>
+                  <button className={styles.secondaryButton} onClick={() => setShowNewForm(false)}>
+                    Отмена
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -630,9 +653,10 @@ export const RoleManagementPage: FC = () => {
                             value={editState.employee_variant}
                             onChange={e => setEditState(s => (s ? { ...s, employee_variant: e.target.value as EmployeeVariant | '' } : s))}
                           >
-                            <option value="">—</option>
-                            <option value="office">office</option>
-                            <option value="object">object</option>
+                            <option value="">Без кабинета</option>
+                            <option value="office">Офис</option>
+                            <option value="object">Рабочий (объект)</option>
+                            <option value="contractor">Подрядчик</option>
                           </select>
                         ) : employeeVariantLabel(role.employee_variant)}
                       </td>
@@ -815,9 +839,10 @@ export const RoleManagementPage: FC = () => {
                       value={cloneForm.employee_variant}
                       onChange={e => setCloneForm(s => ({ ...s, employee_variant: e.target.value as EmployeeVariant | '' }))}
                     >
-                      <option value="">Без кабинета /employee</option>
+                      <option value="">Без кабинета</option>
                       <option value="office">Офис</option>
-                      <option value="object">Рабочий</option>
+                      <option value="object">Рабочий (объект)</option>
+                      <option value="contractor">Подрядчик</option>
                     </select>
                     <input
                       className={styles.input}

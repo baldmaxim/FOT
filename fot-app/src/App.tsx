@@ -103,7 +103,11 @@ const SystemAdminPage = lazy(() => import('./pages/hubs/SystemAdminPage').then(m
 
 // Компонент для умного редиректа на основе должности
 const PositionBasedRedirect = () => {
-  const { canViewPage } = useAuth();
+  const { canViewPage, employeeVariant } = useAuth();
+  // Тип кабинета «Подрядчик» — всегда лендинг на /contractor.
+  if (employeeVariant === 'contractor') {
+    return <Navigate to="/contractor" replace />;
+  }
   if (canViewPage('/dashboard')) {
     return <Navigate to="/dashboard" replace />;
   }
@@ -434,7 +438,7 @@ const AppRoutes = () => {
           <Route
             path="/contractor"
             element={
-              <Layout title="Подрядчик" theme={theme} onToggleTheme={toggleTheme}>
+              <Layout title="Пропуска" theme={theme} onToggleTheme={toggleTheme}>
                 <ContractorPage />
               </Layout>
             }

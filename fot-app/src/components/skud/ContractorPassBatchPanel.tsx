@@ -1,8 +1,11 @@
-import { useState, type FC } from 'react';
+import { useState, useMemo, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
+import { useStructureTree } from '../../hooks/useStructure';
 import { contractorAdminService } from '../../services/contractorService';
 import { adminService } from '../../services/adminService';
+import { DepartmentTreeSelect } from '../staff/DepartmentTreeSelect';
+import type { OrgDepartmentNode } from '../../types/organization';
 import styles from '../../pages/contractor/Contractor.module.css';
 
 export const ContractorPassBatchPanel: FC = () => {
@@ -14,11 +17,12 @@ export const ContractorPassBatchPanel: FC = () => {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ created: string[]; failed: Array<{ pass_number: string; error: string }> } | null>(null);
 
-  const orgsQuery = useQuery({
-    queryKey: ['contractor-admin-orgs'],
-    queryFn: contractorAdminService.listOrgs,
-    staleTime: 5 * 60_000,
-  });
+  // Всё дерево папок Sigur (зеркало org_departments) с поиском.
+  const structureQuery = useStructureTree();
+  const departments = useMemo<OrgDepartmentNode[]>(
+    () => structureQuery.data?.departments ?? [],
+    [structureQuery.data?.departments],
+  );
 
   const objectsQuery = useQuery({
     queryKey: ['skud-objects-for-assignment'],
@@ -28,7 +32,7 @@ export const ContractorPassBatchPanel: FC = () => {
 
   const handleIssue = async () => {
     const n = Number(count);
-    if (!orgId) { toast.error('Выберите организацию'); return; }
+    if (!orgId) { toast.error('Выберите папку Sigur'); return; }
     if (!Number.isInteger(n) || n <= 0 || n > 500) { toast.error('Количество 1–500'); return; }
     setBusy(true);
     setResult(null);
@@ -50,22 +54,19 @@ export const ContractorPassBatchPanel: FC = () => {
   };
 
   return (
-    <div style={{ maxWidth: 640 }}>
+    <div>
       <div className={styles.field}>
-        <span className={styles.label}>Подрядная организация</span>
-        <select
-          className={styles.select}
+        <span className={styles.label}>Подрядчик (папка Sigur)</span>
+        <DepartmentTreeSelect
+          departments={departments}
           value={orgId}
-          onChange={e => setOrgId(e.target.value)}
-          disabled={busy || orgsQuery.isLoading}
-        >
-          <option value="">— выбрать —</option>
-          {(orgsQuery.data ?? []).map(o => (
-            <option key={o.id} value={o.id} disabled={o.sigur_department_id == null}>
-              {o.name}{o.sigur_department_id == null ? ' (нет в Sigur)' : ''}
-            </option>
-          ))}
-        </select>
+          onChange={setOrgId}
+          isLoading={structureQuery.isLoading}
+          isError={structureQuery.isError}
+          onRetry={() => void structureQuery.refetch()}
+          showAllOption={false}
+          placeholder="Поиск папки Sigur..."
+        />
       </div>
 
       <div className={styles.field}>
@@ -107,7 +108,7 @@ export const ContractorPassBatchPanel: FC = () => {
         />
       </div>
 
-      <button className={styles.btnPrimary} onClick={() => void handleIssue()} disabled={busy}>
+      <button className="btn-primary" onClick={() => void handleIssue()} disabled={busy}>
         {busy ? 'Выпускаю…' : 'Выпустить пропуска'}
       </button>
 

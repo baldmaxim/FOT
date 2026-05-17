@@ -12,6 +12,7 @@ import type { OrgDepartmentNode } from '../../types/organization';
 import { getTreeFlatDepartments } from '../../utils/departmentUtils';
 import { SearchInput } from '../ui/SearchInput';
 import { UserCompanyAccessSection } from './UserCompanyAccessSection';
+import { ContractorOrgAccessSection } from './ContractorOrgAccessSection';
 import styles from '../../pages/super-admin/SuperAdmin.module.css';
 
 export interface IUserFromApi {
@@ -270,6 +271,13 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
 
       {showCompanySection && (
         <UserCompanyAccessSection userId={user.id} isUserAdmin={isUserAdmin} compact />
+      )}
+
+      {userRole?.code === 'contractor' && (
+        <div className={styles.controlGroup}>
+          <label>Подрядная организация:</label>
+          <ContractorOrgAccessSection userId={user.id} />
+        </div>
       )}
 
       <div className={styles.controlGroup}>
