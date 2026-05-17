@@ -14,7 +14,6 @@ import { timesheetService } from '../../services/timesheetService';
 import { ApiError } from '../../api/client';
 import {
   useTimesheetApprovalStatus,
-  useTimesheetDepartmentApprovals,
   useWeekendMemoPreview,
 } from '../../hooks/useTimesheetApprovalData';
 import { formatTimesheetRangeLabel } from '../../utils/timesheetApprovalPeriod';
@@ -28,7 +27,6 @@ const MANAGER_OBJ_ROLE_CODE = 'manager_obj';
 
 interface IProps {
   departmentId: string | null;
-  month: string; // YYYY-MM (для списка всех согласований месяца)
   startDate: string;
   endDate: string;
   compact?: boolean;
@@ -342,7 +340,6 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
 
 export const TimesheetApprovalBar: FC<IProps> = ({
   departmentId,
-  month,
   startDate,
   endDate,
   compact = false,
@@ -355,7 +352,6 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const isManagerObj = profile?.role_code === MANAGER_OBJ_ROLE_CODE;
   const queryClient = useQueryClient();
   const activeStatus = useTimesheetApprovalStatus(departmentId, startDate, endDate);
-  const monthApprovals = useTimesheetDepartmentApprovals(departmentId, month);
   const [loading, setLoading] = useState(false);
   const [comment, setComment] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -490,12 +486,6 @@ export const TimesheetApprovalBar: FC<IProps> = ({
     });
   };
 
-  const otherApprovals = (monthApprovals.data ?? []).filter(approval => {
-    const active = activeStatus.data;
-    if (!active) return true;
-    return approval.id !== active.id;
-  });
-
   const dismissMissing = () => {
     setMissingDays([]);
     setSubmitError(null);
@@ -583,26 +573,6 @@ export const TimesheetApprovalBar: FC<IProps> = ({
               ))}
             </ul>
           )}
-        </div>
-      )}
-      {otherApprovals.length > 0 && (
-        <div className="ts-approval-other-list">
-          <div className="ts-approval-other-title">Другие согласования за месяц:</div>
-          <ul className="ts-approval-other-items">
-            {otherApprovals.map(approval => {
-              const Icon = STATUS_ICONS[approval.status];
-              return (
-                <li key={approval.id} className="ts-approval-other-item">
-                  <span className="ts-approval-other-range">
-                    {formatTimesheetRangeLabel(approval.start_date, approval.end_date)}
-                  </span>
-                  <span className="ts-approval-other-status" style={{ color: STATUS_COLORS[approval.status] }}>
-                    <Icon size={12} /> {APPROVAL_STATUS_LABELS[approval.status]}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
         </div>
       )}
     </div>

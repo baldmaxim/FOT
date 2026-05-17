@@ -31,7 +31,10 @@ import type {
   ISubmitProblemDay,
 } from '../../components/timesheet/TimesheetSubmitConfirmModal';
 import { APPROVAL_STATUS_LABELS } from '../../services/timesheetApprovalService';
-import { useTimesheetApprovalStatus } from '../../hooks/useTimesheetApprovalData';
+import {
+  useTimesheetApprovalStatus,
+  useTimesheetDepartmentApprovals,
+} from '../../hooks/useTimesheetApprovalData';
 import { getDayStatus, STATUS_LABEL_RU } from '../../utils/dayStatus';
 import {
   getFullDayThresholdHoursForDay,
@@ -45,6 +48,7 @@ import { useIsMobile } from '../../hooks/useIsMobile';
 import {
   getHalfRange,
   formatHalfLabel,
+  formatTimesheetRangeLabel,
   getHalfFromDate,
   getCurrentHalf,
   type TimesheetHalf,
@@ -1520,12 +1524,18 @@ export const TimesheetPage: FC = () => {
   const headerApprovalDeptId = !isAssignedMode && !isDirectReportsMarker ? activeGridDeptId : null;
   const headerApproval = useTimesheetApprovalStatus(headerApprovalDeptId, rangeStart, rangeEnd);
   const headerApprovalStatus = headerApproval.data?.status ?? null;
+  const headerMonth = `${year}-${String(month).padStart(2, '0')}`;
+  const headerMonthApprovals = useTimesheetDepartmentApprovals(headerApprovalDeptId, headerMonth);
 
   const headerEmployeeCounter = useMemo(() => {
     if (isAssignedMode) return null;
     if (!effectiveSelectedDeptId) return null;
     const showCounter = Boolean(stats.employeeCount);
-    if (!showCounter && !headerApprovalStatus) return null;
+    const activeApproval = headerApproval.data ?? null;
+    const otherApprovals = (headerMonthApprovals.data ?? []).filter(
+      a => !activeApproval || a.id !== activeApproval.id,
+    );
+    if (!showCounter && !headerApprovalStatus && otherApprovals.length === 0) return null;
     const StatusIcon = headerApprovalStatus ? STATUS_ICONS[headerApprovalStatus] : null;
     return (
       <span className="ts-header-addon">
@@ -1543,9 +1553,26 @@ export const TimesheetPage: FC = () => {
             <StatusIcon size={13} /> {APPROVAL_STATUS_LABELS[headerApprovalStatus]}
           </span>
         )}
+        {otherApprovals.map(a => {
+          const OtherIcon = STATUS_ICONS[a.status];
+          return (
+            <span
+              key={a.id}
+              className="ts-header-other-chip"
+              style={{ color: STATUS_COLORS[a.status] }}
+              title="Согласование другого периода месяца"
+            >
+              {formatTimesheetRangeLabel(a.start_date, a.end_date)}{' '}
+              <OtherIcon size={13} /> {APPROVAL_STATUS_LABELS[a.status]}
+            </span>
+          );
+        })}
       </span>
     );
-  }, [isAssignedMode, effectiveSelectedDeptId, stats.employeeCount, headerApprovalStatus]);
+  }, [
+    isAssignedMode, effectiveSelectedDeptId, stats.employeeCount,
+    headerApprovalStatus, headerApproval.data, headerMonthApprovals.data,
+  ]);
   useHeaderAddon(headerEmployeeCounter);
 
   const segmentControl = (isAssignedMode ? selectedAssigneeId : effectiveSelectedDeptId) ? (
@@ -1702,7 +1729,6 @@ export const TimesheetPage: FC = () => {
               <div className="ts-mobile-approval-panel">
                 <TimesheetApprovalBar
                   departmentId={effectiveSelectedDeptId}
-                  month={`${year}-${String(month).padStart(2, '0')}`}
                   startDate={rangeStart}
                   endDate={rangeEnd}
                   compact
@@ -1727,7 +1753,6 @@ export const TimesheetPage: FC = () => {
               <div className="ts-header-cell ts-header-cell--right">
                 <TimesheetApprovalBar
                   departmentId={activeGridDeptId}
-                  month={`${year}-${String(month).padStart(2, '0')}`}
                   startDate={rangeStart}
                   endDate={rangeEnd}
                   allowReview={false}
