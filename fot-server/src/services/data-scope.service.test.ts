@@ -31,7 +31,7 @@ const mockState = vi.hoisted(() => ({
   rpcSubtree: new Map<string, string[]>(),
 }));
 
-import { invalidateAccessibleScopeCache, resolveAccessibleDepartmentIds, resolveCompanyScope } from './data-scope.service.js';
+import { getSelfHistoryLimitForUser, invalidateAccessibleScopeCache, resolveAccessibleDepartmentIds, resolveCompanyScope } from './data-scope.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 function buildReq(overrides: Partial<AuthenticatedRequest['user']> = {}): AuthenticatedRequest {
@@ -154,5 +154,51 @@ describe('resolveAccessibleDepartmentIds (для админа)', () => {
     mockState.rpcSubtree.set('comp-A', ['comp-A', 'extra']);
     const second = await resolveAccessibleDepartmentIds(req);
     expect(second).toEqual(['comp-A']);
+  });
+});
+
+describe('getSelfHistoryLimitForUser', () => {
+  // REF = 16 мая 2026 (месяц-индекс 4).
+  const REF = new Date(2026, 4, 16);
+
+  it('окно по умолчанию (back=1) → первое число прошлого месяца', () => {
+    const r = getSelfHistoryLimitForUser({ timesheet_months_back: 1 }, REF);
+    expect(r.minDate).toBe('2026-04-01');
+    expect(r.message).toContain('01.04.2026');
+  });
+
+  it('широкое окно back=3', () => {
+    expect(getSelfHistoryLimitForUser({ timesheet_months_back: 3 }, REF).minDate).toBe('2026-02-01');
+  });
+
+  it('back=0 → только текущий месяц', () => {
+    expect(getSelfHistoryLimitForUser({ timesheet_months_back: 0 }, REF).minDate).toBe('2026-05-01');
+  });
+
+  it('граница года: февраль 2026, back=3 → ноябрь 2025', () => {
+    const r = getSelfHistoryLimitForUser({ timesheet_months_back: 3 }, new Date(2026, 1, 10));
+    expect(r.minDate).toBe('2025-11-01');
+  });
+
+  it('is_admin освобождён — без ограничения', () => {
+    const r = getSelfHistoryLimitForUser({ is_admin: true, timesheet_months_back: 0 }, REF);
+    expect(r.minDate).toBeNull();
+    expect(r.message).toBeNull();
+  });
+
+  it('невалидный/отсутствующий back → дефолт 1', () => {
+    expect(getSelfHistoryLimitForUser({}, REF).minDate).toBe('2026-04-01');
+    expect(getSelfHistoryLimitForUser({ timesheet_months_back: -5 }, REF).minDate).toBe('2026-04-01');
+    expect(getSelfHistoryLimitForUser({ timesheet_months_back: NaN }, REF).minDate).toBe('2026-04-01');
+  });
+
+  it('точный текст сообщения для back=1 (регресс-гард формулировки)', () => {
+    expect(getSelfHistoryLimitForUser({ timesheet_months_back: 1 }, REF).message).toBe(
+      'Доступ к своим данным ограничен периодом с 01.04.2026. Для расширения обратитесь к администратору.',
+    );
+  });
+
+  it('is_admin=false c back=2 — окно применяется', () => {
+    expect(getSelfHistoryLimitForUser({ is_admin: false, timesheet_months_back: 2 }, REF).minDate).toBe('2026-03-01');
   });
 });

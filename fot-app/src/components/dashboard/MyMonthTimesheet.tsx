@@ -55,18 +55,24 @@ interface IMyMonthTimesheetProps {
 }
 
 export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activeDayIso, onDayActivate, noCard }) => {
-  const { showActualHours } = useAuth();
+  const { showActualHours, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
   const today = useMemo(() => new Date(), []);
   const currentYear = today.getFullYear();
   const currentMonth = today.getMonth() + 1;
   const todayIso = useMemo(() => buildIsoDate(currentYear, currentMonth, today.getDate()), [currentYear, currentMonth, today]);
 
-  const [monthOffset, setMonthOffset] = useState<0 | -1>(0);
+  // Окно доступных месяцев берётся из роли (system_roles.timesheet_months_back /
+  // timesheet_months_forward, миграция 094). offset клампится в [minOffset, maxOffset]
+  // на случай сужения окна после смены роли.
+  const minOffset = -timesheetMonthsBack;
+  const maxOffset = timesheetMonthsForward;
+  const [monthOffset, setMonthOffset] = useState<number>(0);
+  const offset = Math.min(maxOffset, Math.max(minOffset, monthOffset));
 
   const { year, month } = useMemo(() => {
-    const d = new Date(currentYear, currentMonth - 1 + monthOffset, 1);
+    const d = new Date(currentYear, currentMonth - 1 + offset, 1);
     return { year: d.getFullYear(), month: d.getMonth() + 1 };
-  }, [currentYear, currentMonth, monthOffset]);
+  }, [currentYear, currentMonth, offset]);
 
   const monthKey = `${year}-${pad(month)}`;
   const timesheetQuery = useEmployeeTimesheetMonth(employeeId, monthKey, !!employeeId);
@@ -116,16 +122,31 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activ
         <h2 className={styles.title}>Мой табель — {monthLabel}</h2>
         <div className={styles.monthSwitch}>
           <button
-            className={`${styles.monthBtn} ${monthOffset === -1 ? styles.monthBtnActive : ''}`}
-            onClick={() => setMonthOffset(-1)}
+            type="button"
+            className={styles.monthBtn}
+            onClick={() => setMonthOffset(o => Math.max(minOffset, Math.min(maxOffset, o) - 1))}
+            disabled={offset <= minOffset}
+            aria-label="Предыдущий месяц"
           >
-            Прошлый
+            ◀
           </button>
+          {offset !== 0 && (
+            <button
+              type="button"
+              className={styles.monthBtn}
+              onClick={() => setMonthOffset(0)}
+            >
+              Текущий
+            </button>
+          )}
           <button
-            className={`${styles.monthBtn} ${monthOffset === 0 ? styles.monthBtnActive : ''}`}
-            onClick={() => setMonthOffset(0)}
+            type="button"
+            className={styles.monthBtn}
+            onClick={() => setMonthOffset(o => Math.min(maxOffset, Math.max(minOffset, o) + 1))}
+            disabled={offset >= maxOffset}
+            aria-label="Следующий месяц"
           >
-            Текущий
+            ▶
           </button>
         </div>
       </div>

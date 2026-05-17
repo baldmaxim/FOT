@@ -30,7 +30,7 @@ import { skudWriteController } from './skud-write.controller.js';
 import { skudTravelController } from './skud-travel.controller.js';
 import {
   canAccessEmployeeInScope,
-  getMinSelfHistoryDate,
+  getSelfHistoryLimitForUser,
   isSelfEmployeeRequest,
   resolveManagedDepartmentIds,
   resolveRequestDataScope,
@@ -576,13 +576,12 @@ const skudReadController = {
       }
 
       const { startDate, endDate } = req.query;
-      if (
-        isSelfEmployeeRequest(req, employeeId)
-        && typeof startDate === 'string'
-        && startDate < getMinSelfHistoryDate()
-      ) {
-        res.status(403).json({ success: false, error: 'Доступ только за текущий и прошлый месяц' });
-        return;
+      if (isSelfEmployeeRequest(req, employeeId) && typeof startDate === 'string') {
+        const selfLimit = getSelfHistoryLimitForUser(req.user);
+        if (selfLimit.minDate !== null && startDate < selfLimit.minDate) {
+          res.status(403).json({ success: false, error: selfLimit.message });
+          return;
+        }
       }
 
       const [{ events }, failures] = await Promise.all([
@@ -623,9 +622,12 @@ const skudReadController = {
         return;
       }
 
-      if (isSelfEmployeeRequest(req, employeeId) && startDate < getMinSelfHistoryDate()) {
-        res.status(403).json({ success: false, error: 'Доступ только за текущий и прошлый месяц' });
-        return;
+      if (isSelfEmployeeRequest(req, employeeId)) {
+        const selfLimit = getSelfHistoryLimitForUser(req.user);
+        if (selfLimit.minDate !== null && startDate < selfLimit.minDate) {
+          res.status(403).json({ success: false, error: selfLimit.message });
+          return;
+        }
       }
 
       const { employeeName, events } = await loadEmployeeEventsForRequest(employeeId, startDate, endDate);

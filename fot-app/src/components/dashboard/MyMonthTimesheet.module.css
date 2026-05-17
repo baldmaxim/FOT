@@ -51,8 +51,13 @@
   transition: background 0.15s, color 0.15s;
 }
 
-.monthBtn:hover {
+.monthBtn:hover:not(:disabled) {
   color: var(--text-primary);
+}
+
+.monthBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .monthBtnActive {

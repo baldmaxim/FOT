@@ -4,6 +4,7 @@ import { query } from '../config/postgres.js';
 import { withDbSlot } from '../config/db-instrumentation.js';
 import { listExplicitDepartmentIdsForUser, loadEmployeeAccessMap } from './department-access.service.js';
 import { listDirectSubordinates } from './employee-direct-reports.service.js';
+import { DEFAULT_TIMESHEET_MONTHS_BACK } from '../utils/timesheet-month-access.js';
 
 export type DataScope = 'self' | 'department' | 'all';
 
@@ -262,6 +263,37 @@ export function getMinSelfHistoryDate(): string {
   const now = new Date();
   const min = new Date(now.getFullYear(), now.getMonth() - SELF_HISTORY_MONTHS_BACK, 1);
   return `${min.getFullYear()}-${String(min.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
+export interface ISelfHistoryLimit {
+  /** ISO YYYY-MM-DD первого допустимого дня; null = ограничения нет (админ). */
+  minDate: string | null;
+  /** Готовый текст 403 (дата ДД.ММ.ГГГГ); null если ограничения нет. */
+  message: string | null;
+}
+
+/**
+ * Окно истории для запроса самого сотрудника (ЛК). Учитывает per-role
+ * timesheet_months_back (миграция 094). is_admin освобождён (minDate=null) —
+ * по аналогии с isTimesheetWindowExempt для scope=department. Forward-кап на
+ * self-пути сознательно не вводится (его не было и раньше — будущие месяцы
+ * просто отдают пустые данные).
+ */
+export function getSelfHistoryLimitForUser(
+  user: { is_admin?: boolean; timesheet_months_back?: number },
+  referenceDate: Date = new Date(),
+): ISelfHistoryLimit {
+  if (user.is_admin === true) return { minDate: null, message: null };
+  const back = Number.isFinite(user.timesheet_months_back) && (user.timesheet_months_back as number) >= 0
+    ? Math.floor(user.timesheet_months_back as number)
+    : DEFAULT_TIMESHEET_MONTHS_BACK;
+  const min = new Date(referenceDate.getFullYear(), referenceDate.getMonth() - back, 1);
+  const yyyy = min.getFullYear();
+  const mm = String(min.getMonth() + 1).padStart(2, '0');
+  return {
+    minDate: `${yyyy}-${mm}-01`,
+    message: `Доступ к своим данным ограничен периодом с 01.${mm}.${yyyy}. Для расширения обратитесь к администратору.`,
+  };
 }
 
 /** true, если запрос идёт от самого сотрудника (self-request). */

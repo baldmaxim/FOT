@@ -15,7 +15,7 @@ import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned 
 import { generateWeekendMemo, getWeekendMemoPreview } from './timesheet-weekend-memo.controller.js';
 import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, computeCappedFactHours, getShiftDurationHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
 import {
-  getMinSelfHistoryDate,
+  getSelfHistoryLimitForUser,
   isSelfEmployeeRequest,
   resolveAccessibleDepartmentIds,
   resolveManagedDepartmentIds,
@@ -974,12 +974,11 @@ export const timesheetController = {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 
-      if (
-        hasEmployeeFilter
-        && isSelfEmployeeRequest(req, requestedEmployeeId)
-        && startDate < getMinSelfHistoryDate()
-      ) {
-        return res.status(403).json({ success: false, error: 'Доступ только за текущий и прошлый месяц' });
+      if (hasEmployeeFilter && isSelfEmployeeRequest(req, requestedEmployeeId)) {
+        const selfLimit = getSelfHistoryLimitForUser(req.user, today);
+        if (selfLimit.minDate !== null && startDate < selfLimit.minDate) {
+          return res.status(403).json({ success: false, error: selfLimit.message ?? DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
+        }
       }
 
       if (scope === 'self' && !req.user.employee_id) {
