@@ -10,18 +10,7 @@
     "sentry:sourcemaps": "sentry-cli sourcemaps inject ./dist && sentry-cli sourcemaps upload --release=$SENTRY_RELEASE ./dist",
     "test": "vitest run",
     "audit:routes": "tsx scripts/audit-route-protection.ts",
-    "start": "node dist/index.js",
-    "migrate:yandex:preflight": "tsx scripts/yandex-migration/preflight-yandex-db.ts",
-    "migrate:yandex:assert-env": "tsx scripts/yandex-migration/assert-env.ts",
-    "migrate:yandex:auth-users": "tsx scripts/yandex-migration/migrate-auth-users.ts",
-    "migrate:yandex:validate-auth-fk": "tsx scripts/yandex-migration/validate-auth-fk.ts",
-    "migrate:yandex:validate-auth-fks": "tsx scripts/yandex-migration/validate-auth-fks.ts",
-    "migrate:yandex:skud-object-maps": "tsx scripts/yandex-migration/migrate-skud-object-maps-storage.ts",
-    "migrate:yandex:fix-sequences": "tsx ../scripts/yandex-migration/fix-sequences.ts",
-    "migrate:yandex:verify-public": "tsx ../scripts/yandex-migration/verify-public-data.ts",
-    "migrate:yandex:skud-events": "tsx scripts/yandex-migration/migrate-skud-events-chunked.ts",
-    "migrate:yandex:sigur-retention": "tsx scripts/yandex-migration/sigur-retention-probe.ts",
-    "migrate:yandex:backfill-skud-events": "tsx scripts/yandex-migration/backfill-skud-events-from-sigur.ts"
+    "start": "node dist/index.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1017.0",

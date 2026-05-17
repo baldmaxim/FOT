@@ -51,6 +51,9 @@ docs/yandex-postgres-migration/yandex.env
 # Build output
 dist/
 build/
+*.tsbuildinfo
+.vite/
+.eslintcache
 
 # Logs
 logs/
@@ -62,10 +65,6 @@ npm-debug.log*
 .vscode/
 *.swp
 *.swo
-
-# OS
-.DS_Store
-Thumbs.db
 
 # Testing
 coverage/
