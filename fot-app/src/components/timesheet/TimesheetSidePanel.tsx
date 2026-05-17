@@ -103,6 +103,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
   visibleDays,
 }) => {
   const { canViewPage, showActualHours } = useAuth();
+  const canViewSkud = canViewPage('/timesheet/events');
   const {
     canOpenAccessPointMap,
     openAccessPointMap,
@@ -122,7 +123,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
 
   // Load SKUD events when panel opens
   const loadSkudEvents = useCallback(async () => {
-    if (!employee || !open) return;
+    if (!employee || !open || !canViewSkud) return;
     setLoadingSkud(true);
     try {
       const firstVisibleDay = visibleDays?.[0] || 1;
@@ -136,7 +137,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
     } finally {
       setLoadingSkud(false);
     }
-  }, [employee, open, year, month, visibleDays]);
+  }, [employee, open, year, month, visibleDays, canViewSkud]);
 
   useEffect(() => {
     if (open && employee) {
@@ -260,13 +261,15 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
               return (
                 <div key={day} className="ts-day-detail-wrap">
                   <div
-                    className={`ts-day-detail ts-day-detail--clickable${entry?.status === 'absent' ? ' ts-day-detail--absent' : ''}${isPreHoliday ? ' ts-day-detail--pre-holiday' : ''}`}
-                    onClick={() => toggleDay(day)}
+                    className={`ts-day-detail${canViewSkud ? ' ts-day-detail--clickable' : ''}${entry?.status === 'absent' ? ' ts-day-detail--absent' : ''}${isPreHoliday ? ' ts-day-detail--pre-holiday' : ''}`}
+                    onClick={canViewSkud ? () => toggleDay(day) : undefined}
                   >
                     <div className="ts-day-detail-left">
-                      <span className="ts-day-detail-chevron">
-                        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      </span>
+                      {canViewSkud && (
+                        <span className="ts-day-detail-chevron">
+                          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        </span>
+                      )}
                       <div>
                         <div className="ts-day-detail-date">{formatDateRu(day, month)}</div>
                         <div className="ts-day-detail-day">
@@ -301,7 +304,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
                     </div>
                   </div>
 
-                  {expanded && (
+                  {canViewSkud && expanded && (
                     <div className="ts-day-events-panel">
                       {loadingSkud ? (
                         <div className="ts-day-events-loading">Загрузка...</div>

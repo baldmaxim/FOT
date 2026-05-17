@@ -1575,7 +1575,8 @@ export const TimesheetPage: FC = () => {
   ]);
   useHeaderAddon(headerEmployeeCounter);
 
-  const segmentControl = (isAssignedMode ? selectedAssigneeId : effectiveSelectedDeptId) ? (
+  const hasActiveScope = isAssignedMode ? selectedAssigneeId : activeGridDeptId;
+  const segmentControl = hasActiveScope ? (
     <section className="ts-half-toggle" aria-label="Период табеля">
       <button
         type="button"
@@ -1600,7 +1601,6 @@ export const TimesheetPage: FC = () => {
       </button>
     </section>
   ) : null;
-  const hasActiveScope = (isAssignedMode ? selectedAssigneeId : effectiveSelectedDeptId);
 
   const viewControl = hasActiveScope ? (
     <section className="ts-view-switch">
