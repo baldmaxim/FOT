@@ -119,36 +119,25 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activ
   return (
     <div className={`${styles.root}${noCard ? ` ${styles.rootNoCard}` : ''}`}>
       <div className={styles.header}>
-        <h2 className={styles.title}>Мой табель — {monthLabel}</h2>
-        <div className={styles.monthSwitch}>
-          <button
-            type="button"
-            className={styles.monthBtn}
-            onClick={() => setMonthOffset(o => Math.max(minOffset, Math.min(maxOffset, o) - 1))}
-            disabled={offset <= minOffset}
-            aria-label="Предыдущий месяц"
-          >
-            ◀
-          </button>
-          {offset !== 0 && (
-            <button
-              type="button"
-              className={styles.monthBtn}
-              onClick={() => setMonthOffset(0)}
-            >
-              Текущий
-            </button>
-          )}
-          <button
-            type="button"
-            className={styles.monthBtn}
-            onClick={() => setMonthOffset(o => Math.min(maxOffset, Math.max(minOffset, o) + 1))}
-            disabled={offset >= maxOffset}
-            aria-label="Следующий месяц"
-          >
-            ▶
-          </button>
-        </div>
+        <button
+          type="button"
+          className={styles.monthBtn}
+          onClick={() => setMonthOffset(o => Math.max(minOffset, Math.min(maxOffset, o) - 1))}
+          disabled={offset <= minOffset}
+          aria-label="Предыдущий месяц"
+        >
+          ◀
+        </button>
+        <h2 className={styles.title}>{monthLabel}</h2>
+        <button
+          type="button"
+          className={styles.monthBtn}
+          onClick={() => setMonthOffset(o => Math.min(maxOffset, Math.max(minOffset, o) + 1))}
+          disabled={offset >= maxOffset}
+          aria-label="Следующий месяц"
+        >
+          ▶
+        </button>
       </div>
 
       <div className={styles.weekdays}>

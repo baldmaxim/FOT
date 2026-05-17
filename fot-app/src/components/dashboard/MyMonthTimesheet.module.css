@@ -19,33 +19,26 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 16px;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .title {
+  flex: 1;
   margin: 0;
   font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
   text-transform: capitalize;
-}
-
-.monthSwitch {
-  display: inline-flex;
-  background: var(--bg-tertiary);
-  border-radius: 10px;
-  padding: 3px;
-  gap: 2px;
+  text-align: center;
 }
 
 .monthBtn {
   border: 0;
-  background: transparent;
+  background: var(--bg-tertiary);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
-  padding: 6px 14px;
+  padding: 8px 16px;
   border-radius: 8px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
@@ -58,12 +51,6 @@
 .monthBtn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
-}
-
-.monthBtnActive {
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 
 .weekdays {
