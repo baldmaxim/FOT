@@ -17,7 +17,6 @@ const WORK_START = '09:00:00';
 const WORK_END = '18:00:00';
 const LATE_THRESHOLD_DEFAULT = WORK_START;
 const SLIGHTLY_LATE_THRESHOLD_DEFAULT = '09:15:00';
-const DASHBOARD_PAGE_SIZE = 1000;
 
 type DashboardSummaryRow = {
   employee_id: number;
@@ -34,9 +33,10 @@ type DashboardEventRow = {
   employee_id: number;
 };
 
-type DashboardTodayEventRow = {
-  event_time: string;
-  employee_id: number;
+type DashboardTodayCounts = {
+  entry_count: number;
+  exit_count: number;
+  exit_distinct_emp: number;
 };
 
 const dashboardCache = new Map<string, { data: IDashboardStatsResult; expiresAt: number }>();
@@ -106,90 +106,67 @@ async function loadAttendanceHoursMap(params: {
   return result;
 }
 
-async function fetchSummaryPages(
+// Раньше эти выборки делались постранично (LIMIT 1000 OFFSET n в цикле):
+// большой OFFSET в Postgres сканирует и отбрасывает все предыдущие строки —
+// O(n²) на масштабе. Один запрос с тем же WHERE/ORDER BY даёт идентичный
+// упорядоченный набор за один проход (паритет: конкатенация страниц == полный
+// упорядоченный результат).
+async function fetchSummaryRows(
   employeeIds: number[],
   startDate: string,
   endDate: string,
 ): Promise<DashboardSummaryRow[]> {
   if (employeeIds.length === 0) return [];
-
-  const rows: DashboardSummaryRow[] = [];
-  let offset = 0;
-
-  while (true) {
-    const page = await query<DashboardSummaryRow>(
-      `SELECT employee_id, date, first_entry, last_exit, total_hours, is_present
-       FROM skud_daily_summary
-       WHERE employee_id = ANY($1::bigint[]) AND date >= $2 AND date <= $3
-       ORDER BY date ASC, employee_id ASC
-       LIMIT ${DASHBOARD_PAGE_SIZE} OFFSET ${offset}`,
-      [employeeIds, startDate, endDate],
-    );
-
-    if (page.length === 0) break;
-    rows.push(...page);
-    if (page.length < DASHBOARD_PAGE_SIZE) break;
-    offset += DASHBOARD_PAGE_SIZE;
-  }
-
-  return rows;
+  return query<DashboardSummaryRow>(
+    `SELECT employee_id, date, first_entry, last_exit, total_hours, is_present
+     FROM skud_daily_summary
+     WHERE employee_id = ANY($1::bigint[]) AND date >= $2 AND date <= $3
+     ORDER BY date ASC, employee_id ASC`,
+    [employeeIds, startDate, endDate],
+  );
 }
 
-async function fetchEntryEventPages(
+async function fetchEntryEventRows(
   employeeIds: number[],
   startDate: string,
   endDate: string,
 ): Promise<DashboardEventRow[]> {
   if (employeeIds.length === 0) return [];
-
-  const rows: DashboardEventRow[] = [];
-  let offset = 0;
-
-  while (true) {
-    const page = await query<DashboardEventRow>(
-      `SELECT event_date, event_time, employee_id FROM skud_events
-       WHERE direction = 'entry' AND employee_id = ANY($1::bigint[])
-         AND event_date >= $2 AND event_date <= $3
-       ORDER BY event_date ASC, employee_id ASC, event_time ASC
-       LIMIT ${DASHBOARD_PAGE_SIZE} OFFSET ${offset}`,
-      [employeeIds, startDate, endDate],
-    );
-
-    if (page.length === 0) break;
-    rows.push(...page);
-    if (page.length < DASHBOARD_PAGE_SIZE) break;
-    offset += DASHBOARD_PAGE_SIZE;
-  }
-
-  return rows;
+  return query<DashboardEventRow>(
+    `SELECT event_date, event_time, employee_id FROM skud_events
+     WHERE direction = 'entry' AND employee_id = ANY($1::bigint[])
+       AND event_date >= $2 AND event_date <= $3
+     ORDER BY event_date ASC, employee_id ASC, event_time ASC`,
+    [employeeIds, startDate, endDate],
+  );
 }
 
-async function fetchTodayEventPages(
+// Раньше тянулись ВСЕ сегодняшние события входа/выхода только ради .length и
+// Set(employee_id). Теперь — агрегатный запрос (счётчики считает СУБД).
+// Паритет: COUNT(*) == rows.length; COUNT(DISTINCT employee_id) == Set.size.
+async function fetchTodayEventCounts(
   employeeIds: number[],
   date: string,
-  direction: 'entry' | 'exit',
-): Promise<DashboardTodayEventRow[]> {
-  if (employeeIds.length === 0) return [];
-
-  const rows: DashboardTodayEventRow[] = [];
-  let offset = 0;
-
-  while (true) {
-    const page = await query<DashboardTodayEventRow>(
-      `SELECT event_time, employee_id FROM skud_events
-       WHERE event_date = $1 AND direction = $2 AND employee_id = ANY($3::bigint[])
-       ORDER BY employee_id ASC, event_time ASC
-       LIMIT ${DASHBOARD_PAGE_SIZE} OFFSET ${offset}`,
-      [date, direction, employeeIds],
-    );
-
-    if (page.length === 0) break;
-    rows.push(...page);
-    if (page.length < DASHBOARD_PAGE_SIZE) break;
-    offset += DASHBOARD_PAGE_SIZE;
+): Promise<DashboardTodayCounts> {
+  if (employeeIds.length === 0) {
+    return { entry_count: 0, exit_count: 0, exit_distinct_emp: 0 };
   }
-
-  return rows;
+  const rows = await query<DashboardTodayCounts>(
+    `SELECT
+       COUNT(*) FILTER (WHERE direction = 'entry')::int AS entry_count,
+       COUNT(*) FILTER (WHERE direction = 'exit')::int AS exit_count,
+       COUNT(DISTINCT employee_id) FILTER (WHERE direction = 'exit')::int AS exit_distinct_emp
+     FROM skud_events
+     WHERE event_date = $1 AND employee_id = ANY($2::bigint[])
+       AND direction IN ('entry', 'exit')`,
+    [date, employeeIds],
+  );
+  const r = rows?.[0];
+  return {
+    entry_count: Number(r?.entry_count) || 0,
+    exit_count: Number(r?.exit_count) || 0,
+    exit_distinct_emp: Number(r?.exit_distinct_emp) || 0,
+  };
 }
 
 export async function getDashboardStats(
@@ -320,21 +297,20 @@ export async function getDashboardStats(
     && arrivalRangeStart === periodStartStr
     && arrivalRangeEnd === periodEndStr;
   const periodEventsPromise = shouldFetchPeriodEvents
-    ? fetchEntryEventPages(empIds, periodStartStr, periodEndStr)
+    ? fetchEntryEventRows(empIds, periodStartStr, periodEndStr)
     : Promise.resolve([] as DashboardEventRow[]);
   const arrivalEventsPromise = canReusePeriodEventsForArrival
     ? periodEventsPromise
-    : fetchEntryEventPages(empIds, arrivalRangeStart, arrivalRangeEnd);
+    : fetchEntryEventRows(empIds, arrivalRangeStart, arrivalRangeEnd);
 
   const attendanceEmployees: IAttendanceEmployee[] = employees.map(e => ({
     id: e.id as number,
     full_name: (e.full_name as string | null) || null,
   }));
 
-  const [summaries, todayEvents, todayExitEvents, recentEventsRaw, periodEvents, arrivalEvents, attendanceHoursMap] = await Promise.all([
-    fetchSummaryPages(empIds, summaryStartDate, summaryEndDate),
-    fetchTodayEventPages(empIds, todayStr, 'entry'),
-    fetchTodayEventPages(empIds, todayStr, 'exit'),
+  const [summaries, todayCounts, recentEventsRaw, periodEvents, arrivalEvents, attendanceHoursMap] = await Promise.all([
+    fetchSummaryRows(empIds, summaryStartDate, summaryEndDate),
+    fetchTodayEventCounts(empIds, todayStr),
     query<{
       event_time: string;
       employee_id: number | null;
@@ -573,8 +549,8 @@ export async function getDashboardStats(
       summariesLoaded: summaries.length,
       arrivalEventsLoaded: arrivalEvents.length,
       periodEntryEventsLoaded: periodEvents.length,
-      todayEntryEventsLoaded: todayEvents.length,
-      todayExitEventsLoaded: todayExitEvents.length,
+      todayEntryEventsLoaded: todayCounts.entry_count,
+      todayExitEventsLoaded: todayCounts.exit_count,
       totalPresent,
       avgPresent,
       dailyBreakdown: [...dailyPresent.entries()].map(([d, s]) => `${d}:${s.size}`),
@@ -586,11 +562,12 @@ export async function getDashboardStats(
     periodStats = { avgPresent, avgAbsent, attendanceRate, lateCount: pLateCount, prevLateCount };
   }
 
-  const exitedEmployees = new Set((todayExitEvents || []).map(e => e.employee_id));
-  const earlyLeaveToday = exitedEmployees.size;
+  // earlyLeaveToday = число уникальных сотрудников с выходом сегодня
+  // (раньше — Set по выгруженным строкам выхода).
+  const earlyLeaveToday = todayCounts.exit_distinct_emp;
 
-  const todayEntriesCount = (todayEvents || []).length;
-  const todayExitsCount = (todayExitEvents || []).length;
+  const todayEntriesCount = todayCounts.entry_count;
+  const todayExitsCount = todayCounts.exit_count;
 
   const recentEvents = (recentEventsRaw || []).map(ev => ({
     time: ev.event_time ? ev.event_time.slice(0, 5) : '',

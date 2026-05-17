@@ -17,7 +17,7 @@ vi.mock('../config/postgres.js', () => ({
 type QueryCall = {
   sql: string;
   params: unknown[];
-  table: 'employees' | 'skud_daily_summary' | 'skud_events' | 'skud_events_recent' | 'unknown';
+  table: 'employees' | 'skud_daily_summary' | 'skud_events' | 'skud_events_recent' | 'skud_today_counts' | 'unknown';
   offset?: number;
   limit?: number;
 };
@@ -52,7 +52,7 @@ const mockedState = vi.hoisted(() => ({
   queryLog: [] as Array<{
     sql: string;
     params: unknown[];
-    table: 'employees' | 'skud_daily_summary' | 'skud_events' | 'skud_events_recent' | 'unknown';
+    table: 'employees' | 'skud_daily_summary' | 'skud_events' | 'skud_events_recent' | 'skud_today_counts' | 'unknown';
     offset?: number;
     limit?: number;
   }>,
@@ -116,7 +116,8 @@ function classifyQuery(sql: string, params: unknown[]): QueryCall {
   if (/FROM\s+employees\b/i.test(sql)) table = 'employees';
   else if (/FROM\s+skud_daily_summary\b/i.test(sql)) table = 'skud_daily_summary';
   else if (/FROM\s+skud_events\b/i.test(sql)) {
-    table = /LIMIT\s+50/i.test(sql) && !/OFFSET/i.test(sql) ? 'skud_events_recent' : 'skud_events';
+    if (/AS\s+entry_count/i.test(sql)) table = 'skud_today_counts';
+    else table = /LIMIT\s+50/i.test(sql) && !/OFFSET/i.test(sql) ? 'skud_events_recent' : 'skud_events';
   }
 
   const limitMatch = /LIMIT\s+(\d+)/i.exec(sql);
@@ -190,6 +191,19 @@ function resolveQuery(call: QueryCall): unknown[] {
       .sort((a, b) => (a.event_time < b.event_time ? 1 : -1))
       .slice(0, 50);
   }
+  if (call.table === 'skud_today_counts') {
+    // SELECT COUNT(*) FILTER (...) ... — агрегат сегодняшних входов/выходов.
+    const date = call.params[0] as string;
+    const empIds = new Set(((call.params[1] as number[]) ?? []));
+    const rows = mockedState.eventRows.filter(
+      r => r.event_date === date && empIds.has(r.employee_id) && (r.direction === 'entry' || r.direction === 'exit'),
+    );
+    const entry_count = rows.filter(r => r.direction === 'entry').length;
+    const exitRows = rows.filter(r => r.direction === 'exit');
+    const exit_count = exitRows.length;
+    const exit_distinct_emp = new Set(exitRows.map(r => r.employee_id)).size;
+    return [{ entry_count, exit_count, exit_distinct_emp }];
+  }
   return [];
 }
 
@@ -221,7 +235,7 @@ describe('skud-dashboard.service', () => {
     vi.useRealTimers();
   });
 
-  it('paginates weekly summaries and preserves full period stats for large departments', async () => {
+  it('сохраняет статистику недели одним запросом summary (без OFFSET-пагинации)', async () => {
     const employees = Array.from({ length: 1500 }, (_, index) => ({
       id: index + 1,
       full_name: `Сотрудник ${index + 1}`,
@@ -267,12 +281,14 @@ describe('skud-dashboard.service', () => {
     });
     expect(stats.todayEntriesCount).toBe(1500);
 
+    // Де-пагинация: ровно один запрос summary без LIMIT/OFFSET (раньше — цикл по 1000).
     const summaryQueries = mockedState.queryLog.filter(q => q.table === 'skud_daily_summary');
-    expect(summaryQueries.length).toBeGreaterThan(2);
-    expect(summaryQueries.some(q => q.offset === 1000 && q.limit === 1000)).toBe(true);
+    expect(summaryQueries.length).toBe(1);
+    expect(summaryQueries[0].offset).toBeUndefined();
+    expect(summaryQueries[0].limit).toBeUndefined();
   });
 
-  it('paginates monthly entry events for arrival and hourly activity aggregations', async () => {
+  it('агрегирует приходы за месяц одним запросом без OFFSET-пагинации', async () => {
     const employees = Array.from({ length: 800 }, (_, index) => ({
       id: index + 1,
       full_name: `Сотрудник ${index + 1}`,
@@ -326,13 +342,14 @@ describe('skud-dashboard.service', () => {
     });
     expect(stats.avgArrivalByDay.find(item => item.day === 'Пт')?.avgTime).toBe('09:20');
 
-    const pagedEventQueries = mockedState.queryLog.filter(q =>
+    // Де-пагинация: один запрос событий входа за диапазон, без LIMIT/OFFSET.
+    const entryEventQueries = mockedState.queryLog.filter(q =>
       q.table === 'skud_events'
-      && q.offset !== undefined
       && q.params[1] === '2026-04-01'
       && q.params[2] === '2026-04-17',
     );
-    expect(pagedEventQueries.length).toBeGreaterThan(2);
+    expect(entryEventQueries.length).toBe(1);
+    expect(entryEventQueries.every(q => q.offset === undefined && q.limit === undefined)).toBe(true);
   });
 
   it('keeps today calculations unchanged while using paged today event queries', async () => {

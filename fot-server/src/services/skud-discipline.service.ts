@@ -32,65 +32,44 @@ export async function getDisciplineViolations(
   const normalizedStartMonth = startMonth <= endMonth ? startMonth : endMonth;
   const normalizedEndMonth = startMonth <= endMonth ? endMonth : startMonth;
 
-  // Запрашиваем помесячно
-  const fetchSummaryPages = async (): Promise<IDailySummaryRow[]> => {
-    const PAGE_SIZE = 1000;
-    const rows: IDailySummaryRow[] = [];
-    let [curY, curM] = normalizedStartMonth.split('-').map(Number);
-    const [endY, endM] = normalizedEndMonth.split('-').map(Number);
-
-    while (curY < endY || (curY === endY && curM <= endM)) {
-      const monthStart = `${curY}-${String(curM).padStart(2, '0')}-01`;
-      const monthEnd = formatDateToISO(new Date(curY, curM, 0));
-      let off = 0;
-
-      while (true) {
-        const sql = `SELECT employee_id, date, first_entry, last_exit, total_hours, is_present
-          FROM skud_daily_summary
-          WHERE is_present = true
-            AND date >= $1 AND date <= $2
-            AND (first_entry > $3 OR total_hours < $4)
-          ORDER BY date ASC
-          LIMIT ${PAGE_SIZE} OFFSET ${off}`;
-        const page = await query<IDailySummaryRow>(sql, [monthStart, monthEnd, '09:00:00', 8]);
-        if (!page || page.length === 0) break;
-        rows.push(...page);
-        if (page.length < PAGE_SIZE) break;
-        off += PAGE_SIZE;
-      }
-
-      curM++;
-      if (curM > 12) { curM = 1; curY++; }
-    }
-    return rows;
-  };
-
-  const empPromise = query<{
-    id: number;
-    full_name: string | null;
-    position_id: string | null;
-    org_department_id: string | null;
-  }>(
-    `SELECT id, full_name, position_id, org_department_id FROM employees
-     WHERE is_archived = false AND employment_status = 'active'`,
-  );
-
-  const deptPromise = query<{ id: string; name: string }>(
-    'SELECT id, name FROM org_departments',
-  );
-
-  const [employees, departments, allSummaryRows] = await Promise.all([
-    empPromise,
-    deptPromise,
-    fetchSummaryPages(),
+  const [employees, departments] = await Promise.all([
+    query<{
+      id: number;
+      full_name: string | null;
+      position_id: string | null;
+      org_department_id: string | null;
+    }>(
+      `SELECT id, full_name, position_id, org_department_id FROM employees
+       WHERE is_archived = false AND employment_status = 'active'`,
+    ),
+    query<{ id: string; name: string }>('SELECT id, name FROM org_departments'),
   ]);
 
   if (!employees || employees.length === 0) {
     return { violations: [], employees: {}, departments: {} };
   }
 
-  const empIdSet = new Set(employees.map(e => e.id));
-  const summaries = allSummaryRows.filter(s => empIdSet.has(s.employee_id));
+  const activeEmpIds = employees.map(e => e.id);
+
+  // Диапазон: первый день стартового месяца … последний день конечного.
+  const rangeStart = `${normalizedStartMonth}-01`;
+  const [endY, endM] = normalizedEndMonth.split('-').map(Number);
+  const rangeEnd = formatDateToISO(new Date(endY, endM, 0));
+
+  // Раньше: помесячная выборка с OFFSET-пагинацией по 1000 + фильтр активных
+  // сотрудников в JS (большие OFFSET деградируют квадратично, на крупном
+  // масштабе — десятки тысяч лишних строк в Node). Теперь: один запрос за весь
+  // диапазон, фильтр активных сотрудников в SQL. Правила-eval ниже не изменены.
+  const summaries = await query<IDailySummaryRow>(
+    `SELECT employee_id, date, first_entry, last_exit, total_hours, is_present
+     FROM skud_daily_summary
+     WHERE is_present = true
+       AND date >= $1 AND date <= $2
+       AND (first_entry > $3 OR total_hours < $4)
+       AND employee_id = ANY($5::bigint[])
+     ORDER BY date ASC, employee_id ASC`,
+    [rangeStart, rangeEnd, '09:00:00', 8, activeEmpIds],
+  );
 
   const posIdSet = new Set(employees.map(e => e.position_id).filter((v): v is string => !!v));
   const posMap = new Map<string, string>();

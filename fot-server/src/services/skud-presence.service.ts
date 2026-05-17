@@ -93,10 +93,14 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
   }
 
   const orgInternalPoints = await getInternalAccessPoints();
+  // Внутренние точки фильтруются в SQL (раньше — в JS). null → фильтр не применяется.
+  const internalArr = orgInternalPoints.size > 0 ? [...orgInternalPoints] : null;
 
   const today = formatDateToISO(new Date());
 
-  const eventsByEmpId = await query<{
+  // События дня без внутренних точек, упорядочены ASC по сотруднику/времени.
+  // Старый код тянул все события, фильтровал внутренние и строил Map в JS.
+  const eventRows = await query<{
     employee_id: number | null;
     event_time: string;
     direction: string | null;
@@ -104,29 +108,23 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
   }>(
     `SELECT employee_id, event_time, direction, access_point FROM skud_events
      WHERE event_date = $1 AND employee_id = ANY($2::bigint[])
-     ORDER BY event_time DESC`,
-    [today, empIds],
+       AND ($3::text[] IS NULL OR access_point IS NULL OR access_point = ''
+            OR access_point <> ALL($3::text[]))
+     ORDER BY employee_id ASC, event_time ASC`,
+    [today, empIds, internalArr],
   );
 
-  const latestEvent = new Map<number, { event_time: string; direction: string | null; access_point: string | null }>();
-  const allExternalEvents = new Map<number, Array<{ event_time: string; direction: string | null }>>();
-
-  for (const evt of eventsByEmpId || []) {
+  // Группировка по сотруднику (строки уже ASC и без внутренних точек —
+  // эквивалент прежних allExternalEvents после reverse()).
+  const eventsByEmp = new Map<number, Array<{ event_time: string; direction: string | null; access_point: string | null }>>();
+  for (const evt of eventRows || []) {
     if (!evt.employee_id) continue;
-    if (orgInternalPoints.size > 0 && evt.access_point && orgInternalPoints.has(evt.access_point)) continue;
-
-    if (!latestEvent.has(evt.employee_id)) {
-      latestEvent.set(evt.employee_id, { event_time: evt.event_time, direction: evt.direction, access_point: evt.access_point || null });
+    let arr = eventsByEmp.get(evt.employee_id);
+    if (!arr) {
+      arr = [];
+      eventsByEmp.set(evt.employee_id, arr);
     }
-    if (!allExternalEvents.has(evt.employee_id)) {
-      allExternalEvents.set(evt.employee_id, []);
-    }
-    allExternalEvents.get(evt.employee_id)!.push({ event_time: evt.event_time, direction: evt.direction });
-  }
-
-  // eventsByEmpId отсортирован DESC — переворачиваем в ASC
-  for (const events of allExternalEvents.values()) {
-    events.reverse();
+    arr.push({ event_time: evt.event_time, direction: evt.direction, access_point: evt.access_point || null });
   }
 
   const dailySummaries = await query<{
@@ -140,24 +138,23 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
   );
 
   const monthStart = today.slice(0, 7) + '-01';
-  const monthSummaries = await query<{ employee_id: number; first_entry: string | null }>(
-    `SELECT employee_id, first_entry FROM skud_daily_summary
-     WHERE date >= $1 AND date <= $2 AND is_present = true AND employee_id = ANY($3::bigint[])`,
+  // Пунктуальность агрегируется в SQL (раньше — выгрузка всех present-дней
+  // месяца по всем сотрудникам + цикл; на крупном масштабе это был главный
+  // объём пересылки). Процент считаем в JS Math.round — точный паритет.
+  const punctualityRows = await query<{ employee_id: number; total: number; on_time: number }>(
+    `SELECT employee_id,
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE first_entry IS NOT NULL AND first_entry <= '09:00:00')::int AS on_time
+     FROM skud_daily_summary
+     WHERE date >= $1 AND date <= $2 AND is_present = true AND employee_id = ANY($3::bigint[])
+     GROUP BY employee_id`,
     [monthStart, today, empIds],
   );
-
   const punctualityMap = new Map<number, number>();
-  if (monthSummaries && monthSummaries.length > 0) {
-    const byEmp = new Map<number, { total: number; onTime: number }>();
-    for (const s of monthSummaries) {
-      if (!byEmp.has(s.employee_id)) byEmp.set(s.employee_id, { total: 0, onTime: 0 });
-      const rec = byEmp.get(s.employee_id)!;
-      rec.total++;
-      if (s.first_entry && s.first_entry <= '09:00:00') rec.onTime++;
-    }
-    for (const [empId, rec] of byEmp) {
-      punctualityMap.set(empId, rec.total > 0 ? Math.round((rec.onTime / rec.total) * 100) : 100);
-    }
+  for (const r of punctualityRows || []) {
+    const total = Number(r.total) || 0;
+    const onTime = Number(r.on_time) || 0;
+    punctualityMap.set(r.employee_id, total > 0 ? Math.round((onTime / total) * 100) : 100);
   }
 
   const summaryMap = new Map<number, { first_entry: string | null; total_hours: number | null }>();
@@ -189,7 +186,10 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
   };
 
   const result: IPresenceItem[] = employees.map(emp => {
-    const last = latestEvent.get(emp.id);
+    const empEvents = eventsByEmp.get(emp.id) || [];
+    // empEvents — ASC по времени; последнее = событие с макс. event_time
+    // (эквивалент прежнего latestEvent из DESC-итерации).
+    const last = empEvents.length > 0 ? empEvents[empEvents.length - 1] : null;
     let status: 'online' | 'offline' | 'unknown' = 'unknown';
     let since: string | null = null;
 
@@ -199,7 +199,6 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
     }
 
     const summary = summaryMap.get(emp.id);
-    const empEvents = allExternalEvents.get(emp.id) || [];
     const { exit_count, time_outside_minutes } = computeExitMetrics(empEvents);
 
     const firstEntryEvent = empEvents.find(e => e.direction === 'entry');
