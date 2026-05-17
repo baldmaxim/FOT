@@ -1,10 +1,35 @@
-*.ts text eol=lf
-*.tsx text eol=lf
-*.js text eol=lf
-*.jsx text eol=lf
-*.json text eol=lf
-*.css text eol=lf
-*.html text eol=lf
-*.md text eol=lf
-*.sh text eol=lf
-package-lock.json text eol=lf
+# Единая нормализация переводов строк: всё текстовое хранится в репозитории с LF.
+# Устраняет фантомные CRLF-диффы на Windows (ломали rebase/stash).
+* text=auto eol=lf
+
+# Явно текстовые типы (на случай неверного авто-определения)
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.js    text eol=lf
+*.jsx   text eol=lf
+*.json  text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.md    text eol=lf
+*.sh    text eol=lf
+*.sql   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.env   text eol=lf
+.gitignore     text eol=lf
+.gitattributes text eol=lf
+
+# Бинарные ресурсы — не трогать
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.woff  binary
+*.woff2 binary
+*.ttf  binary
+*.eot  binary
+*.pdf  binary
+*.zip  binary
+*.xlsx binary
