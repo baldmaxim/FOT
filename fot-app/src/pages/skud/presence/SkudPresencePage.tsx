@@ -1,5 +1,7 @@
 import { useMemo, useState, useRef, useEffect, type FC } from 'react';
-import { usePresenceByObjectQuery } from '../../../hooks/useEmployeeDirectory';
+import { useQueryClient } from '@tanstack/react-query';
+import { usePresenceByObjectQuery, presenceByObjectQueryKey } from '../../../hooks/useEmployeeDirectory';
+import { usePresenceRealtime } from '../../../hooks/usePresenceRealtime';
 import { MapPinIcon, UsersIcon, SearchIcon, BuildingIcon } from '../../../components/ui/Icons';
 import type {
   IPresenceByObjectResponse,
@@ -30,6 +32,7 @@ const filterData = (
   data: IPresenceByObjectResponse | undefined,
   search: string,
   selectedCompanyIds: Set<string>,
+  selectedObjectIds: Set<string>,
   hideEmpty: boolean,
 ): {
   buckets: IFilteredBucket[];
@@ -37,27 +40,39 @@ const filterData = (
   filteredCount: number;
 } => {
   if (!data) return { buckets: [], totalOnline: 0, filteredCount: 0 };
+  const q = search.toLowerCase();
   const hasCompanyFilter = selectedCompanyIds.size > 0;
+  const hasObjectFilter = selectedObjectIds.size > 0;
+  const isActive = q !== '' || hasCompanyFilter || hasObjectFilter;
 
   const buckets: IFilteredBucket[] = [];
   let filteredCount = 0;
 
   for (const bucket of data.buckets) {
+    const objectKey = bucket.object_id ?? '__no_object__';
+    if (hasObjectFilter && !selectedObjectIds.has(objectKey)) continue;
+
+    // Поиск по названию объекта: совпал — показываем весь объект.
+    const objectMatches = q !== '' && bucket.object_name.toLowerCase().includes(q);
+
     const filteredCompanies: IPresenceObjectCompany[] = [];
     let bucketTotal = 0;
 
     for (const company of bucket.companies) {
       if (hasCompanyFilter && !selectedCompanyIds.has(company.company_id)) continue;
-      const matched = company.employees.filter(emp => matchesEmployee(emp, search));
-      if (matched.length === 0 && (search || hasCompanyFilter)) continue;
+      // Поиск по названию компании: совпал — показываем весь её состав.
+      const companyMatches = q !== '' && company.company_name.toLowerCase().includes(q);
+      const matched = objectMatches || companyMatches
+        ? company.employees
+        : company.employees.filter(emp => matchesEmployee(emp, search));
+      if (matched.length === 0 && isActive) continue;
       filteredCompanies.push({ ...company, online_count: matched.length, employees: matched });
       bucketTotal += matched.length;
       filteredCount += matched.length;
     }
 
-    const hideThis = hideEmpty && bucketTotal === 0 && (search !== '' || hasCompanyFilter);
-    if (hideThis) continue;
-    if (hideEmpty && bucketTotal === 0 && !search && !hasCompanyFilter) continue;
+    // Под активным поиском/фильтром объект без совпадений скрываем целиком.
+    if (bucketTotal === 0 && (isActive || hideEmpty)) continue;
 
     buckets.push({ ...bucket, companies: filteredCompanies, online_count: bucketTotal });
   }
@@ -131,12 +146,16 @@ const ObjectCard: FC<{
   );
 };
 
-const CompanyFilter: FC<{
-  allCompanies: { id: string; name: string }[];
+const EntityFilter: FC<{
+  label: string;
+  searchPlaceholder: string;
+  emptyText: string;
+  allEntities: { id: string; name: string }[];
   selected: Set<string>;
   onToggle: (id: string) => void;
   onClear: () => void;
-}> = ({ allCompanies, selected, onToggle, onClear }) => {
+  isSynced?: (id: string) => boolean;
+}> = ({ label, searchPlaceholder, emptyText, allEntities, selected, onToggle, onClear, isSynced }) => {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -161,15 +180,15 @@ const CompanyFilter: FC<{
   }
 
   const selectedList = useMemo(
-    () => allCompanies.filter(c => selected.has(c.id)),
-    [allCompanies, selected],
+    () => allEntities.filter(c => selected.has(c.id)),
+    [allEntities, selected],
   );
 
-  const visibleCompanies = useMemo(() => {
+  const visibleEntities = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return allCompanies;
-    return allCompanies.filter(c => c.name.toLowerCase().includes(q));
-  }, [allCompanies, search]);
+    if (!q) return allEntities;
+    return allEntities.filter(c => c.name.toLowerCase().includes(q));
+  }, [allEntities, search]);
 
   return (
     <div className={styles.companyFilter} ref={wrapperRef}>
@@ -178,22 +197,22 @@ const CompanyFilter: FC<{
         className={`${styles.companyFilterToggle} ${open ? styles.companyFilterToggleOpen : ''}`}
         onClick={() => setOpen(prev => !prev)}
       >
-        Фильтр по компаниям
+        {label}
         {selected.size > 0 && <span className={styles.companyFilterBadge}>{selected.size}</span>}
         <span className={styles.companyFilterCaret} aria-hidden>▾</span>
       </button>
 
-      {selectedList.map(company => {
-        const isSynced = isSyncedCompanyId(company.id);
+      {selectedList.map(entity => {
+        const synced = isSynced?.(entity.id) ?? false;
         return (
           <button
-            key={company.id}
+            key={entity.id}
             type="button"
-            className={`${styles.chip} ${styles.chipActive} ${isSynced ? styles.chipSynced : ''}`}
-            onClick={() => onToggle(company.id)}
+            className={`${styles.chip} ${styles.chipActive} ${synced ? styles.chipSynced : ''}`}
+            onClick={() => onToggle(entity.id)}
             title="Убрать из фильтра"
           >
-            {company.name}
+            {entity.name}
             <span className={styles.chipRemove} aria-hidden>×</span>
           </button>
         );
@@ -212,32 +231,32 @@ const CompanyFilter: FC<{
             <input
               type="search"
               className={styles.companyFilterSearchInput}
-              placeholder="Поиск компании"
+              placeholder={searchPlaceholder}
               value={search}
               onChange={e => setSearch(e.target.value)}
               autoFocus
             />
           </div>
-          {visibleCompanies.length === 0 ? (
+          {visibleEntities.length === 0 ? (
             <div className={styles.companyFilterEmpty}>
-              {allCompanies.length === 0 ? 'Компании не найдены' : 'Ничего не найдено'}
+              {allEntities.length === 0 ? emptyText : 'Ничего не найдено'}
             </div>
           ) : (
-            visibleCompanies.map(company => {
-              const isActive = selected.has(company.id);
-              const isSynced = isSyncedCompanyId(company.id);
+            visibleEntities.map(entity => {
+              const isActive = selected.has(entity.id);
+              const synced = isSynced?.(entity.id) ?? false;
               return (
-                <label key={company.id} className={styles.companyFilterRow}>
+                <label key={entity.id} className={styles.companyFilterRow}>
                   <input
                     type="checkbox"
                     checked={isActive}
-                    onChange={() => onToggle(company.id)}
+                    onChange={() => onToggle(entity.id)}
                   />
                   <span
-                    className={isSynced ? styles.companyFilterRowSynced : undefined}
-                    title={isSynced ? 'Синхронизирована с ФОТ' : 'Только в Sigur'}
+                    className={synced ? styles.companyFilterRowSynced : undefined}
+                    title={isSynced ? (synced ? 'Синхронизирована с ФОТ' : 'Только в Sigur') : undefined}
                   >
-                    {company.name}
+                    {entity.name}
                   </span>
                 </label>
               );
@@ -251,10 +270,22 @@ const CompanyFilter: FC<{
 
 export const SkudPresencePage: FC = () => {
   const { data, isLoading, isError, refetch, isFetching } = usePresenceByObjectQuery();
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [selectedCompanies, setSelectedCompanies] = useState<Set<string>>(new Set());
+  const [selectedObjects, setSelectedObjects] = useState<Set<string>>(new Set());
   const [hideEmpty, setHideEmpty] = useState(false);
   const [detailsBucket, setDetailsBucket] = useState<IFilteredBucket | null>(null);
+
+  // Прямой эфир: socket `presence_updated` (как на дашборде) → мгновенный
+  // refetch. 30-сек polling в usePresenceByObjectQuery остаётся как fallback.
+  usePresenceRealtime({
+    owner: 'skud-presence',
+    enabled: true,
+    onPresenceUpdate: () => {
+      void queryClient.invalidateQueries({ queryKey: presenceByObjectQueryKey() });
+    },
+  });
 
   const allCompanies = useMemo(() => {
     if (!data) return [];
@@ -269,9 +300,19 @@ export const SkudPresencePage: FC = () => {
     return [...map.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   }, [data]);
 
+  const allObjects = useMemo(() => {
+    if (!data) return [];
+    const map = new Map<string, { id: string; name: string }>();
+    for (const bucket of data.buckets) {
+      const id = bucket.object_id ?? '__no_object__';
+      if (!map.has(id)) map.set(id, { id, name: bucket.object_name });
+    }
+    return [...map.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  }, [data]);
+
   const filtered = useMemo(
-    () => filterData(data, search.trim(), selectedCompanies, hideEmpty),
-    [data, search, selectedCompanies, hideEmpty],
+    () => filterData(data, search.trim(), selectedCompanies, selectedObjects, hideEmpty),
+    [data, search, selectedCompanies, selectedObjects, hideEmpty],
   );
 
   const toggleCompanyFilter = (id: string) => {
@@ -283,7 +324,18 @@ export const SkudPresencePage: FC = () => {
     });
   };
 
-  const isFiltering = search.trim() !== '' || selectedCompanies.size > 0;
+  const toggleObjectFilter = (id: string) => {
+    setSelectedObjects(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const isFiltering = search.trim() !== ''
+    || selectedCompanies.size > 0
+    || selectedObjects.size > 0;
   const displayedTotal = isFiltering ? filtered.filteredCount : filtered.totalOnline;
 
   // Detail-view: ровно 1 приписанный объект (бэк отдаст ровно 1 bucket).
@@ -311,7 +363,7 @@ export const SkudPresencePage: FC = () => {
           <input
             className={styles.searchInput}
             type="search"
-            placeholder="Поиск по ФИО или должности"
+            placeholder="Поиск по ФИО, компании или объекту"
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
@@ -337,13 +389,32 @@ export const SkudPresencePage: FC = () => {
         </button>
       </div>
 
-      {allCompanies.length > 0 && (
-        <CompanyFilter
-          allCompanies={allCompanies}
-          selected={selectedCompanies}
-          onToggle={toggleCompanyFilter}
-          onClear={() => setSelectedCompanies(new Set())}
-        />
+      {(allCompanies.length > 0 || (allObjects.length > 1 && !isSingleObjectView)) && (
+        <div className={styles.filters}>
+          {allCompanies.length > 0 && (
+            <EntityFilter
+              label="Фильтр по компаниям"
+              searchPlaceholder="Поиск компании"
+              emptyText="Компании не найдены"
+              allEntities={allCompanies}
+              selected={selectedCompanies}
+              onToggle={toggleCompanyFilter}
+              onClear={() => setSelectedCompanies(new Set())}
+              isSynced={isSyncedCompanyId}
+            />
+          )}
+          {allObjects.length > 1 && !isSingleObjectView && (
+            <EntityFilter
+              label="Фильтр по объектам"
+              searchPlaceholder="Поиск объекта"
+              emptyText="Объекты не найдены"
+              allEntities={allObjects}
+              selected={selectedObjects}
+              onToggle={toggleObjectFilter}
+              onClear={() => setSelectedObjects(new Set())}
+            />
+          )}
+        </div>
       )}
 
       {isLoading && <div className={styles.state}>Загрузка…</div>}

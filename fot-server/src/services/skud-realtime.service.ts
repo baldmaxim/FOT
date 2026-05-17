@@ -1,8 +1,8 @@
 import { invalidateCaches } from '../middleware/cacheResponse.js';
 import { getIo } from '../socket/io-instance.js';
 import { invalidateDashboardCache } from './skud-dashboard.service.js';
-import { invalidatePresenceCache } from './skud-presence.service.js';
-import { invalidatePresenceByObjectCache } from './skud-presence-by-object.service.js';
+import { invalidatePresenceCache, rewarmPresenceAll } from './skud-presence.service.js';
+import { invalidatePresenceByObjectCache, rewarmPresenceByObjectAll } from './skud-presence-by-object.service.js';
 
 export type SkudRealtimeSource = 'polling' | 'manual_sync' | 'employee_sync' | 'daily_sync' | 'timesheet_refresh';
 
@@ -35,7 +35,15 @@ export function invalidateSkudRealtimeCaches(): void {
 }
 
 export function notifySkudRealtimeChanged(input: ISkudRealtimeNotification): void {
-  invalidateSkudRealtimeCaches();
+  // Сервисные SWR-кэши presence НЕ чистим вхолодную (это давало холодный
+  // пересчёт у следующего запроса страницы и пауза в «прямом эфире»), а
+  // перегреваем «горячий» scope свежими данными в фоне — старое значение
+  // остаётся отдаваемым до замены, без паузы. HTTP per-user кэши чистим:
+  // контроллер быстр, т.к. сервисный слой уже горячий.
+  invalidateDashboardCache();
+  invalidateCaches(...SKUD_REALTIME_CACHE_NAMES);
+  rewarmPresenceAll();
+  rewarmPresenceByObjectAll();
 
   const employeeIds = [...new Set((input.employeeIds || []).filter(Number.isFinite))];
   try {

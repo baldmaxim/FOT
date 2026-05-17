@@ -5,24 +5,42 @@ import { query } from '../config/postgres.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import type { IPresenceParams, IPresenceItem } from '../types/skud.types.js';
 import { getAllDepartmentsTree, getInternalAccessPoints } from './skud-shared.service.js';
+import { createSwrCache } from '../utils/swr-cache.js';
 
-// In-memory кэш по ключу departmentId (TTL 30с). Снижает нагрузку при множественных
-// пользователях, смотрящих один отдел одновременно между socket-refetch и fallback polling.
-const presenceCache = new Map<string, { data: IPresenceItem[]; expiresAt: number }>();
+// SWR-кэш по ключу departmentId: TTL 30с (свежесть), окно stale 10м.
+// Протухшее значение отдаётся мгновенно + фоновая ревалидация — страница
+// «Сотрудники на объектах» не ждёт холодного пересчёта.
 const PRESENCE_TTL_MS = 30_000;
+const PRESENCE_STALE_MS = 10 * 60_000;
+const presenceCache = createSwrCache<IPresenceItem[]>();
 
 export function invalidatePresenceCache(): void {
   presenceCache.clear();
 }
 
-export async function getPresence(params: IPresenceParams): Promise<IPresenceItem[]> {
-  const { departmentId } = params;
+/** Перегреть «горячий» scope (все отделы) свежими данными в фоне —
+ *  вызывается из realtime-нотификации при новых СКУД-событиях. */
+export function rewarmPresenceAll(): void {
+  presenceCache.refreshNow(
+    '__all__',
+    PRESENCE_TTL_MS,
+    PRESENCE_STALE_MS,
+    () => computePresence({ departmentId: null }),
+  );
+}
 
-  const cacheKey = departmentId ?? '__all__';
-  const cached = presenceCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.data;
-  }
+export async function getPresence(params: IPresenceParams): Promise<IPresenceItem[]> {
+  const cacheKey = params.departmentId ?? '__all__';
+  return presenceCache.getOrRefresh(
+    cacheKey,
+    PRESENCE_TTL_MS,
+    PRESENCE_STALE_MS,
+    () => computePresence(params),
+  );
+}
+
+async function computePresence(params: IPresenceParams): Promise<IPresenceItem[]> {
+  const { departmentId } = params;
 
   const allDepts = await getAllDepartmentsTree();
 
@@ -59,7 +77,6 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
   );
 
   if (!employees || employees.length === 0) {
-    presenceCache.set(cacheKey, { data: [], expiresAt: Date.now() + PRESENCE_TTL_MS });
     return [];
   }
 
@@ -250,6 +267,5 @@ export async function getPresence(params: IPresenceParams): Promise<IPresenceIte
   const statusOrder: Record<string, number> = { online: 0, offline: 1, unknown: 2 };
   result.sort((a, b) => statusOrder[a.status] - statusOrder[b.status]);
 
-  presenceCache.set(cacheKey, { data: result, expiresAt: Date.now() + PRESENCE_TTL_MS });
   return result;
 }

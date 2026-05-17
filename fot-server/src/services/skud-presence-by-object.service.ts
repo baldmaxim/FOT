@@ -12,6 +12,7 @@ import { getCompanyResolveIndex, getInternalAccessPoints } from './skud-shared.s
 import { resolveSigurEmployeesByNames, resolveSigurEmployeesByIds, normalizeMatchName } from './sigur-presence-resolver.service.js';
 import { query } from '../config/postgres.js';
 import { formatDateToISO } from '../utils/date.utils.js';
+import { createSwrCache } from '../utils/swr-cache.js';
 
 export const NO_OBJECT_BUCKET_ID = '__no_object__';
 export const NO_COMPANY_ID = '__no_company__';
@@ -50,9 +51,11 @@ export interface IPresenceByObjectResponse {
 }
 
 const CACHE_TTL_MS = 30_000;
-// Кеш ключуется по отсортированному списку allowedObjectIds (или '__all__'),
+const CACHE_STALE_MS = 10 * 60_000;
+// SWR-кэш, ключуется по отсортированному списку allowedObjectIds (или '__all__'),
 // чтобы юзер с приписками к конкретным объектам не получал общий кеш с админом.
-const cache = new Map<string, { data: IPresenceByObjectResponse; expiresAt: number }>();
+// Протухшее значение отдаётся сразу + фоновая ревалидация (без холодных пауз).
+const cache = createSwrCache<IPresenceByObjectResponse>();
 
 function buildCacheKey(allowedObjectIds: string[] | 'all'): string {
   if (allowedObjectIds === 'all') return '__all__';
@@ -61,6 +64,17 @@ function buildCacheKey(allowedObjectIds: string[] | 'all'): string {
 
 export function invalidatePresenceByObjectCache(): void {
   cache.clear();
+}
+
+/** Перегреть «горячий» глобальный scope (allowedObjectIds='all') свежими
+ *  данными в фоне — из realtime-нотификации при новых СКУД-событиях. */
+export function rewarmPresenceByObjectAll(): void {
+  cache.refreshNow(
+    '__all__',
+    CACHE_TTL_MS,
+    CACHE_STALE_MS,
+    () => computePresenceByObject('all'),
+  );
 }
 
 const collator = new Intl.Collator('ru', { sensitivity: 'base' });
@@ -104,11 +118,17 @@ export async function getPresenceByObject(
   opts: { allowedObjectIds?: string[] | 'all' } = {},
 ): Promise<IPresenceByObjectResponse> {
   const allowedObjectIds: string[] | 'all' = opts.allowedObjectIds ?? 'all';
-  const cacheKey = buildCacheKey(allowedObjectIds);
-  const now = Date.now();
-  const cached = cache.get(cacheKey);
-  if (cached && cached.expiresAt > now) return cached.data;
+  return cache.getOrRefresh(
+    buildCacheKey(allowedObjectIds),
+    CACHE_TTL_MS,
+    CACHE_STALE_MS,
+    () => computePresenceByObject(allowedObjectIds),
+  );
+}
 
+async function computePresenceByObject(
+  allowedObjectIds: string[] | 'all',
+): Promise<IPresenceByObjectResponse> {
   const today = formatDateToISO(new Date());
 
   const [presence, travelObjectsAll, companyIndex, internalPoints, unsyncedEvents] = await Promise.all([
@@ -390,6 +410,5 @@ export async function getPresenceByObject(
     buckets: finalBuckets,
   };
 
-  cache.set(cacheKey, { data: response, expiresAt: Date.now() + CACHE_TTL_MS });
   return response;
 }

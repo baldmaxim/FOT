@@ -14,6 +14,8 @@ import { startTimesheetReminderScheduler } from './services/timesheet-reminder.s
 import { startPatentExpiryReminderScheduler } from './services/patent-expiry-reminder.service.js';
 import { startDailyTasksReminderScheduler } from './services/daily-tasks-reminder.service.js';
 import { aiReceiptRecognitionService } from './services/ai-receipt-recognition.service.js';
+import { prewarmSigurPresenceResolver } from './services/sigur-presence-resolver.service.js';
+import { getPresenceByObject } from './services/skud-presence-by-object.service.js';
 import { sigurService } from './services/sigur.service.js';
 import { setupChatSocket } from './socket/chatHandler.js';
 import { setIo } from './socket/io-instance.js';
@@ -51,6 +53,10 @@ httpServer.listen(PORT, HOST, () => {
   void startStructureSyncScheduler();
   void startSigurEventsDailyScheduler();
   startSkudSummaryReconcileScheduler();
+  // Прогрев тяжёлых кэшей, чтобы первое открытие «Сотрудники на объектах»
+  // не ждало холодного ре-фетча справочника Sigur и полного пересчёта.
+  prewarmSigurPresenceResolver();
+  void getPresenceByObject({ allowedObjectIds: 'all' }).catch(() => { /* noop */ });
   startTimesheetReminderScheduler();
   startPatentExpiryReminderScheduler();
   startDailyTasksReminderScheduler();
