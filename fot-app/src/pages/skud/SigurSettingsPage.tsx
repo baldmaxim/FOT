@@ -1,5 +1,5 @@
 import { Suspense, lazy, useState, useEffect, useCallback } from 'react';
-import { Settings, MapPin, Filter, Database, AlertCircle } from 'lucide-react';
+import { Settings, MapPin, Filter, Database, AlertCircle, HardDrive } from 'lucide-react';
 import { Navigate, useSearchParams } from 'react-router-dom';
 import { sigurService } from '../../services/sigurService';
 import { useAuth } from '../../contexts/AuthContext';
@@ -24,6 +24,9 @@ const TravelConfigTab = lazy(() => import('../../components/skud/TravelConfigTab
 const SkudFailuresTab = lazy(() => import('../../components/skud/SkudFailuresTab').then(module => ({
   default: module.SkudFailuresTab,
 })));
+const SkudDbTab = lazy(() => import('../../components/skud/SkudDbTab').then(module => ({
+  default: module.SkudDbTab,
+})));
 
 const SETTINGS_TABS: SettingsTab[] = [
   'settings',
@@ -32,6 +35,7 @@ const SETTINGS_TABS: SettingsTab[] = [
   'objects',
   'travel-config',
   'failures',
+  'skud-db',
 ];
 
 const resolveSettingsTab = (value: string | null): SettingsTab => (
@@ -183,6 +187,13 @@ export const SigurSettingsPage = () => {
           <AlertCircle size={14} />
           Ошибочные события
         </button>
+        <button
+          className={`sigur-tab ${activeTab === 'skud-db' ? 'active' : ''}`}
+          onClick={() => setActiveTab('skud-db')}
+        >
+          <HardDrive size={14} />
+          База
+        </button>
       </div>
 
       {error && (
@@ -251,6 +262,12 @@ export const SigurSettingsPage = () => {
       {activeTab === 'failures' && (
         <Suspense fallback={tabFallback}>
           <SkudFailuresTab />
+        </Suspense>
+      )}
+
+      {activeTab === 'skud-db' && (
+        <Suspense fallback={tabFallback}>
+          <SkudDbTab />
         </Suspense>
       )}
     </div>

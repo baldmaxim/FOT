@@ -1,9 +1,9 @@
-import { useState, useMemo, useCallback, useRef } from 'react';
+import { type FC, useState, useMemo, useCallback, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Search, X, HardDrive, RefreshCw, AlertCircle } from 'lucide-react';
 import { getSkudSupabaseEventsQueryKey, getSkudSupabaseSummaryQueryKey, useSkudSupabaseEvents, useSkudSupabaseSummary } from '../../hooks/useSkudOpsData';
 import type { SkudEvent, SkudDailySummary } from '../../types';
-import '../../styles/SkudSupabasePage.css';
+import '../../styles/SkudDbTab.css';
 
 type TabId = 'events' | 'summary';
 
@@ -36,7 +36,7 @@ const formatCellValue = (value: unknown): string => {
   return String(value);
 };
 
-export const SkudSupabasePage: React.FC = () => {
+export const SkudDbTab: FC = () => {
   const [activeTab, setActiveTab] = useState<TabId>('events');
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');

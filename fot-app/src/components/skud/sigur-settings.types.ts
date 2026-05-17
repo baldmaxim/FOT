@@ -68,4 +68,4 @@ export interface ISseMessage extends Record<string, unknown> {
   type?: string;
 }
 
-export type SettingsTab = 'settings' | 'access-points' | 'objects' | 'travel-config' | 'sync-filter' | 'failures';
+export type SettingsTab = 'settings' | 'access-points' | 'objects' | 'travel-config' | 'sync-filter' | 'failures' | 'skud-db';

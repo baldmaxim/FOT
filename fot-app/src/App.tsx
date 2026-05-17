@@ -67,7 +67,6 @@ const TimesheetTransfersAdminPage = lazy(() => import('./pages/admin/TimesheetTr
 const EmployeeCardPage = lazy(() => import('./pages/employees/EmployeeCardPage').then(m => ({ default: m.EmployeeCardPage })));
 const SigurSettingsPage = lazy(() => import('./pages/skud/SigurSettingsPage').then(m => ({ default: m.SigurSettingsPage })));
 const SigurPage = lazy(() => import('./pages/skud/SigurPage').then(m => ({ default: m.SigurPage })));
-const SkudSupabasePage = lazy(() => import('./pages/skud/SkudSupabasePage').then(m => ({ default: m.SkudSupabasePage })));
 const SkudCardReaderPage = lazy(() => import('./pages/skud/SkudCardReaderPage').then(m => ({ default: m.SkudCardReaderPage })));
 const ContractorPage = lazy(() => import('./pages/contractor/ContractorPage').then(m => ({ default: m.ContractorPage })));
 const ContractorApprovalsPage = lazy(() => import('./pages/admin/ContractorApprovalsPage').then(m => ({ default: m.ContractorApprovalsPage })));
@@ -387,18 +386,7 @@ const AppRoutes = () => {
           />
         </Route>
 
-<Route element={<ProtectedRoute requiredPage="/skud-db" />}>
-          <Route
-            path="/skud-db"
-            element={
-              <Layout title="Просмотр СКУД (база)" theme={theme} onToggleTheme={toggleTheme}>
-                <SkudSupabasePage />
-              </Layout>
-            }
-          />
-        </Route>
-
-        <Route element={<ProtectedRoute requiredPage="/staff-control" />}>
+<Route element={<ProtectedRoute requiredPage="/staff-control" />}>
           <Route
             path="/staff-control"
             element={

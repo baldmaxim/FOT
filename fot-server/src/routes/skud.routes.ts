@@ -103,10 +103,11 @@ router.get(
   skudController.exportDisciplineViolations
 );
 
-// GET /api/skud/daily-summary - дневные сводки (header+)
+// GET /api/skud/daily-summary - дневные сводки (admin+)
+// Доступ под /skud-settings: вкладка «База» живёт на этой странице.
 router.get(
   '/daily-summary',
-  requirePageAccess('/skud-db', 'view'),
+  requirePageAccess('/skud-settings', 'view'),
   skudController.getDailySummary
 );
 
@@ -129,10 +130,11 @@ router.get(
   skudController.exportEmployeeEvents
 );
 
-// GET /api/skud/events - события СКУД (header+)
+// GET /api/skud/events - события СКУД (admin+)
+// Доступ под /skud-settings: вкладка «База» живёт на этой странице.
 router.get(
   '/events',
-  requirePageAccess('/skud-db', 'view'),
+  requirePageAccess('/skud-settings', 'view'),
   skudController.getEvents
 );
 
