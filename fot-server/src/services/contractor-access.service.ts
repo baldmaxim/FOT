@@ -1,7 +1,7 @@
 /**
- * ЭТАП 2: резолвинг объекта (skud_objects) в числовые id точек доступа Sigur.
- * Цепочка: skud_object_access_points.access_point_name → имя точки доступа
- * в Sigur → numeric accessPointId (getAccessPointOptionsCached).
+ * ЭТАП 2: резолвинг точек доступа в числовые id Sigur.
+ * Цепочка: имя точки доступа (из skud_object_access_points либо переданное
+ * явно) → numeric accessPointId (getAccessPointOptionsCached).
  */
 import { query } from '../config/postgres.js';
 import { sigurService } from './sigur.service.js';
@@ -15,18 +15,15 @@ export interface IResolvedObjectAccessPoints {
 }
 
 /**
- * По skud_object_id возвращает id точек доступа Sigur. unmatchedNames —
- * имена из объекта, которым не нашлось точки доступа в Sigur (диагностика).
+ * Резолвит произвольный список имён точек доступа в numeric id Sigur.
+ * unmatchedNames — имена, которым не нашлось точки в Sigur (диагностика).
  */
-export const resolveObjectAccessPointIds = async (
-  skudObjectId: string,
+export const resolveAccessPointNamesToIds = async (
+  names: string[],
   connection?: ConnectionType,
 ): Promise<IResolvedObjectAccessPoints> => {
-  const rows = await query<{ access_point_name: string }>(
-    'SELECT access_point_name FROM skud_object_access_points WHERE object_id = $1::uuid',
-    [skudObjectId],
-  );
-  if (rows.length === 0) {
+  const cleaned = [...new Set(names.map(n => n.trim()).filter(Boolean))];
+  if (cleaned.length === 0) {
     return { accessPointIds: [], unmatchedNames: [] };
   }
 
@@ -38,10 +35,25 @@ export const resolveObjectAccessPointIds = async (
 
   const accessPointIds: number[] = [];
   const unmatchedNames: string[] = [];
-  for (const row of rows) {
-    const id = byName.get(norm(row.access_point_name));
+  for (const name of cleaned) {
+    const id = byName.get(norm(name));
     if (id != null) accessPointIds.push(id);
-    else unmatchedNames.push(row.access_point_name);
+    else unmatchedNames.push(name);
   }
   return { accessPointIds: [...new Set(accessPointIds)], unmatchedNames };
+};
+
+/**
+ * По skud_object_id возвращает id точек доступа Sigur. unmatchedNames —
+ * имена из объекта, которым не нашлось точки доступа в Sigur (диагностика).
+ */
+export const resolveObjectAccessPointIds = async (
+  skudObjectId: string,
+  connection?: ConnectionType,
+): Promise<IResolvedObjectAccessPoints> => {
+  const rows = await query<{ access_point_name: string }>(
+    'SELECT access_point_name FROM skud_object_access_points WHERE object_id = $1::uuid',
+    [skudObjectId],
+  );
+  return resolveAccessPointNamesToIds(rows.map(r => r.access_point_name), connection);
 };

@@ -8,6 +8,8 @@ import { ToastProvider } from './contexts/ToastContext';
 import { ChatProvider } from './contexts/ChatContext';
 import { ProtectedRoute, PublicRoute } from './components/auth/ProtectedRoute';
 import { SigurHeaderBadges } from './components/skud/SigurHeaderBadges';
+import { CardReaderAgentProvider } from './contexts/CardReaderAgentContext';
+import { CardReaderHeaderBadge } from './components/skud/CardReaderHeaderBadge';
 import { useTheme } from './hooks/useTheme';
 import { useStructureRealtime } from './hooks/useStructureRealtime';
 import { PageLoader } from './components/ui/PageLoader';
@@ -427,9 +429,16 @@ const AppRoutes = () => {
           <Route
             path="/skud-card-reader"
             element={
-              <Layout title="Пропуск" theme={theme} onToggleTheme={toggleTheme}>
-                <SkudCardReaderPage />
-              </Layout>
+              <CardReaderAgentProvider>
+                <Layout
+                  title="Выдача пропусков"
+                  theme={theme}
+                  onToggleTheme={toggleTheme}
+                  titleAddon={<CardReaderHeaderBadge />}
+                >
+                  <SkudCardReaderPage />
+                </Layout>
+              </CardReaderAgentProvider>
             }
           />
         </Route>

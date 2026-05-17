@@ -28,8 +28,11 @@ export interface IContractorPassRow {
   status: 'issued' | 'assigned' | 'applied' | 'revoked';
   sigur_employee_id: number | null;
   card_uid: string | null;
-  assigned_roster_id: string | null;
-  assigned_full_name: string | null;
+  holder_name: string | null;
+  expires_at: string | null;
+  submission_id: string | null;
+  access_point_names: string[] | null;
+  object_label: string;
 }
 
 const PAGE_SIZE = 500;
@@ -111,7 +114,7 @@ export const getRoster = async (orgDepartmentId: string): Promise<IContractorRos
     [orgDepartmentId],
   );
 
-/** Пропуска организации с информацией о назначенном человеке. */
+/** Пропуска организации: номер, карта, объекты/точки, срок, вписанное ФИО. */
 export const getPasses = async (orgDepartmentId: string): Promise<IContractorPassRow[]> =>
   query<IContractorPassRow>(
     `SELECT p.id,
@@ -119,11 +122,15 @@ export const getPasses = async (orgDepartmentId: string): Promise<IContractorPas
             p.status,
             p.sigur_employee_id,
             p.card_uid,
-            r.id AS assigned_roster_id,
-            r.full_name AS assigned_full_name
+            p.holder_name,
+            p.expires_at,
+            p.submission_id,
+            p.access_point_names,
+            COALESCE(
+              (SELECT string_agg(o.name, ', ' ORDER BY o.name)
+                 FROM skud_objects o WHERE o.id = ANY(p.object_ids)),
+              '') AS object_label
        FROM contractor_passes p
-       LEFT JOIN contractor_roster r
-              ON r.assigned_pass_id = p.id AND r.state <> 'removed'
       WHERE p.org_department_id = $1::uuid AND p.status <> 'revoked'
       ORDER BY p.pass_number ASC`,
     [orgDepartmentId],

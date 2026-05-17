@@ -14,8 +14,11 @@ import { getAllRoles, getRoleByCode } from '../services/roles-cache.service.js';
 import {
   getContractorOrgs,
   getOrgSigurDepartmentId,
+  getContractorUserIdsForOrg,
   ContractorScopeError,
 } from '../services/contractor-scope.service.js';
+import { notificationService } from '../services/notification.service.js';
+import { pushService } from '../services/push.service.js';
 import { isContractorSigurDryRun } from '../config/contractor.js';
 import { sigurService } from '../services/sigur.service.js';
 import {
@@ -27,7 +30,7 @@ import {
   assignSigurEmployeeCardBinding,
   replaceSigurEmployeeAccessPoints,
 } from '../services/sigur-live-cards.service.js';
-import { resolveObjectAccessPointIds } from '../services/contractor-access.service.js';
+import { resolveAccessPointNamesToIds } from '../services/contractor-access.service.js';
 
 /** Только системный админ (как approveUser/replaceUserCompanies). */
 const ensureSystemAdmin = async (
@@ -55,36 +58,44 @@ export const contractorAdminController = {
   },
 
   /**
-   * POST /passes/issue — массовый выпуск нумерованных профилей в папке
-   * организации в Sigur. Body: { org_department_id, count } | { org_department_id, from, to }
-   * card_uids: опциональный список UID (по одному на пропуск, по порядку).
+   * POST /passes/issue — массовый выпуск нумерованных профилей-заглушек в
+   * папке организации в Sigur. Карты считываются считывателем по порядку;
+   * каждый профиль создаётся заблокированным, сразу с привязкой карты,
+   * сроком действия и точками доступа выбранных объектов.
+   * Body: { org_department_id, from, to?, object_ids[], access_point_names[],
+   *         expires_at?, cards: [{uid, sequence}], notify? }.
+   * Клиент может слать пачку чанками (для прогресс-бара); идемпотентно по
+   * (org, pass_number). notify=false подавляет уведомление подрядчику
+   * (true только на финальном чанке).
    */
   async issuePassBatch(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const body = z.object({
         org_department_id: z.string().uuid(),
-        count: z.number().int().positive().max(500).optional(),
-        from: z.number().int().positive().optional(),
+        from: z.number().int().positive(),
         to: z.number().int().positive().optional(),
-        card_uids: z.array(z.string().trim().min(1)).optional(),
-        skud_object_id: z.string().uuid().nullable().optional(),
+        object_ids: z.array(z.string().uuid()).min(1),
+        access_point_names: z.array(z.string().trim().min(1)).min(1),
+        expires_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        cards: z.array(z.object({
+          uid: z.string().trim().min(1),
+          sequence: z.number().int().nonnegative(),
+        })).min(1).max(100),
+        notify: z.boolean().optional(),
       }).parse(req.body);
 
       const orgId = body.org_department_id;
 
-      // Объект (набор точек доступа) — опционально, применяется к пачке.
-      let skudObjectId: string | null = null;
-      if (body.skud_object_id) {
-        const obj = await queryOne<{ id: string }>(
-          'SELECT id FROM skud_objects WHERE id = $1::uuid AND is_active = true',
-          [body.skud_object_id],
-        );
-        if (!obj) {
-          res.status(400).json({ success: false, error: 'Объект не найден или неактивен' });
-          return;
-        }
-        skudObjectId = obj.id;
+      // Объекты обязательны — проверяем что существуют и активны.
+      const objRows = await query<{ id: string }>(
+        `SELECT id FROM skud_objects WHERE id = ANY($1::uuid[]) AND is_active = true`,
+        [body.object_ids],
+      );
+      if (objRows.length !== body.object_ids.length) {
+        res.status(400).json({ success: false, error: 'Некоторые объекты не найдены или неактивны' });
+        return;
       }
+
       let sigurDepartmentId: number;
       try {
         sigurDepartmentId = await getOrgSigurDepartmentId(orgId);
@@ -96,30 +107,50 @@ export const contractorAdminController = {
         throw scopeError;
       }
 
-      // Следующий номер = max(pass_number::int)+1 среди пропусков организации.
-      const maxRow = await queryOne<{ max_num: number | null }>(
-        `SELECT MAX(pass_number::int) AS max_num
-           FROM contractor_passes WHERE org_department_id = $1::uuid`,
-        [orgId],
-      );
-      const startFrom = body.from ?? (maxRow?.max_num ? maxRow.max_num + 1 : 1);
-      const requested = body.count ?? (body.to ? body.to - startFrom + 1 : 0);
-      if (requested <= 0) {
-        res.status(400).json({ success: false, error: 'Не задано количество пропусков' });
-        return;
-      }
-      const lastNumber = startFrom + requested - 1;
-      const width = Math.max(2, String(lastNumber).length);
-
       const dryRun = isContractorSigurDryRun();
       const connection = await sigurService.getBackgroundConnectionType();
+
+      // Резолв точек доступа один раз на пачку.
+      const resolvedPoints = dryRun
+        ? { accessPointIds: [] as number[], unmatchedNames: [] as string[] }
+        : await resolveAccessPointNamesToIds(body.access_point_names, connection);
+      if (!dryRun && resolvedPoints.accessPointIds.length === 0) {
+        res.status(400).json({
+          success: false,
+          error: `Точки доступа не сопоставлены в Sigur: ${resolvedPoints.unmatchedNames.join(', ')}`,
+        });
+        return;
+      }
+
+      // Срок действия пропуска: дефолт +5 лет, конец дня.
+      const expDate = body.expires_at ?? (() => {
+        const d = new Date();
+        d.setFullYear(d.getFullYear() + 5);
+        return d.toISOString().slice(0, 10);
+      })();
+      const expIso = new Date(`${expDate}T23:59:59`).toISOString();
+
+      const maxSeq = body.cards.reduce((m, c) => Math.max(m, c.sequence), 0);
+      const lastNumber = Math.max(body.to ?? 0, body.from + maxSeq);
+      const width = Math.max(2, String(lastNumber).length);
+
       const created: string[] = [];
       const failed: Array<{ pass_number: string; error: string }> = [];
+      const warnings: string[] = [];
+      if (resolvedPoints.unmatchedNames.length > 0) {
+        warnings.push(`точки не сопоставлены: ${resolvedPoints.unmatchedNames.join(', ')}`);
+      }
 
-      for (let i = 0; i < requested; i += 1) {
-        const num = startFrom + i;
+      // Сортировка по sequence — детерминированная нумерация и при чанках.
+      const cards = [...body.cards].sort((a, b) => a.sequence - b.sequence);
+      for (const card of cards) {
+        const num = body.from + card.sequence;
+        if (body.to && num > body.to) {
+          failed.push({ pass_number: String(num), error: `вне пула (> ${body.to})` });
+          continue;
+        }
         const passNumber = String(num).padStart(width, '0');
-        const cardUid = body.card_uids?.[i]?.trim() || null;
+        const cardUid = card.uid.trim();
         try {
           let sigurEmployeeId: number;
           if (dryRun) {
@@ -132,21 +163,27 @@ export const contractorAdminController = {
               blocked: true,
             }, connection);
             sigurEmployeeId = profile.sigurEmployeeId;
-            if (cardUid) {
-              try {
-                await assignSigurEmployeeCardBinding(sigurEmployeeId, [cardUid], undefined, connection);
-              } catch (cardError) {
-                // Ошибка карты не откатывает профиль.
-                console.error(`Pass ${passNumber} card bind failed:`, cardError);
-              }
+            try {
+              await assignSigurEmployeeCardBinding(sigurEmployeeId, [cardUid], expIso, connection);
+            } catch (cardError) {
+              const m = cardError instanceof Error ? cardError.message : String(cardError);
+              warnings.push(`${passNumber} карта: ${m}`);
+            }
+            try {
+              await replaceSigurEmployeeAccessPoints(sigurEmployeeId, resolvedPoints.accessPointIds, connection);
+            } catch (apError) {
+              const m = apError instanceof Error ? apError.message : String(apError);
+              warnings.push(`${passNumber} точки: ${m}`);
             }
           }
           await execute(
             `INSERT INTO contractor_passes
-               (org_department_id, pass_number, sigur_employee_id, card_uid, skud_object_id, status, created_by)
-             VALUES ($1::uuid, $2, $3, $4, $5, 'issued', $6::uuid)
+               (org_department_id, pass_number, sigur_employee_id, card_uid,
+                object_ids, access_point_names, expires_at, status, created_by)
+             VALUES ($1::uuid, $2, $3, $4, $5::uuid[], $6::text[], $7::date, 'issued', $8::uuid)
              ON CONFLICT (org_department_id, pass_number) DO NOTHING`,
-            [orgId, passNumber, sigurEmployeeId, cardUid, skudObjectId, req.user.id],
+            [orgId, passNumber, sigurEmployeeId, cardUid,
+             body.object_ids, body.access_point_names, expDate, req.user.id],
           );
           created.push(passNumber);
         } catch (passError) {
@@ -155,13 +192,34 @@ export const contractorAdminController = {
         }
       }
 
+      // Уведомление подрядчику (notify=true только на финальном чанке).
+      if (body.notify !== false && created.length > 0) {
+        try {
+          const userIds = await getContractorUserIdsForOrg(orgId);
+          if (userIds.length > 0) {
+            const title = 'Выпущены пропуска';
+            const text = `Вам выдано пропусков: ${created.length}. Впишите ФИО в кабинете.`;
+            await notificationService.createMany(userIds.map(uid => ({
+              userId: uid,
+              type: 'contractor_passes_issued',
+              title,
+              body: text,
+              metadata: { org_department_id: orgId, count: created.length },
+            })));
+            await pushService.sendGenericNotification(userIds, title, text);
+          }
+        } catch (notifyError) {
+          console.error('Contractor issue notify error:', notifyError);
+        }
+      }
+
       await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_PASSES_ISSUED, {
         entityType: 'contractor_org',
         entityId: orgId,
-        details: { requested, created: created.length, failed: failed.length, dryRun },
+        details: { created: created.length, failed: failed.length, warnings: warnings.length, dryRun },
       });
 
-      res.json({ success: true, data: { requested, created, failed } });
+      res.json({ success: true, data: { created, failed, warnings } });
     } catch (error) {
       if (error instanceof z.ZodError) {
         res.status(400).json({ success: false, error: error.errors[0].message });
@@ -169,6 +227,63 @@ export const contractorAdminController = {
       }
       console.error('Contractor issuePassBatch error:', error);
       res.status(500).json({ success: false, error: 'Не удалось выпустить пропуска' });
+    }
+  },
+
+  /** GET /objects — активные объекты СКУД (id, name) для формы выпуска. */
+  async listObjects(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const rows = await query<{ id: string; name: string }>(
+        `SELECT id, name FROM skud_objects WHERE is_active = true ORDER BY name`,
+      );
+      res.json({ success: true, data: rows });
+    } catch (error) {
+      console.error('Contractor listObjects error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить объекты' });
+    }
+  },
+
+  /** GET /objects/access-points?object_ids=a,b — точки доступа выбранных объектов. */
+  async listObjectAccessPoints(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const raw = String(req.query.object_ids ?? '').trim();
+      const ids = raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : [];
+      if (ids.length === 0) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+      const rows = await query<{ object_id: string; object_name: string; access_point_name: string }>(
+        `SELECT ap.object_id, o.name AS object_name, ap.access_point_name
+           FROM skud_object_access_points ap
+           JOIN skud_objects o ON o.id = ap.object_id
+          WHERE ap.object_id = ANY($1::uuid[])
+          ORDER BY o.name, ap.access_point_name`,
+        [ids],
+      );
+      res.json({ success: true, data: rows });
+    } catch (error) {
+      console.error('Contractor listObjectAccessPoints error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить точки доступа' });
+    }
+  },
+
+  /** GET /orgs/:orgId/next-pass — следующий свободный номер пропуска организации. */
+  async getNextPassNumber(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const orgId = z.string().uuid().parse(req.params.orgId);
+      const row = await queryOne<{ max_num: number | null }>(
+        `SELECT MAX(pass_number::int) AS max_num
+           FROM contractor_passes WHERE org_department_id = $1::uuid`,
+        [orgId],
+      );
+      res.json({ success: true, data: { next: row?.max_num ? row.max_num + 1 : 1 } });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректная организация' });
+        return;
+      }
+      console.error('Contractor getNextPassNumber error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось вычислить номер' });
     }
   },
 
@@ -287,12 +402,11 @@ export const contractorAdminController = {
                 s.status,
                 s.submitted_at,
                 s.apply_error,
-                COUNT(r.*) FILTER (WHERE r.state = 'pending_add')    AS adds,
-                COUNT(r.*) FILTER (WHERE r.state = 'pending_remove') AS removes,
-                COUNT(r.*) FILTER (WHERE r.assigned_pass_id IS NOT NULL) AS assigns
+                COUNT(p.*)                                       AS passes,
+                COUNT(p.*) FILTER (WHERE p.status = 'applied')    AS applied
            FROM contractor_submissions s
            JOIN org_departments d ON d.id = s.org_department_id
-           LEFT JOIN contractor_roster r ON r.submission_id = s.id
+           LEFT JOIN contractor_passes p ON p.submission_id = s.id
           WHERE s.status IN ('pending', 'partially_applied')
           GROUP BY s.id, d.name
           ORDER BY s.submitted_at ASC`,
@@ -304,17 +418,23 @@ export const contractorAdminController = {
     }
   },
 
-  /** GET /submissions/:id — детали заявки (строки ростера). */
+  /** GET /submissions/:id — детали заявки (пропуска с вписанным ФИО). */
   async getSubmissionDetail(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!(await ensureSystemAdmin(req, res))) return;
       const rows = await query(
-        `SELECT r.id, r.full_name, r.state, r.sigur_employee_id,
-                p.pass_number, p.status AS pass_status
-           FROM contractor_roster r
-           LEFT JOIN contractor_passes p ON p.id = r.assigned_pass_id
-          WHERE r.submission_id = $1::uuid
-          ORDER BY r.state, r.full_name`,
+        `SELECT p.id,
+                p.pass_number,
+                p.holder_name,
+                p.card_uid,
+                p.status AS pass_status,
+                COALESCE(
+                  (SELECT string_agg(o.name, ', ' ORDER BY o.name)
+                     FROM skud_objects o WHERE o.id = ANY(p.object_ids)),
+                  '') AS object_label
+           FROM contractor_passes p
+          WHERE p.submission_id = $1::uuid
+          ORDER BY p.pass_number ASC`,
         [req.params.id],
       );
       res.json({ success: true, data: rows });
@@ -388,19 +508,20 @@ export const contractorAdminController = {
         }
       }
 
-      // Шаг 2. Переименование нумерованных профилей → ФИО.
+      // Шаг 2. Переименование нумерованных профилей → ФИО (вписано подрядчиком).
+      // Точки доступа уже привязаны при выпуске; здесь — идемпотентный ре-бинд
+      // из access_point_names как страховка.
       const toRename = await query<{
-        roster_id: string; full_name: string;
         pass_id: string; pass_status: string; pass_sigur_id: number | null;
-        skud_object_id: string | null;
+        holder_name: string; access_point_names: string[] | null;
       }>(
-        `SELECT r.id AS roster_id, r.full_name,
-                p.id AS pass_id, p.status AS pass_status, p.sigur_employee_id AS pass_sigur_id,
-                p.skud_object_id AS skud_object_id
-           FROM contractor_roster r
-           JOIN contractor_passes p ON p.id = r.assigned_pass_id
-          WHERE r.submission_id = $1::uuid
-            AND r.state IN ('pending_add', 'active')`,
+        `SELECT p.id AS pass_id, p.status AS pass_status,
+                p.sigur_employee_id AS pass_sigur_id,
+                p.holder_name, p.access_point_names
+           FROM contractor_passes p
+          WHERE p.submission_id = $1::uuid
+            AND p.status = 'assigned'
+            AND p.holder_name IS NOT NULL`,
         [submissionId],
       );
       for (const row of toRename) {
@@ -413,12 +534,12 @@ export const contractorAdminController = {
           if (!dryRun) {
             await updateSigurEmployee(
               row.pass_sigur_id,
-              { name: row.full_name, blocked: false },
+              { name: row.holder_name, blocked: false },
               connection,
             );
-            // ЭТАП 2: бинд точек доступа объекта (если задан на пропуске).
-            if (row.skud_object_id) {
-              const resolved = await resolveObjectAccessPointIds(row.skud_object_id, connection);
+            const names = row.access_point_names ?? [];
+            if (names.length > 0) {
+              const resolved = await resolveAccessPointNamesToIds(names, connection);
               if (resolved.accessPointIds.length > 0) {
                 await replaceSigurEmployeeAccessPoints(
                   row.pass_sigur_id,
@@ -433,18 +554,10 @@ export const contractorAdminController = {
               }
             }
           }
-          await withTransaction(async client => {
-            await client.query(
-              `UPDATE contractor_passes SET status = 'applied', updated_at = now() WHERE id = $1::uuid`,
-              [row.pass_id],
-            );
-            await client.query(
-              `UPDATE contractor_roster
-                  SET state = 'active', sigur_employee_id = $1, updated_at = now()
-                WHERE id = $2::uuid`,
-              [row.pass_sigur_id, row.roster_id],
-            );
-          });
+          await execute(
+            `UPDATE contractor_passes SET status = 'applied', updated_at = now() WHERE id = $1::uuid`,
+            [row.pass_id],
+          );
           applied += 1;
         } catch (e) {
           failures.push(`pass ${row.pass_id}: ${e instanceof Error ? e.message : String(e)}`);
@@ -501,15 +614,15 @@ export const contractorAdminController = {
       }
 
       await withTransaction(async client => {
-        // Освобождаем назначенные (не выданные) пропуска.
+        // Возвращаем пропуска заявки в 'issued' (ФИО сохраняем — подрядчик
+        // может поправить и переотправить); отвязываем от заявки.
         await client.query(
-          `UPDATE contractor_passes SET status = 'issued', updated_at = now()
-            WHERE status = 'assigned'
-              AND id IN (SELECT assigned_pass_id FROM contractor_roster
-                          WHERE submission_id = $1::uuid AND assigned_pass_id IS NOT NULL)`,
+          `UPDATE contractor_passes
+              SET status = 'issued', submission_id = NULL, updated_at = now()
+            WHERE submission_id = $1::uuid AND status = 'assigned'`,
           [submissionId],
         );
-        // Откат staged-строк ростера.
+        // Откат staged-строк ростера (legacy, пусто для нового потока).
         await client.query(
           `DELETE FROM contractor_roster
             WHERE submission_id = $1::uuid AND state = 'pending_add'`,

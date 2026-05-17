@@ -14,6 +14,9 @@ const apprView = requirePageAccess('/admin/contractor-approvals', 'view');
 const apprEdit = requirePageAccess('/admin/contractor-approvals', 'edit');
 
 router.get('/orgs', passView, contractorAdminController.listOrgs);
+router.get('/objects', passView, contractorAdminController.listObjects);
+router.get('/objects/access-points', passView, contractorAdminController.listObjectAccessPoints);
+router.get('/orgs/:orgId/next-pass', passView, contractorAdminController.getNextPassNumber);
 router.post('/passes/issue', passEdit, requireCritical2FA, contractorAdminController.issuePassBatch);
 
 router.get('/users', usersView, contractorAdminController.listContractorUsers);

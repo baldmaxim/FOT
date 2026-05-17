@@ -44,7 +44,21 @@ vi.mock('../services/sigur-live-cards.service.js', () => ({
   replaceSigurEmployeeAccessPoints: h.replaceAP,
 }));
 vi.mock('../services/contractor-access.service.js', () => ({
-  resolveObjectAccessPointIds: h.resolveAP,
+  resolveAccessPointNamesToIds: h.resolveAP,
+}));
+vi.mock('../services/contractor-scope.service.js', () => ({
+  getContractorOrgs: vi.fn(),
+  getOrgSigurDepartmentId: vi.fn(),
+  getContractorUserIdsForOrg: vi.fn().mockResolvedValue([]),
+  ContractorScopeError: class extends Error {
+    constructor(public status: number, message: string) { super(message); }
+  },
+}));
+vi.mock('../services/notification.service.js', () => ({
+  notificationService: { createMany: vi.fn().mockResolvedValue(undefined) },
+}));
+vi.mock('../services/push.service.js', () => ({
+  pushService: { sendGenericNotification: vi.fn().mockResolvedValue([]) },
 }));
 
 import { contractorAdminController } from './contractor-admin.controller.js';
@@ -93,7 +107,7 @@ describe('contractorAdminController.approveSubmission', () => {
     h.query.mockResolvedValueOnce([{ id: 'r-rm', sigur_employee_id: 100 }]);
     // toRename
     h.query.mockResolvedValueOnce([
-      { roster_id: 'r1', full_name: 'Иванов И.', pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11 },
+      { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'Иванов И.', access_point_names: null },
     ]);
     const res = makeRes();
     await contractorAdminController.approveSubmission(makeReq(), res as never);
@@ -111,8 +125,8 @@ describe('contractorAdminController.approveSubmission', () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
     h.query.mockResolvedValueOnce([]); // нет удалений
     h.query.mockResolvedValueOnce([
-      { roster_id: 'r1', full_name: 'A', pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11 },
-      { roster_id: 'r2', full_name: 'B', pass_id: 'p2', pass_status: 'assigned', pass_sigur_id: 12 },
+      { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: null },
+      { pass_id: 'p2', pass_status: 'assigned', pass_sigur_id: 12, holder_name: 'B', access_point_names: null },
     ]);
     h.updEmp.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Sigur 500'));
     const res = makeRes();
@@ -133,8 +147,8 @@ describe('contractorAdminController.approveSubmission', () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'partially_applied' });
     h.query.mockResolvedValueOnce([]);
     h.query.mockResolvedValueOnce([
-      { roster_id: 'r1', full_name: 'A', pass_id: 'p1', pass_status: 'applied', pass_sigur_id: 11 },
-      { roster_id: 'r2', full_name: 'B', pass_id: 'p2', pass_status: 'assigned', pass_sigur_id: 12 },
+      { pass_id: 'p1', pass_status: 'applied', pass_sigur_id: 11, holder_name: 'A', access_point_names: null },
+      { pass_id: 'p2', pass_status: 'assigned', pass_sigur_id: 12, holder_name: 'B', access_point_names: null },
     ]);
     const res = makeRes();
     await contractorAdminController.approveSubmission(makeReq(), res as never);
@@ -162,13 +176,13 @@ describe('contractorAdminController.approveSubmission', () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
     h.query.mockResolvedValueOnce([]);
     h.query.mockResolvedValueOnce([
-      { roster_id: 'r1', full_name: 'A', pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, skud_object_id: 'obj-1' },
+      { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: ['КПП 1', 'КПП X'] },
     ]);
     h.resolveAP.mockResolvedValue({ accessPointIds: [7, 8], unmatchedNames: ['КПП X'] });
     const res = makeRes();
     await contractorAdminController.approveSubmission(makeReq(), res as never);
 
-    expect(h.resolveAP).toHaveBeenCalledWith('obj-1', 'external');
+    expect(h.resolveAP).toHaveBeenCalledWith(['КПП 1', 'КПП X'], 'external');
     expect(h.replaceAP).toHaveBeenCalledWith(11, [7, 8], 'external');
     const body = res.body as { data: { status: string; applied: number; warnings: string[] } };
     expect(body.data.status).toBe('approved');
@@ -180,7 +194,7 @@ describe('contractorAdminController.approveSubmission', () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
     h.query.mockResolvedValueOnce([]);
     h.query.mockResolvedValueOnce([
-      { roster_id: 'r1', full_name: 'A', pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, skud_object_id: 'obj-1' },
+      { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: ['КПП 1'] },
     ]);
     h.resolveAP.mockResolvedValue({ accessPointIds: [7], unmatchedNames: [] });
     h.replaceAP.mockRejectedValueOnce(new Error('Sigur AP 500'));

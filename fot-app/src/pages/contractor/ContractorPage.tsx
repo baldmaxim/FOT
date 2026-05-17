@@ -2,7 +2,7 @@ import { useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
-import { contractorService, type IRosterRow } from '../../services/contractorService';
+import { contractorService, type IRosterRow, type IPassRow } from '../../services/contractorService';
 import styles from './Contractor.module.css';
 
 type Tab = 'roster' | 'passes';
@@ -15,13 +15,28 @@ const stateBadge = (state: IRosterRow['state']): { cls: string; label: string } 
   }
 };
 
+const passBadge = (status: IPassRow['status']): { cls: string; label: string } => {
+  switch (status) {
+    case 'applied': return { cls: styles.badgeActive, label: 'выдан' };
+    case 'assigned': return { cls: styles.badgePending, label: 'на согласовании' };
+    case 'revoked': return { cls: styles.badgeRemove, label: 'отозван' };
+    default: return { cls: styles.badgeAdd, label: 'свободен' };
+  }
+};
+
+const fmtDate = (iso: string | null): string => {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleDateString('ru-RU'); } catch { return iso; }
+};
+
 export const ContractorPage: FC = () => {
   const toast = useToast();
   const qc = useQueryClient();
-  const [tab, setTab] = useState<Tab>('roster');
+  const [tab, setTab] = useState<Tab>('passes');
   const [addOpen, setAddOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [edited, setEdited] = useState<Record<string, string>>({});
 
   const overlay = useOverlayDismiss(() => setAddOpen(false));
 
@@ -35,7 +50,7 @@ export const ContractorPage: FC = () => {
   const subs = subsQuery.data ?? [];
   const latest = subs[0];
   const hasPending = subs.some(s => s.status === 'pending');
-  const assignable = roster.filter(r => r.state !== 'pending_remove');
+  const filledCount = passes.filter(p => p.status === 'issued' && !p.submission_id && (edited[p.id] ?? p.holder_name ?? '').trim().length >= 2).length;
 
   const refresh = async () => {
     await Promise.all([
@@ -69,6 +84,16 @@ export const ContractorPage: FC = () => {
     setAddOpen(false);
   };
 
+  const saveHolder = async (p: IPassRow) => {
+    const value = (edited[p.id] ?? p.holder_name ?? '').trim();
+    if (value === (p.holder_name ?? '')) return;
+    if (value && value.length < 2) {
+      toast.error('ФИО — минимум 2 символа');
+      return;
+    }
+    await run(() => contractorService.setPassHolder(p.id, value || null));
+  };
+
   const statusLabel: Record<string, string> = {
     pending: 'на согласовании',
     approved: 'согласовано',
@@ -96,16 +121,16 @@ export const ContractorPage: FC = () => {
 
       <div className={styles.tabs}>
         <button
-          className={`${styles.tab} ${tab === 'roster' ? styles.tabActive : ''}`}
-          onClick={() => setTab('roster')}
-        >
-          Сотрудники
-        </button>
-        <button
           className={`${styles.tab} ${tab === 'passes' ? styles.tabActive : ''}`}
           onClick={() => setTab('passes')}
         >
           Назначение пропусков
+        </button>
+        <button
+          className={`${styles.tab} ${tab === 'roster' ? styles.tabActive : ''}`}
+          onClick={() => setTab('roster')}
+        >
+          Сотрудники
         </button>
       </div>
 
@@ -114,14 +139,6 @@ export const ContractorPage: FC = () => {
           <div className={styles.toolbar}>
             <button className="btn-primary" onClick={() => setAddOpen(true)} disabled={busy}>
               Добавить
-            </button>
-            <button
-              className="btn-secondary"
-              onClick={() => run(() => contractorService.submit(), 'Отправлено на согласование')}
-              disabled={busy || hasPending}
-              title={hasPending ? 'Уже есть заявка на согласовании' : ''}
-            >
-              Отправить на согласование
             </button>
           </div>
           {rosterQuery.isLoading ? (
@@ -172,49 +189,65 @@ export const ContractorPage: FC = () => {
       )}
 
       {tab === 'passes' && (
-        passesQuery.isLoading ? (
-          <div className={styles.empty}>Загрузка…</div>
-        ) : passes.length === 0 ? (
-          <div className={styles.empty}>Пропуска ещё не выпущены администратором</div>
-        ) : (
-          <table className={styles.table}>
-            <thead>
-              <tr><th>№ пропуска</th><th>Статус</th><th>Назначен</th><th>Назначить</th></tr>
-            </thead>
-            <tbody>
-              {passes.map(p => {
-                const applied = p.status === 'applied';
-                return (
-                  <tr key={p.id}>
-                    <td>{p.pass_number}</td>
-                    <td>
-                      <span className={`${styles.badge} ${applied ? styles.badgeActive : styles.badgePending}`}>
-                        {applied ? 'выдан' : p.status === 'assigned' ? 'назначен' : 'свободен'}
-                      </span>
-                    </td>
-                    <td>{p.assigned_full_name ?? '—'}</td>
-                    <td>
-                      <select
-                        className={styles.select}
-                        value={p.assigned_roster_id ?? ''}
-                        disabled={busy || applied}
-                        onChange={e => {
-                          const rosterId = e.target.value;
-                          if (rosterId) run(() => contractorService.assignPass(p.id, rosterId), 'Назначено');
-                        }}
-                      >
-                        <option value="">— выбрать —</option>
-                        {assignable.map(r => (
-                          <option key={r.id} value={r.id}>{r.full_name}</option>
-                        ))}
-                      </select>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )
+        <>
+          <div className={styles.toolbar}>
+            <button
+              className="btn-primary"
+              onClick={() => run(() => contractorService.submit(), 'Отправлено на согласование')}
+              disabled={busy || hasPending || filledCount === 0}
+              title={hasPending ? 'Уже есть заявка на согласовании'
+                : filledCount === 0 ? 'Впишите ФИО хотя бы в один пропуск' : ''}
+            >
+              Отправить на согласование ({filledCount})
+            </button>
+          </div>
+          {passesQuery.isLoading ? (
+            <div className={styles.empty}>Загрузка…</div>
+          ) : passes.length === 0 ? (
+            <div className={styles.empty}>Пропуска ещё не выпущены администратором</div>
+          ) : (
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>№ пропуска</th><th>UID</th><th>Организация</th><th>Доступ к объектам</th>
+                  <th>Срок</th><th>ФИО</th><th>Статус</th>
+                </tr>
+              </thead>
+              <tbody>
+                {passes.map(p => {
+                  const b = passBadge(p.status);
+                  const editable = p.status === 'issued' && !p.submission_id;
+                  const value = edited[p.id] ?? p.holder_name ?? '';
+                  return (
+                    <tr key={p.id}>
+                      <td>{p.pass_number}</td>
+                      <td>{p.card_uid ?? '—'}</td>
+                      <td>{orgQuery.data?.name ?? '—'}</td>
+                      <td>{p.object_label || '—'}</td>
+                      <td>{fmtDate(p.expires_at)}</td>
+                      <td>
+                        {editable ? (
+                          <input
+                            className={`${styles.input} ${styles.fullInput}`}
+                            value={value}
+                            placeholder="Фамилия Имя Отчество"
+                            disabled={busy}
+                            onChange={e => setEdited(prev => ({ ...prev, [p.id]: e.target.value }))}
+                            onBlur={() => void saveHolder(p)}
+                            onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                          />
+                        ) : (
+                          p.holder_name ?? '—'
+                        )}
+                      </td>
+                      <td><span className={`${styles.badge} ${b.cls}`}>{b.label}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </>
       )}
 
       {addOpen && (

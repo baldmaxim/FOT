@@ -35,6 +35,17 @@ export const resolveContractorOrgForUser = async (
   return row?.org_department_id ?? null;
 };
 
+/** Пользователи-подрядчики, привязанные к организации (для уведомлений). */
+export const getContractorUserIdsForOrg = async (
+  orgDepartmentId: string,
+): Promise<string[]> => {
+  const rows = await query<{ user_id: string }>(
+    'SELECT user_id FROM contractor_org_access WHERE org_department_id = $1::uuid',
+    [orgDepartmentId],
+  );
+  return rows.map(r => r.user_id);
+};
+
 /** Sigur-id отдела организации. throws — если организации нет или она не синхронизирована. */
 export const getOrgSigurDepartmentId = async (
   orgDepartmentId: string,

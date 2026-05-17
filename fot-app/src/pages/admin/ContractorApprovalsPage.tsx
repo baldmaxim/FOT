@@ -16,17 +16,15 @@ const SubmissionDetail: FC<{ id: string }> = ({ id }) => {
   if (rows.length === 0) return <div className={styles.detailRow}>Нет изменений</div>;
   return (
     <table className={styles.table}>
-      <thead><tr><th>ФИО</th><th>Действие</th><th>Пропуск</th></tr></thead>
+      <thead><tr><th>№ пропуска</th><th>ФИО</th><th>UID</th><th>Объекты</th><th>Статус</th></tr></thead>
       <tbody>
         {rows.map(r => (
           <tr key={r.id}>
-            <td>{r.full_name}</td>
-            <td>
-              {r.state === 'pending_add' ? 'Добавление'
-                : r.state === 'pending_remove' ? 'Удаление'
-                : r.state}
-            </td>
-            <td>{r.pass_number ? `${r.pass_number} (${r.pass_status})` : '—'}</td>
+            <td>{r.pass_number}</td>
+            <td>{r.holder_name ?? '—'}</td>
+            <td>{r.card_uid ?? '—'}</td>
+            <td>{r.object_label || '—'}</td>
+            <td>{r.pass_status}</td>
           </tr>
         ))}
       </tbody>
@@ -94,8 +92,8 @@ export const ContractorApprovalsPage: FC = () => {
         <table className={styles.table}>
           <thead>
             <tr>
-              <th>Организация</th><th>Отправлена</th><th>Добав.</th><th>Удал.</th>
-              <th>Назнач.</th><th>Статус</th><th></th>
+              <th>Организация</th><th>Отправлена</th><th>Пропусков</th><th>Применено</th>
+              <th>Статус</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -104,9 +102,8 @@ export const ContractorApprovalsPage: FC = () => {
                 <tr>
                   <td>{s.org_name}</td>
                   <td>{new Date(s.submitted_at).toLocaleString('ru')}</td>
-                  <td>{s.adds}</td>
-                  <td>{s.removes}</td>
-                  <td>{s.assigns}</td>
+                  <td>{s.passes}</td>
+                  <td>{s.applied}</td>
                   <td>
                     <span className={`${styles.badge} ${s.status === 'partially_applied' ? styles.badgeRemove : styles.badgePending}`}>
                       {s.status === 'partially_applied' ? 'частично' : 'ожидает'}
@@ -137,7 +134,7 @@ export const ContractorApprovalsPage: FC = () => {
                 </tr>
                 {expanded === s.id && (
                   <tr>
-                    <td colSpan={7}><SubmissionDetail id={s.id} /></td>
+                    <td colSpan={6}><SubmissionDetail id={s.id} /></td>
                   </tr>
                 )}
               </Fragment>

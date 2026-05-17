@@ -159,7 +159,39 @@ export const contractorController = {
     }
   },
 
-  /** Назначить роста-человека на пропуск. Body: { roster_id }. */
+  /** Вписать ФИО держателя пропуска. Body: { full_name } (null/'' — очистить). */
+  async setPassHolder(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const orgId = await resolveOrgOr403(req, res);
+      if (!orgId) return;
+      const { full_name } = z.object({
+        full_name: z.string().trim().max(200).nullable(),
+      }).parse(req.body);
+      const holder = full_name && full_name.length >= 2 ? full_name : null;
+
+      const affected = await execute(
+        `UPDATE contractor_passes
+            SET holder_name = $1, updated_at = now()
+          WHERE id = $2::uuid AND org_department_id = $3::uuid
+            AND status = 'issued' AND submission_id IS NULL`,
+        [holder, req.params.id, orgId],
+      );
+      if (affected === 0) {
+        res.status(409).json({ success: false, error: 'Пропуск недоступен для редактирования' });
+        return;
+      }
+      res.json({ success: true });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Contractor setPassHolder error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось сохранить ФИО' });
+    }
+  },
+
+  /** Назначить роста-человека на пропуск. Body: { roster_id }. (legacy) */
   async assignPass(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const orgId = await resolveOrgOr403(req, res);
@@ -234,13 +266,25 @@ export const contractorController = {
     }
   },
 
-  /** Отправить пакет изменений на согласование. */
+  /** Отправить пропуска с вписанным ФИО на согласование админу. */
   async submit(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const orgId = await resolveOrgOr403(req, res);
       if (!orgId) return;
       if (await hasPendingSubmission(orgId)) {
         res.status(409).json({ success: false, error: 'Уже есть заявка на согласовании' });
+        return;
+      }
+
+      const eligible = await queryOne<{ n: string }>(
+        `SELECT COUNT(*)::text AS n FROM contractor_passes
+          WHERE org_department_id = $1::uuid AND submission_id IS NULL
+            AND status = 'issued' AND holder_name IS NOT NULL`,
+        [orgId],
+      );
+      const passes = Number(eligible?.n ?? 0);
+      if (passes === 0) {
+        res.status(409).json({ success: false, error: 'Нет пропусков с заполненным ФИО' });
         return;
       }
 
@@ -251,33 +295,18 @@ export const contractorController = {
           [orgId, req.user.id],
         );
         const subId = created.rows[0].id;
-        // Привязываем staged-строки ростера к заявке.
+        // Привязываем пропуска с вписанным ФИО к заявке.
         await client.query(
-          `UPDATE contractor_roster
-              SET submission_id = $1::uuid, updated_at = now()
-            WHERE org_department_id = $2::uuid
-              AND submission_id IS NULL
-              AND (
-                state IN ('pending_add', 'pending_remove')
-                OR assigned_pass_id IN (
-                  SELECT id FROM contractor_passes
-                   WHERE org_department_id = $2::uuid AND status = 'assigned'
-                )
-              )`,
+          `UPDATE contractor_passes
+              SET submission_id = $1::uuid, status = 'assigned', updated_at = now()
+            WHERE org_department_id = $2::uuid AND submission_id IS NULL
+              AND status = 'issued' AND holder_name IS NOT NULL`,
           [subId, orgId],
         );
         return subId;
       });
 
-      const counts = await queryOne<{ adds: string; removes: string; assigns: string }>(
-        `SELECT
-            COUNT(*) FILTER (WHERE state = 'pending_add')                       AS adds,
-            COUNT(*) FILTER (WHERE state = 'pending_remove')                    AS removes,
-            COUNT(*) FILTER (WHERE assigned_pass_id IS NOT NULL)                AS assigns
-           FROM contractor_roster
-          WHERE submission_id = $1::uuid`,
-        [submissionId],
-      );
+      const counts = { passes };
 
       await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_SUBMISSION_SUBMITTED, {
         entityType: 'contractor_submission',

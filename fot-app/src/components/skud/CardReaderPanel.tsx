@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FC } from 'react';
-import { useCardReader, type ICardEvent } from '../../hooks/useCardReader';
+import { type ICardEvent } from '../../hooks/useCardReader';
+import { useCardReaderAgent, EnsureCardReaderAgent } from '../../contexts/CardReaderAgentContext';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { useToast } from '../../contexts/ToastContext';
+import { downloadsService } from '../../services/downloadsService';
 import { employeeService } from '../../services/employeeService';
 import {
   collectCardUids,
@@ -105,9 +107,44 @@ const DebugBlock: FC<{ debug: ICardLookupDebug | undefined }> = ({ debug }) => {
   );
 };
 
-export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onAssignSuccess }) => {
+const DriverDownloadButton: FC = () => {
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const handleDownload = useCallback(async () => {
+    setError(null);
+    setDownloading(true);
+    try {
+      const { download_url, file_name } = await downloadsService.getSigurReaderDriverUrl();
+      const link = document.createElement('a');
+      link.href = download_url;
+      link.download = file_name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось получить ссылку на драйвер');
+    } finally {
+      setDownloading(false);
+    }
+  }, []);
+  return (
+    <>
+      <button
+        type="button"
+        className="scr-driver-btn"
+        onClick={() => { void handleDownload(); }}
+        disabled={downloading}
+      >
+        {downloading ? 'Получение ссылки…' : 'Скачать драйвер Sigur Reader EH'}
+      </button>
+      {error && <span className="scr-driver-error">{error}</span>}
+    </>
+  );
+};
+
+const CardReaderPanelInner: FC<ICardReaderPanelProps> = ({ mode, embedded, onAssignSuccess }) => {
   const { success, error: toastError } = useToast();
-  const { connected, message, lastCard, cardSeq, clearLastCard } = useCardReader();
+  const { connected, message, lastCard, cardSeq, clearLastCard } = useCardReaderAgent();
 
   const [lookupResult, setLookupResult] = useState<CardLookupResult | null>(null);
   const [lookupLoading, setLookupLoading] = useState(false);
@@ -309,15 +346,16 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
 
   return (
     <div className={`scr-panel ${embedded ? 'scr-panel--embedded' : ''}`}>
-      {!embedded && (
-        <div className="scr-panel-status-bar">{statusBar}</div>
-      )}
       {embedded && <div className="scr-panel-status-bar scr-panel-status-bar--inline">{statusBar}</div>}
 
       {!connected && (
         <div className="scr-hint">
-          Запустите приложение <strong>Sigur Reader EH</strong> на этом ПК. Если оно ещё не установлено —{' '}
-          смотрите <a href="/docs/skud-card-reader.html" target="_blank" rel="noreferrer">инструкцию</a>.
+          <div className="scr-hint-text">
+            Запустите приложение <strong>Sigur Reader EH</strong> на этом ПК. Если оно ещё не
+            установлено — смотрите{' '}
+            <a href="/docs/skud-card-reader.html" target="_blank" rel="noreferrer">инструкцию</a>.
+          </div>
+          <DriverDownloadButton />
         </div>
       )}
 
@@ -551,3 +589,9 @@ export const CardReaderPanel: FC<ICardReaderPanelProps> = ({ mode, embedded, onA
     </div>
   );
 };
+
+export const CardReaderPanel: FC<ICardReaderPanelProps> = (props) => (
+  <EnsureCardReaderAgent>
+    <CardReaderPanelInner {...props} />
+  </EnsureCardReaderAgent>
+);

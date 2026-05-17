@@ -27,8 +27,11 @@ export interface IPassRow {
   status: 'issued' | 'assigned' | 'applied' | 'revoked';
   sigur_employee_id: number | null;
   card_uid: string | null;
-  assigned_roster_id: string | null;
-  assigned_full_name: string | null;
+  holder_name: string | null;
+  expires_at: string | null;
+  submission_id: string | null;
+  access_point_names: string[] | null;
+  object_label: string;
 }
 
 export interface ISubmissionRow {
@@ -47,18 +50,17 @@ export interface IPendingSubmission {
   status: 'pending' | 'partially_applied';
   submitted_at: string;
   apply_error: string | null;
-  adds: string;
-  removes: string;
-  assigns: string;
+  passes: string;
+  applied: string;
 }
 
 export interface ISubmissionDetailRow {
   id: string;
-  full_name: string;
-  state: string;
-  sigur_employee_id: number | null;
-  pass_number: string | null;
-  pass_status: string | null;
+  pass_number: string;
+  holder_name: string | null;
+  card_uid: string | null;
+  pass_status: string;
+  object_label: string;
 }
 
 export interface IContractorUser {
@@ -66,6 +68,34 @@ export interface IContractorUser {
   full_name: string | null;
   org_department_id: string | null;
   org_name: string | null;
+}
+
+export interface ISkudObjectOption {
+  id: string;
+  name: string;
+}
+
+export interface IObjectAccessPoint {
+  object_id: string;
+  object_name: string;
+  access_point_name: string;
+}
+
+export interface IIssuePassBatchInput {
+  org_department_id: string;
+  from: number;
+  to?: number;
+  object_ids: string[];
+  access_point_names: string[];
+  expires_at?: string;
+  cards: Array<{ uid: string; sequence: number }>;
+  notify?: boolean;
+}
+
+export interface IIssuePassBatchResult {
+  created: string[];
+  failed: Array<{ pass_number: string; error: string }>;
+  warnings: string[];
 }
 
 /** Контрактор-фасад (роль «Подрядчик»). */
@@ -91,8 +121,8 @@ export const contractorService = {
     const r = await apiClient.get<ApiResponse<IPassRow[]>>('/contractor/passes');
     return r.data ?? [];
   },
-  async assignPass(passId: string, rosterId: string): Promise<void> {
-    await apiClient.post(`/contractor/passes/${passId}/assign`, { roster_id: rosterId });
+  async setPassHolder(passId: string, fullName: string | null): Promise<void> {
+    await apiClient.post(`/contractor/passes/${passId}/holder`, { full_name: fullName });
   },
   async submit(): Promise<void> {
     await apiClient.post('/contractor/submit');
@@ -109,19 +139,28 @@ export const contractorAdminService = {
     const r = await apiClient.get<ApiResponse<IContractorOrg[]>>('/admin/contractor/orgs');
     return r.data ?? [];
   },
-  async issuePassBatch(input: {
-    org_department_id: string;
-    count?: number;
-    from?: number;
-    to?: number;
-    card_uids?: string[];
-    skud_object_id?: string | null;
-  }): Promise<{ requested: number; created: string[]; failed: Array<{ pass_number: string; error: string }> }> {
-    const r = await apiClient.post<ApiResponse<{
-      requested: number;
-      created: string[];
-      failed: Array<{ pass_number: string; error: string }>;
-    }>>('/admin/contractor/passes/issue', input);
+  async listIssueObjects(): Promise<ISkudObjectOption[]> {
+    const r = await apiClient.get<ApiResponse<ISkudObjectOption[]>>('/admin/contractor/objects');
+    return r.data ?? [];
+  },
+  async listObjectAccessPoints(objectIds: string[]): Promise<IObjectAccessPoint[]> {
+    if (objectIds.length === 0) return [];
+    const r = await apiClient.get<ApiResponse<IObjectAccessPoint[]>>(
+      `/admin/contractor/objects/access-points?object_ids=${encodeURIComponent(objectIds.join(','))}`,
+    );
+    return r.data ?? [];
+  },
+  async getNextPassNumber(orgId: string): Promise<number> {
+    const r = await apiClient.get<ApiResponse<{ next: number }>>(
+      `/admin/contractor/orgs/${orgId}/next-pass`,
+    );
+    return r.data?.next ?? 1;
+  },
+  async issuePassBatch(input: IIssuePassBatchInput): Promise<IIssuePassBatchResult> {
+    const r = await apiClient.post<ApiResponse<IIssuePassBatchResult>>(
+      '/admin/contractor/passes/issue',
+      input,
+    );
     return r.data;
   },
   async listContractorUsers(): Promise<IContractorUser[]> {
