@@ -3,6 +3,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { query } from '../config/postgres.js';
 import { withDbSlot } from '../config/db-instrumentation.js';
 import { listExplicitDepartmentIdsForUser, loadEmployeeAccessMap } from './department-access.service.js';
+import { listDirectSubordinates } from './employee-direct-reports.service.js';
 
 export type DataScope = 'self' | 'department' | 'all';
 
@@ -75,6 +76,22 @@ export async function resolveRequestDataScope(req: AuthenticatedRequest): Promis
   const accessible = await resolveAccessibleDepartmentIds(req);
   if (accessible === 'all') return 'all';
   return accessible.length > 0 ? 'department' : 'self';
+}
+
+/**
+ * Как resolveRequestDataScope, но с «псевдо-ячейкой»: если у пользователя есть
+ * активные прямые подчинённые (employee_direct_reports), self → department,
+ * чтобы он видел их в списке. Аналог resolveTimesheetScope (псевдо-ячейка табеля).
+ */
+export async function resolveRequestDataScopeWithDirectReports(
+  req: AuthenticatedRequest,
+): Promise<DataScope> {
+  const scope = await resolveRequestDataScope(req);
+  if (scope === 'self' && req.user.employee_id) {
+    const directSubs = await listDirectSubordinates(req.user.employee_id);
+    if (directSubs.length > 0) return 'department';
+  }
+  return scope;
 }
 
 /**

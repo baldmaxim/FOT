@@ -20,6 +20,7 @@ import {
   canAccessEmployeeInScope,
   resolveManagedDepartmentIds,
   resolveRequestDataScope,
+  resolveRequestDataScopeWithDirectReports,
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
 import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
@@ -93,7 +94,7 @@ export const employeesController = {
   async getAll(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const t0 = Date.now();
-      const scope = await resolveRequestDataScope(req);
+      const scope = await resolveRequestDataScopeWithDirectReports(req);
       if (!scope) {
         res.status(403).json({ success: false, error: 'Data scope не настроен для роли' });
         return;
@@ -402,7 +403,7 @@ export const employeesController = {
    */
   async getCounts(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const scope = await resolveRequestDataScope(req);
+      const scope = await resolveRequestDataScopeWithDirectReports(req);
       if (!scope) {
         res.status(403).json({ success: false, error: 'Data scope не настроен для роли' });
         return;
