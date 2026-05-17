@@ -1,33 +1,45 @@
 import { type FC, useMemo, useState } from 'react';
 import { useEmployeeTimesheetMonth } from '../../hooks/useEmployeeTimesheet';
-import { getFullDayThresholdHoursForDay } from '../../utils/scheduleUtils';
-import type { TimesheetEntry, TimesheetStatus } from '../../types';
+import { useAuth } from '../../contexts/AuthContext';
+import { getFullDayThresholdHoursForDay, isScheduleDayOff } from '../../utils/scheduleUtils';
+import { getDayStatus, type DayStatus } from '../../utils/dayStatus';
+import type { TimesheetEntry } from '../../types';
 import styles from './MyMonthTimesheet.module.css';
 
 const WEEKDAY_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
-const STATUS_LABELS: Record<string, string> = {
-  work: 'Работа',
-  manual: 'Работа',
-  remote: 'Удалёнка',
-  sick: 'Больничный',
-  vacation: 'Отпуск',
-  dayoff: 'Выходной',
-  absent: 'Неявка',
-  unpaid: 'За свой счёт',
-  educational_leave: 'Учебный отпуск',
-};
-
-const STATUS_CSS: Record<string, string> = {
-  work: 'cellWork',
-  manual: 'cellWork',
-  remote: 'cellRemote',
+// DayStatus → CSS-класс ячейки этого виджета (зеркалит STATUS_TO_GRID_CLASS
+// из dayStatus.ts, но на классы MyMonthTimesheet.module.css).
+const STATUS_TO_CSS: Record<DayStatus, string> = {
+  present: 'cellWork',
+  underwork: 'cellUnderwork',
+  absent: 'cellAbsent',
+  incomplete_skud: 'cellAbsent',
   sick: 'cellSick',
   vacation: 'cellVacation',
-  dayoff: 'cellWeekend',
-  absent: 'cellAbsent',
+  remote: 'cellRemote',
   unpaid: 'cellAbsent',
   educational_leave: 'cellVacation',
+  weekend: 'cellWeekend',
+  future: 'cellEmpty',
+  empty: 'cellEmpty',
+};
+
+// Подписи статусов для tooltip. Сохраняем привычное слово «Неявка»
+// (в общем STATUS_LABEL_RU — «Прогул»), терминологию виджета не меняем.
+const STATUS_LABEL: Record<DayStatus, string> = {
+  present: 'Работа',
+  underwork: 'Недоработка',
+  absent: 'Неявка',
+  incomplete_skud: 'СКУД без часов',
+  sick: 'Больничный',
+  vacation: 'Отпуск',
+  remote: 'Удалёнка',
+  unpaid: 'За свой счёт',
+  educational_leave: 'Учебный отпуск',
+  weekend: 'Выходной',
+  future: 'Будущий день',
+  empty: '—',
 };
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -43,6 +55,7 @@ interface IMyMonthTimesheetProps {
 }
 
 export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activeDayIso, onDayActivate, noCard }) => {
+  const { showActualHours } = useAuth();
   const today = useMemo(() => new Date(), []);
   const currentYear = today.getFullYear();
   const currentMonth = today.getMonth() + 1;
@@ -78,33 +91,24 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activ
     return d === 0 ? 6 : d - 1;
   })();
 
-  const cells: Array<{ day: number; iso: string; isFuture: boolean; isToday: boolean; isWeekend: boolean; entry: TimesheetEntry | null } | null> = [];
+  const cells: Array<{ day: number; iso: string; isToday: boolean; entry: TimesheetEntry | null; ds: DayStatus } | null> = [];
   for (let i = 0; i < firstDow; i++) cells.push(null);
   for (let day = 1; day <= daysInMonth; day++) {
     const iso = buildIsoDate(year, month, day);
-    const dow = new Date(year, month - 1, day).getDay();
-    const isWeekend = dow === 0 || dow === 6;
-    cells.push({
-      day,
-      iso,
+    const entry = entriesByDay.get(day) || null;
+    const isScheduledDayOff = isScheduleDayOff(employeeSchedule, calendar, year, month, day);
+    const fullDayThresholdHours = getFullDayThresholdHoursForDay(employeeSchedule, calendar, year, month, day);
+    const ds = getDayStatus(entry, {
+      showActualHours,
+      fullDayThresholdHours,
+      isScheduledDayOff,
       isFuture: iso > todayIso,
-      isToday: iso === todayIso,
-      isWeekend,
-      entry: entriesByDay.get(day) || null,
     });
+    cells.push({ day, iso, isToday: iso === todayIso, entry, ds });
   }
 
   const monthLabel = new Date(year, month - 1, 1)
     .toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
-
-  const getCellStatus = (entry: TimesheetEntry | null, status: TimesheetStatus | null, day: number): string => {
-    if (!entry || !status) return '';
-    if ((status === 'work' || status === 'manual') && entry.hours_worked && entry.hours_worked > 0) {
-      const threshold = getFullDayThresholdHoursForDay(employeeSchedule, calendar, year, month, day);
-      if (entry.hours_worked < threshold) return 'cellUnderwork';
-    }
-    return STATUS_CSS[status] || '';
-  };
 
   return (
     <div className={`${styles.root}${noCard ? ` ${styles.rootNoCard}` : ''}`}>
@@ -133,21 +137,19 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activ
       <div className={styles.grid}>
         {cells.map((cell, idx) => {
           if (!cell) return <div key={`pad-${idx}`} className={styles.padCell} />;
-          const status = cell.entry?.status ?? null;
           const isActive = cell.iso === activeDayIso;
           const cellCls = [
             styles.cell,
             cell.isToday ? styles.cellToday : '',
-            cell.isWeekend && !cell.entry ? styles.cellWeekend : '',
-            cell.entry ? styles[getCellStatus(cell.entry, status, cell.day)] : '',
-            cell.isFuture && !cell.entry ? styles.cellEmpty : '',
+            styles[STATUS_TO_CSS[cell.ds]] || '',
             isActive ? styles.cellActive : '',
             cell.entry?.is_correction ? styles.cellCorrection : '',
           ].filter(Boolean).join(' ');
 
+          const label = STATUS_LABEL[cell.ds];
           const title = cell.entry
-            ? `${cell.day}: ${STATUS_LABELS[status as string] || status || '—'}${cell.entry.hours_worked ? ` (${cell.entry.hours_worked}ч)` : ''}${cell.entry.is_correction ? ' • корр.' : ''}`
-            : `${cell.day}${cell.isWeekend ? ' (выходной)' : ''}`;
+            ? `${cell.day}: ${label}${cell.entry.hours_worked ? ` (${cell.entry.hours_worked}ч)` : ''}${cell.entry.is_correction ? ' • корр.' : ''}`
+            : `${cell.day}${cell.ds === 'weekend' ? ' (выходной)' : ''}`;
 
           return (
             <button
@@ -172,6 +174,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activ
         <span><i className={`${styles.dot} ${styles.cellRemote}`}/>Удалёнка</span>
         <span><i className={`${styles.dot} ${styles.cellSick}`}/>Больничный</span>
         <span><i className={`${styles.dot} ${styles.cellVacation}`}/>Отпуск</span>
+        <span><i className={`${styles.dot} ${styles.cellWeekend}`}/>Выходной</span>
         <span><i className={`${styles.dot} ${styles.cellAbsent}`}/>Неявка</span>
       </div>
     </div>

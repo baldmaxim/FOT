@@ -77,8 +77,11 @@ export const getDayStatus = (
       return 'vacation';
     case 'absent':
       // Если есть СКУД-проходы, но руководитель пометил «неявка» — показываем
-      // incomplete_skud как сигнал «есть события, но не учтены».
-      return hasSkudEvents ? 'incomplete_skud' : 'absent';
+      // incomplete_skud как сигнал «есть события, но не учтены». На плановом
+      // выходном/празднике (график + произв. календарь) неявки быть не может —
+      // показываем выходной (зеркалит ветку «нет entry» и default-ветку).
+      if (hasSkudEvents) return 'incomplete_skud';
+      return isScheduledDayOff ? 'weekend' : 'absent';
     case 'unpaid':
       return 'unpaid';
     case 'educational_leave':
