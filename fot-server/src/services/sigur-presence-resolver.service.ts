@@ -254,9 +254,7 @@ async function buildResolver(): Promise<ICachedResolver> {
   return { byName, byPrefix, byEmployeeId, expiresAt: Date.now() + RESOLVER_CACHE_TTL_MS };
 }
 
-async function getResolver(): Promise<ICachedResolver> {
-  const now = Date.now();
-  if (cache && cache.expiresAt > now) return cache;
+function startRebuild(): Promise<ICachedResolver> {
   if (inflight) return inflight;
   inflight = buildResolver()
     .then(resolver => {
@@ -267,6 +265,29 @@ async function getResolver(): Promise<ICachedResolver> {
       inflight = null;
     });
   return inflight;
+}
+
+async function getResolver(): Promise<ICachedResolver> {
+  const now = Date.now();
+  if (cache && cache.expiresAt > now) return cache;
+
+  // Протухло, но индекс есть — отдаём stale немедленно, полный ре-фетч
+  // справочника Sigur уходит в фон. Это убирает спайк раз в 10 мин.
+  if (cache) {
+    // Фоновую ошибку гасим: вызывающий получает stale cache, не этот промис
+    // (buildResolver и так деградирует на пустые мапы при сбое).
+    startRebuild().catch(() => { /* noop */ });
+    return cache;
+  }
+
+  // Холодный старт: индекса нет вовсе — придётся дождаться (single-flight).
+  return startRebuild();
+}
+
+/** Прогрев индекса при старте сервера, чтобы первый запрос presence
+ *  не ждал полного ре-фетча справочника Sigur. */
+export function prewarmSigurPresenceResolver(): void {
+  void getResolver().catch(() => { /* деградация уже внутри buildResolver */ });
 }
 
 export function invalidateSigurPresenceResolverCache(): void {

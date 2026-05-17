@@ -116,6 +116,13 @@
   cursor: not-allowed;
 }
 
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  align-items: flex-start;
+}
+
 .companyFilter {
   display: flex;
   flex-wrap: wrap;
