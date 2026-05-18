@@ -113,9 +113,10 @@ git checkout -f -B main personal/main
 git reset --hard personal/main
 git clean -fd
 
-# 3. Прогрев тулчейна
-( cd /opt/fot-build/fot-server && npm ci )
-( cd /opt/fot-build/fot-app    && npm ci )
+# 3. Прогрев тулчейна. В build-контексте нужны devDependencies:
+# tsc/vite живут именно там, даже если shell на сервере NODE_ENV=production.
+( cd /opt/fot-build/fot-server && npm_config_production=false npm ci --include=dev )
+( cd /opt/fot-build/fot-app    && npm_config_production=false npm ci --include=dev )
 
 # 4. Засеять package-файлы backend в папку сайта (нужны для npm ci --omit=dev)
 cp /opt/fot-build/fot-server/package.json      /srv/sites/fot.su10.ru/fot-server/package.json
@@ -128,19 +129,71 @@ bash scripts/deploy-server.sh --check
 bash scripts/deploy-server.sh both
 bash scripts/deploy-server.sh all
 
-# 6. ТОЛЬКО после зелёного прогона — убрать git/исходники из папки сайта
+# 6. ТОЛЬКО после зелёного прогона — убрать git/исходники из папки сайта.
+# Безопаснее переносить в backup, а не удалять сразу.
 cd /srv/sites/fot.su10.ru
-rm -rf .git scripts docs
-rm -rf fot-server/src fot-server/tsconfig.json
-rm -rf fot-app/src fot-app/vite.config.ts fot-app/tsconfig*.json fot-app/index.html
+
+TS=$(date +%Y%m%d-%H%M%S)
+BACKUP="/root/fot-site-source-backup-$TS"
+mkdir -p "$BACKUP"/{root,fot-server,fot-app}
+
+[ -d .git ] && mv .git "$BACKUP/root/git"
+[ -d scripts ] && mv scripts "$BACKUP/root/scripts"
+[ -d docs ] && mv docs "$BACKUP/root/docs"
+[ -d .claude ] && mv .claude "$BACKUP/root/.claude"
+[ -d BRANDING ] && mv BRANDING "$BACKUP/root/BRANDING"
+[ -d supabase ] && mv supabase "$BACKUP/root/supabase"
+[ -f DEPLOY.md ] && mv DEPLOY.md "$BACKUP/root/DEPLOY.md"
+[ -f .gitattributes ] && mv .gitattributes "$BACKUP/root/.gitattributes"
+[ -f .gitignore ] && mv .gitignore "$BACKUP/root/.gitignore"
+[ -f CLAUDE.md ] && mv CLAUDE.md "$BACKUP/root/CLAUDE.md"
+
+[ -d fot-server/src ] && mv fot-server/src "$BACKUP/fot-server/src"
+[ -d fot-server/scripts ] && mv fot-server/scripts "$BACKUP/fot-server/scripts"
+[ -d fot-server/tests ] && mv fot-server/tests "$BACKUP/fot-server/tests"
+[ -f fot-server/tsconfig.json ] && mv fot-server/tsconfig.json "$BACKUP/fot-server/tsconfig.json"
+[ -f fot-server/tsconfig.tsbuildinfo ] && mv fot-server/tsconfig.tsbuildinfo "$BACKUP/fot-server/tsconfig.tsbuildinfo"
+
+[ -d fot-app/src ] && mv fot-app/src "$BACKUP/fot-app/src"
+[ -d fot-app/public ] && mv fot-app/public "$BACKUP/fot-app/public"
+[ -d fot-app/node_modules ] && mv fot-app/node_modules "$BACKUP/fot-app/node_modules"
+[ -d fot-app/scripts ] && mv fot-app/scripts "$BACKUP/fot-app/scripts"
+[ -f fot-app/index.html ] && mv fot-app/index.html "$BACKUP/fot-app/index.html"
+[ -f fot-app/vite.config.ts ] && mv fot-app/vite.config.ts "$BACKUP/fot-app/vite.config.ts"
+[ -f fot-app/tsconfig.json ] && mv fot-app/tsconfig.json "$BACKUP/fot-app/tsconfig.json"
+[ -f fot-app/tsconfig.app.json ] && mv fot-app/tsconfig.app.json "$BACKUP/fot-app/tsconfig.app.json"
+[ -f fot-app/tsconfig.node.json ] && mv fot-app/tsconfig.node.json "$BACKUP/fot-app/tsconfig.node.json"
+[ -f fot-app/eslint.config.js ] && mv fot-app/eslint.config.js "$BACKUP/fot-app/eslint.config.js"
+
 # СОХРАНИТЬ: */.env, .migration/, */dist, fot-server/node_modules,
-#            fot-server/package*.json, fot-data-api/app, fot-data-api/.venv,
-#            fot-data-api/requirements.txt
+#            fot-server/package*.json, fot-server/templates,
+#            fot-data-api/app, fot-data-api/.venv, fot-data-api/requirements.txt.
 pm2 save
 ```
 
 Подпроект целиком (`rm -rf fot-server` и т.п.) удалять нельзя — только
 известные файлы исходников.
+
+После перехода `/srv/sites/fot.su10.ru` — runtime-папка. В ней не должно быть
+git-репозитория и проектных исходников. Нормальный вид верхнего уровня:
+
+```text
+.
+./.migration
+./fot-app
+./fot-app/dist
+./fot-data-api
+./fot-data-api/.venv
+./fot-data-api/app
+./fot-server
+./fot-server/dist
+./fot-server/node_modules
+./fot-server/templates
+```
+
+`fot-server/templates` не удалять без отдельной проверки: backend может читать
+шаблоны в runtime. Бэкап `/root/fot-site-source-backup-*` держать несколько
+дней после чистки.
 
 ## Деплой С Локального Компьютера
 
@@ -249,7 +302,7 @@ git clean -fd
 
 ```bash
 cd /opt/fot-build/fot-server
-npm ci
+npm_config_production=false npm ci --include=dev
 npm run build -- --outDir dist.new
 test -f dist.new/index.js
 rm -rf dist.old; [ -d dist ] && mv dist dist.old; mv dist.new dist; rm -rf dist.old
@@ -298,7 +351,7 @@ git reset --hard personal/main
 git clean -fd
 
 cd /opt/fot-build/fot-app
-npm ci
+npm_config_production=false npm ci --include=dev
 
 set -a
 . /srv/sites/fot.su10.ru/fot-app/.env
