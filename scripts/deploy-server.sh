@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
 # Server-side production deploy for fot.su10.ru.
 #
+# Source/git live in a disposable build context (/opt/fot-build).
+# Only built artefacts are copied into the live site (/srv/sites/fot.su10.ru).
+# Runtime config (.env, .migration/yandex-ca.pem) stays in the site folder
+# and is never touched by this script.
+#
 # Run on the production server:
-#   cd /srv/sites/fot.su10.ru
+#   cd /opt/fot-build
 #   bash scripts/deploy-server.sh both
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+BUILD_DIR="${BUILD_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+SITE_DIR="${SITE_DIR:-/srv/sites/fot.su10.ru}"
 
 FOT_BRANCH="${FOT_BRANCH:-main}"
+FOT_REMOTE="${FOT_REMOTE:-personal}"
 EXPECTED_HOSTNAME="${EXPECTED_HOSTNAME:-hub}"
 ALLOW_HOSTNAME_MISMATCH="${ALLOW_HOSTNAME_MISMATCH:-0}"
+BUILD_CLEAN_HARD="${BUILD_CLEAN_HARD:-0}"
 
 FRONTEND_NPM_CI="${FRONTEND_NPM_CI:-auto}"
 BACKEND_NPM_CI="${BACKEND_NPM_CI:-auto}"
@@ -30,19 +38,24 @@ usage() {
 Usage:
   bash scripts/deploy-server.sh [frontend|backend|data-api|both|all] [--check]
 
-Run this script on the production server from /srv/sites/fot.su10.ru.
+Run this script on the production server from the build context (/opt/fot-build).
+Git/source live in BUILD_DIR; only built artefacts are published into SITE_DIR.
 
 Scopes:
-  frontend   Pull code, build fot-app on server, activate dist/.
-  backend    Pull code, build fot-server on server, restart fot-server.
-  data-api   Pull code, update venv if needed, restart fot-data-api.
+  frontend   Sync code, build fot-app in BUILD_DIR, publish dist/ to SITE_DIR.
+  backend    Sync code, build fot-server in BUILD_DIR, publish + restart fot-server.
+  data-api   Sync code, publish app/, update venv if needed, restart fot-data-api.
   both       Deploy backend + frontend. Default.
   all        Deploy backend + frontend + data-api.
 
 Environment:
+  BUILD_DIR=/opt/fot-build
+  SITE_DIR=/srv/sites/fot.su10.ru
   FOT_BRANCH=main
+  FOT_REMOTE=personal          # git remote the server tracks (baldmaxim/FOT)
   EXPECTED_HOSTNAME=hub
   ALLOW_HOSTNAME_MISMATCH=1
+  BUILD_CLEAN_HARD=1            # also wipe gitignored paths (node_modules) in BUILD_DIR
 
   FRONTEND_NPM_CI=auto|1|0
   BACKEND_NPM_CI=auto|1|0
@@ -189,12 +202,25 @@ ensure_expected_host() {
   fi
 }
 
-ensure_clean_tree() {
-  cd "$ROOT_DIR"
-  if ! git diff --quiet || ! git diff --cached --quiet; then
-    git status --short >&2
-    die "на сервере есть незакоммиченные tracked-изменения"
-  fi
+# Atomic publish of a freshly-built directory into the site folder.
+# $1 build-side source dir, $2 site-side target dir (lives on one filesystem
+# with its parent, so the final mv-swap is atomic).
+publish_dir() {
+  local src="$1"
+  local target="$2"
+  local parent
+  parent="$(dirname "$target")"
+
+  test -d "$src" || die "нет собранной директории: $src"
+  mkdir -p "$parent"
+
+  rm -rf "$target.new"
+  cp -a "$src" "$target.new"
+
+  rm -rf "$target.old"
+  [ -d "$target" ] && mv "$target" "$target.old"
+  mv "$target.new" "$target"
+  rm -rf "$target.old"
 }
 
 server_preflight() {
@@ -204,6 +230,7 @@ server_preflight() {
   require_cmd pm2
   require_cmd curl
   require_cmd nginx
+  require_cmd cp
 
   includes_data_api && require_cmd python3.12
 
@@ -213,36 +240,43 @@ server_preflight() {
 
   ensure_expected_host
 
-  cd "$ROOT_DIR"
-  git rev-parse --is-inside-work-tree >/dev/null
+  test -d "$BUILD_DIR" || die "BUILD_DIR не найден: $BUILD_DIR"
+  cd "$BUILD_DIR"
+  git rev-parse --is-inside-work-tree >/dev/null || die "BUILD_DIR не git-репозиторий: $BUILD_DIR"
 
   local current_branch
-  current_branch="$(git branch --show-current)"
-  [[ "$current_branch" == "$FOT_BRANCH" ]] || die "ветка сервера '$current_branch', ожидалась '$FOT_BRANCH'"
+  current_branch="$(git branch --show-current || true)"
+  if [[ -n "$current_branch" && "$current_branch" != "$FOT_BRANCH" ]]; then
+    log "ветка BUILD_DIR '$current_branch', будет принудительно переключена на '$FOT_BRANCH'"
+  fi
 
-  ensure_clean_tree
-
-  test -f fot-server/.env || die "fot-server/.env missing"
-  test -f fot-app/.env || die "fot-app/.env missing"
-  test -f fot-data-api/.env || die "fot-data-api/.env missing"
-  test -f .migration/yandex-ca.pem || die ".migration/yandex-ca.pem missing"
+  test -f "$SITE_DIR/fot-server/.env" || die "$SITE_DIR/fot-server/.env missing"
+  test -f "$SITE_DIR/fot-app/.env" || die "$SITE_DIR/fot-app/.env missing"
+  test -f "$SITE_DIR/fot-data-api/.env" || die "$SITE_DIR/fot-data-api/.env missing"
+  test -f "$SITE_DIR/.migration/yandex-ca.pem" || die "$SITE_DIR/.migration/yandex-ca.pem missing"
 
   nginx -t >/dev/null
 }
 
 update_code() {
-  log "Обновляю код на сервере..."
-  cd "$ROOT_DIR"
+  log "Синхронизирую BUILD_DIR с $FOT_REMOTE/$FOT_BRANCH..."
+  cd "$BUILD_DIR"
 
-  BEFORE="$(git rev-parse --short HEAD)"
-  git fetch origin "$FOT_BRANCH"
-  git pull --ff-only origin "$FOT_BRANCH"
+  BEFORE="$(git rev-parse --short HEAD 2>/dev/null || echo '')"
+  git fetch "$FOT_REMOTE" "$FOT_BRANCH" --prune
+  git checkout -f -B "$FOT_BRANCH" "$FOT_REMOTE/$FOT_BRANCH"
+  git reset --hard "$FOT_REMOTE/$FOT_BRANCH"
+  if [[ "$BUILD_CLEAN_HARD" == "1" ]]; then
+    git clean -fdx
+  else
+    git clean -fd
+  fi
   AFTER="$(git rev-parse --short HEAD)"
 
-  ensure_clean_tree
-  echo "✓ Server code: $BEFORE -> $AFTER"
+  echo "✓ BUILD_DIR code: ${BEFORE:-none} -> $AFTER"
 }
 
+# True when build-dir deps must be (re)installed for the build itself.
 need_npm_ci() {
   local policy="$1"
   local sentinel="$2"
@@ -260,16 +294,31 @@ need_npm_ci() {
         return 0
       fi
       if [[ -n "$BEFORE" && -n "$AFTER" && "$BEFORE" != "$AFTER" ]]; then
-        git -C "$ROOT_DIR" diff --name-only "$BEFORE" "$AFTER" -- "$@" | grep -q . && return 0
+        git -C "$BUILD_DIR" diff --name-only "$BEFORE" "$AFTER" -- "$@" | grep -q . && return 0
       fi
       return 1
       ;;
   esac
 }
 
+# True when runtime prod-deps in the site folder must be refreshed.
+site_deps_stale() {
+  local node_modules="$1"
+  local force="$2"
+  local lockfile="$3"
+
+  [[ ! -d "$node_modules" ]] && return 0
+  [[ "$force" == "1" ]] && return 0
+  if [[ -n "$BEFORE" && -n "$AFTER" && "$BEFORE" != "$AFTER" ]]; then
+    git -C "$BUILD_DIR" diff --name-only "$BEFORE" "$AFTER" -- "$lockfile" | grep -q . && return 0
+  fi
+  return 1
+}
+
 deploy_backend() {
-  local app_dir="$ROOT_DIR/fot-server"
-  log "Собираю backend на сервере..."
+  local app_dir="$BUILD_DIR/fot-server"
+  local site_dir="$SITE_DIR/fot-server"
+  log "Собираю backend в BUILD_DIR..."
   cd "$app_dir"
 
   if need_npm_ci "$BACKEND_NPM_CI" "node_modules/.bin/tsc" fot-server/package.json fot-server/package-lock.json; then
@@ -285,30 +334,42 @@ deploy_backend() {
   mv dist.new dist
   rm -rf dist.old
 
-  load_env_file .env
+  load_env_file "$site_dir/.env"
   export SENTRY_RELEASE="$AFTER"
 
   if [[ "$BACKEND_SOURCEMAPS" == "1" ]]; then
     npm run sentry:sourcemaps
   fi
 
+  log "Публикую backend в SITE_DIR..."
+  cp "$app_dir/package.json" "$site_dir/package.json"
+  cp "$app_dir/package-lock.json" "$site_dir/package-lock.json"
+
+  if site_deps_stale "$site_dir/node_modules" "$BACKEND_NPM_CI" fot-server/package-lock.json; then
+    log "Обновляю prod-зависимости backend в SITE_DIR..."
+    ( cd "$site_dir" && npm ci --omit=dev )
+  fi
+
+  publish_dir "$app_dir/dist" "$site_dir/dist"
+
   if pm2 describe fot-server >/dev/null 2>&1; then
     pm2 restart fot-server --update-env
   else
-    pm2 start "$app_dir/dist/index.js" --name fot-server --cwd "$app_dir"
+    pm2 start "$site_dir/dist/index.js" --name fot-server --cwd "$site_dir"
   fi
 }
 
 deploy_frontend() {
-  local app_dir="$ROOT_DIR/fot-app"
-  log "Собираю frontend на сервере..."
+  local app_dir="$BUILD_DIR/fot-app"
+  local site_dir="$SITE_DIR/fot-app"
+  log "Собираю frontend в BUILD_DIR..."
   cd "$app_dir"
 
   if need_npm_ci "$FRONTEND_NPM_CI" "node_modules/.bin/vite" fot-app/package.json fot-app/package-lock.json; then
     npm ci
   fi
 
-  load_env_file .env
+  load_env_file "$site_dir/.env"
   export VITE_SENTRY_RELEASE="$AFTER"
   export SENTRY_RELEASE="$AFTER"
 
@@ -323,14 +384,17 @@ deploy_frontend() {
   mv dist.new dist
   rm -rf dist.old
 
-  find dist -type d -exec chmod 755 {} \;
-  find dist -type f -exec chmod 644 {} \;
+  log "Публикую frontend в SITE_DIR..."
+  publish_dir "$app_dir/dist" "$site_dir/dist"
+
+  find "$site_dir/dist" -type d -exec chmod 755 {} \;
+  find "$site_dir/dist" -type f -exec chmod 644 {} \;
 }
 
 deploy_data_api() {
-  local app_dir="$ROOT_DIR/fot-data-api"
+  local app_dir="$BUILD_DIR/fot-data-api"
+  local site_dir="$SITE_DIR/fot-data-api"
   log "Обновляю Public Data API..."
-  cd "$app_dir"
 
   local need_pip=0
   case "$DATA_API_PIP_INSTALL" in
@@ -341,30 +405,35 @@ deploy_data_api() {
       need_pip=0
       ;;
     auto)
-      if [[ ! -x .venv/bin/uvicorn ]]; then
+      if [[ ! -x "$site_dir/.venv/bin/uvicorn" ]]; then
         need_pip=1
       elif [[ -n "$BEFORE" && -n "$AFTER" && "$BEFORE" != "$AFTER" ]]; then
-        git -C "$ROOT_DIR" diff --name-only "$BEFORE" "$AFTER" -- fot-data-api/requirements.txt | grep -q . && need_pip=1
+        git -C "$BUILD_DIR" diff --name-only "$BEFORE" "$AFTER" -- fot-data-api/requirements.txt | grep -q . && need_pip=1
       fi
       ;;
   esac
 
-  if [[ ! -d .venv ]]; then
-    python3.12 -m venv .venv
+  log "Публикую data-api код в SITE_DIR..."
+  publish_dir "$app_dir/app" "$site_dir/app"
+  cp "$app_dir/requirements.txt" "$site_dir/requirements.txt"
+
+  if [[ ! -d "$site_dir/.venv" ]]; then
+    python3.12 -m venv "$site_dir/.venv"
+    need_pip=1
   fi
 
   if (( need_pip == 1 )); then
-    .venv/bin/pip install -r requirements.txt
+    "$site_dir/.venv/bin/pip" install -r "$site_dir/requirements.txt"
   fi
 
-  .venv/bin/python -m compileall -q app
+  ( cd "$site_dir" && .venv/bin/python -m compileall -q app )
 
   if pm2 describe fot-data-api >/dev/null 2>&1; then
     pm2 restart fot-data-api --update-env
   else
     pm2 start ".venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 4001" \
       --name fot-data-api \
-      --cwd "$app_dir" \
+      --cwd "$site_dir" \
       --interpreter none
   fi
 }
@@ -390,7 +459,7 @@ verify_deploy() {
   fi
 
   if includes_frontend; then
-    test -f "$ROOT_DIR/fot-app/dist/index.html"
+    test -f "$SITE_DIR/fot-app/dist/index.html"
     curl -fsS -I https://fot.su10.ru/ >/dev/null
   fi
 

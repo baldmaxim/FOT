@@ -3,8 +3,15 @@
 Рабочая инструкция по деплою проекта FOT на production-сервер
 `fot.su10.ru`.
 
-Главная идея простая: в production попадает код из `origin/main`. Перед
-деплоем нужные изменения должны быть закоммичены и запушены в GitHub.
+Главная идея простая: в production попадает код из `personal/main`
+(remote `personal` = `baldmaxim/FOT`). Перед деплоем нужные изменения
+должны быть закоммичены и запушены в `personal`.
+
+Схема деплоя: git/исходники живут в **одноразовом build-контексте**
+`/opt/fot-build`, сборка идёт там, в папку сайта `/srv/sites/fot.su10.ru`
+копируются **только собранные артефакты**. Рантайм-конфиг (`.env`-файлы,
+`.migration/yandex-ca.pem`) лежит в папке сайта и деплоем не трогается.
+`/opt/fot-build` можно удалить и пересоздать в любой момент.
 
 ## Production
 
@@ -14,7 +21,9 @@
 | Сервер | `45.80.128.254` |
 | SSH | `ssh root@45.80.128.254` |
 | Hostname | `hub` |
-| Корень проекта | `/srv/sites/fot.su10.ru` |
+| Git remote (источник деплоя) | `personal` (`baldmaxim/FOT`), ветка `main` |
+| Build-контекст (git/исходники) | `/opt/fot-build` |
+| Корень сайта (только артефакты + конфиг) | `/srv/sites/fot.su10.ru` |
 | Frontend | `/srv/sites/fot.su10.ru/fot-app/dist` |
 | Backend | PM2 `fot-server`, `127.0.0.1:3001` |
 | Public Data API | PM2 `fot-data-api`, `127.0.0.1:4001` |
@@ -26,13 +35,13 @@ Runtime использует Yandex Managed PostgreSQL и Cloud.ru S3. Productio
 
 ## Самый Частый Деплой
 
-Если ты уже подключаешься к серверу по SSH, используй серверный скрипт:
+Если ты уже подключаешься к серверу по SSH, используй серверный скрипт.
+Запускается он из build-контекста, git подтягивается скриптом автоматически:
 
 ```bash
 ssh root@45.80.128.254
-cd /srv/sites/fot.su10.ru
+cd /opt/fot-build
 
-git pull --ff-only origin main
 bash scripts/deploy-server.sh --check
 bash scripts/deploy-server.sh both
 ```
@@ -59,16 +68,86 @@ bash scripts/deploy-server.sh all
 Что делает `scripts/deploy-server.sh`:
 
 - проверяет, что скрипт запущен на hostname `hub`;
-- проверяет чистый git tree на сервере;
-- проверяет наличие `.env` файлов и `.migration/yandex-ca.pem`;
-- выполняет `git fetch` и `git pull --ff-only origin main`;
-- собирает нужные части проекта прямо на сервере;
-- атомарно заменяет `dist`;
-- перезапускает PM2-процессы;
+- проверяет наличие `.env`-файлов и `.migration/yandex-ca.pem` в папке сайта;
+- синхронизирует `/opt/fot-build` с `personal/main`
+  (`git fetch` + `git checkout -f -B main` + `git reset --hard` + `git clean -fd`) —
+  расхождение веток и грязное дерево больше деплой не ломают;
+- собирает нужные части проекта в `/opt/fot-build`;
+- копирует артефакты в `/srv/sites/fot.su10.ru` и атомарно заменяет `dist`/`app`;
+- обновляет prod-зависимости в папке сайта только при изменении lock-файлов;
+- перезапускает PM2-процессы (cwd остаётся в папке сайта);
 - выполняет `pm2 save`;
 - прогоняет проверки через `curl`.
 
-## Деплой С Локального Компьютера
+Локальные правки прямо в `/opt/fot-build` затираются `git reset --hard` —
+любые изменения только через `personal/main`. Полная пересборка с чистого
+листа: `BUILD_CLEAN_HARD=1 bash scripts/deploy-server.sh both`.
+
+Если сервер нужно временно переключить на другой remote/ветку:
+`FOT_REMOTE=origin FOT_BRANCH=hotfix bash scripts/deploy-server.sh both`.
+
+## Первичная Миграция На `/opt/fot-build`
+
+Одноразово, при переходе со старой схемы (git-репо в папке сайта). Порядок
+такой, чтобы живой сайт не сломался: git/исходники из папки сайта убираются
+**последним шагом**, только после успешного прогона нового скрипта.
+
+```bash
+ssh root@45.80.128.254
+hostname    # должно быть: hub
+
+# 1. Бэкап рантайм-конфига
+TS=$(date +%Y%m%d-%H%M%S); mkdir -p /root/fot-env-backups/$TS
+cp /srv/sites/fot.su10.ru/fot-server/.env    /root/fot-env-backups/$TS/fot-server.env
+cp /srv/sites/fot.su10.ru/fot-data-api/.env  /root/fot-env-backups/$TS/fot-data-api.env
+cp /srv/sites/fot.su10.ru/fot-app/.env       /root/fot-env-backups/$TS/fot-app.env
+cp /srv/sites/fot.su10.ru/.migration/yandex-ca.pem /root/fot-env-backups/$TS/yandex-ca.pem
+
+# 2. Клон build-контекста из personal (папку сайта не трогает)
+mkdir -p /opt/fot-build
+git clone https://github.com/baldmaxim/FOT.git /opt/fot-build
+cd /opt/fot-build
+git remote rename origin personal      # клон создаёт remote 'origin' → переименовать
+git fetch personal main --prune
+git checkout -f -B main personal/main
+git reset --hard personal/main
+git clean -fd
+
+# 3. Прогрев тулчейна
+( cd /opt/fot-build/fot-server && npm ci )
+( cd /opt/fot-build/fot-app    && npm ci )
+
+# 4. Засеять package-файлы backend в папку сайта (нужны для npm ci --omit=dev)
+cp /opt/fot-build/fot-server/package.json      /srv/sites/fot.su10.ru/fot-server/package.json
+cp /opt/fot-build/fot-server/package-lock.json /srv/sites/fot.su10.ru/fot-server/package-lock.json
+# Существующие fot-server/node_modules и fot-data-api/.venv в папке сайта сохранить.
+
+# 5. Прогон новой схемы рядом со старой (сайт всё ещё на старом dist/PM2)
+cd /opt/fot-build
+bash scripts/deploy-server.sh --check
+bash scripts/deploy-server.sh both
+bash scripts/deploy-server.sh all
+
+# 6. ТОЛЬКО после зелёного прогона — убрать git/исходники из папки сайта
+cd /srv/sites/fot.su10.ru
+rm -rf .git scripts docs
+rm -rf fot-server/src fot-server/tsconfig.json
+rm -rf fot-app/src fot-app/vite.config.ts fot-app/tsconfig*.json fot-app/index.html
+# СОХРАНИТЬ: */.env, .migration/, */dist, fot-server/node_modules,
+#            fot-server/package*.json, fot-data-api/app, fot-data-api/.venv,
+#            fot-data-api/requirements.txt
+pm2 save
+```
+
+Подпроект целиком (`rm -rf fot-server` и т.п.) удалять нельзя — только
+известные файлы исходников.
+
+## Деплой С Локального Компьютера (legacy)
+
+> **Legacy.** Актуальный путь — серверный `scripts/deploy-server.sh` из
+> `/opt/fot-build`. `scripts/deploy-production.sh` и обёртки
+> `deploy-{frontend,backend,both}.sh` под новую раскладку ещё не переписаны
+> (предполагают git-репо в папке сайта). Не использовать без обновления.
 
 Есть отдельный сценарий, когда сборка делается локально, а на сервер
 копируются готовые артефакты:
@@ -141,127 +220,140 @@ SKIP_VERIFY=1 bash scripts/deploy-production.sh both
 
 ## Ручной Деплой Backend
 
-Обычно ручной деплой не нужен, но порядок такой.
+Обычно ручной деплой не нужен (используй `scripts/deploy-server.sh backend`),
+но порядок такой. Всё делается на сервере: сборка в `/opt/fot-build`, в папку
+сайта копируется только `dist` + `package*.json`.
 
-Локально:
+Подтянуть код в build-контекст:
 
 ```bash
-export FOT_SSH=root@45.80.128.254
-export FOT_ROOT=/srv/sites/fot.su10.ru
+ssh root@45.80.128.254
+cd /opt/fot-build
+git fetch personal main --prune
+git checkout -f -B main personal/main
+git reset --hard personal/main
+git clean -fd
+```
 
-git fetch origin main
-git status --short
+Собрать backend в build-контексте:
 
-cd fot-server
+```bash
+cd /opt/fot-build/fot-server
 npm ci
-npm run build
+npm run build -- --outDir dist.new
+test -f dist.new/index.js
+rm -rf dist.old; [ -d dist ] && mv dist dist.old; mv dist.new dist; rm -rf dist.old
 ```
 
-На сервере подтянуть код:
+Опубликовать в папку сайта (`node_modules` остаётся в папке сайта, обновляется
+только при смене lock-файла):
 
 ```bash
-ssh "$FOT_SSH" "cd $FOT_ROOT && git pull --ff-only origin main"
-```
+BUILD=/opt/fot-build/fot-server
+SITE=/srv/sites/fot.su10.ru/fot-server
 
-Залить backend build:
+cp "$BUILD/package.json" "$SITE/package.json"
+cp "$BUILD/package-lock.json" "$SITE/package-lock.json"
+# Если менялся fot-server/package-lock.json — обнови prod-зависимости:
+( cd "$SITE" && npm ci --omit=dev )
 
-```bash
-tar czf - -C dist . | ssh "$FOT_SSH" '
-set -e
-TARGET=/srv/sites/fot.su10.ru/fot-server
-rm -rf "$TARGET/dist.new"
-mkdir -p "$TARGET/dist.new"
-tar xzf - -C "$TARGET/dist.new"
-'
-```
-
-Активировать backend:
-
-```bash
-ssh "$FOT_SSH" '
-set -e
-cd /srv/sites/fot.su10.ru/fot-server
-
-if [ ! -d node_modules ]; then
-  npm ci --omit=dev
-fi
-
-rm -rf dist.old
-[ -d dist ] && mv dist dist.old
-mv dist.new dist
-rm -rf dist.old
+rm -rf "$SITE/dist.new"
+cp -a "$BUILD/dist" "$SITE/dist.new"
+rm -rf "$SITE/dist.old"
+[ -d "$SITE/dist" ] && mv "$SITE/dist" "$SITE/dist.old"
+mv "$SITE/dist.new" "$SITE/dist"
+rm -rf "$SITE/dist.old"
 
 pm2 restart fot-server --update-env
 pm2 save
 pm2 status fot-server
-'
 ```
 
-Если менялись `fot-server/package.json` или `fot-server/package-lock.json`,
-перед restart обязательно обнови зависимости на сервере:
-
-```bash
-ssh "$FOT_SSH" "cd $FOT_ROOT/fot-server && npm ci --omit=dev"
-```
+PM2-процесс `fot-server` имеет cwd `/srv/sites/fot.su10.ru/fot-server`, поэтому
+dotenv грузит `.env` из папки сайта. Cwd при ручном деплое не менять.
 
 ## Ручной Деплой Frontend
 
-Локально:
+Всё на сервере. `VITE_*` зашиваются в бандл при сборке, поэтому env берётся
+из `.env` папки сайта (production-значения), а не из build-контекста.
+
+Подтянуть код и собрать в build-контексте:
 
 ```bash
-export FOT_SSH=root@45.80.128.254
-export FOT_ROOT=/srv/sites/fot.su10.ru
-export RELEASE=$(git rev-parse --short HEAD)
+ssh root@45.80.128.254
+cd /opt/fot-build
+git fetch personal main --prune
+git checkout -f -B main personal/main
+git reset --hard personal/main
+git clean -fd
 
-cd fot-app
+cd /opt/fot-build/fot-app
 npm ci
 
 set -a
-source .env.production.local
+. /srv/sites/fot.su10.ru/fot-app/.env
 set +a
-
+export RELEASE=$(git -C /opt/fot-build rev-parse --short HEAD)
 export VITE_SENTRY_RELEASE="$RELEASE"
 export SENTRY_RELEASE="$RELEASE"
-NODE_OPTIONS='--max-old-space-size=2048' npm run build
+
+rm -rf dist.new
+./node_modules/.bin/tsc -b
+NODE_OPTIONS='--max-old-space-size=2048' ./node_modules/.bin/vite build --outDir dist.new
+test -f dist.new/index.html
+find dist.new -name '*.map' -type f -delete
+rm -rf dist.old; [ -d dist ] && mv dist dist.old; mv dist.new dist; rm -rf dist.old
 ```
 
-Залить и активировать frontend:
+Опубликовать в папку сайта:
 
 ```bash
-tar czf - -C dist . | ssh "$FOT_SSH" '
-set -e
-TARGET=/srv/sites/fot.su10.ru/fot-app
-rm -rf "$TARGET/dist.new"
-mkdir -p "$TARGET/dist.new"
-tar xzf - -C "$TARGET/dist.new"
+BUILD=/opt/fot-build/fot-app
+SITE=/srv/sites/fot.su10.ru/fot-app
 
-rm -rf "$TARGET/dist.old"
-[ -d "$TARGET/dist" ] && mv "$TARGET/dist" "$TARGET/dist.old"
-mv "$TARGET/dist.new" "$TARGET/dist"
-rm -rf "$TARGET/dist.old"
+rm -rf "$SITE/dist.new"
+cp -a "$BUILD/dist" "$SITE/dist.new"
+rm -rf "$SITE/dist.old"
+[ -d "$SITE/dist" ] && mv "$SITE/dist" "$SITE/dist.old"
+mv "$SITE/dist.new" "$SITE/dist"
+rm -rf "$SITE/dist.old"
 
-find "$TARGET/dist" -type d -exec chmod 755 {} \;
-find "$TARGET/dist" -type f -exec chmod 644 {} \;
-'
+find "$SITE/dist" -type d -exec chmod 755 {} \;
+find "$SITE/dist" -type f -exec chmod 644 {} \;
 ```
 
 Frontend не требует PM2 restart.
 
 ## Public Data API
 
-У `fot-data-api` нет отдельной сборки. После `git pull` нужно обновить venv при
-изменении зависимостей и перезапустить PM2:
+У `fot-data-api` нет отдельной сборки. Код (`app/` + `requirements.txt`)
+копируется из build-контекста в папку сайта; `.venv` живёт в папке сайта и
+обновляется только при изменении `requirements.txt`:
 
 ```bash
 ssh root@45.80.128.254
-cd /srv/sites/fot.su10.ru/fot-data-api
+cd /opt/fot-build
+git fetch personal main --prune
+git checkout -f -B main personal/main
+git reset --hard personal/main
+git clean -fd
 
-if [ ! -d .venv ]; then
-  python3.12 -m venv .venv
-fi
+BUILD=/opt/fot-build/fot-data-api
+SITE=/srv/sites/fot.su10.ru/fot-data-api
 
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python -m compileall -q app
+rm -rf "$SITE/app.new"
+cp -a "$BUILD/app" "$SITE/app.new"
+cp "$BUILD/requirements.txt" "$SITE/requirements.txt"
+rm -rf "$SITE/app.old"
+[ -d "$SITE/app" ] && mv "$SITE/app" "$SITE/app.old"
+mv "$SITE/app.new" "$SITE/app"
+rm -rf "$SITE/app.old"
+
+[ -d "$SITE/.venv" ] || python3.12 -m venv "$SITE/.venv"
+# Если менялся requirements.txt:
+"$SITE/.venv/bin/pip" install -r "$SITE/requirements.txt"
+
+( cd "$SITE" && .venv/bin/python -m compileall -q app )
 pm2 restart fot-data-api --update-env
 pm2 save
 pm2 status fot-data-api
@@ -270,7 +362,7 @@ pm2 status fot-data-api
 Через скрипт это короче:
 
 ```bash
-cd /srv/sites/fot.su10.ru
+cd /opt/fot-build
 bash scripts/deploy-server.sh data-api
 ```
 
@@ -355,10 +447,15 @@ DEFAULT_RATE_LIMIT_PER_MINUTE=60
 SQL-миграции из `docs/migrations/` применяются вручную через `psql`.
 Автоматического запуска миграций в деплой-скриптах нет.
 
+SQL-файлы лежат в build-контексте (`/opt/fot-build/docs/migrations/`).
+`DATABASE_URL` берётся из `.env` папки сайта.
+
 ```bash
 ssh root@45.80.128.254
-cd /srv/sites/fot.su10.ru
-git pull --ff-only origin main
+cd /opt/fot-build
+git fetch personal main --prune
+git checkout -f -B main personal/main
+git reset --hard personal/main
 
 cd /srv/sites/fot.su10.ru/fot-server
 export DATABASE_URL="$(node -e "require('dotenv').config({override:true}); process.stdout.write(process.env.DATABASE_URL || '')")"
@@ -366,7 +463,7 @@ export PGSSLROOTCERT=/srv/sites/fot.su10.ru/.migration/yandex-ca.pem
 test -n "$DATABASE_URL"
 
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
-  -f /srv/sites/fot.su10.ru/docs/migrations/<NNN>_<name>.sql
+  -f /opt/fot-build/docs/migrations/<NNN>_<name>.sql
 
 pm2 restart fot-server --update-env
 pm2 save
@@ -376,7 +473,7 @@ pm2 save
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
-  -f /srv/sites/fot.su10.ru/docs/migrations/096_timesheet_team_mgmt_access.sql
+  -f /opt/fot-build/docs/migrations/096_timesheet_team_mgmt_access.sql
 ```
 
 ## Проверки После Деплоя
@@ -502,21 +599,23 @@ hostname
 Локально:
 
 ```bash
-git fetch origin main
+git fetch personal main
 git switch main
-git pull --ff-only origin main
+git pull --ff-only personal main
 git revert <bad_commit>
-git push origin main
+git push personal main
 ```
 
-На сервере:
+На сервере (скрипт сам синхронизирует `/opt/fot-build` с `personal/main`):
 
 ```bash
 ssh root@45.80.128.254
-cd /srv/sites/fot.su10.ru
-git pull --ff-only origin main
+cd /opt/fot-build
 bash scripts/deploy-server.sh both
 ```
+
+Правки прямо в `/opt/fot-build` для rollback бесполезны — `git reset --hard`
+их затрёт. Откат только через revert/fix в `main` и обычный деплой.
 
 Если нужно срочно откатить только frontend или backend без revert, используй
 ручной деплой предыдущего локально собранного `dist`.
