@@ -142,15 +142,18 @@ pm2 save
 Подпроект целиком (`rm -rf fot-server` и т.п.) удалять нельзя — только
 известные файлы исходников.
 
-## Деплой С Локального Компьютера (legacy)
+## Деплой С Локального Компьютера
 
-> **Legacy.** Актуальный путь — серверный `scripts/deploy-server.sh` из
-> `/opt/fot-build`. `scripts/deploy-production.sh` и обёртки
-> `deploy-{frontend,backend,both}.sh` под новую раскладку ещё не переписаны
-> (предполагают git-репо в папке сайта). Не использовать без обновления.
+Локальная команда теперь только запускает серверный деплой по SSH.
+Она **не собирает проект локально** и **не копирует локальные файлы** на
+сервер. Код всё равно берётся из git на production-сервере:
 
-Есть отдельный сценарий, когда сборка делается локально, а на сервер
-копируются готовые артефакты:
+1. сервер создаёт/обновляет `/opt/fot-build`;
+2. `/opt/fot-build` синхронизируется с `personal/main`;
+3. сборка выполняется в `/opt/fot-build`;
+4. в `/srv/sites/fot.su10.ru` копируются только артефакты.
+
+Перед запуском убедись, что нужные изменения закоммичены и запушены:
 
 ```bash
 git fetch origin main
@@ -162,20 +165,11 @@ bash scripts/deploy-production.sh --check
 bash scripts/deploy-production.sh both
 ```
 
-Для frontend локально нужен файл `fot-app/.env.production.local`. Он не
-коммитится.
+`scripts/deploy-production.sh` сам подключается к `root@45.80.128.254`,
+проверяет build-контекст и запускает на сервере `scripts/deploy-server.sh`.
+Если `/opt/fot-build` отсутствует, wrapper создаст его через `git clone`.
 
-Минимум:
-
-```env
-VITE_API_URL=https://fot.su10.ru/api
-VITE_SENTRY_DSN=...
-SENTRY_AUTH_TOKEN=...
-SENTRY_ORG=odintsovorg
-SENTRY_PROJECT=fot-app
-```
-
-Доступные scope локального скрипта:
+Доступные scope:
 
 ```bash
 bash scripts/deploy-production.sh frontend
@@ -185,7 +179,7 @@ bash scripts/deploy-production.sh both
 bash scripts/deploy-production.sh all
 ```
 
-Короткие команды оставлены как удобные обертки:
+Короткие команды — это такие же SSH-wrapper'ы:
 
 ```bash
 bash scripts/deploy-frontend.sh
@@ -193,9 +187,25 @@ bash scripts/deploy-backend.sh
 bash scripts/deploy-both.sh
 ```
 
+Переменные для локального запуска:
+
+```bash
+FOT_SSH=root@45.80.128.254
+BUILD_DIR=/opt/fot-build
+FOT_REPO_URL=https://github.com/baldmaxim/FOT.git
+FOT_REMOTE=personal
+FOT_BRANCH=main
+```
+
+Старый сценарий "собрать локально и залить артефакты на сервер" больше не
+используется. Production не должен зависеть от состояния локального рабочего
+дерева.
+
 ## Полезные Флаги
 
-Для серверного скрипта:
+Флаги одинаковые для серверного скрипта и локального SSH-wrapper'а.
+Локальный `scripts/deploy-production.sh` просто передаёт их в
+`scripts/deploy-server.sh` на сервере.
 
 ```bash
 BACKEND_NPM_CI=1 bash scripts/deploy-server.sh backend
@@ -205,7 +215,7 @@ BACKEND_SOURCEMAPS=1 bash scripts/deploy-server.sh backend
 SKIP_VERIFY=1 bash scripts/deploy-server.sh both
 ```
 
-Для локального скрипта:
+То же самое с локального компьютера:
 
 ```bash
 BACKEND_NPM_CI=1 bash scripts/deploy-production.sh backend

@@ -33,7 +33,7 @@
 
 ### 3. .env файлы (правишь сам — Claude .env не трогает)
 
-**`fot-server/.env`** (на проде в `/var/www/fot/fot-server/.env`):
+**`fot-server/.env`** (на проде в `/srv/sites/fot.su10.ru/fot-server/.env`):
 ```
 SENTRY_DSN=https://<key>@o<orgId>.ingest.sentry.io/<backendProjectId>
 SENTRY_AUTH_TOKEN=<токен из шага 2>
@@ -42,7 +42,7 @@ SENTRY_PROJECT=fot-server
 ```
 `SENTRY_RELEASE` экспортируется при сборке (см. ниже).
 
-**`fot-app/.env`** (на проде в `/var/www/fot/fot-app/.env`):
+**`fot-app/.env`** (на проде в `/srv/sites/fot.su10.ru/fot-app/.env`):
 ```
 VITE_SENTRY_DSN=https://<key>@o<orgId>.ingest.sentry.io/<frontendProjectId>
 SENTRY_AUTH_TOKEN=<тот же токен>
