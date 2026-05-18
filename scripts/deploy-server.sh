@@ -141,6 +141,13 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "команда не найдена: $1"
 }
 
+npm_ci_build_deps() {
+  # BUILD_DIR needs devDependencies for tsc/vite even when the server shell has
+  # NODE_ENV=production or npm production config enabled. SITE_DIR runtime deps
+  # are still installed separately with --omit=dev.
+  npm_config_production=false npm ci --include=dev
+}
+
 dotenv_exports() {
   local env_file="$1"
   node - "$env_file" <<'NODE'
@@ -322,8 +329,9 @@ deploy_backend() {
   cd "$app_dir"
 
   if need_npm_ci "$BACKEND_NPM_CI" "node_modules/.bin/tsc" fot-server/package.json fot-server/package-lock.json; then
-    npm ci
+    npm_ci_build_deps
   fi
+  test -x ./node_modules/.bin/tsc || die "backend build deps missing: ./node_modules/.bin/tsc"
 
   rm -rf dist.new
   npm run build -- --outDir dist.new
@@ -366,8 +374,10 @@ deploy_frontend() {
   cd "$app_dir"
 
   if need_npm_ci "$FRONTEND_NPM_CI" "node_modules/.bin/vite" fot-app/package.json fot-app/package-lock.json; then
-    npm ci
+    npm_ci_build_deps
   fi
+  test -x ./node_modules/.bin/tsc || die "frontend build deps missing: ./node_modules/.bin/tsc"
+  test -x ./node_modules/.bin/vite || die "frontend build deps missing: ./node_modules/.bin/vite"
 
   load_env_file "$site_dir/.env"
   export VITE_SENTRY_RELEASE="$AFTER"
