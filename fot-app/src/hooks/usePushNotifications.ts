@@ -4,12 +4,21 @@ import { apiClient } from '../api/client';
 
 type NotificationPermission = 'default' | 'granted' | 'denied';
 
+export type PushSubscribeResult =
+  | 'subscribed'
+  | 'denied'
+  | 'dismissed'
+  | 'unsupported'
+  | 'error';
+
+export type PushUnsubscribeResult = 'unsubscribed' | 'error';
+
 interface IUsePushNotifications {
   isSupported: boolean;
   permission: NotificationPermission;
   isSubscribed: boolean;
-  subscribe: () => Promise<void>;
-  unsubscribe: () => Promise<void>;
+  subscribe: () => Promise<PushSubscribeResult>;
+  unsubscribe: () => Promise<PushUnsubscribeResult>;
 }
 
 const OPT_OUT_KEY = 'push_opt_out';
@@ -19,6 +28,19 @@ const urlBase64ToUint8Array = (base64String: string): Uint8Array => {
   const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
   const rawData = window.atob(base64);
   return new Uint8Array([...rawData].map(char => char.charCodeAt(0)));
+};
+
+// Сравнение applicationServerKey уже существующей подписки с актуальным
+// VAPID-ключом. При ротации ключа (cutover) старый ключ не совпадёт и
+// pushManager.subscribe() кинул бы InvalidStateError.
+const sameKey = (a: ArrayBuffer | null | undefined, b: Uint8Array): boolean => {
+  if (!a) return false;
+  const av = new Uint8Array(a);
+  if (av.length !== b.length) return false;
+  for (let i = 0; i < av.length; i += 1) {
+    if (av[i] !== b[i]) return false;
+  }
+  return true;
 };
 
 const saveSubscriptionToServer = async (sub: PushSubscription): Promise<boolean> => {
@@ -48,11 +70,22 @@ const createSubscription = async (reg: ServiceWorkerRegistration): Promise<boole
     );
     if (!res.success) return false;
 
-    const applicationServerKey = urlBase64ToUint8Array(res.data.publicKey).buffer as ArrayBuffer;
-    const sub = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey,
-    });
+    const keyBytes = urlBase64ToUint8Array(res.data.publicKey);
+    const applicationServerKey = keyBytes.buffer as ArrayBuffer;
+
+    let sub = await reg.pushManager.getSubscription();
+    // Старая подписка с другим VAPID-ключом → без переотписки повторный
+    // subscribe() кинет InvalidStateError и тумблер молча не включится.
+    if (sub && !sameKey(sub.options.applicationServerKey, keyBytes)) {
+      await sub.unsubscribe();
+      sub = null;
+    }
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey,
+      });
+    }
     return await saveSubscriptionToServer(sub);
   } catch (err) {
     console.error('[push] subscribe failed', err);
@@ -103,42 +136,79 @@ export const usePushNotifications = (): IUsePushNotifications => {
       });
   }, [isSupported]);
 
-  const subscribe = useCallback(async () => {
-    if (!isSupported || !registration) return;
-
-    const perm = await Notification.requestPermission();
-    setPermission(perm);
-    if (perm !== 'granted') return;
-
-    const ok = await createSubscription(registration);
-    if (ok) {
-      localStorage.removeItem(OPT_OUT_KEY);
-      setIsSubscribed(true);
+  // Достаём регистрацию SW устойчиво: не полагаемся на гонку setRegistration —
+  // навигатор отдаёт активную регистрацию через serviceWorker.ready.
+  const resolveRegistration = useCallback(async (): Promise<ServiceWorkerRegistration | null> => {
+    if (registration) return registration;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      setRegistration(reg);
+      return reg;
+    } catch (err) {
+      console.error('[push] serviceWorker.ready failed', err);
+      Sentry.captureException(err, { tags: { push: 'sw-ready' } });
+      return null;
     }
-  }, [isSupported, registration]);
+  }, [registration]);
 
-  const unsubscribe = useCallback(async () => {
-    if (!isSupported || !registration) return;
+  const subscribe = useCallback(async (): Promise<PushSubscribeResult> => {
+    if (!isSupported) return 'unsupported';
+
+    const reg = await resolveRegistration();
+    if (!reg) return 'error';
+
+    let perm: NotificationPermission;
+    try {
+      perm = await Notification.requestPermission();
+    } catch (err) {
+      console.error('[push] requestPermission failed', err);
+      Sentry.captureException(err, { tags: { push: 'request-permission' } });
+      return 'error';
+    }
+    setPermission(perm);
+
+    if (perm === 'denied') {
+      console.warn('[push] permission denied');
+      Sentry.addBreadcrumb({ category: 'push', level: 'warning', message: 'permission denied' });
+      return 'denied';
+    }
+    if (perm !== 'granted') {
+      console.warn('[push] permission prompt dismissed (default)');
+      Sentry.addBreadcrumb({ category: 'push', level: 'info', message: 'permission dismissed' });
+      return 'dismissed';
+    }
+
+    const ok = await createSubscription(reg);
+    if (!ok) return 'error';
+
+    localStorage.removeItem(OPT_OUT_KEY);
+    setIsSubscribed(true);
+    return 'subscribed';
+  }, [isSupported, resolveRegistration]);
+
+  const unsubscribe = useCallback(async (): Promise<PushUnsubscribeResult> => {
+    if (!isSupported) return 'error';
 
     // Запоминаем явный отказ, чтобы авто-подписка при granted не включила обратно.
     localStorage.setItem(OPT_OUT_KEY, '1');
 
-    const sub = await registration.pushManager.getSubscription();
-    if (!sub) {
-      setIsSubscribed(false);
-      return;
-    }
-
-    const endpoint = sub.endpoint;
+    const reg = await resolveRegistration();
     try {
-      await sub.unsubscribe();
-      await apiClient.delete('/push/subscribe', { body: JSON.stringify({ endpoint }) });
+      const sub = reg ? await reg.pushManager.getSubscription() : null;
+      if (sub) {
+        const endpoint = sub.endpoint;
+        await sub.unsubscribe();
+        await apiClient.delete('/push/subscribe', { body: JSON.stringify({ endpoint }) });
+      }
+      setIsSubscribed(false);
+      return 'unsubscribed';
     } catch (err) {
       console.error('[push] unsubscribe failed', err);
       Sentry.captureException(err, { tags: { push: 'unsubscribe' } });
+      setIsSubscribed(false);
+      return 'error';
     }
-    setIsSubscribed(false);
-  }, [isSupported, registration]);
+  }, [isSupported, resolveRegistration]);
 
   return { isSupported, permission, isSubscribed, subscribe, unsubscribe };
 };

@@ -4,7 +4,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useChatContext } from '../../contexts/ChatContext';
 import { useToast } from '../../contexts/ToastContext';
 import { chatService, type IChatContactRequest, type IChatUser } from '../../services/chatService';
-import { usePushNotifications } from '../../hooks/usePushNotifications';
+import { usePushNotifications, type PushSubscribeResult } from '../../hooks/usePushNotifications';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import styles from './ChatSidePanel.module.css';
 
@@ -53,6 +53,40 @@ export const ChatSidePanel: FC = () => {
   const { isSupported: pushSupported, permission, isSubscribed, subscribe, unsubscribe } = usePushNotifications();
   const showPushBanner = pushSupported && permission !== 'denied' && !isSubscribed;
   const overlayHandlers = useOverlayDismiss(closeChat);
+
+  const notifySubscribeResult = (result: PushSubscribeResult): void => {
+    switch (result) {
+      case 'subscribed':
+        toast.success('Уведомления включены');
+        break;
+      case 'denied':
+        toast.warning('Разрешите уведомления для сайта в настройках браузера');
+        break;
+      case 'dismissed':
+        toast.info('Запрос на уведомления закрыт — нажмите ещё раз и выберите «Разрешить»');
+        break;
+      case 'unsupported':
+        toast.warning('Браузер не поддерживает push-уведомления');
+        break;
+      case 'error':
+        toast.error('Не удалось включить уведомления, попробуйте позже');
+        break;
+    }
+  };
+
+  const handleEnablePush = async (): Promise<void> => {
+    notifySubscribeResult(await subscribe());
+  };
+
+  const handleTogglePush = async (): Promise<void> => {
+    if (isSubscribed) {
+      const result = await unsubscribe();
+      if (result === 'unsubscribed') toast.success('Уведомления отключены');
+      else toast.error('Не удалось отключить уведомления');
+      return;
+    }
+    notifySubscribeResult(await subscribe());
+  };
 
   const [activeTab, setActiveTab] = useState<PanelTab>('chats');
   const [requestBox, setRequestBox] = useState<RequestBox>('inbox');
@@ -358,7 +392,7 @@ export const ChatSidePanel: FC = () => {
                       aria-label="Уведомления о сообщениях"
                       className={`${styles.switch} ${isSubscribed ? styles.switchOn : ''}`}
                       disabled={permission === 'denied'}
-                      onClick={() => (isSubscribed ? unsubscribe() : subscribe())}
+                      onClick={() => { void handleTogglePush(); }}
                     >
                       <span className={styles.switchThumb} />
                     </button>
@@ -404,7 +438,7 @@ export const ChatSidePanel: FC = () => {
                 <path d="M13.73 21a2 2 0 0 1-3.46 0" />
               </svg>
               <span>Уведомления</span>
-              <button className={styles.pushBannerBtn} onClick={subscribe}>
+              <button className={styles.pushBannerBtn} onClick={() => { void handleEnablePush(); }}>
                 Включить
               </button>
             </div>
