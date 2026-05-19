@@ -353,14 +353,18 @@ export async function syncEmployeesLogic(
     else portalOnlyByName.set(key, [e]);
   }
 
-  const dbDepartments = await query<{ id: string; sigur_department_id: number | null; name: string | null }>(
-    'SELECT id, sigur_department_id, name FROM org_departments WHERE sigur_department_id IS NOT NULL',
+  // ORDER BY is_active DESC → активная строка идёт первой и выигрывает (Map
+  // ставим только если ключа ещё нет). Защита от привязки сотрудника к
+  // осиротевшему is_active=false дубликату, если тот ещё не схлопнут
+  // consolidateDuplicateDepartments (или до применения миграции 106).
+  const dbDepartments = await query<{ id: string; sigur_department_id: number | null; name: string | null; is_active: boolean }>(
+    'SELECT id, sigur_department_id, name, is_active FROM org_departments WHERE sigur_department_id IS NOT NULL ORDER BY is_active DESC, id ASC',
   );
 
   const sigurDeptToDbId = new Map<number, string>();
   const sigurDeptToName = new Map<number, string>();
   for (const d of dbDepartments || []) {
-    if (d.sigur_department_id != null) {
+    if (d.sigur_department_id != null && !sigurDeptToDbId.has(d.sigur_department_id)) {
       sigurDeptToDbId.set(d.sigur_department_id, d.id);
       if (d.name) sigurDeptToName.set(d.sigur_department_id, d.name);
     }

@@ -40,6 +40,12 @@ vi.mock('../services/data-scope.service.js', () => ({
   }),
 }));
 
+// collectDeptIds расширяет выбранную бригаду дочерними отделами. В юнит-тестах
+// бригады плоские → возвращаем сам id (детерминированно, без обращения к БД).
+vi.mock('../services/skud-shared.service.js', () => ({
+  collectDeptIds: vi.fn(async (id: string) => [id]),
+}));
+
 import { scheduleController } from './schedule.controller.js';
 
 const BRIGADE_1 = '11111111-1111-4111-8111-111111111111';
@@ -173,6 +179,8 @@ describe('scheduleController.bulkApplyToBrigades', () => {
         departments_processed: 2,
         employees_matched: 2,
         employees_updated: 2,
+        employees_failed: 0,
+        sample_errors: [],
       },
     });
 
@@ -238,6 +246,8 @@ describe('scheduleController.bulkApplyToBrigades', () => {
         departments_processed: 1,
         employees_matched: 2,
         employees_updated: 1,
+        employees_failed: 0,
+        sample_errors: [],
       },
     });
 
@@ -329,7 +339,59 @@ describe('scheduleController.bulkApplyToBrigades', () => {
         departments_processed: 1,
         employees_matched: 0,
         employees_updated: 0,
+        employees_failed: 0,
+        sample_errors: [],
+        note: 'В выбранных бригадах нет активных сотрудников (исключённые из табеля, архивные и уволенные не учитываются)',
       },
     });
+  });
+
+  it('one failing employee does not abort the batch (allSettled)', async () => {
+    pgQuery.mockImplementation(async (sql: string) => {
+      const lower = sql.toLowerCase();
+      if (lower.includes('from org_departments')) {
+        return [{ id: BRIGADE_1, name: 'Бр. 1', kind: 'brigade' }];
+      }
+      if (lower.includes('from employees')) {
+        return [{ id: 301 }, { id: 302 }];
+      }
+      if (lower.includes('from employee_schedule_assignments')) {
+        return []; // нет преднастроек → путь Case 3 (INSERT)
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+
+    // Первый INSERT успешен, второй возвращает null → assignEmployeeSchedule
+    // бросает «Failed to insert…». allSettled должен это поглотить.
+    let insertCounter = 0;
+    pgQueryOne.mockImplementation(async (sql: string) => {
+      if (sql.toLowerCase().startsWith('insert into employee_schedule_assignments')) {
+        insertCounter += 1;
+        return insertCounter === 1 ? { id: 'new-1' } : null;
+      }
+      return { id: 'fetched' };
+    });
+    pgExecute.mockResolvedValue(1);
+
+    const req = makeReq({
+      body: {
+        department_ids: [BRIGADE_1],
+        action: 'assign',
+        schedule_id: SCHEDULE_ID,
+        effective_date: '2026-04-20',
+      },
+    });
+    const res = makeRes();
+
+    await scheduleController.bulkApplyToBrigades(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const data = (res.payload as { data: Record<string, unknown> }).data;
+    expect(data.departments_processed).toBe(1);
+    expect(data.employees_matched).toBe(2);
+    expect(data.employees_updated).toBe(1);
+    expect(data.employees_failed).toBe(1);
+    expect((data.sample_errors as string[]).length).toBe(1);
+    expect(data.note).toContain('Не удалось обновить 1 из 2');
   });
 });

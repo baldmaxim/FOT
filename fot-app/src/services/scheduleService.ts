@@ -23,6 +23,10 @@ export interface IBulkBrigadeScheduleResult {
   departments_processed: number;
   employees_matched: number;
   employees_updated: number;
+  employees_failed?: number;
+  sample_errors?: string[];
+  /** Пояснение, когда matched=0 или были сбои — показываем пользователю. */
+  note?: string;
 }
 
 export const scheduleService = {

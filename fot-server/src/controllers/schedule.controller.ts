@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { execute, query, queryOne } from '../config/postgres.js';
 import { resolveSchedule, resolveSchedulesBulk, computeNetWorkHours } from '../services/schedule.service.js';
 import { canAccessEmployeeInScope, resolveRequestDataScope, resolveScopedDepartmentIds } from '../services/data-scope.service.js';
+import { collectDeptIds } from '../services/skud-shared.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const scheduleTypeEnum = z.enum(['office', 'remote', 'hybrid', 'shift']);
@@ -768,24 +769,36 @@ export const scheduleController = {
         return res.status(400).json({ success: false, error: 'Можно выбирать только отделы-бригады' });
       }
 
+      // Расширяем выбор дочерними отделами бригады (collectDeptIds = отдел +
+      // все потомки). Бригады обычно плоские, но это страхует случай, когда
+      // сотрудники сидят на под-отделе бригады и иначе молча пропускались бы.
+      const expandedDeptIds = Array.from(new Set(
+        (await Promise.all(departmentIds.map(id => collectDeptIds(id)))).flat(),
+      ));
+
       const employees = await query<{ id: number }>(
         `SELECT id FROM employees
           WHERE org_department_id = ANY($1::uuid[])
             AND is_archived = false
             AND excluded_from_timesheet = false
             AND employment_status <> 'fired'`,
-        [departmentIds],
+        [expandedDeptIds],
       );
 
       const employeeIds = employees.map(row => row.id);
       let employeesUpdated = 0;
+      let employeesFailed = 0;
+      const sampleErrors: string[] = [];
       const CHUNK_SIZE = 20;
 
       const preloadedByEmployee = await loadEmployeeScheduleRowsBatch(employeeIds);
 
+      // allSettled + per-employee try/catch: одна сбойная запись больше НЕ
+      // роняет весь батч (раньше Promise.all → reject чанка → 500 → ни одной
+      // выбранной бригаде график не выставлялся).
       for (let index = 0; index < employeeIds.length; index += CHUNK_SIZE) {
         const chunk = employeeIds.slice(index, index + CHUNK_SIZE);
-        const results = await Promise.all(chunk.map(async (employeeId) => {
+        const results = await Promise.allSettled(chunk.map(async (employeeId) => {
           const preloaded = preloadedByEmployee.get(employeeId) ?? [];
           if (action === 'assign') {
             await assignEmployeeSchedule(employeeId, scheduleId!, effectiveDate, req.user.employee_id, undefined, preloaded);
@@ -793,8 +806,24 @@ export const scheduleController = {
           }
           return removeEmployeeSchedule(employeeId, effectiveDate, preloaded);
         }));
-        employeesUpdated += results.filter(Boolean).length;
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i];
+          if (r.status === 'fulfilled') {
+            if (r.value) employeesUpdated++;
+          } else {
+            employeesFailed++;
+            if (sampleErrors.length < 5) {
+              sampleErrors.push(`emp ${chunk[i]}: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`);
+            }
+          }
+        }
       }
+
+      const note = employeeIds.length === 0
+        ? 'В выбранных бригадах нет активных сотрудников (исключённые из табеля, архивные и уволенные не учитываются)'
+        : employeesFailed > 0
+          ? `Не удалось обновить ${employeesFailed} из ${employeeIds.length}`
+          : undefined;
 
       res.json({
         success: true,
@@ -802,6 +831,9 @@ export const scheduleController = {
           departments_processed: departmentIds.length,
           employees_matched: employeeIds.length,
           employees_updated: employeesUpdated,
+          employees_failed: employeesFailed,
+          sample_errors: sampleErrors,
+          ...(note ? { note } : {}),
         },
       });
     } catch (err) {

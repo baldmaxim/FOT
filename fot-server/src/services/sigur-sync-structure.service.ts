@@ -1,5 +1,5 @@
 import { sigurService } from './sigur.service.js';
-import { query, queryOne, execute } from '../config/postgres.js';
+import { query, queryOne, execute, withTransaction } from '../config/postgres.js';
 import {
   expandDepartmentIdsToAncestors,
   getDepartmentsRaw,
@@ -215,14 +215,22 @@ export async function syncDepartmentsLogic(
       }
 
       try {
+        // ON CONFLICT по партиальному UNIQUE-индексу
+        // uniq_org_departments_sigur (миграция 106): если строка с этим
+        // sigur_department_id уже есть (а в sigurIdToDbId не попала) — не
+        // плодим дубликат, а обновляем имя. Идемпотентность при повторном
+        // синке/смене root, чтобы не появлялись осиротевшие копии.
         const created = await queryOne<{ id: string }>(
           `INSERT INTO org_departments (name, sigur_department_id, kind)
            VALUES ($1, $2, $3)
+           ON CONFLICT (sigur_department_id) WHERE sigur_department_id IS NOT NULL
+           DO UPDATE SET name = EXCLUDED.name
            RETURNING id`,
           [dept.name, dept.id, detectDepartmentKindFromName(dept.name)],
         );
         if (created) {
           imported++;
+          sigurIdToDbId.set(dept.id, created.id);
           sigurToDbMap.set(dept.id, created.id);
         }
       } catch (insertError) {
@@ -256,8 +264,105 @@ export async function syncDepartmentsLogic(
   }
 
   console.log(`[syncDepartments] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${filtered} filtered, ${parentLinksSet} parent links`);
+
+  // Sigur при пересоздании компании выдаёт НОВЫЕ sigur-id, whitelist гасит
+  // старое поддерево → осиротевшие is_active=false дубликаты с застрявшими
+  // сотрудниками. Схлопываем их на одноимённую активную строку, чтобы
+  // массовое назначение графика по бригадам никого не теряло.
+  try {
+    const consolidated = await consolidateDuplicateDepartments();
+    if (consolidated.pairs > 0) {
+      console.log(`[syncDepartments] consolidated ${consolidated.pairs} duplicate departments, moved ${consolidated.employeesMoved} employees`);
+    }
+  } catch (consolidateError) {
+    errors.push(`consolidate duplicates: ${(consolidateError as Error).message}`);
+  }
+
   // Sync структуры из Sigur меняет и имена (employee-mapper), и иерархию
   // (dept tree), и whitelist sync-фильтра — инвалидируем все три согласованно.
   invalidateOrgStructureCaches();
   return { imported, updated, skipped, filtered, total: departments.length, parentLinksSet, errors };
+}
+
+export interface IConsolidateResult {
+  /** Сколько пар orphan→canonical схлопнуто. */
+  pairs: number;
+  /** Сколько активных сотрудников перенесено с осиротевших строк. */
+  employeesMoved: number;
+}
+
+/**
+ * Схлопывает осиротевшие дубликаты org_departments на одноимённую активную
+ * строку. Логика ИДЕНТИЧНА docs/migrations/106_dedup_org_departments.sql и
+ * fot-server/scripts/diagnose-dup-departments.mjs: для name с РОВНО одной
+ * is_active=false строкой (sigur_department_id IS NOT NULL) и РОВНО одной
+ * is_active=true строкой — orphan=inactive, canonical=active; переносим все
+ * FK с orphan на canonical и удаляем orphan. Неоднозначные имена (>1 активной
+ * и т.п.) НЕ трогаем. Идемпотентна, безопасна при 0 дублей.
+ */
+export async function consolidateDuplicateDepartments(): Promise<IConsolidateResult> {
+  return withTransaction(async (client) => {
+    await client.query(`
+      CREATE TEMP TABLE dept_dedup_map ON COMMIT DROP AS
+      WITH dup AS (
+        SELECT name FROM org_departments
+         GROUP BY name
+        HAVING count(*) FILTER (WHERE is_active = false AND sigur_department_id IS NOT NULL) = 1
+           AND count(*) FILTER (WHERE is_active = true) = 1
+      )
+      SELECT orphan.id AS orphan_id, canon.id AS canonical_id
+        FROM dup
+        JOIN org_departments orphan
+          ON orphan.name = dup.name AND orphan.is_active = false AND orphan.sigur_department_id IS NOT NULL
+        JOIN org_departments canon
+          ON canon.name = dup.name AND canon.is_active = true`);
+    await client.query('CREATE INDEX ON dept_dedup_map (orphan_id)');
+
+    const pairs = Number((await client.query('SELECT count(*)::int AS n FROM dept_dedup_map')).rows[0].n);
+    if (pairs === 0) return { pairs: 0, employeesMoved: 0 };
+
+    const employeesMoved = Number((await client.query(
+      `SELECT count(*)::int AS n FROM employees e JOIN dept_dedup_map m ON m.orphan_id = e.org_department_id
+        WHERE e.is_archived = false AND e.excluded_from_timesheet = false AND e.employment_status <> 'fired'`,
+    )).rows[0].n);
+
+    // Плоские репоинты (UNIQUE только на id → конфликт по колонке отдела невозможен).
+    const flat = [
+      `UPDATE employees t SET org_department_id = m.canonical_id FROM dept_dedup_map m WHERE t.org_department_id = m.orphan_id`,
+      `UPDATE employee_assignments t SET org_department_id = m.canonical_id FROM dept_dedup_map m WHERE t.org_department_id = m.orphan_id`,
+      `UPDATE contractor_submissions t SET org_department_id = m.canonical_id FROM dept_dedup_map m WHERE t.org_department_id = m.orphan_id`,
+      `UPDATE contractor_org_access t SET org_department_id = m.canonical_id FROM dept_dedup_map m WHERE t.org_department_id = m.orphan_id`,
+      `UPDATE org_sites t SET department_id = m.canonical_id FROM dept_dedup_map m WHERE t.department_id = m.orphan_id`,
+      `UPDATE timesheet_approval_events t SET department_id = m.canonical_id FROM dept_dedup_map m WHERE t.department_id = m.orphan_id`,
+      `UPDATE timesheet_approvals t SET department_id = m.canonical_id FROM dept_dedup_map m WHERE t.department_id = m.orphan_id`,
+      `UPDATE manager_department_import_brigade_aliases t SET department_id = m.canonical_id FROM dept_dedup_map m WHERE t.department_id = m.orphan_id`,
+      `UPDATE org_departments t SET parent_id = m.canonical_id FROM dept_dedup_map m WHERE t.parent_id = m.orphan_id`,
+    ];
+    for (const sql of flat) await client.query(sql);
+
+    // Репоинты с защитой от UNIQUE-конфликта: сперва удалить orphan-строки,
+    // которые столкнулись бы с уже существующей canonical-строкой.
+    const guarded: Array<[string, string]> = [
+      [`DELETE FROM employee_department_access t USING dept_dedup_map m WHERE t.department_id = m.orphan_id AND EXISTS (SELECT 1 FROM employee_department_access x WHERE x.department_id = m.canonical_id AND x.employee_id = t.employee_id)`,
+       `UPDATE employee_department_access t SET department_id = m.canonical_id FROM dept_dedup_map m WHERE t.department_id = m.orphan_id`],
+      [`DELETE FROM timesheet_responsibles t USING dept_dedup_map m WHERE t.department_id = m.orphan_id AND EXISTS (SELECT 1 FROM timesheet_responsibles x WHERE x.department_id = m.canonical_id AND x.role = t.role)`,
+       `UPDATE timesheet_responsibles t SET department_id = m.canonical_id FROM dept_dedup_map m WHERE t.department_id = m.orphan_id`],
+      [`DELETE FROM user_company_access t USING dept_dedup_map m WHERE t.company_root_id = m.orphan_id AND EXISTS (SELECT 1 FROM user_company_access x WHERE x.company_root_id = m.canonical_id AND x.user_id = t.user_id)`,
+       `UPDATE user_company_access t SET company_root_id = m.canonical_id FROM dept_dedup_map m WHERE t.company_root_id = m.orphan_id`],
+      [`DELETE FROM contractor_passes t USING dept_dedup_map m WHERE t.org_department_id = m.orphan_id AND EXISTS (SELECT 1 FROM contractor_passes x WHERE x.org_department_id = m.canonical_id AND x.pass_number = t.pass_number)`,
+       `UPDATE contractor_passes t SET org_department_id = m.canonical_id FROM dept_dedup_map m WHERE t.org_department_id = m.orphan_id`],
+      [`DELETE FROM contractor_roster t USING dept_dedup_map m WHERE t.org_department_id = m.orphan_id AND t.sigur_employee_id IS NOT NULL AND EXISTS (SELECT 1 FROM contractor_roster x WHERE x.org_department_id = m.canonical_id AND x.sigur_employee_id = t.sigur_employee_id)`,
+       `UPDATE contractor_roster t SET org_department_id = m.canonical_id FROM dept_dedup_map m WHERE t.org_department_id = m.orphan_id`],
+    ];
+    for (const [del, upd] of guarded) { await client.query(del); await client.query(upd); }
+
+    // timesheet_reminder_log — журнал (ON DELETE CASCADE, UNIQUE по
+    // dept+period+user+stage): для дефунктного отдела ценности нет, удаляем.
+    await client.query(`DELETE FROM timesheet_reminder_log t USING dept_dedup_map m WHERE t.department_id = m.orphan_id`);
+
+    // Orphan-строки больше никем не используются → удаляем.
+    await client.query(`DELETE FROM org_departments WHERE id IN (SELECT orphan_id FROM dept_dedup_map)`);
+
+    return { pairs, employeesMoved };
+  });
 }

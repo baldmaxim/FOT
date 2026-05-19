@@ -18,8 +18,13 @@ interface ISigurDeptRow {
 async function reconcileDepartmentsActivity(whitelistSigurIds: number[]): Promise<void> {
   let rows: ISigurDeptRow[];
   try {
+    // ORDER BY is_active ASC → is_active=true строки идут последними и
+    // выигрывают Map.set (last-wins). Защита на случай, когда осиротевший
+    // дубликат с тем же sigur_id ещё существует (между синком, что пересоздал
+    // компанию, и шагом consolidateDuplicateDepartments / до миграции 106):
+    // whitelist→active должен якориться на АКТИВНУЮ строку, не на сироту.
     rows = await query<ISigurDeptRow>(
-      'SELECT id, sigur_department_id, parent_id FROM org_departments',
+      'SELECT id, sigur_department_id, parent_id FROM org_departments ORDER BY is_active ASC, id ASC',
     );
   } catch (error) {
     throw new Error(`reconcile: failed to load departments: ${(error as Error).message}`);

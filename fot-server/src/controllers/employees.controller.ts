@@ -465,8 +465,8 @@ export const employeesController = {
         return;
       }
 
-      const rows = await query<{ id: number; org_department_id: string | null; employment_status: string }>(
-        `SELECT id, org_department_id, employment_status
+      const rows = await query<{ id: number; org_department_id: string | null; employment_status: string; excluded_from_timesheet: boolean }>(
+        `SELECT id, org_department_id, employment_status, excluded_from_timesheet
            FROM employees
           WHERE ${whereParts.join(' AND ')}`,
         params,
@@ -479,7 +479,12 @@ export const employeesController = {
           byStatus.fired++;
         } else {
           byStatus.active++;
-          if (r.org_department_id) {
+          // byDepartment гейтит видимость бригады в модалке массового
+          // назначения графика. Назначение фильтрует excluded_from_timesheet
+          // — счётчик отдела должен это учитывать, иначе бригада видна, но
+          // назначает 0 (рассинхрон «видно ⇔ назначено»). byStatus.active
+          // НЕ трогаем (используется как «Всего активных» в другом UI).
+          if (r.org_department_id && !r.excluded_from_timesheet) {
             byDepartment[r.org_department_id] = (byDepartment[r.org_department_id] || 0) + 1;
           }
         }

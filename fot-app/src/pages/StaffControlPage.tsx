@@ -1375,14 +1375,19 @@ export const StaffControlPage: FC = () => {
         effective_date: effectiveFrom,
       });
 
-      if (result.employees_updated > 0) {
-        toast.success(
-          `Обработано бригад: ${result.departments_processed}. Сотрудников обновлено: ${result.employees_updated} из ${result.employees_matched}.`,
+      const base = `Обработано бригад: ${result.departments_processed}.`;
+      const failed = result.employees_failed ?? 0;
+      if (result.employees_matched === 0) {
+        toast.info(`${base} ${result.note ?? 'Активных сотрудников в выбранных бригадах нет.'}`);
+      } else if (failed > 0) {
+        toast.error(
+          `${base} Обновлено ${result.employees_updated} из ${result.employees_matched}, не удалось ${failed}.`
+          + (result.sample_errors?.length ? ` Пример: ${result.sample_errors[0]}` : ''),
         );
+      } else if (result.employees_updated > 0) {
+        toast.success(`${base} Сотрудников обновлено: ${result.employees_updated} из ${result.employees_matched}.`);
       } else {
-        toast.info(
-          `Обработано бригад: ${result.departments_processed}. Активных изменений нет.`,
-        );
+        toast.info(`${base} ${result.note ?? 'Активных изменений нет.'}`);
       }
 
       setBulkBrigadeScheduleOpen(false);
