@@ -513,23 +513,85 @@ SQL-миграции из `docs/migrations/` применяются вручну
 SQL-файлы лежат в build-контексте (`/opt/fot-build/docs/migrations/`).
 `DATABASE_URL` берётся из `.env` папки сайта.
 
+Порядок на production:
+
+1. Сначала подтянуть свежий `personal/main` в `/opt/fot-build`.
+2. Проверить, какие миграции появились после текущего production-коммита.
+3. Применить нужные SQL-миграции вручную через `psql`.
+4. Если новый backend зависит от схемы БД, сначала `COMMIT` миграции, потом
+   деплой backend/frontend.
+5. После деплоя выполнить health-check и, если есть, read-only diagnostic script
+   для конкретной миграции.
+
 ```bash
 ssh root@45.80.128.254
 cd /opt/fot-build
+export GIT_PAGER=cat
+
+hostname    # должно быть: hub
 git fetch personal main --prune
 git checkout -f -B main personal/main
 git reset --hard personal/main
+git clean -fd
+git --no-pager log -5 --oneline
 
 cd /srv/sites/fot.su10.ru/fot-server
 export DATABASE_URL="$(node -e "require('dotenv').config({override:true}); process.stdout.write(process.env.DATABASE_URL || '')")"
 export PGSSLROOTCERT=/srv/sites/fot.su10.ru/.migration/yandex-ca.pem
 test -n "$DATABASE_URL"
+test -f "$PGSSLROOTCERT"
+```
 
+Простая миграция без ручного контроля:
+
+```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
   -f /opt/fot-build/docs/migrations/<NNN>_<name>.sql
+```
 
-pm2 restart fot-server --update-env
-pm2 save
+Миграция с блоком `КОНТРОЛЬ ПОСЛЕ`, которую нужно проверить глазами перед
+`COMMIT`: сначала убрать финальный `COMMIT;` во временную копию, применить её
+в интерактивном `psql`, проверить вывод и затем вручную выполнить `COMMIT`.
+
+```bash
+awk 'BEGIN{removed=0} /^COMMIT;[[:space:]]*$/ {removed=1; next} {print} END{if(!removed){exit 2}}' \
+  /opt/fot-build/docs/migrations/<NNN>_<name>.sql \
+  > /tmp/<NNN>_<name>.no-commit.sql
+
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1
+```
+
+Внутри `psql`:
+
+```sql
+\i /tmp/<NNN>_<name>.no-commit.sql
+```
+
+Если контрольные SELECT показывают ожидаемые значения, например `0` в
+`targets_after`/`stranded_after`/`split_names`/`dup_sigur`, ввести только:
+
+```sql
+COMMIT;
+\q
+```
+
+Если проверка не сошлась или в `psql` случайно введён текст-пояснение и prompt
+стал вида `FOT_Prod=!>`, откатить транзакцию:
+
+```sql
+ROLLBACK;
+\q
+```
+
+Важно: строки вроде `targets_after = 0` — это заметки для проверки глазами, их
+нельзя вводить в `psql` как SQL-команды.
+
+После успешной миграции выполнить деплой нужного scope из build-контекста:
+
+```bash
+cd /opt/fot-build
+bash scripts/deploy-server.sh --check
+bash scripts/deploy-server.sh both
 ```
 
 Пример:
