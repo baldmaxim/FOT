@@ -1,6 +1,6 @@
 import { type FC, Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRightLeft, ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, RefreshCcwDot, UserPlus, Mail } from 'lucide-react';
+import { ArrowRightLeft, ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, UserPlus, Mail } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { TimesheetCorrectionsList } from '../../components/timesheet/TimesheetCorrectionsList';
@@ -8,7 +8,6 @@ import { TimesheetTeamManagementModal } from '../../components/timesheet/Timeshe
 import { TimesheetTransfersTab } from '../../components/timesheet/TimesheetTransfersTab';
 import { TimesheetExcludeEmployeeModal } from '../../components/timesheet/TimesheetExcludeEmployeeModal';
 import { timesheetService } from '../../services/timesheetService';
-import { ApiError } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
@@ -39,7 +38,6 @@ import { getDayStatus, STATUS_LABEL_RU } from '../../utils/dayStatus';
 import {
   getFullDayThresholdHoursForDay,
   getScheduleForTimesheetDay,
-  getShiftDurationForDay,
   getWorkHoursForDay,
   isPreHolidayForSchedule,
   isScheduleDayOff,
@@ -749,35 +747,8 @@ export const TimesheetPage: FC = () => {
     return getWorkHoursForDay(sched, year, month, modalDay);
   }, [modalMode, modalObjectEntry, modalEntry, modalEmployee, schedules, dailySchedules, year, month, modalDay]);
 
-  const modalMaxHours = useMemo(() => {
-    if (!isTimesheetDepartmentScope || !modalEmployee) return null;
-    const sched = getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay);
-    const shiftDuration = getShiftDurationForDay(sched, year, month, modalDay);
-    if (modalMode !== 'object' || !modalObjectTarget) {
-      return shiftDuration;
-    }
-
-    const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
-    const dayObjectEntries = objectEntriesByEmployeeDate.get(modalEmployee.id)?.get(workDate) || [];
-    const otherHours = dayObjectEntries.reduce((sum, item) => {
-      if (item.object_key === modalObjectTarget.object_key) {
-        return sum;
-      }
-      return sum + (item.display_hours_worked ?? item.hours_worked ?? 0);
-    }, 0);
-    return Math.max(0, shiftDuration - otherHours);
-  }, [
-    isTimesheetDepartmentScope,
-    modalEmployee,
-    schedules,
-    dailySchedules,
-    year,
-    month,
-    modalDay,
-    modalMode,
-    modalObjectTarget,
-    objectEntriesByEmployeeDate,
-  ]);
+  // Корректировки могут превышать длительность смены по графику — лимит снят.
+  const modalMaxHours = null;
 
   const handleBulkModeToggle = useCallback(() => {
     if (bulkModeEnabled) {
@@ -979,53 +950,8 @@ export const TimesheetPage: FC = () => {
     return getWorkHoursForDay(sched, year, month, firstTarget.day);
   }, [isObjectBulkOperation, bulkObjectTargets, bulkTargets, schedules, dailySchedules, year, month]);
 
-  const bulkMaxHours = useMemo(() => {
-    if (!isTimesheetDepartmentScope) return null;
-    if (isObjectBulkOperation) {
-      if (bulkObjectTargets.length === 0) return null;
-      return bulkObjectTargets.reduce<number | null>((minValue, target) => {
-        const sched = getScheduleForTimesheetDay(
-          schedules,
-          dailySchedules,
-          target.employee.id,
-          year,
-          month,
-          target.day,
-        );
-        const shiftDuration = getShiftDurationForDay(sched, year, month, target.day);
-        const dayObjectEntries = objectEntriesByEmployeeDate.get(target.employee.id)?.get(target.workDate) || [];
-        const otherHours = dayObjectEntries.reduce((sum, item) => {
-          if (item.object_key === target.objectTarget.object_key) {
-            return sum;
-          }
-          return sum + (item.display_hours_worked ?? item.hours_worked ?? 0);
-        }, 0);
-        const allowedHours = Math.max(0, shiftDuration - otherHours);
-        return minValue == null ? allowedHours : Math.min(minValue, allowedHours);
-      }, null);
-    }
-    if (bulkTargets.length === 0) return null;
-    const firstTarget = bulkTargets[0];
-    const sched = getScheduleForTimesheetDay(
-      schedules,
-      dailySchedules,
-      firstTarget.employee.id,
-      year,
-      month,
-      firstTarget.day,
-    );
-    return getShiftDurationForDay(sched, year, month, firstTarget.day);
-  }, [
-    isTimesheetDepartmentScope,
-    isObjectBulkOperation,
-    bulkObjectTargets,
-    bulkTargets,
-    schedules,
-    dailySchedules,
-    year,
-    month,
-    objectEntriesByEmployeeDate,
-  ]);
+  // Массовые корректировки тоже не ограничены графиком.
+  const bulkMaxHours = null;
 
   const handleOpenBulkModal = useCallback(() => {
     if (viewMode === 'employees' && bulkTargets.length > 0 && bulkObjectTargets.length > 0) {
@@ -1220,22 +1146,18 @@ export const TimesheetPage: FC = () => {
     });
   }, [clearBulkState, closeTeamManagement, setSearchParams]);
 
-  const handleRefreshTimesheet = useCallback(async (syncMode: 'quick' | 'full' = 'quick') => {
+  const handleRefreshTimesheet = useCallback(async () => {
     if (!rangeStart || !rangeEnd || refreshInFlight) return;
-    const isFull = syncMode === 'full';
-    setRefreshState({
-      phase: 'syncing',
-      message: isFull ? 'Синхронизация СКУД…' : 'Обновление табеля…',
-    });
+    setRefreshState({ phase: 'syncing', message: 'Пересчёт табеля…' });
 
     const controller = new AbortController();
-    const timeoutMs = isFull ? 90_000 : 15_000;
+    const timeoutMs = 30_000;
     const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const result = await timesheetService.refresh(
         { start_date: rangeStart, end_date: rangeEnd },
-        { signal: controller.signal, sync_mode: syncMode },
+        { signal: controller.signal },
       );
       setRefreshState({ phase: 'invalidating', message: 'Обновление данных табеля…' });
       await Promise.all([
@@ -1246,25 +1168,13 @@ export const TimesheetPage: FC = () => {
         queryClient.invalidateQueries({ queryKey: ['employee-timesheet'] }),
       ]);
       const parts: string[] = [];
-      if (result.sync) {
-        parts.push(`события: ${result.sync.imported ?? 0}/${result.sync.sigurTotal ?? 0}`);
-      }
-      if (result.conflicts.length > 0) {
-        parts.push(`коллизий: ${result.conflicts.length}`);
-      }
-      if (result.timed_out) {
-        toast.error?.('Синхронизация СКУД не успела завершиться, фоновая выгрузка продолжается');
-      } else {
-        toast.success?.(parts.length > 0 ? `Обновлено (${parts.join(', ')})` : 'Табель обновлён');
-      }
+      if (result.reapproved > 0) parts.push(`согласований: ${result.reapproved}`);
+      if (result.conflicts.length > 0) parts.push(`коллизий: ${result.conflicts.length}`);
+      toast.success?.(parts.length > 0 ? `Табель обновлён (${parts.join(', ')})` : 'Табель обновлён');
       setRefreshState({ phase: 'idle', message: '' });
     } catch (err) {
       const aborted = (err as { name?: string } | null)?.name === 'AbortError' || controller.signal.aborted;
-      const apiError = err instanceof ApiError ? err : null;
-      if (apiError?.code === 'SYNC_IN_PROGRESS') {
-        toast.error?.('Синхронизация уже идёт фоном, попробуйте через минуту');
-        setRefreshState({ phase: 'idle', message: '' });
-      } else if (aborted) {
+      if (aborted) {
         const seconds = Math.round(timeoutMs / 1000);
         toast.error?.(`Сервер не ответил за ${seconds} секунд, повторите попытку`);
         setRefreshState({ phase: 'error', message: 'Таймаут' });
@@ -1776,28 +1686,16 @@ export const TimesheetPage: FC = () => {
                   <Download size={16} />
                   Экспорт
                 </button>
-                <div className="ts-refresh-group">
-                  <button
-                    type="button"
-                    className="ts-btn ts-refresh-main"
-                    onClick={() => handleRefreshTimesheet('quick')}
-                    disabled={refreshInFlight || !rangeStart || !rangeEnd}
-                    title="Перечитать табель с текущим графиком (без СКУД-синхронизации)"
-                  >
-                    <RefreshCw size={16} className={refreshInFlight ? 'ts-refresh-spinning' : undefined} />
-                    Обновить
-                  </button>
-                  <button
-                    type="button"
-                    className="ts-btn ts-refresh-full"
-                    onClick={() => handleRefreshTimesheet('full')}
-                    disabled={refreshInFlight || !rangeStart || !rangeEnd}
-                    title="Полное обновление: синхронизация событий СКУД из Sigur"
-                    aria-label="Полное обновление с синхронизацией СКУД"
-                  >
-                    <RefreshCcwDot size={16} />
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  className="ts-btn"
+                  onClick={() => handleRefreshTimesheet()}
+                  disabled={refreshInFlight || !rangeStart || !rangeEnd}
+                  title="Пересчитать табель по текущему графику и пришедшим проходам"
+                >
+                  <RefreshCw size={16} className={refreshInFlight ? 'ts-refresh-spinning' : undefined} />
+                  Обновить
+                </button>
                 {refreshState.phase !== 'idle' && (
                   <span
                     className={`ts-refresh-status${refreshState.phase === 'error' ? ' ts-refresh-status--error' : ''}`}

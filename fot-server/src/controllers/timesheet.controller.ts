@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import { query } from '../config/postgres.js';
+import { query, execute } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import type {
   AuthenticatedRequest,
@@ -13,7 +13,7 @@ import { exportTimesheet } from './timesheet-export.controller.js';
 import { exportTimesheetMass } from './timesheet-mass-export.controller.js';
 import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned } from './timesheet-assigned-export.controller.js';
 import { generateWeekendMemo, getWeekendMemoPreview } from './timesheet-weekend-memo.controller.js';
-import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, computeCappedFactHours, getShiftDurationHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
+import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, computeCappedFactHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
 import {
   getSelfHistoryLimitForUser,
   isSelfEmployeeRequest,
@@ -48,14 +48,7 @@ import {
   loadEmployeeFullName as loadEmployeeFullNameForAudit,
   loadEmployeeFullNamesMap,
 } from '../services/audit-context.helpers.js';
-import { sigurService } from '../services/sigur.service.js';
-import {
-  acquireSigurEventsSyncLock,
-  releaseSigurEventsSyncLock,
-  ManualSyncInProgressError,
-} from '../services/presence-polling.service.js';
-import { syncEventsLogic } from '../services/sigur-sync-events.service.js';
-import { isSigurRuntimeNotAllowedError } from '../services/sigur-runtime-guard.service.js';
+import { invalidateCaches } from '../middleware/cacheResponse.js';
 import { notifySkudRealtimeChanged } from '../services/skud-realtime.service.js';
 import {
   isDepartmentMonthAllowed,
@@ -318,6 +311,91 @@ async function resolveAdjustmentApprovalStatus(
   return 'pending';
 }
 
+/**
+ * Массовое переопределение approval_status по ТЕКУЩЕМУ графику для диапазона.
+ * Пересчитываем только строки в состоянии 'auto_approved'/'pending' — решения
+ * руководителя ('approved'/'rejected') не трогаем. Возвращает число изменённых.
+ */
+async function reapproveAdjustmentsForRange(
+  employeeIds: number[] | null,
+  startDate: string,
+  endDate: string,
+): Promise<number> {
+  const params: unknown[] = [startDate, endDate];
+  let sql = `SELECT id, employee_id, work_date::text AS work_date, status, approval_status
+               FROM attendance_adjustments
+              WHERE work_date >= $1 AND work_date <= $2
+                AND approval_status IN ('auto_approved', 'pending')`;
+  if (employeeIds && employeeIds.length > 0) {
+    params.push(employeeIds);
+    sql += ` AND employee_id = ANY($3::int[])`;
+  }
+  const rows = await query<{
+    id: number | string;
+    employee_id: number | string;
+    work_date: string;
+    status: string;
+    approval_status: string;
+  }>(sql, params);
+  if (rows.length === 0) return 0;
+
+  const empList = [...new Set(rows.map(r => Number(r.employee_id)))].map(id => ({ id }));
+  const schedules = await resolveSchedulesForPeriod(empList, startDate, endDate);
+
+  // Производственный календарь грузим по месяцам диапазона один раз.
+  const calendarCache = new Map<string, Awaited<ReturnType<typeof loadCalendarMonth>>>();
+  const getCalendar = async (dateObj: Date) => {
+    const key = `${dateObj.getFullYear()}-${dateObj.getMonth() + 1}`;
+    if (!calendarCache.has(key)) {
+      calendarCache.set(key, await loadCalendarMonth(dateObj.getFullYear(), dateObj.getMonth() + 1));
+    }
+    return calendarCache.get(key) ?? null;
+  };
+
+  const toUpdate: Array<{ id: number; status: 'auto_approved' | 'pending' }> = [];
+  for (const row of rows) {
+    const empId = Number(row.employee_id);
+    const workDate = String(row.work_date).slice(0, 10);
+    const status = row.status as TimeStatus;
+    let target: 'auto_approved' | 'pending';
+
+    if (!WORKED_STATUSES_FOR_APPROVAL.has(status)) {
+      target = 'auto_approved';
+    } else {
+      const schedule = schedules.get(empId)?.get(workDate);
+      if (!schedule) {
+        target = 'auto_approved';
+      } else {
+        const dateObj = new Date(`${workDate}T00:00:00`);
+        const calendar = await getCalendar(dateObj);
+        if (isWorkingDay(schedule, dateObj, calendar)) {
+          target = 'auto_approved';
+        } else if (schedule.expected_saturdays_per_month > 0 && dateObj.getDay() === 6) {
+          // Обязательные субботы считаются помесячно — точный подсчёт через
+          // существующий per-row резолвер (таких строк немного).
+          target = await resolveAdjustmentApprovalStatus(empId, workDate, status, Number(row.id));
+        } else {
+          target = 'pending';
+        }
+      }
+    }
+
+    if (target !== row.approval_status) {
+      toUpdate.push({ id: Number(row.id), status: target });
+    }
+  }
+
+  if (toUpdate.length === 0) return 0;
+  await execute(
+    `UPDATE attendance_adjustments AS a
+        SET approval_status = v.st, updated_at = NOW()
+       FROM (SELECT UNNEST($1::bigint[]) AS id, UNNEST($2::text[]) AS st) v
+      WHERE a.id = v.id AND a.approval_status <> v.st`,
+    [toUpdate.map(u => u.id), toUpdate.map(u => u.status)],
+  );
+  return toUpdate.length;
+}
+
 const MANAGED_TIMESHEET_PAGE_KEYS = ['/timesheet', '/timesheet-hr'] as const;
 
 interface IManagedDepartmentTimesheetSummary {
@@ -460,39 +538,6 @@ async function resolvePlannedHoursByItems(items: Array<{ employee_id: number; wo
   }));
 }
 
-/** Лимит ввода часов для руководителя = длительность смены (work_end − work_start), без вычета обеда. */
-async function resolveShiftDurationByItems(
-  items: Array<{ employee_id: number; work_date: string }>,
-): Promise<Map<string, number>> {
-  const uniqueItems = Array.from(
-    new Map(items.map(item => [`${item.employee_id}_${item.work_date}`, item] as const)).values(),
-  );
-  if (uniqueItems.length === 0) return new Map();
-
-  const employeeIds = [...new Set(uniqueItems.map(item => item.employee_id))];
-  const employees = await query<{ id: number | string }>(
-    `SELECT id FROM employees WHERE id = ANY($1::int[])`,
-    [employeeIds],
-  );
-
-  const employeeRows = employees.map(employee => ({
-    id: Number(employee.id),
-  }));
-
-  const startDate = uniqueItems.reduce((min, item) => (item.work_date < min ? item.work_date : min), uniqueItems[0].work_date);
-  const endDate = uniqueItems.reduce((max, item) => (item.work_date > max ? item.work_date : max), uniqueItems[0].work_date);
-  const schedules = await resolveSchedulesForPeriod(employeeRows, startDate, endDate);
-
-  return new Map(uniqueItems.map(item => {
-    const schedule = schedules.get(item.employee_id)?.get(item.work_date);
-    const dayParams = schedule
-      ? getScheduleForDate(schedule, new Date(`${item.work_date}T00:00:00`))
-      : null;
-    const shiftHours = dayParams ? getShiftDurationHours(dayParams) : 9;
-    return [`${item.employee_id}_${item.work_date}`, shiftHours] as const;
-  }));
-}
-
 async function resolvePlannedHoursForObjectItem(params: {
   employee_id: number;
   work_date: string;
@@ -613,13 +658,6 @@ async function canAccessEmployeeForTimesheetPeriod(
   }
 
   return false;
-}
-
-function formatHoursLabel(hours: number): string {
-  const totalMinutes = Math.max(0, Math.round(hours * 60));
-  const h = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
-  return m === 0 ? `${h}ч` : `${h}ч ${m}м`;
 }
 
 async function resolveAllowedObjectHours(
@@ -1488,16 +1526,6 @@ export const timesheetController = {
       }
       const plannedHours = (await resolvePlannedHoursByItems([{ employee_id: parsed.employee_id, work_date: parsed.work_date }]))
         .get(`${parsed.employee_id}_${parsed.work_date}`) ?? null;
-      if (scope === 'department' && parsed.status !== 'remote' && parsed.hours_worked != null) {
-        const shiftDuration = (await resolveShiftDurationByItems([{ employee_id: parsed.employee_id, work_date: parsed.work_date }]))
-          .get(`${parsed.employee_id}_${parsed.work_date}`) ?? null;
-        if (shiftDuration != null && parsed.hours_worked > shiftDuration) {
-          return res.status(422).json({
-            success: false,
-            error: `Часы (${formatHoursLabel(parsed.hours_worked)}) превышают длительность смены (${formatHoursLabel(shiftDuration)})`,
-          });
-        }
-      }
       const normalizedHours = parsed.status === 'remote'
         ? (plannedHours ?? 8)
         : (parsed.hours_worked ?? null);
@@ -1601,18 +1629,6 @@ export const timesheetController = {
           employee_id: Number(existing.employee_id),
           work_date: String(existing.work_date),
         }])).get(`${Number(existing.employee_id)}_${String(existing.work_date)}`) ?? null;
-        if (scope === 'department' && nextStatus !== 'remote' && parsed.hours_worked != null) {
-          const shiftDuration = (await resolveShiftDurationByItems([{
-            employee_id: Number(existing.employee_id),
-            work_date: String(existing.work_date),
-          }])).get(`${Number(existing.employee_id)}_${String(existing.work_date)}`) ?? null;
-          if (shiftDuration != null && parsed.hours_worked > shiftDuration) {
-            return res.status(422).json({
-              success: false,
-              error: `Часы (${formatHoursLabel(parsed.hours_worked)}) превышают длительность смены (${formatHoursLabel(shiftDuration)})`,
-            });
-          }
-        }
         const normalizedHours = nextStatus === 'remote'
           ? (plannedHours ?? 8)
           : parsed.hours_worked;
@@ -1725,18 +1741,6 @@ export const timesheetController = {
       }
       const employeeIds = [...new Set(uniqueItems.map(item => item.employee_id))];
       const plannedHoursByItem = await resolvePlannedHoursByItems(uniqueItems);
-      if (scope === 'department' && parsed.status !== 'remote' && parsed.hours_worked != null) {
-        const shiftDurations = await resolveShiftDurationByItems(uniqueItems);
-        for (const item of uniqueItems) {
-          const shiftDuration = shiftDurations.get(`${item.employee_id}_${item.work_date}`) ?? null;
-          if (shiftDuration != null && parsed.hours_worked > shiftDuration) {
-            return res.status(422).json({
-              success: false,
-              error: `Часы (${formatHoursLabel(parsed.hours_worked)}) превышают длительность смены (${formatHoursLabel(shiftDuration)}) у сотрудника ${item.employee_id} за ${item.work_date}`,
-            });
-          }
-        }
-      }
 
       // Для work/remote (где статус согласования зависит от уже зачтённых плановых
       // суббот) обходим items последовательно, чтобы каждый upsert был виден
@@ -2123,7 +2127,12 @@ export const timesheetController = {
     }
   },
 
-  /** POST /api/timesheet/refresh { start_date, end_date, sync_mode? } */
+  /**
+   * POST /api/timesheet/refresh { start_date, end_date }
+   * Единый пересчёт табеля БЕЗ обращения к Sigur (фоновые шедулеры импортируют
+   * проходы сами): пересчёт skud_daily_summary из уже пришедших проходов +
+   * переопределение approval_status по текущему графику + сброс легаси-часов.
+   */
   async refresh(req: AuthenticatedRequest, res: Response) {
     try {
       const scope = await resolveTimesheetScope(req);
@@ -2140,55 +2149,6 @@ export const timesheetController = {
         return res.status(400).json({ success: false, error: 'Диапазон не должен превышать 62 дня' });
       }
 
-      const syncModeRaw = String(req.body?.sync_mode ?? 'quick');
-      const syncMode: 'quick' | 'full' = syncModeRaw === 'full' ? 'full' : 'quick';
-
-      let syncResult: { sigurTotal?: number; imported?: number; skipped?: number; errors_count?: number; matched?: number } | null = null;
-      let timedOut = false;
-      if (syncMode === 'full' && await sigurService.isConfigured()) {
-        try {
-          await acquireSigurEventsSyncLock();
-        } catch (err) {
-          if (err instanceof ManualSyncInProgressError) {
-            return res.status(409).json({ success: false, error: 'Синхронизация уже выполняется', code: 'SYNC_IN_PROGRESS' });
-          }
-          if (isSigurRuntimeNotAllowedError(err)) {
-            return res.status(err.status).json({ success: false, error: err.message, code: err.code });
-          }
-          throw err;
-        }
-        try {
-          const SYNC_TIMEOUT_MS = 60_000;
-          const TIMEOUT_SENTINEL = Symbol('sync_timeout');
-          const timeoutPromise = new Promise<typeof TIMEOUT_SENTINEL>((resolve) => {
-            setTimeout(() => resolve(TIMEOUT_SENTINEL), SYNC_TIMEOUT_MS);
-          });
-          const raced = await Promise.race([syncEventsLogic(startDate, endDate), timeoutPromise]);
-          if (raced === TIMEOUT_SENTINEL) {
-            timedOut = true;
-            console.warn('[timesheet.refresh] syncEventsLogic timed out after', SYNC_TIMEOUT_MS, 'ms');
-          } else {
-            const result = raced;
-            syncResult = {
-              sigurTotal: result?.sigurTotal,
-              imported: result?.imported,
-              skipped: result?.skipped,
-              errors_count: Array.isArray(result?.errors) ? result.errors.length : 0,
-              matched: result?.matched,
-            };
-            notifySkudRealtimeChanged({
-              source: 'timesheet_refresh',
-              from: startDate,
-              to: endDate,
-              insertedCount: result?.imported ?? 0,
-              recalculatedCount: result?.matched ?? 0,
-            });
-          }
-        } finally {
-          await releaseSigurEventsSyncLock();
-        }
-      }
-
       let employeeIds: number[] = [];
       if (scope === 'department') {
         const managedIds = await resolveManagedDepartmentIds(req);
@@ -2198,8 +2158,55 @@ export const timesheetController = {
           for (const id of list) ids.add(id);
         }
         employeeIds = [...ids];
+        if (employeeIds.length === 0) {
+          await auditService.logFromRequest(req, req.user.id, 'TIMESHEET_REFRESH', {
+            entityType: 'timesheet',
+            details: { start_date: startDate, end_date: endDate, recalculated_summaries: 0, reapproved: 0, legacy_cleared: 0, conflicts_count: 0 },
+          });
+          return res.json({ success: true, data: { recalculated_summaries: 0, reapproved: 0, conflicts: [] } });
+        }
+      }
+      const empFilter: number[] | null = employeeIds.length > 0 ? employeeIds : null;
+
+      // Шаг A — пересчёт skud_daily_summary из уже импортированных проходов.
+      const pairParams: unknown[] = [startDate, endDate];
+      let pairSql = `SELECT DISTINCT employee_id, event_date::text AS event_date
+                       FROM skud_events
+                      WHERE event_date >= $1 AND event_date <= $2`;
+      if (empFilter) {
+        pairParams.push(empFilter);
+        pairSql += ` AND employee_id = ANY($3::int[])`;
+      }
+      const pairRows = await query<{ employee_id: number | string; event_date: string }>(pairSql, pairParams);
+      let recalculatedSummaries = 0;
+      if (pairRows.length > 0) {
+        const allPairs = pairRows.map(r => ({ emp_id: Number(r.employee_id), date: String(r.event_date).slice(0, 10) }));
+        const SUMMARY_BATCH = 200;
+        for (let i = 0; i < allPairs.length; i += SUMMARY_BATCH) {
+          const chunk = allPairs.slice(i, i + SUMMARY_BATCH);
+          await query('SELECT public.batch_recalculate_skud_daily_summary($1::jsonb)', [JSON.stringify(chunk)]);
+        }
+        recalculatedSummaries = allPairs.length;
       }
 
+      // Шаг B — переопределение approval_status по текущему графику.
+      const reapproved = await reapproveAdjustmentsForRange(empFilter, startDate, endDate);
+
+      // Шаг C — сброс легаси-часов (день начинает считаться по проходам+графику).
+      const legacyParams: unknown[] = [startDate, endDate];
+      let legacySql = `UPDATE attendance_adjustments
+                          SET hours_override = NULL, updated_at = NOW()
+                        WHERE source_type = 'legacy_tender_timesheet'
+                          AND hours_override IS NOT NULL
+                          AND approval_status NOT IN ('approved', 'rejected')
+                          AND work_date >= $1 AND work_date <= $2`;
+      if (empFilter) {
+        legacyParams.push(empFilter);
+        legacySql += ` AND employee_id = ANY($3::int[])`;
+      }
+      const legacyCleared = await execute(legacySql, legacyParams);
+
+      // Шаг D — конфликт-детекция на свежих сводках (manual absent vs СКУД>0).
       const conflicts: Array<{ employee_id: number; work_date: string; skud_minutes: number }> = [];
       if (employeeIds.length > 0 || scope === 'all') {
         const adjWhere: string[] = [
@@ -2241,12 +2248,34 @@ export const timesheetController = {
         }
       }
 
-      await auditService.logFromRequest(req, req.user.id, 'TIMESHEET_REFRESH', {
-        entityType: 'timesheet',
-        details: { start_date: startDate, end_date: endDate, sync: syncResult, conflicts_count: conflicts.length },
+      // Шаг E — сброс серверного кэша табеля + уведомление realtime.
+      invalidateCaches(
+        'timesheet',
+        'timesheet:today',
+        'timesheet:overview',
+        'timesheet:overview:today',
+        'timesheet:search',
+      );
+      notifySkudRealtimeChanged({
+        source: 'timesheet_refresh',
+        from: startDate,
+        to: endDate,
+        recalculatedCount: recalculatedSummaries,
       });
 
-      res.json({ success: true, data: { sync: syncResult, conflicts, ...(timedOut ? { timed_out: true } : {}) } });
+      await auditService.logFromRequest(req, req.user.id, 'TIMESHEET_REFRESH', {
+        entityType: 'timesheet',
+        details: {
+          start_date: startDate,
+          end_date: endDate,
+          recalculated_summaries: recalculatedSummaries,
+          reapproved,
+          legacy_cleared: legacyCleared,
+          conflicts_count: conflicts.length,
+        },
+      });
+
+      res.json({ success: true, data: { recalculated_summaries: recalculatedSummaries, reapproved, conflicts } });
     } catch (err) {
       console.error('timesheet.refresh error:', err);
       res.status(500).json({ success: false, error: 'Ошибка обновления табеля' });

@@ -144,22 +144,13 @@ export interface IAdminTransfersFilters {
 }
 
 export interface ITimesheetRefreshResult {
-  sync: {
-    sigurTotal?: number;
-    imported?: number;
-    skipped?: number;
-    errors_count?: number;
-    matched?: number;
-  } | null;
+  recalculated_summaries: number;
+  reapproved: number;
   conflicts: Array<{ employee_id: number; work_date: string; skud_minutes: number }>;
-  timed_out?: boolean;
 }
-
-export type ITimesheetRefreshMode = 'quick' | 'full';
 
 export interface ITimesheetRefreshOptions {
   signal?: AbortSignal;
-  sync_mode?: ITimesheetRefreshMode;
 }
 
 export const timesheetService = {
@@ -240,10 +231,9 @@ export const timesheetService = {
     payload: { start_date: string; end_date: string },
     options?: ITimesheetRefreshOptions,
   ): Promise<ITimesheetRefreshResult> {
-    const body = { ...payload, sync_mode: options?.sync_mode ?? 'quick' };
     const res = await apiClient.post<ApiResponse<ITimesheetRefreshResult>>(
       '/timesheet/refresh',
-      body,
+      payload,
       options?.signal ? { signal: options.signal } : undefined,
     );
     if (!res.data) throw new Error(res.error || 'Ошибка обновления табеля');

@@ -15,6 +15,8 @@ vi.mock('../config/postgres.js', () => ({
 }));
 vi.mock('./schedule.service.js', () => ({
   loadCalendarMonth: vi.fn(),
+  resolveSchedulesForPeriod: vi.fn(),
+  isWorkingDay: vi.fn(),
 }));
 vi.mock('./timesheet-department-assignments.service.js', () => ({
   listEmployeeIdsAssignedToDepartmentPeriod: vi.fn(),

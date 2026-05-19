@@ -1,5 +1,5 @@
 import { query } from '../config/postgres.js';
-import { loadCalendarMonth } from './schedule.service.js';
+import { loadCalendarMonth, resolveSchedulesForPeriod, isWorkingDay } from './schedule.service.js';
 import { listEmployeeIdsAssignedToDepartmentPeriod } from './timesheet-department-assignments.service.js';
 import { countApprovalAttachments } from './timesheet-approval-attachments.service.js';
 
@@ -30,34 +30,12 @@ const iterateDates = (startDate: string, endDate: string, cb: (iso: string) => v
   }
 };
 
-async function collectWeekendDates(startDate: string, endDate: string): Promise<Set<string>> {
-  const weekends = new Set<string>();
-  const months = new Set<string>();
-  iterateDates(startDate, endDate, (iso) => {
-    months.add(iso.slice(0, 7));
-    const d = new Date(`${iso}T00:00:00`);
-    const dow = d.getDay();
-    if (dow === 0 || dow === 6) weekends.add(iso);
-  });
-
-  for (const ym of months) {
-    const [y, m] = ym.split('-').map(Number);
-    const calendar = await loadCalendarMonth(y, m);
-    if (!calendar) continue;
-    for (const holiday of calendar.holidays ?? []) {
-      if (typeof holiday === 'string' && holiday >= startDate && holiday <= endDate) {
-        weekends.add(holiday);
-      }
-    }
-    for (const holiday of calendar.mandatory_holidays ?? []) {
-      if (typeof holiday === 'string' && holiday >= startDate && holiday <= endDate) {
-        weekends.add(holiday);
-      }
-    }
-  }
-  return weekends;
-}
-
+/**
+ * Выходной день определяется по ЛИЧНОМУ графику сотрудника (isWorkingDay):
+ * нерабочий по его графику день — выходной, даже если по календарю это будний
+ * (важно для сменных/цикличных графиков). Праздники производственного
+ * календаря учитываются внутри isWorkingDay (respects_holidays).
+ */
 export async function checkWeekendWorkRequirement(params: {
   departmentId: string;
   startDate: string;
@@ -65,41 +43,82 @@ export async function checkWeekendWorkRequirement(params: {
 }): Promise<IWeekendWorkCheck> {
   const { departmentId, startDate, endDate } = params;
 
-  const weekends = await collectWeekendDates(startDate, endDate);
-  const weekendDates = [...weekends].sort();
-  if (weekendDates.length === 0) {
+  const employeeIds = await listEmployeeIdsAssignedToDepartmentPeriod(departmentId, startDate, endDate);
+  if (employeeIds.length === 0) {
     return { requires: false, weekendDates: [], weekendWorkDates: [] };
   }
 
-  const employeeIds = await listEmployeeIdsAssignedToDepartmentPeriod(departmentId, startDate, endDate);
-  if (employeeIds.length === 0) {
-    return { requires: false, weekendDates, weekendWorkDates: [] };
+  const rangeDates: string[] = [];
+  iterateDates(startDate, endDate, (iso) => rangeDates.push(iso));
+
+  const schedules = await resolveSchedulesForPeriod(
+    employeeIds.map((id) => ({ id })),
+    startDate,
+    endDate,
+  );
+
+  // Производственный календарь по месяцам диапазона грузим один раз.
+  const calendarCache = new Map<string, Awaited<ReturnType<typeof loadCalendarMonth>>>();
+  const getCalendar = async (dateObj: Date) => {
+    const key = `${dateObj.getFullYear()}-${dateObj.getMonth() + 1}`;
+    if (!calendarCache.has(key)) {
+      calendarCache.set(key, await loadCalendarMonth(dateObj.getFullYear(), dateObj.getMonth() + 1));
+    }
+    return calendarCache.get(key) ?? null;
+  };
+
+  // Для каждого сотрудника — множество нерабочих по ЕГО графику дат.
+  const offByEmployee = new Map<number, Set<string>>();
+  const allOffDates = new Set<string>();
+  for (const empId of employeeIds) {
+    const dailyMap = schedules.get(empId);
+    const offSet = new Set<string>();
+    for (const iso of rangeDates) {
+      const schedule = dailyMap?.get(iso);
+      if (!schedule) continue;
+      const dateObj = new Date(`${iso}T00:00:00`);
+      const calendar = await getCalendar(dateObj);
+      if (!isWorkingDay(schedule, dateObj, calendar)) {
+        offSet.add(iso);
+        allOffDates.add(iso);
+      }
+    }
+    offByEmployee.set(empId, offSet);
+  }
+
+  const weekendDates = [...allOffDates].sort();
+  if (weekendDates.length === 0) {
+    return { requires: false, weekendDates: [], weekendWorkDates: [] };
   }
 
   const weekendWorkDates = new Set<string>();
 
   const adjRows = await query<{ employee_id: number; work_date: string; status: string }>(
-    `SELECT employee_id, work_date, status
+    `SELECT employee_id, work_date::text AS work_date, status
        FROM attendance_adjustments
       WHERE employee_id = ANY($1::int[])
-        AND work_date = ANY($2::date[])
+        AND work_date >= $2::date AND work_date <= $3::date
         AND status = 'work'`,
-    [employeeIds, weekendDates],
+    [employeeIds, startDate, endDate],
   );
   for (const row of adjRows) {
-    weekendWorkDates.add(String(row.work_date));
+    const empId = Number(row.employee_id);
+    const iso = String(row.work_date).slice(0, 10);
+    if (offByEmployee.get(empId)?.has(iso)) weekendWorkDates.add(iso);
   }
 
   const skudRows = await query<{ employee_id: number; date: string; total_minutes: number }>(
-    `SELECT employee_id, date, total_minutes
+    `SELECT employee_id, date::text AS date, total_minutes
        FROM skud_daily_summary
       WHERE employee_id = ANY($1::int[])
-        AND date = ANY($2::date[])
+        AND date >= $2::date AND date <= $3::date
         AND total_minutes > 0`,
-    [employeeIds, weekendDates],
+    [employeeIds, startDate, endDate],
   );
   for (const row of skudRows) {
-    weekendWorkDates.add(String(row.date));
+    const empId = Number(row.employee_id);
+    const iso = String(row.date).slice(0, 10);
+    if (offByEmployee.get(empId)?.has(iso)) weekendWorkDates.add(iso);
   }
 
   const sortedWeekendWork = [...weekendWorkDates].sort();
