@@ -1,0 +1,31 @@
+{
+  "name": "sphinx-reader-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Локальный USB-агент настольного ридера выдачи карт «Сфинкс» (Sphinx Reader SDK Rev20). Аналог Sigur Reader EH: читает W26 со считывателя и пробрасывает в портал ФОТ через ws://localhost:8765.",
+  "main": "src/index.js",
+  "bin": {
+    "sphinx-reader-agent": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "pkg": "pkg . --targets node18-win-x86 --output dist/sphinx-reader-agent.exe"
+  },
+  "dependencies": {
+    "koffi": "^2.9.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  },
+  "pkg": {
+    "assets": [
+      "vendor/**/*",
+      "config.json"
+    ]
+  },
+  "engines": {
+    "node": ">=18 <=20"
+  },
+  "//": "ВАЖНО: spnxreader.dll 32-битная (PE32 x86). Хост-процесс ОБЯЗАН быть 32-бит: ставить зависимости и запускать 32-битным Node (node-v*-win-x86), pkg-таргет node18-win-x86."
+}

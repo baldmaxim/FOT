@@ -1,0 +1,14 @@
+{
+  "host": "127.0.0.1",
+  "port": 8765,
+  "poll": {
+    "bufLen": 3,
+    "timeoutMs": 500
+  },
+  "w26": {
+    "endian": "big"
+  },
+  "debounceMs": 1500,
+  "reopenBackoffMs": [1000, 2000, 5000],
+  "logRawBytes": true
+}

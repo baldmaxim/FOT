@@ -7,6 +7,9 @@ const router = Router();
 const SIGUR_READER_DRIVER_URL = '/downloads/sigur-reader-eh-setup-1.0.0.exe';
 const SIGUR_READER_DRIVER_FILE_NAME = 'Sigur Reader EH Setup 1.0.0.exe';
 
+const SPHINX_READER_DRIVER_URL = '/downloads/sphinx-reader-setup-1.0.0.exe';
+const SPHINX_READER_DRIVER_FILE_NAME = 'Sphinx Reader Setup 1.0.0.exe';
+
 router.use(authenticate);
 
 router.get(
@@ -16,6 +19,17 @@ router.get(
     res.json({
       success: true,
       data: { download_url: SIGUR_READER_DRIVER_URL, file_name: SIGUR_READER_DRIVER_FILE_NAME },
+    });
+  },
+);
+
+router.get(
+  '/sphinx-reader-driver',
+  requireAnyPageAccess(['/skud-card-reader', '/skud-settings'], 'view'),
+  (_req: AuthenticatedRequest, res: Response): void => {
+    res.json({
+      success: true,
+      data: { download_url: SPHINX_READER_DRIVER_URL, file_name: SPHINX_READER_DRIVER_FILE_NAME },
     });
   },
 );

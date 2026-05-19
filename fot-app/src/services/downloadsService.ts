@@ -13,4 +13,9 @@ export const downloadsService = {
     const res = await apiClient.get<IDownloadUrlResponse>('/downloads/sigur-reader-driver');
     return res.data;
   },
+
+  async getSphinxReaderDriverUrl(): Promise<{ download_url: string; file_name: string }> {
+    const res = await apiClient.get<IDownloadUrlResponse>('/downloads/sphinx-reader-driver');
+    return res.data;
+  },
 };
