@@ -88,12 +88,49 @@ function makeRes() {
   return response as Response & { statusCode: number; payload: unknown };
 }
 
+/**
+ * Контроллер теперь оборачивает мутации в withTransaction(client => ...).
+ * Фейковый клиент маршрутизирует SQL в те же моки query/queryOne/execute,
+ * что и прод-хелперы (INSERT…RETURNING и SELECT…WHERE a.id=$1 → queryOne,
+ * прочие SELECT → query, UPDATE/DELETE → execute) — существующие моки и
+ * ассерты тестов остаются валидными.
+ */
+function makeTxClient() {
+  return {
+    query: async (sql: string, params?: unknown[]) => {
+      const lower = sql.trimStart().toLowerCase();
+      if (lower.startsWith('insert')) {
+        const row = await pgQueryOne(sql, params);
+        return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
+      }
+      if (lower.startsWith('select')) {
+        if (lower.includes('where a.id = $1')) {
+          const row = await pgQueryOne(sql, params);
+          return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
+        }
+        const rows = (await pgQuery(sql, params)) ?? [];
+        return { rows, rowCount: rows.length };
+      }
+      if (lower.startsWith('update') || lower.startsWith('delete')) {
+        const n = await pgExecute(sql, params);
+        return { rows: [], rowCount: typeof n === 'number' ? n : 0 };
+      }
+      return { rows: [], rowCount: 0 };
+    },
+  };
+}
+
+const installDefaultTx = () => {
+  pgTx.mockImplementation(async (fn: (client: unknown) => unknown) => fn(makeTxClient()));
+};
+
 describe('scheduleController.bulkApplyToBrigades', () => {
   beforeEach(() => {
     pgQuery.mockReset();
     pgQueryOne.mockReset();
     pgExecute.mockReset();
     pgTx.mockReset();
+    installDefaultTx();
     mockedState.scope = 'all';
   });
 
@@ -407,6 +444,7 @@ describe('scheduleController.fixEmployeeAssignment', () => {
     pgQueryOne.mockReset();
     pgExecute.mockReset();
     pgTx.mockReset();
+    installDefaultTx();
     mockedState.scope = 'all';
   });
 
@@ -542,5 +580,116 @@ describe('scheduleController.fixEmployeeAssignment', () => {
 
     expect(res.statusCode).toBe(400);
     expect(pgQuery).not.toHaveBeenCalled();
+  });
+});
+
+describe('scheduleController.assignEmployee — коррекция даты на более раннюю', () => {
+  const ASSIGN_X = 'eeeeeeee-5555-4555-8555-eeeeeeeeeeee';
+
+  beforeEach(() => {
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
+    installDefaultTx();
+    mockedState.scope = 'all';
+  });
+
+  it('ранняя дата того же графика двигает effective_from существующей записи in-place (без INSERT)', async () => {
+    // Одна активная запись от 2026-05-01. Пользователь ставит более раннюю
+    // дату 2026-03-01 тем же графиком → запись должна сдвинуться, а не
+    // породить мёртвый отрезок + остаться со старой датой.
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_X, schedule_id: SCHEDULE_ID, effective_from: '2026-05-01', effective_to: null },
+    ]);
+    pgExecute.mockResolvedValue(1);
+    pgQueryOne.mockResolvedValue({ id: ASSIGN_X, effective_from: '2026-03-01' });
+
+    const req = makeReq({
+      params: { employeeId: '7' },
+      body: { schedule_id: SCHEDULE_ID, effective_from: '2026-03-01' },
+    });
+    const res = makeRes();
+
+    await scheduleController.assignEmployee(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect((res.payload as { data: { id: string } }).data.id).toBe(ASSIGN_X);
+
+    // UPDATE сдвига effective_from существующей записи.
+    const shift = pgExecute.mock.calls.find(([sql, params]) =>
+      typeof sql === 'string'
+      && sql.toLowerCase().includes('update employee_schedule_assignments')
+      && /effective_from\s*=/i.test(sql)
+      && Array.isArray(params)
+      && (params as unknown[]).includes('2026-03-01')
+      && (params as unknown[]).includes(ASSIGN_X));
+    expect(shift).toBeTruthy();
+
+    // Никакого INSERT мёртвого отрезка.
+    const inserts = pgQueryOne.mock.calls.filter(([sql]) =>
+      typeof sql === 'string' && sql.toLowerCase().trimStart().startsWith('insert'));
+    expect(inserts).toHaveLength(0);
+  });
+
+  it('массово по бригаде: ранняя дата того же графика двигает существующую запись, новым — INSERT', async () => {
+    pgQuery.mockImplementation(async (sql: string) => {
+      const lower = sql.toLowerCase();
+      if (lower.includes('from org_departments')) {
+        return [{ id: BRIGADE_1, name: 'Бр. 1', kind: 'brigade' }];
+      }
+      if (lower.includes('from employees')) {
+        return [{ id: 401 }, { id: 402 }];
+      }
+      if (lower.includes('from employee_schedule_assignments')) {
+        // 402 уже на том же графике, но запись начинается позже выбранной даты.
+        return [
+          { id: 'existing-402', employee_id: 402, schedule_id: SCHEDULE_ID, effective_from: '2026-06-01', effective_to: null },
+        ];
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    let insertCounter = 0;
+    pgQueryOne.mockImplementation(async (sql: string) => {
+      if (sql.toLowerCase().trimStart().startsWith('insert into employee_schedule_assignments')) {
+        insertCounter += 1;
+        return { id: `new-${insertCounter}` };
+      }
+      return { id: 'fetched' };
+    });
+    pgExecute.mockResolvedValue(1);
+
+    const req = makeReq({
+      body: {
+        department_ids: [BRIGADE_1],
+        action: 'assign',
+        schedule_id: SCHEDULE_ID,
+        effective_date: '2026-04-20',
+      },
+    });
+    const res = makeRes();
+
+    await scheduleController.bulkApplyToBrigades(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const data = (res.payload as { data: Record<string, unknown> }).data;
+    expect(data.employees_matched).toBe(2);
+    expect(data.employees_updated).toBe(2);
+    expect(data.employees_failed).toBe(0);
+
+    // 402: сдвиг existing-402 на 2026-04-20 (без INSERT для него).
+    const shift = pgExecute.mock.calls.find(([sql, params]) =>
+      typeof sql === 'string'
+      && sql.toLowerCase().includes('update employee_schedule_assignments')
+      && /effective_from\s*=/i.test(sql)
+      && Array.isArray(params)
+      && (params as unknown[]).includes('2026-04-20')
+      && (params as unknown[]).includes('existing-402'));
+    expect(shift).toBeTruthy();
+
+    // 401: новый сотрудник → ровно один INSERT.
+    const inserts = pgQueryOne.mock.calls.filter(([sql]) =>
+      typeof sql === 'string' && sql.toLowerCase().trimStart().startsWith('insert into employee_schedule_assignments'));
+    expect(inserts).toHaveLength(1);
   });
 });

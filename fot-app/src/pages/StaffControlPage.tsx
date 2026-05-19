@@ -289,8 +289,11 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
     setSaving(true);
     const value = scheduleVal === '' ? null : scheduleVal;
     const anchor = isCycleTemplate && scheduleAnchor.trim() ? scheduleAnchor : null;
-    await onSaveSchedule(modalEmp.id, value, scheduleDate, anchor);
-    setSaving(false);
+    try {
+      await onSaveSchedule(modalEmp.id, value, scheduleDate, anchor);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleFix = async () => {
@@ -1366,24 +1369,42 @@ export const StaffControlPage: FC = () => {
     }
   }, [selectedEmployeeIdsVisible, toast, refresh, queryClient]);
 
+  // Смена графика влияет на табель (норма/покраска/согласования считаются из
+  // расписания). Сбрасываем кэш табеля, иначе пользователь видит старое.
+  const invalidateTimesheetQueries = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ['timesheet-page'] });
+    void queryClient.invalidateQueries({ queryKey: ['timesheet'] });
+    void queryClient.invalidateQueries({ queryKey: ['timesheet-grid'] });
+    void queryClient.invalidateQueries({ queryKey: ['timesheet-approval'] });
+    void queryClient.invalidateQueries({ queryKey: ['employee-timesheet'] });
+  }, [queryClient]);
+
   const handleSaveSchedule = useCallback(async (empId: number, scheduleId: string | null, effectiveFrom: string, anchorDate: string | null) => {
-    if (scheduleId) {
-      await scheduleService.assignEmployee(empId, {
-        schedule_id: scheduleId,
-        effective_from: effectiveFrom,
-        anchor_date: anchorDate,
-      });
-    } else {
-      await scheduleService.removeEmployeeAssignment(empId, effectiveFrom);
+    try {
+      if (scheduleId) {
+        await scheduleService.assignEmployee(empId, {
+          schedule_id: scheduleId,
+          effective_from: effectiveFrom,
+          anchor_date: anchorDate,
+        });
+      } else {
+        await scheduleService.removeEmployeeAssignment(empId, effectiveFrom);
+      }
+      await Promise.all([
+        employeeScheduleAssignmentsQuery.refetch(),
+        queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
+      ]);
+      refresh();
+      void queryClient.invalidateQueries({ queryKey: ['employees'] });
+      invalidateTimesheetQueries();
+      toast.success(scheduleId ? 'График назначен' : 'Персональный график снят');
+      closeModal();
+    } catch (e) {
+      // Ошибку не глотаем (раньше — «тихо ничего», модалка закрывалась):
+      // показываем тост, модалку оставляем открытой для повтора.
+      toast.error(e instanceof ApiError ? e.message : 'Не удалось сохранить график');
     }
-    await Promise.all([
-      employeeScheduleAssignmentsQuery.refetch(),
-      queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
-    ]);
-    refresh();
-    void queryClient.invalidateQueries({ queryKey: ['employees'] });
-    closeModal();
-  }, [closeModal, employeeScheduleAssignmentsQuery, queryClient, refresh]);
+  }, [closeModal, employeeScheduleAssignmentsQuery, queryClient, refresh, toast, invalidateTimesheetQueries]);
 
   const handleFixAssignment = useCallback(async (
     empId: number,
@@ -1397,41 +1418,63 @@ export const StaffControlPage: FC = () => {
       ]);
       refresh();
       void queryClient.invalidateQueries({ queryKey: ['employees'] });
+      invalidateTimesheetQueries();
       toast.success('Даты назначения исправлены');
       closeModal();
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : 'Не удалось исправить даты назначения');
     }
-  }, [closeModal, employeeScheduleAssignmentsQuery, queryClient, refresh, toast]);
+  }, [closeModal, employeeScheduleAssignmentsQuery, queryClient, refresh, toast, invalidateTimesheetQueries]);
 
-  const applyScheduleToEmployees = useCallback(async (employeeIds: number[], scheduleId: string | null, effectiveFrom: string) => {
-    if (employeeIds.length === 0) return;
+  const applyScheduleToEmployees = useCallback(async (
+    employeeIds: number[],
+    scheduleId: string | null,
+    effectiveFrom: string,
+  ): Promise<{ ok: number; failed: number; sampleError?: string }> => {
+    if (employeeIds.length === 0) return { ok: 0, failed: 0 };
     const CHUNK_SIZE = 20;
+    let ok = 0;
+    let failed = 0;
+    let sampleError: string | undefined;
 
+    // allSettled: один сбойный сотрудник не валит всю пачку — собираем сводку
+    // и показываем её в тосте (раньше Promise.all → молчаливый reject).
     for (let i = 0; i < employeeIds.length; i += CHUNK_SIZE) {
       const chunk = employeeIds.slice(i, i + CHUNK_SIZE);
-      if (scheduleId) {
-        await Promise.all(chunk.map(empId => scheduleService.assignEmployee(empId, {
-          schedule_id: scheduleId,
-          effective_from: effectiveFrom,
-        })));
-      } else {
-        await Promise.all(chunk.map(empId => scheduleService.removeEmployeeAssignment(empId, effectiveFrom)));
+      const results = await Promise.allSettled(chunk.map(empId => scheduleId
+        ? scheduleService.assignEmployee(empId, { schedule_id: scheduleId, effective_from: effectiveFrom })
+        : scheduleService.removeEmployeeAssignment(empId, effectiveFrom)));
+      for (const r of results) {
+        if (r.status === 'fulfilled') {
+          ok++;
+        } else {
+          failed++;
+          if (!sampleError) sampleError = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        }
       }
     }
+    return { ok, failed, sampleError };
   }, []);
 
   const handleBulkSaveSchedule = useCallback(async (scheduleId: string | null, effectiveFrom: string) => {
-    await applyScheduleToEmployees(selectedEmployees.map(employee => employee.id), scheduleId, effectiveFrom);
+    const ids = selectedEmployees.map(employee => employee.id);
+    const { ok, failed, sampleError } = await applyScheduleToEmployees(ids, scheduleId, effectiveFrom);
     await Promise.all([
       employeeScheduleAssignmentsQuery.refetch(),
       queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
     ]);
     refresh();
     void queryClient.invalidateQueries({ queryKey: ['employees'] });
+    invalidateTimesheetQueries();
     setBulkScheduleOpen(false);
     setSelectedEmployeeIds([]);
-  }, [applyScheduleToEmployees, employeeScheduleAssignmentsQuery, queryClient, refresh, selectedEmployees]);
+    if (ids.length === 0) return;
+    if (failed > 0) {
+      toast.error(`Обновлено ${ok} из ${ids.length}, не удалось ${failed}.` + (sampleError ? ` Пример: ${sampleError}` : ''));
+    } else {
+      toast.success(`Сотрудников обновлено: ${ok}.`);
+    }
+  }, [applyScheduleToEmployees, employeeScheduleAssignmentsQuery, queryClient, refresh, selectedEmployees, toast, invalidateTimesheetQueries]);
 
   const [rehireEmp, setRehireEmp] = useState<Employee | null>(null);
   const [rehireDeptId, setRehireDeptId] = useState('');
@@ -1482,15 +1525,22 @@ export const StaffControlPage: FC = () => {
       status: 'active',
       view: 'list',
     });
-    await applyScheduleToEmployees(employeeIds, scheduleId, effectiveFrom);
+    const { ok, failed, sampleError } = await applyScheduleToEmployees(employeeIds, scheduleId, effectiveFrom);
     await Promise.all([
       employeeScheduleAssignmentsQuery.refetch(),
       queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
     ]);
     refresh();
     void queryClient.invalidateQueries({ queryKey: ['employees'] });
+    invalidateTimesheetQueries();
     setBulkFilterScheduleOpen(false);
-  }, [applyScheduleToEmployees, debouncedSearch, deptId, employeeScheduleAssignmentsQuery, queryClient, refresh]);
+    if (employeeIds.length === 0) return;
+    if (failed > 0) {
+      toast.error(`Обновлено ${ok} из ${employeeIds.length}, не удалось ${failed}.` + (sampleError ? ` Пример: ${sampleError}` : ''));
+    } else {
+      toast.success(`Сотрудников обновлено: ${ok}.`);
+    }
+  }, [applyScheduleToEmployees, debouncedSearch, deptId, employeeScheduleAssignmentsQuery, queryClient, refresh, toast, invalidateTimesheetQueries]);
 
   const handleBrigadeBulkSaveSchedule = useCallback(async (departmentIds: string[], scheduleId: string | null, effectiveFrom: string) => {
     try {
@@ -1528,8 +1578,9 @@ export const StaffControlPage: FC = () => {
       ]);
       refresh();
       void queryClient.invalidateQueries({ queryKey: ['employees'] });
+      invalidateTimesheetQueries();
     }
-  }, [employeeScheduleAssignmentsQuery, queryClient, refresh, toast]);
+  }, [employeeScheduleAssignmentsQuery, queryClient, refresh, toast, invalidateTimesheetQueries]);
 
   /* ─── history panel data changed ─── */
 

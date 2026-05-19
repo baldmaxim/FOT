@@ -3,7 +3,8 @@
  */
 import { Response } from 'express';
 import { z } from 'zod';
-import { execute, query, queryOne } from '../config/postgres.js';
+import type { PoolClient, QueryResultRow } from 'pg';
+import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import { resolveSchedule, resolveSchedulesBulk, computeNetWorkHours } from '../services/schedule.service.js';
 import { canAccessEmployeeInScope, resolveRequestDataScope, resolveScopedDepartmentIds } from '../services/data-scope.service.js';
 import { collectDeptIds } from '../services/skud-shared.service.js';
@@ -200,8 +201,32 @@ const normalizeDayOverrides = (
   return result;
 };
 
-const loadEmployeeScheduleRows = async (employeeId: number): Promise<EmployeeScheduleRow[]> => {
-  return query<EmployeeScheduleRow>(
+/**
+ * Абстракция исполнителя SQL: пул (poolDb) либо клиент открытой транзакции
+ * (clientDb). Мутация назначения делает несколько шагов (закрыть/сдвинуть
+ * соседнюю запись + обновить/вставить целевую) — их оборачиваем в одну
+ * транзакцию, чтобы UNIQUE(employee_id, effective_from) не мог примениться
+ * наполовину и не оставить расписание в рассогласованном состоянии.
+ */
+interface Db {
+  query: <T extends QueryResultRow = QueryResultRow>(sql: string, params?: readonly unknown[]) => Promise<T[]>;
+  queryOne: <T extends QueryResultRow = QueryResultRow>(sql: string, params?: readonly unknown[]) => Promise<T | null>;
+  execute: (sql: string, params?: readonly unknown[]) => Promise<number>;
+}
+
+const poolDb: Db = { query, queryOne, execute };
+
+const clientDb = (client: PoolClient): Db => ({
+  query: async <T extends QueryResultRow = QueryResultRow>(sql: string, params?: readonly unknown[]): Promise<T[]> =>
+    (await client.query<T>(sql, params as unknown[] | undefined)).rows,
+  queryOne: async <T extends QueryResultRow = QueryResultRow>(sql: string, params?: readonly unknown[]): Promise<T | null> =>
+    (await client.query<T>(sql, params as unknown[] | undefined)).rows[0] ?? null,
+  execute: async (sql: string, params?: readonly unknown[]): Promise<number> =>
+    (await client.query(sql, params as unknown[] | undefined)).rowCount ?? 0,
+});
+
+const loadEmployeeScheduleRows = async (employeeId: number, db: Db = poolDb): Promise<EmployeeScheduleRow[]> => {
+  return db.query<EmployeeScheduleRow>(
     `SELECT id, schedule_id, effective_from, effective_to
        FROM employee_schedule_assignments
       WHERE employee_id = $1
@@ -251,6 +276,7 @@ const loadObjectScheduleRows = async (objectId: string): Promise<ObjectScheduleR
 };
 
 const assignEmployeeSchedule = async (
+  db: Db,
   employeeId: number,
   scheduleId: string,
   effectiveFrom: string,
@@ -259,7 +285,7 @@ const assignEmployeeSchedule = async (
   preloadedRows?: EmployeeScheduleRow[],
   anchorDate?: string | null,
 ): Promise<unknown> => {
-  const rows = preloadedRows ?? await loadEmployeeScheduleRows(employeeId);
+  const rows = preloadedRows ?? await loadEmployeeScheduleRows(employeeId, db);
   const nowIso = new Date().toISOString();
   const activeAtDate = rows.find(row => row.effective_from <= effectiveFrom && (row.effective_to === null || row.effective_to >= effectiveFrom)) || null;
   const nextAssignment = rows.find(row => row.effective_from > effectiveFrom) || null;
@@ -267,21 +293,21 @@ const assignEmployeeSchedule = async (
   if (activeAtDate?.effective_from === effectiveFrom) {
     const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : activeAtDate.effective_to ?? null);
     if (anchorDate !== undefined) {
-      await execute(
+      await db.execute(
         `UPDATE employee_schedule_assignments
             SET schedule_id = $1, effective_to = $2, updated_at = $3, anchor_date = $4
           WHERE id = $5`,
         [scheduleId, nextEffectiveTo, nowIso, anchorDate, activeAtDate.id],
       );
     } else {
-      await execute(
+      await db.execute(
         `UPDATE employee_schedule_assignments
             SET schedule_id = $1, effective_to = $2, updated_at = $3
           WHERE id = $4`,
         [scheduleId, nextEffectiveTo, nowIso, activeAtDate.id],
       );
     }
-    const updated = await queryOne<Record<string, unknown>>(
+    const updated = await db.queryOne<Record<string, unknown>>(
       `SELECT ${SCHEDULE_ASSIGNMENT_JOIN('employee_schedule_assignments')} WHERE a.id = $1`,
       [activeAtDate.id],
     );
@@ -289,8 +315,56 @@ const assignEmployeeSchedule = async (
     return updated;
   }
 
+  // Коррекция даты вступления НА БОЛЕЕ РАННЮЮ. Активной записи на новую дату
+  // нет, но ближайшая следующая запись — того же графика. Это правка даты
+  // старта существующего назначения, а не новая история: двигаем
+  // effective_from существующей записи назад in-place (без INSERT). Иначе
+  // создавался мёртвый отрезок [newFrom .. day-before], а активная запись
+  // оставалась со старой датой — пользователю казалось, что «дата не
+  // меняется» (одиночно и при массовом назначении бригаде).
+  if (!activeAtDate && nextAssignment && nextAssignment.schedule_id === scheduleId) {
+    const between = rows.find(row =>
+      row.id !== nextAssignment.id
+      && row.effective_from > effectiveFrom
+      && row.effective_from < nextAssignment.effective_from,
+    ) || null;
+    const prior = [...rows]
+      .filter(row => row.id !== nextAssignment.id && row.effective_from < nextAssignment.effective_from)
+      .sort((a, b) => (a.effective_from < b.effective_from ? 1 : -1))[0] || null;
+
+    if (!between && (!prior || prior.effective_from < effectiveFrom)) {
+      if (prior && (prior.effective_to === null || prior.effective_to >= effectiveFrom)) {
+        await db.execute(
+          `UPDATE employee_schedule_assignments SET effective_to = $1, updated_at = $2 WHERE id = $3`,
+          [previousIsoDate(effectiveFrom), nowIso, prior.id],
+        );
+      }
+      if (anchorDate !== undefined) {
+        await db.execute(
+          `UPDATE employee_schedule_assignments
+              SET effective_from = $1, updated_at = $2, anchor_date = $3
+            WHERE id = $4`,
+          [effectiveFrom, nowIso, anchorDate, nextAssignment.id],
+        );
+      } else {
+        await db.execute(
+          `UPDATE employee_schedule_assignments
+              SET effective_from = $1, updated_at = $2
+            WHERE id = $3`,
+          [effectiveFrom, nowIso, nextAssignment.id],
+        );
+      }
+      const updated = await db.queryOne<Record<string, unknown>>(
+        `SELECT ${SCHEDULE_ASSIGNMENT_JOIN('employee_schedule_assignments')} WHERE a.id = $1`,
+        [nextAssignment.id],
+      );
+      if (!updated) throw new Error('Failed to load updated employee_schedule_assignment');
+      return updated;
+    }
+  }
+
   if (activeAtDate && activeAtDate.effective_from < effectiveFrom) {
-    await execute(
+    await db.execute(
       `UPDATE employee_schedule_assignments
           SET effective_to = $1, updated_at = $2
         WHERE id = $3`,
@@ -299,7 +373,7 @@ const assignEmployeeSchedule = async (
   }
 
   const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : null);
-  const inserted = await queryOne<{ id: string }>(
+  const inserted = await db.queryOne<{ id: string }>(
     anchorDate !== undefined
       ? `INSERT INTO employee_schedule_assignments
            (employee_id, schedule_id, effective_from, effective_to, created_by, anchor_date)
@@ -312,7 +386,7 @@ const assignEmployeeSchedule = async (
       : [employeeId, scheduleId, effectiveFrom, nextEffectiveTo, createdBy],
   );
   if (!inserted) throw new Error('Failed to insert employee_schedule_assignment');
-  const data = await queryOne<Record<string, unknown>>(
+  const data = await db.queryOne<Record<string, unknown>>(
     `SELECT ${SCHEDULE_ASSIGNMENT_JOIN('employee_schedule_assignments')} WHERE a.id = $1`,
     [inserted.id],
   );
@@ -330,11 +404,12 @@ class AssignmentFixError extends Error {}
  *    а перекрытие/перепрыгивание соседних записей запрещено.
  */
 const fixEmployeeAssignmentDates = async (
+  db: Db,
   employeeId: number,
   assignmentId: string,
   patch: { effectiveFrom?: string; anchorDate?: string | null },
 ): Promise<Record<string, unknown>> => {
-  const rows = await query<EmployeeScheduleRow>(
+  const rows = await db.query<EmployeeScheduleRow>(
     `SELECT id, schedule_id, effective_from, effective_to
        FROM employee_schedule_assignments
       WHERE employee_id = $1
@@ -377,7 +452,7 @@ const fixEmployeeAssignmentDates = async (
     p++;
 
     if (prev) {
-      await execute(
+      await db.execute(
         `UPDATE employee_schedule_assignments SET effective_to = $1, updated_at = $2 WHERE id = $3`,
         [previousIsoDate(newFrom), nowIso, prev.id],
       );
@@ -392,13 +467,13 @@ const fixEmployeeAssignmentDates = async (
 
   if (sets.length > 1) {
     params.push(target.id);
-    await execute(
+    await db.execute(
       `UPDATE employee_schedule_assignments SET ${sets.join(', ')} WHERE id = $${p}`,
       params,
     );
   }
 
-  const updated = await queryOne<Record<string, unknown>>(
+  const updated = await db.queryOne<Record<string, unknown>>(
     `SELECT ${SCHEDULE_ASSIGNMENT_JOIN('employee_schedule_assignments')} WHERE a.id = $1`,
     [target.id],
   );
@@ -407,15 +482,16 @@ const fixEmployeeAssignmentDates = async (
 };
 
 const removeEmployeeSchedule = async (
+  db: Db,
   employeeId: number,
   effectiveDate: string,
   preloadedRows?: EmployeeScheduleRow[],
 ): Promise<boolean> => {
-  const rows = preloadedRows ?? await loadEmployeeScheduleRows(employeeId);
+  const rows = preloadedRows ?? await loadEmployeeScheduleRows(employeeId, db);
   const nowIso = new Date().toISOString();
   const exactRow = rows.find(row => row.effective_from === effectiveDate) || null;
   if (exactRow) {
-    await execute('DELETE FROM employee_schedule_assignments WHERE id = $1', [exactRow.id]);
+    await db.execute('DELETE FROM employee_schedule_assignments WHERE id = $1', [exactRow.id]);
     return true;
   }
 
@@ -424,7 +500,7 @@ const removeEmployeeSchedule = async (
     return false;
   }
 
-  await execute(
+  await db.execute(
     `UPDATE employee_schedule_assignments
         SET effective_to = $1, updated_at = $2
       WHERE id = $3`,
@@ -794,7 +870,8 @@ export const scheduleController = {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 
-      const data = await assignEmployeeSchedule(
+      const data = await withTransaction(client => assignEmployeeSchedule(
+        clientDb(client),
         parsedEmployeeId.data,
         parsed.data.schedule_id,
         parsed.data.effective_from,
@@ -802,7 +879,7 @@ export const scheduleController = {
         parsed.data.effective_to,
         undefined,
         parsed.data.anchor_date,
-      );
+      ));
 
       res.json({ success: true, data });
     } catch (err) {
@@ -831,7 +908,8 @@ export const scheduleController = {
       if (body.effective_from !== undefined) patch.effectiveFrom = body.effective_from;
       if ('anchor_date' in body) patch.anchorDate = body.anchor_date ?? null;
 
-      const data = await fixEmployeeAssignmentDates(parsedEmployeeId.data, body.assignment_id, patch);
+      const data = await withTransaction(client =>
+        fixEmployeeAssignmentDates(clientDb(client), parsedEmployeeId.data, body.assignment_id, patch));
       res.json({ success: true, data });
     } catch (err) {
       if (err instanceof AssignmentFixError) {
@@ -934,10 +1012,11 @@ export const scheduleController = {
         const results = await Promise.allSettled(chunk.map(async (employeeId) => {
           const preloaded = preloadedByEmployee.get(employeeId) ?? [];
           if (action === 'assign') {
-            await assignEmployeeSchedule(employeeId, scheduleId!, effectiveDate, req.user.employee_id, undefined, preloaded);
+            await withTransaction(client => assignEmployeeSchedule(
+              clientDb(client), employeeId, scheduleId!, effectiveDate, req.user.employee_id, undefined, preloaded));
             return true;
           }
-          return removeEmployeeSchedule(employeeId, effectiveDate, preloaded);
+          return withTransaction(client => removeEmployeeSchedule(clientDb(client), employeeId, effectiveDate, preloaded));
         }));
         for (let i = 0; i < results.length; i++) {
           const r = results[i];
@@ -994,7 +1073,8 @@ export const scheduleController = {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 
-      const updated = await removeEmployeeSchedule(parsedEmployeeId.data, parsedEffectiveTo.data);
+      const updated = await withTransaction(client =>
+        removeEmployeeSchedule(clientDb(client), parsedEmployeeId.data, parsedEffectiveTo.data));
       if (!updated) {
         return res.json({ success: true });
       }
