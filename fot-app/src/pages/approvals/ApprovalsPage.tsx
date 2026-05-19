@@ -565,7 +565,7 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
       {hasPendingWeekend && (
         <div className="approvals-flags">
           <span className="approvals-flag approvals-flag--yellow">
-            <Clock size={12} /> На рассмотрении (выходные/праздники): {row.pending_weekend_dates.join(', ')}
+            <Clock size={12} /> На рассмотрении (выходные/праздники): {row.pending_weekend_dates.map(formatDate).join(', ')}
           </span>
         </div>
       )}
