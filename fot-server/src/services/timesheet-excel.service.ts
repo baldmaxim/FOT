@@ -259,7 +259,7 @@ const getEffectiveScheduleForDate = (
  *  - факт ≥ личной нормы дня:
  *      • студенческий график → 8 ч (7 ч на предпраздник);
  *      • остальные → round(dayNormHours) — реальная норма дня (учитывает предпраздник через getDayNormHours).
- *  - факт < нормы → факт, округлённый ВНИЗ до целого часа.
+ *  - факт < нормы → факт, округлённый арифметически до ближайшего целого часа.
  * Допуск 0.001 ч ≈ 4 секунды компенсирует потери точности при хранении total_hours без total_minutes.
  */
 const compute1CDayHours = (
@@ -277,7 +277,7 @@ const compute1CDayHours = (
     }
     return Math.round(dayNormHours);
   }
-  return Math.max(0, Math.floor(factHours));
+  return Math.max(0, Math.round(factHours));
 };
 
 const isPreHolidayDate = (data: IDepartmentTimesheetData, dateStr: string): boolean => (

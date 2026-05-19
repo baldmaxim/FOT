@@ -286,7 +286,7 @@ describe('timesheet-excel.service', () => {
       [2, new Map([['2026-04-01', sched]])],
     ]);
     // Иван отработал ровно 6 ч (норма) → студенту 8
-    // Пётр отработал 4 ч (меньше нормы) → 4 (floor) + underwork
+    // Пётр отработал 4 ч (меньше нормы) → 4 (round) + underwork
     data.dataMap = new Map([
       [1, new Map([['2026-04-01', { status: 'work', hours: 6, corrected: false }]])],
       [2, new Map([['2026-04-01', { status: 'work', hours: 4, corrected: false }]])],
@@ -344,7 +344,7 @@ describe('timesheet-excel.service', () => {
       [2, new Map([['2026-04-01', sched]])],
     ]);
     // Иван отработал ровно 11 ч (норма) → 11 (round(11)).
-    // Пётр отработал 10:45 (10.75) — на минуты меньше нормы → floor = 10, underwork.
+    // Пётр отработал 10:45 (10.75) — на минуты меньше нормы → round = 11.
     data.dataMap = new Map([
       [1, new Map([['2026-04-01', { status: 'work', hours: 11, corrected: false }]])],
       [2, new Map([['2026-04-01', { status: 'work', hours: 10.75, corrected: false }]])],
@@ -354,7 +354,7 @@ describe('timesheet-excel.service', () => {
     const ws = wb.getWorksheet('Табель 1С');
     expect(ws).toBeTruthy();
     expect(ws!.getCell(4, 3).value).toBe(11);
-    expect(ws!.getCell(5, 3).value).toBe(10);
+    expect(ws!.getCell(5, 3).value).toBe(11);
   });
 
   it('1C export: не-студенческий 5+0 в предпраздник → норма дня 7, факт 7 → 7 в 1С', async () => {
@@ -422,7 +422,7 @@ describe('timesheet-excel.service', () => {
     expect(ws!.getCell(5, 3).value).toBe('Б');
   });
 
-  it('1C export: при факте < нормы дня округляет факт ВНИЗ', async () => {
+  it('1C export: при факте < нормы дня округляет факт арифметически', async () => {
     const data = makeBaseData();
     const sched: IResolvedSchedule = {
       ...makeSchedule(),
@@ -434,8 +434,8 @@ describe('timesheet-excel.service', () => {
       [1, new Map([['2026-04-01', sched]])],
       [2, new Map([['2026-04-01', sched]])],
     ]);
-    // Иван: факт 7.4833 (= 7:29) — на минуту меньше нормы 7:30 → floor = 7
-    // Пётр: факт 6.5 — между 6 и 7 → floor = 6
+    // Иван: факт 7.4833 (= 7:29) — на минуту меньше нормы 7:30 → round = 7
+    // Пётр: факт 6.5 — ровно посередине → round = 7 (.5 вверх)
     data.dataMap = new Map([
       [1, new Map([['2026-04-01', { status: 'work', hours: 7.4833, corrected: false }]])],
       [2, new Map([['2026-04-01', { status: 'work', hours: 6.5, corrected: false }]])],
@@ -445,6 +445,25 @@ describe('timesheet-excel.service', () => {
     const ws = wb.getWorksheet('Табель 1С');
     expect(ws).toBeTruthy();
     expect(ws!.getCell(4, 3).value).toBe(7);
-    expect(ws!.getCell(5, 3).value).toBe(6);
+    expect(ws!.getCell(5, 3).value).toBe(7);
+  });
+
+  it('1C export: 7:46 при норме 8 → 8 (регресс: было floor → 7)', async () => {
+    const data = makeBaseData();
+    const sched: IResolvedSchedule = {
+      ...makeSchedule(),
+      work_hours: 8,
+    };
+    data.schedulesMap = new Map([[1, sched]]);
+    data.dailySchedulesMap = new Map([[1, new Map([['2026-04-01', sched]])]]);
+    // Факт 7.7667 ч (= 7:46) — меньше нормы 8 → round = 8 (раньше floor давал 7).
+    data.dataMap = new Map([
+      [1, new Map([['2026-04-01', { status: 'work', hours: 7.7667, corrected: false }]])],
+    ]);
+
+    const wb = await build1CTimesheetWorkbook('Табель 1С', data);
+    const ws = wb.getWorksheet('Табель 1С');
+    expect(ws).toBeTruthy();
+    expect(ws!.getCell(4, 3).value).toBe(8);
   });
 });
