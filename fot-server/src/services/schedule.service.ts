@@ -336,7 +336,8 @@ export const getEffectiveLateThreshold = (schedule: IResolvedSchedule, date?: Da
 /**
  * Норма часов в месяце:
  *  - сумма work_hours по будням графика (с учётом праздников),
- *  - плюс expected_saturdays_per_month × work_hours (для pattern_type='5+2').
+ *  - плюс expected_saturdays_per_month × work_hours (обязательные субботы:
+ *    legacy 5+2 и cycle-графики с включённой опцией).
  * Обед в норму НЕ входит — считается как length of shift, так как сотрудник физически присутствует.
  */
 export const countNormHoursForSchedule = (
@@ -350,9 +351,10 @@ export const countNormHoursForSchedule = (
   for (let d = 1; d <= daysInMonth; d++) {
     total += getDayNormHours(schedule, new Date(year, month - 1, d), calendar);
   }
-  // Дополнительные субботы — только для классического 5+2 (на день недели).
-  // Для cycle норма уже посчитана через getDayNormHours (по слотам цикла).
-  if (schedule.pattern_type === '5+2' && schedule.expected_saturdays_per_month > 0) {
+  // Обязательные субботы. Суббота не входит в work_days (5+2) и в cycle —
+  // выходной слот (work_hours 0), поэтому getDayNormHours их не учёл:
+  // двойного счёта нет.
+  if (schedule.expected_saturdays_per_month > 0) {
     total += schedule.expected_saturdays_per_month * schedule.work_hours;
   }
   return total;

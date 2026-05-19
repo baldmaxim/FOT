@@ -147,19 +147,19 @@ const deleteObjectEntrySchema = z.object({
 const WORKED_STATUSES_FOR_APPROVAL = new Set<TimeStatus>(['work', 'remote']);
 
 /**
- * Зачёт «плановой» субботы для графика 5+2:
- * первые expected_saturdays_per_month субботы месяца с work/remote → auto_approved.
- * Праздничная суббота (по производственному календарю) в норму не зачитывается.
+ * Зачёт обязательной субботы: первые expected_saturdays_per_month суббот месяца
+ * с work/remote → auto_approved. Праздничная суббота (по производственному
+ * календарю) в норму не зачитывается. Применяется к любому графику с
+ * expected_saturdays_per_month > 0 (в т.ч. cycle), не только legacy 5+2.
  */
 export const isMandatorySaturdaySlotAvailable = (
-  schedule: { pattern_type: string; expected_saturdays_per_month: number; respects_holidays: boolean },
+  schedule: { expected_saturdays_per_month: number; respects_holidays: boolean; pattern_type?: string },
   workDate: string,
   dateObj: Date,
   calendar: { holidays?: string[]; mandatory_holidays?: string[] } | null,
   usedSaturdaysCount: number,
 ): boolean => {
   if (dateObj.getDay() !== 6) return false;
-  if (schedule.pattern_type !== '5+2') return false;
   if (schedule.expected_saturdays_per_month <= 0) return false;
   const isHolidayDate = !!calendar && (
     (calendar.mandatory_holidays?.includes(workDate) ?? false)
@@ -212,6 +212,71 @@ async function countAcceptedMandatorySaturdays(
   return count;
 }
 
+/**
+ * ISO-даты непраздничных суббот месяца year-mon. mandatory_holidays
+ * исключаются всегда; обычные holidays — только если respectsHolidays.
+ */
+const listNonHolidaySaturdays = (
+  year: number,
+  mon: number,
+  calendar: { holidays?: string[]; mandatory_holidays?: string[] } | null,
+  respectsHolidays: boolean,
+): string[] => {
+  const lastDay = new Date(year, mon, 0).getDate();
+  const monthStr = String(mon).padStart(2, '0');
+  const out: string[] = [];
+  for (let d = 1; d <= lastDay; d++) {
+    if (new Date(year, mon - 1, d).getDay() !== 6) continue;
+    const iso = `${year}-${monthStr}-${String(d).padStart(2, '0')}`;
+    const isHoliday = !!calendar && (
+      (calendar.mandatory_holidays?.includes(iso) ?? false)
+      || (respectsHolidays && (calendar.holidays?.includes(iso) ?? false))
+    );
+    if (isHoliday) continue;
+    out.push(iso);
+  }
+  return out;
+};
+
+/**
+ * Для каждого сотрудника — множество отработанных ISO-суббот за ВЕСЬ месяц
+ * (status work/remote, approval auto_approved/approved). Не ограничено
+ * запрошенным диапазоном табеля — обязательные субботы считаются помесячно.
+ */
+async function loadAcceptedSaturdaysForMonth(
+  employeeIds: number[],
+  year: number,
+  mon: number,
+): Promise<Map<number, Set<string>>> {
+  const result = new Map<number, Set<string>>();
+  if (employeeIds.length === 0) return result;
+  const monthStr = String(mon).padStart(2, '0');
+  const lastDay = new Date(year, mon, 0).getDate();
+  const monthStart = `${year}-${monthStr}-01`;
+  const monthEnd = `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`;
+  const rows = await query<{ employee_id: number | string; work_date: string }>(
+    `SELECT employee_id, work_date FROM attendance_adjustments
+       WHERE employee_id = ANY($1::int[])
+         AND work_date >= $2
+         AND work_date <= $3
+         AND status IN ('work', 'remote')
+         AND approval_status IN ('auto_approved', 'approved')`,
+    [employeeIds, monthStart, monthEnd],
+  );
+  for (const row of rows) {
+    const iso = String(row.work_date).slice(0, 10);
+    if (new Date(`${iso}T00:00:00`).getDay() !== 6) continue;
+    const empId = Number(row.employee_id);
+    let set = result.get(empId);
+    if (!set) {
+      set = new Set<string>();
+      result.set(empId, set);
+    }
+    set.add(iso);
+  }
+  return result;
+}
+
 async function resolveAdjustmentApprovalStatus(
   employeeId: number,
   workDate: string,
@@ -243,7 +308,7 @@ async function resolveAdjustmentApprovalStatus(
   const monthCalendar = await loadCalendarMonth(dateObj.getFullYear(), dateObj.getMonth() + 1);
   if (isWorkingDay(schedule, dateObj, monthCalendar)) return 'auto_approved';
 
-  if (schedule.pattern_type === '5+2' && schedule.expected_saturdays_per_month > 0 && dateObj.getDay() === 6) {
+  if (schedule.expected_saturdays_per_month > 0 && dateObj.getDay() === 6) {
     const used = await countAcceptedMandatorySaturdays(employeeId, workDate, excludeAdjustmentId);
     if (isMandatorySaturdaySlotAvailable(schedule, workDate, dateObj, monthCalendar, used)) {
       return 'auto_approved';
@@ -1237,6 +1302,48 @@ export const timesheetController = {
           const empStats = employeeStatsMap.get(empId);
           if (empStats) empStats.fact_hours += cappedHours;
         }
+      }
+
+      // ─── Обязательные субботы (SchedulesPage → «Обязательные субботы») ───
+      // Проверка ПОМЕСЯЧНАЯ: норма месяца включает N суббот, отработанные
+      // (в любой половине) дают факт, недобор по итогам месяца = прогулы.
+      // Не отработано в 1-й половине — не страшно, если добрано во 2-й.
+      // Поэтому вердикт привязан к периоду, который закрывает месяц
+      // (H2 / полный месяц / диапазон до последней субботы), и только когда
+      // все субботы месяца прошли. В отдельном виде 1-й половины (1–15)
+      // недобор НЕ показываем — он там не определяется.
+      const acceptedSatByEmp = await loadAcceptedSaturdaysForMonth(employeeIds, year, mon);
+      for (const empId of employeeIds) {
+        const sched = schedulesMap.get(empId);
+        if (!sched || sched.expected_saturdays_per_month <= 0) continue;
+        const empCutoff = cutoffByEmployeeId.get(empId) ?? null;
+        const monthSaturdays = listNonHolidaySaturdays(year, mon, calendarMonth, sched.respects_holidays);
+        const inWindow = monthSaturdays.filter(iso => !empCutoff || iso < empCutoff);
+        if (inWindow.length === 0) continue;
+        const lastSat = inWindow[inWindow.length - 1];
+        if (lastSat >= todayStr) continue; // месяц по субботам ещё не завершён
+        if (endDate < lastSat) continue;   // запрошенный период не закрывает месяц (напр. только 1-я половина)
+
+        const requiredSat = Math.min(sched.expected_saturdays_per_month, inWindow.length);
+        if (requiredSat <= 0) continue;
+
+        const workedSet = acceptedSatByEmp.get(empId);
+        let workedSat = 0;
+        if (workedSet) {
+          for (const iso of inWindow) if (workedSet.has(iso)) workedSat++;
+        }
+        const creditedSat = Math.min(workedSat, requiredSat);
+        const shortfall = requiredSat - creditedSat;
+        const satHours = sched.work_hours || 0;
+        const empStats = employeeStatsMap.get(empId);
+
+        normHours += requiredSat * satHours;
+        if (empStats) empStats.norm_hours += requiredSat * satHours;
+        if (creditedSat > 0) {
+          actualHours += creditedSat * satHours;
+          if (empStats) empStats.fact_hours += creditedSat * satHours;
+        }
+        if (shortfall > 0) deviations.absent += shortfall;
       }
 
       const departmentMembershipSet = new Set<number>(departmentEmployeeIds);

@@ -457,9 +457,15 @@ describe('schedule.service cycle patterns', () => {
     expect(needsSkudCheck(s, new Date(2026, 4, 6))).toBe(false);
   });
 
-  it('countNormHoursForSchedule: формула 5+2-суббот не применяется к cycle', () => {
-    const s = buildCycle22({ pattern_type: 'cycle', expected_saturdays_per_month: 4 });
+  it('countNormHoursForSchedule: cycle без обязательных суббот — норма не меняется', () => {
+    const s = buildCycle22({ pattern_type: 'cycle', expected_saturdays_per_month: 0 });
     expect(countNormHoursForSchedule(2026, 5, s)).toBe(165);
+  });
+
+  it('countNormHoursForSchedule: cycle с обязательными субботами добавляет N×work_hours', () => {
+    // 165 (база цикла 2/2, май 2026) + 2 субботы × 11ч = 187
+    const s = buildCycle22({ pattern_type: 'cycle', expected_saturdays_per_month: 2 });
+    expect(countNormHoursForSchedule(2026, 5, s)).toBe(187);
   });
 
   it('cycle с битыми данными (cycle_days длина не совпадает с cycle_length) → null, фоллбек на work_days', () => {

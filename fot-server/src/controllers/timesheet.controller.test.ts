@@ -82,16 +82,16 @@ describe('isMandatorySaturdaySlotAvailable', () => {
     ).toBe(false);
   });
 
-  it('не работает для графика 5+0', () => {
+  it('работает для любого pattern_type при expected_saturdays_per_month>0 (5+0)', () => {
     expect(
       isMandatorySaturdaySlotAvailable(
-        { ...baseSchedule, pattern_type: '5+0', expected_saturdays_per_month: 0 },
+        { ...baseSchedule, pattern_type: '5+0' },
         '2026-05-02',
         dateOf('2026-05-02'),
         null,
         0,
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('не работает при expected_saturdays_per_month=0', () => {
@@ -106,14 +106,26 @@ describe('isMandatorySaturdaySlotAvailable', () => {
     ).toBe(false);
   });
 
-  it('не работает для графика 6+0 (даже если суббота)', () => {
+  it('работает для cycle-графика с обязательными субботами (used<норма)', () => {
     expect(
       isMandatorySaturdaySlotAvailable(
-        { ...baseSchedule, pattern_type: '6+0', expected_saturdays_per_month: 0 },
+        { ...baseSchedule, pattern_type: 'cycle' },
         '2026-05-02',
         dateOf('2026-05-02'),
         null,
         0,
+      ),
+    ).toBe(true);
+  });
+
+  it('cycle-график: блокирует субботу сверх нормы (used>=норма)', () => {
+    expect(
+      isMandatorySaturdaySlotAvailable(
+        { ...baseSchedule, pattern_type: 'cycle' },
+        '2026-05-16',
+        dateOf('2026-05-16'),
+        null,
+        2,
       ),
     ).toBe(false);
   });

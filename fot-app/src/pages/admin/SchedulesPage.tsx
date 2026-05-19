@@ -81,6 +81,9 @@ interface IFormState {
   late_threshold_minutes: number;
   full_day_threshold: string;          // "HH:MM", "" = авто (чистое время)
   weekend_full_day_threshold: string;  // "HH:MM", "" = авто (= full_day_threshold)
+  /** Обязательные субботы: сотрудник должен отработать N суббот в месяц (какие — заранее неизвестно). */
+  mandatory_saturdays_enabled: boolean;
+  mandatory_saturdays_count: number;
 }
 
 /** Создаёт массив дней произвольного цикла из «префиксного» N/M-вида. */
@@ -161,6 +164,8 @@ const EMPTY_FORM: IFormState = {
   late_threshold_minutes: 0,
   full_day_threshold: '',
   weekend_full_day_threshold: '',
+  mandatory_saturdays_enabled: false,
+  mandatory_saturdays_count: 1,
 };
 
 const createEmptyForm = (): IFormState => ({
@@ -222,6 +227,10 @@ const tplToFormState = (tpl: IWorkSchedule, today: string): IFormState => {
   const baseStart = tpl.work_start.slice(0, 5);
   const baseEnd = tpl.work_end.slice(0, 5);
   const lunch = tpl.lunch_minutes;
+  const mandatorySaturdays = {
+    mandatory_saturdays_enabled: tpl.expected_saturdays_per_month > 0,
+    mandatory_saturdays_count: tpl.expected_saturdays_per_month || 1,
+  };
 
   // 1) cycle
   if (tpl.pattern_type === 'cycle' && tpl.cycle_length && tpl.cycle_days) {
@@ -281,6 +290,7 @@ const tplToFormState = (tpl: IWorkSchedule, today: string): IFormState => {
         late_threshold_minutes: tpl.late_threshold_minutes,
         full_day_threshold: minutesToHM(tpl.full_day_threshold_minutes),
         weekend_full_day_threshold: minutesToHM(tpl.weekend_full_day_threshold_minutes),
+        ...mandatorySaturdays,
       };
     }
 
@@ -319,6 +329,7 @@ const tplToFormState = (tpl: IWorkSchedule, today: string): IFormState => {
       late_threshold_minutes: tpl.late_threshold_minutes,
       full_day_threshold: minutesToHM(tpl.full_day_threshold_minutes),
       weekend_full_day_threshold: minutesToHM(tpl.weekend_full_day_threshold_minutes),
+      ...mandatorySaturdays,
     };
   }
 
@@ -364,6 +375,7 @@ const tplToFormState = (tpl: IWorkSchedule, today: string): IFormState => {
     late_threshold_minutes: tpl.late_threshold_minutes,
     full_day_threshold: minutesToHM(tpl.full_day_threshold_minutes),
     weekend_full_day_threshold: minutesToHM(tpl.weekend_full_day_threshold_minutes),
+    ...mandatorySaturdays,
   };
 };
 
@@ -767,8 +779,10 @@ export const SchedulesPage: FC = () => {
         day_overrides: null,
         lunch_minutes: form.lunch_minutes,
         respects_holidays: form.respects_holidays,
-        // expected_saturdays_per_month — устаревшее поле legacy 5+2, для cycle 0.
-        expected_saturdays_per_month: 0,
+        // Обязательные субботы: N суббот/мес, какие — заранее неизвестно (не циклом).
+        expected_saturdays_per_month: form.mandatory_saturdays_enabled
+          ? form.mandatory_saturdays_count
+          : 0,
         late_threshold_minutes: form.late_threshold_minutes,
         full_day_threshold_minutes: fullDayMin,
         weekend_full_day_threshold_minutes: weekendFullDayMin,
@@ -1050,6 +1064,29 @@ export const SchedulesPage: FC = () => {
                       />
                       Учитывать праздники РФ
                     </label>
+                    <label className={styles.checkboxRow} style={{ gridColumn: '1 / -1' }} title="Сотрудник обязан отработать N суббот в месяц. Какие именно субботы — заранее неизвестно (не задаётся циклом). Недобор по итогам месяца считается прогулами.">
+                      <input
+                        type="checkbox"
+                        checked={form.mandatory_saturdays_enabled}
+                        onChange={e => setForm({ ...form, mandatory_saturdays_enabled: e.target.checked })}
+                      />
+                      Обязательные субботы
+                    </label>
+                    {form.mandatory_saturdays_enabled && (
+                      <label style={{ gridColumn: '1 / -1' }} title="Сколько суббот в месяц сотрудник обязан отработать (1–5).">
+                        Количество обязательных суббот в месяц
+                        <input
+                          type="number"
+                          min={1}
+                          max={5}
+                          value={form.mandatory_saturdays_count}
+                          onChange={e => setForm({
+                            ...form,
+                            mandatory_saturdays_count: Math.min(5, Math.max(1, parseInt(e.target.value) || 1)),
+                          })}
+                        />
+                      </label>
+                    )}
                   </section>
 
               {/* ─── Особые рабочие дни (N/M-режим) ─────────────────────── */}
