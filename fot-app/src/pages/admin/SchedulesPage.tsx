@@ -13,6 +13,7 @@ import type {
 import { WEEKDAY_LABELS } from '../../types/schedule';
 import type { ITravelObject } from '../../types/travel';
 import { parseHMToMinutes, minutesToHM } from '../../utils/scheduleUtils';
+import { NumberInput } from '../../components/ui/NumberInput';
 import styles from './SchedulesPage.module.css';
 
 const ProductionCalendarPage = lazy(() => import('../super-admin/ProductionCalendarPage').then(module => ({
@@ -945,14 +946,12 @@ export const SchedulesPage: FC = () => {
                         </div>
 
                         <label>
-                          Рабочих (N)
-                          <input
-                            type="number"
+                          Рабочих (N), 1–28
+                          <NumberInput
                             min={1}
                             max={28}
                             value={form.work_days_count}
-                            onChange={e => {
-                              const v = Math.max(1, Math.min(28, parseInt(e.target.value) || 1));
+                            onCommit={v => {
                               setForm(f => ({
                                 ...f,
                                 work_days_count: v,
@@ -964,14 +963,12 @@ export const SchedulesPage: FC = () => {
                           />
                         </label>
                         <label>
-                          Выходных (M)
-                          <input
-                            type="number"
+                          Выходных (M), 0–28
+                          <NumberInput
                             min={0}
                             max={28}
                             value={form.off_days_count}
-                            onChange={e => {
-                              const v = Math.max(0, Math.min(28, parseInt(e.target.value) || 0));
+                            onCommit={v => {
                               setForm(f => ({
                                 ...f,
                                 off_days_count: v,
@@ -1073,17 +1070,13 @@ export const SchedulesPage: FC = () => {
                       Обязательные субботы
                     </label>
                     {form.mandatory_saturdays_enabled && (
-                      <label style={{ gridColumn: '1 / -1' }} title="Сколько суббот в месяц сотрудник обязан отработать (1–5).">
-                        Количество обязательных суббот в месяц
-                        <input
-                          type="number"
+                      <label style={{ gridColumn: '1 / -1' }} title="Сколько суббот в месяц сотрудник обязан отработать.">
+                        Количество обязательных суббот в месяц, 1–5
+                        <NumberInput
                           min={1}
                           max={5}
                           value={form.mandatory_saturdays_count}
-                          onChange={e => setForm({
-                            ...form,
-                            mandatory_saturdays_count: Math.min(5, Math.max(1, parseInt(e.target.value) || 1)),
-                          })}
+                          onCommit={v => setForm(f => ({ ...f, mandatory_saturdays_count: v }))}
                         />
                       </label>
                     )}
