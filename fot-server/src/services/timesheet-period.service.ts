@@ -96,6 +96,40 @@ export function getCurrentTimesheetApprovalPeriod(date = new Date(), timeZone = 
   return buildTimesheetApprovalPeriod(parts.year, parts.month, parts.day <= 15 ? 'H1' : 'H2');
 }
 
+/**
+ * Единственный разрешённый для подачи период — последний завершённый полупериод
+ * относительно текущего дня (МСК). День ≥ 16 → H1 текущего месяца; день ≤ 15 →
+ * H2 предыдущего месяца. Старые/текущий/будущие периоды подавать нельзя.
+ */
+export function getAllowedSubmissionPeriod(date = new Date(), timeZone = 'Europe/Moscow'): string | null {
+  return getPreviousTimesheetApprovalPeriod(getCurrentTimesheetApprovalPeriod(date, timeZone));
+}
+
+export function getAllowedSubmissionRange(
+  date = new Date(),
+  timeZone = 'Europe/Moscow',
+): { startDate: string; endDate: string } | null {
+  const period = getAllowedSubmissionPeriod(date, timeZone);
+  if (!period) return null;
+  return getTimesheetPeriodDateRange(period);
+}
+
+/**
+ * Можно ли подать табель за диапазон [startDate; endDate]. true только при точном
+ * совпадении с разрешённым полупериодом. FULL «весь месяц», кастомные диапазоны,
+ * старые/текущий/будущие полупериоды дают несовпадение → false.
+ */
+export function isRangeSubmittable(
+  startDate: string,
+  endDate: string,
+  date = new Date(),
+  timeZone = 'Europe/Moscow',
+): boolean {
+  const allowed = getAllowedSubmissionRange(date, timeZone);
+  if (!allowed) return false;
+  return startDate === allowed.startDate && endDate === allowed.endDate;
+}
+
 export function getZonedDateParts(date: Date, timeZone: string): IZonedDateParts {
   const formatter = new Intl.DateTimeFormat('en-GB', {
     timeZone,

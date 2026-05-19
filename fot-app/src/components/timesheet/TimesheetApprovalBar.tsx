@@ -12,7 +12,12 @@ import {
 } from '../../services/timesheetApprovalService';
 import { ApiError } from '../../api/client';
 import { useTimesheetApprovalStatus } from '../../hooks/useTimesheetApprovalData';
-import { formatTimesheetRangeLabel } from '../../utils/timesheetApprovalPeriod';
+import {
+  formatTimesheetRangeLabel,
+  getAllowedSubmissionHalf,
+  getHalfRange,
+  isAllowedSubmissionRange,
+} from '../../utils/timesheetApprovalPeriod';
 import {
   TimesheetSubmitConfirmModal,
   type ISubmitProblemEmployee,
@@ -52,6 +57,8 @@ interface IActiveCardProps {
   startDate: string;
   endDate: string;
   loading: boolean;
+  periodSubmittable: boolean;
+  submitDisabledReason: string;
   showMemoToggle: boolean;
   memoOpen: boolean;
   onApprove: () => Promise<void>;
@@ -71,6 +78,8 @@ const ActiveCard: FC<IActiveCardProps> = ({
   startDate,
   endDate,
   loading,
+  periodSubmittable,
+  submitDisabledReason,
   showMemoToggle,
   memoOpen,
   onApprove,
@@ -107,28 +116,39 @@ const ActiveCard: FC<IActiveCardProps> = ({
       )}
 
       {canShowSubmit && (
-        <div className="ts-btn-split">
-          <button
-            className="ts-btn ts-btn-split-main"
-            onClick={onSubmit}
-            disabled={loading}
-            type="button"
-          >
-            <Send size={14} /> {submitLabel}
-          </button>
-          {showMemoToggle && (
+        <>
+          <div className="ts-btn-split">
             <button
-              className={`ts-btn ts-btn-split-toggle${memoOpen ? ' ts-btn-split-toggle--open' : ''}`}
-              onClick={onToggleMemo}
+              className="ts-btn ts-btn-split-main"
+              onClick={onSubmit}
+              disabled={loading || !periodSubmittable}
               type="button"
-              aria-label="Открыть служебную записку о работе в выходные"
-              aria-expanded={memoOpen}
-              title="Служебная записка о работе в выходные"
+              title={periodSubmittable ? undefined : submitDisabledReason}
             >
-              <ChevronDown size={14} />
+              <Send size={14} /> {submitLabel}
             </button>
+            {showMemoToggle && (
+              <button
+                className={`ts-btn ts-btn-split-toggle${memoOpen ? ' ts-btn-split-toggle--open' : ''}`}
+                onClick={onToggleMemo}
+                type="button"
+                aria-label="Открыть служебную записку о работе в выходные"
+                aria-expanded={memoOpen}
+                title="Служебная записка о работе в выходные"
+              >
+                <ChevronDown size={14} />
+              </button>
+            )}
+          </div>
+          {!periodSubmittable && (
+            <div className="ts-approval-submit-error">
+              <div className="ts-approval-submit-error-header">
+                <AlertCircle size={14} />
+                <span>{submitDisabledReason}</span>
+              </div>
+            </div>
           )}
-        </div>
+        </>
       )}
 
       {canSubmitDepartment && status === 'submitted' && (
@@ -273,10 +293,17 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   allowReview = true,
   submitProblems = [],
 }) => {
-  const { hasPermission, profile } = useAuth();
+  const { hasPermission, canViewPage, profile } = useAuth();
   const canSubmitDepartment = hasPermission('timesheet.workflow.submit');
   const canReviewApproval = allowReview && hasPermission('timesheet.workflow.review');
   const isManagerObj = profile?.role_code === MANAGER_OBJ_ROLE_CODE;
+
+  // Блокировка периода подачи (зеркалит бэкенд). HR/админ обходят.
+  const isHrOrAdmin = canViewPage('/timesheet-hr');
+  const periodSubmittable = isHrOrAdmin || isAllowedSubmissionRange({ startDate, endDate });
+  const allowedHalf = getAllowedSubmissionHalf();
+  const allowedRange = getHalfRange(allowedHalf.year, allowedHalf.month, allowedHalf.half);
+  const submitDisabledReason = `Подача доступна только за ${formatTimesheetRangeLabel(allowedRange.startDate, allowedRange.endDate)} — последний завершённый период. За «Весь месяц» подача недоступна.`;
   const queryClient = useQueryClient();
   const activeStatus = useTimesheetApprovalStatus(departmentId, startDate, endDate);
   const [loading, setLoading] = useState(false);
@@ -322,6 +349,8 @@ export const TimesheetApprovalBar: FC<IProps> = ({
         setMemoRequired(true);
         setSubmitError(err.message);
         setMemoOpen(true);
+      } else if (err instanceof ApiError && err.code === 'SUBMISSION_PERIOD_LOCKED') {
+        setSubmitError(err.message);
       } else {
         const message = err instanceof Error ? err.message : 'Ошибка подачи табеля';
         setSubmitError(message);
@@ -412,6 +441,8 @@ export const TimesheetApprovalBar: FC<IProps> = ({
           startDate={startDate}
           endDate={endDate}
           loading={loading}
+          periodSubmittable={periodSubmittable}
+          submitDisabledReason={submitDisabledReason}
           showMemoToggle={memoSectionAllowed}
           memoOpen={memoOpen}
           onApprove={handleApprove}

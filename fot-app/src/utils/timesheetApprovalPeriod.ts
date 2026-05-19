@@ -121,3 +121,31 @@ export const isHalfRange = (
   const expected = getHalfRange(year, month, half);
   return range.startDate === expected.startDate && range.endDate === expected.endDate;
 };
+
+/**
+ * Единственный разрешённый для подачи полупериод — последний завершённый
+ * относительно текущего дня. H2 текущей половины → H1 того же месяца;
+ * H1 → H2 предыдущего месяца (с переносом года Янв→Дек).
+ * Зеркалит бэкенд getAllowedSubmissionPeriod. Использует локальное время
+ * браузера — точная граница за бэкендом (фолбэк по коду SUBMISSION_PERIOD_LOCKED).
+ */
+export const getAllowedSubmissionHalf = (
+  now: Date = new Date(),
+): { year: number; month: number; half: 'H1' | 'H2' } => {
+  const current = getCurrentHalf(now);
+  if (current.half === 'H2') {
+    return { year: current.year, month: current.month, half: 'H1' };
+  }
+  const month = current.month === 1 ? 12 : current.month - 1;
+  const year = current.month === 1 ? current.year - 1 : current.year;
+  return { year, month, half: 'H2' };
+};
+
+/** Совпадает ли диапазон с разрешённым полупериодом. FULL/кастом → false. */
+export const isAllowedSubmissionRange = (
+  range: ITimesheetDateRange,
+  now: Date = new Date(),
+): boolean => {
+  const allowed = getAllowedSubmissionHalf(now);
+  return isHalfRange(range, allowed.year, allowed.month, allowed.half);
+};

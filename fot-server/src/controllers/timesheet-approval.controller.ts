@@ -27,6 +27,8 @@ import {
   checkWeekendWorkRequirement,
 } from '../services/timesheet-approval-weekend-check.service.js';
 import { validateCorrectionAttachments } from '../services/timesheet-approval-correction-validation.service.js';
+import { getAllowedSubmissionRange, isRangeSubmittable } from '../services/timesheet-period.service.js';
+import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import {
   APPROVAL_ATTACHMENT_CATEGORY,
   createAttachmentRecord,
@@ -265,6 +267,23 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(400).json({
         success: false,
         error: 'start_date и end_date обязательны (формат YYYY-MM-DD, end_date >= start_date)',
+      });
+      return;
+    }
+
+    // Блокировка периода подачи: только последний завершённый полупериод (МСК).
+    // system_admin / HR (доступ к /timesheet-hr) блокировку обходят.
+    const submissionExempt = await resolveEffectivePageAccess(req, '/timesheet-hr', 'view');
+    if (!submissionExempt && !isRangeSubmittable(range.startDate, range.endDate)) {
+      const allowed = getAllowedSubmissionRange();
+      res.status(409).json({
+        success: false,
+        code: 'SUBMISSION_PERIOD_LOCKED',
+        error: allowed
+          ? `Подать табель можно только за период ${formatTimesheetRangeLabel(allowed.startDate, allowed.endDate)} (последний завершённый расчётный период). Подача за выбранный период недоступна.`
+          : 'Подача табеля за выбранный период недоступна.',
+        allowed_start_date: allowed?.startDate ?? null,
+        allowed_end_date: allowed?.endDate ?? null,
       });
       return;
     }
