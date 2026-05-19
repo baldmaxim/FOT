@@ -46,6 +46,40 @@ export async function listObjectIdsForEmployee(employeeId: number): Promise<stri
   }
 }
 
+/**
+ * Батч-вариант listObjectIdsForEmployee: одним запросом возвращает приписки
+ * для набора сотрудников. Используется в табеле по объектам, чтобы относить
+ * часы общей корректировки к «месту работы» сотрудника.
+ */
+export async function listObjectIdsForEmployees(
+  employeeIds: number[],
+): Promise<Map<number, string[]>> {
+  const result = new Map<number, string[]>();
+  const ids = [...new Set(employeeIds.filter(id => Number.isInteger(id) && id > 0))];
+  if (ids.length === 0) return result;
+  try {
+    const rows = await query<{ employee_id: number | string; skud_object_id: string }>(
+      `SELECT employee_id, skud_object_id FROM employee_skud_object_access
+       WHERE employee_id = ANY($1::bigint[]) AND is_active = true`,
+      [ids],
+    );
+    for (const row of rows) {
+      const employeeId = Number(row.employee_id);
+      if (!Number.isFinite(employeeId) || !row.skud_object_id) continue;
+      const bucket = result.get(employeeId) || [];
+      if (!bucket.includes(row.skud_object_id)) bucket.push(row.skud_object_id);
+      result.set(employeeId, bucket);
+    }
+    return result;
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      warnMissingTable();
+      return result;
+    }
+    throw err;
+  }
+}
+
 export async function listEmployeesForObject(objectId: string): Promise<number[]> {
   if (!objectId) return [];
   try {

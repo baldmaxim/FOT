@@ -1,5 +1,6 @@
 import { query } from '../config/postgres.js';
 import { getInternalAccessPoints } from './skud-shared.service.js';
+import { listObjectIdsForEmployees } from './employee-skud-object-access.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 
 const BATCH_SIZE = 500;
@@ -7,7 +8,20 @@ const BATCH_SIZE = 500;
 export const OBJECT_ADJUSTMENT_SOURCE_TYPE = 'manual_object';
 export const UNKNOWN_OBJECT_KEY = '__unknown_object__';
 export const UNKNOWN_OBJECT_NAME = 'Не определён';
-export const LEGACY_OBJECT_DETAIL_MESSAGE = 'День скорректирован общей корректировкой. Для объектной правки снимите общую корректировку и внесите часы по объектам.';
+
+// Зеркало attendance.service.ts: статусы без реально отработанного времени.
+// Импортировать оттуда нельзя — attendance.service импортирует этот модуль (цикл).
+const NON_WORK_ADJUSTMENT_STATUSES = new Set<string>([
+  'absent', 'sick', 'vacation', 'dayoff', 'unpaid', 'educational_leave', 'remote',
+]);
+
+// Зеркало ADJUSTMENT_PRIORITY из attendance.service.ts: какая корректировка дня
+// авторитетна (определяет entry.hours_worked). Объектную разбивку строим по той же.
+const DAILY_ADJUSTMENT_PRIORITY: Record<string, number> = {
+  manual: 300,
+  leave_request: 200,
+  legacy_tender_timesheet: 100,
+};
 
 export interface IObjectAdjustmentSource {
   id: number;
@@ -16,6 +30,7 @@ export interface IObjectAdjustmentSource {
   hours_override: number | null;
   source_type: string;
   source_id: string;
+  status: string;
   reason: string | null;
   updated_at: string;
   metadata: Record<string, unknown>;
@@ -382,12 +397,15 @@ export async function buildObjectAttendanceData(params: {
     };
   }
 
-  const [internalPoints, objectMappings, rawEvents] = await Promise.all([
+  const [internalPoints, objectMappings, rawEvents, assignedObjectsByEmployee] = await Promise.all([
     getNormalizedInternalPoints(),
     includeObjectDetails
       ? fetchObjectMappings()
       : Promise.resolve({ accessPointToObjectId: new Map<string, string>(), objectNameById: new Map<string, string>() }),
     fetchRawEvents({ employeeIds, startDate, endDate }),
+    includeObjectDetails
+      ? listObjectIdsForEmployees(employeeIds)
+      : Promise.resolve(new Map<number, string[]>()),
   ]);
 
   const rawFallbackSummaries = new Map<number, Map<string, IRawFallbackSummary>>();
@@ -504,22 +522,88 @@ export async function buildObjectAttendanceData(params: {
     baseDistinctObjectKeys.set(splitKey, dayObjects);
   }
 
+  // legacyBlockedDays больше не заполняется: общая дневная корректировка теперь
+  // относится к приписке сотрудника, а не блокирует объектную детализацию.
+  // Пустую Map сохраняем в контракте — её читает attendance.service.
   const legacyBlockedDays = new Map<string, string>();
-  for (const adjustment of dailyAdjustments) {
-    const key = dayKey(adjustment.employee_id, adjustment.work_date);
-    const distinctObjects = baseDistinctObjectKeys.get(key);
-    if (distinctObjects && distinctObjects.size > 1) {
-      legacyBlockedDays.set(key, LEGACY_OBJECT_DETAIL_MESSAGE);
+
+  // Дни с явной объектной правкой (manual_object) приоритетнее общей корректировки.
+  const objectAdjustedDays = new Set(
+    objectAdjustments.map(adjustment => dayKey(adjustment.employee_id, adjustment.work_date)),
+  );
+
+  const sortedDailyAdjustments = [...dailyAdjustments].sort((left, right) => {
+    const diff = (DAILY_ADJUSTMENT_PRIORITY[right.source_type] ?? 0)
+      - (DAILY_ADJUSTMENT_PRIORITY[left.source_type] ?? 0);
+    if (diff !== 0) return diff;
+    return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime();
+  });
+
+  const seenSplitDays = new Set<string>();
+  for (const adjustment of sortedDailyAdjustments) {
+    const dKey = dayKey(adjustment.employee_id, adjustment.work_date);
+    // Только авторитетная (top-priority) корректировка дня — та же, что задаёт
+    // entry.hours_worked в attendance.service. Иначе объектная сумма ≠ дневной.
+    if (seenSplitDays.has(dKey)) continue;
+    seenSplitDays.add(dKey);
+    if (objectAdjustedDays.has(dKey)) continue;
+
+    const hoursOverride = adjustment.hours_override;
+    // Делим по объектам только реально отработанное время с явным hours_override.
+    if (hoursOverride == null || hoursOverride <= 0) continue;
+    if (NON_WORK_ADJUSTMENT_STATUSES.has(adjustment.status)) continue;
+
+    // Корректировка перекрывает фактические СКУД-события дня — иначе двойной счёт.
+    for (const entryKey of [...baseObjectEntries.keys()]) {
+      if (entryKey.startsWith(`${dKey}_`)) baseObjectEntries.delete(entryKey);
     }
+    baseDistinctObjectKeys.delete(dKey);
+
+    const assigned = (assignedObjectsByEmployee.get(adjustment.employee_id) || [])
+      .filter(objectId => objectMappings.objectNameById.has(objectId));
+    const targets: Array<{ objectKey: string; objectId: string | null; objectName: string }> =
+      assigned.length > 0
+        ? assigned.map(objectId => ({
+          objectKey: objectId,
+          objectId,
+          objectName: objectMappings.objectNameById.get(objectId) || UNKNOWN_OBJECT_NAME,
+        }))
+        : [{ objectKey: UNKNOWN_OBJECT_KEY, objectId: null, objectName: UNKNOWN_OBJECT_NAME }];
+
+    // Делим в центичасах (2 знака — домен roundHours), чтобы сумма долей точно
+    // равнялась скорректированным часам без копеечных «остатков» в объектном виде.
+    const totalCentihours = Math.max(0, Math.round(hoursOverride * 100));
+    const perTarget = Math.floor(totalCentihours / targets.length);
+    const remainder = totalCentihours - perTarget * targets.length;
+    const dayObjects = baseDistinctObjectKeys.get(dKey) || new Set<string>();
+    targets.forEach((target, index) => {
+      const centihours = perTarget + (index < remainder ? 1 : 0);
+      baseObjectEntries.set(
+        objectEntryKey(adjustment.employee_id, adjustment.work_date, target.objectKey),
+        {
+          adjustment_id: adjustment.id,
+          employee_id: adjustment.employee_id,
+          work_date: adjustment.work_date,
+          object_key: target.objectKey,
+          object_id: target.objectId,
+          object_name: target.objectName,
+          base_minutes: 0,
+          // центичасы → минуты: roundHours(effective_minutes/60) даст ровно centihours/100.
+          effective_minutes: centihours * 0.6,
+          is_correction: true,
+          notes: adjustment.reason,
+        },
+      );
+      dayObjects.add(target.objectKey);
+    });
+    baseDistinctObjectKeys.set(dKey, dayObjects);
   }
 
   const objectEntries: IAttendanceObjectEntry[] = [];
   const objectEntriesByEmployeeDate = new Map<number, Map<string, IAttendanceObjectEntry[]>>();
   const employeeDistinctObjectKeys = new Map<number, Set<string>>();
 
-  for (const entry of [...baseObjectEntries.values()]
-    .filter(item => !legacyBlockedDays.has(dayKey(item.employee_id, item.work_date))))
-  {
+  for (const entry of baseObjectEntries.values()) {
     const objectEntry = toObjectEntry(entry);
     objectEntries.push(objectEntry);
 

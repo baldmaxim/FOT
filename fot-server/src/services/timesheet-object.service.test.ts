@@ -26,6 +26,7 @@ const mockedState = vi.hoisted(() => ({
       access_point: string;
       direction: 'entry' | 'exit';
     }>,
+    employee_skud_object_access: [] as Array<{ employee_id: number; skud_object_id: string }>,
   },
 }));
 
@@ -43,6 +44,9 @@ import {
 // fetchObjectMappings/fetchRawEvents (порядок зависит от Promise.all внутри сервиса).
 function routeQuery(sql: string): unknown[] {
   const s = sql.toLowerCase();
+  if (s.includes('employee_skud_object_access')) {
+    return mockedState.tables.employee_skud_object_access;
+  }
   if (s.includes('skud_object_access_points')) {
     return mockedState.tables.skud_object_access_points;
   }
@@ -72,6 +76,7 @@ describe('timesheet-object.service', () => {
       { id: 'obj-b', name: 'Объект B' },
     ];
     mockedState.tables.skud_events = [];
+    mockedState.tables.employee_skud_object_access = [];
 
     pgQuery.mockImplementation(async (sql: string) => routeQuery(sql));
   });
@@ -173,6 +178,7 @@ describe('timesheet-object.service', () => {
           hours_override: 4,
           source_type: 'manual_object',
           source_id: 'obj-b',
+          status: 'work',
           reason: 'Руководитель поправил часы',
           updated_at: '2026-04-12T12:00:00.000Z',
           metadata: {
@@ -199,13 +205,8 @@ describe('timesheet-object.service', () => {
     ]);
   });
 
-  it('blocks object disclosure when a split day has legacy day-level adjustment', async () => {
-    mockedState.tables.skud_events = [
-      { employee_id: 1, event_date: '2026-04-13', event_time: '09:00:00', access_point: 'КПП A', direction: 'entry' },
-      { employee_id: 1, event_date: '2026-04-13', event_time: '12:00:00', access_point: 'КПП A', direction: 'exit' },
-      { employee_id: 1, event_date: '2026-04-13', event_time: '12:30:00', access_point: 'КПП B', direction: 'entry' },
-      { employee_id: 1, event_date: '2026-04-13', event_time: '15:30:00', access_point: 'КПП B', direction: 'exit' },
-    ];
+  it('relocates a manual day-level correction onto the employee single assigned object', async () => {
+    mockedState.tables.employee_skud_object_access = [{ employee_id: 1, skud_object_id: 'obj-a' }];
 
     const result = await buildObjectAttendanceData({
       employeeIds: [1],
@@ -220,7 +221,162 @@ describe('timesheet-object.service', () => {
           hours_override: 8,
           source_type: 'manual',
           source_id: 'manual',
-          reason: 'Старая дневная корректировка',
+          status: 'work',
+          reason: 'Дневная корректировка',
+          updated_at: '2026-04-13T10:00:00.000Z',
+          metadata: {},
+        },
+      ],
+    });
+
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({
+        adjustment_id: 77,
+        employee_id: 1,
+        work_date: '2026-04-13',
+        object_id: 'obj-a',
+        object_name: 'Объект A',
+        hours_worked: 8,
+        is_correction: true,
+      }),
+    ]);
+    expect(result.legacyBlockedDays.size).toBe(0);
+  });
+
+  it('splits a manual day-level correction equally across multiple assigned objects', async () => {
+    mockedState.tables.skud_objects = [
+      { id: 'obj-a', name: 'Объект A' },
+      { id: 'obj-b', name: 'Объект B' },
+      { id: 'obj-c', name: 'Объект C' },
+    ];
+    mockedState.tables.employee_skud_object_access = [
+      { employee_id: 1, skud_object_id: 'obj-a' },
+      { employee_id: 1, skud_object_id: 'obj-b' },
+      { employee_id: 1, skud_object_id: 'obj-c' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-13',
+      endDate: '2026-04-13',
+      todayStr: '2026-04-13',
+      adjustments: [
+        {
+          id: 78,
+          employee_id: 1,
+          work_date: '2026-04-13',
+          hours_override: 1,
+          source_type: 'manual',
+          source_id: 'manual',
+          status: 'work',
+          reason: 'Корректировка',
+          updated_at: '2026-04-13T10:00:00.000Z',
+          metadata: {},
+        },
+      ],
+    });
+
+    expect(result.objectEntries.map(entry => entry.object_name)).toEqual([
+      'Объект A', 'Объект B', 'Объект C',
+    ]);
+    expect(result.objectEntries.map(entry => entry.hours_worked)).toEqual([0.34, 0.33, 0.33]);
+    const total = result.objectEntries.reduce((sum, entry) => sum + entry.hours_worked, 0);
+    expect(Math.round(total * 100) / 100).toBe(1);
+    expect(result.objectEntries.every(entry => entry.is_correction)).toBe(true);
+  });
+
+  it('keeps a manual correction in the unknown object when the employee has no assignment', async () => {
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-13',
+      endDate: '2026-04-13',
+      todayStr: '2026-04-13',
+      adjustments: [
+        {
+          id: 79,
+          employee_id: 1,
+          work_date: '2026-04-13',
+          hours_override: 8,
+          source_type: 'manual',
+          source_id: 'manual',
+          status: 'work',
+          reason: 'Корректировка',
+          updated_at: '2026-04-13T10:00:00.000Z',
+          metadata: {},
+        },
+      ],
+    });
+
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({
+        object_id: null,
+        object_name: UNKNOWN_OBJECT_NAME,
+        hours_worked: 8,
+        is_correction: true,
+      }),
+    ]);
+  });
+
+  it('overrides same-day skud object intervals with the corrected assigned object (no double count)', async () => {
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-04-13', event_time: '09:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-13', event_time: '12:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-04-13', event_time: '12:30:00', access_point: 'КПП B', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-13', event_time: '15:30:00', access_point: 'КПП B', direction: 'exit' },
+    ];
+    mockedState.tables.employee_skud_object_access = [{ employee_id: 1, skud_object_id: 'obj-a' }];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-13',
+      endDate: '2026-04-13',
+      todayStr: '2026-04-13',
+      adjustments: [
+        {
+          id: 80,
+          employee_id: 1,
+          work_date: '2026-04-13',
+          hours_override: 8,
+          source_type: 'manual',
+          source_id: 'manual',
+          status: 'work',
+          reason: 'Корректировка',
+          updated_at: '2026-04-13T10:00:00.000Z',
+          metadata: {},
+        },
+      ],
+    });
+
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({
+        adjustment_id: 80,
+        object_id: 'obj-a',
+        object_name: 'Объект A',
+        hours_worked: 8,
+        is_correction: true,
+      }),
+    ]);
+    expect(result.objectEntries).toHaveLength(1);
+  });
+
+  it('does not generate object entries for a non-work correction without worked hours', async () => {
+    mockedState.tables.employee_skud_object_access = [{ employee_id: 1, skud_object_id: 'obj-a' }];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-13',
+      endDate: '2026-04-13',
+      todayStr: '2026-04-13',
+      adjustments: [
+        {
+          id: 81,
+          employee_id: 1,
+          work_date: '2026-04-13',
+          hours_override: null,
+          source_type: 'manual',
+          source_id: 'manual',
+          status: 'vacation',
+          reason: 'Отпуск',
           updated_at: '2026-04-13T10:00:00.000Z',
           metadata: {},
         },
@@ -228,6 +384,6 @@ describe('timesheet-object.service', () => {
     });
 
     expect(result.objectEntries).toEqual([]);
-    expect(result.legacyBlockedDays.get('1_2026-04-13')).toBeTruthy();
+    expect(result.legacyBlockedDays.size).toBe(0);
   });
 });
