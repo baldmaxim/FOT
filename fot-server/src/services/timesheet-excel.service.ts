@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
-import { getFullDayThresholdHoursForDate, getDayNormHours, isWorkingDay } from './schedule.service.js';
+import { getFullDayThresholdHoursForDate, getDayNormHours } from './schedule.service.js';
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 import type { IResolvedSchedule } from '../types/index.js';
 import { defangCsvCell } from '../utils/file-validation.utils.js';
@@ -51,6 +51,8 @@ const headerFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: {
 const docRowFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDE8DF' } };
 const correctedFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB3E5FC' } };
 const underworkFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF59D' } };
+// Серый фон для пустых выходных дней календаря (тот же оттенок, что у статуса dayoff).
+const weekendFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
 const statusFills: Record<string, ExcelJS.Fill> = {
   sick:              { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFCDD2' } },
   vacation:          { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBBDEFB' } },
@@ -201,6 +203,8 @@ interface IOneCDisplayDayValue {
   hours: number;
   label?: string;
   isUnderwork: boolean;
+  /** Пустой выходной день календаря — ячейка без текста, серая заливка. */
+  isWeekend?: boolean;
 }
 
 interface IOneCExportRow {
@@ -284,6 +288,24 @@ const isPreHolidayDate = (data: IDepartmentTimesheetData, dateStr: string): bool
   Boolean(data.calendarMonth?.pre_holidays?.includes(dateStr))
 );
 
+/**
+ * Календарный выходной для серой заливки: суббота/воскресенье ИЛИ праздник
+ * производственного календаря (holidays + mandatory_holidays). Не зависит от
+ * индивидуального графика сотрудника.
+ */
+const isCalendarWeekend = (
+  dateObj: Date,
+  dateStr: string,
+  calendar: IDepartmentTimesheetData['calendarMonth'],
+): boolean => {
+  const dow = dateObj.getDay();
+  if (dow === 0 || dow === 6) return true;
+  return Boolean(
+    calendar?.holidays?.includes(dateStr) ||
+    calendar?.mandatory_holidays?.includes(dateStr),
+  );
+};
+
 const getDayNormForEmployeeOnDate = (
   data: IDepartmentTimesheetData,
   employeeId: number,
@@ -327,14 +349,20 @@ const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCExportRo
 
     for (const day of data.exportDays) {
       const dateStr = `${data.year}-${pad2(data.mon)}-${pad2(day)}`;
+      const dateObj = new Date(data.year, data.mon - 1, day);
+      const markWeekend = (): void => {
+        if (isCalendarWeekend(dateObj, dateStr, data.calendarMonth)) {
+          dayValues.set(day, { hours: 0, isUnderwork: false, isWeekend: true });
+        }
+      };
       const entry = employeeDays?.get(dateStr);
-      if (!entry) continue;
+      if (!entry) { markWeekend(); continue; }
       const label = STATUS_LABELS[entry.status];
       if (label) {
         dayValues.set(day, { hours: 0, label, isUnderwork: false });
         continue;
       }
-      if (!hasPositiveHours(entry.hours)) continue;
+      if (!hasPositiveHours(entry.hours)) { markWeekend(); continue; }
       const dayNormHours = getDayNormForEmployeeOnDate(data, employee.id, dateStr, schedule);
       const effectiveSchedule = getEffectiveScheduleForDate(data, employee.id, dateStr, schedule);
       const roundedHours = compute1CDayHours(
@@ -343,7 +371,7 @@ const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCExportRo
         isPreHolidayDate(data, dateStr),
         isStudentSchedule(effectiveSchedule),
       );
-      if (!roundedHours) continue;
+      if (!roundedHours) { markWeekend(); continue; }
       const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);
       dayValues.set(day, {
         hours: roundedHours,
@@ -416,6 +444,8 @@ const buildObjectRowsForOneC = (
         const label = status ? STATUS_LABELS[status] : '';
         if (label) {
           dayValues.set(day, { hours: 0, label, isUnderwork: false });
+        } else if (isCalendarWeekend(new Date(data.year, data.mon - 1, day), dateStr, data.calendarMonth)) {
+          dayValues.set(day, { hours: 0, isUnderwork: false, isWeekend: true });
         }
       }
 
@@ -445,6 +475,11 @@ const fillOneCWorksheet = (
     for (const [day, dayValue] of rowData.dayValues) {
       if (day < 1 || day > ONE_C_MAX_DAY_COLUMNS) continue;
       const cell = worksheet.getCell(rowNumber, ONE_C_DAY_START_COLUMN + day - 1);
+      if (dayValue.isWeekend && !dayValue.label && !dayValue.hours) {
+        cell.value = null;
+        cell.fill = cloneExcelValue(weekendFill);
+        continue;
+      }
       cell.value = dayValue.label ?? dayValue.hours;
       if (!dayValue.label && dayValue.isUnderwork) {
         cell.fill = cloneExcelValue(underworkFill);
@@ -494,7 +529,6 @@ export function buildTimesheetSheet(
   const {
     employees,
     schedulesMap,
-    dailySchedulesMap,
     calendarMonth,
     dataMap,
     year,
@@ -700,26 +734,22 @@ export function buildTimesheetSheet(
       exportDays.forEach((day, dayIndex) => {
         const dateStr = `${year}-${pad2(mon)}-${pad2(day)}`;
         const dateObj = new Date(year, mon - 1, day);
-        const daySched = dailySchedulesMap.get(emp.id)?.get(dateStr) || sched;
         const col = COL_DAY_START + dayIndex;
         const cell = ws.getCell(rowNumber, col);
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.font = { size: 8 };
 
         const thresholdHours = getThresholdHoursForDate(data, emp.id, dateStr, sched);
-        const isDayOff = daySched
-          ? !isWorkingDay(daySched, dateObj, calendarMonth)
-          : (dateObj.getDay() === 0 || dateObj.getDay() === 6);
-        if (isDayOff) {
-          cell.value = '';
-          return;
-        }
+        // Данные дня имеют приоритет над выходным: работа/согласование в выходной
+        // должны показываться. Серую заливку даём только пустым выходным.
+        const isWeekend = isCalendarWeekend(dateObj, dateStr, calendarMonth);
 
         if (isSummaryRow) {
           cell.fill = docRowFill;
           const entry = empData?.get(dateStr);
           if (!entry) {
             cell.value = '';
+            if (isWeekend) cell.fill = weekendFill;
             return;
           }
 
@@ -735,6 +765,7 @@ export function buildTimesheetSheet(
             else if (entry.corrected) cell.fill = correctedFill;
           } else {
             cell.value = formatExportCellValue('', entry.corrected);
+            if (isWeekend && !entry.corrected) cell.fill = weekendFill;
           }
           return;
         }
@@ -744,6 +775,7 @@ export function buildTimesheetSheet(
           const objectEntry = definition.item.dayMap.get(dateStr);
           if (!objectEntry || objectEntry.hours <= 0) {
             cell.value = '';
+            if (isWeekend) cell.fill = weekendFill;
             return;
           }
 
@@ -818,7 +850,6 @@ export function buildObjectTimesheetSheet(
   const {
     employees,
     schedulesMap,
-    dailySchedulesMap,
     calendarMonth,
     objectEntries,
     year,
@@ -1002,25 +1033,18 @@ export function buildObjectTimesheetSheet(
     exportDays.forEach((day, dayIndex) => {
       const dateStr = `${year}-${pad2(mon)}-${pad2(day)}`;
       const dateObj = new Date(year, mon - 1, day);
-      const daySchedule = dailySchedulesMap.get(employee.id)?.get(dateStr) || schedule;
       const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);
       const col = COL_DAY_START + dayIndex;
       const cell = ws.getCell(rowNumber, col);
       cell.alignment = { horizontal: 'center', vertical: 'middle' };
       cell.font = { size: 8 };
 
-      const isDayOff = daySchedule
-        ? !isWorkingDay(daySchedule, dateObj, calendarMonth)
-        : (dateObj.getDay() === 0 || dateObj.getDay() === 6);
-      if (isDayOff) {
-        cell.value = '';
-        return;
-      }
-
+      const isWeekend = isCalendarWeekend(dateObj, dateStr, calendarMonth);
       const entry = employeeDayMap.get(dateStr);
       cell.fill = docRowFill;
       if (!entry || !hasPositiveHours(entry.hours)) {
         cell.value = '';
+        if (isWeekend) cell.fill = weekendFill;
         return;
       }
 

@@ -448,6 +448,72 @@ describe('timesheet-excel.service', () => {
     expect(ws!.getCell(5, 3).value).toBe(7);
   });
 
+  it('экспорт: работа в выходной видна, пустой выходной — серый (без текста)', () => {
+    const wb = new ExcelJS.Workbook();
+    const data = makeBaseData();
+    // 2026-04-04 — суббота (работал 6ч), 2026-04-05 — воскресенье (нет данных).
+    data.exportDays = [4, 5];
+    data.dataMap = new Map([
+      [1, new Map([['2026-04-04', { status: 'work', hours: 6, corrected: false }]])],
+      [2, new Map()],
+    ]);
+
+    buildTimesheetSheet(wb, 'Табель', data);
+
+    const ws = wb.getWorksheet('Табель')!;
+    // emp1 summary = строка 7; день 4 → col 5, день 5 → col 6.
+    expect(ws.getCell(7, 5).value).toBe('6:00'); // работа в субботу теперь показывается
+    expect((ws.getCell(7, 5).fill as ExcelJS.FillPattern)?.fgColor?.argb).not.toBe('FFE0E0E0');
+    expect(ws.getCell(7, 6).value).toBe(''); // воскресенье без работы — пусто
+    expect(ws.getCell(7, 6).fill).toMatchObject({ type: 'pattern', fgColor: { argb: 'FFE0E0E0' } });
+    // emp2 без данных (строка 8) — обе ячейки выходных серые
+    expect(ws.getCell(8, 5).fill).toMatchObject({ type: 'pattern', fgColor: { argb: 'FFE0E0E0' } });
+    expect(ws.getCell(8, 6).fill).toMatchObject({ type: 'pattern', fgColor: { argb: 'FFE0E0E0' } });
+  });
+
+  it('экспорт: праздник производственного календаря в будний день — серый', () => {
+    const wb = new ExcelJS.Workbook();
+    const data = makeBaseData();
+    // 2026-04-02 — четверг (будний), объявлен праздником. Объектных строк нет
+    // (objectEntries за 2026-04-01 вне диапазона) → emp1=строка7, emp2=строка8.
+    data.exportDays = [2];
+    data.calendarMonth = {
+      year: 2026, month: 4, norm_days: 22, norm_hours: 175,
+      holidays: ['2026-04-02'], mandatory_holidays: [], pre_holidays: [],
+    };
+    data.dataMap = new Map([
+      [1, new Map([['2026-04-02', { status: 'work', hours: 8, corrected: false }]])],
+      [2, new Map()],
+    ]);
+
+    buildTimesheetSheet(wb, 'Табель', data);
+
+    const ws = wb.getWorksheet('Табель')!;
+    expect(ws.getCell(7, 5).value).toBe('8:00'); // факт в праздник виден (данные важнее)
+    expect((ws.getCell(7, 5).fill as ExcelJS.FillPattern)?.fgColor?.argb).not.toBe('FFE0E0E0');
+    expect(ws.getCell(8, 5).value).toBe(''); // emp2 без данных
+    expect(ws.getCell(8, 5).fill).toMatchObject({ type: 'pattern', fgColor: { argb: 'FFE0E0E0' } });
+  });
+
+  it('1C export: работа в выходной выгружается, пустой выходной — серый без текста', async () => {
+    const data = makeBaseData();
+    data.exportDays = [4, 5]; // Сб 2026-04-04 (работал), Вс 2026-04-05 (пусто)
+    data.dataMap = new Map([
+      [1, new Map([['2026-04-04', { status: 'work', hours: 6, corrected: false }]])],
+      [2, new Map()],
+    ]);
+
+    const wb = await build1CTimesheetWorkbook('Табель 1С', data);
+    const ws = wb.getWorksheet('Табель 1С')!;
+    // emp1 = строка 4; день 4 → col 6, день 5 → col 7.
+    expect(ws.getCell(4, 6).value).toBe(6); // суббота отработана — часы есть
+    expect(ws.getCell(4, 7).value).toBeNull(); // воскресенье — пусто
+    expect(ws.getCell(4, 7).fill).toMatchObject({ type: 'pattern', fgColor: { argb: 'FFE0E0E0' } });
+    // emp2 без данных (строка 5) — выходные серые, без текста
+    expect(ws.getCell(5, 6).value).toBeNull();
+    expect(ws.getCell(5, 6).fill).toMatchObject({ type: 'pattern', fgColor: { argb: 'FFE0E0E0' } });
+  });
+
   it('1C export: 7:46 при норме 8 → 8 (регресс: было floor → 7)', async () => {
     const data = makeBaseData();
     const sched: IResolvedSchedule = {
