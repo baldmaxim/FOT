@@ -51,7 +51,13 @@ app.use(cors({
       callback(null, true);
       return;
     }
-    callback(new Error(`CORS origin is not allowed: ${origin}`));
+    // Чужой Origin — НЕ бросаем Error: cors-lib иначе уходит в Express
+    // error-handler и Sentry.setupExpressErrorHandler шлёт это как
+    // unhandled error (был FOT-SERVER-3, 6600+ событий от остаточного
+    // трафика старого домена). callback(null, false) штатно завершает
+    // запрос без ACAO — браузер так же блокирует кросс-доступ, но без
+    // исключения и без шума в Sentry.
+    callback(null, false);
   },
   credentials: true,
   exposedHeaders: ['Content-Disposition', 'Server-Timing'],

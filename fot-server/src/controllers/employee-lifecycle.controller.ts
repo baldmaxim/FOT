@@ -70,6 +70,17 @@ export function getErrorMessage(error: unknown, fallback: string): string {
   return typeof error === 'string' && error ? error : fallback;
 }
 
+/**
+ * Триггер ensure_no_overlapping_employee_assignments (миграция 020) кидает
+ * "Overlapping employee_assignments period for employee_id=...". Корневой путь
+ * (слепой INSERT с hire_date) закрыт в коммите 6d96c6f, но остаточные
+ * пересечения возможны на грязных исторических данных. Это data-condition,
+ * а не краш сервера: отвечаем 409 с понятным текстом и НЕ шумим в Sentry.
+ */
+function isOverlappingAssignmentError(error: unknown): boolean {
+  return getErrorMessage(error, '').includes('Overlapping employee_assignments period');
+}
+
 export async function loadEmployeeLifecycleRow(employeeId: number): Promise<EmployeeEncrypted | null> {
   const data = await queryOne<EmployeeEncrypted>(
     `SELECT ${EMPLOYEE_LIFECYCLE_COLUMNS} FROM employees WHERE id = $1`,
@@ -423,6 +434,15 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
     const updatedEmployee = decryptEmployee(data as EmployeeEncrypted, structureCache);
     res.json({ success: true, data: updatedEmployee });
   } catch (error) {
+    if (isOverlappingAssignmentError(error)) {
+      console.warn('[fire] overlapping assignment periods', { employeeId: req.params.id });
+      res.status(409).json({
+        success: false,
+        error: 'У сотрудника пересекаются периоды назначений (employee_assignments). Исправьте историю назначений и повторите увольнение.',
+        code: 'ASSIGNMENT_OVERLAP',
+      });
+      return;
+    }
     console.error('Fire employee error:', error);
     Sentry.captureException(error, {
       tags: { route: 'employees.fire' },
@@ -628,6 +648,16 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
         success: false,
         error: getErrorMessage(error, 'Не удалось восстановить сотрудника'),
         ...(getHttpErrorCode(error) ? { code: getHttpErrorCode(error) } : {}),
+      });
+      return;
+    }
+
+    if (isOverlappingAssignmentError(error)) {
+      console.warn('[rehire] overlapping assignment periods', { employeeId: req.params.id });
+      res.status(409).json({
+        success: false,
+        error: 'У сотрудника пересекаются периоды назначений (employee_assignments). Исправьте историю назначений и повторите восстановление.',
+        code: 'ASSIGNMENT_OVERLAP',
       });
       return;
     }

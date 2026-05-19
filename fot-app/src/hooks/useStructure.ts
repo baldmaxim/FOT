@@ -6,6 +6,17 @@ import { sortDepartmentTree } from '../utils/departmentUtils';
 
 export const STRUCTURE_QUERY_KEY = ['structure', 'tree'] as const;
 
+// Транзиентные сетевые сбои/таймауты/отмены — ожидаемое поведение на мобильных
+// (FOT-APP-1X, 39 юзеров). React Query их ретраит (retry:3); в Sentry не шумим,
+// иначе шум маскирует реальные ошибки структуры.
+const TRANSIENT_ERROR_RE = /failed to fetch|load failed|networkerror|network request failed|timeout|aborted|the operation was aborted/i;
+
+const isTransientNetworkError = (e: unknown): boolean => {
+  if (e instanceof Error && e.name === 'AbortError') return true;
+  const msg = e instanceof Error ? e.message : typeof e === 'string' ? e : '';
+  return TRANSIENT_ERROR_RE.test(msg);
+};
+
 export const useStructureTree = (enabled = true) => {
   return useQuery({
     queryKey: STRUCTURE_QUERY_KEY,
@@ -27,7 +38,10 @@ export const useStructureTree = (enabled = true) => {
           departments: sortDepartmentTree(data.departments || []),
         };
       } catch (e) {
-        Sentry.captureException(e, { tags: { query: 'structure-tree' } });
+        // Сетевые/таймаут/отмена — не шумим (React Query повторит сам).
+        if (!isTransientNetworkError(e)) {
+          Sentry.captureException(e, { tags: { query: 'structure-tree' } });
+        }
         throw e;
       }
     },

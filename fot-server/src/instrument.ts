@@ -42,6 +42,14 @@ if (dsn) {
     profilesSampleRate: 0.1,
     sendDefaultPii: false,
     beforeSend(event) {
+      // Defense-in-depth: CORS-отказ чужого Origin — это ожидаемое
+      // поведение, не баг сервера. Основной фикс — callback(null, false)
+      // в app.ts (не бросаем Error); этот фильтр страхует от любых
+      // других путей, чтобы FOT-SERVER-3 не воскрес.
+      const exc = event.exception?.values;
+      if (Array.isArray(exc) && exc.some(e => typeof e?.value === 'string' && e.value.startsWith('CORS origin is not allowed'))) {
+        return null;
+      }
       if (event.request) {
         if (event.request.headers) {
           event.request.headers = scrubHeaders(event.request.headers);

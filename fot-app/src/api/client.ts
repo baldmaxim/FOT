@@ -59,9 +59,16 @@ export class ApiError extends Error {
   }
 }
 
+// Без таймаута fetch может висеть бесконечно на мобильных сетях (переключение
+// 4G/Wi-Fi, слабый сигнал) — основной источник FOT-APP-1X «Failed to fetch».
+// AbortController обрывает запрос, React Query (retry) повторяет.
+const DEFAULT_TIMEOUT_MS = 30_000;
+
 interface RequestOptions extends RequestInit {
   skipAuth?: boolean;
   __skipRefresh?: boolean;
+  /** Таймаут запроса в мс; 0 — отключить. По умолчанию DEFAULT_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
 export const setSessionToken = (token: string | null): void => {
@@ -135,7 +142,7 @@ const refreshSession = async (): Promise<boolean> => {
 
 export const apiClient = {
   async request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
-    const { skipAuth, __skipRefresh, ...fetchOptions } = options;
+    const { skipAuth, __skipRefresh, timeoutMs, ...fetchOptions } = options;
 
     const headers: HeadersInit = {
       ...fetchOptions.headers,
@@ -158,12 +165,39 @@ export const apiClient = {
       (headers as Record<string, string>)['Pragma'] = 'no-cache';
     }
 
-    const response = await fetch(buildApiUrl(endpoint), {
-      ...fetchOptions,
-      cache: bypassHttpCache ? 'no-store' : fetchOptions.cache,
-      credentials: 'include',
-      headers,
-    });
+    // Таймаут через AbortController, скомпонованный с пользовательским signal
+    // (React Query отмены продолжают работать как раньше).
+    const controller = new AbortController();
+    const callerSignal = fetchOptions.signal;
+    if (callerSignal) {
+      if (callerSignal.aborted) controller.abort();
+      else callerSignal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+    const effectiveTimeout = timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    let timedOut = false;
+    const timer = effectiveTimeout > 0
+      ? setTimeout(() => { timedOut = true; controller.abort(); }, effectiveTimeout)
+      : null;
+
+    let response: Response;
+    try {
+      response = await fetch(buildApiUrl(endpoint), {
+        ...fetchOptions,
+        cache: bypassHttpCache ? 'no-store' : fetchOptions.cache,
+        credentials: 'include',
+        headers,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      // Наш таймаут — типизированная ApiError (useStructure её не шлёт в Sentry).
+      // Иначе — отмена вызывающим (AbortError) или сетевой TypeError: пробрасываем как есть.
+      if (timedOut) {
+        throw new ApiError('Превышено время ожидания запроса (timeout)', 0, 'TIMEOUT');
+      }
+      throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
 
     // Handle 401 - authentication error
     if (response.status === 401) {
