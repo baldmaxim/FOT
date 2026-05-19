@@ -8,6 +8,8 @@ Thumbs.db
 
 # Binaries / installers
 *.exe
+# Установщик Sigur Reader EH отдаётся как статика фронта (см. DEPLOY.md)
+!fot-app/public/downloads/*.exe
 
 # Screenshots in repo root (Windows-style names)
 /Снимок*.png

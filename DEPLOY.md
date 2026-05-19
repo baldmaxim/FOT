@@ -625,6 +625,22 @@ ssh root@45.80.128.254 "nginx -t && systemctl reload nginx"
 ssh root@45.80.128.254 "certbot renew --dry-run"
 ```
 
+### Статика и установщик Sigur Reader EH (`/downloads/`)
+
+Установщик USB-считывателя лежит в репозитории по пути
+`fot-app/public/downloads/sigur-reader-eh-setup-1.0.0.exe`. Vite копирует `public/`
+как есть в `fot-app/dist`, а nginx отдаёт его по `/downloads/...` через обычный
+`try_files $uri … /index.html` (так же, как `/docs/*.html`). Отдельная nginx-локация
+и папка `static-downloads` **не нужны** — ничего вручную на сервере класть не надо.
+
+⚠️ При рефакторах структуры проекта или деплоя **нельзя терять**
+`fot-app/public/downloads/` (файл в `.gitignore` исключён негейтом
+`!fot-app/public/downloads/*.exe`, в `.gitattributes` помечен `binary`). Если папка
+выпадет из `fot-app/dist`, запрос `/downloads/...exe` снова провалится в SPA-fallback
+и пользователи скачают `index.html` под именем `.exe` («файл повреждён»). Проверка:
+`curl -I https://fot.su10.ru/downloads/sigur-reader-eh-setup-1.0.0.exe` — ожидать
+`Content-Length: 84634432`, а не `text/html`.
+
 ## Sigur
 
 Sigur polling работает внутри `fot-server`. На production важно:

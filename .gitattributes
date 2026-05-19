@@ -32,4 +32,5 @@
 *.eot  binary
 *.pdf  binary
 *.zip  binary
+*.exe  binary
 *.xlsx binary
