@@ -54,8 +54,6 @@ async function loadEmployeeIdsByDepartments(
 }
 
 /** Создание заявления (worker+) */
-const ATTACHMENT_REQUIRED_TYPES = new Set(['remote', 'vacation']);
-
 const create = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { request_type, start_date, end_date, reason, correction_date, correction_status, correction_hours, attachments } = req.body;
@@ -79,11 +77,6 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     const attachmentIds = Array.isArray(attachments)
       ? attachments.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)
       : [];
-
-    if (ATTACHMENT_REQUIRED_TYPES.has(request_type) && attachmentIds.length === 0) {
-      res.status(400).json({ success: false, error: 'Прикрепите файл-подтверждение к заявлению' });
-      return;
-    }
 
     const employeeId = req.user.employee_id;
     if (!employeeId) {

@@ -2,7 +2,7 @@ import { type FC, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Check, X, Send, RotateCcw, AlertCircle,
-  Download, Upload, FileText, ChevronDown,
+  Upload, FileText, ChevronDown,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
@@ -10,12 +10,8 @@ import {
   APPROVAL_STATUS_LABELS,
   type ITimesheetApproval,
 } from '../../services/timesheetApprovalService';
-import { timesheetService } from '../../services/timesheetService';
 import { ApiError } from '../../api/client';
-import {
-  useTimesheetApprovalStatus,
-  useWeekendMemoPreview,
-} from '../../hooks/useTimesheetApprovalData';
+import { useTimesheetApprovalStatus } from '../../hooks/useTimesheetApprovalData';
 import { formatTimesheetRangeLabel } from '../../utils/timesheetApprovalPeriod';
 import {
   TimesheetSubmitConfirmModal,
@@ -45,11 +41,6 @@ interface IMissingDay {
 const formatDayLabel = (iso: string): string => {
   const [, m, d] = iso.split('-');
   return `${Number(d)}.${m}`;
-};
-
-const formatRu = (iso: string): string => {
-  const [, m, d] = iso.split('-');
-  return `${d}.${m}`;
 };
 
 interface IActiveCardProps {
@@ -192,14 +183,8 @@ const ActiveCard: FC<IActiveCardProps> = ({
 
 interface IWeekendMemoPopoverProps {
   departmentId: string | null;
-  startDate: string;
-  endDate: string;
-  memoReason: string;
   loading: boolean;
-  downloading: boolean;
   errorText: string | null;
-  onChangeReason: (value: string) => void;
-  onDownload: () => Promise<void>;
   onUploadClick: () => void;
   onFileSelected: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   onClose: () => void;
@@ -208,30 +193,14 @@ interface IWeekendMemoPopoverProps {
 
 const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
   departmentId,
-  startDate,
-  endDate,
-  memoReason,
   loading,
-  downloading,
   errorText,
-  onChangeReason,
-  onDownload,
   onUploadClick,
   onFileSelected,
   onClose,
   fileInputRef,
 }) => {
   const popoverRef = useRef<HTMLDivElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const preview = useWeekendMemoPreview(departmentId, startDate, endDate, true);
-  const entries = preview.data?.entries ?? [];
-  const weekendDates = preview.data?.weekend_dates ?? [];
-  const hasEntries = entries.length > 0;
-  const hasWeekendDays = weekendDates.length > 0;
-
-  useEffect(() => {
-    textareaRef.current?.focus();
-  }, []);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent): void => {
@@ -254,10 +223,10 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
   }, [onClose]);
 
   return (
-    <div className="ts-memo-popover" role="dialog" aria-label="Служебная записка о работе в выходные" ref={popoverRef}>
+    <div className="ts-memo-popover" role="dialog" aria-label="Прикрепить файл к табелю" ref={popoverRef}>
       <div className="ts-memo-popover-header">
         <div className="ts-memo-popover-title">
-          <FileText size={14} /> Служебная записка о работе в выходные
+          <FileText size={14} /> Прикрепить файл к табелю
         </div>
         <button type="button" className="ts-memo-popover-close" onClick={onClose} aria-label="Закрыть">
           <X size={14} />
@@ -265,42 +234,9 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
       </div>
 
       <div className="ts-memo-popover-hint">
-        В шаблон попадут сотрудники, у которых в «Режиме корректировок» выходной/праздничный день
-        помечен статусом «работа». Чтобы добавить или убрать — выделите ячейки в табеле.
+        В выбранном периоде есть работа в выходные/праздники. Приложите файл-подтверждение,
+        чтобы подать табель.
       </div>
-
-      <div className="ts-memo-popover-list">
-        {preview.isLoading && <div className="ts-memo-popover-empty">Загрузка…</div>}
-        {!preview.isLoading && !hasWeekendDays && (
-          <div className="ts-memo-popover-empty">В выбранном диапазоне нет выходных/праздничных дней.</div>
-        )}
-        {!preview.isLoading && hasWeekendDays && !hasEntries && (
-          <div className="ts-memo-popover-empty">
-            Пока нет корректировок «работа» на выходные дни диапазона.
-          </div>
-        )}
-        {hasEntries && (
-          <ul className="ts-memo-popover-items">
-            {entries.map((entry) => (
-              <li key={entry.employee_id} className="ts-memo-popover-item">
-                <span className="ts-memo-popover-name">{entry.full_name || `#${entry.employee_id}`}</span>
-                <span className="ts-memo-popover-dates">
-                  {entry.work_dates.map(formatRu).join(', ')}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <textarea
-        ref={textareaRef}
-        className="ts-memo-popover-reason"
-        placeholder="Кратко обоснуйте необходимость работы в выходные (попадёт в шаблон)"
-        value={memoReason}
-        onChange={e => onChangeReason(e.target.value)}
-        rows={2}
-      />
 
       {errorText && (
         <div className="ts-memo-popover-error">
@@ -312,19 +248,10 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
         <button
           type="button"
           className="ts-btn"
-          onClick={onDownload}
-          disabled={downloading || !departmentId || !hasEntries}
-          title={!hasEntries ? 'Сначала отметьте корректировкой выходные дни как «работа»' : undefined}
-        >
-          <Download size={14} /> Скачать шаблон
-        </button>
-        <button
-          type="button"
-          className="ts-btn"
           onClick={onUploadClick}
           disabled={loading || !departmentId}
         >
-          <Upload size={14} /> Загрузить подписанную
+          <Upload size={14} /> Прикрепить файл
         </button>
         <input
           ref={fileInputRef}
@@ -357,8 +284,6 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [missingDays, setMissingDays] = useState<IMissingDay[]>([]);
   const [memoRequired, setMemoRequired] = useState(false);
-  const [memoReason, setMemoReason] = useState('');
-  const [memoDownloading, setMemoDownloading] = useState(false);
   const [memoOpen, setMemoOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const memoFileInputRef = useRef<HTMLInputElement>(null);
@@ -415,32 +340,6 @@ export const TimesheetApprovalBar: FC<IProps> = ({
     await runAction(async () => {
       await timesheetApprovalService.recall(departmentId, startDate, endDate);
     });
-  };
-
-  const handleDownloadMemo = async () => {
-    if (!departmentId) return;
-    setMemoDownloading(true);
-    try {
-      const blob = await timesheetService.generateWeekendMemo({
-        department_id: departmentId,
-        start_date: startDate,
-        end_date: endDate,
-        reason: memoReason,
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `weekend-memo-${startDate}_${endDate}.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Ошибка скачивания служебки';
-      setSubmitError(message);
-    } finally {
-      setMemoDownloading(false);
-    }
   };
 
   const handleUploadMemoClick = () => memoFileInputRef.current?.click();
@@ -533,14 +432,8 @@ export const TimesheetApprovalBar: FC<IProps> = ({
         {memoOpen && memoSectionAllowed && (
           <WeekendMemoPopover
             departmentId={departmentId}
-            startDate={startDate}
-            endDate={endDate}
-            memoReason={memoReason}
             loading={loading}
-            downloading={memoDownloading}
             errorText={memoErrorText}
-            onChangeReason={setMemoReason}
-            onDownload={handleDownloadMemo}
             onUploadClick={handleUploadMemoClick}
             onFileSelected={handleMemoFileSelected}
             onClose={() => setMemoOpen(false)}
