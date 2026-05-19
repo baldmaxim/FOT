@@ -395,3 +395,152 @@ describe('scheduleController.bulkApplyToBrigades', () => {
     expect(data.note).toContain('Не удалось обновить 1 из 2');
   });
 });
+
+describe('scheduleController.fixEmployeeAssignment', () => {
+  const ASSIGN_A = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+  const ASSIGN_B = 'bbbbbbbb-2222-4222-9222-bbbbbbbbbbbb';
+  const ASSIGN_P = 'cccccccc-3333-4333-a333-cccccccccccc';
+  const MISSING = 'dddddddd-4444-4444-b444-dddddddddddd';
+
+  beforeEach(() => {
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
+    mockedState.scope = 'all';
+  });
+
+  const findUpdate = (predicate: (sql: string, params: unknown[]) => boolean) =>
+    pgExecute.mock.calls.find(([sql, params]) =>
+      typeof sql === 'string'
+      && sql.toLowerCase().includes('update employee_schedule_assignments')
+      && Array.isArray(params)
+      && predicate(sql.toLowerCase(), params as unknown[]),
+    );
+
+  it('правит только anchor_date той же записи (id не меняется, без INSERT)', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_A, schedule_id: SCHEDULE_ID, effective_from: '2026-01-01', effective_to: null },
+    ]);
+    pgExecute.mockResolvedValue(1);
+    pgQueryOne.mockResolvedValue({ id: ASSIGN_A, anchor_date: '2026-02-01' });
+
+    const req = makeReq({
+      params: { employeeId: '7' },
+      body: { assignment_id: ASSIGN_A, anchor_date: '2026-02-01' },
+    });
+    const res = makeRes();
+
+    await scheduleController.fixEmployeeAssignment(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect((res.payload as { data: { id: string } }).data.id).toBe(ASSIGN_A);
+
+    const upd = findUpdate((sql, params) =>
+      sql.includes('anchor_date') && params.includes('2026-02-01') && params.includes(ASSIGN_A));
+    expect(upd).toBeTruthy();
+    expect(upd?.[0]).not.toMatch(/effective_from\s*=/i);
+
+    const insertCalls = pgQueryOne.mock.calls.filter(([sql]) =>
+      typeof sql === 'string' && sql.toLowerCase().startsWith('insert'));
+    expect(insertCalls).toHaveLength(0);
+  });
+
+  it('anchor_date: null очищает override', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_A, schedule_id: SCHEDULE_ID, effective_from: '2026-01-01', effective_to: null },
+    ]);
+    pgExecute.mockResolvedValue(1);
+    pgQueryOne.mockResolvedValue({ id: ASSIGN_A, anchor_date: null });
+
+    const req = makeReq({
+      params: { employeeId: '7' },
+      body: { assignment_id: ASSIGN_A, anchor_date: null },
+    });
+    const res = makeRes();
+
+    await scheduleController.fixEmployeeAssignment(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const upd = findUpdate((sql, params) =>
+      sql.includes('anchor_date') && params.includes(null) && params.includes(ASSIGN_A));
+    expect(upd).toBeTruthy();
+  });
+
+  it('правка effective_from подгоняет effective_to предыдущей записи', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_P, schedule_id: SCHEDULE_ID, effective_from: '2026-01-01', effective_to: '2026-02-28' },
+      { id: ASSIGN_A, schedule_id: SCHEDULE_ID, effective_from: '2026-03-01', effective_to: null },
+    ]);
+    pgExecute.mockResolvedValue(1);
+    pgQueryOne.mockResolvedValue({ id: ASSIGN_A, effective_from: '2026-02-15' });
+
+    const req = makeReq({
+      params: { employeeId: '7' },
+      body: { assignment_id: ASSIGN_A, effective_from: '2026-02-15' },
+    });
+    const res = makeRes();
+
+    await scheduleController.fixEmployeeAssignment(req, res);
+
+    expect(res.statusCode).toBe(200);
+
+    const prevClosure = findUpdate((sql, params) =>
+      sql.includes('set effective_to') && params.includes(ASSIGN_P) && params.includes('2026-02-14'));
+    expect(prevClosure).toBeTruthy();
+
+    const targetUpdate = findUpdate((sql, params) =>
+      sql.includes('effective_from =') && params.includes('2026-02-15') && params.includes(ASSIGN_A));
+    expect(targetUpdate).toBeTruthy();
+  });
+
+  it('коллизия effective_from с другой записью → 400, без записи в БД', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_A, schedule_id: SCHEDULE_ID, effective_from: '2026-03-01', effective_to: null },
+      { id: ASSIGN_B, schedule_id: SCHEDULE_ID, effective_from: '2026-05-01', effective_to: null },
+    ]);
+
+    const req = makeReq({
+      params: { employeeId: '7' },
+      body: { assignment_id: ASSIGN_A, effective_from: '2026-05-01' },
+    });
+    const res = makeRes();
+
+    await scheduleController.fixEmployeeAssignment(req, res);
+
+    expect(res.statusCode).toBe(400);
+    expect((res.payload as { error: string }).error).toContain('уже есть назначение');
+    expect(pgExecute).not.toHaveBeenCalled();
+  });
+
+  it('назначение не принадлежит сотруднику → 400 not-found', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_A, schedule_id: SCHEDULE_ID, effective_from: '2026-01-01', effective_to: null },
+    ]);
+
+    const req = makeReq({
+      params: { employeeId: '7' },
+      body: { assignment_id: MISSING, anchor_date: '2026-02-01' },
+    });
+    const res = makeRes();
+
+    await scheduleController.fixEmployeeAssignment(req, res);
+
+    expect(res.statusCode).toBe(400);
+    expect((res.payload as { error: string }).error).toContain('не найдено');
+    expect(pgExecute).not.toHaveBeenCalled();
+  });
+
+  it('пустое тело (ни одной даты) → 400 ещё до БД', async () => {
+    const req = makeReq({
+      params: { employeeId: '7' },
+      body: { assignment_id: ASSIGN_A },
+    });
+    const res = makeRes();
+
+    await scheduleController.fixEmployeeAssignment(req, res);
+
+    expect(res.statusCode).toBe(400);
+    expect(pgQuery).not.toHaveBeenCalled();
+  });
+});

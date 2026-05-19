@@ -6,7 +6,7 @@
  * от React state, легко тестируются и переиспользуются.
  */
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import type { IWorkSchedule, IEmployeeScheduleAssignment } from '../types/schedule';
+import type { IWorkSchedule, IEmployeeScheduleAssignment, PatternType } from '../types/schedule';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -21,6 +21,10 @@ export interface IEmployeeScheduleView {
   effectiveFrom?: string | null;
   /** anchor_date конкретного назначения (override якоря cycle-паттерна), если задан */
   assignmentAnchorDate?: string | null;
+  /** id строки employee_schedule_assignments — для in-place правки дат */
+  assignmentId?: string | null;
+  /** pattern_type шаблона текущего назначения — якорь правим только для 'cycle' */
+  templatePatternType?: PatternType | null;
 }
 
 export interface IAddEmployeeForm {

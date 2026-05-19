@@ -219,6 +219,7 @@ interface IStaffModalsProps {
   onSavePosition: (empId: number, val: string, reason?: string, date?: string) => Promise<void>;
   onSaveDepartment: (empId: number, deptId: string, effectiveDate?: string, reason?: string) => Promise<void>;
   onSaveSchedule: (empId: number, scheduleId: string | null, effectiveFrom: string, anchorDate: string | null) => Promise<void>;
+  onFixAssignment: (empId: number, data: { assignment_id: string; effective_from?: string; anchor_date?: string | null }) => Promise<void>;
 }
 
 const StaffModals: FC<IStaffModalsProps> = memo(({
@@ -233,6 +234,7 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   onSavePosition,
   onSaveDepartment,
   onSaveSchedule,
+  onFixAssignment,
 }) => {
   const currentSchedule = modalEmp ? scheduleViews.get(modalEmp.id) : undefined;
   const [salaryVal, setSalaryVal] = useState('');
@@ -247,6 +249,10 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   const [scheduleVal, setScheduleVal] = useState(() => currentSchedule?.source === 'employee' ? currentSchedule.scheduleId || '' : '');
   const [scheduleDate, setScheduleDate] = useState(() => currentSchedule?.source === 'employee' ? currentSchedule.effectiveFrom || getLocalISODate() : getLocalISODate());
   const [scheduleAnchor, setScheduleAnchor] = useState(() => currentSchedule?.assignmentAnchorDate ?? '');
+  const hasFixableAssignment = currentSchedule?.source === 'employee' && !!currentSchedule.assignmentId;
+  const [scheduleTab, setScheduleTab] = useState<'fix' | 'new'>(() => (hasFixableAssignment ? 'fix' : 'new'));
+  const [fixFrom, setFixFrom] = useState(() => currentSchedule?.effectiveFrom || '');
+  const [fixAnchor, setFixAnchor] = useState(() => currentSchedule?.assignmentAnchorDate ?? '');
   const [saving, setSaving] = useState(false);
   const selectedScheduleTemplate = scheduleVal ? templates.find(t => t.id === scheduleVal) ?? null : null;
   const isCycleTemplate = selectedScheduleTemplate?.pattern_type === 'cycle';
@@ -285,6 +291,25 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
     const anchor = isCycleTemplate && scheduleAnchor.trim() ? scheduleAnchor : null;
     await onSaveSchedule(modalEmp.id, value, scheduleDate, anchor);
     setSaving(false);
+  };
+
+  const handleFix = async () => {
+    if (!currentSchedule?.assignmentId) return;
+    const payload: { assignment_id: string; effective_from?: string; anchor_date?: string | null } = {
+      assignment_id: currentSchedule.assignmentId,
+    };
+    if (fixFrom && fixFrom !== (currentSchedule.effectiveFrom || '')) payload.effective_from = fixFrom;
+    if (currentSchedule.templatePatternType === 'cycle') {
+      const norm = fixAnchor.trim() ? fixAnchor : null;
+      if (norm !== (currentSchedule.assignmentAnchorDate ?? null)) payload.anchor_date = norm;
+    }
+    if (payload.effective_from === undefined && !('anchor_date' in payload)) return;
+    setSaving(true);
+    try {
+      await onFixAssignment(modalEmp.id, payload);
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (modalType === 'salary' || modalType === 'salary_actual') {
@@ -367,6 +392,16 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
     const isUnchanged = (scheduleVal || '') === currentEmployeeScheduleId
       && scheduleDate === currentEmployeeScheduleDate
       && !anchorChanged;
+
+    // ── Вкладка «Исправить назначение» ──────────────────────────────────────
+    const currentTemplate = templates.find(t => t.id === effectiveSchedule?.scheduleId) ?? null;
+    const isCurrentCycle = effectiveSchedule?.templatePatternType === 'cycle';
+    const fixAnchorNorm = fixAnchor.trim() ? fixAnchor : null;
+    const fixFromChanged = !!fixFrom && fixFrom !== (effectiveSchedule?.effectiveFrom || '');
+    const fixAnchorChanged = isCurrentCycle && fixAnchorNorm !== (effectiveSchedule?.assignmentAnchorDate ?? null);
+    const fixDisabled = saving || !effectiveSchedule?.assignmentId || !fixFrom || (!fixFromChanged && !fixAnchorChanged);
+    const onFixTab = scheduleTab === 'fix' && hasFixableAssignment;
+
     return (
       <div className="sc-overlay" onClick={onClose}>
         <div className="sc-modal" onClick={e => e.stopPropagation()}>
@@ -375,53 +410,117 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
             <button className="sc-modal-close" onClick={onClose}>&times;</button>
           </div>
           <div className="sc-modal-body">
-            <div className="sc-field">
-              <label>Персональный график</label>
-              <select value={scheduleVal} onChange={e => setScheduleVal(e.target.value)} autoFocus>
-                <option value="">— {defaultScheduleLabel} —</option>
-                {templates.filter(tpl => !tpl.is_default).map(tpl => (
-                  <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
-                ))}
-              </select>
+            <div className="sc-segmented" role="tablist" aria-label="Режим" style={{ marginBottom: 14 }}>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={onFixTab}
+                disabled={!hasFixableAssignment}
+                title={hasFixableAssignment ? '' : 'У сотрудника нет персонального назначения'}
+                className={`sc-seg-btn${onFixTab ? ' is-active' : ''}`}
+                onClick={() => setScheduleTab('fix')}
+              >
+                Исправить назначение
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={!onFixTab}
+                className={`sc-seg-btn${!onFixTab ? ' is-active' : ''}`}
+                onClick={() => setScheduleTab('new')}
+              >
+                Новое назначение
+              </button>
             </div>
-            <div className="sc-field">
-              <label>{scheduleVal ? 'Дата вступления в силу' : 'Дата снятия персонального графика'}</label>
-              <input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} />
-            </div>
-            {isCycleTemplate && (
-              <div className="sc-field">
-                <label title="Опционально перебивает дату-якорь паттерна для этого назначения. Пусто = использовать якорь паттерна.">
-                  Якорь цикла (override)
-                </label>
-                <input
-                  type="date"
-                  value={scheduleAnchor}
-                  onChange={e => setScheduleAnchor(e.target.value)}
-                  placeholder={selectedScheduleTemplate?.anchor_date || ''}
-                />
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-                  Якорь паттерна: <strong>{selectedScheduleTemplate?.anchor_date || '—'}</strong>
-                  {scheduleAnchor && scheduleAnchor !== selectedScheduleTemplate?.anchor_date
-                    ? ' · цикл сдвинется для этого сотрудника'
-                    : ''}
+
+            {onFixTab ? (
+              <>
+                <div className="sc-schedule-help" style={{ marginBottom: 14 }}>
+                  <div><strong>Текущий график:</strong> {effectiveSchedule?.scheduleName || '—'}</div>
+                  <div><strong>Дата вступления:</strong> {effectiveSchedule?.effectiveFrom || '—'}</div>
+                  {isCurrentCycle && (
+                    <div><strong>Якорь назначения:</strong> {effectiveSchedule?.assignmentAnchorDate || `— (якорь паттерна ${currentTemplate?.anchor_date || '—'})`}</div>
+                  )}
                 </div>
-              </div>
+                <div className="sc-field">
+                  <label>Дата вступления в силу</label>
+                  <input type="date" value={fixFrom} onChange={e => setFixFrom(e.target.value)} autoFocus />
+                </div>
+                {isCurrentCycle && (
+                  <div className="sc-field">
+                    <label title="Пусто = использовать якорь паттерна графика.">Якорь цикла (override)</label>
+                    <input
+                      type="date"
+                      value={fixAnchor}
+                      onChange={e => setFixAnchor(e.target.value)}
+                      placeholder={currentTemplate?.anchor_date || ''}
+                    />
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+                      Якорь паттерна: <strong>{currentTemplate?.anchor_date || '—'}</strong>. Пусто — сбросить override и считать цикл от якоря паттерна.
+                    </div>
+                  </div>
+                )}
+                <div className="sc-schedule-help">
+                  <div>Правка исправляет текущую запись назначения на месте — без создания новой. История графиков сохраняется.</div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="sc-field">
+                  <label>Персональный график</label>
+                  <select value={scheduleVal} onChange={e => setScheduleVal(e.target.value)} autoFocus>
+                    <option value="">— {defaultScheduleLabel} —</option>
+                    {templates.filter(tpl => !tpl.is_default).map(tpl => (
+                      <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="sc-field">
+                  <label>{scheduleVal ? 'Дата вступления в силу' : 'Дата снятия персонального графика'}</label>
+                  <input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} />
+                </div>
+                {isCycleTemplate && (
+                  <div className="sc-field">
+                    <label title="Опционально перебивает дату-якорь паттерна для этого назначения. Пусто = использовать якорь паттерна.">
+                      Якорь цикла (override)
+                    </label>
+                    <input
+                      type="date"
+                      value={scheduleAnchor}
+                      onChange={e => setScheduleAnchor(e.target.value)}
+                      placeholder={selectedScheduleTemplate?.anchor_date || ''}
+                    />
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+                      Якорь паттерна: <strong>{selectedScheduleTemplate?.anchor_date || '—'}</strong>
+                      {scheduleAnchor && scheduleAnchor !== selectedScheduleTemplate?.anchor_date
+                        ? ' · цикл сдвинется для этого сотрудника'
+                        : ''}
+                    </div>
+                  </div>
+                )}
+                <div className="sc-schedule-help">
+                  <div><strong>Сейчас действует:</strong> {effectiveSchedule?.scheduleName || '—'}{effectiveSchedule && effectiveSchedule.source !== 'default' ? ` (${SCHEDULE_SOURCE_LABELS[effectiveSchedule.source]})` : ''}</div>
+                  <div><strong>Базовый график:</strong> {baseSchedule?.scheduleName || defaultScheduleLabel}</div>
+                  <div>Если оставить пусто, с выбранной даты сотрудник вернётся к графику {defaultScheduleLabel}. Создаётся новая датированная запись.</div>
+                </div>
+              </>
             )}
-            <div className="sc-schedule-help">
-              <div><strong>Сейчас действует:</strong> {effectiveSchedule?.scheduleName || '—'}{effectiveSchedule && effectiveSchedule.source !== 'default' ? ` (${SCHEDULE_SOURCE_LABELS[effectiveSchedule.source]})` : ''}</div>
-              <div><strong>Базовый график:</strong> {baseSchedule?.scheduleName || defaultScheduleLabel}</div>
-              <div>Если оставить пусто, с выбранной даты сотрудник вернётся к графику {defaultScheduleLabel}.</div>
-            </div>
           </div>
           <div className="sc-modal-footer">
             <button className="sc-btn cancel" onClick={onClose}>Отмена</button>
-            <button
-              className="sc-btn apply"
-              onClick={handleSchedule}
-              disabled={saving || !scheduleDate || (!hasEmployeeOverride && scheduleVal === '') || isUnchanged}
-            >
-              {saving ? 'Сохранение...' : 'Применить'}
-            </button>
+            {onFixTab ? (
+              <button className="sc-btn apply" onClick={handleFix} disabled={fixDisabled}>
+                {saving ? 'Сохранение...' : 'Исправить даты'}
+              </button>
+            ) : (
+              <button
+                className="sc-btn apply"
+                onClick={handleSchedule}
+                disabled={saving || !scheduleDate || (!hasEmployeeOverride && scheduleVal === '') || isUnchanged}
+              >
+                {saving ? 'Сохранение...' : 'Применить'}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -935,6 +1034,8 @@ export const StaffControlPage: FC = () => {
           source: isSameAsDefault ? 'default' : 'employee',
           effectiveFrom: isSameAsDefault ? null : personalAssignment.effective_from,
           assignmentAnchorDate: personalAssignment.anchor_date,
+          assignmentId: personalAssignment.id,
+          templatePatternType: personalAssignment.work_schedules.pattern_type,
         });
         continue;
       }
@@ -1281,6 +1382,23 @@ export const StaffControlPage: FC = () => {
     ]);
     closeModal();
   }, [closeModal, employeeScheduleAssignmentsQuery, queryClient]);
+
+  const handleFixAssignment = useCallback(async (
+    empId: number,
+    data: { assignment_id: string; effective_from?: string; anchor_date?: string | null },
+  ) => {
+    try {
+      await scheduleService.fixEmployeeAssignment(empId, data);
+      await Promise.all([
+        employeeScheduleAssignmentsQuery.refetch(),
+        queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
+      ]);
+      toast.success('Даты назначения исправлены');
+      closeModal();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Не удалось исправить даты назначения');
+    }
+  }, [closeModal, employeeScheduleAssignmentsQuery, queryClient, toast]);
 
   const applyScheduleToEmployees = useCallback(async (employeeIds: number[], scheduleId: string | null, effectiveFrom: string) => {
     if (employeeIds.length === 0) return;
@@ -1868,6 +1986,7 @@ export const StaffControlPage: FC = () => {
         onSavePosition={handleSavePosition}
         onSaveDepartment={handleSaveDepartment}
         onSaveSchedule={handleSaveSchedule}
+        onFixAssignment={handleFixAssignment}
       />
       <BulkScheduleModal
         open={bulkScheduleOpen}

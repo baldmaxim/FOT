@@ -92,6 +92,19 @@ export const scheduleService = {
     return res.data;
   },
 
+  /** In-place правка дат существующего назначения сотрудника (без создания новой записи) */
+  async fixEmployeeAssignment(
+    employeeId: number,
+    data: { assignment_id: string; effective_from?: string; anchor_date?: string | null },
+  ): Promise<IEmployeeScheduleAssignment> {
+    const res = await apiClient.patch<ApiResponse<IEmployeeScheduleAssignment>>(
+      `/schedules/employee/${employeeId}/assignment`,
+      data,
+    );
+    if (!res.data) throw new Error(res.error || 'Ошибка правки дат назначения');
+    return res.data;
+  },
+
   /** Назначить график объекту */
   async assignObject(
     objectId: string,

@@ -100,6 +100,21 @@ const employeeIdParamSchema = z.coerce.number().int().positive();
 const objectIdParamSchema = z.string().uuid();
 const assignEmployeeSchema = assignmentBodySchema;
 const assignObjectSchema = assignmentBodySchema;
+
+// In-place правка дат уже существующей записи назначения по её id (без INSERT).
+const fixAssignmentSchema = z.object({
+  assignment_id: z.string().uuid(),
+  effective_from: isoDateString.optional(),
+  anchor_date: isoDateString.nullable().optional(),
+}).superRefine((value, ctx) => {
+  if (value.effective_from === undefined && !('anchor_date' in value)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Нужно передать хотя бы одно из effective_from / anchor_date',
+      path: ['effective_from'],
+    });
+  }
+});
 const effectiveDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const bulkBrigadeScheduleSchema = z.object({
   department_ids: z.array(z.string().uuid()).min(1),
@@ -302,6 +317,93 @@ const assignEmployeeSchedule = async (
     [inserted.id],
   );
   return data;
+};
+
+/** Ошибка валидации правки назначения — контроллер маппит её в 400. */
+class AssignmentFixError extends Error {}
+
+/**
+ * In-place правка дат уже существующей записи назначения сотрудника по её id.
+ * НЕ создаёт новую запись. История графиков сохраняется:
+ *  - anchor_date меняется только в рамках диапазона своей записи;
+ *  - при сдвиге effective_from подгоняется effective_to предыдущей записи,
+ *    а перекрытие/перепрыгивание соседних записей запрещено.
+ */
+const fixEmployeeAssignmentDates = async (
+  employeeId: number,
+  assignmentId: string,
+  patch: { effectiveFrom?: string; anchorDate?: string | null },
+): Promise<Record<string, unknown>> => {
+  const rows = await query<EmployeeScheduleRow>(
+    `SELECT id, schedule_id, effective_from, effective_to
+       FROM employee_schedule_assignments
+      WHERE employee_id = $1
+      ORDER BY effective_from ASC`,
+    [employeeId],
+  );
+  const target = rows.find(row => row.id === assignmentId) || null;
+  if (!target) {
+    throw new AssignmentFixError('Назначение не найдено у этого сотрудника');
+  }
+
+  const nowIso = new Date().toISOString();
+  const sets: string[] = ['updated_at = $1'];
+  const params: unknown[] = [nowIso];
+  let p = 2;
+
+  if (patch.effectiveFrom !== undefined && patch.effectiveFrom !== target.effective_from) {
+    const newFrom = patch.effectiveFrom;
+
+    if (rows.some(row => row.id !== target.id && row.effective_from === newFrom)) {
+      throw new AssignmentFixError(`У сотрудника уже есть назначение с датой вступления ${newFrom}`);
+    }
+
+    const others = rows.filter(row => row.id !== target.id);
+    const prev = [...others].reverse().find(row => row.effective_from < target.effective_from) || null;
+    const next = others.find(row => row.effective_from > target.effective_from) || null;
+
+    if (prev && newFrom <= prev.effective_from) {
+      throw new AssignmentFixError('Дата вступления должна быть позже предыдущего назначения');
+    }
+    if (next && newFrom >= next.effective_from) {
+      throw new AssignmentFixError('Дата вступления должна быть раньше следующего назначения');
+    }
+    if (target.effective_to !== null && newFrom > target.effective_to) {
+      throw new AssignmentFixError('Дата вступления не может быть позже даты окончания этого назначения');
+    }
+
+    sets.push(`effective_from = $${p}`);
+    params.push(newFrom);
+    p++;
+
+    if (prev) {
+      await execute(
+        `UPDATE employee_schedule_assignments SET effective_to = $1, updated_at = $2 WHERE id = $3`,
+        [previousIsoDate(newFrom), nowIso, prev.id],
+      );
+    }
+  }
+
+  if ('anchorDate' in patch) {
+    sets.push(`anchor_date = $${p}`);
+    params.push(patch.anchorDate ?? null);
+    p++;
+  }
+
+  if (sets.length > 1) {
+    params.push(target.id);
+    await execute(
+      `UPDATE employee_schedule_assignments SET ${sets.join(', ')} WHERE id = $${p}`,
+      params,
+    );
+  }
+
+  const updated = await queryOne<Record<string, unknown>>(
+    `SELECT ${SCHEDULE_ASSIGNMENT_JOIN('employee_schedule_assignments')} WHERE a.id = $1`,
+    [target.id],
+  );
+  if (!updated) throw new Error('Failed to load updated employee_schedule_assignment');
+  return updated;
 };
 
 const removeEmployeeSchedule = async (
@@ -706,6 +808,37 @@ export const scheduleController = {
     } catch (err) {
       console.error('[schedules] assignEmployee error:', err);
       res.status(500).json({ success: false, error: 'Ошибка назначения персонального графика сотруднику' });
+    }
+  },
+
+  /** PATCH /api/schedules/employee/:employeeId/assignment — in-place правка дат существующего назначения */
+  async fixEmployeeAssignment(req: AuthenticatedRequest, res: Response) {
+    try {
+      const parsedEmployeeId = employeeIdParamSchema.safeParse(req.params.employeeId);
+      if (!parsedEmployeeId.success) {
+        return res.status(400).json({ success: false, error: 'Неверный employeeId' });
+      }
+
+      const parsed = fixAssignmentSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ success: false, error: parsed.error.issues });
+
+      if (!(await canAccessEmployeeInScope(req, parsedEmployeeId.data))) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
+
+      const body = parsed.data;
+      const patch: { effectiveFrom?: string; anchorDate?: string | null } = {};
+      if (body.effective_from !== undefined) patch.effectiveFrom = body.effective_from;
+      if ('anchor_date' in body) patch.anchorDate = body.anchor_date ?? null;
+
+      const data = await fixEmployeeAssignmentDates(parsedEmployeeId.data, body.assignment_id, patch);
+      res.json({ success: true, data });
+    } catch (err) {
+      if (err instanceof AssignmentFixError) {
+        return res.status(400).json({ success: false, error: err.message });
+      }
+      console.error('[schedules] fixEmployeeAssignment error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка правки дат назначения' });
     }
   },
 
