@@ -1380,8 +1380,10 @@ export const StaffControlPage: FC = () => {
       employeeScheduleAssignmentsQuery.refetch(),
       queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
     ]);
+    refresh();
+    void queryClient.invalidateQueries({ queryKey: ['employees'] });
     closeModal();
-  }, [closeModal, employeeScheduleAssignmentsQuery, queryClient]);
+  }, [closeModal, employeeScheduleAssignmentsQuery, queryClient, refresh]);
 
   const handleFixAssignment = useCallback(async (
     empId: number,
@@ -1393,12 +1395,14 @@ export const StaffControlPage: FC = () => {
         employeeScheduleAssignmentsQuery.refetch(),
         queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
       ]);
+      refresh();
+      void queryClient.invalidateQueries({ queryKey: ['employees'] });
       toast.success('Даты назначения исправлены');
       closeModal();
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : 'Не удалось исправить даты назначения');
     }
-  }, [closeModal, employeeScheduleAssignmentsQuery, queryClient, toast]);
+  }, [closeModal, employeeScheduleAssignmentsQuery, queryClient, refresh, toast]);
 
   const applyScheduleToEmployees = useCallback(async (employeeIds: number[], scheduleId: string | null, effectiveFrom: string) => {
     if (employeeIds.length === 0) return;
@@ -1423,9 +1427,11 @@ export const StaffControlPage: FC = () => {
       employeeScheduleAssignmentsQuery.refetch(),
       queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
     ]);
+    refresh();
+    void queryClient.invalidateQueries({ queryKey: ['employees'] });
     setBulkScheduleOpen(false);
     setSelectedEmployeeIds([]);
-  }, [applyScheduleToEmployees, employeeScheduleAssignmentsQuery, queryClient, selectedEmployees]);
+  }, [applyScheduleToEmployees, employeeScheduleAssignmentsQuery, queryClient, refresh, selectedEmployees]);
 
   const [rehireEmp, setRehireEmp] = useState<Employee | null>(null);
   const [rehireDeptId, setRehireDeptId] = useState('');
@@ -1481,8 +1487,10 @@ export const StaffControlPage: FC = () => {
       employeeScheduleAssignmentsQuery.refetch(),
       queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
     ]);
+    refresh();
+    void queryClient.invalidateQueries({ queryKey: ['employees'] });
     setBulkFilterScheduleOpen(false);
-  }, [applyScheduleToEmployees, debouncedSearch, deptId, employeeScheduleAssignmentsQuery, queryClient]);
+  }, [applyScheduleToEmployees, debouncedSearch, deptId, employeeScheduleAssignmentsQuery, queryClient, refresh]);
 
   const handleBrigadeBulkSaveSchedule = useCallback(async (departmentIds: string[], scheduleId: string | null, effectiveFrom: string) => {
     try {
@@ -1518,8 +1526,10 @@ export const StaffControlPage: FC = () => {
         employeeScheduleAssignmentsQuery.refetch(),
         queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
       ]);
+      refresh();
+      void queryClient.invalidateQueries({ queryKey: ['employees'] });
     }
-  }, [employeeScheduleAssignmentsQuery, queryClient, toast]);
+  }, [employeeScheduleAssignmentsQuery, queryClient, refresh, toast]);
 
   /* ─── history panel data changed ─── */
 
