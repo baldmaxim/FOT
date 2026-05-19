@@ -227,6 +227,13 @@ export const timesheetApprovalService = {
     await apiClient.delete(`/timesheet-approvals/attachments/${documentId}`);
   },
 
+  getAttachmentDownloadUrl: async (documentId: number) => {
+    const res = await apiClient.get<ApiResponse<{ download_url: string; file_name: string }>>(
+      `/timesheet-approvals/attachments/${documentId}/download`,
+    );
+    return res.data;
+  },
+
   getReviewList: async (
     status: TimesheetApprovalStatus = 'submitted',
     start_date?: string,

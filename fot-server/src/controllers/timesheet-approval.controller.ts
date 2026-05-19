@@ -1145,6 +1145,59 @@ const deleteAttachment = async (req: AuthenticatedRequest, res: Response): Promi
   }
 };
 
+/** HR / Admin: подписанный URL для просмотра вложения подачи табеля. */
+const getAttachmentDownloadUrl = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!(await r2Service.isEnabledAsync())) {
+      res.status(503).json({ success: false, error: 'R2 хранилище не настроено' });
+      return;
+    }
+    const documentId = Number(req.params.document_id);
+    if (!Number.isFinite(documentId) || documentId <= 0) {
+      res.status(400).json({ success: false, error: 'Некорректный id документа' });
+      return;
+    }
+
+    const linkRow = await queryOne<{ entity_id: string }>(
+      `SELECT entity_id FROM document_links
+         WHERE document_id = $1
+           AND entity_type = 'timesheet_approval'
+           AND purpose = 'weekend_confirmation'
+         LIMIT 1`,
+      [documentId],
+    );
+    if (!linkRow) {
+      res.status(404).json({ success: false, error: 'Вложение не найдено' });
+      return;
+    }
+
+    const approval = await loadApprovalById(String(Number(linkRow.entity_id)));
+    if (!approval) {
+      res.status(404).json({ success: false, error: 'Подача не найдена' });
+      return;
+    }
+    if (!(await ensureApprovalDepartmentAccess(req, approval.department_id))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к отделу' });
+      return;
+    }
+
+    const doc = await queryOne<{ r2_key: string; file_name: string }>(
+      `SELECT r2_key, file_name FROM documents WHERE id = $1 LIMIT 1`,
+      [documentId],
+    );
+    if (!doc) {
+      res.status(404).json({ success: false, error: 'Документ не найден' });
+      return;
+    }
+
+    const downloadUrl = await r2Service.generateDownloadUrl(doc.r2_key);
+    res.json({ success: true, data: { download_url: downloadUrl, file_name: doc.file_name } });
+  } catch (err) {
+    console.error('timesheet-approval.getAttachmentDownloadUrl error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения URL' });
+  }
+};
+
 /** HR / Admin: список подач с флагами проблемных дней и вложениями. */
 const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -1352,5 +1405,6 @@ export const timesheetApprovalController = {
   confirmAttachmentUpload,
   listAttachments,
   deleteAttachment,
+  getAttachmentDownloadUrl,
   getReviewList,
 };

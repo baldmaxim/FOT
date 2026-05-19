@@ -33,6 +33,7 @@ router.post('/:id/return-to-rework', requirePageAccess('/timesheet-hr', 'edit'),
 router.post('/attachments/upload-url', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.getAttachmentUploadUrl);
 router.post('/attachments/confirm', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.confirmAttachmentUpload);
 router.get('/attachments', requirePageAccess('/timesheet', 'view'), timesheetApprovalController.listAttachments);
+router.get('/attachments/:document_id/download', requirePageAccess('/timesheet', 'view'), timesheetApprovalController.getAttachmentDownloadUrl);
 router.delete('/attachments/:document_id', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.deleteAttachment);
 
 // Объединённый review-list для админской страницы согласований.

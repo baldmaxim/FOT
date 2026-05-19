@@ -1,6 +1,6 @@
 import { type FC, useState, useMemo, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Clock } from 'lucide-react';
+import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Clock, FileText, Download } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee } from '../../types';
 import {
   timesheetApprovalService,
@@ -477,6 +477,129 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
   );
 };
 
+const sanitizeFilePart = (value: string): string => value.replace(/[\\/:*?"<>|]+/g, '_');
+
+interface IApprovalCardExtrasProps {
+  row: IApprovalReviewItem;
+}
+
+const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row }) => {
+  const toast = useToast();
+  const [openingId, setOpeningId] = useState<number | null>(null);
+  const [exporting, setExporting] = useState<'fact' | '1c' | null>(null);
+
+  const monthStr = useMemo(() => {
+    const d = new Date(row.start_date + 'T00:00:00');
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }, [row.start_date]);
+  const deptLabel = sanitizeFilePart(row.department_name ?? row.department_id);
+
+  const attachmentsQuery = useQuery({
+    queryKey: ['approval-attachments', row.id],
+    queryFn: () => timesheetApprovalService.listAttachments({ approval_id: row.id }),
+    staleTime: 30_000,
+  });
+  const attachments = attachmentsQuery.data ?? [];
+
+  const handleView = async (documentId: number) => {
+    setOpeningId(documentId);
+    try {
+      const { download_url } = await timesheetApprovalService.getAttachmentDownloadUrl(documentId);
+      window.open(download_url, '_blank', 'noopener');
+    } catch (err) {
+      toast.error?.(err instanceof Error ? err.message : 'Не удалось открыть файл');
+    } finally {
+      setOpeningId(null);
+    }
+  };
+
+  const downloadBlob = (blob: Blob, name: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportFact = async () => {
+    setExporting('fact');
+    try {
+      const blob = await timesheetService.export({
+        month: monthStr,
+        department_id: row.department_id,
+        from: row.start_date,
+        to: row.end_date,
+        presentation: 'hr',
+      });
+      downloadBlob(blob, `Факт_${deptLabel}_${row.start_date}_${row.end_date}.xlsx`);
+    } catch (err) {
+      toast.error?.(err instanceof Error ? err.message : 'Ошибка выгрузки факта');
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const handleExport1C = async () => {
+    setExporting('1c');
+    try {
+      const blob = await timesheetService.exportMass({
+        month: monthStr,
+        department_ids: [row.department_id],
+        from: row.start_date,
+        to: row.end_date,
+        group_by: 'employees',
+        presentation: 'hr',
+        export_as_1c: true,
+      });
+      downloadBlob(blob, `1С_${deptLabel}_${row.start_date}_${row.end_date}.zip`);
+    } catch (err) {
+      toast.error?.(err instanceof Error ? err.message : 'Ошибка выгрузки для 1С');
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  return (
+    <>
+      {attachments.length > 0 && (
+        <div className="approvals-attachments">
+          <span className="approvals-attachments-title">Вложения:</span>
+          {attachments.map(att => (
+            <button
+              key={att.document_id}
+              type="button"
+              className="approvals-attachment-btn"
+              onClick={() => handleView(att.document_id)}
+              disabled={openingId === att.document_id}
+            >
+              <FileText size={14} /> {att.file_name}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="approvals-export">
+        <button
+          type="button"
+          className="approvals-export-btn"
+          onClick={handleExportFact}
+          disabled={exporting !== null}
+        >
+          <Download size={16} /> {exporting === 'fact' ? 'Выгрузка…' : 'Выгрузка факта'}
+        </button>
+        <button
+          type="button"
+          className="approvals-export-btn"
+          onClick={handleExport1C}
+          disabled={exporting !== null}
+        >
+          <Download size={16} /> {exporting === '1c' ? 'Выгрузка…' : 'Выгрузка для 1С'}
+        </button>
+      </div>
+    </>
+  );
+};
+
 interface IApprovalCardBodyProps {
   row: IApprovalReviewItem;
   canReview: boolean;
@@ -618,6 +741,8 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
         />
       </Suspense>
 
+      <ApprovalCardExtras row={row} />
+
       {canReview && (
         <div className="approvals-actions">
           {row.status === 'submitted' && (
@@ -728,12 +853,6 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
     }
   };
 
-  const severity = (row: IApprovalReviewItem): 'red' | 'yellow' | 'green' => {
-    if (row.problem_flags.correction_exceeds_skud) return 'red';
-    if (row.problem_flags.any_correction || row.problem_flags.absent_days) return 'yellow';
-    return 'green';
-  };
-
   return (
     <>
       <div className="approvals-tabs">
@@ -758,16 +877,14 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
       ) : (
         <ul className="approvals-list">
           {rows.map(row => {
-            const sev = severity(row);
             const expanded = expandedId === row.id;
             return (
-              <li key={row.id} className={`approvals-card approvals-card--${sev}`}>
+              <li key={row.id} className="approvals-card">
                 <button
                   type="button"
                   className="approvals-card-header"
                   onClick={() => setExpandedId(expanded ? null : row.id)}
                 >
-                  <span className="approvals-card-badge" aria-label={`Серьёзность: ${sev}`} />
                   <div className="approvals-card-info">
                     <strong>{row.department_name ?? row.department_id}</strong>
                     <span className="approvals-card-range">{formatDate(row.start_date)} — {formatDate(row.end_date)}</span>

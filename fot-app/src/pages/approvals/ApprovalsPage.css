@@ -137,9 +137,6 @@
   overflow: hidden;
   background: var(--surface);
 }
-.approvals-card--red { border-left: 4px solid var(--error); }
-.approvals-card--yellow { border-left: 4px solid var(--warning); }
-.approvals-card--green { border-left: 4px solid var(--success); }
 .approvals-card-header {
   display: flex;
   align-items: center;
@@ -156,15 +153,6 @@
 .approvals-card-header:hover {
   background: var(--surface-hover);
 }
-.approvals-card-badge {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.approvals-card--red .approvals-card-badge { background: var(--error); }
-.approvals-card--yellow .approvals-card-badge { background: var(--warning); }
-.approvals-card--green .approvals-card-badge { background: var(--success); }
 .approvals-card-info {
   flex: 1;
   display: flex;
@@ -297,6 +285,66 @@
 }
 .approvals-action-btn--rework:hover:not(:disabled) {
   background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+}
+.approvals-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.approvals-attachments-title {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.approvals-attachment-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  transition: background var(--transition);
+}
+.approvals-attachment-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.approvals-attachment-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.approvals-export {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.approvals-export-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition), transform var(--transition);
+}
+.approvals-export-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  transform: translateY(-1px);
+}
+.approvals-export-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .approvals-timesheet-frame {
   margin: 0 -16px;
