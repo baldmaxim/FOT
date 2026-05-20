@@ -497,6 +497,14 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
       return;
     }
 
+    // Автором корректировки в табеле должен быть сам сотрудник-заявитель,
+    // а не одобряющий руководитель. Резолвим его user_profiles.id по employee_id.
+    const author = await queryOne<{ id: string }>(
+      `SELECT id FROM user_profiles WHERE employee_id = $1 LIMIT 1`,
+      [request.employee_id],
+    );
+    const authorUserId = author?.id ?? req.user.id;
+
     const nowIso = new Date().toISOString();
     const data = await queryOne(
       `UPDATE leave_requests SET
@@ -530,7 +538,7 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
           source_type: 'leave_request',
           source_id: String(request.id),
           reason: `Approved leave request: ${request.request_type}`,
-          created_by: req.user.id,
+          created_by: authorUserId,
         });
       }
     }
@@ -546,7 +554,7 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         source_type: 'leave_request',
         source_id: `${request.id}:time_correction`,
         reason: request.reason || 'Approved time correction request',
-        created_by: req.user.id,
+        created_by: authorUserId,
       });
     }
 

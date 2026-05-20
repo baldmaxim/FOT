@@ -399,7 +399,6 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
     if (!employeeId) return showToast('error', 'Не найден ID сотрудника');
     if (isCorrection) {
       if (!correctionDate) return showToast('error', 'Укажите дату корректировки');
-      if (files.length === 0) return showToast('error', 'Для корректировки табеля приложите файл');
     } else {
       if (selectedDates.size === 0) return showToast('error', 'Выберите хотя бы один день');
       if (requestType === 'sick_leave' && files.length === 0) return showToast('error', 'Для больничного приложите файл');
