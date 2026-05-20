@@ -21,7 +21,7 @@ import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
 const isSuperAdmin = (req: AuthenticatedRequest): boolean => req.user.role_code === 'super_admin';
 
 const sendApiError = (res: Response, error: MtsApiError, fallback: string): void => {
-  console.error(`[mts] upstream error: http=${error.status} code=${error.code ?? '-'}`);
+  console.error(`[mts] upstream error: http=${error.status} code=${error.code ?? '-'} desc=${error.description ?? '-'} msg="${error.message}"`);
   Sentry.captureException(error, {
     tags: {
       module: 'mts',
@@ -31,9 +31,17 @@ const sendApiError = (res: Response, error: MtsApiError, fallback: string): void
     },
     extra: { fallback, description: error.description },
   });
+  // Отдаём в payload расширенную диагностику — фронт показывает её в баннере
+  // секции. description МТС — технический enum (NO_SUCH_RESOURCE, USER_UNAUTHORIZED
+  // и т.п.), без ПДн. message может быть подробнее, отдаём его тоже.
   res.status(502).json({
     success: false,
     error: error.code ? `Ошибка МТС (код ${error.code})` : fallback,
+    mtsHttp: error.status,
+    mtsCode: error.code ?? null,
+    mtsDescription: error.description ?? null,
+    mtsMessage: error.message,
+    fallback,
   });
 };
 
@@ -42,12 +50,22 @@ const fail = (res: Response, error: unknown, fallback: string): void => {
     sendApiError(res, error, fallback);
     return;
   }
-  console.error(`[mts] ${fallback}:`, error instanceof Error ? error.message : 'unknown');
+  const msg = error instanceof Error ? error.message : 'unknown';
+  console.error(`[mts] ${fallback}: ${msg}`);
   Sentry.captureException(error, {
     tags: { module: 'mts', kind: 'generic' },
     extra: { fallback },
   });
-  res.status(500).json({ success: false, error: fallback });
+  res.status(500).json({ success: false, error: fallback, internal: msg });
+};
+
+// Лёгкий per-request лог для контроллера: видно user/role и итог запроса.
+const logRequest = (req: AuthenticatedRequest, label: string): void => {
+  const role = (req.user as { role_code?: string }).role_code ?? '-';
+  console.log(`[mts-api] ▶ ${label} user=${req.user.id} role=${role}`);
+};
+const logSuccess = (label: string, summary: string): void => {
+  console.log(`[mts-api] ◀ ok ${label} ${summary}`);
 };
 
 export const mtsController = {
@@ -483,50 +501,60 @@ export const mtsController = {
   // Все вызовы ниже — только GET к МТС, никаких списаний. Не дёргают requestLocation
   // и subscriberRequests. Подробнее: docs/руководство-по-mts-api.md, секция «Тарификация».
 
-  async getSubscriberGroups(_req: AuthenticatedRequest, res: Response): Promise<void> {
+  async getSubscriberGroups(req: AuthenticatedRequest, res: Response): Promise<void> {
+    logRequest(req, 'GET /subscriber-groups');
     try {
       const data = await mtsDataService.getSubscriberGroups();
+      logSuccess('GET /subscriber-groups', `count=${data.length}`);
       res.json({ success: true, data });
     } catch (error) {
       fail(res, error, 'Ошибка получения групп абонентов МТС');
     }
   },
 
-  async getSubscriberGroup(_req: AuthenticatedRequest, res: Response): Promise<void> {
+  async getSubscriberGroup(req: AuthenticatedRequest, res: Response): Promise<void> {
+    const groupId = Number(req.params.id);
+    logRequest(req, `GET /subscriber-groups/${groupId}`);
     try {
-      const groupId = Number(_req.params.id);
       if (!Number.isFinite(groupId)) {
         res.status(400).json({ success: false, error: 'id обязателен' });
         return;
       }
       const data = await mtsDataService.getSubscriberGroupDetails(groupId);
+      logSuccess(`GET /subscriber-groups/${groupId}`, 'ok');
       res.json({ success: true, data });
     } catch (error) {
       fail(res, error, 'Ошибка получения группы абонентов МТС');
     }
   },
 
-  async getCustomFields(_req: AuthenticatedRequest, res: Response): Promise<void> {
+  /**
+   * Шаблоны кастомных полей. Эндпоинт может отсутствовать на некоторых тарифах
+   * (404 USER_UNAUTHORIZED по ресурсу / 405 / 501) — отдаём пустой массив, чтобы
+   * не валить страницу. Реальные ошибки (401, 500, network) — пробрасываем.
+   */
+  async getCustomFields(req: AuthenticatedRequest, res: Response): Promise<void> {
+    logRequest(req, 'GET /custom-fields');
     try {
       const data = await mtsDataService.getCustomFields();
+      logSuccess('GET /custom-fields', `count=${data.length}`);
       res.json({ success: true, data });
     } catch (error) {
+      if (error instanceof MtsApiError && (error.status === 404 || error.status === 405 || error.status === 501)) {
+        console.warn(`[mts] /custom-fields недоступен на тарифе (http=${error.status}, code=${error.code ?? '-'}). Отдаём пустой список.`);
+        res.json({ success: true, data: [], notice: 'Эндпоинт недоступен на текущем тарифе' });
+        return;
+      }
       fail(res, error, 'Ошибка получения кастомных полей МТС');
     }
   },
 
-  /**
-   * Узкий read-only датафид: LBS-локации за N дней (1..7).
-   * Только super_admin (нет per-subscriber IDOR-фильтра — для краткости и нагрузки).
-   */
   async getRecentLocations(req: AuthenticatedRequest, res: Response): Promise<void> {
-    if (!isSuperAdmin(req)) {
-      res.status(403).json({ success: false, error: 'Доступно только super_admin' });
-      return;
-    }
+    logRequest(req, 'GET /recent-locations');
     try {
       const { dateFrom, dateTo } = parseDaysRange(req.query.days);
       const data = await mtsDataService.getLocationsRange(dateFrom, dateTo);
+      logSuccess('GET /recent-locations', `count=${data.length} range=${dateFrom}..${dateTo}`);
       res.json({ success: true, data });
     } catch (error) {
       if (error instanceof RangeError) {
@@ -538,13 +566,11 @@ export const mtsController = {
   },
 
   async getRecentTracks(req: AuthenticatedRequest, res: Response): Promise<void> {
-    if (!isSuperAdmin(req)) {
-      res.status(403).json({ success: false, error: 'Доступно только super_admin' });
-      return;
-    }
+    logRequest(req, 'GET /recent-tracks');
     try {
       const { dateFrom, dateTo } = parseDaysRange(req.query.days);
       const data = await mtsDataService.getTracksRange(dateFrom, dateTo);
+      logSuccess('GET /recent-tracks', `count=${data.length} range=${dateFrom}..${dateTo}`);
       res.json({ success: true, data });
     } catch (error) {
       if (error instanceof RangeError) {
@@ -556,13 +582,11 @@ export const mtsController = {
   },
 
   async getRecentGlobalLocations(req: AuthenticatedRequest, res: Response): Promise<void> {
-    if (!isSuperAdmin(req)) {
-      res.status(403).json({ success: false, error: 'Доступно только super_admin' });
-      return;
-    }
+    logRequest(req, 'GET /recent-global-locations');
     try {
       const { dateFrom, dateTo } = parseDaysRange(req.query.days);
       const data = await mtsDataService.getGlobalLocations(dateFrom, dateTo);
+      logSuccess('GET /recent-global-locations', `count=${data.length} range=${dateFrom}..${dateTo}`);
       res.json({ success: true, data });
     } catch (error) {
       if (error instanceof RangeError) {

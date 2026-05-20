@@ -124,6 +124,13 @@ export class MtsServiceBase {
     options: { params?: Record<string, unknown>; data?: unknown; timeout?: number } = {},
   ): Promise<T> {
     const release = await limiter.acquire();
+    const m = method.toUpperCase();
+    // Параметры безопасны для лога (ID/даты), body POST/PUT может содержать
+    // subscriberID — это не ПДн. Не логируем имена/телефоны (их в data нет).
+    const paramsLog = options.params ? JSON.stringify(options.params) : '-';
+    const bodyLog = options.data ? JSON.stringify(options.data) : '-';
+    console.log(`[mts] → ${m} ${endpoint} params=${paramsLog} body=${bodyLog}`);
+    const tStart = Date.now();
     try {
       const client = await this.getClient();
       let attempt = 0;
@@ -138,14 +145,32 @@ export class MtsServiceBase {
             data: options.data,
             timeout: options.timeout ?? MTS_TIMEOUTS.quick,
           });
+          const dur = Date.now() - tStart;
+          const data = response.data;
+          const shape = Array.isArray(data)
+            ? `array(len=${(data as unknown as unknown[]).length})`
+            : data && typeof data === 'object'
+              ? `object(keys=[${Object.keys(data as object).slice(0, 8).join(',')}])`
+              : `primitive(${typeof data})`;
+          console.log(`[mts] ← ${response.status} ${m} ${endpoint} ${dur}ms shape=${shape}`);
           return response.data;
         } catch (error) {
           lastError = error;
           if (attempt >= MTS_RETRY_ATTEMPTS || !this.isRetryable(error)) {
-            throw this.toMtsError(error);
+            const dur = Date.now() - tStart;
+            const mtsErr = this.toMtsError(error);
+            // Тело ошибки от МТС обрезаем — иногда внутри validation hints (без PII),
+            // но на всякий случай ограничиваем длину.
+            const bodyPreview = error instanceof AxiosError && error.response?.data
+              ? JSON.stringify(error.response.data).slice(0, 500)
+              : '-';
+            console.error(
+              `[mts] ✗ ${m} ${endpoint} ${dur}ms http=${mtsErr.status} code=${mtsErr.code ?? '-'} desc=${mtsErr.description ?? '-'} msg="${mtsErr.message}" body=${bodyPreview}`,
+            );
+            throw mtsErr;
           }
           const delay = MTS_RETRY_BASE_MS * Math.pow(2, attempt);
-          console.warn(`[mts] retry ${attempt + 1}/${MTS_RETRY_ATTEMPTS} ${method.toUpperCase()} ${endpoint} after ${delay}ms`);
+          console.warn(`[mts] retry ${attempt + 1}/${MTS_RETRY_ATTEMPTS} ${m} ${endpoint} after ${delay}ms`);
           await new Promise(resolve => setTimeout(resolve, delay));
           attempt++;
         }

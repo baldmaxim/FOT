@@ -26,6 +26,24 @@ import styles from './MtsPage.module.css';
 const errText = (e: unknown, fallback: string): string =>
   e instanceof ApiError ? e.message : fallback;
 
+/**
+ * Подробная диагностика ошибки секции — статус и поля МТС из error.details,
+ * которые бэк прокидывает в payload при апстрим-ошибке.
+ */
+const mtsErrorDetails = (e: unknown): string | null => {
+  if (!(e instanceof ApiError)) return null;
+  const d = (e.details as
+    | { mtsHttp?: number; mtsCode?: number | null; mtsDescription?: string | null; mtsMessage?: string; internal?: string }
+    | undefined) ?? {};
+  const parts: string[] = [`HTTP ${e.status}`];
+  if (d.mtsHttp !== undefined && d.mtsHttp !== e.status) parts.push(`upstream=${d.mtsHttp}`);
+  if (d.mtsCode != null) parts.push(`код МТС=${d.mtsCode}`);
+  if (d.mtsDescription) parts.push(d.mtsDescription);
+  if (d.mtsMessage && d.mtsMessage !== e.message) parts.push(d.mtsMessage);
+  if (d.internal && e.status >= 500) parts.push(d.internal);
+  return parts.join(' · ');
+};
+
 const fmtDuration = (sec: number | null): string => {
   if (sec == null || !Number.isFinite(sec)) return '—';
   const h = Math.floor(sec / 3600);
@@ -505,7 +523,12 @@ export const MtsPage: FC = () => {
             <span className={styles.badgeFree}>бесплатно · GET</span>
           </div>
           {groupsQuery.isError && (
-            <p className={styles.err}>Не удалось загрузить группы — остальные разделы работают</p>
+            <p className={styles.err}>
+              Не удалось загрузить группы — остальные разделы работают
+              {mtsErrorDetails(groupsQuery.error) && (
+                <><br /><code>{mtsErrorDetails(groupsQuery.error)}</code></>
+              )}
+            </p>
           )}
           {groupsQuery.isLoading && <p className={styles.hint}>Загрузка…</p>}
           {groupsQuery.isSuccess && (groupsQuery.data?.length ?? 0) === 0 && (
@@ -550,7 +573,12 @@ export const MtsPage: FC = () => {
             <span className={styles.badgeFree}>бесплатно · GET</span>
           </div>
           {customFieldsQuery.isError && (
-            <p className={styles.err}>Не удалось загрузить кастомные поля — остальные разделы работают</p>
+            <p className={styles.err}>
+              Не удалось загрузить кастомные поля — остальные разделы работают
+              {mtsErrorDetails(customFieldsQuery.error) && (
+                <><br /><code>{mtsErrorDetails(customFieldsQuery.error)}</code></>
+              )}
+            </p>
           )}
           {customFieldsQuery.isLoading && <p className={styles.hint}>Загрузка…</p>}
           {customFieldsQuery.isSuccess && (customFieldsQuery.data?.length ?? 0) === 0 && (
@@ -602,7 +630,12 @@ export const MtsPage: FC = () => {
             </select>
           </div>
           {tracksQuery.isError && (
-            <p className={styles.err}>Не удалось загрузить треки — остальные разделы работают</p>
+            <p className={styles.err}>
+              Не удалось загрузить треки — остальные разделы работают
+              {mtsErrorDetails(tracksQuery.error) && (
+                <><br /><code>{mtsErrorDetails(tracksQuery.error)}</code></>
+              )}
+            </p>
           )}
           {tracksQuery.isLoading && <p className={styles.hint}>Загрузка…</p>}
           {tracksQuery.isSuccess && (tracksQuery.data?.length ?? 0) === 0 && (
@@ -659,7 +692,12 @@ export const MtsPage: FC = () => {
             Данные с приложения МТС-Координатор на телефоне сотрудника. Получение из МТС — бесплатно.
           </p>
           {gpsQuery.isError && (
-            <p className={styles.err}>Не удалось загрузить GPS-точки — остальные разделы работают</p>
+            <p className={styles.err}>
+              Не удалось загрузить GPS-точки — остальные разделы работают
+              {mtsErrorDetails(gpsQuery.error) && (
+                <><br /><code>{mtsErrorDetails(gpsQuery.error)}</code></>
+              )}
+            </p>
           )}
           {gpsQuery.isLoading && <p className={styles.hint}>Загрузка…</p>}
           {gpsQuery.isSuccess && (gpsQuery.data?.length ?? 0) === 0 && (
