@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FC } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { adminService } from '../../services/adminService';
@@ -24,10 +24,7 @@ export interface IPendingUser {
   created_at: string;
 }
 
-interface IApprovalModal {
-  visible: boolean;
-  userId: string;
-  userName: string;
+interface IApprovalDraft {
   positionType: EmployeePositionType | '';
   employeeId: number | null;
   employeeSearch: string;
@@ -42,19 +39,33 @@ interface IPendingUsersTabProps {
   patchPendingCache: (updater: (prev: IPendingUser[]) => IPendingUser[]) => void;
 }
 
+const EMPTY_DRAFT: IApprovalDraft = {
+  positionType: '',
+  employeeId: null,
+  employeeSearch: '',
+  employeeResults: [],
+  searchLoading: false,
+};
+
 export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loading = false, onReload, patchPendingCache }) => {
   const toast = useToast();
   const { roles } = useAuth();
   const queryClient = useQueryClient();
-  const [approvalModal, setApprovalModal] = useState<IApprovalModal | null>(null);
+  const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<IApprovalDraft>(EMPTY_DRAFT);
+  // Локальный набор «только что подтверждённых email» — кнопка прячется сразу
+  // и не возвращается, даже если рефетч пришёл со stale значением.
+  const [recentlyConfirmed, setRecentlyConfirmed] = useState<Set<string>>(new Set());
+  const searchSeqRef = useRef(0);
 
-  // Отменяем in-flight рефечи перед мутацией, иначе ответ старого запроса
-  // (запущенного на mount/refocus) может прийти после setQueryData и перезатереть
-  // оптимистичный кэш — карточка одобренного пользователя «висит» до F5.
+  // Отменяем in-flight рефечи перед мутацией — иначе ответ старого запроса
+  // (запущенного на mount/refocus) приходит после setQueryData и затирает
+  // оптимистичный кэш.
   const cancelUserListQueries = async () => {
     await Promise.all([
       queryClient.cancelQueries({ queryKey: ['admin-users', 'pending'] }),
-      queryClient.cancelQueries({ queryKey: ['admin-users', 'all'] }),
+      queryClient.cancelQueries({ queryKey: ['admin-users', 'page'] }),
+      queryClient.cancelQueries({ queryKey: ['admin-users', 'count'] }),
     ]);
   };
 
@@ -62,53 +73,56 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
   const availableRoles = [...roles]
     .sort((a, b) => Number(b.is_admin) - Number(a.is_admin) || a.name.localeCompare(b.name, 'ru'));
 
-  const openApprovalModal = (user: IPendingUser) => {
-    setApprovalModal({
-      visible: true,
-      userId: user.id,
-      userName: user.full_name || user.email || '',
-      positionType: '',
-      employeeId: null,
-      employeeSearch: '',
-      employeeResults: [],
-      searchLoading: false,
-    });
-  };
-
-  const handleEmployeeSearch = async (query: string) => {
-    if (!approvalModal) return;
-    setApprovalModal(prev => prev ? { ...prev, employeeSearch: query, searchLoading: true } : null);
-
-    if (query.length < 2) {
-      setApprovalModal(prev => prev ? { ...prev, employeeResults: [], searchLoading: false } : null);
+  // Debounce поиска сотрудника (250 мс) + защита от устаревших ответов.
+  useEffect(() => {
+    if (draft.employeeSearch.length < 2) {
+      setDraft(prev => ({ ...prev, employeeResults: [], searchLoading: false }));
       return;
     }
+    setDraft(prev => ({ ...prev, searchLoading: true }));
+    const seq = ++searchSeqRef.current;
+    const timer = setTimeout(async () => {
+      try {
+        const results = await adminService.searchUnlinkedEmployees(draft.employeeSearch);
+        if (seq === searchSeqRef.current) {
+          setDraft(prev => ({ ...prev, employeeResults: results, searchLoading: false }));
+        }
+      } catch {
+        if (seq === searchSeqRef.current) {
+          setDraft(prev => ({ ...prev, employeeResults: [], searchLoading: false }));
+        }
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [draft.employeeSearch]);
 
-    try {
-      const results = await adminService.searchUnlinkedEmployees(query);
-      setApprovalModal(prev => prev ? { ...prev, employeeResults: results, searchLoading: false } : null);
-    } catch {
-      setApprovalModal(prev => prev ? { ...prev, searchLoading: false } : null);
-    }
+  const startApproval = (user: IPendingUser) => {
+    setExpandedUserId(user.id);
+    setDraft({ ...EMPTY_DRAFT });
+  };
+
+  const cancelApproval = () => {
+    setExpandedUserId(null);
+    setDraft({ ...EMPTY_DRAFT });
   };
 
   const handleApproveConfirm = async () => {
-    if (!approvalModal) return;
-    if (!approvalModal.positionType) {
+    if (!expandedUserId) return;
+    if (!draft.positionType) {
       toast.error('Выберите роль перед одобрением');
       return;
     }
 
     try {
-      const userId = approvalModal.userId;
+      const userId = expandedUserId;
       await cancelUserListQueries();
       await adminService.approveUser(userId, {
-        position_type: approvalModal.positionType,
-        employee_id: approvalModal.employeeId || undefined,
+        position_type: draft.positionType,
+        employee_id: draft.employeeId || undefined,
       });
       toast.success('Пользователь одобрен. Теперь выдайте ему 2FA.');
-      setApprovalModal(null);
       patchPendingCache((prev) => prev.filter((u) => u.id !== userId));
+      cancelApproval();
       await onReload();
     } catch (e) {
       toast.error(errMsg(e, 'Ошибка одобрения пользователя'));
@@ -123,6 +137,7 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
       await adminService.rejectUser(userId);
       toast.success('Заявка отклонена');
       patchPendingCache((prev) => prev.filter((u) => u.id !== userId));
+      if (expandedUserId === userId) cancelApproval();
       await onReload();
     } catch (e) {
       toast.error(errMsg(e, 'Ошибка отклонения пользователя'));
@@ -130,6 +145,12 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
   };
 
   const handleConfirmEmail = async (userId: string) => {
+    // Оптимистично прячем кнопку до ответа сервера.
+    setRecentlyConfirmed(prev => {
+      const next = new Set(prev);
+      next.add(userId);
+      return next;
+    });
     try {
       await cancelUserListQueries();
       await adminService.confirmUserEmail(userId);
@@ -137,31 +158,40 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
       patchPendingCache((prev) => prev.map((u) => u.id === userId ? { ...u, email_confirmed: true } : u));
       await onReload();
     } catch (e) {
+      // На ошибку — возвращаем кнопку.
+      setRecentlyConfirmed(prev => {
+        const next = new Set(prev);
+        next.delete(userId);
+        return next;
+      });
       toast.error(errMsg(e, 'Ошибка подтверждения email'));
     }
   };
 
+  if (loading && pendingUsers.length === 0) {
+    return <div className={styles.pendingEmpty}>Загрузка...</div>;
+  }
+  if (pendingUsers.length === 0) {
+    return <div className={styles.pendingEmpty}>Нет ожидающих заявок</div>;
+  }
+
   return (
-    <>
-      <div className={styles.userList}>
-        {loading && pendingUsers.length === 0 ? (
-          <div className={styles.empty}>Загрузка...</div>
-        ) : pendingUsers.length === 0 ? (
-          <div className={styles.empty}>Нет ожидающих заявок</div>
-        ) : (
-          pendingUsers.map(user => (
-            <div key={user.id} className={styles.userCard}>
-              <div className={styles.userInfo}>
-                <div className={styles.userName}>{user.full_name || 'Без имени'}</div>
-                <div className={styles.userEmail}>{user.email}</div>
-                <div className={styles.userMeta}>
-                  <span className={styles.userDate}>
-                    Заявка от: {new Date(user.created_at).toLocaleDateString('ru-RU')}
-                  </span>
-                </div>
+    <div className={styles.pendingList}>
+      {pendingUsers.map(user => {
+        const isExpanded = expandedUserId === user.id;
+        const emailHidden = user.email_confirmed || recentlyConfirmed.has(user.id);
+        return (
+          <div key={user.id} className={styles.pendingRow}>
+            <div className={styles.pendingRowHeader}>
+              <div className={styles.pendingRowInfo}>
+                <div className={styles.pendingRowName}>{user.full_name || 'Без имени'}</div>
+                <div className={styles.pendingRowEmail}>{user.email}</div>
               </div>
-              <div className={styles.userActions}>
-                {!user.email_confirmed && (
+              <div className={styles.pendingRowDate}>
+                {new Date(user.created_at).toLocaleDateString('ru-RU')}
+              </div>
+              <div className={styles.pendingRowActions}>
+                {!emailHidden && (
                   <button
                     className={styles.primaryBtn}
                     onClick={() => handleConfirmEmail(user.id)}
@@ -172,9 +202,9 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
                 )}
                 <button
                   className={styles.approveBtn}
-                  onClick={() => openApprovalModal(user)}
+                  onClick={() => isExpanded ? cancelApproval() : startApproval(user)}
                 >
-                  Одобрить
+                  {isExpanded ? 'Свернуть' : 'Одобрить'}
                 </button>
                 <button
                   className={styles.rejectBtn}
@@ -184,86 +214,90 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
                 </button>
               </div>
             </div>
-          ))
-        )}
-      </div>
 
-      {/* Approval Modal */}
-      {approvalModal?.visible && (
-        <div className={styles.modalOverlay} onClick={() => setApprovalModal(null)}>
-          <div className={styles.modal} onClick={e => e.stopPropagation()}>
-            <div className={styles.modalHeader}>
-              <h2>Одобрение: {approvalModal.userName}</h2>
-              <button className={styles.closeBtn} onClick={() => setApprovalModal(null)}>&times;</button>
-            </div>
-            <div className={styles.modalContent}>
-              <div className={styles.controlGroup}>
-                <label>Должность:</label>
-                <select
-                  value={approvalModal.positionType}
-                  onChange={(e) => setApprovalModal(prev => prev ? { ...prev, positionType: e.target.value as EmployeePositionType } : null)}
-                >
-                  <option value="">Выберите роль</option>
-                  {availableRoles.map(role => (
-                    <option key={role.code} value={role.code}>
-                      {role.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className={styles.controlGroup}>
-                <label>Привязка к сотруднику (СКУД):</label>
-                <input
-                  type="text"
-                  placeholder="Поиск по ФИО..."
-                  value={approvalModal.employeeSearch}
-                  onChange={(e) => handleEmployeeSearch(e.target.value)}
-                  className={styles.nameInput}
-                />
-                {approvalModal.employeeId && (
-                  <div className={styles.empSelected}>
-                    Выбран: ID {approvalModal.employeeId}
-                    <button
-                      className={styles.empSelectedUnlink}
-                      onClick={() => setApprovalModal(prev => prev ? { ...prev, employeeId: null } : null)}
-                    >
-                      Отвязать
-                    </button>
-                  </div>
-                )}
-                {approvalModal.employeeResults.length > 0 && (
-                  <div className={styles.empSearchResults}>
-                    {approvalModal.employeeResults.map(emp => (
-                      <div
-                        key={emp.id}
-                        className={`${styles.empSearchItem} ${approvalModal.employeeId === emp.id ? styles.empSearchItemActive : ''}`}
-                        onClick={() => setApprovalModal(prev => prev ? { ...prev, employeeId: emp.id, employeeSearch: emp.full_name, employeeResults: [] } : null)}
-                      >
-                        {emp.full_name}
-                      </div>
+            {isExpanded && (
+              <div className={styles.pendingInline}>
+                <div className={styles.pendingInlineRow}>
+                  <label className={styles.pendingInlineLabel}>Должность:</label>
+                  <select
+                    value={draft.positionType}
+                    onChange={(e) => setDraft(prev => ({ ...prev, positionType: e.target.value as EmployeePositionType }))}
+                  >
+                    <option value="">Выберите роль</option>
+                    {availableRoles.map(role => (
+                      <option key={role.code} value={role.code}>
+                        {role.name}
+                      </option>
                     ))}
-                  </div>
-                )}
-                {approvalModal.searchLoading && <div className={styles.empSearchLoading}>Поиск...</div>}
-              </div>
+                  </select>
+                </div>
 
-              <div className={styles.controlActions}>
-                <button
-                  className={styles.approveBtn}
-                  onClick={handleApproveConfirm}
-                  disabled={!approvalModal.positionType}
-                >
-                  Одобрить
-                </button>
-                <button className={styles.cancelBtn} onClick={() => setApprovalModal(null)}>
-                  Отмена
-                </button>
+                <div className={styles.pendingInlineRow}>
+                  <label className={styles.pendingInlineLabel}>Сотрудник СКУД:</label>
+                  <div className={styles.pendingInlineSearchWrap}>
+                    {draft.employeeId ? (
+                      <div className={styles.pendingInlineSelected}>
+                        Выбран: {draft.employeeSearch || `ID ${draft.employeeId}`}
+                        <button
+                          className={styles.empSelectedUnlink}
+                          onClick={() => setDraft(prev => ({ ...prev, employeeId: null, employeeSearch: '', employeeResults: [] }))}
+                        >
+                          Отвязать
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <input
+                          type="text"
+                          placeholder="Поиск по ФИО..."
+                          value={draft.employeeSearch}
+                          onChange={(e) => setDraft(prev => ({ ...prev, employeeSearch: e.target.value }))}
+                          className={styles.nameInput}
+                        />
+                        {draft.searchLoading && (
+                          <div className={styles.skudSearchLoading} style={{ marginTop: 4 }}>Поиск...</div>
+                        )}
+                        {draft.employeeResults.length > 0 && (
+                          <div className={styles.skudSearchResults}>
+                            {draft.employeeResults.map(emp => (
+                              <div
+                                key={emp.id}
+                                className={styles.skudSearchItem}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => setDraft(prev => ({
+                                  ...prev,
+                                  employeeId: emp.id,
+                                  employeeSearch: emp.full_name,
+                                  employeeResults: [],
+                                }))}
+                              >
+                                {emp.full_name}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className={styles.controlActions}>
+                  <button
+                    className={styles.approveBtn}
+                    onClick={handleApproveConfirm}
+                    disabled={!draft.positionType}
+                  >
+                    Подтвердить одобрение
+                  </button>
+                  <button className={styles.cancelBtn} onClick={cancelApproval}>
+                    Отмена
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
-        </div>
-      )}
-    </>
+        );
+      })}
+    </div>
   );
 };

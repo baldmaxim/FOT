@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FC } from 'react';
+import { useEffect, useMemo, useRef, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { adminService } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
@@ -8,7 +8,7 @@ interface IProps {
   userId: string;
   /** true, если у пользователя is_admin (по выбранной роли). Иначе секция не рендерится. */
   isUserAdmin: boolean;
-  /** Компактный режим — меньше padding/font, ограниченный max-height списка. */
+  /** Компактный режим — оставлен для совместимости вызывающих, на новой вёрстке не влияет. */
   compact?: boolean;
 }
 
@@ -19,10 +19,12 @@ const arraysEqual = (left: string[], right: string[]): boolean => {
   return a.every((v, i) => v === b[i]);
 };
 
-export const UserCompanyAccessSection: FC<IProps> = ({ userId, isUserAdmin, compact = false }) => {
+export const UserCompanyAccessSection: FC<IProps> = ({ userId, isUserAdmin }) => {
   const toast = useToast();
   const [draft, setDraft] = useState<string[] | null>(null);
   const [saving, setSaving] = useState(false);
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
 
   const companiesQuery = useQuery({
     queryKey: ['admin-companies'],
@@ -43,9 +45,35 @@ export const UserCompanyAccessSection: FC<IProps> = ({ userId, isUserAdmin, comp
     [userCompaniesQuery.data?.company_root_ids],
   );
 
+  // Сброс draft и закрытие popover'а при смене пользователя — иначе предыдущий выбор
+  // утечёт в строку другого админа.
   useEffect(() => {
     setDraft(null);
+    setOpen(false);
   }, [userId]);
+
+  // Закрытие popover'а по клику/тапу вне (паттерн как в skud-поиске).
+  useEffect(() => {
+    if (!open) return;
+    const handler = (event: MouseEvent | TouchEvent) => {
+      const node = wrapRef.current;
+      if (!node) return;
+      const target = event.target as Node | null;
+      if (target && node.contains(target)) return;
+      setOpen(false);
+    };
+    const escHandler = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    document.addEventListener('touchstart', handler);
+    document.addEventListener('keydown', escHandler);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('touchstart', handler);
+      document.removeEventListener('keydown', escHandler);
+    };
+  }, [open]);
 
   const current = draft ?? initial;
   const hasChanges = !arraysEqual(current, initial);
@@ -70,6 +98,7 @@ export const UserCompanyAccessSection: FC<IProps> = ({ userId, isUserAdmin, comp
           : 'Привязки компаний обновлены',
       );
       await userCompaniesQuery.refetch();
+      setOpen(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка сохранения');
     } finally {
@@ -81,65 +110,93 @@ export const UserCompanyAccessSection: FC<IProps> = ({ userId, isUserAdmin, comp
 
   const companies = companiesQuery.data || [];
   const isSystemAdmin = current.length === 0;
+  const isLoading = companiesQuery.isLoading || userCompaniesQuery.isLoading;
+  const selectedNames = companies
+    .filter(company => current.includes(company.id))
+    .map(company => company.name);
+
+  const triggerText = isLoading
+    ? 'Загрузка…'
+    : isSystemAdmin
+      ? 'Системный администратор — все компании'
+      : selectedNames.join(', ');
 
   return (
-    <div className={`${styles.departmentAccessSection} ${compact ? styles.departmentAccessSectionCompact : ''}`}>
-      <div className={styles.departmentAccessHeader}>
-        <div>
-          <div className={styles.departmentAccessTitle}>Компании администратора</div>
-          <div className={styles.departmentAccessHint}>
-            Если ничего не выбрано — пользователь видит все компании (системный администратор).
-            Выберите компании, чтобы ограничить зону доступа.
+    <div className={styles.companyAccessWrap} ref={wrapRef}>
+      <div className={styles.companyAccessLabel}>Компании администратора</div>
+      <div className={styles.companyAccessHint}>
+        Если ничего не выбрано — пользователь видит все компании. Выберите компании, чтобы ограничить зону доступа.
+      </div>
+
+      <button
+        type="button"
+        className={`${styles.companyAccessTrigger} ${open ? styles.companyAccessTriggerOpen : ''}`}
+        onClick={() => setOpen(prev => !prev)}
+      >
+        <span
+          className={`${styles.companyAccessTriggerText} ${isSystemAdmin ? styles.companyAccessTriggerSystem : ''}`}
+          title={isSystemAdmin ? undefined : selectedNames.join(', ')}
+        >
+          {triggerText}
+        </span>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          className={`${styles.companyAccessChevron} ${open ? styles.companyAccessChevronOpen : ''}`}
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className={styles.companyAccessPopover}>
+          {isLoading ? (
+            <div className={styles.departmentAccessEmpty}>Загрузка…</div>
+          ) : companies.length === 0 ? (
+            <div className={styles.departmentAccessEmpty}>Компании не найдены</div>
+          ) : (
+            <div className={styles.companyAccessPopoverList}>
+              {companies.map(company => {
+                const checked = current.includes(company.id);
+                return (
+                  <label
+                    key={company.id}
+                    className={`${styles.departmentAccessItem} ${checked ? styles.departmentAccessItemChecked : ''}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggle(company.id)}
+                    />
+                    <span className={styles.departmentAccessItemLabel}>{company.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+
+          <div className={styles.companyAccessPopoverActions}>
+            <button
+              type="button"
+              className={styles.cancelBtn}
+              onClick={() => setDraft(null)}
+              disabled={!hasChanges || saving}
+            >
+              Сбросить
+            </button>
+            <button
+              type="button"
+              className={styles.saveBtn}
+              onClick={() => void handleSave()}
+              disabled={!hasChanges || saving}
+            >
+              {saving ? 'Сохраняю…' : 'Сохранить'}
+            </button>
           </div>
         </div>
-        <div className={styles.departmentAccessCount}>
-          {isSystemAdmin ? 'все' : `${current.length} выбрано`}
-        </div>
-      </div>
-
-      {companiesQuery.isLoading || userCompaniesQuery.isLoading ? (
-        <div className={styles.departmentAccessEmpty}>Загрузка…</div>
-      ) : companies.length === 0 ? (
-        <div className={styles.departmentAccessEmpty}>Компании не найдены</div>
-      ) : (
-        <div className={styles.departmentAccessList}>
-          {companies.map(company => {
-            const checked = current.includes(company.id);
-            return (
-              <label
-                key={company.id}
-                className={`${styles.departmentAccessItem} ${checked ? styles.departmentAccessItemChecked : ''}`}
-              >
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => toggle(company.id)}
-                />
-                <span className={styles.departmentAccessItemLabel}>{company.name}</span>
-              </label>
-            );
-          })}
-        </div>
       )}
-
-      <div className={styles.departmentAccessActions}>
-        <button
-          type="button"
-          className={styles.cancelBtn}
-          onClick={() => setDraft(null)}
-          disabled={!hasChanges || saving}
-        >
-          Сбросить
-        </button>
-        <button
-          type="button"
-          className={styles.saveBtn}
-          onClick={() => void handleSave()}
-          disabled={!hasChanges || saving}
-        >
-          {saving ? 'Сохраняю…' : 'Сохранить'}
-        </button>
-      </div>
     </div>
   );
 };

@@ -308,9 +308,11 @@ async function respondUsersCount(req: AuthenticatedRequest, res: Response): Prom
   try {
     const accessible = await resolveAccessibleDepartmentIds(req);
     let row: { count: number } | null;
+    // Ожидающие заявки считаются отдельно в /admin/users/pending — здесь
+    // только одобренные, чтобы бейдж «Все пользователи (N)» не включал pending.
     if (accessible === 'all') {
       row = await queryOne<{ count: number }>(
-        'SELECT COUNT(*)::int AS count FROM user_profiles',
+        'SELECT COUNT(*)::int AS count FROM user_profiles WHERE is_approved = true',
       );
     } else if (accessible.length === 0) {
       row = { count: 0 };
@@ -318,9 +320,10 @@ async function respondUsersCount(req: AuthenticatedRequest, res: Response): Prom
       row = await queryOne<{ count: number }>(
         `SELECT COUNT(*)::int AS count
            FROM user_profiles up
-          WHERE up.employee_id IN (
-            SELECT id FROM employees WHERE org_department_id = ANY($1::uuid[])
-          )`,
+          WHERE up.is_approved = true
+            AND up.employee_id IN (
+              SELECT id FROM employees WHERE org_department_id = ANY($1::uuid[])
+            )`,
         [accessible],
       );
     }
@@ -339,8 +342,10 @@ async function respondUsersCount(req: AuthenticatedRequest, res: Response): Prom
 async function respondSlimUsers(req: AuthenticatedRequest, res: Response): Promise<void> {
   let rawUsers: Array<Pick<UserProfile, 'id' | 'full_name' | 'employee_id'>>;
   try {
+    // Ожидающие заявки исключены — slim используется в UI назначений/импорта,
+    // где неодобренные пользователи только засоряют выпадающие списки.
     rawUsers = await query<Pick<UserProfile, 'id' | 'full_name' | 'employee_id'>>(
-      'SELECT id, full_name, employee_id FROM user_profiles ORDER BY created_at DESC',
+      'SELECT id, full_name, employee_id FROM user_profiles WHERE is_approved = true ORDER BY created_at DESC',
     );
   } catch (usersError) {
     logSupabaseError('GetUsersSlim', usersError);
@@ -386,8 +391,10 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
   const roleId = roleCode ? roleIdByCode.get(roleCode) : undefined;
 
   // Базовый фильтр (scope + search) — общий для roleCounts и списка.
+  // Ожидающие заявки в этот эндпоинт не попадают: они в /admin/users/pending,
+  // иначе они «падали» во вкладку 'office_worker' и искажали roleCounts.
   const baseParams: unknown[] = [];
-  const baseWhere: string[] = [];
+  const baseWhere: string[] = ['up.is_approved = true'];
 
   if (accessible !== 'all') {
     if (accessible.length === 0) {

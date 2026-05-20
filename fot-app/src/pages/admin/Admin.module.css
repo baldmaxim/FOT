@@ -1031,6 +1031,7 @@
 }
 
 .userSearchRow {
+  position: relative;
   margin: 12px 0;
   max-width: 480px;
 }
@@ -1379,6 +1380,223 @@
 .departmentAccessActions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Company access — collapsed trigger + popover with checkboxes */
+.companyAccessWrap {
+  position: relative;
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.companyAccessLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.companyAccessHint {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.companyAccessTrigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.companyAccessTrigger:hover {
+  border-color: var(--accent);
+}
+
+.companyAccessTriggerOpen {
+  border-color: var(--accent);
+  background: var(--bg-elevated);
+}
+
+.companyAccessTriggerText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.companyAccessTriggerSystem {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.companyAccessChevron {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--text-tertiary);
+  transition: transform 0.15s;
+}
+
+.companyAccessChevronOpen {
+  transform: rotate(180deg);
+}
+
+.companyAccessPopover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.16);
+  max-height: 360px;
+  overflow: hidden;
+}
+
+.companyAccessPopoverList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.companyAccessPopoverActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+/* Pending users — compact list (one row per request) */
+.pendingList {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.pendingRow {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+}
+
+.pendingRow:last-child {
+  border-bottom: none;
+}
+
+.pendingRowHeader {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  flex-wrap: wrap;
+}
+
+.pendingRowInfo {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pendingRowName {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pendingRowEmail {
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.pendingRowDate {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.pendingRowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.pendingEmpty {
+  text-align: center;
+  padding: 24px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+}
+
+/* Pending users — inline approval block under row */
+.pendingInline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.pendingInlineRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pendingInlineLabel {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 90px;
+}
+
+.pendingInlineSearchWrap {
+  position: relative;
+  flex: 1;
+  min-width: 220px;
+}
+
+.pendingInlineSelected {
+  font-size: 12.5px;
+  color: var(--success);
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
   gap: 8px;
 }
 

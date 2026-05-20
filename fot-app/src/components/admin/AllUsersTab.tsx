@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { FC } from 'react';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { adminService } from '../../services/adminService';
@@ -240,32 +240,34 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
           ) : (
             <span className={styles.skudNotLinked}>Не привязан</span>
           )}
-          <div className={styles.skudSearchWrap} ref={skudSearchWrapRef}>
-            <input
-              type="text"
-              placeholder="Поиск по ФИО..."
-              value={empSearchQuery}
-              onChange={(e) => setEmpSearchQuery(e.target.value)}
-              className={`${styles.nameInput} ${styles.skudSearchInput}`}
-            />
-            {empSearchLoading && (
-              <div className={styles.skudSearchLoading}>Поиск...</div>
-            )}
-            {empSearchResults.length > 0 && (
-              <div className={styles.skudSearchResults}>
-                {empSearchResults.map(emp => (
-                  <div
-                    key={emp.id}
-                    className={styles.skudSearchItem}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => handleEmpPick(emp.id, emp.full_name)}
-                  >
-                    {emp.full_name}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          {!user.employee_id && (
+            <div className={styles.skudSearchWrap} ref={skudSearchWrapRef}>
+              <input
+                type="text"
+                placeholder="Поиск по ФИО..."
+                value={empSearchQuery}
+                onChange={(e) => setEmpSearchQuery(e.target.value)}
+                className={`${styles.nameInput} ${styles.skudSearchInput}`}
+              />
+              {empSearchLoading && (
+                <div className={styles.skudSearchLoading}>Поиск...</div>
+              )}
+              {empSearchResults.length > 0 && (
+                <div className={styles.skudSearchResults}>
+                  {empSearchResults.map(emp => (
+                    <div
+                      key={emp.id}
+                      className={styles.skudSearchItem}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => handleEmpPick(emp.id, emp.full_name)}
+                    >
+                      {emp.full_name}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -358,6 +360,14 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     data: null,
     loading: false,
   });
+  // Глобальный combobox-поиск: dropdown ищет по всем ролям и позволяет «прыгнуть»
+  // к конкретному пользователю (см. ниже). Список ниже параллельно фильтруется
+  // по текущей вкладке роли — это два разных потребителя debouncedSearch.
+  const [globalDropdownOpen, setGlobalDropdownOpen] = useState(false);
+  const [pendingScrollUserId, setPendingScrollUserId] = useState<string | null>(null);
+  const userRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const searchWrapRef = useRef<HTMLDivElement | null>(null);
+
   const departmentTree = useMemo<OrgDepartmentNode[]>(
     () => structureQuery.data?.departments ?? [],
     [structureQuery.data?.departments],
@@ -411,6 +421,23 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     placeholderData: keepPreviousData,
   });
 
+  // Глобальный поиск по всем ролям для combobox-выпадайки. Минимум 2 символа,
+  // top-10 совпадений. Используется только для dropdown — список ниже остаётся
+  // под фильтром текущей вкладки.
+  const globalSearchQuery = useQuery({
+    queryKey: ['admin-users', 'global-search', debouncedSearch],
+    queryFn: () => adminService.getUsersPaginated({
+      page: 1,
+      pageSize: 10,
+      search: debouncedSearch,
+    }),
+    enabled: debouncedSearch.length >= 2,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
+  const globalSearchResults = globalSearchQuery.data?.data ?? [];
+  const showGlobalDropdown = globalDropdownOpen && debouncedSearch.length >= 2;
+
   const users = useMemo(() => pageQuery.data?.data ?? [], [pageQuery.data]);
   const meta = pageQuery.data?.meta;
   const totalPages = meta?.totalPages ?? 1;
@@ -448,6 +475,48 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
 
   const toggleExpand = useCallback((userId: string) => {
     setExpandedUserId(prev => prev === userId ? null : userId);
+  }, []);
+
+  // Закрытие dropdown по клику/тапу вне поисковой обёртки.
+  useEffect(() => {
+    if (!showGlobalDropdown) return;
+    const handler = (event: MouseEvent | TouchEvent) => {
+      const node = searchWrapRef.current;
+      if (!node) return;
+      const target = event.target as Node | null;
+      if (target && node.contains(target)) return;
+      setGlobalDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    document.addEventListener('touchstart', handler);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('touchstart', handler);
+    };
+  }, [showGlobalDropdown]);
+
+  // Открыть dropdown заново, как только debounced-значение перешло порог.
+  useEffect(() => {
+    if (debouncedSearch.length >= 2) setGlobalDropdownOpen(true);
+    else setGlobalDropdownOpen(false);
+  }, [debouncedSearch]);
+
+  // Скролл к выбранному пользователю после клика по dropdown: ждём, пока строка
+  // окажется на текущей странице (после смены roleFilter и refetch), и scroll'им.
+  useLayoutEffect(() => {
+    if (!pendingScrollUserId) return;
+    const node = userRowRefs.current.get(pendingScrollUserId);
+    if (!node) return;
+    node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setPendingScrollUserId(null);
+  }, [pendingScrollUserId, pageQuery.data]);
+
+  const handleGlobalResultClick = useCallback((user: IUserFromApi) => {
+    setRoleFilter(user.position_type);
+    setExpandedUserId(user.id);
+    setSearchInput('');
+    setGlobalDropdownOpen(false);
+    setPendingScrollUserId(user.id);
   }, []);
 
   const getPositionName = useCallback((positionType: EmployeePositionType) => {
@@ -616,6 +685,38 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
 
   return (
     <>
+      <div className={styles.userSearchRow} ref={searchWrapRef}>
+        <SearchInput
+          value={searchInput}
+          onValueChange={setSearchInput}
+          placeholder="Найти пользователя по ФИО или email..."
+        />
+        {showGlobalDropdown && (
+          <div className={styles.skudSearchResults}>
+            {globalSearchQuery.isFetching && globalSearchResults.length === 0 ? (
+              <div className={styles.skudSearchLoading} style={{ padding: '10px' }}>Поиск…</div>
+            ) : globalSearchResults.length === 0 ? (
+              <div className={styles.skudSearchLoading} style={{ padding: '10px' }}>Ничего не найдено</div>
+            ) : (
+              globalSearchResults.map(user => (
+                <div
+                  key={user.id}
+                  className={styles.skudSearchItem}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => handleGlobalResultClick(user)}
+                >
+                  <div style={{ fontWeight: 500 }}>{user.full_name || 'Без имени'}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+                    {user.email || ''}
+                    {user.position_type ? ` · ${getPositionName(user.position_type)}` : ''}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+
       <div className={styles.roleTabs}>
         {roleOptions.map(option => (
           <button
@@ -627,14 +728,6 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
             {!option.role?.is_active ? ' (неакт.)' : ''} ({option.count})
           </button>
         ))}
-      </div>
-
-      <div className={styles.userSearchRow}>
-        <SearchInput
-          value={searchInput}
-          onValueChange={setSearchInput}
-          placeholder="Найти пользователя по ФИО или email..."
-        />
       </div>
 
       <div className={styles.userListCompact}>
@@ -658,7 +751,14 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
           const isExpanded = expandedUserId === user.id;
 
           return (
-            <div key={user.id} className={`${styles.userRow} ${isExpanded ? styles.expanded : ''}`}>
+            <div
+              key={user.id}
+              className={`${styles.userRow} ${isExpanded ? styles.expanded : ''}`}
+              ref={(el) => {
+                if (el) userRowRefs.current.set(user.id, el);
+                else userRowRefs.current.delete(user.id);
+              }}
+            >
               <div className={styles.userRowHeader} onClick={() => toggleExpand(user.id)}>
                 <div className={styles.userRowInfo}>
                   <div className={styles.userRowName}>
