@@ -1542,11 +1542,16 @@ export const StaffControlPage: FC = () => {
     }
   }, [applyScheduleToEmployees, debouncedSearch, deptId, employeeScheduleAssignmentsQuery, queryClient, refresh, toast, invalidateTimesheetQueries]);
 
-  const handleBrigadeBulkSaveSchedule = useCallback(async (departmentIds: string[], scheduleId: string | null, effectiveFrom: string) => {
+  const handleBrigadeBulkSaveSchedule = useCallback(async (
+    departmentIds: string[],
+    mode: 'assign' | 'reset' | 'shift_start',
+    scheduleId: string | null,
+    effectiveFrom: string,
+  ) => {
     try {
       const result = await scheduleService.bulkApplyToBrigades({
         department_ids: departmentIds,
-        action: scheduleId ? 'assign' : 'reset',
+        action: mode,
         schedule_id: scheduleId || undefined,
         effective_date: effectiveFrom,
       });

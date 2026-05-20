@@ -212,12 +212,20 @@ export const BulkMoveDepartmentModal: FC<IBulkMoveDepartmentModalProps> = memo((
 
 // ─── BulkBrigadeScheduleModal ──────────────────────────────────────────────
 
+export type BulkBrigadeScheduleMode = 'assign' | 'reset' | 'shift_start';
+
 export interface IBulkBrigadeScheduleModalProps {
   open: boolean;
   brigades: IBrigadeOption[];
   templates: IWorkSchedule[];
   onClose: () => void;
-  onApply: (departmentIds: string[], scheduleId: string | null, effectiveFrom: string) => Promise<void>;
+  // mode='assign' → scheduleId обязателен; 'reset'/'shift_start' игнорируют scheduleId.
+  onApply: (
+    departmentIds: string[],
+    mode: BulkBrigadeScheduleMode,
+    scheduleId: string | null,
+    effectiveFrom: string,
+  ) => Promise<void>;
 }
 
 export const BulkBrigadeScheduleModal: FC<IBulkBrigadeScheduleModalProps> = memo(({
@@ -229,7 +237,7 @@ export const BulkBrigadeScheduleModal: FC<IBulkBrigadeScheduleModalProps> = memo
 }) => {
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [mode, setMode] = useState<'assign' | 'reset'>('assign');
+  const [mode, setMode] = useState<'assign' | 'reset' | 'shift_start'>('assign');
   const [scheduleId, setScheduleId] = useState('');
   const [effectiveFrom, setEffectiveFrom] = useState(() => getLocalISODate());
   const [saving, setSaving] = useState(false);
@@ -295,7 +303,7 @@ export const BulkBrigadeScheduleModal: FC<IBulkBrigadeScheduleModalProps> = memo
 
     setSaving(true);
     try {
-      await onApply(selectedIds, mode === 'assign' ? scheduleId : null, effectiveFrom);
+      await onApply(selectedIds, mode, mode === 'assign' ? scheduleId : null, effectiveFrom);
     } finally {
       setSaving(false);
     }
@@ -369,9 +377,10 @@ export const BulkBrigadeScheduleModal: FC<IBulkBrigadeScheduleModalProps> = memo
           <div className="sc-brigade-panel">
             <div className="sc-field">
               <label>Действие</label>
-              <select value={mode} onChange={e => setMode(e.target.value as 'assign' | 'reset')}>
+              <select value={mode} onChange={e => setMode(e.target.value as BulkBrigadeScheduleMode)}>
                 <option value="assign">Назначить персональный график</option>
                 <option value="reset">Вернуть к графику {defaultScheduleLabel}</option>
+                <option value="shift_start">Сдвинуть дату вступления текущего графика на более раннюю</option>
               </select>
             </div>
             {mode === 'assign' && (
@@ -386,7 +395,13 @@ export const BulkBrigadeScheduleModal: FC<IBulkBrigadeScheduleModalProps> = memo
               </div>
             )}
             <div className="sc-field">
-              <label>{mode === 'assign' ? 'Дата вступления в силу' : 'Дата снятия персонального графика'}</label>
+              <label>
+                {mode === 'assign'
+                  ? 'Дата вступления в силу'
+                  : mode === 'shift_start'
+                    ? 'Новая дата вступления (раньше текущей)'
+                    : 'Дата снятия персонального графика'}
+              </label>
               <input type="date" value={effectiveFrom} onChange={e => setEffectiveFrom(e.target.value)} />
             </div>
             <div className="sc-schedule-help">
@@ -396,7 +411,9 @@ export const BulkBrigadeScheduleModal: FC<IBulkBrigadeScheduleModalProps> = memo
               <div>
                 {mode === 'assign'
                   ? 'С выбранной даты персональный график будет назначен всем текущим активным сотрудникам выбранных бригад.'
-                  : `С выбранной даты персональный график будет снят, и сотрудники вернутся к графику ${defaultScheduleLabel}.`}
+                  : mode === 'shift_start'
+                    ? 'У сотрудников с открытым персональным графиком (без даты окончания) effective_from сдвинется на выбранную дату. Промежуточные исторические фрагменты в новом диапазоне будут удалены; запись, активная на выбранной дате, — закрыта днём ранее. Сотрудников без открытого графика операция не затронет.'
+                    : `С выбранной даты персональный график будет снят, и сотрудники вернутся к графику ${defaultScheduleLabel}.`}
               </div>
             </div>
           </div>

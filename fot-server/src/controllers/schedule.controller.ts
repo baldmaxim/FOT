@@ -120,7 +120,9 @@ const fixAssignmentSchema = z.object({
 const effectiveDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const bulkBrigadeScheduleSchema = z.object({
   department_ids: z.array(z.string().uuid()).min(1),
-  action: z.enum(['assign', 'reset']),
+  // shift_start = сдвинуть effective_from открытого назначения назад без
+  // создания новых фрагментов (см. shiftEmployeeScheduleStart).
+  action: z.enum(['assign', 'reset', 'shift_start']),
   schedule_id: z.string().uuid().optional(),
   effective_date: effectiveDateSchema,
 }).superRefine((value, ctx) => {
@@ -490,6 +492,77 @@ const fixEmployeeAssignmentDates = async (
   );
   if (!updated) throw new Error('Failed to load updated employee_schedule_assignment');
   return updated;
+};
+
+/**
+ * Массовый back-dating: сдвигает effective_from открытого назначения (effective_to=NULL)
+ * сотрудника назад без создания новых исторических фрагментов. Записи с
+ * effective_from ∈ [newFrom .. target.effective_from) удаляются как поглощённые;
+ * запись, активная на newFrom и НЕ являющаяся target, закрывается на prev(newFrom).
+ * Если открытого назначения нет — no-op (вернёт false).
+ *
+ * Используется action='shift_start' в bulkApplyToBrigades. fixEmployeeAssignmentDates
+ * не годится, потому что он валится на «дата вступления должна быть позже
+ * предыдущего назначения» — там запрещён прыжок через несколько кусков истории.
+ */
+const shiftEmployeeScheduleStart = async (
+  db: Db,
+  employeeId: number,
+  newFrom: string,
+  preloadedRows?: EmployeeScheduleRow[],
+): Promise<boolean> => {
+  const rows = preloadedRows ?? await loadEmployeeScheduleRows(employeeId, db);
+  const nowIso = new Date().toISOString();
+
+  // Берём строго ОТКРЫТОЕ (effective_to=NULL) назначение, чтобы не «съесть» чужую
+  // закрытую историю. Если открытых нет — у сотрудника нет персонального графика
+  // в смысле «действует сейчас и далее», сдвигать нечего.
+  const openRecord = [...rows].reverse().find(r => r.effective_to === null) || null;
+  if (!openRecord) return false;
+  if (openRecord.effective_from <= newFrom) return false; // уже не позже запрошенной
+
+  // Промежуточные записи [newFrom .. openRecord.effective_from) поглощаются.
+  const between = rows.filter(r =>
+    r.id !== openRecord.id
+    && r.effective_from >= newFrom
+    && r.effective_from < openRecord.effective_from,
+  );
+  for (const r of between) {
+    const affected = await db.execute(
+      'DELETE FROM employee_schedule_assignments WHERE id = $1',
+      [r.id],
+    );
+    if (affected !== 1) {
+      throw new Error(`Не удалось удалить промежуточное назначение ${r.id} при сдвиге (employeeId=${employeeId}, affected=${affected})`);
+    }
+  }
+
+  // Запись, активная на newFrom (но не target), — закрыть на prev(newFrom).
+  // На UNIQUE(employee_id, effective_from) это не влияет: effective_from не меняется.
+  const coversNewFrom = rows.find(r =>
+    r.id !== openRecord.id
+    && r.effective_from < newFrom
+    && (r.effective_to === null || r.effective_to >= newFrom),
+  ) || null;
+  if (coversNewFrom) {
+    const affected = await db.execute(
+      `UPDATE employee_schedule_assignments SET effective_to = $1, updated_at = $2 WHERE id = $3`,
+      [previousIsoDate(newFrom), nowIso, coversNewFrom.id],
+    );
+    if (affected !== 1) {
+      throw new Error(`Не удалось закрыть перекрывающее назначение ${coversNewFrom.id} при сдвиге (employeeId=${employeeId}, affected=${affected})`);
+    }
+  }
+
+  // Сдвигаем effective_from открытой записи назад.
+  const affected = await db.execute(
+    `UPDATE employee_schedule_assignments SET effective_from = $1, updated_at = $2 WHERE id = $3`,
+    [newFrom, nowIso, openRecord.id],
+  );
+  if (affected !== 1) {
+    throw new Error(`Не удалось сдвинуть effective_from открытого назначения ${openRecord.id} (employeeId=${employeeId}, affected=${affected})`);
+  }
+  return true;
 };
 
 const removeEmployeeSchedule = async (
@@ -1033,6 +1106,10 @@ export const scheduleController = {
             await withTransaction(client => assignEmployeeSchedule(
               clientDb(client), employeeId, scheduleId!, effectiveDate, req.user.employee_id, undefined, preloaded));
             return true;
+          }
+          if (action === 'shift_start') {
+            return withTransaction(client => shiftEmployeeScheduleStart(
+              clientDb(client), employeeId, effectiveDate, preloaded));
           }
           return withTransaction(client => removeEmployeeSchedule(clientDb(client), employeeId, effectiveDate, preloaded));
         }));

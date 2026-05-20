@@ -14,7 +14,9 @@ interface ApiResponse<T> {
 
 export interface IBulkBrigadeSchedulePayload {
   department_ids: string[];
-  action: 'assign' | 'reset';
+  // shift_start = сдвинуть effective_from открытого назначения назад без новых
+  // исторических фрагментов (поглощает промежуточные куски, закрывает соседа).
+  action: 'assign' | 'reset' | 'shift_start';
   schedule_id?: string;
   effective_date: string;
 }

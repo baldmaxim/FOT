@@ -446,6 +446,146 @@ describe('scheduleController.bulkApplyToBrigades', () => {
     expect((params as unknown[]).includes('2026-05-15')).toBe(false);
   });
 
+  // action='shift_start': сдвигает effective_from открытого назначения (effective_to=NULL)
+  // назад, поглощая промежуточные исторические фрагменты и обрезая запись, активную на
+  // новой дате. Сотрудников без открытого назначения операция не трогает.
+  it('shift_start: двигает effective_from открытого назначения и удаляет промежуточные куски', async () => {
+    pgQuery.mockImplementation(async (sql: string) => {
+      const lower = sql.toLowerCase();
+      if (lower.includes('from org_departments')) {
+        return [{ id: BRIGADE_1, name: 'Бр. Курбоншоева', kind: 'brigade' }];
+      }
+      if (lower.includes('from employees')) {
+        return [{ id: 92 }, { id: 999 }];
+      }
+      if (lower.includes('from employee_schedule_assignments')) {
+        // emp 92: история — два закрытых куска и один открытый, который надо сдвинуть с 2026-05-20 → 2026-04-01.
+        // emp 999: НЕТ открытого назначения — должен быть пропущен (employees_updated не растёт).
+        return [
+          {
+            id: 'closed-old',
+            employee_id: 92,
+            schedule_id: SCHEDULE_ID,
+            effective_from: '2026-02-02',
+            effective_to: '2026-04-12', // покрывает 2026-04-01 — будет обрезано на 2026-03-31
+          },
+          {
+            id: 'between',
+            employee_id: 92,
+            schedule_id: SCHEDULE_ID,
+            effective_from: '2026-04-13', // попадает в новый диапазон → DELETE
+            effective_to: '2026-04-26',
+          },
+          {
+            id: 'open',
+            employee_id: 92,
+            schedule_id: SCHEDULE_ID,
+            effective_from: '2026-05-20',
+            effective_to: null,
+          },
+          {
+            id: 'closed-only',
+            employee_id: 999,
+            schedule_id: SCHEDULE_ID,
+            effective_from: '2026-01-01',
+            effective_to: '2026-03-31',
+          },
+        ];
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    pgQueryOne.mockResolvedValue({ id: 'fetched' });
+    pgExecute.mockResolvedValue(1);
+
+    const req = makeReq({
+      body: {
+        department_ids: [BRIGADE_1],
+        action: 'shift_start',
+        effective_date: '2026-04-01',
+      },
+    });
+    const res = makeRes();
+
+    await scheduleController.bulkApplyToBrigades(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const data = (res.payload as { data: { employees_updated: number; employees_matched: number } }).data;
+    expect(data.employees_matched).toBe(2);
+    expect(data.employees_updated).toBe(1); // emp 999 без открытого — пропущен
+
+    // 1) DELETE промежуточной записи between
+    const deleteBetween = pgExecute.mock.calls.find(([sql, params]) =>
+      typeof sql === 'string'
+      && sql.toLowerCase().startsWith('delete from employee_schedule_assignments')
+      && Array.isArray(params)
+      && (params as unknown[]).includes('between'));
+    expect(deleteBetween).toBeTruthy();
+
+    // 2) UPDATE closed-old SET effective_to = 2026-03-31 (prev(2026-04-01))
+    const closeOld = pgExecute.mock.calls.find(([sql, params]) =>
+      typeof sql === 'string'
+      && sql.toLowerCase().includes('update employee_schedule_assignments')
+      && sql.toLowerCase().includes('set effective_to')
+      && Array.isArray(params)
+      && (params as unknown[]).includes('closed-old')
+      && (params as unknown[]).includes('2026-03-31'));
+    expect(closeOld).toBeTruthy();
+
+    // 3) UPDATE open SET effective_from = 2026-04-01
+    const shiftOpen = pgExecute.mock.calls.find(([sql, params]) =>
+      typeof sql === 'string'
+      && sql.toLowerCase().includes('update employee_schedule_assignments')
+      && sql.toLowerCase().includes('set effective_from')
+      && Array.isArray(params)
+      && (params as unknown[]).includes('open')
+      && (params as unknown[]).includes('2026-04-01'));
+    expect(shiftOpen).toBeTruthy();
+  });
+
+  // shift_start с новой датой, которая >= effective_from открытого назначения — no-op
+  // для этого сотрудника (employees_updated не растёт, никаких UPDATE/DELETE).
+  it('shift_start no-op, если новая дата не раньше текущей effective_from открытого', async () => {
+    pgQuery.mockImplementation(async (sql: string) => {
+      const lower = sql.toLowerCase();
+      if (lower.includes('from org_departments')) {
+        return [{ id: BRIGADE_1, name: 'Бр. 1', kind: 'brigade' }];
+      }
+      if (lower.includes('from employees')) {
+        return [{ id: 92 }];
+      }
+      if (lower.includes('from employee_schedule_assignments')) {
+        return [
+          {
+            id: 'open',
+            employee_id: 92,
+            schedule_id: SCHEDULE_ID,
+            effective_from: '2026-04-01',
+            effective_to: null,
+          },
+        ];
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    pgQueryOne.mockResolvedValue({ id: 'fetched' });
+    pgExecute.mockResolvedValue(1);
+
+    const req = makeReq({
+      body: {
+        department_ids: [BRIGADE_1],
+        action: 'shift_start',
+        effective_date: '2026-05-01', // позже текущего effective_from
+      },
+    });
+    const res = makeRes();
+
+    await scheduleController.bulkApplyToBrigades(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect((res.payload as { data: { employees_updated: number } }).data.employees_updated).toBe(0);
+    // Никаких мутаций
+    expect(pgExecute).not.toHaveBeenCalled();
+  });
+
   it('one failing employee does not abort the batch (allSettled)', async () => {
     pgQuery.mockImplementation(async (sql: string) => {
       const lower = sql.toLowerCase();
