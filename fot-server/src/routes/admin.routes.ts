@@ -139,7 +139,7 @@ router.use((req, res, next) => {
   next();
 });
 
-// Пользователи — доступно admin + super_admin
+// Пользователи — доступно admin
 router.get('/users', requirePageAccess('/admin/users', 'view'), usersListCache, adminController.getAllUsers);
 router.get('/users/pending', requirePageAccess('/admin/users', 'view'), pendingUsersCache, adminController.getPendingUsers);
 router.get('/employees/department-access', requirePageAccess('/admin/users', 'view'), adminController.getEmployeeDepartmentAssignments);

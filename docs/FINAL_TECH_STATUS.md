@@ -48,24 +48,23 @@ React 19 + Vite + TypeScript.
 
 ### Структура компонентов
 
-`fot-app/src/components/`: auth, dashboard, discipline, employees, layout, skud, super-admin, timesheet, ui.
+`fot-app/src/components/`: auth, dashboard, discipline, employees, layout, skud, admin, timesheet, ui.
 
-`fot-app/src/pages/`: auth, employee (личный кабинет), employees, profile, skud, super-admin, timesheet.
+`fot-app/src/pages/`: auth, employee (личный кабинет), employees, profile, skud, admin, timesheet.
 
 ---
 
 ## Модель ролей
 
 ```
-worker (1) < header (2) < admin (3) < super_admin (4)
+worker (1) < header (2) < admin (3)
 ```
 
 | Роль | Доступ |
 |------|--------|
 | worker | `/employee/*` — личный кабинет |
 | header | + `/dashboard`, `/timesheet`, `/admin/structure` |
-| admin | + `/employees`, `/skud-raw`, `/skud-db`, `/discipline` |
-| super_admin | + `/skud-settings`, `/admin/users`, `/admin/organizations`, `/admin/audit` |
+| admin | + `/employees`, `/skud-raw`, `/skud-db`, `/discipline`, `/skud-settings`, `/admin/users`, `/admin/organizations`, `/admin/audit` |
 
 ---
 

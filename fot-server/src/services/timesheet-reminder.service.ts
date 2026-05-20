@@ -15,7 +15,7 @@ import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js'
 
 const REMINDER_INTERVAL_MS = 15 * 60_000;
 const STARTUP_DELAY_MS = 45_000;
-const REMINDER_EXCLUDED_ROLE_CODES = ['admin', 'super_admin'] as const;
+const REMINDER_EXCLUDED_ROLE_CODES = ['admin'] as const;
 
 let reminderTimer: ReturnType<typeof setInterval> | null = null;
 let startupTimeout: ReturnType<typeof setTimeout> | null = null;

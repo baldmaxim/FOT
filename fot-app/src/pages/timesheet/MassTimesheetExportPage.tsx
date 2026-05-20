@@ -43,9 +43,9 @@ export const MassTimesheetExportPage: FC = () => {
   const now = useMemo(() => new Date(), []);
   const { hasPermission, profile, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
   const { isDepartmentScope } = useManagedDepartments();
-  const isSuperAdmin = profile?.is_admin === true;
-  const canManageAllDepartments = isSuperAdmin || hasPermission('data.scope.all');
-  const isRestrictedManagerView = !isTimesheetWindowExempt({ isAdmin: isSuperAdmin, canManageAllDepartments }) && isDepartmentScope;
+  const isAdmin = profile?.is_admin === true;
+  const canManageAllDepartments = isAdmin || hasPermission('data.scope.all');
+  const isRestrictedManagerView = !isTimesheetWindowExempt({ isAdmin: isAdmin, canManageAllDepartments }) && isDepartmentScope;
 
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);

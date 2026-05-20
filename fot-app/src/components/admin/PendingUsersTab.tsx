@@ -6,7 +6,7 @@ import { ApiError } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
 import type { EmployeePositionType } from '../../types';
-import styles from '../../pages/super-admin/SuperAdmin.module.css';
+import styles from '../../pages/admin/Admin.module.css';
 
 // Сервер отдаёт причину отказа в ApiError.message (напр. «Подтверждение
 // доступно только системному администратору»). Без этого провал одобрения

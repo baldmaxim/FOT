@@ -16,7 +16,7 @@ import { parseHMToMinutes, minutesToHM } from '../../utils/scheduleUtils';
 import { NumberInput } from '../../components/ui/NumberInput';
 import styles from './SchedulesPage.module.css';
 
-const ProductionCalendarPage = lazy(() => import('../super-admin/ProductionCalendarPage').then(module => ({
+const ProductionCalendarPage = lazy(() => import('./ProductionCalendarPage').then(module => ({
   default: module.ProductionCalendarPage,
 })));
 

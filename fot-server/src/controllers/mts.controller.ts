@@ -16,15 +16,13 @@ import { encryptionService } from '../services/encryption.service.js';
 // - Ошибки апстрима МТС не пробрасываются в клиент/Sentry body (могут содержать
 //   ПДн абонента). Клиенту — generic message + HTTP/функциональный код, в лог —
 //   status/code без message-тела.
-// - Полный доступ к модулю: super_admin (если такая роль есть в проекте) или
-//   любой is_admin. В проектах, где super_admin отсутствует, admin — это и
-//   есть «верхняя» роль с доступом к модулю /mts.
+// - Полный доступ к модулю — у любого is_admin (роль admin).
 // - Не-админы видят только тех абонентов, чьи привязки указывают на сотрудников
 //   в их области доступа (data-scope через employee_department_access).
 // - Аудит на сохранение настроек и изменение привязок.
 
 const hasFullMtsAccess = (req: AuthenticatedRequest): boolean =>
-  req.user.role_code === 'super_admin' || req.user.is_admin === true;
+  req.user.is_admin === true;
 
 const sendApiError = (res: Response, error: MtsApiError, fallback: string): void => {
   console.error(`[mts] upstream error: http=${error.status} code=${error.code ?? '-'} desc=${error.description ?? '-'} msg="${error.message}"`);
@@ -156,7 +154,7 @@ export const mtsController = {
     }
   },
 
-  /** Фильтрует список абонентов по data-scope (super_admin видит всё). */
+  /** Фильтрует список абонентов по data-scope (admin видит всё). */
   async getSubscribers(req: AuthenticatedRequest, res: Response): Promise<void> {
     logRequest(req, 'GET /subscribers');
     try {
@@ -218,7 +216,7 @@ export const mtsController = {
     }
   },
 
-  /** IDOR-guard: не super_admin — только если абонент привязан к сотруднику в скоупе. */
+  /** IDOR-guard: не-admin — только если абонент привязан к сотруднику в скоупе. */
   async getTrack(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const subscriberId = Number(req.query.subscriberId);
@@ -246,7 +244,7 @@ export const mtsController = {
 
   /**
    * История перемещений абонента из mts_location_snapshots. Контент в БД
-   * зашифрован — здесь расшифровывается и возвращается. IDOR: не-super_admin
+   * зашифрован — здесь расшифровывается и возвращается. IDOR: не-admin
    * должен иметь доступ к привязанному сотруднику. Любой просмотр аудируется.
    */
   async getHistory(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -281,13 +279,13 @@ export const mtsController = {
   },
 
   /**
-   * РУЧНОЙ платный запрос актуального положения. Защита: super_admin + critical 2FA
+   * РУЧНОЙ платный запрос актуального положения. Защита: admin + critical 2FA
    * (на уровне роута) + явное { confirmed:true } в body. Аудит обязателен.
    */
   async requestLocation(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!hasFullMtsAccess(req)) {
-        res.status(403).json({ success: false, error: 'Доступно только super_admin' });
+        res.status(403).json({ success: false, error: 'Доступно только администратору' });
         return;
       }
       const { subscriberId, confirmed } = req.body as { subscriberId?: number; confirmed?: boolean };
@@ -332,7 +330,7 @@ export const mtsController = {
     }
   },
 
-  /** Авто-подсказки = name-directory; отдаём только super_admin. */
+  /** Авто-подсказки = name-directory; отдаём только admin. */
   async getMappingSuggestions(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!hasFullMtsAccess(req)) {
@@ -350,7 +348,7 @@ export const mtsController = {
   /**
    * Создаёт задачу в МТС, локально сохраняет зашифрованную копию.
    * Обязательные: title, startDate. subscriberID — опционально; если задан и
-   * caller не super_admin, проверяем что привязанный сотрудник в его scope.
+   * caller не admin, проверяем что привязанный сотрудник в его scope.
    */
   async createTask(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
@@ -412,7 +410,7 @@ export const mtsController = {
     }
   },
 
-  /** Список локальных задач. Не-super_admin — только по абонентам в scope. */
+  /** Список локальных задач. Не-admin — только по абонентам в scope. */
   async getTasks(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const all = await mtsTasksService.listTasks();
@@ -422,7 +420,7 @@ export const mtsController = {
       }
       const filtered: typeof all = [];
       for (const t of all) {
-        if (t.subscriberId == null) continue; // unassigned → только super_admin
+        if (t.subscriberId == null) continue; // unassigned → только admin
         const empId = await mtsMappingService.getEmployeeIdBySubscriber(t.subscriberId);
         if (empId && (await canAccessEmployeeInScope(req, empId))) filtered.push(t);
       }
@@ -487,7 +485,7 @@ export const mtsController = {
         res.status(400).json({ success: false, error: 'Сотрудник не найден' });
         return;
       }
-      // Не super_admin не может привязывать абонента к сотруднику вне своего скоупа
+      // Не-admin не может привязывать абонента к сотруднику вне своего скоупа
       // (закрывает «перепривяжу на себя, чтобы увидеть»).
       if (!hasFullMtsAccess(req) && empId != null && !(await canAccessEmployeeInScope(req, empId))) {
         res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
@@ -628,7 +626,7 @@ export const mtsController = {
   /**
    * Пагинированный список сотрудников, связанных с MTS-абонентами через
    * mts_subscriber_map. Расшифровка имени/телефона делается в сервисе.
-   * Не super_admin — фильтрация по data-scope (как у /subscribers).
+   * Не-admin — фильтрация по data-scope (как у /subscribers).
    */
   async getEmployeesLinked(req: AuthenticatedRequest, res: Response): Promise<void> {
     logRequest(req, 'GET /employees-linked');
@@ -732,12 +730,12 @@ export const mtsController = {
 
   /**
    * Авто-привязка по ФИО: применяет результаты mtsMappingService.suggest()
-   * пакетом. Только super_admin (как и получение подсказок).
+   * пакетом. Только admin (как и получение подсказок).
    */
   async autoLinkMappings(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!hasFullMtsAccess(req)) {
-        res.status(403).json({ success: false, error: 'Доступно только super_admin' });
+        res.status(403).json({ success: false, error: 'Доступно только администратору' });
         return;
       }
       const subscribers = await mtsDataService.getSubscribers();
@@ -864,10 +862,10 @@ export const mtsController = {
         ? [employeeId as number]
         : undefined;
 
-      // Не-super_admin: ограничить только своими employees in scope.
+      // Не-admin: ограничить только своими employees in scope.
       if (!hasFullMtsAccess(req)) {
         if (!employeeIds) {
-          res.status(400).json({ success: false, error: 'employeeId обязателен для не-super_admin' });
+          res.status(400).json({ success: false, error: 'employeeId обязателен для не-администратора' });
           return;
         }
         const allowed = await canAccessEmployeeInScope(req, employeeIds[0]);

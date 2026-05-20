@@ -104,12 +104,12 @@ export const TimesheetPage: FC = () => {
   const toast = useToast();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const isSuperAdmin = profile?.is_admin === true;
+  const isAdmin = profile?.is_admin === true;
   const isManagerObj = profile?.role_code === 'manager_obj';
   const canEditTimesheet = canEditPage('/timesheet') || canEditPage('/timesheet-hr');
   const canViewManagedTimesheet = canEditTimesheet || canViewPage('/timesheet') || canViewPage('/timesheet-hr');
-  const canEditTeamManagement = isSuperAdmin || canEditPage('timesheet-team-management');
-  const canManageAllDepartments = isSuperAdmin || hasPermission('data.scope.all');
+  const canEditTeamManagement = isAdmin || canEditPage('timesheet-team-management');
+  const canManageAllDepartments = isAdmin || hasPermission('data.scope.all');
   const {
     isDepartmentScope,
     isDirectReportsOnly,
@@ -117,7 +117,7 @@ export const TimesheetPage: FC = () => {
     primaryDepartmentId,
     structureQuery,
   } = useManagedDepartments();
-  const isTimesheetDepartmentScope = !isTimesheetWindowExempt({ isAdmin: isSuperAdmin, canManageAllDepartments }) && isDepartmentScope && canViewManagedTimesheet;
+  const isTimesheetDepartmentScope = !isTimesheetWindowExempt({ isAdmin: isAdmin, canManageAllDepartments }) && isDepartmentScope && canViewManagedTimesheet;
   const isMultiDepartmentManager = isTimesheetDepartmentScope && managedDepartmentIds.length > 1;
   const queryMonth = searchParams.get('month');
   const queryFrom = searchParams.get('from');
@@ -213,7 +213,7 @@ export const TimesheetPage: FC = () => {
     ? 'objects'
     : queryView === 'corrections'
       ? 'corrections'
-      : (queryView === 'transfers' && isSuperAdmin && timesheetMode !== 'assigned')
+      : (queryView === 'transfers' && isAdmin && timesheetMode !== 'assigned')
         ? 'transfers'
         : 'employees';
 
@@ -1535,7 +1535,7 @@ export const TimesheetPage: FC = () => {
       >
         Корректировки
       </button>
-      {isSuperAdmin && !isAssignedMode && (
+      {isAdmin && !isAssignedMode && (
         <button
           type="button"
           className={`ts-view-chip ${viewMode === 'transfers' ? ' ts-view-chip--active' : ''}`}
@@ -1576,7 +1576,7 @@ export const TimesheetPage: FC = () => {
     </button>
   ) : null;
 
-  const transfersChip = hasActiveScope && isSuperAdmin && !isAssignedMode ? (
+  const transfersChip = hasActiveScope && isAdmin && !isAssignedMode ? (
     <button
       type="button"
       className={`ts-view-chip ${viewMode === 'transfers' ? ' ts-view-chip--active' : ''}`}

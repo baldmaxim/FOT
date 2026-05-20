@@ -9,7 +9,7 @@ import { useStructureTree } from '../../hooks/useStructure';
 import { useToast } from '../../contexts/ToastContext';
 import { getTreeFlatDepartments } from '../../utils/departmentUtils';
 import { EmployeeAssignmentPanel } from './EmployeeAssignmentPanel';
-import styles from '../../pages/super-admin/SuperAdmin.module.css';
+import styles from '../../pages/admin/Admin.module.css';
 
 interface IEmployeeDepartmentAssignmentsTabProps {
   allUsers: IUserSlim[];

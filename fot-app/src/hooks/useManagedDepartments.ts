@@ -9,8 +9,8 @@ interface UseManagedDepartmentsOptions {
 
 export const useManagedDepartments = (options?: UseManagedDepartmentsOptions) => {
   const { hasPermission, profile } = useAuth();
-  const isSuperAdmin = profile?.is_admin === true;
-  const isAdminLike = isSuperAdmin || hasPermission('data.scope.all');
+  const isAdmin = profile?.is_admin === true;
+  const isAdminLike = isAdmin || hasPermission('data.scope.all');
   const hasManagedDepartmentsRaw = (profile?.managed_department_ids?.filter(Boolean).length ?? 0) > 0;
   const hasDirectReports = profile?.has_direct_reports === true;
   // Руководитель = не-админ и не рядовой сотрудник (employee_variant null у ролей head/hr/etc).

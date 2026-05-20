@@ -38,7 +38,7 @@
 
 | Эндпоинт МТС | Метод в `mtsDataService` | Тариф | Защита |
 |---|---|---|---|
-| `POST /subscriberManagement/subscriberRequests` | `requestLocation(subscriberId)` | ~3–5 ₽/запрос | super_admin + critical 2FA + явное `confirmed:true` |
+| `POST /subscriberManagement/subscriberRequests` | `requestLocation(subscriberId)` | ~3–5 ₽/запрос | admin + critical 2FA + явное `confirmed:true` |
 
 Только ручное действие. **Не должно дёргаться:** в `useQuery`, в фоновых поллерах, в массовых операциях.
 
@@ -322,10 +322,10 @@ const trim = (d: Date): string => d.toISOString().replace(/\.\d{3}Z$/, '');
 | GET | `/last-locations` | 🟢 | view + data-scope |
 | GET | `/track` | 🟢 | view + IDOR |
 | GET | `/history` | — (из БД) | view + IDOR + аудит |
-| GET | `/recent-locations?days=N` | 🟢 | super_admin |
-| GET | `/recent-tracks?days=N` | 🟢 | super_admin |
-| GET | `/recent-global-locations?days=N` | 🟢 | super_admin |
-| POST | `/request-location` | 🔴 | super_admin + 2FA + `confirmed:true` |
+| GET | `/recent-locations?days=N` | 🟢 | admin |
+| GET | `/recent-tracks?days=N` | 🟢 | admin |
+| GET | `/recent-global-locations?days=N` | 🟢 | admin |
+| POST | `/request-location` | 🔴 | admin + 2FA + `confirmed:true` |
 | GET | `/tasks`, `/tasks/:id` | 🟢 / ⚪ | view |
 | POST | `/tasks` | ⚪ | edit + 2FA |
 | GET / PUT | `/mappings*` | — | view / edit + 2FA |
@@ -341,7 +341,7 @@ const trim = (d: Date): string => d.toISOString().replace(/\.\d{3}Z$/, '');
 
 - `Cache-Control: no-store` на всём модуле (middleware `noStore`).
 - Описания ошибок МТС не пробрасываются клиенту целиком (могут содержать ПДн).
-- Доступ к странице `/mts` — только `super_admin` (миграция 108).
+- Доступ к странице `/mts` — только `admin` (миграция 108).
 - Сохранение токена и привязок — под critical 2FA.
 - История перемещений (`/history`) — всегда в аудите.
 
@@ -365,7 +365,7 @@ const trim = (d: Date): string => d.toISOString().replace(/\.\d{3}Z$/, '');
 | `mtsCode=67` | запросили >1000 GPS-точек | разбить интервал на части |
 | `mtsCode=225` | смешаны форматы дат | привести `dateFrom`/`dateTo` к одному формату |
 | Тест ок, но `subscribers=0` | в аккаунте действительно нет абонентов | проверить через UI ЛК M-Poisk |
-| Тест ок, но `Не удалось загрузить абонентов` в портале | data-scope режет всё (не-super_admin) | проверить, есть ли привязки абонент→сотрудник в его scope |
+| Тест ок, но `Не удалось загрузить абонентов` в портале | data-scope режет всё (не-admin) | проверить, есть ли привязки абонент→сотрудник в его scope |
 
 ### Сверить токен через standalone-скрипт
 
@@ -459,7 +459,7 @@ curl -X POST -H "Authorization: Bearer $MTS_TOKEN" -H "Content-Type: application
 5. Dwell-счётчик в памяти:
    - Открыть нарушение после **2** подряд `outside`-тиков (минимум ~10 мин при интервале 5 мин);
    - Закрыть после **1** `inside`-тика.
-6. На открытие шлём уведомление `MTS_GEOFENCE_VIOLATION` всем `super_admin` через
+6. На открытие шлём уведомление `MTS_GEOFENCE_VIOLATION` всем `admin` через
    `notificationService.createMany()` (in-app + Socket.IO + Web Push). Повторное
    уведомление по тому же открытому нарушению — не чаще раз в
    `MTS_GEOFENCE_REPEAT_MIN` минут.
@@ -488,7 +488,7 @@ high-volume коммерческое использование.
 |---|---|---|
 | GET | `/employees-linked?page=&pageSize=&search=` | view + data-scope |
 | GET | `/track-points?subscriberId=&dateFrom=&dateTo=` | view + IDOR |
-| POST | `/mappings/auto-link` | super_admin + 2FA |
+| POST | `/mappings/auto-link` | admin + 2FA |
 | GET | `/geofences` | view |
 | POST | `/geofences` | edit + 2FA |
 | PUT | `/geofences/:id` | edit + 2FA |

@@ -17,7 +17,7 @@ import {
   useTimesheetReminderSettings,
   useEmployeeTransferSettings,
 } from '../../hooks/useSettingsData';
-import { OpenRouterSettingsSection } from '../../components/super-admin/OpenRouterSettingsSection';
+import { OpenRouterSettingsSection } from '../../components/admin/OpenRouterSettingsSection';
 import styles from './SystemSettingsPage.module.css';
 
 export const SystemSettingsPage: FC = () => {

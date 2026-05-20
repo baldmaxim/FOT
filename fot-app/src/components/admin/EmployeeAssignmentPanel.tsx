@@ -10,7 +10,7 @@ import { directReportsService, type IDirectReport } from '../../services/directR
 import { ApiError } from '../../api/client';
 import { getTreeFlatDepartments, type IFlatDepartmentOption } from '../../utils/departmentUtils';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
-import styles from '../../pages/super-admin/SuperAdmin.module.css';
+import styles from '../../pages/admin/Admin.module.css';
 
 interface IEmployeeAssignmentPanelProps {
   isOpen: boolean;

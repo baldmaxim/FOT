@@ -83,7 +83,7 @@
   sub: string,                    // User ID
   email: string,                  // Email пользователя
   organization_id: string | null, // ID организации
-  role: string,                   // Роль (viewer, accountant, admin, super_admin)
+  role: string,                   // Роль (worker, office, manager, admin, contractor)
   is_approved: boolean,           // Одобрен ли аккаунт
   two_factor_enabled: boolean,    // 2FA настроена
   two_factor_verified: boolean,   // 2FA пройдена в текущей сессии

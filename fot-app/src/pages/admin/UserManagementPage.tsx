@@ -2,19 +2,19 @@ import React, { lazy, Suspense, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { adminService, type IUserSlim } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
-import type { IPendingUser } from '../../components/super-admin/PendingUsersTab';
-import styles from './SuperAdmin.module.css';
+import type { IPendingUser } from '../../components/admin/PendingUsersTab';
+import styles from './Admin.module.css';
 
-const PendingUsersTab = lazy(() => import('../../components/super-admin/PendingUsersTab').then(module => ({
+const PendingUsersTab = lazy(() => import('../../components/admin/PendingUsersTab').then(module => ({
   default: module.PendingUsersTab,
 })));
-const AllUsersTab = lazy(() => import('../../components/super-admin/AllUsersTab').then(module => ({
+const AllUsersTab = lazy(() => import('../../components/admin/AllUsersTab').then(module => ({
   default: module.AllUsersTab,
 })));
-const DepartmentAccessImportTab = lazy(() => import('../../components/super-admin/DepartmentAccessImportTab').then(module => ({
+const DepartmentAccessImportTab = lazy(() => import('../../components/admin/DepartmentAccessImportTab').then(module => ({
   default: module.DepartmentAccessImportTab,
 })));
-const EmployeeDepartmentAssignmentsTab = lazy(() => import('../../components/super-admin/EmployeeDepartmentAssignmentsTab').then(module => ({
+const EmployeeDepartmentAssignmentsTab = lazy(() => import('../../components/admin/EmployeeDepartmentAssignmentsTab').then(module => ({
   default: module.EmployeeDepartmentAssignmentsTab,
 })));
 

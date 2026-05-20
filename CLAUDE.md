@@ -66,7 +66,7 @@ cd fot-data-api && uvicorn app.main:app --reload --port 4001
 - **ФИО сотрудников**: хранятся plain-text (`full_name`, `last_name`, `first_name`, `middle_name`). `encryption.service.ts` используется только для TOTP и чата, не для ФИО.
 - **БД-runtime**: прямой `pg.Pool` через `config/postgres.ts` (`query/queryOne/execute/withTransaction`). Supabase SDK удалён из package.json в Phase 10E (см. `docs/yandex-postgres-migration/`). RLS не используется — авторизация проверяется в middleware. Аутентификация через `app_auth.users` + bcrypt (`local-auth.service.ts`).
 - **API роуты**: все под префиксом `/api/` — auth, employees, admin, skud, sigur, structure, timesheet, audit, chat, push, leave-requests, documents, payslips, payments, production-calendar, timesheet-approvals, schedules, roles, salary-raise, settings, notifications, work-categories, official-memos, admin-data-api, correction-approvals, patent-receipts, daily-tasks, direct-reports.
-- **Фронтенд роуты**: по ролям — `worker` видит `/employee/*`, `header`+ видит `/dashboard`, `admin`+ видит `/employees`, `super_admin` видит `/skud-settings`, `/admin/*`.
+- **Фронтенд роуты**: по ролям — `worker` видит `/employee/*`, `header`+ видит `/dashboard`, `admin` видит `/employees`, `/skud-settings`, `/admin/*`.
 
 ## Структура бэкенда
 

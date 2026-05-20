@@ -1,7 +1,7 @@
 import { type FC, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { settingsService, type IOpenRouterSettings, type IOpenRouterTestResult } from '../../services/settingsService';
-import styles from '../../pages/super-admin/SystemSettingsPage.module.css';
+import styles from '../../pages/admin/SystemSettingsPage.module.css';
 
 export const OpenRouterSettingsSection: FC = () => {
   const queryClient = useQueryClient();

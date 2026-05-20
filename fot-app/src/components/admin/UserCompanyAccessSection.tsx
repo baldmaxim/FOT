@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { adminService } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
-import styles from '../../pages/super-admin/SuperAdmin.module.css';
+import styles from '../../pages/admin/Admin.module.css';
 
 interface IProps {
   userId: string;

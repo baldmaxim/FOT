@@ -4,7 +4,7 @@ import { authenticate, requireCritical2FA, requirePageAccess } from '../middlewa
 import { noStore } from '../middleware/noStore.js';
 
 // МТС «Мобильные сотрудники» — отдельный модуль геолокации. Доступ — страница /mts
-// (только super_admin, миграция 108). Сохранение токена и привязок — под critical 2FA.
+// (только admin, миграция 108). Сохранение токена и привязок — под critical 2FA.
 // Cache-Control: no-store на всём модуле (геолокация сотрудников не должна оседать
 // в HTTP-кэше браузера — общие ПК / кнопка «назад»).
 
@@ -37,7 +37,7 @@ router.get('/recent-locations', requirePageAccess('/mts', 'view'), mtsController
 router.get('/recent-tracks', requirePageAccess('/mts', 'view'), mtsController.getRecentTracks);
 router.get('/recent-global-locations', requirePageAccess('/mts', 'view'), mtsController.getRecentGlobalLocations);
 
-// ПЛАТНЫЙ ручной запрос актуального положения — super_admin + 2FA + явный confirmed=true в body.
+// ПЛАТНЫЙ ручной запрос актуального положения — admin + 2FA + явный confirmed=true в body.
 router.post(
   '/request-location',
   requirePageAccess('/mts', 'edit'),

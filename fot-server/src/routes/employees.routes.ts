@@ -107,7 +107,7 @@ router.post(
   employeeEnrichContactsController.enrichContacts
 );
 
-// DELETE /api/employees/all - удаление ВСЕХ (super_admin, только для разработки)
+// DELETE /api/employees/all - удаление ВСЕХ (admin, только для разработки)
 router.delete(
   '/all',
   requirePageAccess('/staff-control', 'edit'),

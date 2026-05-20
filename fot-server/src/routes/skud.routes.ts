@@ -363,7 +363,7 @@ router.post(
   skudController.syncEmployee
 );
 
-// POST /api/skud/clean-duplicates - бэкфилл хэшей + удаление дублей (super_admin, требуется 2FA)
+// POST /api/skud/clean-duplicates - бэкфилл хэшей + удаление дублей (admin, требуется 2FA)
 router.post(
   '/clean-duplicates',
   requirePageAccess('/skud-settings', 'edit'),
@@ -371,7 +371,7 @@ router.post(
   skudController.cleanDuplicates
 );
 
-// DELETE /api/skud/clear - очистка данных (super_admin, требуется 2FA)
+// DELETE /api/skud/clear - очистка данных (admin, требуется 2FA)
 router.delete(
   '/clear',
   requirePageAccess('/skud-settings', 'edit'),

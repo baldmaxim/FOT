@@ -68,7 +68,7 @@ describe('evaluateManagerObjMemoRequirement', () => {
     expect(result.satisfied).toBe(true);
   });
 
-  it('admin/super_admin — служебка не требуется', () => {
+  it('admin — служебка не требуется', () => {
     const result = evaluateManagerObjMemoRequirement({
       submitterRoleCode: 'admin',
       weekendWorkDates: ['2026-05-10'],

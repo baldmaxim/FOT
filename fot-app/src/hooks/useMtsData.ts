@@ -21,7 +21,7 @@ export const useMtsSubscribers = (enabled: boolean) => useQuery({
   enabled,
 });
 
-/** Дополнительный запрос для диагностики (meta: upstreamTotal/isSuperAdmin/filteredOut). */
+/** Дополнительный запрос для диагностики (meta: upstreamTotal/hasFullAccess/filteredOut). */
 export const useMtsSubscribersMeta = (enabled: boolean) => useQuery({
   queryKey: ['mts', 'subscribers', 'meta'] as const,
   queryFn: () => mtsService.getSubscribersWithMeta(),

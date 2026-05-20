@@ -54,12 +54,12 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ de
 const Layout = lazy(() => import('./components/layout/Layout').then(m => ({ default: m.Layout })));
 const EmployeeLayout = lazy(() => import('./components/layout/EmployeeLayout').then(m => ({ default: m.EmployeeLayout })));
 
-// Super Admin
-const UserManagementPage = lazy(() => import('./pages/super-admin/UserManagementPage').then(m => ({ default: m.UserManagementPage })));
-const DataAuditPage = lazy(() => import('./pages/super-admin/DataAuditPage').then(m => ({ default: m.DataAuditPage })));
-const RoleManagementPage = lazy(() => import('./pages/super-admin/RoleManagementPage').then(m => ({ default: m.RoleManagementPage })));
-const SystemSettingsPage = lazy(() => import('./pages/super-admin/SystemSettingsPage').then(m => ({ default: m.SystemSettingsPage })));
-const PayslipManagePage = lazy(() => import('./pages/super-admin/PayslipManagePage').then(m => ({ default: m.PayslipManagePage })));
+// Admin
+const UserManagementPage = lazy(() => import('./pages/admin/UserManagementPage').then(m => ({ default: m.UserManagementPage })));
+const DataAuditPage = lazy(() => import('./pages/admin/DataAuditPage').then(m => ({ default: m.DataAuditPage })));
+const RoleManagementPage = lazy(() => import('./pages/admin/RoleManagementPage').then(m => ({ default: m.RoleManagementPage })));
+const SystemSettingsPage = lazy(() => import('./pages/admin/SystemSettingsPage').then(m => ({ default: m.SystemSettingsPage })));
+const PayslipManagePage = lazy(() => import('./pages/admin/PayslipManagePage').then(m => ({ default: m.PayslipManagePage })));
 const SchedulesPage = lazy(() => import('./pages/admin/SchedulesPage').then(m => ({ default: m.SchedulesPage })));
 const PatentReceiptsPage = lazy(() => import('./pages/admin/PatentReceiptsPage').then(m => ({ default: m.PatentReceiptsPage })));
 const PatentReceiptsEncryptionBadge = lazy(() => import('./pages/admin/PatentReceiptsPage').then(m => ({ default: m.PatentReceiptsEncryptionBadge })));

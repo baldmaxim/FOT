@@ -4,7 +4,7 @@ import { authenticate, requirePageAccess } from '../middleware/auth.js';
 
 const router = Router();
 
-// Все роуты требуют аутентификации и позиции admin или super_admin
+// Все роуты требуют аутентификации и позиции admin
 router.use(authenticate);
 router.use(requirePageAccess('/admin/audit', 'view'));
 

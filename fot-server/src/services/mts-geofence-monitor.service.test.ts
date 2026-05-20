@@ -131,7 +131,7 @@ describe('mts-geofence-monitor runGeofenceMonitorTick', () => {
     expect(openViolation).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledTimes(1);
     const notifications = notify.mock.calls[0][0] as { userId: string; type: string }[];
-    expect(notifications).toHaveLength(2); // оба super_admin
+    expect(notifications).toHaveLength(2); // оба admin
     expect(notifications[0].type).toBe('MTS_GEOFENCE_VIOLATION');
     expect(markNotified).toHaveBeenCalledWith('v-1');
   });

@@ -52,7 +52,7 @@
 
 ## Безопасность
 
-- Доступ к странице — только у ролей `super_admin` и `admin`.
+- Доступ к странице — только у роли `admin`.
 - Привязка карты — критическая операция, защищена 2FA (если включён `CRITICAL_2FA_ENABLED`).
 - Все привязки фиксируются в `audit_logs` (action `UPDATE_EMPLOYEE`, entity `sigur_card_binding`, source `card-reader`).
 

@@ -13,7 +13,7 @@ import { getTreeFlatDepartments } from '../../utils/departmentUtils';
 import { SearchInput } from '../ui/SearchInput';
 import { UserCompanyAccessSection } from './UserCompanyAccessSection';
 import { ContractorOrgAccessSection } from './ContractorOrgAccessSection';
-import styles from '../../pages/super-admin/SuperAdmin.module.css';
+import styles from '../../pages/admin/Admin.module.css';
 
 export interface IUserFromApi {
   id: string;

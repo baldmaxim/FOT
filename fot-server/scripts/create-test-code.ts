@@ -60,22 +60,22 @@ async function main(): Promise<void> {
 
   console.log(`Организация: ${org.name} (${org.id})`);
 
-  // 2. Получаем super_admin пользователя
+  // 2. Получаем admin пользователя
   const admin = await queryOne<IAdminRow>(
     `SELECT id, full_name, position_type
        FROM user_profiles
       WHERE position_type = $1
       LIMIT 1`,
-    ['super_admin'],
+    ['admin'],
   );
 
   if (!admin) {
-    console.error('Ошибка: не найден super_admin пользователь');
-    console.log('Сначала создайте пользователя с position_type = super_admin');
+    console.error('Ошибка: не найден admin пользователь');
+    console.log('Сначала создайте пользователя с position_type = admin');
     process.exit(1);
   }
 
-  console.log(`Создатель: ${admin.full_name || 'Super Admin'} (${admin.id})`);
+  console.log(`Создатель: ${admin.full_name || 'Admin'} (${admin.id})`);
 
   // 3. Генерируем уникальный код
   let code = generateCode();

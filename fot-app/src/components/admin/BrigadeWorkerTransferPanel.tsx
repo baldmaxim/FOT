@@ -6,7 +6,7 @@ import {
   type BrigadeWorkerTransferInput,
 } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
-import styles from '../../pages/super-admin/SuperAdmin.module.css';
+import styles from '../../pages/admin/Admin.module.css';
 
 interface IBrigadeWorkerTransferPanelProps {
   brigadeName: string;

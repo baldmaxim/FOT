@@ -16,8 +16,8 @@ const STORAGE_KEY = 'workerCabinetLocale';
 type Dict = Record<string, string>;
 
 const ru: Dict = {
-  'preview.banner.title': 'Режим предпросмотра (super_admin)',
-  'preview.banner.hint': 'Вы видите кабинет рабочего. Все действия выполняются от имени вашего учёта super_admin и привязанного employee_id.',
+  'preview.banner.title': 'Режим предпросмотра (admin)',
+  'preview.banner.hint': 'Вы видите кабинет рабочего. Все действия выполняются от имени вашего учёта admin и привязанного employee_id.',
   'notLinked.title': 'Аккаунт не привязан к сотруднику',
   'notLinked.hint': 'Обратитесь к администратору — загрузка чека от патента пока недоступна.',
   'profile.label.employee': 'Сотрудник',
@@ -71,8 +71,8 @@ const ru: Dict = {
 };
 
 const tg: Dict = {
-  'preview.banner.title': 'Реҷаи пешнамоиш (super_admin)',
-  'preview.banner.hint': 'Шумо кабинети коргарро мебинед. Ҳамаи амалҳо аз номи ҳисоби super_admin ва employee_id-и пайвасташуда иҷро мешаванд.',
+  'preview.banner.title': 'Реҷаи пешнамоиш (admin)',
+  'preview.banner.hint': 'Шумо кабинети коргарро мебинед. Ҳамаи амалҳо аз номи ҳисоби admin ва employee_id-и пайвасташуда иҷро мешаванд.',
   'notLinked.title': 'Ҳисоб ба коргар пайваст карда нашудааст',
   'notLinked.hint': 'Ба маъмур муроҷиат кунед — ҳоло боргузории чек аз патент дастрас нест.',
   'profile.label.employee': 'Коргар',
@@ -126,8 +126,8 @@ const tg: Dict = {
 };
 
 const uz: Dict = {
-  'preview.banner.title': 'Koʻrib chiqish rejimi (super_admin)',
-  'preview.banner.hint': 'Siz ishchi kabinetini koʻrasiz. Barcha amallar sizning super_admin hisobingiz va bogʻlangan employee_id nomidan bajariladi.',
+  'preview.banner.title': 'Koʻrib chiqish rejimi (admin)',
+  'preview.banner.hint': 'Siz ishchi kabinetini koʻrasiz. Barcha amallar sizning admin hisobingiz va bogʻlangan employee_id nomidan bajariladi.',
   'notLinked.title': 'Hisob xodimga bogʻlanmagan',
   'notLinked.hint': 'Administratorga murojaat qiling — hozircha patent chekini yuklash imkoni yoʻq.',
   'profile.label.employee': 'Xodim',

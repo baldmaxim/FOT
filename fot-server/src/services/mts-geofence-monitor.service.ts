@@ -118,9 +118,7 @@ async function loadLatestSnapshots(subscriberIds: number[], maxAgeMs: number): P
 
 async function loadAdminRecipientIds(): Promise<string[]> {
   // Получатели уведомления о нарушении геозоны: все is_admin=true пользователи
-  // (системные и компанийные). Если в проекте есть отдельная роль super_admin —
-  // она тоже сюда попадёт (is_admin неявно true). В проектах без super_admin
-  // получатели = admin'ы.
+  // (роль admin — системные и компанийные).
   const rows = await query<{ id: string }>(
     `SELECT u.id
        FROM app_auth.users u

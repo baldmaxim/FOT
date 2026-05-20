@@ -13,7 +13,7 @@ import { useToast } from '../../contexts/ToastContext';
 import type { Employee } from '../../types';
 import { getTreeFlatDepartments } from '../../utils/departmentUtils';
 import { BrigadeWorkerTransferPanel } from './BrigadeWorkerTransferPanel';
-import styles from '../../pages/super-admin/SuperAdmin.module.css';
+import styles from '../../pages/admin/Admin.module.css';
 
 interface IDepartmentAccessImportTabProps {
   allUsers: IUserSlim[];
