@@ -1,4 +1,4 @@
-import { type FC, useMemo, useState } from 'react';
+import { type FC, useMemo, useState, lazy, Suspense } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useMtsConnectionSettings,
@@ -11,11 +11,15 @@ import {
   useMtsCustomFields,
   useMtsRecentTracks,
   useMtsRecentGlobalLocations,
+  useMtsEmployeesLinked,
+  useAutoLinkMappings,
   getMtsConnectionQueryKey,
   getMtsMappingsQueryKey,
   getMtsLocationsQueryKey,
   getMtsTasksQueryKey,
 } from '../../hooks/useMtsData';
+
+const MtsMapModal = lazy(() => import('./MtsMapModal').then(m => ({ default: m.MtsMapModal })));
 import { mtsService, type IMtsSubscriber, type IMtsTestResult } from '../../services/mtsService';
 import { ApiError } from '../../api/client';
 import { MtsRequestLocationModal } from './MtsRequestLocationModal';
@@ -79,6 +83,10 @@ export const MtsPage: FC = () => {
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [tracksDays, setTracksDays] = useState(1);
   const [gpsDays, setGpsDays] = useState(1);
+  const [linkedSearch, setLinkedSearch] = useState('');
+  const [mapTarget, setMapTarget] = useState<{ employeeId: number; subscriberId: number; fullName: string } | null>(null);
+  const linkedQuery = useMtsEmployeesLinked({ search: linkedSearch, pageSize: 100 }, configured);
+  const autoLinkMutation = useAutoLinkMappings();
   const tasksQuery = useMtsTasks(configured);
   const groupsQuery = useMtsSubscriberGroups(configured);
   const customFieldsQuery = useMtsCustomFields(configured);
@@ -297,6 +305,99 @@ export const MtsPage: FC = () => {
           </dl>
         )}
       </section>
+
+      {configured && (
+        <section className={styles.card}>
+          <div className={styles.tableHeader}>
+            <h2 className={styles.cardTitle}>
+              Сотрудники с MTS-привязкой
+              {linkedQuery.data ? ` (${linkedQuery.data.data.length})` : ''}
+            </h2>
+            <div className={styles.actions}>
+              <input
+                className={`${styles.input} ${styles.searchInput}`}
+                type="search"
+                placeholder="Поиск по ФИО…"
+                value={linkedSearch}
+                onChange={e => setLinkedSearch(e.target.value)}
+              />
+              <button
+                className={styles.btnSecondary}
+                disabled={autoLinkMutation.isPending}
+                onClick={async () => {
+                  setStatus(null);
+                  try {
+                    const r = await autoLinkMutation.mutateAsync();
+                    setStatus({ ok: true, msg: `Авто-привязано по ФИО: ${r.applied}` });
+                  } catch (e) {
+                    setStatus({ ok: false, msg: errText(e, 'Ошибка авто-привязки (нужен 2FA)') });
+                  }
+                }}
+              >
+                Связать по ФИО (2FA)
+              </button>
+            </div>
+          </div>
+          <p className={styles.hint}>
+            Кликните «Карта», чтобы открыть треки сотрудника на OpenStreetMap и настроить геозоны.
+            Уведомление администратору приходит, если сотрудник вне геозоны во время своей смены.
+          </p>
+          {linkedQuery.isLoading && <p className={styles.hint}>Загрузка…</p>}
+          {linkedQuery.isError && <p className={styles.err}>Не удалось загрузить список</p>}
+          {linkedQuery.isSuccess && linkedQuery.data.data.length === 0 && (
+            <p className={styles.hint}>
+              Нет привязанных сотрудников. Используйте «Связать по ФИО» или вкладку «Абоненты» ниже.
+            </p>
+          )}
+          {linkedQuery.data && linkedQuery.data.data.length > 0 && (
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>ФИО</th>
+                    <th>Таб.№</th>
+                    <th>Телефон МТС</th>
+                    <th>Последний пинг</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {linkedQuery.data.data.map(row => (
+                    <tr key={row.subscriberId}>
+                      <td>{row.employeeFullName || row.displayName || `#${row.employeeId}`}</td>
+                      <td>{row.employeeTabNumber || '—'}</td>
+                      <td>{row.phone || '—'}</td>
+                      <td>{row.lastRecordedAt ? new Date(row.lastRecordedAt).toLocaleString('ru-RU') : '—'}</td>
+                      <td>
+                        <button
+                          className={styles.btnSm}
+                          disabled={!row.employeeId}
+                          onClick={() => {
+                            if (!row.employeeId) return;
+                            setMapTarget({
+                              employeeId: row.employeeId,
+                              subscriberId: row.subscriberId,
+                              fullName: row.employeeFullName || row.displayName || `#${row.employeeId}`,
+                            });
+                          }}
+                        >
+                          Карта
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      {mapTarget && (
+        <Suspense fallback={<div />}>
+          <MtsMapModal target={mapTarget} onClose={() => setMapTarget(null)} />
+        </Suspense>
+      )}
 
       {requestSubscriber && (
         <MtsRequestLocationModal

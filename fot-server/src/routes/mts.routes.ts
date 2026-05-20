@@ -59,5 +59,18 @@ router.post(
 router.get('/mappings', requirePageAccess('/mts', 'view'), mtsController.getMappings);
 router.get('/mappings/suggestions', requirePageAccess('/mts', 'view'), mtsController.getMappingSuggestions);
 router.put('/mappings', requirePageAccess('/mts', 'edit'), requireCritical2FA, mtsController.setMapping);
+router.post('/mappings/auto-link', requirePageAccess('/mts', 'edit'), requireCritical2FA, mtsController.autoLinkMappings);
+
+// Сотрудники с MTS-привязкой (для карты и геозон)
+router.get('/employees-linked', requirePageAccess('/mts', 'view'), mtsController.getEmployeesLinked);
+router.get('/track-points', requirePageAccess('/mts', 'view'), mtsController.getTrackPoints);
+
+// Геозоны
+router.get('/geofences', requirePageAccess('/mts', 'view'), mtsController.listGeofences);
+router.post('/geofences', requirePageAccess('/mts', 'edit'), requireCritical2FA, mtsController.createGeofence);
+router.put('/geofences/:id', requirePageAccess('/mts', 'edit'), requireCritical2FA, mtsController.updateGeofence);
+router.delete('/geofences/:id', requirePageAccess('/mts', 'edit'), requireCritical2FA, mtsController.deleteGeofence);
+router.put('/geofences/:id/assignments', requirePageAccess('/mts', 'edit'), requireCritical2FA, mtsController.setGeofenceAssignments);
+router.get('/violations', requirePageAccess('/mts', 'view'), mtsController.listGeofenceViolations);
 
 export default router;

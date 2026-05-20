@@ -57,9 +57,13 @@ const envSchema = z.object({
   // Значения добавляет пользователь вручную в .env или в системные настройки.
   MTS_API_BASE_URL: optionalUrl,
   MTS_API_TOKEN: optionalString,
-  // Часовой такт для фонового поллера МТС lastLocations (бесплатный API,
-  // активной trigger-схемой не пользуемся — она платная и идёт через UI вручную).
-  MTS_SYNC_INTERVAL_MS: z.string().regex(/^\d+$/).default('3600000'),
+  // Такт фонового поллера МТС lastLocations (бесплатный GET API).
+  // По умолчанию 10 минут — нужно для актуальности входа в геозону.
+  MTS_SYNC_INTERVAL_MS: z.string().regex(/^\d+$/).default('600000'),
+  // Геозоны: интервал монитора нарушений и параметры алгоритма.
+  MTS_GEOFENCE_POLL_MS: z.string().regex(/^\d+$/).default('300000'),
+  MTS_GEOFENCE_REPEAT_MIN: z.string().regex(/^\d+$/).default('30'),
+  MTS_GEOFENCE_SNAPSHOT_MAX_AGE_MIN: z.string().regex(/^\d+$/).default('15'),
 
   // Web Push (VAPID)
   VAPID_PUBLIC_KEY: optionalString,

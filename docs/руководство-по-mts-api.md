@@ -417,7 +417,125 @@ curl -X POST -H "Authorization: Bearer $MTS_TOKEN" -H "Content-Type: application
 
 ---
 
-## 10. Ссылки
+## 10. Геозоны и мониторинг нарушений
+
+Добавлено миграцией 112 (`docs/migrations/112_mts_geofences.sql`). Раздел в `/mts`
+позволяет:
+1. Получить список сотрудников FOT, привязанных к MTS-абонентам (по ФИО),
+2. Открыть карту OpenStreetMap с треком сотрудника за 1/3/7 дней,
+3. Нарисовать полигональную геозону (Leaflet + leaflet-geoman),
+4. Привязать зону к сотрудникам.
+
+Если назначенный сотрудник находится ВНЕ геозоны во время своей рабочей смены
+(резолвится через [schedule.service.ts → resolveSchedule()](../fot-server/src/services/schedule.service.ts) +
+`getActiveShiftWindow` в [mts-geofence-geometry.ts](../fot-server/src/services/mts-geofence-geometry.ts) — учитывает
+кросс-полуночные смены), фоновый монитор открывает запись нарушения и шлёт
+уведомление администраторам.
+
+### Таблицы
+
+| Таблица | Назначение | Шифрование |
+|---|---|---|
+| `mts_geofences` | id, name, geometry(jsonb), is_active | НЕ шифруется — это бизнес-объекты, не PII |
+| `mts_geofence_assignments` | (geofence_id, employee_id), is_active | — |
+| `mts_geofence_violations` | started/ended_at, last_notified_at, lat/lon/acc/source enc | координаты ШИФРУЮТСЯ (AES-256-GCM) — это PII сотрудника |
+
+Геометрия — массив `{lat:number, lng:number}` ≥3 точек, ≤500. Серверная
+валидация рубит self-intersecting полигоны и невалидные координаты
+([validatePolygon](../fot-server/src/services/mts-geofence-geometry.ts)).
+
+### Алгоритм монитора
+
+[mts-geofence-monitor.service.ts](../fot-server/src/services/mts-geofence-monitor.service.ts)
+запускается в `index.ts` рядом с `startMtsLocationPoller`. Каждый тик:
+
+1. Загружает активные геозоны + назначения (одним запросом).
+2. Для каждого сотрудника с назначением — проверяет `getActiveShiftWindow(employeeId, now)`. Если не на смене — пропускает.
+3. Для оставшихся берёт свежий снимок (`mts_location_snapshots`, не старше `MTS_GEOFENCE_SNAPSHOT_MAX_AGE_MIN`), расшифровывает.
+4. Для каждой пары (employee × geofence) вызывает `classifySnapshot(point, accuracy, ring)`:
+   - **outside** — точка вне И ближайшее ребро дальше `accuracy_m` (LBS-погрешность не накрывает зону);
+   - **inside** — точка внутри И дальше `accuracy_m` от любого ребра;
+   - **ambiguous** — у границы с большим LBS-разбросом → тик игнорируется.
+5. Dwell-счётчик в памяти:
+   - Открыть нарушение после **2** подряд `outside`-тиков (минимум ~10 мин при интервале 5 мин);
+   - Закрыть после **1** `inside`-тика.
+6. На открытие шлём уведомление `MTS_GEOFENCE_VIOLATION` всем `super_admin` через
+   `notificationService.createMany()` (in-app + Socket.IO + Web Push). Повторное
+   уведомление по тому же открытому нарушению — не чаще раз в
+   `MTS_GEOFENCE_REPEAT_MIN` минут.
+
+Так гарантируем: 1) ложные срабатывания на LBS-погрешности 250-500м отсекаются,
+2) сотрудник не получает спам в момент пересечения границы (dwell), 3) администратор
+не тонет в повторных уведомлениях (cooldown).
+
+### Карта на фронте
+
+Использует **Leaflet 1.9 + react-leaflet 5 + leaflet-geoman-free**, без API-ключа.
+Тайлы по умолчанию: `https://tile.openstreetmap.org/{z}/{x}/{y}.png` (атрибуция
+`© OpenStreetMap contributors`). URL переключается через env
+`VITE_MAP_TILE_URL` — для прод-нагрузки рекомендуется Carto Positron
+(`https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png`) или Stadia
+(требует регистрации), потому что OSM Tile Usage Policy ограничивает
+high-volume коммерческое использование.
+
+Модалка карты ([MtsMapModal.tsx](../fot-app/src/pages/mts/MtsMapModal.tsx))
+загружается **lazy** через `React.lazy` — Leaflet (~100KB gzipped) не попадает
+в первый рендер `/mts`.
+
+### REST-роуты (под префиксом `/api/mts`)
+
+| Метод | Путь | Защита |
+|---|---|---|
+| GET | `/employees-linked?page=&pageSize=&search=` | view + data-scope |
+| GET | `/track-points?subscriberId=&dateFrom=&dateTo=` | view + IDOR |
+| POST | `/mappings/auto-link` | super_admin + 2FA |
+| GET | `/geofences` | view |
+| POST | `/geofences` | edit + 2FA |
+| PUT | `/geofences/:id` | edit + 2FA |
+| DELETE | `/geofences/:id` | edit + 2FA |
+| PUT | `/geofences/:id/assignments` | edit + 2FA |
+| GET | `/violations?employeeId=&from=&to=&page=&pageSize=` | view + data-scope |
+
+Аудит: `MTS_GEOFENCE_CREATED|UPDATED|DELETED|ASSIGNED`, `MTS_MAPPING_AUTO_LINKED`.
+
+### Env-переменные
+
+Все опциональны (значения по умолчанию работают в продакшене):
+
+```env
+# Кэш МТС lastLocations (бесплатный GET) — снижено с 1ч до 10 мин,
+# чтобы геозон-монитор имел свежие снимки.
+MTS_SYNC_INTERVAL_MS=600000
+
+# Тик монитора геозон.
+MTS_GEOFENCE_POLL_MS=300000
+
+# Cooldown повторного уведомления по одному открытому нарушению.
+MTS_GEOFENCE_REPEAT_MIN=30
+
+# Максимальный возраст снимка для классификации.
+MTS_GEOFENCE_SNAPSHOT_MAX_AGE_MIN=15
+```
+
+### Формат уведомления
+
+```json
+{
+  "type": "MTS_GEOFENCE_VIOLATION",
+  "title": "МТС: выход из геозоны",
+  "body": "Иванов Иван вне зоны «Офис Тверская»",
+  "metadata": {
+    "violationId": "uuid",
+    "geofenceId": "uuid",
+    "geofenceName": "Офис Тверская",
+    "employeeId": 42
+  }
+}
+```
+
+---
+
+## 11. Ссылки
 
 - Технический контракт: [docs/mts-mobile-staff-api.md](mts-mobile-staff-api.md)
 - Standalone-скрипт: [fot-server/scripts/mts-fetch-subscribers.mjs](../fot-server/scripts/mts-fetch-subscribers.mjs)

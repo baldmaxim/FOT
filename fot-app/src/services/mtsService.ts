@@ -135,8 +135,59 @@ export interface IMtsMappingSuggestion {
   employeeFullName: string;
 }
 
+export interface IGeoPoint {
+  lat: number;
+  lng: number;
+}
+
+export interface IMtsEmployeeLinkedRow {
+  subscriberId: number;
+  employeeId: number | null;
+  employeeFullName: string | null;
+  employeeTabNumber: string | null;
+  phone: string | null;
+  displayName: string | null;
+  lastRecordedAt: string | null;
+}
+
+export interface IMtsTrackPoint {
+  recordedAt: string;
+  lat: number;
+  lng: number;
+  accuracy: number | null;
+  source: string | null;
+}
+
+export interface IMtsGeofence {
+  id: string;
+  name: string;
+  geometry: IGeoPoint[];
+  isActive: boolean;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  employeeIds: number[];
+}
+
+export interface IMtsGeofenceViolation {
+  id: string;
+  geofenceId: string;
+  geofenceName: string | null;
+  employeeId: number;
+  employeeFullName: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  lastNotifiedAt: string | null;
+  notifyCount: number;
+  latitude: number | null;
+  longitude: number | null;
+  accuracyMeters: number | null;
+  source: string | null;
+}
+
 interface ApiResponse<T> {
   data: T;
+  meta?: { total?: number; page?: number; pageSize?: number };
 }
 
 export const mtsService = {
@@ -250,5 +301,67 @@ export const mtsService = {
   getRecentGlobalLocations: async (days: number): Promise<IMtsGpsPoint[]> => {
     const res = await apiClient.get<ApiResponse<IMtsGpsPoint[]>>(`/mts/recent-global-locations?days=${days}`);
     return res.data;
+  },
+
+  // === Сотрудники с MTS-привязкой и треки для карты ===
+  getEmployeesLinked: async (params: { page?: number; pageSize?: number; search?: string } = {}): Promise<{ data: IMtsEmployeeLinkedRow[]; total: number }> => {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.pageSize) qs.set('pageSize', String(params.pageSize));
+    if (params.search) qs.set('search', params.search);
+    const url = qs.toString() ? `/mts/employees-linked?${qs.toString()}` : '/mts/employees-linked';
+    const res = await apiClient.get<ApiResponse<IMtsEmployeeLinkedRow[]>>(url);
+    return { data: res.data, total: res.meta?.total ?? res.data.length };
+  },
+
+  getTrackPoints: async (subscriberId: number, dateFrom: string, dateTo: string): Promise<IMtsTrackPoint[]> => {
+    const qs = new URLSearchParams({ subscriberId: String(subscriberId), dateFrom, dateTo });
+    const res = await apiClient.get<ApiResponse<IMtsTrackPoint[]>>(`/mts/track-points?${qs.toString()}`);
+    return res.data;
+  },
+
+  autoLinkMappings: async (): Promise<{ applied: number; suggestions: IMtsMappingSuggestion[] }> => {
+    const res = await apiClient.post<ApiResponse<{ applied: number; suggestions: IMtsMappingSuggestion[] }>>(
+      '/mts/mappings/auto-link',
+      {},
+    );
+    return res.data;
+  },
+
+  // === Геозоны ===
+  listGeofences: async (): Promise<IMtsGeofence[]> => {
+    const res = await apiClient.get<ApiResponse<IMtsGeofence[]>>('/mts/geofences');
+    return res.data;
+  },
+
+  createGeofence: async (input: { name: string; geometry: IGeoPoint[] }): Promise<IMtsGeofence> => {
+    const res = await apiClient.post<ApiResponse<IMtsGeofence>>('/mts/geofences', input);
+    return res.data;
+  },
+
+  updateGeofence: async (id: string, input: { name?: string; geometry?: IGeoPoint[]; isActive?: boolean }): Promise<IMtsGeofence> => {
+    const res = await apiClient.put<ApiResponse<IMtsGeofence>>(`/mts/geofences/${id}`, input);
+    return res.data;
+  },
+
+  deleteGeofence: async (id: string): Promise<void> => {
+    await apiClient.delete(`/mts/geofences/${id}`);
+  },
+
+  setGeofenceAssignments: async (id: string, employeeIds: number[]): Promise<IMtsGeofence> => {
+    const res = await apiClient.put<ApiResponse<IMtsGeofence>>(`/mts/geofences/${id}/assignments`, { employeeIds });
+    return res.data;
+  },
+
+  listGeofenceViolations: async (params: { employeeId?: number; from?: string; to?: string; page?: number; pageSize?: number } = {}): Promise<{ data: IMtsGeofenceViolation[]; total: number }> => {
+    const qs = new URLSearchParams();
+    if (params.employeeId) qs.set('employeeId', String(params.employeeId));
+    if (params.from) qs.set('from', params.from);
+    if (params.to) qs.set('to', params.to);
+    if (params.page) qs.set('page', String(params.page));
+    if (params.pageSize) qs.set('pageSize', String(params.pageSize));
+    const url = qs.toString() ? `/mts/violations?${qs.toString()}` : '/mts/violations';
+    const res = await apiClient.get<ApiResponse<IMtsGeofenceViolation[]>>(url);
+    return { data: res.data, total: res.meta?.total ?? res.data.length };
   },
 };

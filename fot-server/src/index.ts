@@ -14,6 +14,7 @@ import { startTimesheetReminderScheduler } from './services/timesheet-reminder.s
 import { startPatentExpiryReminderScheduler } from './services/patent-expiry-reminder.service.js';
 import { startDailyTasksReminderScheduler } from './services/daily-tasks-reminder.service.js';
 import { startMtsLocationPoller } from './services/mts-location-poller.service.js';
+import { startMtsGeofenceMonitor } from './services/mts-geofence-monitor.service.js';
 import { aiReceiptRecognitionService } from './services/ai-receipt-recognition.service.js';
 import { prewarmSigurPresenceResolver } from './services/sigur-presence-resolver.service.js';
 import { getPresenceByObject } from './services/skud-presence-by-object.service.js';
@@ -62,6 +63,7 @@ httpServer.listen(PORT, HOST, () => {
   startPatentExpiryReminderScheduler();
   startDailyTasksReminderScheduler();
   startMtsLocationPoller();
+  startMtsGeofenceMonitor();
   void aiReceiptRecognitionService.resumePendingRecognitions().then(count => {
     if (count > 0) console.log(`[ai-receipt-recognition] возобновлено задач: ${count}`);
   });

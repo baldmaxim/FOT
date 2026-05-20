@@ -160,6 +160,10 @@
   align-items: center;
 }
 
+.searchInput {
+  max-width: 280px;
+}
+
 .btnDanger,
 .btnDangerSm {
   background: var(--color-danger, #dc2626);
