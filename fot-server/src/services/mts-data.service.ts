@@ -85,9 +85,17 @@ class MtsDataService extends MtsServiceBase {
   }
 
   private async fetchSubscribers(): Promise<IMtsSubscriber[]> {
-    const payload = await this.request<unknown>('get', '/subscriberManagement/subscribers', {
-      params: { isActive: true },
-    });
+    // Без фильтра — МТС-аккаунт может держать абонентов без флага isActive=true
+    // (например, добавленные через CSV-импорт или из приложения «Координатор»).
+    // Фильтрацию по активности оставляем на UI.
+    const payload = await this.request<unknown>('get', '/subscriberManagement/subscribers');
+    // Один диагностический лог: какова форма ответа МТС. Без PII — только тип/ключи/длина.
+    const shape = Array.isArray(payload)
+      ? `array(len=${payload.length})`
+      : payload && typeof payload === 'object'
+        ? `object(keys=[${Object.keys(payload).join(',')}])`
+        : `primitive(${typeof payload})`;
+    console.log(`[mts] subscribers raw payload shape: ${shape}`);
     return this.extractItems<Record<string, unknown>>(payload).map(r => ({
       subscriberID: Number(r.subscriberID),
       name: str(r.name),
