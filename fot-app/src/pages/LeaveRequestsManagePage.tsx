@@ -44,6 +44,20 @@ const NO_DEPARTMENT_KEY = 'Без отдела';
 const DIRECT_REPORTS_KEY = '__direct_reports__';
 const DIRECT_REPORTS_TITLE = 'Непосредственные подчинённые';
 
+// Старые вложения (до Unicode-фикса sanitizeFileName) хранятся в БД как
+// «________.pdf» — буквы/цифры были схлопнуты в подчёркивания. Показываем для
+// них fallback «Документ.ext», исходное имя остаётся в title.
+const formatAttachmentName = (fileName: string): string => {
+  const base = fileName.replace(/^.*[\\/]/, '');
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : '';
+  if (!/[\p{L}\p{N}]/u.test(stem)) {
+    return `Документ${ext}`;
+  }
+  return base;
+};
+
 interface IPreviewState {
   documentId: number;
   fileName: string;
@@ -96,9 +110,11 @@ export const LeaveRequestsManagePage: FC = () => {
     });
   }, [filteredRequests]);
 
-  // Заголовки групп показываем только если групп >1 (несколько отделов или
-  // «отдел + direct reports»). При единственной группе — плоский список.
-  const showGroupHeaders = grouped.length > 1;
+  // Для админа (scope='all') заголовки отделов показываем всегда — даже если
+  // получилась 1 группа (включая «Без отдела»): админу нужен явный контекст.
+  // Для руководителя (scope='department') поведение прежнее — 1 группа →
+  // плоско, ≥2 (отдел + direct reports или несколько отделов) → группы.
+  const showGroupHeaders = scope === 'all' ? grouped.length >= 1 : grouped.length > 1;
 
   useEffect(() => {
     // При первой загрузке (или смене фильтра) — если групп > 2, свернуть все,
@@ -228,7 +244,7 @@ export const LeaveRequestsManagePage: FC = () => {
                   title={att.file_name}
                 >
                   <Paperclip size={12} />
-                  <span className="lrm-attachment-name">{att.file_name}</span>
+                  <span className="lrm-attachment-name">{formatAttachmentName(att.file_name)}</span>
                 </button>
               ))}
             </div>

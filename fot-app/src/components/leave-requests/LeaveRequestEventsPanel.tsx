@@ -1,6 +1,6 @@
 import { type FC, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { LogIn, LogOut, Timer, X, XCircle } from 'lucide-react';
+import { Coffee, LogIn, LogOut, Timer, X, XCircle } from 'lucide-react';
 import { skudService } from '../../services/skudService';
 import {
   buildDisplayItems,
@@ -8,7 +8,9 @@ import {
   findFirstExternalEntry,
   findLastExternalExit,
   mergeFailuresIntoDisplay,
+  sumBreakSeconds,
 } from '../../utils/skudDisplay';
+import { formatFailureType } from '../../utils/skudFailureTypes';
 import { formatSecondsLabel } from '../../utils/hoursDisplay';
 import styles from './LeaveRequestEventsPanel.module.css';
 
@@ -31,19 +33,6 @@ const formatRuDate = (date: string): string => {
     });
   } catch {
     return date;
-  }
-};
-
-const formatFailure = (type: string): string => {
-  switch (type) {
-    case 'PASS_DENY':
-      return 'Отказ';
-    case 'READER_ERROR':
-      return 'Ошибка считывателя';
-    case 'TIMEOUT':
-      return 'Таймаут';
-    default:
-      return type;
   }
 };
 
@@ -89,6 +78,8 @@ export const LeaveRequestEventsPanel: FC<ILeaveRequestEventsPanelProps> = ({
     () => calculateWorkSeconds(events, internalPoints, date),
     [events, internalPoints, date],
   );
+
+  const totalBreakSeconds = useMemo(() => sumBreakSeconds(items), [items]);
 
   const firstEntry = useMemo(() => findFirstExternalEntry(events, internalPoints), [events, internalPoints]);
   const lastExit = useMemo(() => findLastExternalExit(events, internalPoints), [events, internalPoints]);
@@ -140,7 +131,7 @@ export const LeaveRequestEventsPanel: FC<ILeaveRequestEventsPanelProps> = ({
                         <XCircle size={14} />
                       </span>
                       <span className={styles.time}>{formatTime(f.event_time)}</span>
-                      <span className={styles.dir}>{formatFailure(f.failure_type)}</span>
+                      <span className={styles.dir}>{formatFailureType(f.failure_type)}</span>
                       {f.access_point && <span className={styles.point}>{f.access_point}</span>}
                     </div>
                   );
@@ -177,6 +168,15 @@ export const LeaveRequestEventsPanel: FC<ILeaveRequestEventsPanelProps> = ({
                 </span>
                 <span className={styles.summaryValue}>{formatSecondsLabel(totalSeconds)}</span>
               </span>
+              {totalBreakSeconds > 0 && (
+                <span className={styles.summaryRow}>
+                  <span className={styles.summaryLabel}>
+                    <Coffee size={12} className={styles.summaryIcon} />
+                    Перерыв:
+                  </span>
+                  <span className={styles.summaryValue}>{formatSecondsLabel(totalBreakSeconds)}</span>
+                </span>
+              )}
             </div>
           </>
         )}
