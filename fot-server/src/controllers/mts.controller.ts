@@ -86,15 +86,45 @@ export const mtsController = {
   },
 
   async testConnection(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    // Диагностический эндпоинт — отдаёт расширенную информацию: HTTP/код МТС,
+    // baseUrl и source, чтобы понять «почему ничего не грузится» без выкачивания
+    // ПДн (description МТС обычно технический, не содержит PII).
+    let public_settings: { baseUrl: string; hasToken: boolean; source: string } | null = null;
+    try {
+      public_settings = await settingsService.getMtsConnectionSettings();
+    } catch (e) {
+      console.error('[mts] testConnection: settings read failed:', e instanceof Error ? e.message : 'unknown');
+    }
+
     try {
       const result = await mtsDataService.testConnection();
-      res.json({ success: true, data: result });
+      res.json({
+        success: true,
+        data: {
+          ok: result.ok,
+          count: result.count,
+          baseUrl: public_settings?.baseUrl ?? null,
+          source: public_settings?.source ?? 'unknown',
+          hasToken: public_settings?.hasToken ?? false,
+        },
+      });
     } catch (error) {
       if (error instanceof MtsApiError) {
-        // Тест-эндпоинт: показываем результат «не удалось» без body апстрима.
+        console.error(`[mts] testConnection failed: http=${error.status} code=${error.code ?? '-'} desc=${error.description ?? '-'} msg=${error.message}`);
         res.json({
           success: true,
-          data: { ok: false, count: 0, error: error.code ? `код МТС ${error.code}` : 'не удалось' },
+          data: {
+            ok: false,
+            count: 0,
+            error: error.code ? `код МТС ${error.code}` : 'не удалось',
+            mtsHttp: error.status,
+            mtsCode: error.code ?? null,
+            mtsDescription: error.description ?? null,
+            mtsMessage: error.message,
+            baseUrl: public_settings?.baseUrl ?? null,
+            source: public_settings?.source ?? 'unknown',
+            hasToken: public_settings?.hasToken ?? false,
+          },
         });
         return;
       }
@@ -448,4 +478,111 @@ export const mtsController = {
       fail(res, error, 'Ошибка сохранения привязки МТС');
     }
   },
+
+  // === Бесплатные расширенные GET-эндпоинты (read-only) ===
+  // Все вызовы ниже — только GET к МТС, никаких списаний. Не дёргают requestLocation
+  // и subscriberRequests. Подробнее: docs/руководство-по-mts-api.md, секция «Тарификация».
+
+  async getSubscriberGroups(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const data = await mtsDataService.getSubscriberGroups();
+      res.json({ success: true, data });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения групп абонентов МТС');
+    }
+  },
+
+  async getSubscriberGroup(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const groupId = Number(_req.params.id);
+      if (!Number.isFinite(groupId)) {
+        res.status(400).json({ success: false, error: 'id обязателен' });
+        return;
+      }
+      const data = await mtsDataService.getSubscriberGroupDetails(groupId);
+      res.json({ success: true, data });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения группы абонентов МТС');
+    }
+  },
+
+  async getCustomFields(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const data = await mtsDataService.getCustomFields();
+      res.json({ success: true, data });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения кастомных полей МТС');
+    }
+  },
+
+  /**
+   * Узкий read-only датафид: LBS-локации за N дней (1..7).
+   * Только super_admin (нет per-subscriber IDOR-фильтра — для краткости и нагрузки).
+   */
+  async getRecentLocations(req: AuthenticatedRequest, res: Response): Promise<void> {
+    if (!isSuperAdmin(req)) {
+      res.status(403).json({ success: false, error: 'Доступно только super_admin' });
+      return;
+    }
+    try {
+      const { dateFrom, dateTo } = parseDaysRange(req.query.days);
+      const data = await mtsDataService.getLocationsRange(dateFrom, dateTo);
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof RangeError) {
+        res.status(400).json({ success: false, error: error.message });
+        return;
+      }
+      fail(res, error, 'Ошибка получения локаций МТС');
+    }
+  },
+
+  async getRecentTracks(req: AuthenticatedRequest, res: Response): Promise<void> {
+    if (!isSuperAdmin(req)) {
+      res.status(403).json({ success: false, error: 'Доступно только super_admin' });
+      return;
+    }
+    try {
+      const { dateFrom, dateTo } = parseDaysRange(req.query.days);
+      const data = await mtsDataService.getTracksRange(dateFrom, dateTo);
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof RangeError) {
+        res.status(400).json({ success: false, error: error.message });
+        return;
+      }
+      fail(res, error, 'Ошибка получения треков МТС');
+    }
+  },
+
+  async getRecentGlobalLocations(req: AuthenticatedRequest, res: Response): Promise<void> {
+    if (!isSuperAdmin(req)) {
+      res.status(403).json({ success: false, error: 'Доступно только super_admin' });
+      return;
+    }
+    try {
+      const { dateFrom, dateTo } = parseDaysRange(req.query.days);
+      const data = await mtsDataService.getGlobalLocations(dateFrom, dateTo);
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof RangeError) {
+        res.status(400).json({ success: false, error: error.message });
+        return;
+      }
+      fail(res, error, 'Ошибка получения GPS-точек МТС');
+    }
+  },
 };
+
+// Хелпер: окно последних N дней в формате ISO local без TZ (контракт МТС:
+// «нельзя смешивать форматы в одном запросе» → используем одинаковый).
+function parseDaysRange(raw: unknown): { dateFrom: string; dateTo: string } {
+  const n = Number(raw ?? 1);
+  if (!Number.isFinite(n) || n < 1 || n > 7) {
+    throw new RangeError('days должен быть от 1 до 7');
+  }
+  const trim = (d: Date): string => d.toISOString().replace(/\.\d{3}Z$/, '');
+  const to = new Date();
+  const from = new Date(to.getTime() - n * 86_400_000);
+  return { dateFrom: trim(from), dateTo: trim(to) };
+}

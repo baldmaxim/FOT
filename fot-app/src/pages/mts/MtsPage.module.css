@@ -264,6 +264,72 @@
   flex: 1 1 200px;
 }
 
+.titleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.badgeFree {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(22, 163, 74, 0.12);
+  color: #15803d;
+  border: 1px solid rgba(22, 163, 74, 0.35);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.badgePaid {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(220, 38, 38, 0.1);
+  color: #b91c1c;
+  border: 1px solid rgba(220, 38, 38, 0.35);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.diagBlock {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px dashed var(--color-border, #d1d5db);
+  border-radius: 8px;
+  background: var(--color-bg, #fafafa);
+  font-size: 0.85rem;
+  color: var(--color-text, #111);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-x: auto;
+}
+
+.diagBlock dt {
+  font-weight: 600;
+  color: var(--color-text-secondary, #6b7280);
+  display: inline-block;
+  min-width: 90px;
+}
+
+.diagBlock dd {
+  display: inline;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.daysSelect {
+  font-size: 16px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border, #d1d5db);
+  border-radius: 8px;
+  background: var(--color-bg, #fff);
+  color: var(--color-text, #111);
+}
+
 @media (max-width: 768px) {
   .page {
     padding: 12px;

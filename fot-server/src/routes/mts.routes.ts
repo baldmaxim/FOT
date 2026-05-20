@@ -29,6 +29,14 @@ router.get('/last-locations', requirePageAccess('/mts', 'view'), mtsController.g
 router.get('/track', requirePageAccess('/mts', 'view'), mtsController.getTrack);
 router.get('/history', requirePageAccess('/mts', 'view'), mtsController.getHistory);
 
+// Дополнительные бесплатные read-only справочники (GET → МТС, без списаний).
+router.get('/subscriber-groups', requirePageAccess('/mts', 'view'), mtsController.getSubscriberGroups);
+router.get('/subscriber-groups/:id', requirePageAccess('/mts', 'view'), mtsController.getSubscriberGroup);
+router.get('/custom-fields', requirePageAccess('/mts', 'view'), mtsController.getCustomFields);
+router.get('/recent-locations', requirePageAccess('/mts', 'view'), mtsController.getRecentLocations);
+router.get('/recent-tracks', requirePageAccess('/mts', 'view'), mtsController.getRecentTracks);
+router.get('/recent-global-locations', requirePageAccess('/mts', 'view'), mtsController.getRecentGlobalLocations);
+
 // ПЛАТНЫЙ ручной запрос актуального положения — super_admin + 2FA + явный confirmed=true в body.
 router.post(
   '/request-location',

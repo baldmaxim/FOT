@@ -10,6 +10,54 @@ export interface IMtsTestResult {
   ok: boolean;
   count: number;
   error?: string;
+  /** Расширенная диагностика (заполняется бэком при ошибке апстрима МТС). */
+  mtsHttp?: number;
+  mtsCode?: number | null;
+  mtsDescription?: string | null;
+  mtsMessage?: string;
+  baseUrl?: string | null;
+  source?: string;
+  hasToken?: boolean;
+}
+
+export interface IMtsSubscriberGroup {
+  subscriberGroupID: number;
+  name: string | null;
+  [k: string]: unknown;
+}
+
+export interface IMtsCustomField {
+  customFieldID?: number;
+  name?: string | null;
+  type?: string | null;
+  isRequired?: boolean | null;
+  [k: string]: unknown;
+}
+
+export interface IMtsTrackSegment {
+  trackID: number;
+  subscriberID: number;
+  startDate: string | null;
+  finishDate: string | null;
+  startAddress: string | null;
+  finishAddress: string | null;
+  startLat: number | null;
+  startLon: number | null;
+  finishLat: number | null;
+  finishLon: number | null;
+  distance: number | null;
+  duration: number | null;
+}
+
+export interface IMtsGpsPoint {
+  locationID: number;
+  subscriberID: number;
+  locationDate: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  angle: number | null;
+  velocity: number | null;
+  isValid: boolean | null;
 }
 
 export interface IMtsSubscriber {
@@ -21,6 +69,8 @@ export interface IMtsSubscriber {
   isLocateEnabled: boolean | null;
   longitude: number | null;
   latitude: number | null;
+  subscriberGroupIDs?: number[] | null;
+  customTemplateItems?: unknown[] | null;
 }
 
 export interface IMtsLocation {
@@ -173,6 +223,32 @@ export const mtsService = {
       subscriberId,
       confirmed: true,
     });
+    return res.data;
+  },
+
+  // === Дополнительные бесплатные read-only ресурсы (GET → бэк → GET → МТС) ===
+  getSubscriberGroups: async (): Promise<IMtsSubscriberGroup[]> => {
+    const res = await apiClient.get<ApiResponse<IMtsSubscriberGroup[]>>('/mts/subscriber-groups');
+    return res.data;
+  },
+
+  getCustomFields: async (): Promise<IMtsCustomField[]> => {
+    const res = await apiClient.get<ApiResponse<IMtsCustomField[]>>('/mts/custom-fields');
+    return res.data;
+  },
+
+  getRecentTracks: async (days: number): Promise<IMtsTrackSegment[]> => {
+    const res = await apiClient.get<ApiResponse<IMtsTrackSegment[]>>(`/mts/recent-tracks?days=${days}`);
+    return res.data;
+  },
+
+  getRecentLocations: async (days: number): Promise<IMtsLocation[]> => {
+    const res = await apiClient.get<ApiResponse<IMtsLocation[]>>(`/mts/recent-locations?days=${days}`);
+    return res.data;
+  },
+
+  getRecentGlobalLocations: async (days: number): Promise<IMtsGpsPoint[]> => {
+    const res = await apiClient.get<ApiResponse<IMtsGpsPoint[]>>(`/mts/recent-global-locations?days=${days}`);
     return res.data;
   },
 };

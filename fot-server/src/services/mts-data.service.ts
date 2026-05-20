@@ -40,6 +40,10 @@ export interface IMtsSubscriber {
   isLocateEnabled: boolean | null;
   longitude: number | null;
   latitude: number | null;
+  /** ID групп абонента (приходит как массив или null). */
+  subscriberGroupIDs?: number[] | null;
+  /** Значения кастомных полей (withCustomTemplateItems=true). */
+  customTemplateItems?: unknown[] | null;
 }
 
 export interface IMtsLocation {
@@ -68,6 +72,32 @@ export interface IMtsTrackSegment {
   duration: number | null;
 }
 
+export interface IMtsGpsPoint {
+  locationID: number;
+  subscriberID: number;
+  locationDate: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  angle: number | null;
+  velocity: number | null;
+  isValid: boolean | null;
+}
+
+export interface IMtsSubscriberGroup {
+  subscriberGroupID: number;
+  name: string | null;
+  /** Прочие поля группы — отдаём фронту как есть. */
+  [k: string]: unknown;
+}
+
+export interface IMtsCustomField {
+  customFieldID?: number;
+  name?: string | null;
+  type?: string | null;
+  isRequired?: boolean | null;
+  [k: string]: unknown;
+}
+
 const num = (v: unknown): number | null =>
   v === null || v === undefined || v === '' ? null : Number(v);
 const str = (v: unknown): string | null =>
@@ -87,8 +117,13 @@ class MtsDataService extends MtsServiceBase {
   private async fetchSubscribers(): Promise<IMtsSubscriber[]> {
     // Без фильтра — МТС-аккаунт может держать абонентов без флага isActive=true
     // (например, добавленные через CSV-импорт или из приложения «Координатор»).
-    // Фильтрацию по активности оставляем на UI.
-    const payload = await this.request<unknown>('get', '/subscriberManagement/subscribers');
+    // Фильтрацию по активности оставляем на UI. withCustomTemplateItems=true
+    // отдаёт значения кастомных полей и связи с группами (бесплатно, GET).
+    const payload = await this.request<unknown>(
+      'get',
+      '/subscriberManagement/subscribers',
+      { params: { withCustomTemplateItems: true } },
+    );
     // Один диагностический лог: какова форма ответа МТС. Без PII — только тип/ключи/длина.
     const shape = Array.isArray(payload)
       ? `array(len=${payload.length})`
@@ -105,6 +140,12 @@ class MtsDataService extends MtsServiceBase {
       isLocateEnabled: r.isLocateEnabled === undefined ? null : Boolean(r.isLocateEnabled),
       longitude: num(r.longitude),
       latitude: num(r.latitude),
+      subscriberGroupIDs: Array.isArray(r.subscriberGroupIDs)
+        ? (r.subscriberGroupIDs as unknown[]).map(v => Number(v)).filter(n => Number.isFinite(n))
+        : null,
+      customTemplateItems: Array.isArray(r.customTemplateItems)
+        ? (r.customTemplateItems as unknown[])
+        : null,
     }));
   }
 
@@ -187,6 +228,159 @@ class MtsDataService extends MtsServiceBase {
     const raw = await this.request<unknown>('get', `/taskManagement/tasks/${taskId}`);
     const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
     return { ...(obj as IMtsTaskApiResponse), taskID: Number(obj.taskID ?? taskId) };
+  }
+
+  /**
+   * Полные данные одной группы абонентов (бесплатно, GET).
+   * Возвращаем raw payload — поля разнятся между тарифами.
+   */
+  async getSubscriberGroupDetails(groupId: number): Promise<IMtsSubscriberGroup> {
+    const raw = await this.request<unknown>(
+      'get',
+      `/subscriberManagement/subscriberGroups/${groupId}`,
+    );
+    const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    return {
+      subscriberGroupID: Number(obj.subscriberGroupID ?? groupId),
+      name: str(obj.name),
+      ...obj,
+    } as IMtsSubscriberGroup;
+  }
+
+  /**
+   * Определения шаблонов кастомных полей (бесплатно, GET).
+   * Сами значения по абоненту приходят через withCustomTemplateItems в fetchSubscribers.
+   */
+  async getCustomFields(): Promise<IMtsCustomField[]> {
+    const payload = await this.request<unknown>('get', '/customFieldsManagement/customFields');
+    return this.extractItems<Record<string, unknown>>(payload).map(r => ({
+      customFieldID: r.customFieldID == null ? undefined : Number(r.customFieldID),
+      name: str(r.name),
+      type: str(r.type),
+      isRequired: r.isRequired === undefined ? null : Boolean(r.isRequired),
+      ...r,
+    } as IMtsCustomField));
+  }
+
+  /**
+   * Пагинированный читатель списочных GET-эндпоинтов МТС. Используется для LBS/GPS.
+   * Останавливаемся когда страница вернула < pageSize или закончились страницы.
+   */
+  private async paginate<T>(
+    path: string,
+    baseParams: Record<string, unknown>,
+    lastIdParam: string,
+    idField: string,
+    pageSize: number,
+    maxPages: number,
+    mapper: (r: Record<string, unknown>) => T,
+  ): Promise<T[]> {
+    const all: T[] = [];
+    let lastId: number | null = null;
+    for (let i = 0; i < maxPages; i++) {
+      const params: Record<string, unknown> = { ...baseParams, count: pageSize };
+      if (lastId !== null) params[lastIdParam] = lastId;
+      const payload = await this.request<unknown>('get', path, { params });
+      const rows = this.extractItems<Record<string, unknown>>(payload);
+      for (const r of rows) all.push(mapper(r));
+      if (rows.length < pageSize) break;
+      const tail = rows[rows.length - 1];
+      const nextId = Number(tail?.[idField]);
+      if (!Number.isFinite(nextId)) break;
+      lastId = nextId;
+    }
+    return all;
+  }
+
+  /**
+   * Исторические LBS-локации за интервал (бесплатно, GET). Данные — позиции,
+   * уже определённые в МТС (поллер/прошлые платные запросы). Сами POST-запросы
+   * на определение тут НЕ делаем — только читаем накопленное.
+   */
+  async getLocationsRange(
+    dateFrom: string,
+    dateTo: string,
+    maxPages = 10,
+  ): Promise<IMtsLocation[]> {
+    return this.paginate<IMtsLocation>(
+      '/mobilePositioningManagement/locations',
+      { dateFrom, dateTo },
+      'lastLocationID',
+      'locationID',
+      200,
+      maxPages,
+      r => ({
+        subscriberID: Number(r.subscriberID),
+        locationDate: str(r.locationDate),
+        latitude: num(r.latitude),
+        longitude: num(r.longitude),
+        accuracy: num(r.accuracy ?? r.radius),
+        address: str(r.address),
+        state: str(r.state),
+        source: str(r.source),
+      }),
+    );
+  }
+
+  /**
+   * Треки за интервал по всем абонентам (бесплатно, GET).
+   */
+  async getTracksRange(
+    dateFrom: string,
+    dateTo: string,
+    maxPages = 10,
+  ): Promise<IMtsTrackSegment[]> {
+    return this.paginate<IMtsTrackSegment>(
+      '/mobilePositioningManagement/tracks',
+      { dateFrom, dateTo },
+      'lastTrackID',
+      'trackID',
+      200,
+      maxPages,
+      r => ({
+        trackID: Number(r.trackID),
+        subscriberID: Number(r.subscriberID),
+        startDate: str(r.startDate),
+        finishDate: str(r.finishDate),
+        startAddress: str(r.startAddress),
+        finishAddress: str(r.finishAddress),
+        startLat: num(r.startLat),
+        startLon: num(r.startLon),
+        finishLat: num(r.finishLat),
+        finishLon: num(r.finishLon),
+        distance: num(r.distance),
+        duration: num(r.duration),
+      }),
+    );
+  }
+
+  /**
+   * GPS-точки за интервал (приходят с приложения МТС-Координатор на телефоне
+   * сотрудника, бесплатно, GET). Лимит выборки до 1000 (контракт, код 67).
+   */
+  async getGlobalLocations(
+    dateFrom: string,
+    dateTo: string,
+    maxPages = 5,
+  ): Promise<IMtsGpsPoint[]> {
+    return this.paginate<IMtsGpsPoint>(
+      '/globalPositioningManagement/locations',
+      { dateFrom, dateTo },
+      'lastLocationID',
+      'locationID',
+      1000,
+      maxPages,
+      r => ({
+        locationID: Number(r.locationID),
+        subscriberID: Number(r.subscriberID),
+        locationDate: str(r.locationDate),
+        latitude: num(r.latitude),
+        longitude: num(r.longitude),
+        angle: num(r.angle),
+        velocity: num(r.velocity),
+        isValid: r.isValid === undefined ? null : Boolean(r.isValid),
+      }),
+    );
   }
 
   /**

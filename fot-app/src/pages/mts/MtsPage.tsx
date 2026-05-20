@@ -7,12 +7,16 @@ import {
   useMtsMappings,
   useMtsSuggestions,
   useMtsTasks,
+  useMtsSubscriberGroups,
+  useMtsCustomFields,
+  useMtsRecentTracks,
+  useMtsRecentGlobalLocations,
   getMtsConnectionQueryKey,
   getMtsMappingsQueryKey,
   getMtsLocationsQueryKey,
   getMtsTasksQueryKey,
 } from '../../hooks/useMtsData';
-import { mtsService, type IMtsSubscriber } from '../../services/mtsService';
+import { mtsService, type IMtsSubscriber, type IMtsTestResult } from '../../services/mtsService';
 import { ApiError } from '../../api/client';
 import { MtsRequestLocationModal } from './MtsRequestLocationModal';
 import { MtsHistoryModal } from './MtsHistoryModal';
@@ -21,6 +25,18 @@ import styles from './MtsPage.module.css';
 
 const errText = (e: unknown, fallback: string): string =>
   e instanceof ApiError ? e.message : fallback;
+
+const fmtDuration = (sec: number | null): string => {
+  if (sec == null || !Number.isFinite(sec)) return '—';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return h > 0 ? `${h}ч ${m}м` : `${m}м`;
+};
+
+const fmtDistance = (m: number | null): string => {
+  if (m == null || !Number.isFinite(m)) return '—';
+  return m >= 1000 ? `${(m / 1000).toFixed(1)} км` : `${Math.round(m)} м`;
+};
 
 export const MtsPage: FC = () => {
   const queryClient = useQueryClient();
@@ -36,13 +52,20 @@ export const MtsPage: FC = () => {
   const [token, setToken] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [diag, setDiag] = useState<IMtsTestResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [editingConnection, setEditingConnection] = useState(false);
   const [empInputs, setEmpInputs] = useState<Record<number, string>>({});
   const [requestSubscriber, setRequestSubscriber] = useState<IMtsSubscriber | null>(null);
   const [historySubscriber, setHistorySubscriber] = useState<IMtsSubscriber | null>(null);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const [tracksDays, setTracksDays] = useState(1);
+  const [gpsDays, setGpsDays] = useState(1);
   const tasksQuery = useMtsTasks(configured);
+  const groupsQuery = useMtsSubscriberGroups(configured);
+  const customFieldsQuery = useMtsCustomFields(configured);
+  const tracksQuery = useMtsRecentTracks(tracksDays, configured);
+  const gpsQuery = useMtsRecentGlobalLocations(gpsDays, configured);
 
   const locData = locQuery.data;
   const mapData = mapQuery.data;
@@ -82,8 +105,10 @@ export const MtsPage: FC = () => {
   const testConnection = async () => {
     setBusy(true);
     setStatus(null);
+    setDiag(null);
     try {
       const r = await mtsService.testConnection();
+      setDiag(r);
       setStatus(
         r.ok
           ? { ok: true, msg: `Подключение успешно. Абонентов: ${r.count}` }
@@ -237,6 +262,22 @@ export const MtsPage: FC = () => {
         )}
 
         {status && <p className={status.ok ? styles.ok : styles.err}>{status.msg}</p>}
+
+        {diag && (diag.mtsHttp !== undefined || diag.source !== undefined) && (
+          <dl className={styles.diagBlock}>
+            <div><dt>baseUrl</dt> <dd>{diag.baseUrl ?? '—'}</dd></div>
+            <div><dt>source</dt> <dd>{diag.source ?? '—'}</dd></div>
+            <div><dt>hasToken</dt> <dd>{String(diag.hasToken ?? false)}</dd></div>
+            {diag.mtsHttp !== undefined && (
+              <>
+                <div><dt>http</dt> <dd>{diag.mtsHttp}</dd></div>
+                <div><dt>mtsCode</dt> <dd>{diag.mtsCode ?? '—'}</dd></div>
+                <div><dt>desc</dt> <dd>{diag.mtsDescription ?? '—'}</dd></div>
+                <div><dt>message</dt> <dd>{diag.mtsMessage ?? '—'}</dd></div>
+              </>
+            )}
+          </dl>
+        )}
       </section>
 
       {requestSubscriber && (
@@ -452,6 +493,218 @@ export const MtsPage: FC = () => {
               </tbody>
             </table>
           </div>
+        </section>
+      )}
+
+      {configured && (
+        <section className={styles.card}>
+          <div className={styles.titleRow}>
+            <h2 className={styles.cardTitle}>
+              Группы абонентов {groupsQuery.data ? `(${groupsQuery.data.length})` : ''}
+            </h2>
+            <span className={styles.badgeFree}>бесплатно · GET</span>
+          </div>
+          {groupsQuery.isError && (
+            <p className={styles.err}>Не удалось загрузить группы — остальные разделы работают</p>
+          )}
+          {groupsQuery.isLoading && <p className={styles.hint}>Загрузка…</p>}
+          {groupsQuery.isSuccess && (groupsQuery.data?.length ?? 0) === 0 && (
+            <p className={styles.hint}>Групп нет.</p>
+          )}
+          {(groupsQuery.data?.length ?? 0) > 0 && (
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Название</th>
+                    <th>Абонентов в группе</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(groupsQuery.data ?? []).map(g => {
+                    const count = (subsQuery.data ?? []).filter(
+                      s => Array.isArray(s.subscriberGroupIDs) && s.subscriberGroupIDs.includes(g.subscriberGroupID),
+                    ).length;
+                    return (
+                      <tr key={g.subscriberGroupID}>
+                        <td>{g.subscriberGroupID}</td>
+                        <td>{g.name || '—'}</td>
+                        <td>{count}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      {configured && (
+        <section className={styles.card}>
+          <div className={styles.titleRow}>
+            <h2 className={styles.cardTitle}>
+              Шаблоны кастомных полей {customFieldsQuery.data ? `(${customFieldsQuery.data.length})` : ''}
+            </h2>
+            <span className={styles.badgeFree}>бесплатно · GET</span>
+          </div>
+          {customFieldsQuery.isError && (
+            <p className={styles.err}>Не удалось загрузить кастомные поля — остальные разделы работают</p>
+          )}
+          {customFieldsQuery.isLoading && <p className={styles.hint}>Загрузка…</p>}
+          {customFieldsQuery.isSuccess && (customFieldsQuery.data?.length ?? 0) === 0 && (
+            <p className={styles.hint}>Кастомных полей нет.</p>
+          )}
+          {(customFieldsQuery.data?.length ?? 0) > 0 && (
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Название</th>
+                    <th>Тип</th>
+                    <th>Обязательное</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(customFieldsQuery.data ?? []).map((f, idx) => (
+                    <tr key={f.customFieldID ?? idx}>
+                      <td>{f.customFieldID ?? '—'}</td>
+                      <td>{f.name || '—'}</td>
+                      <td>{f.type || '—'}</td>
+                      <td>{f.isRequired ? 'да' : 'нет'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      {configured && (
+        <section className={styles.card}>
+          <div className={styles.titleRow}>
+            <h2 className={styles.cardTitle}>
+              Треки за период {tracksQuery.data ? `(${tracksQuery.data.length})` : ''}
+            </h2>
+            <span className={styles.badgeFree}>бесплатно · GET</span>
+            <select
+              className={styles.daysSelect}
+              value={tracksDays}
+              onChange={e => setTracksDays(Number(e.target.value))}
+              disabled={tracksQuery.isFetching}
+            >
+              <option value={1}>1 день</option>
+              <option value={3}>3 дня</option>
+              <option value={7}>7 дней</option>
+            </select>
+          </div>
+          {tracksQuery.isError && (
+            <p className={styles.err}>Не удалось загрузить треки — остальные разделы работают</p>
+          )}
+          {tracksQuery.isLoading && <p className={styles.hint}>Загрузка…</p>}
+          {tracksQuery.isSuccess && (tracksQuery.data?.length ?? 0) === 0 && (
+            <p className={styles.hint}>Треков за период нет.</p>
+          )}
+          {(tracksQuery.data?.length ?? 0) > 0 && (
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>subscriberID</th>
+                    <th>Старт</th>
+                    <th>Финиш</th>
+                    <th>Расстояние</th>
+                    <th>Длительность</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(tracksQuery.data ?? []).map(t => (
+                    <tr key={t.trackID}>
+                      <td>{t.subscriberID}</td>
+                      <td>{t.startDate ? new Date(t.startDate).toLocaleString('ru-RU') : '—'}</td>
+                      <td>{t.finishDate ? new Date(t.finishDate).toLocaleString('ru-RU') : '—'}</td>
+                      <td>{fmtDistance(t.distance)}</td>
+                      <td>{fmtDuration(t.duration)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      {configured && (
+        <section className={styles.card}>
+          <div className={styles.titleRow}>
+            <h2 className={styles.cardTitle}>
+              GPS-точки за период {gpsQuery.data ? `(${gpsQuery.data.length})` : ''}
+            </h2>
+            <span className={styles.badgeFree}>бесплатно · GET</span>
+            <select
+              className={styles.daysSelect}
+              value={gpsDays}
+              onChange={e => setGpsDays(Number(e.target.value))}
+              disabled={gpsQuery.isFetching}
+            >
+              <option value={1}>1 день</option>
+              <option value={3}>3 дня</option>
+              <option value={7}>7 дней</option>
+            </select>
+          </div>
+          <p className={styles.hint}>
+            Данные с приложения МТС-Координатор на телефоне сотрудника. Получение из МТС — бесплатно.
+          </p>
+          {gpsQuery.isError && (
+            <p className={styles.err}>Не удалось загрузить GPS-точки — остальные разделы работают</p>
+          )}
+          {gpsQuery.isLoading && <p className={styles.hint}>Загрузка…</p>}
+          {gpsQuery.isSuccess && (gpsQuery.data?.length ?? 0) === 0 && (
+            <p className={styles.hint}>GPS-точек за период нет.</p>
+          )}
+          {(gpsQuery.data?.length ?? 0) > 0 && (
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>subscriberID</th>
+                    <th>Время</th>
+                    <th>Координаты</th>
+                    <th>Скорость</th>
+                    <th>Валидна</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(gpsQuery.data ?? []).slice(0, 200).map(p => (
+                    <tr key={p.locationID}>
+                      <td>{p.subscriberID}</td>
+                      <td>{p.locationDate ? new Date(p.locationDate).toLocaleString('ru-RU') : '—'}</td>
+                      <td>
+                        {p.latitude != null && p.longitude != null ? (
+                          <a
+                            className={styles.link}
+                            href={`https://yandex.ru/maps/?pt=${p.longitude},${p.latitude}&z=16&l=map`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {p.latitude.toFixed(5)}, {p.longitude.toFixed(5)}
+                          </a>
+                        ) : '—'}
+                      </td>
+                      <td>{p.velocity != null ? `${Math.round(p.velocity)} км/ч` : '—'}</td>
+                      <td>{p.isValid === false ? 'нет' : 'да'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {(gpsQuery.data?.length ?? 0) > 200 && (
+                <p className={styles.hint}>Показаны первые 200 точек из {gpsQuery.data?.length}.</p>
+              )}
+            </div>
+          )}
         </section>
       )}
     </div>
