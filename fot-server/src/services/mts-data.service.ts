@@ -2,6 +2,22 @@ import { execute, query } from '../config/postgres.js';
 import { encryptionService } from './encryption.service.js';
 import { MtsServiceBase } from './mts-base.service.js';
 
+export interface IMtsTaskCreatePayload {
+  title: string;
+  startDate: string;
+  subscriberID?: number | null;
+  deadline?: string | null;
+  description?: string | null;
+  address?: string | null;
+}
+
+export interface IMtsTaskApiResponse {
+  taskID: number;
+  status?: string | null;
+  creationDate?: string | null;
+  [k: string]: unknown;
+}
+
 export interface IMtsLocationHistoryPoint {
   recordedAt: string;
   latitude: number | null;
@@ -133,6 +149,36 @@ class MtsDataService extends MtsServiceBase {
       distance: num(r.distance),
       duration: num(r.duration),
     }));
+  }
+
+  /**
+   * Создаёт задачу в МТС (`POST /v6/api/taskManagement/tasks`).
+   * Обязательные поля по контракту M-Poisk: title, startDate. Возвращает taskID
+   * и сырой ответ — caller-сервис кладёт зашифрованную копию в mts_tasks.
+   */
+  async createTaskMts(payload: IMtsTaskCreatePayload): Promise<IMtsTaskApiResponse> {
+    const body: Record<string, unknown> = {
+      title: payload.title,
+      startDate: payload.startDate,
+    };
+    if (payload.subscriberID != null) body.subscriberID = payload.subscriberID;
+    if (payload.deadline) body.deadline = payload.deadline;
+    if (payload.description) body.description = payload.description;
+    if (payload.address) body.address = payload.address;
+
+    const raw = await this.request<unknown>('post', '/taskManagement/tasks', { data: body });
+    const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const taskID = Number(obj.taskID);
+    if (!Number.isFinite(taskID)) {
+      throw new Error('МТС не вернул taskID в ответе на создание задачи');
+    }
+    return { ...(obj as IMtsTaskApiResponse), taskID };
+  }
+
+  async getTaskMts(taskId: number): Promise<IMtsTaskApiResponse> {
+    const raw = await this.request<unknown>('get', `/taskManagement/tasks/${taskId}`);
+    const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    return { ...(obj as IMtsTaskApiResponse), taskID: Number(obj.taskID ?? taskId) };
   }
 
   /**

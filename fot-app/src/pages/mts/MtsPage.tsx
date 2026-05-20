@@ -6,14 +6,17 @@ import {
   useMtsLastLocations,
   useMtsMappings,
   useMtsSuggestions,
+  useMtsTasks,
   getMtsConnectionQueryKey,
   getMtsMappingsQueryKey,
   getMtsLocationsQueryKey,
+  getMtsTasksQueryKey,
 } from '../../hooks/useMtsData';
 import { mtsService, type IMtsSubscriber } from '../../services/mtsService';
 import { ApiError } from '../../api/client';
 import { MtsRequestLocationModal } from './MtsRequestLocationModal';
 import { MtsHistoryModal } from './MtsHistoryModal';
+import { MtsTaskCreateModal } from './MtsTaskCreateModal';
 import styles from './MtsPage.module.css';
 
 const errText = (e: unknown, fallback: string): string =>
@@ -37,6 +40,8 @@ export const MtsPage: FC = () => {
   const [empInputs, setEmpInputs] = useState<Record<number, string>>({});
   const [requestSubscriber, setRequestSubscriber] = useState<IMtsSubscriber | null>(null);
   const [historySubscriber, setHistorySubscriber] = useState<IMtsSubscriber | null>(null);
+  const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const tasksQuery = useMtsTasks(configured);
 
   const locData = locQuery.data;
   const mapData = mapQuery.data;
@@ -199,6 +204,16 @@ export const MtsPage: FC = () => {
       {historySubscriber && (
         <MtsHistoryModal subscriber={historySubscriber} onClose={() => setHistorySubscriber(null)} />
       )}
+      {taskModalOpen && (
+        <MtsTaskCreateModal
+          subscribers={subsQuery.data ?? []}
+          onClose={() => setTaskModalOpen(false)}
+          onCreated={() => {
+            queryClient.invalidateQueries({ queryKey: getMtsTasksQueryKey() });
+            setStatus({ ok: true, msg: 'Задача создана в МТС и сохранена локально (шифр).' });
+          }}
+        />
+      )}
 
       {!configured ? (
         <section className={styles.card}>
@@ -313,6 +328,77 @@ export const MtsPage: FC = () => {
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {configured && (
+        <section className={styles.card}>
+          <div className={styles.tableHeader}>
+            <h2 className={styles.cardTitle}>
+              Задачи МТС {tasksQuery.data ? `(${tasksQuery.data.length})` : ''}
+            </h2>
+            <div className={styles.actions}>
+              <button className={styles.btn} onClick={() => setTaskModalOpen(true)} disabled={busy}>
+                + Создать задачу
+              </button>
+            </div>
+          </div>
+
+          {tasksQuery.isError && <p className={styles.err}>Не удалось загрузить задачи</p>}
+          {tasksQuery.isLoading && <p className={styles.hint}>Загрузка…</p>}
+
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>МТС task ID</th>
+                  <th>Название</th>
+                  <th>Абонент</th>
+                  <th>Начало</th>
+                  <th>Дедлайн</th>
+                  <th>Статус</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {(tasksQuery.data ?? []).map(t => (
+                  <tr key={t.id}>
+                    <td>{t.mtsTaskId ?? '—'}</td>
+                    <td>{t.title || '—'}</td>
+                    <td>{t.subscriberId ?? '—'}</td>
+                    <td>{new Date(t.startDate).toLocaleString('ru-RU')}</td>
+                    <td>{t.deadline ? new Date(t.deadline).toLocaleString('ru-RU') : '—'}</td>
+                    <td>{t.status || '—'}</td>
+                    <td>
+                      {t.mtsTaskId != null && (
+                        <button
+                          className={styles.btnSm}
+                          disabled={busy}
+                          onClick={async () => {
+                            try {
+                              setBusy(true);
+                              await mtsService.getTask(t.mtsTaskId as number);
+                              await queryClient.invalidateQueries({ queryKey: getMtsTasksQueryKey() });
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                          title="Обновить статус из МТС"
+                        >
+                          Обновить
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {(tasksQuery.data?.length ?? 0) === 0 && tasksQuery.isSuccess && (
+                  <tr>
+                    <td colSpan={7} className={styles.hint}>Нет задач</td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

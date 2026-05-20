@@ -34,6 +34,30 @@ export interface IMtsLocation {
   source: string | null;
 }
 
+export interface IMtsTaskRow {
+  id: number;
+  mtsTaskId: number | null;
+  subscriberId: number | null;
+  startDate: string;
+  deadline: string | null;
+  createdBy: string | null;
+  title: string | null;
+  description: string | null;
+  address: string | null;
+  status: string | null;
+  createdAt: string;
+  syncedAt: string;
+}
+
+export interface IMtsTaskCreateInput {
+  title: string;
+  startDate: string;
+  subscriberID?: number | null;
+  deadline?: string | null;
+  description?: string | null;
+  address?: string | null;
+}
+
 export interface IMtsHistoryPoint {
   recordedAt: string;
   latitude: number | null;
@@ -125,6 +149,21 @@ export const mtsService = {
       dateTo,
     });
     const res = await apiClient.get<ApiResponse<IMtsHistoryPoint[]>>(`/mts/history?${qs.toString()}`);
+    return res.data;
+  },
+
+  getTasks: async (): Promise<IMtsTaskRow[]> => {
+    const res = await apiClient.get<ApiResponse<IMtsTaskRow[]>>('/mts/tasks');
+    return res.data;
+  },
+
+  getTask: async (taskId: number): Promise<IMtsTaskRow | null> => {
+    const res = await apiClient.get<ApiResponse<IMtsTaskRow | null>>(`/mts/tasks/${taskId}`);
+    return res.data;
+  },
+
+  createTask: async (input: IMtsTaskCreateInput): Promise<IMtsTaskRow> => {
+    const res = await apiClient.post<ApiResponse<IMtsTaskRow>>('/mts/tasks', input);
     return res.data;
   },
 

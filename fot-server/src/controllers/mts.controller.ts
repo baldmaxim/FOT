@@ -3,6 +3,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { settingsService } from '../services/settings.service.js';
 import { mtsDataService } from '../services/mts-data.service.js';
 import { mtsMappingService } from '../services/mts-mapping.service.js';
+import { mtsTasksService } from '../services/mts-tasks.service.js';
 import { MtsApiError } from '../services/mts-base.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
@@ -255,6 +256,129 @@ export const mtsController = {
       res.json({ success: true, data });
     } catch (error) {
       fail(res, error, 'Ошибка подбора привязок МТС');
+    }
+  },
+
+  /**
+   * Создаёт задачу в МТС, локально сохраняет зашифрованную копию.
+   * Обязательные: title, startDate. subscriberID — опционально; если задан и
+   * caller не super_admin, проверяем что привязанный сотрудник в его scope.
+   */
+  async createTask(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { title, startDate, subscriberID, deadline, description, address } = req.body as {
+        title?: string;
+        startDate?: string;
+        subscriberID?: number | null;
+        deadline?: string | null;
+        description?: string | null;
+        address?: string | null;
+      };
+      if (!title || !title.trim()) {
+        res.status(400).json({ success: false, error: 'title обязателен' });
+        return;
+      }
+      if (!startDate) {
+        res.status(400).json({ success: false, error: 'startDate обязателен' });
+        return;
+      }
+      const subId = subscriberID == null ? null : Number(subscriberID);
+      if (subId != null && !isSuperAdmin(req)) {
+        const employeeId = await mtsMappingService.getEmployeeIdBySubscriber(subId);
+        if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
+          res.status(403).json({ success: false, error: 'Нет доступа к абоненту' });
+          return;
+        }
+      }
+
+      const mtsResponse = await mtsDataService.createTaskMts({
+        title: title.trim(),
+        startDate,
+        subscriberID: subId,
+        deadline: deadline ?? null,
+        description: description ?? null,
+        address: address ?? null,
+      });
+
+      const saved = await mtsTasksService.saveCreatedTask({
+        mtsTaskId: mtsResponse.taskID,
+        subscriberId: subId,
+        startDate,
+        deadline: deadline ?? null,
+        title: title.trim(),
+        description: description ?? null,
+        address: address ?? null,
+        status: typeof mtsResponse.status === 'string' ? mtsResponse.status : null,
+        payload: mtsResponse,
+        createdBy: req.user.id,
+      });
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_TASK_CREATED, {
+        entityId: String(mtsResponse.taskID),
+        details: { taskID: mtsResponse.taskID, subscriberID: subId },
+      });
+
+      res.json({ success: true, data: saved });
+    } catch (error) {
+      fail(res, error, 'Ошибка создания задачи МТС');
+    }
+  },
+
+  /** Список локальных задач. Не-super_admin — только по абонентам в scope. */
+  async getTasks(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const all = await mtsTasksService.listTasks();
+      if (isSuperAdmin(req)) {
+        res.json({ success: true, data: all });
+        return;
+      }
+      const filtered: typeof all = [];
+      for (const t of all) {
+        if (t.subscriberId == null) continue; // unassigned → только super_admin
+        const empId = await mtsMappingService.getEmployeeIdBySubscriber(t.subscriberId);
+        if (empId && (await canAccessEmployeeInScope(req, empId))) filtered.push(t);
+      }
+      res.json({ success: true, data: filtered });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения задач МТС');
+    }
+  },
+
+  /** Refresh задачи из МТС + обновление локальной копии. Аудит просмотра. */
+  async getTask(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const taskId = Number(req.params.taskId);
+      if (!Number.isFinite(taskId)) {
+        res.status(400).json({ success: false, error: 'taskId обязателен' });
+        return;
+      }
+
+      // Сначала проверяем локальную запись и scope.
+      const local = await mtsTasksService.getByMtsTaskId(taskId);
+      if (!isSuperAdmin(req)) {
+        if (!local || local.subscriberId == null) {
+          res.status(403).json({ success: false, error: 'Нет доступа к задаче' });
+          return;
+        }
+        const empId = await mtsMappingService.getEmployeeIdBySubscriber(local.subscriberId);
+        if (!empId || !(await canAccessEmployeeInScope(req, empId))) {
+          res.status(403).json({ success: false, error: 'Нет доступа к задаче' });
+          return;
+        }
+      }
+
+      const mtsResponse = await mtsDataService.getTaskMts(taskId);
+      await mtsTasksService.upsertSyncedTask(taskId, mtsResponse);
+      const fresh = await mtsTasksService.getByMtsTaskId(taskId);
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_TASK_VIEWED, {
+        entityId: String(taskId),
+        details: { taskID: taskId },
+      });
+
+      res.json({ success: true, data: fresh });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения задачи МТС');
     }
   },
 

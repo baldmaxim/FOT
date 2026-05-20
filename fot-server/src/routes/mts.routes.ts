@@ -37,6 +37,16 @@ router.post(
   mtsController.requestLocation,
 );
 
+// Задачи МТС
+router.get('/tasks', requirePageAccess('/mts', 'view'), mtsController.getTasks);
+router.get('/tasks/:taskId', requirePageAccess('/mts', 'view'), mtsController.getTask);
+router.post(
+  '/tasks',
+  requirePageAccess('/mts', 'edit'),
+  requireCritical2FA,
+  mtsController.createTask,
+);
+
 // Привязка абонент -> сотрудник
 router.get('/mappings', requirePageAccess('/mts', 'view'), mtsController.getMappings);
 router.get('/mappings/suggestions', requirePageAccess('/mts', 'view'), mtsController.getMappingSuggestions);

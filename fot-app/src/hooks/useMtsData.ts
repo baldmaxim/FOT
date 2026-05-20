@@ -41,6 +41,15 @@ export const useMtsSuggestions = (enabled: boolean) => useQuery({
   enabled,
 });
 
+export const getMtsTasksQueryKey = () => ['mts', 'tasks'] as const;
+
+export const useMtsTasks = (enabled: boolean) => useQuery({
+  queryKey: getMtsTasksQueryKey(),
+  queryFn: () => mtsService.getTasks(),
+  staleTime: 30_000,
+  enabled,
+});
+
 export const getMtsHistoryQueryKey = (subscriberId: number, dateFrom: string, dateTo: string) =>
   ['mts', 'history', subscriberId, dateFrom, dateTo] as const;
 
