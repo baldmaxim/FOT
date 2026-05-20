@@ -1431,11 +1431,17 @@
   padding: 12px 20px;
   border-top: 1px solid var(--border);
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 4px;
   font-size: 13px;
   color: var(--text-secondary);
   background: var(--bg-tertiary);
+}
+
+.eventsPaneFooterRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .eventsPaneFooter strong {

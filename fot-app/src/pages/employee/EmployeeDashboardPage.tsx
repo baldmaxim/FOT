@@ -97,6 +97,7 @@ const buildDayGroup = (
   const isToday = dateStr === todayStr;
   const pairs = buildPairs(dayEvents, internalPoints, isToday);
   const rawTotalMinutes = pairs.reduce((sum, pair) => sum + pair.durationMinutes, 0);
+  const totalBreakMinutes = pairs.reduce((sum, pair) => sum + (pair.breakMinutesAfter ?? 0), 0);
   const canonicalMinutes = entry?.hours_worked != null
     ? Math.max(0, Math.round(entry.hours_worked * 60))
     : 0;
@@ -118,6 +119,7 @@ const buildDayGroup = (
     firstEntry,
     lastExit,
     totalMinutes,
+    totalBreakMinutes,
     isToday,
     isWeekend: dow >= 5 && !hasWorkedStatus,
     isFuture: dateStr > todayStr,
@@ -293,7 +295,7 @@ export const EmployeeDashboardPage: React.FC = () => {
           <div className={styles.eventsPane}>
             <div className={styles.eventsPaneHeader}>
               <span className={styles.eventsPaneDate}>{formatActiveDayLabel(activeDayIso)}</span>
-              {hasEventsData && <DaySummaryBadges group={activeDayGroup} />}
+              {hasEventsData && <DaySummaryBadges group={activeDayGroup} hideDuration />}
             </div>
             <div className={styles.eventsPaneBody}>
               {loading || eventsLoading ? (
@@ -306,10 +308,20 @@ export const EmployeeDashboardPage: React.FC = () => {
                 </div>
               )}
             </div>
-            {activeDayGroup.totalMinutes > 0 && (
+            {(activeDayGroup.totalMinutes > 0 || activeDayGroup.totalBreakMinutes > 0) && (
               <div className={styles.eventsPaneFooter}>
-                <span>Итого за день:</span>
-                <strong>{formatHM(activeDayGroup.totalMinutes)}</strong>
+                {activeDayGroup.totalMinutes > 0 && (
+                  <div className={styles.eventsPaneFooterRow}>
+                    <span>Итого за день:</span>
+                    <strong>{formatHM(activeDayGroup.totalMinutes)}</strong>
+                  </div>
+                )}
+                {activeDayGroup.totalBreakMinutes > 0 && (
+                  <div className={styles.eventsPaneFooterRow}>
+                    <span>Перерыв:</span>
+                    <strong>{formatHM(activeDayGroup.totalBreakMinutes)}</strong>
+                  </div>
+                )}
               </div>
             )}
           </div>

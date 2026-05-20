@@ -2,7 +2,12 @@ import { type FC, useMemo, useState } from 'react';
 import { useEmployeeTimesheetMonth } from '../../hooks/useEmployeeTimesheet';
 import { useAuth } from '../../contexts/AuthContext';
 import { useMyLeaveRequests } from '../../hooks/usePortalData';
-import { getFullDayThresholdHoursForDay, isScheduleDayOff } from '../../utils/scheduleUtils';
+import {
+  getFullDayThresholdHoursForDay,
+  isHolidayForSchedule,
+  isPreHolidayForSchedule,
+  isScheduleDayOff,
+} from '../../utils/scheduleUtils';
 import { getDayStatus, type DayStatus } from '../../utils/dayStatus';
 import {
   REQUEST_TYPE_LABELS,
@@ -160,7 +165,15 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
     return d === 0 ? 6 : d - 1;
   })();
 
-  const cells: Array<{ day: number; iso: string; isToday: boolean; entry: TimesheetEntry | null; ds: DayStatus } | null> = [];
+  const cells: Array<{
+    day: number;
+    iso: string;
+    isToday: boolean;
+    entry: TimesheetEntry | null;
+    ds: DayStatus;
+    isHoliday: boolean;
+    isPreHoliday: boolean;
+  } | null> = [];
   for (let i = 0; i < firstDow; i++) cells.push(null);
   for (let day = 1; day <= daysInMonth; day++) {
     const iso = buildIsoDate(year, month, day);
@@ -173,7 +186,9 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
       isScheduledDayOff,
       isFuture: iso > todayIso,
     });
-    cells.push({ day, iso, isToday: iso === todayIso, entry, ds });
+    const isHoliday = isHolidayForSchedule(employeeSchedule, calendar, year, month, day);
+    const isPreHoliday = isPreHolidayForSchedule(employeeSchedule, calendar, year, month, day);
+    cells.push({ day, iso, isToday: iso === todayIso, entry, ds, isHoliday, isPreHoliday });
   }
 
   const monthLabel = new Date(year, month - 1, 1)
@@ -231,15 +246,22 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
             styles.cell,
             cell.isToday ? styles.cellToday : '',
             styles[STATUS_TO_CSS[cell.ds]] || '',
+            cell.isHoliday ? styles.cellHoliday : '',
+            cell.isPreHoliday ? styles.cellPreHoliday : '',
             isActive ? styles.cellActive : '',
             isSelected ? styles.cellSelected : '',
             cell.entry?.is_correction ? styles.cellCorrection : '',
           ].filter(Boolean).join(' ');
 
           const label = STATUS_LABEL[cell.ds];
+          const dayHints: string[] = [];
+          if (cell.isHoliday) dayHints.push('праздник');
+          if (cell.isPreHoliday) dayHints.push('сокращённый −1ч');
+          if (!cell.entry && cell.ds === 'weekend' && !cell.isHoliday) dayHints.push('выходной');
+          const hintsStr = dayHints.length > 0 ? ` (${dayHints.join(', ')})` : '';
           const baseTitle = cell.entry
-            ? `${cell.day}: ${label}${cell.entry.hours_worked ? ` (${cell.entry.hours_worked}ч)` : ''}${cell.entry.is_correction ? ' • корр.' : ''}`
-            : `${cell.day}${cell.ds === 'weekend' ? ' (выходной)' : ''}`;
+            ? `${cell.day}: ${label}${cell.entry.hours_worked ? ` (${cell.entry.hours_worked}ч)` : ''}${cell.entry.is_correction ? ' • корр.' : ''}${hintsStr}`
+            : `${cell.day}${hintsStr}`;
           const reqTitle = reqInfo
             ? ` • ${REQUEST_TYPE_LABELS[reqInfo.request_type] || 'заявка'}: ${STATUS_LABELS[reqInfo.status]}`
             : '';
@@ -274,7 +296,9 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
         <span><i className={`${styles.dot} ${styles.cellRemote}`}/>Удалёнка</span>
         <span><i className={`${styles.dot} ${styles.cellSick}`}/>Больничный</span>
         <span><i className={`${styles.dot} ${styles.cellVacation}`}/>Отпуск</span>
-        <span><i className={`${styles.dot} ${styles.cellWeekend}`}/>Выходной</span>
+        <span><i className={`${styles.dot} ${styles.cellWeekend}`}/>Выходной по графику</span>
+        <span><i className={`${styles.dot} ${styles.cellHoliday}`}/>Нерабочий день</span>
+        <span><i className={`${styles.dot} ${styles.cellPreHoliday}`}/>Сокращённый день</span>
         <span><i className={`${styles.dot} ${styles.cellAbsent}`}/>Неявка</span>
         <span><i className={`${styles.dotReq} ${styles.reqPending}`}/>Заявка на рассмотрении</span>
         <span><i className={`${styles.dotReq} ${styles.reqApproved}`}/>Одобрено</span>

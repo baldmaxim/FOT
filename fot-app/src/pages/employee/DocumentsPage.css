@@ -14,8 +14,9 @@
 .docs-category-select {
   width: 100%;
   box-sizing: border-box;
-  padding: 8px 12px;
-  border-radius: 8px;
+  padding: 10px 14px;
+  min-height: 40px;
+  border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--bg-secondary);
   color: var(--text-primary);

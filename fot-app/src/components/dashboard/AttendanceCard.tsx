@@ -15,6 +15,7 @@ export interface IDayGroup {
   firstEntry: string | null;
   lastExit: string | null;
   totalMinutes: number;
+  totalBreakMinutes: number;
   isToday: boolean;
   isWeekend: boolean;
   isFuture: boolean;
@@ -132,7 +133,7 @@ export const DayEvents: FC<{ group: IDayGroup }> = ({ group }) => (
   </div>
 );
 
-export const DaySummaryBadges: FC<{ group: IDayGroup }> = ({ group }) => (
+export const DaySummaryBadges: FC<{ group: IDayGroup; hideDuration?: boolean }> = ({ group, hideDuration }) => (
   <div className={styles.skudDaySummary}>
     {group.statusLabel && group.status !== 'work' && group.status !== 'manual' && (
       <span className={`${styles.dayStatusBadge} ${getStatusClassName(group.status)}`}>
@@ -150,7 +151,7 @@ export const DaySummaryBadges: FC<{ group: IDayGroup }> = ({ group }) => (
     {group.lastExit && (
       <span className={`${styles.skudTimeBadge} ${styles.skudTimeBadgeExit}`}>{formatTime(group.lastExit)}</span>
     )}
-    {group.totalMinutes > 0 && (
+    {!hideDuration && group.totalMinutes > 0 && (
       <span className={`${styles.skudTimeBadge} ${styles.skudTimeBadgeDuration}`}>{formatHM(group.totalMinutes)}</span>
     )}
     {group.hasSkudDetails && (

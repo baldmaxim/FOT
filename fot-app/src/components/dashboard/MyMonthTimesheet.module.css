@@ -127,8 +127,24 @@
 }
 
 .cellWeekend {
-  background: var(--bg-primary);
-  color: var(--text-tertiary);
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.cellHoliday {
+  background: rgba(239, 68, 68, 0.20);
+  color: var(--error);
+  font-weight: 600;
+}
+
+.cellPreHoliday {
+  background: linear-gradient(
+    135deg,
+    rgba(245, 158, 11, 0.28) 0%,
+    rgba(245, 158, 11, 0.28) 38%,
+    transparent 38%
+  );
 }
 
 .cellWork {
