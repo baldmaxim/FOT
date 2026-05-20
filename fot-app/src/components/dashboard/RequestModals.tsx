@@ -113,7 +113,7 @@ export const RequestModal: FC<IRequestModalProps> = ({ activeModal, onClose, emp
 
       if (files.length > 0) {
         const uploads = await Promise.allSettled(
-          files.map(file => documentService.uploadFile(file, employeeId, 'scan', created.id)),
+          files.map(file => documentService.uploadFile(file, employeeId, 'leave_request_attachment', created.id)),
         );
         const failed = uploads.filter(u => u.status === 'rejected').length;
         if (failed > 0) {
@@ -426,7 +426,7 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
       );
       if (files.length > 0) {
         const uploads = await Promise.allSettled(
-          files.map(file => documentService.uploadFile(file, employeeId, 'scan', created.id)),
+          files.map(file => documentService.uploadFile(file, employeeId, 'leave_request_attachment', created.id)),
         );
         const failed = uploads.filter(u => u.status === 'rejected').length;
         if (failed > 0) showToast('warning', `Заявка создана, но ${failed} файл(ов) не загрузились`);
