@@ -24,6 +24,16 @@ export type CronRunStatus = 'ok' | 'error';
 
 const TZ_MSK = 'Europe/Moscow';
 
+function isMonitorEnabled(monitorSlug: string): boolean {
+  const raw = process.env.SENTRY_CRON_MONITOR_SLUGS;
+  if (!raw) return false;
+  return raw
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .includes(monitorSlug);
+}
+
 function buildMonitorConfig(config: ICronMonitorConfig) {
   return {
     schedule: config.schedule,
@@ -52,6 +62,13 @@ export async function runWithCronMonitor(
   // оценка на загрузке могла бы ошибочно считать SENTRY_DSN заданным
   // в тестах. То же касается прод-сценария hot-reload .env через PM2.
   if (!process.env.SENTRY_DSN) {
+    await fn();
+    return;
+  }
+  // Sentry биллит каждый зарегистрированный cron-монитор. Whitelist через env
+  // позволяет включать чек-ины только для критичных джоб без выпиливания обёртки
+  // в сервисах. Пустой/незаданный список = чек-ины не шлём ни для кого.
+  if (!isMonitorEnabled(monitorSlug)) {
     await fn();
     return;
   }
