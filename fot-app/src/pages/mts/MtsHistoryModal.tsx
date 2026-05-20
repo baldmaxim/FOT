@@ -2,6 +2,7 @@ import { type FC, useMemo, useState } from 'react';
 import { useMtsHistory } from '../../hooks/useMtsData';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import type { IMtsSubscriber } from '../../services/mtsService';
+import { OsmCoord } from './OsmCoord';
 import styles from './MtsPage.module.css';
 
 interface IProps {
@@ -110,14 +111,7 @@ export const MtsHistoryModal: FC<IProps> = ({ subscriber, onClose }) => {
                   <td>{fmt(p.recordedAt)}</td>
                   <td>
                     {p.latitude != null && p.longitude != null ? (
-                      <a
-                        className={styles.link}
-                        href={`https://yandex.ru/maps/?pt=${p.longitude},${p.latitude}&z=16&l=map`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {p.latitude.toFixed(5)}, {p.longitude.toFixed(5)}
-                      </a>
+                      <OsmCoord lat={p.latitude} lng={p.longitude} />
                     ) : (
                       '—'
                     )}

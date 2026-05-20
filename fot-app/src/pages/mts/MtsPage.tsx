@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   useMtsConnectionSettings,
   useMtsSubscribers,
+  useMtsSubscribersMeta,
   useMtsLastLocations,
   useMtsMappings,
   useMtsSuggestions,
@@ -14,10 +15,12 @@ import {
   useMtsEmployeesLinked,
   useAutoLinkMappings,
   getMtsConnectionQueryKey,
+  getMtsSubscribersQueryKey,
   getMtsMappingsQueryKey,
   getMtsLocationsQueryKey,
   getMtsTasksQueryKey,
 } from '../../hooks/useMtsData';
+import { OsmCoord } from './OsmCoord';
 
 const MtsMapModal = lazy(() => import('./MtsMapModal').then(m => ({ default: m.MtsMapModal })));
 import { mtsService, type IMtsSubscriber, type IMtsTestResult } from '../../services/mtsService';
@@ -67,6 +70,7 @@ export const MtsPage: FC = () => {
   const configured = Boolean(connQuery.data?.hasToken);
 
   const subsQuery = useMtsSubscribers(configured);
+  const subsMetaQuery = useMtsSubscribersMeta(configured);
   const locQuery = useMtsLastLocations(configured);
   const mapQuery = useMtsMappings(configured);
   const suggQuery = useMtsSuggestions(configured);
@@ -119,7 +123,13 @@ export const MtsPage: FC = () => {
       setToken('');
       setBaseUrl('');
       setEditingConnection(false);
-      await queryClient.invalidateQueries({ queryKey: getMtsConnectionQueryKey() });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getMtsConnectionQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getMtsSubscribersQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: ['mts', 'subscribers', 'meta'] }),
+        queryClient.invalidateQueries({ queryKey: getMtsLocationsQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getMtsMappingsQueryKey() }),
+      ]);
       setStatus({ ok: true, msg: 'Настройки сохранены' });
     } catch (e) {
       setStatus({ ok: false, msg: errText(e, 'Ошибка сохранения (возможно нужен код 2FA)') });
@@ -140,6 +150,15 @@ export const MtsPage: FC = () => {
           ? { ok: true, msg: `Подключение успешно. Абонентов: ${r.count}` }
           : { ok: false, msg: r.error || 'Подключение не удалось' },
       );
+      // Освежаем основной список — testConnection бьёт МТС напрямую, а кэш
+      // React Query мог хранить старый пустой ответ из предыдущей сессии.
+      if (r.ok) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: getMtsSubscribersQueryKey() }),
+          queryClient.invalidateQueries({ queryKey: ['mts', 'subscribers', 'meta'] }),
+          queryClient.invalidateQueries({ queryKey: getMtsLocationsQueryKey() }),
+        ]);
+      }
     } catch (e) {
       setStatus({ ok: false, msg: errText(e, 'Ошибка проверки подключения') });
     } finally {
@@ -436,6 +455,17 @@ export const MtsPage: FC = () => {
               Абоненты {subsQuery.data ? `(${subsQuery.data.length})` : ''}
             </h2>
             <div className={styles.actions}>
+              <button
+                className={styles.btnSecondary}
+                onClick={() => {
+                  queryClient.invalidateQueries({ queryKey: getMtsSubscribersQueryKey() });
+                  queryClient.invalidateQueries({ queryKey: ['mts', 'subscribers', 'meta'] });
+                  queryClient.invalidateQueries({ queryKey: getMtsLocationsQueryKey() });
+                }}
+                disabled={busy}
+              >
+                Обновить список
+              </button>
               <button className={styles.btnSecondary} onClick={refreshLocations} disabled={busy}>
                 Обновить геопозиции
               </button>
@@ -448,6 +478,18 @@ export const MtsPage: FC = () => {
               </button>
             </div>
           </div>
+
+          {subsMetaQuery.data?.meta && (
+            <div className={styles.diagInline}>
+              <span>В МТС всего: <b>{subsMetaQuery.data.meta.upstreamTotal ?? '—'}</b></span>
+              <span>Вам видно: <b>{subsMetaQuery.data.data.length}</b></span>
+              <span>Скрыто фильтром доступа: <b>{subsMetaQuery.data.meta.filteredOut ?? 0}</b></span>
+              <span>super_admin: <b>{String(subsMetaQuery.data.meta.isSuperAdmin ?? false)}</b></span>
+              {subsMetaQuery.data.meta.mappingsWithEmployee != null && (
+                <span>Привязок (всего/в скоупе): <b>{subsMetaQuery.data.meta.mappingsWithEmployee}/{subsMetaQuery.data.meta.mappingsInScope ?? 0}</b></span>
+              )}
+            </div>
+          )}
 
           {subsQuery.isError && (
             <p className={styles.err}>
@@ -493,14 +535,7 @@ export const MtsPage: FC = () => {
                       <td>{s.isOnline ? 'онлайн' : 'офлайн'}</td>
                       <td>
                         {lat != null && lon != null ? (
-                          <a
-                            className={styles.link}
-                            href={`https://yandex.ru/maps/?pt=${lon},${lat}&z=16&l=map`}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            {lat.toFixed(5)}, {lon.toFixed(5)}
-                          </a>
+                          <OsmCoord lat={lat} lng={lon} />
                         ) : (
                           '—'
                         )}
@@ -760,13 +795,16 @@ export const MtsPage: FC = () => {
           )}
           {(tracksQuery.data?.length ?? 0) > 0 && (
             <div className={styles.tableWrap}>
+              <p className={styles.hint}>
+                Это агрегированные сегменты МТС (старт→финиш), а не «сырой» трек GPS-движения.
+                Для отрисовки реального трека на карте откройте раздел «Сотрудники с MTS-привязкой» → кнопка «Карта».
+              </p>
               <table className={styles.table}>
                 <thead>
                   <tr>
                     <th>subscriberID</th>
                     <th>Старт</th>
                     <th>Финиш</th>
-                    <th>Маршрут</th>
                     <th>Расстояние</th>
                     <th>Длительность</th>
                   </tr>
@@ -777,40 +815,20 @@ export const MtsPage: FC = () => {
                     const sLon = t.startLon;
                     const fLat = t.finishLat;
                     const fLon = t.finishLon;
-                    const startUrl = sLat != null && sLon != null
-                      ? `https://yandex.ru/maps/?pt=${sLon},${sLat}&z=16&l=map`
-                      : null;
-                    const finishUrl = fLat != null && fLon != null
-                      ? `https://yandex.ru/maps/?pt=${fLon},${fLat}&z=16&l=map`
-                      : null;
-                    const routeUrl = sLat != null && sLon != null && fLat != null && fLon != null
-                      ? `https://yandex.ru/maps/?rtext=${sLat},${sLon}~${fLat},${fLon}&rtt=auto`
-                      : null;
                     return (
                       <tr key={t.trackID}>
                         <td>{t.subscriberID}</td>
                         <td>
                           <div>{t.startDate ? new Date(t.startDate).toLocaleString('ru-RU') : '—'}</div>
-                          {startUrl ? (
-                            <a className={styles.link} href={startUrl} target="_blank" rel="noreferrer" title={t.startAddress ?? ''}>
-                              {sLat!.toFixed(5)}, {sLon!.toFixed(5)}
-                            </a>
+                          {sLat != null && sLon != null ? (
+                            <OsmCoord lat={sLat} lng={sLon} title={t.startAddress ?? undefined} />
                           ) : <span className={styles.hint}>—</span>}
                         </td>
                         <td>
                           <div>{t.finishDate ? new Date(t.finishDate).toLocaleString('ru-RU') : '—'}</div>
-                          {finishUrl ? (
-                            <a className={styles.link} href={finishUrl} target="_blank" rel="noreferrer" title={t.finishAddress ?? ''}>
-                              {fLat!.toFixed(5)}, {fLon!.toFixed(5)}
-                            </a>
+                          {fLat != null && fLon != null ? (
+                            <OsmCoord lat={fLat} lng={fLon} title={t.finishAddress ?? undefined} />
                           ) : <span className={styles.hint}>—</span>}
-                        </td>
-                        <td>
-                          {routeUrl ? (
-                            <a className={styles.link} href={routeUrl} target="_blank" rel="noreferrer">
-                              открыть в Яндекс.Картах
-                            </a>
-                          ) : '—'}
                         </td>
                         <td>{fmtDistance(t.distance)}</td>
                         <td>{fmtDuration(t.duration)}</td>
@@ -876,14 +894,7 @@ export const MtsPage: FC = () => {
                       <td>{p.locationDate ? new Date(p.locationDate).toLocaleString('ru-RU') : '—'}</td>
                       <td>
                         {p.latitude != null && p.longitude != null ? (
-                          <a
-                            className={styles.link}
-                            href={`https://yandex.ru/maps/?pt=${p.longitude},${p.latitude}&z=16&l=map`}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            {p.latitude.toFixed(5)}, {p.longitude.toFixed(5)}
-                          </a>
+                          <OsmCoord lat={p.latitude} lng={p.longitude} />
                         ) : '—'}
                       </td>
                       <td>{p.velocity != null ? `${Math.round(p.velocity)} км/ч` : '—'}</td>

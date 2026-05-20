@@ -17,7 +17,15 @@ export const useMtsConnectionSettings = () => useQuery({
 export const useMtsSubscribers = (enabled: boolean) => useQuery({
   queryKey: getMtsSubscribersQueryKey(),
   queryFn: () => mtsService.getSubscribers(),
-  staleTime: 60_000,
+  staleTime: 30_000,
+  enabled,
+});
+
+/** Дополнительный запрос для диагностики (meta: upstreamTotal/isSuperAdmin/filteredOut). */
+export const useMtsSubscribersMeta = (enabled: boolean) => useQuery({
+  queryKey: ['mts', 'subscribers', 'meta'] as const,
+  queryFn: () => mtsService.getSubscribersWithMeta(),
+  staleTime: 30_000,
   enabled,
 });
 
