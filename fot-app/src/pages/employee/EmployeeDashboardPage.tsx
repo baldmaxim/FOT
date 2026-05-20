@@ -9,6 +9,13 @@ import type { Employee, SkudEvent, IAccessPointSetting, TimesheetEntry, Timeshee
 import { DayEvents, DaySummaryBadges, formatHM } from '../../components/dashboard/AttendanceCard';
 import type { IDayGroup, IEntryExitPair } from '../../components/dashboard/AttendanceCard';
 import { useEmployeeTimesheetMonths } from '../../hooks/useEmployeeTimesheet';
+import { useMyLeaveRequests } from '../../hooks/usePortalData';
+import {
+  CORRECTION_STATUS_LABELS,
+  STATUS_LABELS as LR_STATUS_LABELS,
+  type ILeaveRequest,
+  type LeaveRequestStatus,
+} from '../../services/leaveRequestService';
 import styles from './EmployeeDashboard.module.css';
 
 const EmployeeInfoCards = lazy(() => import('../../components/dashboard/EmployeeInfoCards').then(m => ({ default: m.EmployeeInfoCards })));
@@ -42,6 +49,13 @@ const STATUS_LABELS: Record<TimesheetStatus, string> = {
   educational_leave: 'Учебный отпуск',
 };
 const WORKED_STATUSES = new Set<TimesheetStatus>(['work', 'manual', 'remote']);
+
+const REQ_STATUS_PRIORITY: Record<LeaveRequestStatus, number> = {
+  pending: 3,
+  approved: 2,
+  rejected: 1,
+  cancelled: 0,
+};
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
@@ -182,6 +196,7 @@ export const EmployeeDashboardPage: React.FC = () => {
   });
 
   const timesheetQuery = useEmployeeTimesheetMonths(employeeId, timesheetMonthKeys, !!employeeId);
+  const leaveRequestsQuery = useMyLeaveRequests();
 
   const skudEventsQuery = useQuery<SkudEvent[]>({
     queryKey: ['employee-dashboard-skud-events', employeeId, activeDayIso],
@@ -220,6 +235,20 @@ export const EmployeeDashboardPage: React.FC = () => {
     () => buildDayGroup(activeDayIso, timesheetEntries, skudEvents, internalPoints),
     [activeDayIso, timesheetEntries, skudEvents, internalPoints],
   );
+
+  const activeCorrection = useMemo<ILeaveRequest | null>(() => {
+    const list = leaveRequestsQuery.data ?? [];
+    let best: ILeaveRequest | null = null;
+    for (const req of list) {
+      if (req.request_type !== 'time_correction') continue;
+      if (req.status === 'cancelled') continue;
+      if (req.correction_date !== activeDayIso) continue;
+      if (!best || REQ_STATUS_PRIORITY[req.status] > REQ_STATUS_PRIORITY[best.status]) {
+        best = req;
+      }
+    }
+    return best;
+  }, [leaveRequestsQuery.data, activeDayIso]);
 
   const handleSetup2FA = async () => {
     try {
@@ -308,6 +337,33 @@ export const EmployeeDashboardPage: React.FC = () => {
                 </div>
               )}
             </div>
+            {activeCorrection && (
+              <div className={styles.correctionInfo}>
+                <div className={styles.correctionInfoHeader}>
+                  <span className={styles.correctionInfoTitle}>Корректировка</span>
+                  <span
+                    className={`${styles.correctionInfoStatus} ${styles[`correctionStatus_${activeCorrection.status}`]}`}
+                  >
+                    {LR_STATUS_LABELS[activeCorrection.status]}
+                  </span>
+                </div>
+                {(activeCorrection.correction_status || activeCorrection.correction_hours != null) && (
+                  <div className={styles.correctionInfoBody}>
+                    {activeCorrection.correction_status && (
+                      <span>
+                        {CORRECTION_STATUS_LABELS[activeCorrection.correction_status] ?? activeCorrection.correction_status}
+                      </span>
+                    )}
+                    {activeCorrection.correction_hours != null && (
+                      <span> · {activeCorrection.correction_hours}ч</span>
+                    )}
+                  </div>
+                )}
+                {activeCorrection.reason && (
+                  <div className={styles.correctionInfoReason}>{activeCorrection.reason}</div>
+                )}
+              </div>
+            )}
             {(activeDayGroup.totalMinutes > 0 || activeDayGroup.totalBreakMinutes > 0) && (
               <div className={styles.eventsPaneFooter}>
                 {activeDayGroup.totalMinutes > 0 && (
