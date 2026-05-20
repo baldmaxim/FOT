@@ -8,6 +8,7 @@ import { execute, query, queryOne, withTransaction } from '../config/postgres.js
 import { resolveSchedule, resolveSchedulesBulk, computeNetWorkHours } from '../services/schedule.service.js';
 import { canAccessEmployeeInScope, resolveRequestDataScope, resolveScopedDepartmentIds } from '../services/data-scope.service.js';
 import { collectDeptIds } from '../services/skud-shared.service.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const scheduleTypeEnum = z.enum(['office', 'remote', 'hybrid', 'shift']);
@@ -291,7 +292,15 @@ const assignEmployeeSchedule = async (
   const nextAssignment = rows.find(row => row.effective_from > effectiveFrom) || null;
 
   if (activeAtDate?.effective_from === effectiveFrom) {
-    const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : activeAtDate.effective_to ?? null);
+    // Семантика action='assign' — «график активен с этой даты и далее». При
+    // отсутствии nextAssignment effective_to сбрасываем в NULL (открытое окно),
+    // а НЕ наследуем activeAtDate.effective_to: иначе повторный assign после
+    // remove (который ставит effective_to в прошлое) ничего не меняет в видимом
+    // окне — запись остаётся закрытой на прошедшую дату, а фронт показывает
+    // default-график. Явно переданный effectiveTo (PUT body.effective_to) уважаем.
+    const nextEffectiveTo = effectiveTo !== undefined
+      ? effectiveTo
+      : (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : null);
     if (anchorDate !== undefined) {
       await db.execute(
         `UPDATE employee_schedule_assignments
@@ -334,10 +343,11 @@ const assignEmployeeSchedule = async (
 
     if (!between && (!prior || prior.effective_from < effectiveFrom)) {
       if (prior && (prior.effective_to === null || prior.effective_to >= effectiveFrom)) {
-        await db.execute(
+        const affected = await db.execute(
           `UPDATE employee_schedule_assignments SET effective_to = $1, updated_at = $2 WHERE id = $3`,
           [previousIsoDate(effectiveFrom), nowIso, prior.id],
         );
+        if (affected !== 1) throw new Error(`Не удалось закрыть предыдущее назначение (employeeId=${employeeId}, assignmentId=${prior.id}, affected=${affected})`);
       }
       if (anchorDate !== undefined) {
         await db.execute(
@@ -364,12 +374,13 @@ const assignEmployeeSchedule = async (
   }
 
   if (activeAtDate && activeAtDate.effective_from < effectiveFrom) {
-    await db.execute(
+    const affected = await db.execute(
       `UPDATE employee_schedule_assignments
           SET effective_to = $1, updated_at = $2
         WHERE id = $3`,
       [previousIsoDate(effectiveFrom), nowIso, activeAtDate.id],
     );
+    if (affected !== 1) throw new Error(`Не удалось закрыть активное назначение перед INSERT (employeeId=${employeeId}, assignmentId=${activeAtDate.id}, affected=${affected})`);
   }
 
   const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : null);
@@ -523,7 +534,12 @@ const assignObjectSchedule = async (
   const nextAssignment = rows.find(row => row.effective_from > effectiveFrom) || null;
 
   if (activeAtDate?.effective_from === effectiveFrom) {
-    const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : activeAtDate.effective_to ?? null);
+    // Те же соображения, что и для assignEmployeeSchedule: при отсутствии
+    // nextAssignment не наследуем закрытый effective_to, иначе повторный assign
+    // после remove не «открывает» график.
+    const nextEffectiveTo = effectiveTo !== undefined
+      ? effectiveTo
+      : (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : null);
     if (anchorDate !== undefined) {
       await execute(
         `UPDATE object_schedule_assignments
@@ -814,7 +830,9 @@ export const scheduleController = {
     try {
       const idsParam = req.query.employee_ids as string | undefined;
       if (!idsParam) return res.status(400).json({ success: false, error: 'employee_ids обязателен' });
-      const today = new Date().toISOString().slice(0, 10);
+      // Календарь Europe/Moscow — иначе в окне 00:00–03:00 МСК фильтр срезает
+      // только что вставленные записи с effective_from=сегодня (по МСК).
+      const today = moscowTodayIso();
 
       const employeeIds = idsParam
         .split(',')

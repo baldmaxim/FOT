@@ -125,6 +125,18 @@ export function buildInclusiveDateRange(startDate: string, endDate: string): str
 }
 
 /**
+ * Текущая календарная дата в зоне Europe/Moscow в виде YYYY-MM-DD.
+ *
+ * `new Date().toISOString().slice(0, 10)` даёт UTC-дату — в окне 00:00–03:00 МСК
+ * это вчерашнее число, из-за чего фильтры «активно сегодня» в listEmployeeAssignments
+ * и в employees.controller (schedule-фильтр) показывают вчерашнюю срезку и не видят
+ * только что вставленную запись с effective_from=today (МСК).
+ */
+export function moscowTodayIso(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(now);
+}
+
+/**
  * Собирает timestamptz-строку для события SKUD в часовом поясе Europe/Moscow.
  * Используется как канонический источник для skud_events.event_at.
  */

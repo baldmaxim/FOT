@@ -383,6 +383,69 @@ describe('scheduleController.bulkApplyToBrigades', () => {
     });
   });
 
+  // Регресс: после remove (закрытие effective_to в прошлое) повторный assign того
+  // же графика на effective_date === existing.effective_from должен СБРОСИТЬ
+  // effective_to в NULL, а не наследовать закрытую дату. Иначе бригада остаётся
+  // на default-графике, хотя toast говорит «обновлено N из N».
+  // См. план bright-roaming-cocke.md, шаг 1.
+  it('in-place UPDATE сбрасывает закрытый effective_to в NULL при assign после remove', async () => {
+    pgQuery.mockImplementation(async (sql: string) => {
+      const lower = sql.toLowerCase();
+      if (lower.includes('from org_departments')) {
+        return [{ id: BRIGADE_1, name: 'Бр. Курбоншоева', kind: 'brigade' }];
+      }
+      if (lower.includes('from employees')) {
+        return [{ id: 92 }];
+      }
+      if (lower.includes('from employee_schedule_assignments')) {
+        // Состояние после reset: запись того же графика закрыта вчера-2 относительно
+        // запрошенной даты. nextAssignment === null. До фикса nextEffectiveTo
+        // наследовал '2026-05-15' → видимое окно оставалось закрытым.
+        return [
+          {
+            id: 'existing-92',
+            employee_id: 92,
+            schedule_id: SCHEDULE_ID,
+            effective_from: '2026-04-27',
+            effective_to: '2026-05-15',
+          },
+        ];
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    pgQueryOne.mockResolvedValue({ id: 'existing-92' });
+    pgExecute.mockResolvedValue(1);
+
+    const req = makeReq({
+      body: {
+        department_ids: [BRIGADE_1],
+        action: 'assign',
+        schedule_id: SCHEDULE_ID,
+        effective_date: '2026-04-27',
+      },
+    });
+    const res = makeRes();
+
+    await scheduleController.bulkApplyToBrigades(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect((res.payload as { data: { employees_updated: number } }).data.employees_updated).toBe(1);
+
+    // UPDATE с effective_to=null (NULL), а не '2026-05-15'.
+    const updates = pgExecute.mock.calls.filter(([sql]) =>
+      typeof sql === 'string'
+      && sql.toLowerCase().includes('update employee_schedule_assignments')
+      && sql.toLowerCase().includes('set schedule_id'));
+    expect(updates).toHaveLength(1);
+    const [, params] = updates[0];
+    expect(Array.isArray(params)).toBe(true);
+    expect((params as unknown[])[1]).toBe(null);   // effective_to → NULL
+    expect((params as unknown[])[0]).toBe(SCHEDULE_ID); // schedule_id сохраняется
+    expect((params as unknown[]).includes('existing-92')).toBe(true);
+    // А не наследует закрытую дату:
+    expect((params as unknown[]).includes('2026-05-15')).toBe(false);
+  });
+
   it('one failing employee does not abort the batch (allSettled)', async () => {
     pgQuery.mockImplementation(async (sql: string) => {
       const lower = sql.toLowerCase();

@@ -26,6 +26,7 @@ import {
 import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { collectDeptIds } from '../services/skud-shared.service.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 
 // Полный список колонок employees для getById / lifecycle-хэндлеров
 const EMPLOYEE_FULL_COLUMNS = 'id, full_name, last_name, first_name, middle_name, current_salary, salary_actual, salary_calculated, staff_units, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, created_at, updated_at';
@@ -213,7 +214,8 @@ export const employeesController = {
         // Фильтр по графику: schedule_id=<uuid> или schedule_id=__default__ (legacy).
         const scheduleParam = typeof req.query.schedule_id === 'string' ? req.query.schedule_id.trim() : '';
         if (scheduleParam) {
-          const today = new Date().toISOString().slice(0, 10);
+          // Календарь Europe/Moscow — единый источник «сегодня» с listEmployeeAssignments.
+          const today = moscowTodayIso();
 
           let isDefaultRequested = false;
           if (scheduleParam === '__default__') {
