@@ -12,6 +12,7 @@ import {
 } from './sigur-sync-shared.js';
 import { invalidateOrgStructureCaches } from './employee-mapper.service.js';
 import { detectDepartmentKindFromName } from '../utils/department-kind.utils.js';
+import { evaluateAutoFireSafety, type IAutoFireDecision, type IAutoFireSafetyOptions } from './sigur-sync-employees.service.js';
 
 // ─── Типы результатов ───
 
@@ -22,6 +23,7 @@ export interface ISyncDepartmentsResult {
   filtered: number;
   total: number;
   parentLinksSet: number;
+  deactivated: number;
   errors: string[];
 }
 
@@ -29,6 +31,32 @@ interface IExistingDepartmentRow {
   id: string;
   sigur_department_id: number | null;
   name: string | null;
+  is_active: boolean | null;
+}
+
+/**
+ * Wrapper над evaluateAutoFireSafety для reconciliation org_departments:
+ * абсолютный лимит ниже (10 vs 20 для сотрудников), env-override другой.
+ * Truncation 50% и relative 5% — те же, что для сотрудников.
+ */
+export function evaluateOrphanDepartmentDeactivationSafety(
+  activeWithSigur: number,
+  sigurCount: number,
+  toDeactivateCount: number,
+  opts: IAutoFireSafetyOptions = {},
+): IAutoFireDecision {
+  const absoluteLimit = opts.absoluteLimit ?? Math.max(1, Number(process.env.SIGUR_DEPT_DEACTIVATE_MAX) || 10);
+  const decision = evaluateAutoFireSafety(activeWithSigur, sigurCount, toDeactivateCount, {
+    ...opts,
+    absoluteLimit,
+  });
+  if (decision.shouldSkip && decision.reason) {
+    return {
+      ...decision,
+      reason: decision.reason.replace(/^auto-fire skipped/, 'department-deactivate skipped').replace(/employees/g, 'departments'),
+    };
+  }
+  return decision;
 }
 
 function buildReusableDepartmentNameMap(
@@ -68,7 +96,7 @@ export async function syncDepartmentsLogic(
 
   const rawDepartments = await getDepartmentsRaw(connection, context);
   if (!rawDepartments || rawDepartments.length === 0) {
-    return { imported: 0, updated: 0, skipped: 0, filtered: 0, total: 0, parentLinksSet: 0, errors: [] };
+    return { imported: 0, updated: 0, skipped: 0, filtered: 0, total: 0, parentLinksSet: 0, deactivated: 0, errors: [] };
   }
 
   console.log(`[syncDepartments] got ${rawDepartments.length} departments from Sigur`);
@@ -81,7 +109,7 @@ export async function syncDepartmentsLogic(
   const ROOT_DEPT_NAME = 'Объект';
 
   const existingDepts = await query<IExistingDepartmentRow>(
-    'SELECT id, sigur_department_id, name FROM org_departments',
+    'SELECT id, sigur_department_id, name, is_active FROM org_departments',
   );
 
   const typedExistingDepts = existingDepts;
@@ -187,7 +215,9 @@ export async function syncDepartmentsLogic(
     if (sigurIdToDbId.has(dept.id)) {
       const dbId = sigurIdToDbId.get(dept.id)!;
       try {
-        await execute('UPDATE org_departments SET name = $1 WHERE id = $2', [dept.name, dbId]);
+        // is_active=true: «оживляем» бригаду, если она была помечена is_active=false
+        // (например, как фантом на прошлом тике) и снова появилась в Sigur.
+        await execute('UPDATE org_departments SET name = $1, is_active = true WHERE id = $2', [dept.name, dbId]);
         updated++;
       } catch (updateError) {
         errors.push(`update ${dept.name}: ${(updateError as Error).message}`);
@@ -224,7 +254,7 @@ export async function syncDepartmentsLogic(
           `INSERT INTO org_departments (name, sigur_department_id, kind)
            VALUES ($1, $2, $3)
            ON CONFLICT (sigur_department_id) WHERE sigur_department_id IS NOT NULL
-           DO UPDATE SET name = EXCLUDED.name
+           DO UPDATE SET name = EXCLUDED.name, is_active = true
            RETURNING id`,
           [dept.name, dept.id, detectDepartmentKindFromName(dept.name)],
         );
@@ -263,12 +293,58 @@ export async function syncDepartmentsLogic(
     }
   }
 
-  console.log(`[syncDepartments] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${filtered} filtered, ${parentLinksSet} parent links`);
+  // Reconciliation: org_departments.sigur_department_id, которых нет в свежем
+  // currentSigurDepartmentIds, — это удалённые в Sigur «фантомы». Помечаем
+  // is_active=false. Whitelist на reconciliation НЕ влияет: источник правды —
+  // полный rawDepartments (стр. 80), до whitelist-фильтра. Safety guard
+  // защищает от частичного ответа Sigur API.
+  const phantomCandidates = typedExistingDepts.filter(d =>
+    d.sigur_department_id != null
+    && d.is_active !== false
+    && !currentSigurDepartmentIds.has(d.sigur_department_id),
+  );
+  const activeWithSigur = typedExistingDepts.filter(d =>
+    d.sigur_department_id != null && d.is_active !== false,
+  ).length;
+
+  let deactivated = 0;
+  const safety = evaluateOrphanDepartmentDeactivationSafety(
+    activeWithSigur,
+    departments.length,
+    phantomCandidates.length,
+  );
+  if (phantomCandidates.length > 0) {
+    if (safety.shouldSkip) {
+      console.error(`[syncDepartments] ${safety.reason}`);
+      errors.push(safety.reason!);
+    } else {
+      const ids = phantomCandidates.map(d => d.id);
+      try {
+        await withTransaction(async (client) => {
+          const res = await client.query(
+            'UPDATE org_departments SET is_active = false WHERE id = ANY($1::uuid[])',
+            [ids],
+          );
+          deactivated = res.rowCount ?? 0;
+        });
+        console.log(
+          `[syncDepartments] deactivated ${deactivated} departments missing from Sigur`
+          + ` (sigur returned ${departments.length}, db active w/ sigur-id ${activeWithSigur})`,
+        );
+      } catch (deactivateError) {
+        errors.push(`deactivate phantoms: ${(deactivateError as Error).message}`);
+      }
+    }
+  }
+
+  console.log(`[syncDepartments] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${filtered} filtered, ${parentLinksSet} parent links, ${deactivated} deactivated`);
 
   // Sigur при пересоздании компании выдаёт НОВЫЕ sigur-id, whitelist гасит
   // старое поддерево → осиротевшие is_active=false дубликаты с застрявшими
   // сотрудниками. Схлопываем их на одноимённую активную строку, чтобы
-  // массовое назначение графика по бригадам никого не теряло.
+  // массовое назначение графика по бригадам никого не теряло. Также
+  // подхватит только что помеченные reconciliation-ом phantom-строки, если
+  // у них есть одноимённый is_active=true близнец.
   try {
     const consolidated = await consolidateDuplicateDepartments();
     if (consolidated.pairs > 0) {
@@ -281,7 +357,7 @@ export async function syncDepartmentsLogic(
   // Sync структуры из Sigur меняет и имена (employee-mapper), и иерархию
   // (dept tree), и whitelist sync-фильтра — инвалидируем все три согласованно.
   invalidateOrgStructureCaches();
-  return { imported, updated, skipped, filtered, total: departments.length, parentLinksSet, errors };
+  return { imported, updated, skipped, filtered, total: departments.length, parentLinksSet, deactivated, errors };
 }
 
 export interface IConsolidateResult {
