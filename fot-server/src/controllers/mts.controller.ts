@@ -152,19 +152,39 @@ export const mtsController = {
 
   /** Фильтрует список абонентов по data-scope (super_admin видит всё). */
   async getSubscribers(req: AuthenticatedRequest, res: Response): Promise<void> {
+    logRequest(req, 'GET /subscribers');
     try {
       const subs = await mtsDataService.getSubscribers();
       if (isSuperAdmin(req)) {
-        res.json({ success: true, data: subs });
+        logSuccess('GET /subscribers', `count=${subs.length} (super_admin, без фильтра)`);
+        res.json({ success: true, data: subs, meta: { upstreamTotal: subs.length, filteredOut: 0, isSuperAdmin: true } });
         return;
       }
       const mappings = await mtsMappingService.listMappings();
       const allowed = new Set<number>();
+      let mappedTotal = 0;
       for (const m of mappings) {
         if (m.employeeId == null) continue;
+        mappedTotal++;
         if (await canAccessEmployeeInScope(req, m.employeeId)) allowed.add(m.subscriberId);
       }
-      res.json({ success: true, data: subs.filter(s => allowed.has(s.subscriberID)) });
+      const filtered = subs.filter(s => allowed.has(s.subscriberID));
+      const filteredOut = subs.length - filtered.length;
+      console.log(
+        `[mts-api] getSubscribers user=${req.user.id}: upstream=${subs.length}, mappings(total/withEmp/inScope)=${mappings.length}/${mappedTotal}/${allowed.size}, visible=${filtered.length}, filteredOut=${filteredOut}`,
+      );
+      logSuccess('GET /subscribers', `upstream=${subs.length} visible=${filtered.length}`);
+      res.json({
+        success: true,
+        data: filtered,
+        meta: {
+          upstreamTotal: subs.length,
+          filteredOut,
+          isSuperAdmin: false,
+          mappingsInScope: allowed.size,
+          mappingsWithEmployee: mappedTotal,
+        },
+      });
     } catch (error) {
       fail(res, error, 'Ошибка получения абонентов МТС');
     }

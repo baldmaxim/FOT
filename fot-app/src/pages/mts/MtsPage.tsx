@@ -348,8 +348,24 @@ export const MtsPage: FC = () => {
             </div>
           </div>
 
-          {subsQuery.isError && <p className={styles.err}>Не удалось загрузить абонентов</p>}
+          {subsQuery.isError && (
+            <p className={styles.err}>
+              Не удалось загрузить абонентов
+              {mtsErrorDetails(subsQuery.error) && (
+                <><br /><code>{mtsErrorDetails(subsQuery.error)}</code></>
+              )}
+            </p>
+          )}
           {subsQuery.isLoading && <p className={styles.hint}>Загрузка…</p>}
+          {subsQuery.isSuccess && (subsQuery.data?.length ?? 0) === 0 && (
+            <p className={styles.hint}>
+              Список пуст. Возможные причины:
+              <br />· в МТС-аккаунте нет абонентов (проверьте в ЛК M-Poisk);
+              <br />· вы не <code>super_admin</code> — бэк отдаёт только тех абонентов, чьи привязки указывают на сотрудников
+              в вашей области доступа. Если привязок ещё нет — попросите системного администратора их создать.
+              <br />· проверьте подключение кнопкой «Проверить подключение» — диагностический блок покажет статус и ошибку МТС.
+            </p>
+          )}
 
           <div className={styles.tableWrap}>
             <table className={styles.table}>
@@ -649,20 +665,57 @@ export const MtsPage: FC = () => {
                     <th>subscriberID</th>
                     <th>Старт</th>
                     <th>Финиш</th>
+                    <th>Маршрут</th>
                     <th>Расстояние</th>
                     <th>Длительность</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(tracksQuery.data ?? []).map(t => (
-                    <tr key={t.trackID}>
-                      <td>{t.subscriberID}</td>
-                      <td>{t.startDate ? new Date(t.startDate).toLocaleString('ru-RU') : '—'}</td>
-                      <td>{t.finishDate ? new Date(t.finishDate).toLocaleString('ru-RU') : '—'}</td>
-                      <td>{fmtDistance(t.distance)}</td>
-                      <td>{fmtDuration(t.duration)}</td>
-                    </tr>
-                  ))}
+                  {(tracksQuery.data ?? []).map(t => {
+                    const sLat = t.startLat;
+                    const sLon = t.startLon;
+                    const fLat = t.finishLat;
+                    const fLon = t.finishLon;
+                    const startUrl = sLat != null && sLon != null
+                      ? `https://yandex.ru/maps/?pt=${sLon},${sLat}&z=16&l=map`
+                      : null;
+                    const finishUrl = fLat != null && fLon != null
+                      ? `https://yandex.ru/maps/?pt=${fLon},${fLat}&z=16&l=map`
+                      : null;
+                    const routeUrl = sLat != null && sLon != null && fLat != null && fLon != null
+                      ? `https://yandex.ru/maps/?rtext=${sLat},${sLon}~${fLat},${fLon}&rtt=auto`
+                      : null;
+                    return (
+                      <tr key={t.trackID}>
+                        <td>{t.subscriberID}</td>
+                        <td>
+                          <div>{t.startDate ? new Date(t.startDate).toLocaleString('ru-RU') : '—'}</div>
+                          {startUrl ? (
+                            <a className={styles.link} href={startUrl} target="_blank" rel="noreferrer" title={t.startAddress ?? ''}>
+                              {sLat!.toFixed(5)}, {sLon!.toFixed(5)}
+                            </a>
+                          ) : <span className={styles.hint}>—</span>}
+                        </td>
+                        <td>
+                          <div>{t.finishDate ? new Date(t.finishDate).toLocaleString('ru-RU') : '—'}</div>
+                          {finishUrl ? (
+                            <a className={styles.link} href={finishUrl} target="_blank" rel="noreferrer" title={t.finishAddress ?? ''}>
+                              {fLat!.toFixed(5)}, {fLon!.toFixed(5)}
+                            </a>
+                          ) : <span className={styles.hint}>—</span>}
+                        </td>
+                        <td>
+                          {routeUrl ? (
+                            <a className={styles.link} href={routeUrl} target="_blank" rel="noreferrer">
+                              открыть в Яндекс.Картах
+                            </a>
+                          ) : '—'}
+                        </td>
+                        <td>{fmtDistance(t.distance)}</td>
+                        <td>{fmtDuration(t.duration)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
