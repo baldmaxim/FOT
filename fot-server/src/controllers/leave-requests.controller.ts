@@ -6,6 +6,7 @@ import { notificationService } from '../services/notification.service.js';
 import { getIo } from '../socket/io-instance.js';
 import {
   canAccessEmployeeInScope,
+  resolveAccessibleDepartmentIds,
   resolveManagedDepartmentIds,
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
@@ -51,6 +52,76 @@ async function loadEmployeeIdsByDepartments(
         AND employment_status = 'active'`,
     [departmentIds],
   );
+}
+
+interface IEmployeeMeta {
+  id: number;
+  full_name: string | null;
+  org_department_id: string | null;
+  department_name: string | null;
+  position_name: string | null;
+}
+
+interface IAttachmentRow {
+  leave_request_id: string;
+  id: number;
+  file_name: string;
+  mime_type: string | null;
+  file_size: number | null;
+}
+
+async function loadEmployeeMeta(employeeIds: number[]): Promise<Map<number, IEmployeeMeta>> {
+  if (employeeIds.length === 0) return new Map();
+  const rows = await query<IEmployeeMeta>(
+    `SELECT e.id,
+            e.full_name,
+            e.org_department_id,
+            od.name AS department_name,
+            p.name  AS position_name
+       FROM employees e
+       LEFT JOIN org_departments od ON od.id = e.org_department_id
+       LEFT JOIN positions p        ON p.id = e.position_id
+      WHERE e.id = ANY($1::bigint[])`,
+    [employeeIds],
+  );
+  return new Map(rows.map(r => [r.id, r]));
+}
+
+async function loadAttachmentsByLeaveRequestIds(
+  requestIds: number[],
+): Promise<Map<number, Array<{ id: number; file_name: string; mime_type: string | null; file_size: number | null }>>> {
+  const result = new Map<number, Array<{ id: number; file_name: string; mime_type: string | null; file_size: number | null }>>();
+  if (requestIds.length === 0) return result;
+  const rows = await query<IAttachmentRow>(
+    `SELECT dl.entity_id AS leave_request_id,
+            d.id,
+            d.file_name,
+            d.mime_type,
+            d.file_size
+       FROM document_links dl
+       JOIN documents d ON d.id = dl.document_id
+      WHERE dl.entity_type = 'leave_request'
+        AND dl.entity_id = ANY($1::text[])`,
+    [requestIds.map(String)],
+  );
+  for (const row of rows) {
+    const key = Number(row.leave_request_id);
+    if (!Number.isFinite(key)) continue;
+    const list = result.get(key) || [];
+    list.push({
+      id: row.id,
+      file_name: row.file_name,
+      mime_type: row.mime_type,
+      file_size: row.file_size,
+    });
+    result.set(key, list);
+  }
+  return result;
+}
+
+function broadcastPendingChanged(): void {
+  const io = getIo();
+  if (io) io.emit('leave_request_pending_changed');
 }
 
 /** Создание заявления (worker+) */
@@ -140,6 +211,8 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return row;
     });
 
+    broadcastPendingChanged();
+
     // Уведомляем руководителя отдела и админов (fire-and-forget)
     const label = LEAVE_TYPE_LABELS[request_type] || request_type;
     pushService.sendLeaveRequestNotification(employeeId, request_type, req.user.id)
@@ -208,19 +281,27 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
       return;
     }
 
-    const nameMap = new Map(employees.map(e => [e.id, e.full_name]));
-
-    const data = await query<{ employee_id: number; [k: string]: unknown }>(
+    const data = await query<{ id: number; employee_id: number; [k: string]: unknown }>(
       `SELECT * FROM leave_requests
         WHERE employee_id = ANY($1::bigint[])
         ORDER BY created_at DESC`,
       [empIds],
     );
 
-    const enriched = data.map(r => ({
-      ...r,
-      employee_name: nameMap.get(r.employee_id) || null,
-    }));
+    const metaMap = await loadEmployeeMeta(empIds);
+    const requestIds = data.map(r => Number(r.id)).filter(Number.isFinite);
+    const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
+
+    const enriched = data.map(r => {
+      const meta = metaMap.get(r.employee_id);
+      return {
+        ...r,
+        employee_name: meta?.full_name ?? null,
+        department_name: meta?.department_name ?? null,
+        position_name: meta?.position_name ?? null,
+        attachments: attachmentsMap.get(Number(r.id)) ?? [],
+      };
+    });
     res.json({ success: true, data: enriched });
   } catch (err) {
     console.error('leave-requests.getDepartment error:', err);
@@ -260,32 +341,65 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     const whereSql = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
 
-    const data = await query<{ employee_id: number; [k: string]: unknown }>(
+    const data = await query<{ id: number; employee_id: number; [k: string]: unknown }>(
       `SELECT * FROM leave_requests
         ${whereSql}
         ORDER BY created_at DESC`,
       params,
     );
 
-    // Подгружаем ФИО сотрудников
     const empIds = [...new Set(data.map(r => r.employee_id))];
-    let nameMap = new Map<number, string | null>();
-    if (empIds.length > 0) {
-      const emps = await query<{ id: number; full_name: string | null }>(
-        `SELECT id, full_name FROM employees WHERE id = ANY($1::bigint[])`,
-        [empIds],
-      );
-      nameMap = new Map(emps.map(e => [e.id, e.full_name]));
-    }
+    const metaMap = await loadEmployeeMeta(empIds);
+    const requestIds = data.map(r => Number(r.id)).filter(Number.isFinite);
+    const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
 
-    const enriched = data.map(r => ({
-      ...r,
-      employee_name: nameMap.get(r.employee_id) || null,
-    }));
+    const enriched = data.map(r => {
+      const meta = metaMap.get(r.employee_id);
+      return {
+        ...r,
+        employee_name: meta?.full_name ?? null,
+        department_name: meta?.department_name ?? null,
+        position_name: meta?.position_name ?? null,
+        attachments: attachmentsMap.get(Number(r.id)) ?? [],
+      };
+    });
     res.json({ success: true, data: enriched });
   } catch (err) {
     console.error('leave-requests.getAll error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения заявлений' });
+  }
+};
+
+/** Количество pending-заявлений в scope текущего юзера (для бейджа в меню) */
+const pendingCount = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const accessible = await resolveAccessibleDepartmentIds(req);
+
+    if (accessible === 'all') {
+      const row = await queryOne<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM leave_requests WHERE status = 'pending'`,
+      );
+      res.json({ success: true, data: { count: Number(row?.count ?? 0) } });
+      return;
+    }
+
+    if (accessible.length === 0) {
+      res.json({ success: true, data: { count: 0 } });
+      return;
+    }
+
+    const row = await queryOne<{ count: string }>(
+      `SELECT COUNT(*)::text AS count
+         FROM leave_requests lr
+         JOIN employees e ON e.id = lr.employee_id
+        WHERE lr.status = 'pending'
+          AND e.org_department_id = ANY($1::uuid[])`,
+      [accessible],
+    );
+    res.json({ success: true, data: { count: Number(row?.count ?? 0) } });
+  } catch (err) {
+    console.error('leave-requests.pendingCount error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения счётчика заявлений' });
   }
 };
 
@@ -436,6 +550,8 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
       });
     }
 
+    broadcastPendingChanged();
+
     res.json({ success: true, data });
   } catch (err) {
     console.error('leave-requests.approve error:', err);
@@ -482,6 +598,8 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       [req.user.id, nowIso, comment || null, id],
     );
 
+    broadcastPendingChanged();
+
     res.json({ success: true, data });
   } catch (err) {
     console.error('leave-requests.reject error:', err);
@@ -523,6 +641,8 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       [nowIso, id],
     );
 
+    broadcastPendingChanged();
+
     res.json({ success: true, data });
   } catch (err) {
     console.error('leave-requests.cancel error:', err);
@@ -536,6 +656,7 @@ export const leaveRequestsController = {
   getById,
   getDepartment,
   getAll,
+  pendingCount,
   approve,
   reject,
   cancel,

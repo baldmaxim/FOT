@@ -2,6 +2,7 @@ import type { FC } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useMyEmployee } from '../../hooks/useMyEmployee';
+import { usePendingLeaveRequestsCount } from '../../hooks/usePendingLeaveRequestsCount';
 import { formatFioShort } from '../../utils/formatFio';
 import styles from './Sidebar.module.css';
 import {
@@ -94,6 +95,7 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose, is
   const location = useLocation();
   const { profile, logout, canViewPage, hideSidebar, employeeVariant } = useAuth();
   const { data: myEmployee } = useMyEmployee(!profile?.imported_position);
+  const leaveRequestsBadge = usePendingLeaveRequestsCount();
 
   // Defense in depth: если Layout по какой-то причине отрендерил Sidebar,
   // а флаг hide_sidebar активен (и пользователь не админ), всё равно не показываем меню.
@@ -194,15 +196,17 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose, is
 
       <nav className={styles.nav}>
         {navGroups.map(group => {
-          const visibleItems = group.items.filter(item => {
-            if (item.systemAdminOnly && isCompanyAdmin) return false;
-            // ЛК подрядчика виден только если у роли тип кабинета = contractor
-            // (админ обходит page-access, поэтому не по canViewPage).
-            if (item.personalCabinet === 'contractor') return employeeVariant === 'contractor';
-            const pages = item.requiredPage ?? item.path;
-            const pageList = Array.isArray(pages) ? pages : [pages];
-            return pageList.some(page => canViewPage(page));
-          });
+          const visibleItems = group.items
+            .map(item => item.id === 'leave-requests' ? { ...item, badge: leaveRequestsBadge } : item)
+            .filter(item => {
+              if (item.systemAdminOnly && isCompanyAdmin) return false;
+              // ЛК подрядчика виден только если у роли тип кабинета = contractor
+              // (админ обходит page-access, поэтому не по canViewPage).
+              if (item.personalCabinet === 'contractor') return employeeVariant === 'contractor';
+              const pages = item.requiredPage ?? item.path;
+              const pageList = Array.isArray(pages) ? pages : [pages];
+              return pageList.some(page => canViewPage(page));
+            });
 
           if (visibleItems.length === 0) return null;
 

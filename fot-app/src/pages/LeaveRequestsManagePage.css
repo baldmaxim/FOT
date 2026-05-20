@@ -69,9 +69,21 @@
   margin-bottom: 6px;
 }
 
+.lrm-card-employee-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .lrm-card-employee {
   font-size: 15px;
   font-weight: 600;
+}
+
+.lrm-card-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .lrm-status {
@@ -79,7 +91,7 @@
   align-items: center;
   gap: 4px;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 700;
 }
 
 .lrm-card-type {
@@ -90,7 +102,11 @@
 
 .lrm-card-dates {
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.lrm-card-dates strong {
+  font-weight: 700;
 }
 
 .lrm-card-reason {
@@ -100,10 +116,72 @@
 }
 
 .lrm-card-comment {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.08));
+  border-left: 3px solid var(--accent, #6b7280);
+  border-radius: 0 6px 6px 0;
   font-style: italic;
+}
+
+.lrm-card-comment-label {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-right: 4px;
+}
+
+.lrm-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.lrm-attachment-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 100%;
+}
+
+.lrm-attachment-btn:hover {
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.12));
+}
+
+.lrm-attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+
+.lrm-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lrm-group + .lrm-group {
+  margin-top: 16px;
+}
+
+.lrm-group-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
 }
 
 .lrm-card-actions {

@@ -3,6 +3,13 @@ import { apiClient } from '../api/client';
 export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'certificate' | 'time_correction';
 export type LeaveRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 
+export interface ILeaveRequestAttachment {
+  id: number;
+  file_name: string;
+  mime_type: string | null;
+  file_size: number | null;
+}
+
 export interface ILeaveRequest {
   id: number;
   employee_id: number;
@@ -20,8 +27,21 @@ export interface ILeaveRequest {
   created_at: string;
   updated_at: string;
   employee_name?: string | null;
+  department_name?: string | null;
+  position_name?: string | null;
+  attachments?: ILeaveRequestAttachment[];
   reviewer?: { id: string; full_name: string | null } | null;
 }
+
+export const CORRECTION_STATUS_LABELS: Record<string, string> = {
+  work: 'Рабочий день',
+  vacation: 'Отпуск',
+  remote: 'Удалённо',
+  unpaid: 'Без сохранения',
+  absent: 'Прогул',
+  sick: 'Больничный',
+  educational_leave: 'Учебный отпуск',
+};
 
 export const REQUEST_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск',
@@ -91,6 +111,11 @@ export const leaveRequestService = {
 
   cancel: async (id: number) => {
     const res = await apiClient.patch<ApiResponse<ILeaveRequest>>(`/leave-requests/${id}/cancel`, {});
+    return res.data;
+  },
+
+  getPendingCount: async (): Promise<{ count: number }> => {
+    const res = await apiClient.get<ApiResponse<{ count: number }>>('/leave-requests/pending-count');
     return res.data;
   },
 };

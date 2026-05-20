@@ -27,6 +27,13 @@ router.get(
   leaveRequestsController.getDepartment
 );
 
+// GET /api/leave-requests/pending-count — счётчик pending для бейджа в меню
+router.get(
+  '/pending-count',
+  requirePageAccess('/leave-requests', 'view'),
+  leaveRequestsController.pendingCount
+);
+
 // GET /api/leave-requests — все заявления организации (hr/admin)
 router.get(
   '/',
