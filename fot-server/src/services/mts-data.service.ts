@@ -1,6 +1,16 @@
-import { execute } from '../config/postgres.js';
+import { execute, query } from '../config/postgres.js';
 import { encryptionService } from './encryption.service.js';
 import { MtsServiceBase } from './mts-base.service.js';
+
+export interface IMtsLocationHistoryPoint {
+  recordedAt: string;
+  latitude: number | null;
+  longitude: number | null;
+  accuracy: number | null;
+  address: string | null;
+  state: string | null;
+  source: string | null;
+}
 
 // Доступ к данным МТС «Мобильные сотрудники» + персист зашифрованных снимков
 // позиций. Контракт: docs/mts-mobile-staff-api.md.
@@ -122,6 +132,66 @@ class MtsDataService extends MtsServiceBase {
       finishLon: num(r.finishLon),
       distance: num(r.distance),
       duration: num(r.duration),
+    }));
+  }
+
+  /**
+   * Принудительный запрос актуального местоположения у МТС (платный, по тарифу
+   * M-Poisk ~3–5 ₽). Дёргается ТОЛЬКО вручную с UI после явного подтверждения
+   * пользователя, не в фоне. Контракт subscriberRequests — body { subscriberID },
+   * MTS обновит lastLocation; результат подтянется при следующем GET lastLocations.
+   */
+  async requestLocation(subscriberId: number): Promise<{ ok: boolean; raw: unknown }> {
+    const raw = await this.request<unknown>('post', '/subscriberManagement/subscriberRequests', {
+      data: { subscriberID: subscriberId },
+    });
+    return { ok: true, raw };
+  }
+
+  /**
+   * Читает зашифрованную историю из mts_location_snapshots и расшифровывает в памяти.
+   * Используется endpoint'ом /history с проверкой data-scope/IDOR.
+   */
+  async getHistorySnapshots(
+    subscriberId: number,
+    dateFrom: string,
+    dateTo: string,
+    limit = 5000,
+  ): Promise<IMtsLocationHistoryPoint[]> {
+    const rows = await query<{
+      recorded_at: string;
+      lat_enc: string | null;
+      lon_enc: string | null;
+      accuracy_m_enc: string | null;
+      address_enc: string | null;
+      state_enc: string | null;
+      source_enc: string | null;
+    }>(
+      `SELECT recorded_at, lat_enc, lon_enc, accuracy_m_enc, address_enc, state_enc, source_enc
+         FROM mts_location_snapshots
+        WHERE subscriber_id = $1
+          AND recorded_at >= $2::timestamptz
+          AND recorded_at <= $3::timestamptz
+        ORDER BY recorded_at DESC
+        LIMIT $4`,
+      [subscriberId, dateFrom, dateTo, limit],
+    );
+
+    const numOrNull = (raw: string | null): number | null => {
+      const v = encryptionService.decryptField(raw);
+      if (v === null || v === '') return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    return rows.map(r => ({
+      recordedAt: r.recorded_at,
+      latitude: numOrNull(r.lat_enc),
+      longitude: numOrNull(r.lon_enc),
+      accuracy: numOrNull(r.accuracy_m_enc),
+      address: encryptionService.decryptField(r.address_enc),
+      state: encryptionService.decryptField(r.state_enc),
+      source: encryptionService.decryptField(r.source_enc),
     }));
   }
 

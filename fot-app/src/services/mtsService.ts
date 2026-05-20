@@ -34,6 +34,16 @@ export interface IMtsLocation {
   source: string | null;
 }
 
+export interface IMtsHistoryPoint {
+  recordedAt: string;
+  latitude: number | null;
+  longitude: number | null;
+  accuracy: number | null;
+  address: string | null;
+  state: string | null;
+  source: string | null;
+}
+
 export interface IMtsMappingRow {
   subscriberId: number;
   employeeId: number | null;
@@ -101,6 +111,29 @@ export const mtsService = {
     displayName?: string | null;
   }): Promise<IMtsMappingRow[]> => {
     const res = await apiClient.put<ApiResponse<IMtsMappingRow[]>>('/mts/mappings', data);
+    return res.data;
+  },
+
+  getHistory: async (
+    subscriberId: number,
+    dateFrom: string,
+    dateTo: string,
+  ): Promise<IMtsHistoryPoint[]> => {
+    const qs = new URLSearchParams({
+      subscriberId: String(subscriberId),
+      dateFrom,
+      dateTo,
+    });
+    const res = await apiClient.get<ApiResponse<IMtsHistoryPoint[]>>(`/mts/history?${qs.toString()}`);
+    return res.data;
+  },
+
+  /** ПЛАТНЫЙ ручной запрос актуальной позиции. confirmed=true обязателен (бэк проверяет). */
+  requestLocation: async (subscriberId: number): Promise<{ ok: boolean }> => {
+    const res = await apiClient.post<ApiResponse<{ ok: boolean }>>('/mts/request-location', {
+      subscriberId,
+      confirmed: true,
+    });
     return res.data;
   },
 };

@@ -52,7 +52,9 @@ const envSchema = z.object({
   // Значения добавляет пользователь вручную в .env или в системные настройки.
   MTS_API_BASE_URL: optionalUrl,
   MTS_API_TOKEN: optionalString,
-  MTS_SYNC_INTERVAL_MS: z.string().regex(/^\d+$/).default('120000'),
+  // Часовой такт для фонового поллера МТС lastLocations (бесплатный API,
+  // активной trigger-схемой не пользуемся — она платная и идёт через UI вручную).
+  MTS_SYNC_INTERVAL_MS: z.string().regex(/^\d+$/).default('3600000'),
 
   // Web Push (VAPID)
   VAPID_PUBLIC_KEY: optionalString,

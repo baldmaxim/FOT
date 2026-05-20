@@ -40,3 +40,19 @@ export const useMtsSuggestions = (enabled: boolean) => useQuery({
   staleTime: 60_000,
   enabled,
 });
+
+export const getMtsHistoryQueryKey = (subscriberId: number, dateFrom: string, dateTo: string) =>
+  ['mts', 'history', subscriberId, dateFrom, dateTo] as const;
+
+export const useMtsHistory = (
+  subscriberId: number | null,
+  dateFrom: string,
+  dateTo: string,
+  enabled: boolean,
+) =>
+  useQuery({
+    queryKey: getMtsHistoryQueryKey(subscriberId ?? 0, dateFrom, dateTo),
+    queryFn: () => mtsService.getHistory(subscriberId as number, dateFrom, dateTo),
+    enabled: enabled && subscriberId !== null && Boolean(dateFrom) && Boolean(dateTo),
+    staleTime: 30_000,
+  });

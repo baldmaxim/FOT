@@ -27,6 +27,15 @@ router.post('/connection-settings/test', requirePageAccess('/mts', 'view'), mtsC
 router.get('/subscribers', requirePageAccess('/mts', 'view'), mtsController.getSubscribers);
 router.get('/last-locations', requirePageAccess('/mts', 'view'), mtsController.getLastLocations);
 router.get('/track', requirePageAccess('/mts', 'view'), mtsController.getTrack);
+router.get('/history', requirePageAccess('/mts', 'view'), mtsController.getHistory);
+
+// ПЛАТНЫЙ ручной запрос актуального положения — super_admin + 2FA + явный confirmed=true в body.
+router.post(
+  '/request-location',
+  requirePageAccess('/mts', 'edit'),
+  requireCritical2FA,
+  mtsController.requestLocation,
+);
 
 // Привязка абонент -> сотрудник
 router.get('/mappings', requirePageAccess('/mts', 'view'), mtsController.getMappings);

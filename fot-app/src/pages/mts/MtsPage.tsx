@@ -10,8 +10,10 @@ import {
   getMtsMappingsQueryKey,
   getMtsLocationsQueryKey,
 } from '../../hooks/useMtsData';
-import { mtsService } from '../../services/mtsService';
+import { mtsService, type IMtsSubscriber } from '../../services/mtsService';
 import { ApiError } from '../../api/client';
+import { MtsRequestLocationModal } from './MtsRequestLocationModal';
+import { MtsHistoryModal } from './MtsHistoryModal';
 import styles from './MtsPage.module.css';
 
 const errText = (e: unknown, fallback: string): string =>
@@ -33,6 +35,8 @@ export const MtsPage: FC = () => {
   const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [empInputs, setEmpInputs] = useState<Record<number, string>>({});
+  const [requestSubscriber, setRequestSubscriber] = useState<IMtsSubscriber | null>(null);
+  const [historySubscriber, setHistorySubscriber] = useState<IMtsSubscriber | null>(null);
 
   const locData = locQuery.data;
   const mapData = mapQuery.data;
@@ -180,6 +184,22 @@ export const MtsPage: FC = () => {
         )}
       </section>
 
+      {requestSubscriber && (
+        <MtsRequestLocationModal
+          subscriber={requestSubscriber}
+          onClose={() => setRequestSubscriber(null)}
+          onConfirmed={() => {
+            setStatus({
+              ok: true,
+              msg: 'Запрос отправлен. Свежая позиция появится при следующем обновлении lastLocations (обычно несколько секунд).',
+            });
+          }}
+        />
+      )}
+      {historySubscriber && (
+        <MtsHistoryModal subscriber={historySubscriber} onClose={() => setHistorySubscriber(null)} />
+      )}
+
       {!configured ? (
         <section className={styles.card}>
           <p className={styles.hint}>Укажите токен, чтобы загрузить абонентов и геопозиции.</p>
@@ -274,6 +294,20 @@ export const MtsPage: FC = () => {
                               Отвязать
                             </button>
                           )}
+                          <button
+                            className={styles.btnSm}
+                            onClick={() => setHistorySubscriber(s)}
+                            title="История перемещений (бесплатно, из БД)"
+                          >
+                            История
+                          </button>
+                          <button
+                            className={styles.btnDangerSm}
+                            onClick={() => setRequestSubscriber(s)}
+                            title="Запросить актуальное положение у МТС (ПЛАТНО)"
+                          >
+                            📍 Запросить (платно)
+                          </button>
                         </div>
                       </td>
                     </tr>

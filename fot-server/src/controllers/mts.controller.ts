@@ -155,6 +155,75 @@ export const mtsController = {
     }
   },
 
+  /**
+   * История перемещений абонента из mts_location_snapshots. Контент в БД
+   * зашифрован — здесь расшифровывается и возвращается. IDOR: не-super_admin
+   * должен иметь доступ к привязанному сотруднику. Любой просмотр аудируется.
+   */
+  async getHistory(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const subscriberId = Number(req.query.subscriberId);
+      const dateFrom = String(req.query.dateFrom || '');
+      const dateTo = String(req.query.dateTo || '');
+      if (!Number.isFinite(subscriberId) || !dateFrom || !dateTo) {
+        res.status(400).json({ success: false, error: 'Нужны subscriberId, dateFrom, dateTo' });
+        return;
+      }
+
+      if (!isSuperAdmin(req)) {
+        const employeeId = await mtsMappingService.getEmployeeIdBySubscriber(subscriberId);
+        if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
+          res.status(403).json({ success: false, error: 'Нет доступа к абоненту' });
+          return;
+        }
+      }
+
+      const data = await mtsDataService.getHistorySnapshots(subscriberId, dateFrom, dateTo);
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_HISTORY_VIEWED, {
+        entityId: String(subscriberId),
+        details: { subscriberId, dateFrom, dateTo, points: data.length },
+      });
+
+      res.json({ success: true, data });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения истории МТС');
+    }
+  },
+
+  /**
+   * РУЧНОЙ платный запрос актуального положения. Защита: super_admin + critical 2FA
+   * (на уровне роута) + явное { confirmed:true } в body. Аудит обязателен.
+   */
+  async requestLocation(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!isSuperAdmin(req)) {
+        res.status(403).json({ success: false, error: 'Доступно только super_admin' });
+        return;
+      }
+      const { subscriberId, confirmed } = req.body as { subscriberId?: number; confirmed?: boolean };
+      if (!Number.isFinite(Number(subscriberId))) {
+        res.status(400).json({ success: false, error: 'subscriberId обязателен' });
+        return;
+      }
+      if (confirmed !== true) {
+        res.status(400).json({ success: false, error: 'Требуется подтверждение платного запроса' });
+        return;
+      }
+
+      await mtsDataService.requestLocation(Number(subscriberId));
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_LOCATION_REQUESTED, {
+        entityId: String(subscriberId),
+        details: { subscriberId, paid: true },
+      });
+
+      res.json({ success: true, data: { ok: true } });
+    } catch (error) {
+      fail(res, error, 'Ошибка запроса положения МТС');
+    }
+  },
+
   async getMappings(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const all = await mtsMappingService.listMappings();
