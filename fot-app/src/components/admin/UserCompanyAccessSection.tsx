@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Check, X } from 'lucide-react';
 import { adminService } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
 import styles from '../../pages/admin/Admin.module.css';
@@ -128,75 +129,85 @@ export const UserCompanyAccessSection: FC<IProps> = ({ userId, isUserAdmin }) =>
         Если ничего не выбрано — пользователь видит все компании. Выберите компании, чтобы ограничить зону доступа.
       </div>
 
-      <button
-        type="button"
-        className={`${styles.companyAccessTrigger} ${open ? styles.companyAccessTriggerOpen : ''}`}
-        onClick={() => setOpen(prev => !prev)}
-      >
-        <span
-          className={`${styles.companyAccessTriggerText} ${isSystemAdmin ? styles.companyAccessTriggerSystem : ''}`}
-          title={isSystemAdmin ? undefined : selectedNames.join(', ')}
-        >
-          {triggerText}
-        </span>
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          className={`${styles.companyAccessChevron} ${open ? styles.companyAccessChevronOpen : ''}`}
-        >
-          <polyline points="6 9 12 15 18 9" />
-        </svg>
-      </button>
+      <div className={styles.companyAccessRow}>
+        <div className={styles.companyAccessTriggerSlot}>
+          <button
+            type="button"
+            className={`${styles.companyAccessTrigger} ${open ? styles.companyAccessTriggerOpen : ''}`}
+            onClick={() => setOpen(prev => !prev)}
+          >
+            <span
+              className={`${styles.companyAccessTriggerText} ${isSystemAdmin ? styles.companyAccessTriggerSystem : ''}`}
+              title={isSystemAdmin ? undefined : selectedNames.join(', ')}
+            >
+              {triggerText}
+            </span>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              className={`${styles.companyAccessChevron} ${open ? styles.companyAccessChevronOpen : ''}`}
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
 
-      {open && (
-        <div className={styles.companyAccessPopover}>
-          {isLoading ? (
-            <div className={styles.departmentAccessEmpty}>Загрузка…</div>
-          ) : companies.length === 0 ? (
-            <div className={styles.departmentAccessEmpty}>Компании не найдены</div>
-          ) : (
-            <div className={styles.companyAccessPopoverList}>
-              {companies.map(company => {
-                const checked = current.includes(company.id);
-                return (
-                  <label
-                    key={company.id}
-                    className={`${styles.departmentAccessItem} ${checked ? styles.departmentAccessItemChecked : ''}`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggle(company.id)}
-                    />
-                    <span className={styles.departmentAccessItemLabel}>{company.name}</span>
-                  </label>
-                );
-              })}
+          {open && (
+            <div className={styles.companyAccessPopover}>
+              {isLoading ? (
+                <div className={styles.departmentAccessEmpty}>Загрузка…</div>
+              ) : companies.length === 0 ? (
+                <div className={styles.departmentAccessEmpty}>Компании не найдены</div>
+              ) : (
+                <div className={styles.companyAccessPopoverList}>
+                  {companies.map(company => {
+                    const checked = current.includes(company.id);
+                    return (
+                      <label
+                        key={company.id}
+                        className={`${styles.departmentAccessItem} ${checked ? styles.departmentAccessItemChecked : ''}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggle(company.id)}
+                        />
+                        <span className={styles.departmentAccessItemLabel}>{company.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
-
-          <div className={styles.companyAccessPopoverActions}>
-            <button
-              type="button"
-              className={styles.cancelBtn}
-              onClick={() => setDraft(null)}
-              disabled={!hasChanges || saving}
-            >
-              Сбросить
-            </button>
-            <button
-              type="button"
-              className={styles.saveBtn}
-              onClick={() => void handleSave()}
-              disabled={!hasChanges || saving}
-            >
-              {saving ? 'Сохраняю…' : 'Сохранить'}
-            </button>
-          </div>
         </div>
-      )}
+
+        {hasChanges && (
+          <>
+            <button
+              type="button"
+              className={styles.companyAccessConfirm}
+              onClick={() => void handleSave()}
+              disabled={saving}
+              aria-label="Сохранить изменения"
+              title="Сохранить"
+            >
+              <Check size={18} strokeWidth={2.5} />
+            </button>
+            <button
+              type="button"
+              className={styles.companyAccessRevert}
+              onClick={() => setDraft(null)}
+              disabled={saving}
+              aria-label="Отменить изменения"
+              title="Отменить"
+            >
+              <X size={18} strokeWidth={2.5} />
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 };

@@ -1386,10 +1386,23 @@
 /* Company access — collapsed trigger + popover with checkboxes */
 .companyAccessWrap {
   position: relative;
-  flex: 1 1 100%;
+  width: 100%;
+  max-width: 380px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.companyAccessRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.companyAccessTriggerSlot {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .companyAccessLabel {
@@ -1488,6 +1501,58 @@
   gap: 8px;
   padding-top: 4px;
   border-top: 1px solid var(--border);
+}
+
+.companyAccessConfirm,
+.companyAccessRevert {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.companyAccessConfirm {
+  background: var(--success);
+  color: #fff;
+  border: none;
+}
+
+.companyAccessConfirm:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.companyAccessConfirm:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.companyAccessRevert {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--border);
+}
+
+.companyAccessRevert:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: var(--bg-tertiary);
+}
+
+.companyAccessRevert:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+@media (max-width: 768px) {
+  .companyAccessConfirm,
+  .companyAccessRevert {
+    width: 40px;
+    height: 40px;
+  }
 }
 
 /* Pending users — compact list (one row per request) */
