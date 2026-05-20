@@ -84,7 +84,7 @@ const setupMocks = (opts: {
         source_enc: 'enc-src',
       }];
     }
-    if (sql.includes('position_type')) {
+    if (sql.includes('p.is_admin = true')) {
       return [{ id: 'admin-1' }, { id: 'admin-2' }];
     }
     if (sql.includes('FROM employees WHERE id')) {

@@ -329,7 +329,7 @@ export const MtsPage: FC = () => {
         <section className={styles.card}>
           <div className={styles.tableHeader}>
             <h2 className={styles.cardTitle}>
-              Сотрудники с MTS-привязкой
+              Привязанные сотрудники — карта и геозоны
               {linkedQuery.data ? ` (${linkedQuery.data.data.length})` : ''}
             </h2>
             <div className={styles.actions}>
@@ -353,19 +353,22 @@ export const MtsPage: FC = () => {
                   }
                 }}
               >
-                Связать по ФИО (2FA)
+                Авто-привязка по ФИО (2FA)
               </button>
             </div>
           </div>
           <p className={styles.hint}>
-            Кликните «Карта», чтобы открыть треки сотрудника на OpenStreetMap и настроить геозоны.
+            Это сотрудники FOT, для которых уже назначена связь с абонентом МТС
+            (через раздел «Абоненты МТС» ниже). По кнопке «Карта» — треки на OpenStreetMap и настройка геозон.
             Уведомление администратору приходит, если сотрудник вне геозоны во время своей смены.
           </p>
           {linkedQuery.isLoading && <p className={styles.hint}>Загрузка…</p>}
           {linkedQuery.isError && <p className={styles.err}>Не удалось загрузить список</p>}
           {linkedQuery.isSuccess && linkedQuery.data.data.length === 0 && (
             <p className={styles.hint}>
-              Нет привязанных сотрудников. Используйте «Связать по ФИО» или вкладку «Абоненты» ниже.
+              Привязок пока нет. Спуститесь к разделу «Абоненты МТС» ниже — там назначьте каждому абоненту сотрудника FOT
+              (вручную по табельному номеру или массово «Авто-привязка по ФИО» сверху). После сохранения
+              сотрудники появятся здесь.
             </p>
           )}
           {linkedQuery.data && linkedQuery.data.data.length > 0 && (
@@ -452,7 +455,7 @@ export const MtsPage: FC = () => {
         <section className={styles.card}>
           <div className={styles.tableHeader}>
             <h2 className={styles.cardTitle}>
-              Абоненты {subsQuery.data ? `(${subsQuery.data.length})` : ''}
+              Абоненты МТС — назначение сотрудников FOT {subsQuery.data ? `(${subsQuery.data.length})` : ''}
             </h2>
             <div className={styles.actions}>
               <button
@@ -479,12 +482,24 @@ export const MtsPage: FC = () => {
             </div>
           </div>
 
+          <p className={styles.hint}>
+            <b>Что это.</b> Список всех номеров (SIM-карт) из вашего корпоративного аккаунта МТС.
+            Чтобы система знала, кому принадлежит каждый номер, — назначьте каждому абоненту
+            соответствующего сотрудника FOT. Это похоже на «одобрение» нового пользователя и
+            привязку его к карте Sigur: один раз указываете соответствие — дальше треки и геозоны
+            работают автоматически.
+            <br />
+            <b>Как назначить.</b> 1) Кнопка «Авто-привязка по ФИО» сверху — пакетно по точному
+            совпадению. 2) Вручную в строке: ввести табельный номер сотрудника FOT и нажать «Привязать».
+            После привязки сотрудник появится в разделе «Привязанные сотрудники» выше.
+          </p>
+
           {subsMetaQuery.data?.meta && (
             <div className={styles.diagInline}>
               <span>В МТС всего: <b>{subsMetaQuery.data.meta.upstreamTotal ?? '—'}</b></span>
               <span>Вам видно: <b>{subsMetaQuery.data.data.length}</b></span>
               <span>Скрыто фильтром доступа: <b>{subsMetaQuery.data.meta.filteredOut ?? 0}</b></span>
-              <span>super_admin: <b>{String(subsMetaQuery.data.meta.isSuperAdmin ?? false)}</b></span>
+              <span>Полный доступ: <b>{String(subsMetaQuery.data.meta.hasFullAccess ?? false)}</b></span>
               {subsMetaQuery.data.meta.mappingsWithEmployee != null && (
                 <span>Привязок (всего/в скоупе): <b>{subsMetaQuery.data.meta.mappingsWithEmployee}/{subsMetaQuery.data.meta.mappingsInScope ?? 0}</b></span>
               )}
@@ -803,6 +818,7 @@ export const MtsPage: FC = () => {
                 <thead>
                   <tr>
                     <th>subscriberID</th>
+                    <th>Сотрудник FOT</th>
                     <th>Старт</th>
                     <th>Финиш</th>
                     <th>Расстояние</th>
@@ -815,9 +831,11 @@ export const MtsPage: FC = () => {
                     const sLon = t.startLon;
                     const fLat = t.finishLat;
                     const fLon = t.finishLon;
+                    const mappingRow = mapBySub.get(t.subscriberID);
                     return (
                       <tr key={t.trackID}>
                         <td>{t.subscriberID}</td>
+                        <td>{mappingRow?.employeeFullName || <span className={styles.hint}>не привязан</span>}</td>
                         <td>
                           <div>{t.startDate ? new Date(t.startDate).toLocaleString('ru-RU') : '—'}</div>
                           {sLat != null && sLon != null ? (

@@ -214,8 +214,8 @@ export const mtsService = {
     return res.data;
   },
 
-  /** То же что getSubscribers, но возвращает meta (upstreamTotal, isSuperAdmin, filteredOut). */
-  getSubscribersWithMeta: async (): Promise<{ data: IMtsSubscriber[]; meta: { upstreamTotal?: number; filteredOut?: number; isSuperAdmin?: boolean; mappingsInScope?: number; mappingsWithEmployee?: number } }> => {
+  /** То же что getSubscribers, но возвращает meta (upstreamTotal, hasFullAccess, filteredOut). */
+  getSubscribersWithMeta: async (): Promise<{ data: IMtsSubscriber[]; meta: { upstreamTotal?: number; filteredOut?: number; hasFullAccess?: boolean; mappingsInScope?: number; mappingsWithEmployee?: number } }> => {
     const res = await apiClient.get<ApiResponse<IMtsSubscriber[]>>('/mts/subscribers');
     return { data: res.data, meta: (res.meta as never) ?? {} };
   },

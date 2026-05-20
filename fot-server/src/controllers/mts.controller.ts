@@ -16,12 +16,15 @@ import { encryptionService } from '../services/encryption.service.js';
 // - Ошибки апстрима МТС не пробрасываются в клиент/Sentry body (могут содержать
 //   ПДн абонента). Клиенту — generic message + HTTP/функциональный код, в лог —
 //   status/code без message-тела.
-// - Доступ super_admin = весь модуль. Прочие роли (если когда-то получат /mts)
-//   видят только привязанных абонентов в своём data-scope; авто-подсказки и
-//   неназначенные абоненты — только super_admin.
+// - Полный доступ к модулю: super_admin (если такая роль есть в проекте) или
+//   любой is_admin. В проектах, где super_admin отсутствует, admin — это и
+//   есть «верхняя» роль с доступом к модулю /mts.
+// - Не-админы видят только тех абонентов, чьи привязки указывают на сотрудников
+//   в их области доступа (data-scope через employee_department_access).
 // - Аудит на сохранение настроек и изменение привязок.
 
-const isSuperAdmin = (req: AuthenticatedRequest): boolean => req.user.role_code === 'super_admin';
+const hasFullMtsAccess = (req: AuthenticatedRequest): boolean =>
+  req.user.role_code === 'super_admin' || req.user.is_admin === true;
 
 const sendApiError = (res: Response, error: MtsApiError, fallback: string): void => {
   console.error(`[mts] upstream error: http=${error.status} code=${error.code ?? '-'} desc=${error.description ?? '-'} msg="${error.message}"`);
@@ -158,9 +161,9 @@ export const mtsController = {
     logRequest(req, 'GET /subscribers');
     try {
       const subs = await mtsDataService.getSubscribers();
-      if (isSuperAdmin(req)) {
-        logSuccess('GET /subscribers', `count=${subs.length} (super_admin, без фильтра)`);
-        res.json({ success: true, data: subs, meta: { upstreamTotal: subs.length, filteredOut: 0, isSuperAdmin: true } });
+      if (hasFullMtsAccess(req)) {
+        logSuccess('GET /subscribers', `count=${subs.length} (full access, без фильтра)`);
+        res.json({ success: true, data: subs, meta: { upstreamTotal: subs.length, filteredOut: 0, hasFullAccess: true } });
         return;
       }
       const mappings = await mtsMappingService.listMappings();
@@ -183,7 +186,7 @@ export const mtsController = {
         meta: {
           upstreamTotal: subs.length,
           filteredOut,
-          isSuperAdmin: false,
+          hasFullAccess: false,
           mappingsInScope: allowed.size,
           mappingsWithEmployee: mappedTotal,
         },
@@ -199,7 +202,7 @@ export const mtsController = {
       // Снимки шифрованно сохраняем сразу (все, что прислал МТС — это инвентарь).
       await mtsDataService.persistLocationSnapshots(locations);
 
-      if (isSuperAdmin(req)) {
+      if (hasFullMtsAccess(req)) {
         res.json({ success: true, data: locations });
         return;
       }
@@ -226,7 +229,7 @@ export const mtsController = {
         return;
       }
 
-      if (!isSuperAdmin(req)) {
+      if (!hasFullMtsAccess(req)) {
         const employeeId = await mtsMappingService.getEmployeeIdBySubscriber(subscriberId);
         if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
           res.status(403).json({ success: false, error: 'Нет доступа к абоненту' });
@@ -256,7 +259,7 @@ export const mtsController = {
         return;
       }
 
-      if (!isSuperAdmin(req)) {
+      if (!hasFullMtsAccess(req)) {
         const employeeId = await mtsMappingService.getEmployeeIdBySubscriber(subscriberId);
         if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
           res.status(403).json({ success: false, error: 'Нет доступа к абоненту' });
@@ -283,7 +286,7 @@ export const mtsController = {
    */
   async requestLocation(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!isSuperAdmin(req)) {
+      if (!hasFullMtsAccess(req)) {
         res.status(403).json({ success: false, error: 'Доступно только super_admin' });
         return;
       }
@@ -313,7 +316,7 @@ export const mtsController = {
   async getMappings(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const all = await mtsMappingService.listMappings();
-      if (isSuperAdmin(req)) {
+      if (hasFullMtsAccess(req)) {
         res.json({ success: true, data: all });
         return;
       }
@@ -332,7 +335,7 @@ export const mtsController = {
   /** Авто-подсказки = name-directory; отдаём только super_admin. */
   async getMappingSuggestions(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!isSuperAdmin(req)) {
+      if (!hasFullMtsAccess(req)) {
         res.json({ success: true, data: [] });
         return;
       }
@@ -368,7 +371,7 @@ export const mtsController = {
         return;
       }
       const subId = subscriberID == null ? null : Number(subscriberID);
-      if (subId != null && !isSuperAdmin(req)) {
+      if (subId != null && !hasFullMtsAccess(req)) {
         const employeeId = await mtsMappingService.getEmployeeIdBySubscriber(subId);
         if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
           res.status(403).json({ success: false, error: 'Нет доступа к абоненту' });
@@ -413,7 +416,7 @@ export const mtsController = {
   async getTasks(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const all = await mtsTasksService.listTasks();
-      if (isSuperAdmin(req)) {
+      if (hasFullMtsAccess(req)) {
         res.json({ success: true, data: all });
         return;
       }
@@ -440,7 +443,7 @@ export const mtsController = {
 
       // Сначала проверяем локальную запись и scope.
       const local = await mtsTasksService.getByMtsTaskId(taskId);
-      if (!isSuperAdmin(req)) {
+      if (!hasFullMtsAccess(req)) {
         if (!local || local.subscriberId == null) {
           res.status(403).json({ success: false, error: 'Нет доступа к задаче' });
           return;
@@ -486,7 +489,7 @@ export const mtsController = {
       }
       // Не super_admin не может привязывать абонента к сотруднику вне своего скоупа
       // (закрывает «перепривяжу на себя, чтобы увидеть»).
-      if (!isSuperAdmin(req) && empId != null && !(await canAccessEmployeeInScope(req, empId))) {
+      if (!hasFullMtsAccess(req) && empId != null && !(await canAccessEmployeeInScope(req, empId))) {
         res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
         return;
       }
@@ -505,7 +508,7 @@ export const mtsController = {
 
       // Отдаём только то, что зритель имеет право видеть.
       const all = await mtsMappingService.listMappings();
-      const visible = isSuperAdmin(req)
+      const visible = hasFullMtsAccess(req)
         ? all
         : (
             await Promise.all(
@@ -668,7 +671,7 @@ export const mtsController = {
 
       const items = [];
       for (const r of rows) {
-        if (!isSuperAdmin(req)) {
+        if (!hasFullMtsAccess(req)) {
           if (!r.employee_id || !(await canAccessEmployeeInScope(req, r.employee_id))) continue;
         }
         items.push({
@@ -703,7 +706,7 @@ export const mtsController = {
         res.status(400).json({ success: false, error: 'Нужны subscriberId, dateFrom, dateTo' });
         return;
       }
-      if (!isSuperAdmin(req)) {
+      if (!hasFullMtsAccess(req)) {
         const employeeId = await mtsMappingService.getEmployeeIdBySubscriber(subscriberId);
         if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
           res.status(403).json({ success: false, error: 'Нет доступа к абоненту' });
@@ -733,7 +736,7 @@ export const mtsController = {
    */
   async autoLinkMappings(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!isSuperAdmin(req)) {
+      if (!hasFullMtsAccess(req)) {
         res.status(403).json({ success: false, error: 'Доступно только super_admin' });
         return;
       }
@@ -862,7 +865,7 @@ export const mtsController = {
         : undefined;
 
       // Не-super_admin: ограничить только своими employees in scope.
-      if (!isSuperAdmin(req)) {
+      if (!hasFullMtsAccess(req)) {
         if (!employeeIds) {
           res.status(400).json({ success: false, error: 'employeeId обязателен для не-super_admin' });
           return;

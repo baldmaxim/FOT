@@ -116,12 +116,16 @@ async function loadLatestSnapshots(subscriberIds: number[], maxAgeMs: number): P
   return result;
 }
 
-async function loadSuperAdminUserIds(): Promise<string[]> {
+async function loadAdminRecipientIds(): Promise<string[]> {
+  // Получатели уведомления о нарушении геозоны: все is_admin=true пользователи
+  // (системные и компанийные). Если в проекте есть отдельная роль super_admin —
+  // она тоже сюда попадёт (is_admin неявно true). В проектах без super_admin
+  // получатели = admin'ы.
   const rows = await query<{ id: string }>(
     `SELECT u.id
        FROM app_auth.users u
-       LEFT JOIN user_profiles p ON p.id = u.id
-      WHERE p.position_type IN ('super_admin')`,
+       JOIN user_profiles p ON p.id = u.id
+      WHERE p.is_admin = true`,
   );
   return rows.map(r => r.id);
 }
@@ -239,7 +243,7 @@ export async function runGeofenceMonitorTick(): Promise<void> {
   const snapshots = await loadLatestSnapshots(Array.from(subToEmp.keys()), maxAgeMs);
   if (snapshots.size === 0) return;
 
-  const recipients = await loadSuperAdminUserIds();
+  const recipients = await loadAdminRecipientIds();
   const ctx: ITickContext = { now, notifyRecipients: recipients };
 
   for (const [subscriberId, snapshot] of snapshots) {
