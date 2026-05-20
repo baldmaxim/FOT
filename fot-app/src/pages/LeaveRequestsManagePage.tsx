@@ -1,6 +1,16 @@
-import { type FC, useMemo, useState } from 'react';
+import { type FC, type MouseEvent as ReactMouseEvent, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Check, X, Clock, CheckCircle, XCircle, Ban, Paperclip } from 'lucide-react';
+import {
+  Check,
+  X,
+  Clock,
+  CheckCircle,
+  XCircle,
+  Ban,
+  Paperclip,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import {
   leaveRequestService,
@@ -13,6 +23,7 @@ import {
 } from '../services/leaveRequestService';
 import { useLeaveRequestsManage } from '../hooks/usePortalData';
 import { FilePreviewModal } from '../components/documents/FilePreviewModal';
+import { LeaveRequestEventsPanel } from '../components/leave-requests/LeaveRequestEventsPanel';
 import './LeaveRequestsManagePage.css';
 
 const STATUS_COLORS: Record<LeaveRequestStatus, string> = {
@@ -37,6 +48,12 @@ interface IPreviewState {
   mimeType: string | null;
 }
 
+interface IEventsPanelState {
+  employeeId: number;
+  employeeName: string;
+  date: string;
+}
+
 export const LeaveRequestsManagePage: FC = () => {
   const { hasPermission } = useAuth();
   const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
@@ -47,6 +64,8 @@ export const LeaveRequestsManagePage: FC = () => {
   const [commentId, setCommentId] = useState<number | null>(null);
   const [comment, setComment] = useState('');
   const [preview, setPreview] = useState<IPreviewState | null>(null);
+  const [eventsPanel, setEventsPanel] = useState<IEventsPanelState | null>(null);
+  const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
   const { data, isLoading } = useLeaveRequestsManage(scope, filter);
   const requests = data ?? EMPTY_REQUESTS;
 
@@ -70,6 +89,27 @@ export const LeaveRequestsManagePage: FC = () => {
   }, [filteredRequests]);
 
   const showGroupHeaders = grouped.length > 1;
+
+  useEffect(() => {
+    // При первой загрузке (или смене фильтра) — если групп > 2, свернуть все,
+    // иначе развернуть. Не трогаем явно изменённые пользователем состояния
+    // при добавлении/удалении карточек — пересчитываем только при смене ключей.
+    if (grouped.length > 2) {
+      setCollapsedDepts(new Set(grouped.map(([key]) => key)));
+    } else {
+      setCollapsedDepts(new Set());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, grouped.length]);
+
+  const toggleDept = (key: string) => {
+    setCollapsedDepts(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   const handleApprove = async (id: number) => {
     try {
@@ -100,10 +140,39 @@ export const LeaveRequestsManagePage: FC = () => {
     setPreview({ documentId: att.id, fileName: att.file_name, mimeType: att.mime_type });
   };
 
+  const openEventsPanel = (r: ILeaveRequest) => {
+    if (!r.correction_date) return;
+    setEventsPanel({
+      employeeId: r.employee_id,
+      employeeName: r.employee_name || `#${r.employee_id}`,
+      date: r.correction_date,
+    });
+  };
+
+  const stop = (e: ReactMouseEvent) => e.stopPropagation();
+
   const renderCard = (r: ILeaveRequest) => {
     const Icon = STATUS_ICONS[r.status];
+    const isCorrection = r.request_type === 'time_correction' && !!r.correction_date;
+    const isActive =
+      !!eventsPanel &&
+      isCorrection &&
+      eventsPanel.employeeId === r.employee_id &&
+      eventsPanel.date === r.correction_date;
     return (
-      <div key={r.id} className="lrm-card">
+      <div
+        key={r.id}
+        className={`lrm-card${isCorrection ? ' lrm-card--clickable' : ''}${isActive ? ' lrm-card--active' : ''}`}
+        onClick={isCorrection ? () => openEventsPanel(r) : undefined}
+        role={isCorrection ? 'button' : undefined}
+        tabIndex={isCorrection ? 0 : undefined}
+        onKeyDown={isCorrection ? (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openEventsPanel(r);
+          }
+        } : undefined}
+      >
         <div className="lrm-card-main">
           <div className="lrm-card-top">
             <div className="lrm-card-employee-block">
@@ -139,14 +208,14 @@ export const LeaveRequestsManagePage: FC = () => {
           )}
           {r.reason && <div className="lrm-card-reason">{r.reason}</div>}
           {r.attachments && r.attachments.length > 0 && (
-            <div className="lrm-attachments">
+            <div className="lrm-attachments" onClick={stop}>
               {r.attachments.map(att => (
                 <button
                   key={att.id}
                   type="button"
                   className="lrm-attachment-btn"
-                  onClick={() => openAttachment(att)}
-                  title="Открыть просмотр"
+                  onClick={(e) => { e.stopPropagation(); openAttachment(att); }}
+                  title={att.file_name}
                 >
                   <Paperclip size={12} />
                   <span className="lrm-attachment-name">{att.file_name}</span>
@@ -162,7 +231,7 @@ export const LeaveRequestsManagePage: FC = () => {
         </div>
 
         {r.status === 'pending' && (
-          <div className="lrm-card-actions">
+          <div className="lrm-card-actions" onClick={stop}>
             {commentId === r.id ? (
               <div className="lrm-comment-form">
                 <input
@@ -170,22 +239,35 @@ export const LeaveRequestsManagePage: FC = () => {
                   placeholder="Комментарий (необязательно)"
                   value={comment}
                   onChange={e => setComment(e.target.value)}
+                  onClick={stop}
                 />
                 <div className="lrm-comment-btns">
-                  <button className="lrm-action-btn approve" onClick={() => handleApprove(r.id)}>
+                  <button
+                    className="lrm-action-btn approve"
+                    onClick={(e) => { e.stopPropagation(); handleApprove(r.id); }}
+                  >
                     <Check size={14} /> Одобрить
                   </button>
-                  <button className="lrm-action-btn reject" onClick={() => handleReject(r.id)}>
+                  <button
+                    className="lrm-action-btn reject"
+                    onClick={(e) => { e.stopPropagation(); handleReject(r.id); }}
+                  >
                     <X size={14} /> Отклонить
                   </button>
                 </div>
               </div>
             ) : (
               <div className="lrm-action-row">
-                <button className="lrm-action-btn approve" onClick={() => handleApprove(r.id)}>
+                <button
+                  className="lrm-action-btn approve"
+                  onClick={(e) => { e.stopPropagation(); handleApprove(r.id); }}
+                >
                   <Check size={14} /> Одобрить
                 </button>
-                <button className="lrm-action-btn reject" onClick={() => setCommentId(r.id)}>
+                <button
+                  className="lrm-action-btn reject"
+                  onClick={(e) => { e.stopPropagation(); setCommentId(r.id); }}
+                >
                   <X size={14} /> Отклонить
                 </button>
               </div>
@@ -196,33 +278,62 @@ export const LeaveRequestsManagePage: FC = () => {
     );
   };
 
+  const totalEmployees = (items: ILeaveRequest[]) =>
+    new Set(items.map(i => i.employee_id)).size;
+
   return (
-    <div className="lrm-page">
-      <div className="lrm-header">
-        <h1 className="lrm-title">Заявления</h1>
-        <div className="lrm-filter">
-          <button className={`lrm-filter-btn ${filter === 'pending' ? 'active' : ''}`} onClick={() => setFilter('pending')}>
-            Ожидающие
-          </button>
-          <button className={`lrm-filter-btn ${filter === 'all' ? 'active' : ''}`} onClick={() => setFilter('all')}>
-            Все
-          </button>
+    <div className={`lrm-shell${eventsPanel ? ' lrm-shell--with-panel' : ''}`}>
+      <div className="lrm-page">
+        <div className="lrm-header">
+          <div className="lrm-filter">
+            <button className={`lrm-filter-btn ${filter === 'pending' ? 'active' : ''}`} onClick={() => setFilter('pending')}>
+              Ожидающие
+            </button>
+            <button className={`lrm-filter-btn ${filter === 'all' ? 'active' : ''}`} onClick={() => setFilter('all')}>
+              Все
+            </button>
+          </div>
         </div>
+
+        {isLoading ? (
+          <div className="lrm-loading">Загрузка...</div>
+        ) : filteredRequests.length === 0 ? (
+          <div className="lrm-empty">Нет заявлений</div>
+        ) : (
+          <div className="lrm-list">
+            {grouped.map(([department, items]) => {
+              const isCollapsed = collapsedDepts.has(department);
+              return (
+                <div key={department} className={`lrm-group${isCollapsed ? ' lrm-group--collapsed' : ''}`}>
+                  {showGroupHeaders && (
+                    <button
+                      type="button"
+                      className="lrm-group-toggle"
+                      onClick={() => toggleDept(department)}
+                      aria-expanded={!isCollapsed}
+                    >
+                      {isCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+                      <span className="lrm-group-name">{department}</span>
+                      <span className="lrm-group-stats">
+                        {items.length} · {totalEmployees(items)} чел
+                      </span>
+                    </button>
+                  )}
+                  {!isCollapsed && items.map(renderCard)}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      {isLoading ? (
-        <div className="lrm-loading">Загрузка...</div>
-      ) : filteredRequests.length === 0 ? (
-        <div className="lrm-empty">Нет заявлений</div>
-      ) : (
-        <div className="lrm-list">
-          {grouped.map(([department, items]) => (
-            <div key={department} className="lrm-group">
-              {showGroupHeaders && <h3 className="lrm-group-title">{department}</h3>}
-              {items.map(renderCard)}
-            </div>
-          ))}
-        </div>
+      {eventsPanel && (
+        <LeaveRequestEventsPanel
+          employeeId={eventsPanel.employeeId}
+          employeeName={eventsPanel.employeeName}
+          date={eventsPanel.date}
+          onClose={() => setEventsPanel(null)}
+        />
       )}
 
       {preview && (

@@ -23,12 +23,14 @@ export function isExcelBuffer(buffer: Buffer): boolean {
 // Очищает имя файла от управляющих и опасных символов перед сохранением в
 // БД/R2. Защищает от: path traversal (`../`), null-byte, контрольных символов,
 // CSV-injection префиксов в Excel-export (`=`, `+`, `-`, `@`, табуляция).
-// Сохраняет кириллицу, пробелы, цифры, латиницу, точки, дефис, подчёркивание.
+// Сохраняет любые Unicode-буквы и цифры (\p{L}\p{N}), пробелы, точки,
+// дефис, подчёркивание, скобки, плюс и знак №.
 export function sanitizeFileName(name: string, maxLength = 200): string {
   // path.basename + удаление NUL и control-chars
   const base = name.replace(/^.*[\\/]/, '').replace(/[\x00-\x1f\x7f]/g, '');
-  // Запрещённые символы заменяем на _
-  let cleaned = base.replace(/[^\w.\-А-Яа-яЁё ()]/g, '_').slice(0, maxLength);
+  // Запрещённые символы заменяем на _ (всё, что не буква/цифра Unicode и
+  // не из разрешённой пунктуации). Файлы с диакритикой, № и т.п. не теряются.
+  let cleaned = base.replace(/[^\p{L}\p{N}.\-_ ()+№]/gu, '_').slice(0, maxLength);
   // Defang CSV-injection: префиксы =, +, -, @, табуляция в начале → апостроф
   if (/^[=+\-@\t\r]/.test(cleaned)) cleaned = `'${cleaned}`;
   return cleaned || 'file';

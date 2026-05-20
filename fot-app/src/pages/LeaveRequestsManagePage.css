@@ -1,18 +1,25 @@
+.lrm-shell {
+  display: flex;
+  align-items: stretch;
+  min-height: 100%;
+}
+
 .lrm-page {
+  flex: 1;
+  min-width: 0;
   padding: 24px;
+}
+
+.lrm-shell--with-panel .lrm-page {
+  /* На десктопе панель «толкает» основной экран. Никакого затемнения. */
+  padding-right: 16px;
 }
 
 .lrm-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 20px;
-}
-
-.lrm-title {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0;
+  justify-content: flex-end;
+  margin-bottom: 16px;
 }
 
 .lrm-filter {
@@ -56,6 +63,20 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 16px 20px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.lrm-card--clickable {
+  cursor: pointer;
+}
+
+.lrm-card--clickable:hover {
+  border-color: var(--accent, #6b7280);
+}
+
+.lrm-card--active {
+  border-color: var(--accent, #3b82f6);
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.06));
 }
 
 .lrm-card-main {
@@ -142,7 +163,7 @@
 
 .lrm-attachment-btn {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   padding: 4px 10px;
   border-radius: 6px;
@@ -152,6 +173,7 @@
   font-size: 12px;
   cursor: pointer;
   max-width: 100%;
+  text-align: left;
 }
 
 .lrm-attachment-btn:hover {
@@ -159,10 +181,11 @@
 }
 
 .lrm-attachment-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 240px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.4;
+  flex: 1;
+  min-width: 0;
 }
 
 .lrm-group {
@@ -175,13 +198,43 @@
   margin-top: 16px;
 }
 
-.lrm-group-title {
+.lrm-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0 0 4px;
-  font-size: 12px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  color: var(--text-primary);
+  transition: background 0.15s ease;
+}
+
+.lrm-group-toggle:hover {
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.12));
+}
+
+.lrm-group-name {
+  flex: 1;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lrm-group-stats {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .lrm-card-actions {
@@ -249,14 +302,14 @@
     padding: 16px;
   }
 
+  .lrm-shell--with-panel .lrm-page {
+    padding-right: 16px;
+  }
+
   .lrm-header {
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;
-  }
-
-  .lrm-title {
-    font-size: 18px;
   }
 }
 
@@ -292,7 +345,7 @@
     font-size: 12px;
   }
 
-  .lrm-title {
-    font-size: 16px;
+  .lrm-group-name {
+    font-size: 12px;
   }
 }
