@@ -1,5 +1,10 @@
 import { execute, query } from '../config/postgres.js';
 
+// Лениво: encryption.service инициализирует ключ на module-load (бросает без
+// валидного ENCRYPTION_KEY). Грузим только при вызове МТС-методов, чтобы не
+// тащить его в модули/тесты, которые мокают env без ENCRYPTION_KEY.
+const getEncryption = async () => (await import('./encryption.service.js')).encryptionService;
+
 interface ISetting {
   key: string;
   value: string | null;
@@ -98,6 +103,45 @@ export interface ISigurConnectionSettings {
   archiveDepartmentName: string | null;
 }
 
+export interface IMtsConnectionPublicSettings {
+  baseUrl: string;
+  hasToken: boolean;
+  source: 'system_settings' | 'env' | 'unset';
+}
+
+export interface IMtsResolvedConfig {
+  baseUrl: string;
+  token: string;
+  source: 'system_settings' | 'env';
+}
+
+export const DEFAULT_MTS_BASE_URL = 'https://api.mpoisk.ru/v6/api';
+
+/**
+ * Allow-list хостов МТС API. Защита от SSRF / увода токена через подмену
+ * base URL: даже админ с edit-доступом не может направить интеграцию на
+ * чужой хост. Расширять список только при подтверждённой смене вендором.
+ */
+export const MTS_ALLOWED_HOSTS = ['api.mpoisk.ru'] as const;
+
+/** Проверяет URL: https + хост из allow-list. Бросает с человекочитаемой ошибкой. */
+export const assertMtsBaseUrlAllowed = (raw: string): void => {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error('MTS base URL: невалидный URL');
+  }
+  if (url.protocol !== 'https:') {
+    throw new Error('MTS base URL: разрешён только https://');
+  }
+  if (!(MTS_ALLOWED_HOSTS as readonly string[]).includes(url.hostname)) {
+    throw new Error(
+      `MTS base URL: хост "${url.hostname}" не в allow-list (разрешены: ${MTS_ALLOWED_HOSTS.join(', ')})`,
+    );
+  }
+};
+
 export const DEFAULT_SIGUR_MONITOR_SETTINGS: ISigurMonitorSettings = {
   enabled: true,
   failureThreshold: 2,
@@ -129,7 +173,10 @@ const CACHE_TTL = 60_000; // 60 сек
 
 const isSecretKey = (key: string): boolean => {
   const normalized = key.toLowerCase();
-  return normalized.includes('secret') || normalized.includes('key') || normalized.includes('password');
+  return normalized.includes('secret')
+    || normalized.includes('key')
+    || normalized.includes('password')
+    || normalized.includes('token');
 };
 
 const parseBoolean = (value: string | null | undefined, fallback: boolean): boolean => {
@@ -760,6 +807,104 @@ export const settingsService = {
     }
 
     return this.getOpenRouterConfig();
+  },
+
+  /**
+   * Публичные настройки подключения МТС (без токена). baseUrl — из БД,
+   * фоллбэк на .env, иначе дефолт api.mpoisk.ru. hasToken — есть ли токен.
+   */
+  async getMtsConnectionSettings(): Promise<IMtsConnectionPublicSettings> {
+    await loadCache();
+
+    const settingsBaseUrl = (cache.get('mts_api_base_url') || '').trim();
+    const settingsToken = cache.get('mts_api_token') || '';
+    const envBaseUrl = (process.env.MTS_API_BASE_URL || '').trim();
+    const envToken = process.env.MTS_API_TOKEN || '';
+
+    const source: IMtsConnectionPublicSettings['source'] = settingsToken
+      ? 'system_settings'
+      : envToken
+        ? 'env'
+        : 'unset';
+
+    return {
+      baseUrl: settingsBaseUrl || envBaseUrl || DEFAULT_MTS_BASE_URL,
+      hasToken: Boolean(settingsToken || envToken),
+      source,
+    };
+  },
+
+  /**
+   * Резолв конфига для бэк-вызовов МТС. Токен в system_settings хранится
+   * зашифрованным (encryption.service) — здесь расшифровываем. .env-токен
+   * хранится как есть (его задаёт пользователь, не сервис).
+   */
+  async getResolvedMtsConfig(): Promise<IMtsResolvedConfig | null> {
+    await loadCache();
+
+    const settingsBaseUrl = (cache.get('mts_api_base_url') || '').trim();
+    const settingsTokenEnc = cache.get('mts_api_token') || '';
+
+    if (settingsTokenEnc) {
+      const encryptionService = await getEncryption();
+      const token = encryptionService.decryptField(settingsTokenEnc);
+      if (token) {
+        return {
+          baseUrl: settingsBaseUrl || process.env.MTS_API_BASE_URL || DEFAULT_MTS_BASE_URL,
+          token,
+          source: 'system_settings',
+        };
+      }
+    }
+
+    const envToken = process.env.MTS_API_TOKEN || '';
+    if (envToken) {
+      return {
+        baseUrl: settingsBaseUrl || process.env.MTS_API_BASE_URL || DEFAULT_MTS_BASE_URL,
+        token: envToken,
+        source: 'env',
+      };
+    }
+
+    return null;
+  },
+
+  /**
+   * Сохранить настройки МТС. Токен шифруется ПЕРЕД записью в system_settings —
+   * в БД он не лежит в открытом виде.
+   */
+  async setMtsConnectionSettings(
+    config: { baseUrl?: string | null; token?: string | null },
+    userId: string,
+  ): Promise<IMtsConnectionPublicSettings> {
+    const entries: { key: string; value: string | null; description?: string }[] = [];
+
+    if (config.baseUrl !== undefined) {
+      const trimmedUrl = config.baseUrl?.trim() || null;
+      if (trimmedUrl) assertMtsBaseUrlAllowed(trimmedUrl);
+      entries.push({
+        key: 'mts_api_base_url',
+        value: trimmedUrl,
+        description: 'МТС «Мобильные сотрудники» — base URL API (allow-list)',
+      });
+    }
+
+    if (config.token !== undefined) {
+      const trimmed = config.token?.trim() || null;
+      const encryptionService = await getEncryption();
+      entries.push({
+        key: 'mts_api_token',
+        value: trimmed ? encryptionService.encrypt(trimmed) : null,
+        description: 'МТС «Мобильные сотрудники» — API-токен (зашифрован)',
+      });
+    }
+
+    if (entries.length > 0) {
+      await this.setMultiple(entries, userId);
+      this.invalidateCache();
+    }
+
+    return this.getMtsConnectionSettings();
   },
 
   invalidateCache() {

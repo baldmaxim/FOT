@@ -68,6 +68,7 @@ const TimesheetTransfersAdminPage = lazy(() => import('./pages/admin/TimesheetTr
 // Employees & SKUD
 const EmployeeCardPage = lazy(() => import('./pages/employees/EmployeeCardPage').then(m => ({ default: m.EmployeeCardPage })));
 const SigurSettingsPage = lazy(() => import('./pages/skud/SigurSettingsPage').then(m => ({ default: m.SigurSettingsPage })));
+const MtsPage = lazy(() => import('./pages/mts/MtsPage').then(m => ({ default: m.MtsPage })));
 const SigurPage = lazy(() => import('./pages/skud/SigurPage').then(m => ({ default: m.SigurPage })));
 const SkudCardReaderPage = lazy(() => import('./pages/skud/SkudCardReaderPage').then(m => ({ default: m.SkudCardReaderPage })));
 const ContractorPage = lazy(() => import('./pages/contractor/ContractorPage').then(m => ({ default: m.ContractorPage })));
@@ -420,6 +421,17 @@ const AppRoutes = () => {
             element={
               <Layout title="Настройки СКУД" theme={theme} onToggleTheme={toggleTheme}>
                 <SigurSettingsPage />
+              </Layout>
+            }
+          />
+        </Route>
+
+        <Route element={<ProtectedRoute requiredPage="/mts" />}>
+          <Route
+            path="/mts"
+            element={
+              <Layout title="Мобильные сотрудники МТС" theme={theme} onToggleTheme={toggleTheme}>
+                <MtsPage />
               </Layout>
             }
           />

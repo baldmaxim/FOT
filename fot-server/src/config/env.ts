@@ -48,6 +48,12 @@ const envSchema = z.object({
   SIGUR_EVENT_PAGE_SIZE: z.string().regex(/^\d+$/).default('1000'),
   SIGUR_EVENT_CHUNK_PARALLELISM: z.string().regex(/^\d+$/).default('3'),
 
+  // МТС «Мобильные сотрудники» (M-Poisk) — отдельный модуль геолокации.
+  // Значения добавляет пользователь вручную в .env или в системные настройки.
+  MTS_API_BASE_URL: optionalUrl,
+  MTS_API_TOKEN: optionalString,
+  MTS_SYNC_INTERVAL_MS: z.string().regex(/^\d+$/).default('120000'),
+
   // Web Push (VAPID)
   VAPID_PUBLIC_KEY: optionalString,
   VAPID_PRIVATE_KEY: optionalString,
