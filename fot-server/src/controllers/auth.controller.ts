@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { execute, query, queryOne } from '../config/postgres.js';
 import { localAuthService, LocalAuthError } from '../services/local-auth.service.js';
 import { auditService } from '../services/audit.service.js';
+import { mailerService } from '../services/mailer.service.js';
 import type { AuthenticatedRequest, SystemRole, UserProfile, UserProfileResponse } from '../types/index.js';
 import { LOGIN_2FA_ENABLED } from '../config/features.js';
 import { getRolePageAccess } from '../services/access-control.service.js';
@@ -308,6 +309,23 @@ async function forgotPassword(req: Request, res: Response): Promise<void> {
       console.error('Update reset token error:', updateError);
       res.status(500).json({ success: false, error: 'Не удалось создать запрос на сброс пароля' });
       return;
+    }
+
+    const appUrlBase = (process.env.APP_URL || 'https://fot.su10.ru').replace(/\/+$/, '');
+    const resetUrl = `${appUrlBase}/reset-password?token=${resetToken}`;
+
+    if (mailerService.isConfigured()) {
+      try {
+        await mailerService.sendPasswordResetEmail({ to: normalizedEmail, resetUrl });
+      } catch (mailError) {
+        // Не палим клиенту, что аккаунт существует, поэтому не отдаём 500 — токен
+        // уже создан в БД, пользователь увидит generic-success.
+        console.error('Password reset email send failed:', mailError);
+      }
+    } else if (process.env.NODE_ENV !== 'production') {
+      console.log(`[Password Reset] ${normalizedEmail}: ${resetUrl}`);
+    } else {
+      console.warn('[Password Reset] SMTP не настроен — письмо не отправлено для', normalizedEmail);
     }
 
     await auditService.logFromRequest(req, userRow.id, 'PASSWORD_RESET_REQUESTED', {

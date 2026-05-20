@@ -30,6 +30,11 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   CORS_ORIGIN: z.string().default(DEFAULT_CORS_ORIGINS.join(',')),
 
+  // Базовый URL фронтенда (например https://fot.su10.ru). Используется в
+  // ссылках исходящих писем (например /reset-password). Если не задан —
+  // forgotPassword падает обратно на захардкоженный production-домен.
+  APP_URL: optionalUrl,
+
   // Sigur REST API — внутренний доступ (для разработки)
   SIGUR_INTERNAL_URL: optionalUrl,
   SIGUR_INTERNAL_USERNAME: optionalString,
