@@ -24,6 +24,8 @@ export interface TimesheetEntry {
   corrected_by?: number | null;
   corrected_at?: string | null;
   corrected_by_name?: string | null;
+  approved_at?: string | null;
+  approved_by_name?: string | null;
   created_at?: string;
   updated_at?: string;
   object_detail_mode?: 'none' | 'available' | 'legacy_blocked';

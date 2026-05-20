@@ -1,4 +1,5 @@
-import { useState, useMemo, useRef, useCallback, memo, type FC, type ChangeEvent, type KeyboardEvent } from 'react';
+import { useState, useMemo, useRef, useCallback, useEffect, useLayoutEffect, memo, type FC, type ChangeEvent, type KeyboardEvent, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
 import type { OrgDepartmentNode } from '../../types/organization';
 import {
@@ -54,6 +55,8 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>({});
 
   const debounced = useDebouncedValue(query, 200).trim();
 
@@ -108,6 +111,36 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
   }, [open, computeBaseExpansion]);
 
   const overlay = useOverlayDismiss(closePanel);
+
+  // Координаты для portal-панели — вычисляем по trigger при открытии и при resize/scroll.
+  // На мобиле (<=430px) CSS перебивает inline-стили через !important.
+  const updatePanelPosition = useCallback(() => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setPanelStyle({
+      position: 'fixed',
+      top: rect.bottom + 4,
+      left: rect.left,
+      minWidth: rect.width,
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    updatePanelPosition();
+  }, [open, updatePanelPosition]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = () => updatePanelPosition();
+    window.addEventListener('resize', handler);
+    window.addEventListener('scroll', handler, true);
+    return () => {
+      window.removeEventListener('resize', handler);
+      window.removeEventListener('scroll', handler, true);
+    };
+  }, [open, updatePanelPosition]);
 
   const pick = useCallback((id: string) => {
     onChange(id);
@@ -190,7 +223,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
 
   return (
     <div className={styles.wrapper}>
-      <div className={styles.trigger}>
+      <div ref={triggerRef} className={styles.trigger}>
         <input
           ref={inputRef}
           className={styles.input}
@@ -210,7 +243,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
         </span>
       </div>
 
-      {open && (
+      {open && createPortal(
         <>
           <div
             className={styles.backdrop}
@@ -220,7 +253,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
             onTouchStart={overlay.onTouchStart}
             onTouchEnd={overlay.onTouchEnd}
           />
-          <div className={styles.panel}>
+          <div className={styles.panel} style={panelStyle}>
             {showStaleBadge && (
               <div className={styles.staleBanner}>
                 Показаны последние данные.
@@ -259,7 +292,8 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
               )}
             </div>
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </div>
   );

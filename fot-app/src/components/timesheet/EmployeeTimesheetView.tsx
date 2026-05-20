@@ -404,6 +404,8 @@ export const EmployeeTimesheetView: FC<IEmployeeTimesheetViewProps> = ({ employe
           is_correction: true,
           corrected_at: modalEntry.corrected_at,
           corrected_by_name: modalEntry.corrected_by_name,
+          approved_at: modalEntry.approved_at,
+          approved_by_name: modalEntry.approved_by_name,
         } : null}
         allowAccessPointMap={false}
         hideCorrectionTab={!canEdit}

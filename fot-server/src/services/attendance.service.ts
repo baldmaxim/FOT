@@ -86,6 +86,7 @@ export interface IAttendanceAdjustment {
 export interface IAttendanceAdjustmentWithAuthor extends IAttendanceAdjustment {
   employee_full_name: string | null;
   author_name: string | null;
+  approver_name: string | null;
 }
 
 export interface IAttendanceEntry {
@@ -110,6 +111,8 @@ export interface IAttendanceEntry {
   corrected_at?: string | null;
   corrected_by_name?: string | null;
   corrected_by?: number | null;
+  approved_at?: string | null;
+  approved_by_name?: string | null;
   created_at?: string;
   updated_at?: string;
   object_detail_mode?: 'none' | 'available' | 'legacy_blocked';
@@ -344,7 +347,10 @@ async function loadAdjustmentNames(adjustments: IAttendanceAdjustment[]): Promis
   userNames: Map<string, string>;
   legacyEmployeeNames: Map<number, string>;
 }> {
-  const userIds = [...new Set(adjustments.map((item) => item.created_by).filter((id): id is string => Boolean(id)))];
+  const userIds = [...new Set([
+    ...adjustments.map((item) => item.created_by).filter((id): id is string => Boolean(id)),
+    ...adjustments.map((item) => item.approved_by).filter((id): id is string => Boolean(id)),
+  ])];
   const legacyEmployeeIds = [...new Set(adjustments.map((item) => extractLegacyCorrectorId(item.metadata)).filter((id): id is number => id != null))];
 
   // Сначала смотрим в in-memory кэш — большая часть авторов повторяется между вызовами.
@@ -495,6 +501,9 @@ export async function buildAttendanceEntries(params: {
     const correctedByName = adjustment.created_by
       ? userNames.get(adjustment.created_by) || null
       : (legacyCorrectedBy ? legacyEmployeeNames.get(legacyCorrectedBy) || null : null);
+    const approvedByName = adjustment.approved_by
+      ? userNames.get(adjustment.approved_by) || null
+      : null;
 
     const existingSkud = skudMap.get(adjustment.employee_id)?.get(adjustment.work_date);
     if (existingSkud) {
@@ -541,6 +550,8 @@ export async function buildAttendanceEntries(params: {
       corrected_at: adjustment.updated_at ?? adjustment.created_at,
       corrected_by_name: correctedByName,
       corrected_by: legacyCorrectedBy,
+      approved_at: adjustment.approved_at,
+      approved_by_name: approvedByName,
       created_at: adjustment.created_at,
       updated_at: adjustment.updated_at,
     });
@@ -1083,7 +1094,7 @@ export async function loadAttendanceAdjustmentsWithAuthors(
 
   const authorIds = [...new Set(
     manualAdjustments
-      .flatMap((item) => [item.updated_by, item.created_by])
+      .flatMap((item) => [item.updated_by, item.created_by, item.approved_by])
       .filter((id): id is string => Boolean(id)),
   )];
 
@@ -1113,6 +1124,7 @@ export async function loadAttendanceAdjustmentsWithAuthors(
       ...item,
       employee_full_name: employeeNames.get(item.employee_id) ?? null,
       author_name: latestAuthorId ? authorNames.get(latestAuthorId) ?? null : null,
+      approver_name: item.approved_by ? authorNames.get(item.approved_by) ?? null : null,
     };
   });
 }

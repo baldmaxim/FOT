@@ -64,20 +64,19 @@
 .backdrop {
   position: fixed;
   inset: 0;
-  z-index: 49;
+  z-index: 1090;
 }
 
 .panel {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  min-width: 100%;
+  /* Координаты top/left/min-width проставляются inline (см. DepartmentTreeSelect.tsx),
+     панель рендерится через React Portal в document.body, поэтому position: fixed. */
+  position: fixed;
   max-width: 360px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-  z-index: 50;
+  z-index: 1091;
   display: flex;
   flex-direction: column;
 }
@@ -216,13 +215,14 @@
     font-size: 12px;
   }
 
+  /* На мобиле перебиваем inline top/left (Portal) — полноэкранная панель сверху. */
   .panel {
-    position: fixed;
-    top: calc(56px + env(safe-area-inset-top, 0px));
-    left: 8px;
-    right: 8px;
-    min-width: 0;
-    max-width: none;
+    position: fixed !important;
+    top: calc(56px + env(safe-area-inset-top, 0px)) !important;
+    left: 8px !important;
+    right: 8px !important;
+    min-width: 0 !important;
+    max-width: none !important;
     max-height: calc(100vh - 72px - env(safe-area-inset-top, 0px));
   }
 

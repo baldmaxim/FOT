@@ -278,6 +278,8 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
             is_correction: true,
             corrected_at: editingRow.updated_at,
             corrected_by_name: editingRow.author_name,
+            approved_at: editingRow.approved_at ?? null,
+            approved_by_name: editingRow.approver_name ?? null,
           }}
           onClose={() => setEditingRow(null)}
           onSave={(status, hours, notes) => {

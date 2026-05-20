@@ -91,6 +91,8 @@ export interface ITimesheetCorrectionRow {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  approved_at?: string | null;
+  approver_name?: string | null;
   can_edit: boolean;
   can_delete: boolean;
   approval_locked: boolean;

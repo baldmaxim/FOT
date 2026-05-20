@@ -45,6 +45,8 @@ interface ICorrectionModalProps {
     is_correction: boolean;
     corrected_at?: string | null;
     corrected_by_name?: string | null;
+    approved_at?: string | null;
+    approved_by_name?: string | null;
   } | null;
   // Контекст дня для рендера чипа со статусом в шапке. Если не передан — чип не рисуется.
   // Прокидывает родитель: те же значения, что считают TimesheetGrid и TimesheetSidePanel
@@ -283,6 +285,8 @@ const CorrectionTab: FC<{
     is_correction: boolean;
     corrected_at?: string | null;
     corrected_by_name?: string | null;
+    approved_at?: string | null;
+    approved_by_name?: string | null;
   } | null;
 }> = ({
   onClose,
@@ -322,9 +326,13 @@ const CorrectionTab: FC<{
     const hoursLabel = HOURS_EDITABLE_STATUSES.has(initialStatus)
       ? formatHM(initialHours)
       : '—';
+    const approvedLine = correctionInfo?.approved_at
+      ? `Согласовано: ${formatCorrectionDate(correctionInfo.approved_at)}${correctionInfo.approved_by_name ? ` (${correctionInfo.approved_by_name})` : ''}`
+      : null;
     const authorLine = [
       correctionInfo?.corrected_by_name ?? null,
       correctionInfo?.corrected_at ? formatCorrectionDate(correctionInfo.corrected_at) : null,
+      approvedLine,
     ].filter(Boolean).join(' • ');
     const tooltip = [
       `${statusLabel} · ${hoursLabel}`,
@@ -578,12 +586,19 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
         </button>
       </div>
 
-      {correctionInfo?.is_correction && (correctionInfo.corrected_by_name || correctionInfo.corrected_at) && (
+      {correctionInfo?.is_correction && (correctionInfo.corrected_by_name || correctionInfo.corrected_at || correctionInfo.approved_at) && (
         <div className="ts-correction-info">
           <span className="ts-correction-info-icon">✎</span>
           {correctionInfo.corrected_by_name}
           {correctionInfo.corrected_by_name && correctionInfo.corrected_at && ', '}
           {correctionInfo.corrected_at && formatCorrectionDate(correctionInfo.corrected_at)}
+          {correctionInfo.approved_at && (
+            <>
+              {(correctionInfo.corrected_by_name || correctionInfo.corrected_at) && ' • '}
+              {`Согласовано: ${formatCorrectionDate(correctionInfo.approved_at)}`}
+              {correctionInfo.approved_by_name && ` (${correctionInfo.approved_by_name})`}
+            </>
+          )}
         </div>
       )}
 

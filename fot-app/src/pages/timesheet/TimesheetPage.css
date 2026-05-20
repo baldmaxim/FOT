@@ -1634,7 +1634,9 @@
      и sticky thead из-за border-collapse и rounding в Chrome/Firefox.
      Без этого при прокрутке на ¼ строки виден просвет содержимого таблицы под легендой. */
   top: -1px;
-  z-index: 10;
+  /* Выше sticky-row отдела/секции (.ts-col-sticky z-index 20), чтобы шапка
+     с датами не перекрывалась групповыми строками при прокрутке. */
+  z-index: 40;
   box-shadow: 0 1px 0 var(--border);
 }
 
@@ -1663,7 +1665,7 @@
 }
 
 .ts-table thead th.ts-col-sticky {
-  z-index: 30;
+  z-index: 60;
   background: var(--bg-secondary);
 }
 
@@ -1671,13 +1673,13 @@
 .ts-table--objects thead th {
   position: sticky;
   top: -1px;
-  z-index: 50;
+  z-index: 80;
   background: var(--bg-secondary);
   box-shadow: 0 1px 0 var(--border);
 }
 
 .ts-table--objects thead th.ts-col-sticky {
-  z-index: 60;
+  z-index: 90;
 }
 
 /* Sticky deviation column (rightmost) */
@@ -1694,7 +1696,7 @@
   box-shadow: -4px 0 8px -4px rgba(0, 0, 0, 0.15);
 }
 .ts-table thead th.ts-col-deviation-sticky {
-  z-index: 25;
+  z-index: 55;
   background: var(--bg-secondary);
 }
 .ts-table tbody tr:hover td.ts-col-deviation-sticky {

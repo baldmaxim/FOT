@@ -22,6 +22,7 @@ import type {
   TimesheetStatus,
   TimesheetTeamManagementCandidate,
 } from '../../types';
+import type { TimesheetResponse, ITimesheetDepartmentApprovalSummary } from '../../types/timesheet';
 import type { IResolvedSchedule } from '../../types/schedule';
 import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
 import { STATUS_COLORS, STATUS_ICONS } from '../../components/timesheet/timesheetApprovalStatus';
@@ -323,10 +324,31 @@ export const TimesheetPage: FC = () => {
     }
     return Array.from({ length: end - start + 1 }, (_, index) => start + index);
   }, [rangeStart, rangeEnd]);
-  const lockedDateSet = useMemo(() => {
-    const raw = (timesheetQuery.data as { approval_locked_dates?: string[] } | undefined)?.approval_locked_dates;
-    return new Set<string>(Array.isArray(raw) ? raw : []);
+  const lockedDateStatus = useMemo(() => {
+    const data = timesheetQuery.data as TimesheetResponse | undefined;
+    const dates = Array.isArray(data?.approval_locked_dates) ? data.approval_locked_dates : [];
+    const approvals = Array.isArray(data?.approvals) ? data.approvals : [];
+    const statusPriority: Record<ITimesheetDepartmentApprovalSummary['status'], number> = {
+      approved: 3, submitted: 2, returned: 1, rejected: 0, draft: 0,
+    };
+    const map = new Map<string, ITimesheetDepartmentApprovalSummary['status']>();
+    for (const date of dates) {
+      let best: ITimesheetDepartmentApprovalSummary['status'] | null = null;
+      for (const a of approvals) {
+        if (a.start_date <= date && a.end_date >= date) {
+          if (!best || statusPriority[a.status] > statusPriority[best]) best = a.status;
+        }
+      }
+      map.set(date, best ?? 'submitted');
+    }
+    return map;
   }, [timesheetQuery.data]);
+  const lockedDateSet = lockedDateStatus;
+  const lockMessage = (status: ITimesheetDepartmentApprovalSummary['status'] | undefined): string => {
+    if (status === 'approved') return 'Период согласован — редактирование закрыто';
+    if (status === 'returned') return 'Период возвращён на доработку — редактирование закрыто';
+    return 'Период подан — редактирование закрыто';
+  };
   const entryMap = useMemo(() => {
     const map = new Map<string, TimesheetEntry>();
     for (const entry of entries) {
@@ -439,7 +461,7 @@ export const TimesheetPage: FC = () => {
       return;
     }
     if (isTimesheetDepartmentScope && lockedDateSet.has(workDate)) {
-      toast.info?.('Период согласован — редактирование закрыто');
+      toast.info?.(lockMessage(lockedDateSet.get(workDate)));
       return;
     }
     setModalEmployee(emp);
@@ -463,7 +485,7 @@ export const TimesheetPage: FC = () => {
   ) => {
     const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     if (isTimesheetDepartmentScope && lockedDateSet.has(workDate)) {
-      toast.info?.('Период согласован — редактирование закрыто');
+      toast.info?.(lockMessage(lockedDateSet.get(workDate)));
       return;
     }
     setModalEmployee(emp);
@@ -1993,6 +2015,8 @@ export const TimesheetPage: FC = () => {
               is_correction: true,
               corrected_at: modalEntry.corrected_at,
               corrected_by_name: modalEntry.corrected_by_name,
+              approved_at: modalEntry.approved_at,
+              approved_by_name: modalEntry.approved_by_name,
             } : null}
             dayStatusContext={modalMode === 'day' && modalEmployee && modalDay ? (() => {
               const sched = getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay);

@@ -274,8 +274,11 @@ async function resolveAdjustmentApprovalStatus(
   employeeId: number,
   workDate: string,
   status: TimeStatus,
+  hoursOverride: number | null = null,
   excludeAdjustmentId: number | null = null,
 ): Promise<'auto_approved' | 'pending'> {
+  // Правка руководителя с 0 часов = «не работал» — не требует согласования админом
+  if (hoursOverride !== null && Number(hoursOverride) === 0) return 'auto_approved';
   if (!WORKED_STATUSES_FOR_APPROVAL.has(status)) return 'auto_approved';
 
   let employee: { id: number | string } | null = null;
@@ -322,7 +325,7 @@ async function reapproveAdjustmentsForRange(
   endDate: string,
 ): Promise<number> {
   const params: unknown[] = [startDate, endDate];
-  let sql = `SELECT id, employee_id, work_date::text AS work_date, status, approval_status
+  let sql = `SELECT id, employee_id, work_date::text AS work_date, status, hours_override, approval_status
                FROM attendance_adjustments
               WHERE work_date >= $1 AND work_date <= $2
                 AND approval_status IN ('auto_approved', 'pending')`;
@@ -335,6 +338,7 @@ async function reapproveAdjustmentsForRange(
     employee_id: number | string;
     work_date: string;
     status: string;
+    hours_override: number | string | null;
     approval_status: string;
   }>(sql, params);
   if (rows.length === 0) return 0;
@@ -357,9 +361,14 @@ async function reapproveAdjustmentsForRange(
     const empId = Number(row.employee_id);
     const workDate = String(row.work_date).slice(0, 10);
     const status = row.status as TimeStatus;
+    const hoursOverride = row.hours_override === null || row.hours_override === undefined
+      ? null
+      : Number(row.hours_override);
     let target: 'auto_approved' | 'pending';
 
-    if (!WORKED_STATUSES_FOR_APPROVAL.has(status)) {
+    if (hoursOverride !== null && hoursOverride === 0) {
+      target = 'auto_approved';
+    } else if (!WORKED_STATUSES_FOR_APPROVAL.has(status)) {
       target = 'auto_approved';
     } else {
       const schedule = schedules.get(empId)?.get(workDate);
@@ -373,7 +382,7 @@ async function reapproveAdjustmentsForRange(
         } else if (schedule.expected_saturdays_per_month > 0 && dateObj.getDay() === 6) {
           // Обязательные субботы считаются помесячно — точный подсчёт через
           // существующий per-row резолвер (таких строк немного).
-          target = await resolveAdjustmentApprovalStatus(empId, workDate, status, Number(row.id));
+          target = await resolveAdjustmentApprovalStatus(empId, workDate, status, hoursOverride, Number(row.id));
         } else {
           target = 'pending';
         }
@@ -1530,7 +1539,12 @@ export const timesheetController = {
         ? (plannedHours ?? 8)
         : (parsed.hours_worked ?? null);
 
-      const approvalStatus = await resolveAdjustmentApprovalStatus(parsed.employee_id, parsed.work_date, parsed.status);
+      const approvalStatus = await resolveAdjustmentApprovalStatus(
+        parsed.employee_id,
+        parsed.work_date,
+        parsed.status,
+        normalizedHours,
+      );
 
 	      const raw = await upsertAttendanceAdjustment({
 	        employee_id: parsed.employee_id,
@@ -1637,6 +1651,7 @@ export const timesheetController = {
           Number(existing.employee_id),
           String(existing.work_date),
           nextStatus,
+          normalizedHours ?? null,
           id,
         );
 
@@ -1748,18 +1763,20 @@ export const timesheetController = {
       // одного сотрудника все они увидят 0 уже зачтённых и пройдут как auto_approved.
       const isWorkOrRemoteBulk = WORKED_STATUSES_FOR_APPROVAL.has(parsed.status);
       const buildUpsert = async (item: typeof uniqueItems[number]) => {
+        const itemHoursOverride = parsed.status === 'remote'
+          ? (plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) ?? 8)
+          : (parsed.hours_worked ?? null);
         const approvalStatus = await resolveAdjustmentApprovalStatus(
           item.employee_id,
           item.work_date,
           parsed.status,
+          itemHoursOverride,
         );
         return upsertAttendanceAdjustment({
           employee_id: item.employee_id,
           work_date: item.work_date,
           status: parsed.status,
-          hours_override: parsed.status === 'remote'
-            ? (plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) ?? 8)
-            : (parsed.hours_worked ?? null),
+          hours_override: itemHoursOverride,
           source_type: 'manual',
           source_id: 'manual',
           reason: parsed.notes ?? null,
@@ -2026,6 +2043,8 @@ export const timesheetController = {
           created_by: item.created_by,
           created_at: item.created_at,
           updated_at: item.updated_at,
+          approved_at: item.approved_at,
+          approver_name: item.approver_name,
           can_edit: canEdit,
           can_delete: canDelete,
           approval_locked: approvalLocked,
