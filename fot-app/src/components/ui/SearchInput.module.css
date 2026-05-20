@@ -12,7 +12,10 @@
   color: var(--text-tertiary);
 }
 
-.input {
+/* Селекторы .wrapper .input (специфичность 0,2,0) поднимают приоритет над
+   .sc-field input (0,1,1) и т.п., иначе глобальные правила обёрток (StaffControlPage.css,
+   модалки в брегаде/фильтре) переопределяют padding-left=36px и иконка лупы наезжает на текст. */
+.wrapper .input {
   width: 280px;
   height: 36px;
   background: var(--surface);
@@ -26,16 +29,16 @@
   font-family: inherit;
 }
 
-.input::placeholder {
+.wrapper .input::placeholder {
   color: var(--text-tertiary);
 }
 
-.input:focus {
+.wrapper .input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-muted);
 }
 
-[data-theme="light"] .input:focus {
+[data-theme="light"] .wrapper .input:focus {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
 }
 
@@ -44,13 +47,13 @@
     width: 100%;
   }
 
-  .input {
+  .wrapper .input {
     width: 100%;
   }
 }
 
 @media (max-width: 430px) {
-  .input {
+  .wrapper .input {
     height: 32px;
     font-size: 12px;
     padding: 0 8px 0 32px;
