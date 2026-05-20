@@ -1,6 +1,7 @@
 import { query } from '../config/postgres.js';
 import { notificationService } from './notification.service.js';
 import { pushService } from './push.service.js';
+import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js';
 
 const REMINDER_INTERVAL_MS = 5 * 60_000; // 5 минут
 const STARTUP_DELAY_MS = 60_000;         // минута после старта
@@ -143,43 +144,60 @@ async function runReminderCycle(): Promise<void> {
   runInFlight = (async () => {
     try {
       const parts = getMoscowParts(new Date());
+      // Cron-чек-ин шлём только в активном окне 16:50–17:00 МСК будни.
+      // Иначе 5-минутный тик флудил бы Sentry "ok" каждые 5 минут впустую.
       if (!shouldFireNow(parts)) return;
 
-      const allowedRoleCodes = await loadAllowedRoleCodes();
-      const candidates = await loadCandidates(allowedRoleCodes);
-      if (candidates.length === 0) return;
+      let cronStatus: CronRunStatus = 'ok';
+      await runWithCronMonitor(
+        'daily-tasks-reminder',
+        async () => {
+          try {
+            const allowedRoleCodes = await loadAllowedRoleCodes();
+            const candidates = await loadCandidates(allowedRoleCodes);
+            if (candidates.length === 0) return;
 
-      const filledToday = await loadEmployeesWithFilledToday(
-        candidates.map(c => c.employee_id),
-        parts.dateIso,
+            const filledToday = await loadEmployeesWithFilledToday(
+              candidates.map(c => c.employee_id),
+              parts.dateIso,
+            );
+            const pending = candidates.filter(c => !filledToday.has(c.employee_id));
+            if (pending.length === 0) return;
+
+            const fresh = await reserveRemindersInLog(pending, parts.dateIso);
+            if (fresh.length === 0) return;
+
+            const userIds = fresh.map(c => c.user_id);
+            const title = 'Запишите задачи за день';
+            const body = 'Не забудьте заполнить, что сделали сегодня. После полуночи запись закроется.';
+            const path = '/employee';
+
+            await notificationService.createMany(userIds.map(userId => ({
+              userId,
+              type: 'daily_tasks_reminder',
+              title,
+              body,
+              metadata: { path, reminderDate: parts.dateIso },
+            })));
+
+            await pushService.sendGenericNotification(userIds, title, body, {
+              path,
+              reminderDate: parts.dateIso,
+            });
+
+            console.log(`[daily-tasks-reminder] sent ${fresh.length} reminders for ${parts.dateIso}`);
+          } catch (error) {
+            cronStatus = 'error';
+            console.error('[daily-tasks-reminder] error:', error instanceof Error ? error.message : error);
+          }
+          return cronStatus;
+        },
+        {
+          schedule: { type: 'crontab', value: '50 16 * * 1-5' },
+          checkinMargin: 15,
+          maxRuntime: 10,
+        },
       );
-      const pending = candidates.filter(c => !filledToday.has(c.employee_id));
-      if (pending.length === 0) return;
-
-      const fresh = await reserveRemindersInLog(pending, parts.dateIso);
-      if (fresh.length === 0) return;
-
-      const userIds = fresh.map(c => c.user_id);
-      const title = 'Запишите задачи за день';
-      const body = 'Не забудьте заполнить, что сделали сегодня. После полуночи запись закроется.';
-      const path = '/employee';
-
-      await notificationService.createMany(userIds.map(userId => ({
-        userId,
-        type: 'daily_tasks_reminder',
-        title,
-        body,
-        metadata: { path, reminderDate: parts.dateIso },
-      })));
-
-      await pushService.sendGenericNotification(userIds, title, body, {
-        path,
-        reminderDate: parts.dateIso,
-      });
-
-      console.log(`[daily-tasks-reminder] sent ${fresh.length} reminders for ${parts.dateIso}`);
-    } catch (error) {
-      console.error('[daily-tasks-reminder] error:', error instanceof Error ? error.message : error);
     } finally {
       runInFlight = null;
     }

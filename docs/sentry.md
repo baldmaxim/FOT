@@ -10,6 +10,10 @@
 - **fot-server** (Express) — ловит ошибки HTTP-роутов через `Sentry.setupExpressErrorHandler`,
   ошибки Socket.IO (chat), `unhandledRejection` и `uncaughtException` процесса,
   ошибки фоновых сервисов `presence-polling` и `structure-scheduler`. Трейсинг HTTP-запросов и Express-роутов.
+- **Session Replay (фронт)** — при ошибке записывает последние ~60с DOM/действий. Маски: `maskAllText`/`maskAllInputs`/`blockAllMedia` → ФИО, паспорта, 2FA и т.п. скрыты. Открыть в issue → вкладка **Replays**. Поднять `replaysSessionSampleRate` в [fot-app/src/sentry.ts](../fot-app/src/sentry.ts), если нужны фоновые сессии.
+- **Cron Monitoring (бэк)** — 9 фоновых джоб шлют чек-ины через [fot-server/src/utils/sentry-cron.ts](../fot-server/src/utils/sentry-cron.ts): `presence-polling`, `sigur-monitor`, `sigur-structure-sync`, `sigur-events-daily`, `skud-summary-reconcile`, `timesheet-reminder`, `patent-expiry-reminder`, `daily-tasks-reminder`, `mts-poller`. Если джоба молча перестала тикать (missed slot) — Sentry поднимет issue.
+- **Uptime Monitoring** — настраивается в UI: Project `fot-server` → **Alerts → Uptime Monitors → Create Alert**, URL `https://<prod>/health` (handler в [app.ts:87](../fot-server/src/app.ts)), interval 1 min, регион EU.
+- **Release Health / Deploy markers** — sourcemaps льются автоматом; для crash-free sessions и пометки регрессий нужен ручной `sentry-cli releases deploys ... new` после деплоя. См. [sentry-deploy-marker.md](sentry-deploy-marker.md).
 
 ## Первичная настройка (делается один раз)
 

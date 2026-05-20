@@ -31,8 +31,25 @@ if (dsn && import.meta.env.PROD) {
     dsn,
     environment: import.meta.env.MODE,
     release: import.meta.env.VITE_SENTRY_RELEASE as string | undefined,
-    integrations: [Sentry.browserTracingIntegration()],
+    integrations: [
+      Sentry.browserTracingIntegration(),
+      // Session Replay: запись DOM/событий последних ~60с при ошибке.
+      // По умолчанию маскируем весь текст и инпуты — в проекте ФИО, паспорта,
+      // СНИЛС, 2FA-коды, сообщения чата (зашифрованы в БД, но в DOM открытые).
+      // Чтобы раскрыть нечувствительный элемент — навесить класс `.sentry-unmask`.
+      Sentry.replayIntegration({
+        maskAllText: true,
+        maskAllInputs: true,
+        blockAllMedia: true,
+        networkDetailAllowUrls: [],
+      }),
+    ],
     tracesSampleRate: 0.1,
+    // Не пишем «фоновые» сессии без ошибок (квота). Поднять до 0.05, если нужны
+    // UX-сессии для анализа потока пользователя.
+    replaysSessionSampleRate: 0,
+    // 100% сессий, в которых произошла ошибка — пишем последние ~60с до неё.
+    replaysOnErrorSampleRate: 1.0,
     sendDefaultPii: false,
     beforeSend(event) {
       if (event.request) {

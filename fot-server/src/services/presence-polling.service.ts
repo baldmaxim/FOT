@@ -35,6 +35,7 @@ import {
   logSigurRuntimeGuardSkip,
 } from './sigur-runtime-guard.service.js';
 import type { ConnectionType } from './sigur.service.js';
+import { runWithCronMonitor } from '../utils/sentry-cron.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const MIN_POLL_INTERVAL_MS = 5_000;
@@ -1383,8 +1384,32 @@ function scheduleNextPollTick(): void {
   const delayMs = computeNextPollDelay();
   pollingTimer = setTimeout(() => {
     pollingTimer = null;
-    void runPollCycle().finally(() => scheduleNextPollTick());
+    void runPollCycleWithCronCheckin().finally(() => scheduleNextPollTick());
   }, delayMs);
+}
+
+// Adaptive polling делает 12 тиков/мин в горячем режиме и 2/мин в idle.
+// Шлём cron-чек-ин не на каждом тике (это была бы лавина), а раз в ~2 мин:
+// миссед-алёрт сработает, если поллер тихо умрёт.
+const PRESENCE_CHECKIN_EVERY_N_TICKS = 24;
+let presencePollingTickCounter = 0;
+
+async function runPollCycleWithCronCheckin(): Promise<void> {
+  presencePollingTickCounter++;
+  if (presencePollingTickCounter < PRESENCE_CHECKIN_EVERY_N_TICKS) {
+    await runPollCycle();
+    return;
+  }
+  presencePollingTickCounter = 0;
+  await runWithCronMonitor(
+    'presence-polling',
+    () => runPollCycle(),
+    {
+      schedule: { type: 'interval', value: 2, unit: 'minute' },
+      checkinMargin: 2,
+      maxRuntime: 5,
+    },
+  );
 }
 
 export async function startPresencePolling(): Promise<void> {
@@ -1409,7 +1434,7 @@ export async function startPresencePolling(): Promise<void> {
   consecutiveEmptyTicks = 0;
   startupTimeout = setTimeout(() => {
     startupTimeout = null;
-    void runPollCycle().finally(() => scheduleNextPollTick());
+    void runPollCycleWithCronCheckin().finally(() => scheduleNextPollTick());
   }, 10_000);
 }
 

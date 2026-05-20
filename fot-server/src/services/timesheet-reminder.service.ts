@@ -11,6 +11,7 @@ import {
 } from './timesheet-period.service.js';
 import { listTimesheetWorkflowRecipientIds } from './timesheet-workflow-recipients.service.js';
 import { listUserIdsAssignedToDepartment } from './department-access.service.js';
+import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js';
 
 const REMINDER_INTERVAL_MS = 15 * 60_000;
 const STARTUP_DELAY_MS = 45_000;
@@ -250,16 +251,31 @@ async function runReminderCycle(): Promise<void> {
   if (runInFlight) return;
 
   runInFlight = (async () => {
+    let cronStatus: CronRunStatus = 'ok';
     try {
-      const settings = await settingsService.getTimesheetReminderConfig();
-      if (!settings.enabled) return;
+      await runWithCronMonitor(
+        'timesheet-reminder',
+        async () => {
+          try {
+            const settings = await settingsService.getTimesheetReminderConfig();
+            if (!settings.enabled) return;
 
-      const events = getTimesheetReminderEventsForDate(new Date(), settings);
-      for (const event of events) {
-        await processReminderEvent(event);
-      }
-    } catch (error) {
-      console.error('[timesheet-reminder] error:', error instanceof Error ? error.message : error);
+            const events = getTimesheetReminderEventsForDate(new Date(), settings);
+            for (const event of events) {
+              await processReminderEvent(event);
+            }
+          } catch (error) {
+            cronStatus = 'error';
+            console.error('[timesheet-reminder] error:', error instanceof Error ? error.message : error);
+          }
+          return cronStatus;
+        },
+        {
+          schedule: { type: 'interval', value: 15, unit: 'minute' },
+          checkinMargin: 5,
+          maxRuntime: 10,
+        },
+      );
     } finally {
       runInFlight = null;
     }

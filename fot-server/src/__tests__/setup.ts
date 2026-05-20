@@ -20,6 +20,7 @@ vi.mock('@sentry/node', () => ({
   init: vi.fn(),
   captureException: vi.fn(),
   captureMessage: vi.fn(),
+  captureCheckIn: vi.fn(() => 'mock-check-in-id'),
   addBreadcrumb: vi.fn(),
   setupExpressErrorHandler: vi.fn(),
   getCurrentScope: () => ({ setUser: vi.fn(), setTag: vi.fn(), setContext: vi.fn() }),

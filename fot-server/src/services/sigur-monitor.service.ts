@@ -12,6 +12,7 @@ import {
   tryAcquireSigurRuntimeLease,
 } from './sigur-runtime-state.service.js';
 import { isSigurRuntimeAllowed, logSigurRuntimeGuardSkip } from './sigur-runtime-guard.service.js';
+import { runWithCronMonitor } from '../utils/sentry-cron.js';
 
 type SigurConnectionType = 'internal' | 'external' | null;
 export type SigurMonitorSource = 'presence_polling' | 'monitor_probe' | 'silence_detector';
@@ -1076,14 +1077,14 @@ export async function startSigurMonitor(): Promise<void> {
   console.log('[sigur-monitor] started (interval: 60s)');
   startupTimeout = setTimeout(() => {
     startupTimeout = null;
-    void runSigurMonitorCycleAsLeader().catch(error => {
+    void runSigurMonitorCycleWithCronMonitor().catch(error => {
       console.error('[sigur-monitor] startup error:', (error as Error).message);
     });
   }, MONITOR_STARTUP_DELAY_MS);
 
   monitorTimer = setInterval(() => {
     if (cycleInFlight) return;
-    cycleInFlight = runSigurMonitorCycleAsLeader()
+    cycleInFlight = runSigurMonitorCycleWithCronMonitor()
       .catch(error => {
         console.error('[sigur-monitor] cycle error:', (error as Error).message);
       })
@@ -1091,6 +1092,18 @@ export async function startSigurMonitor(): Promise<void> {
         cycleInFlight = null;
       });
   }, MONITOR_INTERVAL_MS);
+}
+
+async function runSigurMonitorCycleWithCronMonitor(now = new Date()): Promise<void> {
+  await runWithCronMonitor(
+    'sigur-monitor',
+    () => runSigurMonitorCycleAsLeader(now),
+    {
+      schedule: { type: 'interval', value: 1, unit: 'minute' },
+      checkinMargin: 2,
+      maxRuntime: 5,
+    },
+  );
 }
 
 export function stopSigurMonitor(): void {

@@ -1,6 +1,7 @@
 import { execute, query, queryOne } from '../config/postgres.js';
 import { notificationService } from './notification.service.js';
 import { pushService } from './push.service.js';
+import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js';
 
 const REMINDER_INTERVAL_MS = 24 * 60 * 60_000;
 const STARTUP_DELAY_MS = 60_000;
@@ -81,43 +82,58 @@ async function runReminderCycle(): Promise<void> {
   if (runInFlight) return;
 
   runInFlight = (async () => {
+    let cronStatus: CronRunStatus = 'ok';
     try {
-      const employees = await loadExpiringEmployees();
-      if (employees.length === 0) return;
+      await runWithCronMonitor(
+        'patent-expiry-reminder',
+        async () => {
+          try {
+            const employees = await loadExpiringEmployees();
+            if (employees.length === 0) return;
 
-      const userIdMap = await loadEmployeeUserIds(employees.map(e => e.id));
-      const reminderDate = new Date().toISOString().slice(0, 10);
+            const userIdMap = await loadEmployeeUserIds(employees.map(e => e.id));
+            const reminderDate = new Date().toISOString().slice(0, 10);
 
-      for (const emp of employees) {
-        const userId = userIdMap.get(emp.id);
-        if (!userId) continue;
+            for (const emp of employees) {
+              const userId = userIdMap.get(emp.id);
+              if (!userId) continue;
 
-        if (await hasReminderLog(emp.id, reminderDate)) continue;
+              if (await hasReminderLog(emp.id, reminderDate)) continue;
 
-        const daysLeft = daysUntil(emp.patent_expiry_date);
-        const expiryLabel = formatExpiryDate(emp.patent_expiry_date);
-        const title = 'Срок патента истекает';
-        const body = daysLeft <= 0
-          ? `Срок патента истекает сегодня (${expiryLabel}). Не забудьте обновить.`
-          : `Срок патента истекает через ${daysLeft} дн. (${expiryLabel}). Не забудьте обновить.`;
-        const path = '/employee';
+              const daysLeft = daysUntil(emp.patent_expiry_date);
+              const expiryLabel = formatExpiryDate(emp.patent_expiry_date);
+              const title = 'Срок патента истекает';
+              const body = daysLeft <= 0
+                ? `Срок патента истекает сегодня (${expiryLabel}). Не забудьте обновить.`
+                : `Срок патента истекает через ${daysLeft} дн. (${expiryLabel}). Не забудьте обновить.`;
+              const path = '/employee';
 
-        try {
-          await notificationService.createMany([{
-            userId,
-            type: 'patent_expiry',
-            title,
-            body,
-            metadata: { expiryDate: emp.patent_expiry_date, employeeId: emp.id, path },
-          }]);
-          await pushService.sendGenericNotification([userId], title, body, { path, expiryDate: emp.patent_expiry_date });
-          await writeReminderLog(emp.id, reminderDate);
-        } catch (e) {
-          console.error('[patent-expiry] send error for employee', emp.id, e);
-        }
-      }
-    } catch (error) {
-      console.error('[patent-expiry] error:', error instanceof Error ? error.message : error);
+              try {
+                await notificationService.createMany([{
+                  userId,
+                  type: 'patent_expiry',
+                  title,
+                  body,
+                  metadata: { expiryDate: emp.patent_expiry_date, employeeId: emp.id, path },
+                }]);
+                await pushService.sendGenericNotification([userId], title, body, { path, expiryDate: emp.patent_expiry_date });
+                await writeReminderLog(emp.id, reminderDate);
+              } catch (e) {
+                console.error('[patent-expiry] send error for employee', emp.id, e);
+              }
+            }
+          } catch (error) {
+            cronStatus = 'error';
+            console.error('[patent-expiry] error:', error instanceof Error ? error.message : error);
+          }
+          return cronStatus;
+        },
+        {
+          schedule: { type: 'interval', value: 1, unit: 'day' },
+          checkinMargin: 60,
+          maxRuntime: 30,
+        },
+      );
     } finally {
       runInFlight = null;
     }

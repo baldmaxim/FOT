@@ -1,5 +1,6 @@
 import * as Sentry from '@sentry/node';
 import { query } from '../config/postgres.js';
+import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js';
 
 /**
  * Фоновая страховка от «осиротевших» событий — записей в skud_events,
@@ -112,6 +113,11 @@ async function runReconcileCycle(): Promise<void> {
   if (runInFlight) return;
 
   runInFlight = (async () => {
+    let cronStatus: CronRunStatus = 'ok';
+    try {
+      await runWithCronMonitor(
+        'skud-summary-reconcile',
+        async () => {
     const startedAt = Date.now();
     try {
       const cutoff = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000)
@@ -192,8 +198,18 @@ async function runReconcileCycle(): Promise<void> {
         });
       }
     } catch (error) {
+      cronStatus = 'error';
       console.error('[skud-summary-reconcile] error:', error instanceof Error ? error.message : error);
       Sentry.captureException(error, { tags: { source: 'skud-summary-reconcile' } });
+    }
+          return cronStatus;
+        },
+        {
+          schedule: { type: 'interval', value: 15, unit: 'minute' },
+          checkinMargin: 5,
+          maxRuntime: 15,
+        },
+      );
     } finally {
       runInFlight = null;
     }

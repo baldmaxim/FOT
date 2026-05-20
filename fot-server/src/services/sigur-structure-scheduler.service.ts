@@ -17,6 +17,7 @@ import { invalidateOrgStructureCaches } from './employee-mapper.service.js';
 import { notifySigurStructureChanged } from './skud-realtime.service.js';
 import type { ISyncContext } from './sigur-sync-shared.js';
 import { isSigurRuntimeAllowed, logSigurRuntimeGuardSkip } from './sigur-runtime-guard.service.js';
+import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js';
 
 const MIN_STRUCTURE_SYNC_INTERVAL = 60_000; // 1 минута — нижний предел против самой Sigur API
 // 2 часа — структура (отделы/должности/сотрудники) меняется в основном через нашу
@@ -44,39 +45,52 @@ async function runStructureSyncCycle(): Promise<void> {
 
   syncInFlight = (async () => {
     let lockAcquired = false;
+    let cronStatus: CronRunStatus = 'ok';
     const startedAt = Date.now();
-    try {
-      await acquireStructureSyncSchedulerLock();
-      lockAcquired = true;
+    await runWithCronMonitor(
+      'sigur-structure-sync',
+      async () => {
+        try {
+          await acquireStructureSyncSchedulerLock();
+          lockAcquired = true;
 
-      const connectionType = await sigurService.getBackgroundConnectionType();
-      const context: ISyncContext = {};
-      console.log(`[structure-scheduler] starting sync connection=${connectionType}: departments + positions + employees`);
+          const connectionType = await sigurService.getBackgroundConnectionType();
+          const context: ISyncContext = {};
+          console.log(`[structure-scheduler] starting sync connection=${connectionType}: departments + positions + employees`);
 
-      await syncDepartmentsLogic(connectionType, context);
-      await syncPositionsFromSigurLogic(connectionType, context);
-      await seedPositionsLogic();
-      await syncEmployeesLogic(connectionType, () => {}, context, true);
+          await syncDepartmentsLogic(connectionType, context);
+          await syncPositionsFromSigurLogic(connectionType, context);
+          await seedPositionsLogic();
+          await syncEmployeesLogic(connectionType, () => {}, context, true);
 
-      // Сбрасываем все кэши структуры, чтобы карточка сотрудника не мигала
-      // между старыми и новыми именами отделов/должностей, а dept tree
-      // и sync filter не отдавали стейл данные.
-      invalidateOrgStructureCaches();
-      notifySigurStructureChanged({ source: 'scheduler', scope: 'all' });
+          // Сбрасываем все кэши структуры, чтобы карточка сотрудника не мигала
+          // между старыми и новыми именами отделов/должностей, а dept tree
+          // и sync filter не отдавали стейл данные.
+          invalidateOrgStructureCaches();
+          notifySigurStructureChanged({ source: 'scheduler', scope: 'all' });
 
-      const durationMs = Date.now() - startedAt;
-      console.log(`[structure-scheduler] sync done connection=${connectionType} durationMs=${durationMs}`);
-    } catch (err) {
-      if (err instanceof ManualSyncInProgressError) {
-        console.log('[structure-scheduler] skipped: manual or concurrent sync in progress');
-      } else {
-        console.error('[structure-scheduler] error:', (err as Error).message);
-        Sentry.captureException(err, { tags: { service: 'structure-scheduler' } });
-      }
-    } finally {
-      if (lockAcquired) await releaseStructureSyncSchedulerLock();
-      syncInFlight = null;
-    }
+          const durationMs = Date.now() - startedAt;
+          console.log(`[structure-scheduler] sync done connection=${connectionType} durationMs=${durationMs}`);
+        } catch (err) {
+          if (err instanceof ManualSyncInProgressError) {
+            console.log('[structure-scheduler] skipped: manual or concurrent sync in progress');
+          } else {
+            cronStatus = 'error';
+            console.error('[structure-scheduler] error:', (err as Error).message);
+            Sentry.captureException(err, { tags: { service: 'structure-scheduler' } });
+          }
+        } finally {
+          if (lockAcquired) await releaseStructureSyncSchedulerLock();
+        }
+        return cronStatus;
+      },
+      {
+        schedule: { type: 'interval', value: 120, unit: 'minute' },
+        checkinMargin: 30,
+        maxRuntime: 60,
+      },
+    );
+    syncInFlight = null;
   })();
 
   return syncInFlight;

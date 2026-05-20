@@ -12,6 +12,7 @@ import {
 } from './sigur-runtime-state.service.js';
 import { isSigurRuntimeAllowed, logSigurRuntimeGuardSkip } from './sigur-runtime-guard.service.js';
 import { env } from '../config/env.js';
+import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js';
 
 const CHECK_INTERVAL_MS = 60_000;
 const DAILY_STATE_KEY = 'sigur_events_daily';
@@ -74,75 +75,91 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
     const windowDays = resolveWindowDays();
     const startDate = getDailyWindowStartYmd(ymd, windowDays);
     const endDate = ymd;
+    const targetHour = resolveTargetHourMsk();
+    let cronStatus: CronRunStatus = 'ok';
 
     try {
-      // Уступаем ручной полной синхронизации, не блокируя при этом фоновый
-      // presence-polling (он пишет идемпотентно через UPSERT и не конфликтует
-      // с daily). hasEventsSyncLease отсекает параллельный manual events sync.
-      if (await hasExclusiveSyncLease()) {
-        console.log('[events-daily-scheduler] skipped: exclusive sync in progress, will retry next tick');
-        lastRunYmdMsk = null;
-        return;
-      }
-      if (await hasEventsSyncLease()) {
-        console.log('[events-daily-scheduler] skipped: manual events sync in progress, will retry next tick');
-        lastRunYmdMsk = null;
-        return;
-      }
+      await runWithCronMonitor(
+        'sigur-events-daily',
+        async () => {
+          try {
+            // Уступаем ручной полной синхронизации, не блокируя при этом фоновый
+            // presence-polling (он пишет идемпотентно через UPSERT и не конфликтует
+            // с daily). hasEventsSyncLease отсекает параллельный manual events sync.
+            if (await hasExclusiveSyncLease()) {
+              console.log('[events-daily-scheduler] skipped: exclusive sync in progress, will retry next tick');
+              lastRunYmdMsk = null;
+              return;
+            }
+            if (await hasEventsSyncLease()) {
+              console.log('[events-daily-scheduler] skipped: manual events sync in progress, will retry next tick');
+              lastRunYmdMsk = null;
+              return;
+            }
 
-      const connection = await sigurService.getBackgroundConnectionType();
-      console.log(
-        `[events-daily-scheduler] starting daily sync connection=${connection} range=${startDate}..${endDate} startedAt=${startedAtIso} windowDays=${windowDays}`,
-      );
+            const connection = await sigurService.getBackgroundConnectionType();
+            console.log(
+              `[events-daily-scheduler] starting daily sync connection=${connection} range=${startDate}..${endDate} startedAt=${startedAtIso} windowDays=${windowDays}`,
+            );
 
-      const context: ISyncContext = {};
-      const result = await syncEventsLogic(startDate, endDate, connection, () => {}, context);
+            const context: ISyncContext = {};
+            const result = await syncEventsLogic(startDate, endDate, connection, () => {}, context);
 
-      const durationMs = Date.now() - startedAt;
-      const finishedAtIso = new Date().toISOString();
-      console.log(
-        `[events-daily-scheduler] done durationMs=${durationMs} startedAt=${startedAtIso} finishedAt=${finishedAtIso} imported=${result.imported} skipped=${result.skipped} filteredByDept=${result.filteredByDept} matched=${result.matched} errors=${result.errors.length}`,
-      );
+            const durationMs = Date.now() - startedAt;
+            const finishedAtIso = new Date().toISOString();
+            console.log(
+              `[events-daily-scheduler] done durationMs=${durationMs} startedAt=${startedAtIso} finishedAt=${finishedAtIso} imported=${result.imported} skipped=${result.skipped} filteredByDept=${result.filteredByDept} matched=${result.matched} errors=${result.errors.length}`,
+            );
 
-      notifySkudRealtimeChanged({
-        source: 'daily_sync',
-        from: startDate,
-        to: endDate,
-        insertedCount: result.imported,
-        recalculatedCount: result.matched,
-      });
+            notifySkudRealtimeChanged({
+              source: 'daily_sync',
+              from: startDate,
+              to: endDate,
+              insertedCount: result.imported,
+              recalculatedCount: result.matched,
+            });
 
-      lastRunYmdMsk = ymd;
-      await mergeSigurRuntimeState({
-        key: DAILY_STATE_KEY,
-        meta: {
-          lastRunYmdMsk: ymd,
-          lastSuccessAt: finishedAtIso,
-          lastStartedAt: startedAtIso,
-          lastDurationMs: durationMs,
-          lastWindow: { startDate, endDate, windowDays },
-          lastResult: {
-            imported: result.imported,
-            skipped: result.skipped,
-            filteredByDept: result.filteredByDept,
-            matched: result.matched,
-            errors: result.errors.length,
-          },
+            lastRunYmdMsk = ymd;
+            await mergeSigurRuntimeState({
+              key: DAILY_STATE_KEY,
+              meta: {
+                lastRunYmdMsk: ymd,
+                lastSuccessAt: finishedAtIso,
+                lastStartedAt: startedAtIso,
+                lastDurationMs: durationMs,
+                lastWindow: { startDate, endDate, windowDays },
+                lastResult: {
+                  imported: result.imported,
+                  skipped: result.skipped,
+                  filteredByDept: result.filteredByDept,
+                  matched: result.matched,
+                  errors: result.errors.length,
+                },
+              },
+            }).catch(err =>
+              console.error('[events-daily-scheduler] mergeSigurRuntimeState success error:', (err as Error).message),
+            );
+          } catch (err) {
+            cronStatus = 'error';
+            console.error('[events-daily-scheduler] error:', (err as Error).message);
+            lastRunYmdMsk = null;
+            await mergeSigurRuntimeState({
+              key: DAILY_STATE_KEY,
+              meta: {
+                lastFailureAt: new Date().toISOString(),
+                lastError: (err as Error).message,
+              },
+            }).catch(stateErr =>
+              console.error('[events-daily-scheduler] mergeSigurRuntimeState failure error:', (stateErr as Error).message),
+            );
+          }
+          return cronStatus;
         },
-      }).catch(err =>
-        console.error('[events-daily-scheduler] mergeSigurRuntimeState success error:', (err as Error).message),
-      );
-    } catch (err) {
-      console.error('[events-daily-scheduler] error:', (err as Error).message);
-      lastRunYmdMsk = null;
-      await mergeSigurRuntimeState({
-        key: DAILY_STATE_KEY,
-        meta: {
-          lastFailureAt: new Date().toISOString(),
-          lastError: (err as Error).message,
+        {
+          schedule: { type: 'crontab', value: `0 ${targetHour} * * *` },
+          checkinMargin: 60,
+          maxRuntime: 120,
         },
-      }).catch(stateErr =>
-        console.error('[events-daily-scheduler] mergeSigurRuntimeState failure error:', (stateErr as Error).message),
       );
     } finally {
       runInFlight = null;

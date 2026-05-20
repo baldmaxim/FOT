@@ -8,6 +8,7 @@ import {
   getSigurRuntimeOwner,
 } from './sigur-runtime-state.service.js';
 import { MtsApiError } from './mts-base.service.js';
+import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js';
 
 // Фоновый поллер пассивных lastLocations: раз в час (env MTS_SYNC_INTERVAL_MS)
 // дёргает один bulk-запрос на ВСЕХ абонентов и сохраняет снимки в БД
@@ -37,18 +38,33 @@ async function tick(owner: string): Promise<void> {
   });
   if (!acq.acquired) return;
 
+  let cronStatus: CronRunStatus = 'ok';
   try {
-    const locations = await mtsDataService.getLastLocations();
-    const saved = await mtsDataService.persistLocationSnapshots(locations);
-    console.log(`[mts-poller] tick: fetched=${locations.length} saved=${saved}`);
-  } catch (error) {
-    // Тело апстрима МТС НЕ кладём в сообщение — может содержать ПДн.
-    if (error instanceof MtsApiError) {
-      console.error(`[mts-poller] upstream error: http=${error.status} code=${error.code ?? '-'}`);
-    } else {
-      console.error('[mts-poller] tick failed:', error instanceof Error ? error.message : 'unknown');
-      Sentry.captureException(error);
-    }
+    await runWithCronMonitor(
+      'mts-poller',
+      async () => {
+        try {
+          const locations = await mtsDataService.getLastLocations();
+          const saved = await mtsDataService.persistLocationSnapshots(locations);
+          console.log(`[mts-poller] tick: fetched=${locations.length} saved=${saved}`);
+        } catch (error) {
+          cronStatus = 'error';
+          // Тело апстрима МТС НЕ кладём в сообщение — может содержать ПДн.
+          if (error instanceof MtsApiError) {
+            console.error(`[mts-poller] upstream error: http=${error.status} code=${error.code ?? '-'}`);
+          } else {
+            console.error('[mts-poller] tick failed:', error instanceof Error ? error.message : 'unknown');
+            Sentry.captureException(error);
+          }
+        }
+        return cronStatus;
+      },
+      {
+        schedule: { type: 'interval', value: 1, unit: 'hour' },
+        checkinMargin: 15,
+        maxRuntime: 30,
+      },
+    );
   } finally {
     await releaseSigurRuntimeLease({ key: LEASE_KEY, owner }).catch(err =>
       console.error('[mts-poller] release lease failed:', (err as Error).message),
