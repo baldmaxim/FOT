@@ -15,7 +15,9 @@ const vendorDir = path.join(baseDir, 'vendor');
 
 function loadConfig() {
   const defaults = {
-    host: '127.0.0.1',
+    // Пустая строка → агент слушает оба loopback-стека (127.0.0.1 и ::1).
+    // См. server.js: AgentServer._resolveHosts.
+    host: '',
     port: 8765,
     poll: { bufLen: 3, timeoutMs: 500 },
     w26: { endian: 'big' },
@@ -49,7 +51,10 @@ function main() {
 
   const server = new AgentServer(cfg.host, cfg.port);
   server.start();
-  log(`WS-сервер: ws://${cfg.host}:${cfg.port}`);
+  for (const host of server.listeningHosts()) {
+    const url = host.includes(':') ? `ws://[${host}]:${cfg.port}` : `ws://${host}:${cfg.port}`;
+    log(`WS-сервер: ${url}`);
+  }
 
   const sdk = new SphinxSdk(vendorDir);
   sdk.load();

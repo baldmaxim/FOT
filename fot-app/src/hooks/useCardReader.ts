@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
-export const SKUD_AGENT_WS_URL = 'ws://localhost:8765';
+/**
+ * Список адресов локального WS-агента (Sigur Reader EH или Sphinx Reader Agent).
+ * Пробуем по очереди (round-robin при close): на Windows браузер может резолвить
+ * `localhost` в IPv6 `::1`, тогда как часть инсталляций агента слушает только
+ * IPv4 `127.0.0.1`. Перебор покрывает оба варианта без правок агента.
+ */
+export const SKUD_AGENT_WS_URLS = [
+  'ws://127.0.0.1:8765',
+  'ws://localhost:8765',
+] as const;
 
 export interface ICardEvent {
   w26: string;
@@ -36,6 +45,7 @@ export const useCardReader = (): IReaderControls => {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backoffRef = useRef<number>(MIN_BACKOFF);
+  const urlIdxRef = useRef<number>(0);
   const stoppedRef = useRef<boolean>(false);
 
   const clearLastCard = useCallback(() => {
@@ -48,8 +58,10 @@ export const useCardReader = (): IReaderControls => {
     const connect = (): void => {
       if (stoppedRef.current) return;
 
+      const url = SKUD_AGENT_WS_URLS[urlIdxRef.current % SKUD_AGENT_WS_URLS.length];
+
       try {
-        const ws = new WebSocket(SKUD_AGENT_WS_URL);
+        const ws = new WebSocket(url);
         wsRef.current = ws;
 
         ws.onopen = () => {
@@ -85,6 +97,7 @@ export const useCardReader = (): IReaderControls => {
         ws.onclose = () => {
           wsRef.current = null;
           if (stoppedRef.current) return;
+          urlIdxRef.current = (urlIdxRef.current + 1) % SKUD_AGENT_WS_URLS.length;
           setState(prev => ({ ...prev, connected: false, message: 'Агент не запущен' }));
           reconnectTimerRef.current = setTimeout(connect, backoffRef.current);
           backoffRef.current = Math.min(backoffRef.current * 2, MAX_BACKOFF);
@@ -95,6 +108,7 @@ export const useCardReader = (): IReaderControls => {
         };
       } catch {
         if (stoppedRef.current) return;
+        urlIdxRef.current = (urlIdxRef.current + 1) % SKUD_AGENT_WS_URLS.length;
         reconnectTimerRef.current = setTimeout(connect, backoffRef.current);
         backoffRef.current = Math.min(backoffRef.current * 2, MAX_BACKOFF);
       }
