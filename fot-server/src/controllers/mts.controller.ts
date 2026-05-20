@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import * as Sentry from '@sentry/node';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { settingsService } from '../services/settings.service.js';
 import { mtsDataService } from '../services/mts-data.service.js';
@@ -21,6 +22,15 @@ const isSuperAdmin = (req: AuthenticatedRequest): boolean => req.user.role_code 
 
 const sendApiError = (res: Response, error: MtsApiError, fallback: string): void => {
   console.error(`[mts] upstream error: http=${error.status} code=${error.code ?? '-'}`);
+  Sentry.captureException(error, {
+    tags: {
+      module: 'mts',
+      kind: 'upstream',
+      mtsHttp: String(error.status),
+      mtsCode: String(error.code ?? '-'),
+    },
+    extra: { fallback, description: error.description },
+  });
   res.status(502).json({
     success: false,
     error: error.code ? `Ошибка МТС (код ${error.code})` : fallback,
@@ -33,6 +43,10 @@ const fail = (res: Response, error: unknown, fallback: string): void => {
     return;
   }
   console.error(`[mts] ${fallback}:`, error instanceof Error ? error.message : 'unknown');
+  Sentry.captureException(error, {
+    tags: { module: 'mts', kind: 'generic' },
+    extra: { fallback },
+  });
   res.status(500).json({ success: false, error: fallback });
 };
 
