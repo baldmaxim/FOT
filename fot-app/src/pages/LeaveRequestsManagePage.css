@@ -237,6 +237,14 @@
   white-space: nowrap;
 }
 
+.lrm-group--direct-reports .lrm-group-toggle {
+  border-color: var(--accent, #3b82f6);
+}
+
+.lrm-group--direct-reports .lrm-group-name {
+  color: var(--accent, #3b82f6);
+}
+
 .lrm-card-actions {
   border-top: 1px solid var(--border);
   padding-top: 12px;

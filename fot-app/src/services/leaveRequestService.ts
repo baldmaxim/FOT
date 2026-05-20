@@ -29,6 +29,8 @@ export interface ILeaveRequest {
   employee_name?: string | null;
   department_name?: string | null;
   position_name?: string | null;
+  /** true, если сотрудник пришёл через employee_direct_reports и вне subtree отделов руководителя. */
+  is_direct_subordinate?: boolean;
   attachments?: ILeaveRequestAttachment[];
   reviewer?: { id: string; full_name: string | null } | null;
 }

@@ -5,7 +5,11 @@ import {
   resolveAccessibleDepartmentIds,
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
+import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
+
+const DIRECT_REPORTS_GROUP_ID = '__direct_reports__';
+const DIRECT_REPORTS_GROUP_NAME = 'Непосредственные подчинённые';
 
 interface IPendingItem {
   id: number;
@@ -31,6 +35,7 @@ interface IDepartmentGroup {
   pending_count: number;
   employees_count: number;
   items: IPendingItem[];
+  is_direct_reports?: boolean;
 }
 
 function isIsoDate(value: unknown): value is string {
@@ -48,7 +53,12 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
     }
 
     const accessible = await resolveAccessibleDepartmentIds(req);
-    if (accessible !== 'all' && accessible.length === 0) {
+    const directReportIds = req.user.employee_id
+      ? await listDirectSubordinates(req.user.employee_id)
+      : [];
+    const directReportsSet = new Set(directReportIds);
+
+    if (accessible !== 'all' && accessible.length === 0 && directReportIds.length === 0) {
       res.json({ success: true, data: [] });
       return;
     }
@@ -89,19 +99,28 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
     const filteredEmployees = employees.filter(e => {
       if (!allowedDeptIds) return true;
       const deptId = e.org_department_id ? String(e.org_department_id) : null;
-      return deptId !== null && allowedDeptIds.has(deptId);
+      const inDeptSubtree = deptId !== null && allowedDeptIds.has(deptId);
+      const isDirectReport = directReportsSet.has(Number(e.id));
+      return inDeptSubtree || isDirectReport;
     });
     if (filteredEmployees.length === 0) {
       res.json({ success: true, data: [] });
       return;
     }
 
-    const employeeMap = new Map(filteredEmployees.map(e => [Number(e.id), {
-      full_name: e.full_name ?? null,
-      department_id: e.org_department_id ? String(e.org_department_id) : null,
-    }]));
+    const employeeMap = new Map(filteredEmployees.map(e => {
+      const deptId = e.org_department_id ? String(e.org_department_id) : null;
+      const inDeptSubtree = !allowedDeptIds || (deptId !== null && allowedDeptIds.has(deptId));
+      const isDirectOnly = !inDeptSubtree && directReportsSet.has(Number(e.id));
+      return [Number(e.id), {
+        full_name: e.full_name ?? null,
+        department_id: deptId,
+        is_direct_only: isDirectOnly,
+      }];
+    }));
 
     const deptIds = [...new Set([...employeeMap.values()]
+      .filter(e => !e.is_direct_only)
       .map(e => e.department_id)
       .filter((id): id is string => id !== null))];
     const deptNamesMap = new Map<string, string>();
@@ -130,16 +149,21 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
     const groups = new Map<string, IDepartmentGroup>();
     for (const adj of adjustments) {
       const empInfo = employeeMap.get(Number(adj.employee_id));
-      if (!empInfo || !empInfo.department_id) continue;
-      const deptId = empInfo.department_id;
+      if (!empInfo) continue;
+      const isDirectOnly = empInfo.is_direct_only === true;
+      const deptId = isDirectOnly ? DIRECT_REPORTS_GROUP_ID : empInfo.department_id;
+      if (!deptId) continue;
       let group = groups.get(deptId);
       if (!group) {
         group = {
           department_id: deptId,
-          department_name: deptNamesMap.get(deptId) ?? deptId,
+          department_name: isDirectOnly
+            ? DIRECT_REPORTS_GROUP_NAME
+            : (deptNamesMap.get(deptId) ?? deptId),
           pending_count: 0,
           employees_count: 0,
           items: [],
+          is_direct_reports: isDirectOnly,
         };
         groups.set(deptId, group);
       }
@@ -162,7 +186,12 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
       group.employees_count = new Set(group.items.map(i => i.employee_id)).size;
     }
 
-    const result = [...groups.values()].sort((a, b) => a.department_name.localeCompare(b.department_name, 'ru'));
+    const result = [...groups.values()].sort((a, b) => {
+      // Группа «Непосредственные подчинённые» — всегда в конце списка.
+      if (a.is_direct_reports && !b.is_direct_reports) return 1;
+      if (!a.is_direct_reports && b.is_direct_reports) return -1;
+      return a.department_name.localeCompare(b.department_name, 'ru');
+    });
     res.json({ success: true, data: result });
   } catch (err) {
     console.error('correction-approval.getPendingByDepartment error:', err);
@@ -208,7 +237,15 @@ async function ensureAdjustmentDepartmentAccess(
   );
   if (!data) return false;
   const deptId = data.org_department_id ? String(data.org_department_id) : null;
-  return deptId !== null && accessible.includes(deptId);
+  if (deptId !== null && accessible.includes(deptId)) return true;
+
+  // Доступ через непосредственное подчинение (employee_direct_reports), даже
+  // если сотрудник числится в отделе вне поддерева руководителя.
+  if (req.user.employee_id) {
+    const directReports = await listDirectSubordinates(req.user.employee_id);
+    if (directReports.includes(Number(employeeId))) return true;
+  }
+  return false;
 }
 
 async function changeAdjustmentApproval(
@@ -341,6 +378,9 @@ async function bulkChangeByIds(
 
   if (accessible !== 'all') {
     const allowedDeptSet = new Set(accessible);
+    const directReports = req.user.employee_id
+      ? new Set(await listDirectSubordinates(req.user.employee_id))
+      : new Set<number>();
     const employeeIds = [...new Set(pending.map(a => Number(a.employee_id)))];
     const empRows = await query<{ id: number; org_department_id: string | null }>(
       `SELECT id, org_department_id FROM employees WHERE id = ANY($1::bigint[])`,
@@ -349,7 +389,8 @@ async function bulkChangeByIds(
     const allowedEmpSet = new Set<number>();
     for (const row of empRows) {
       const deptId = row.org_department_id ? String(row.org_department_id) : null;
-      if (deptId && allowedDeptSet.has(deptId)) allowedEmpSet.add(Number(row.id));
+      const inDept = !!deptId && allowedDeptSet.has(deptId);
+      if (inDept || directReports.has(Number(row.id))) allowedEmpSet.add(Number(row.id));
     }
     const filteredIds: number[] = [];
     for (const a of pending) {
@@ -471,6 +512,9 @@ async function bulkRevertByIdsImpl(
 
   if (accessible !== 'all') {
     const allowedDeptSet = new Set(accessible);
+    const directReports = req.user.employee_id
+      ? new Set(await listDirectSubordinates(req.user.employee_id))
+      : new Set<number>();
     const employeeIds = [...new Set(revertable.map(a => Number(a.employee_id)))];
     const empRows = await query<{ id: number; org_department_id: string | null }>(
       `SELECT id, org_department_id FROM employees WHERE id = ANY($1::bigint[])`,
@@ -479,7 +523,8 @@ async function bulkRevertByIdsImpl(
     const allowedEmpSet = new Set<number>();
     for (const row of empRows) {
       const deptId = row.org_department_id ? String(row.org_department_id) : null;
-      if (deptId && allowedDeptSet.has(deptId)) allowedEmpSet.add(Number(row.id));
+      const inDept = !!deptId && allowedDeptSet.has(deptId);
+      if (inDept || directReports.has(Number(row.id))) allowedEmpSet.add(Number(row.id));
     }
     const filteredIds: number[] = [];
     for (const a of revertable) {
@@ -623,7 +668,12 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
     const statuses = allowedStatuses.length > 0 ? allowedStatuses : ['approved', 'rejected'];
 
     const accessible = await resolveAccessibleDepartmentIds(req);
-    if (accessible !== 'all' && accessible.length === 0) {
+    const directReportIds = req.user.employee_id
+      ? await listDirectSubordinates(req.user.employee_id)
+      : [];
+    const directReportsSet = new Set(directReportIds);
+
+    if (accessible !== 'all' && accessible.length === 0 && directReportIds.length === 0) {
       res.json({ success: true, data: [] });
       return;
     }
@@ -667,19 +717,28 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
     const filteredEmployees = employees.filter(e => {
       if (!allowedDeptIds) return true;
       const deptId = e.org_department_id ? String(e.org_department_id) : null;
-      return deptId !== null && allowedDeptIds.has(deptId);
+      const inDeptSubtree = deptId !== null && allowedDeptIds.has(deptId);
+      const isDirectReport = directReportsSet.has(Number(e.id));
+      return inDeptSubtree || isDirectReport;
     });
     if (filteredEmployees.length === 0) {
       res.json({ success: true, data: [] });
       return;
     }
 
-    const employeeMap = new Map(filteredEmployees.map(e => [Number(e.id), {
-      full_name: e.full_name ?? null,
-      department_id: e.org_department_id ? String(e.org_department_id) : null,
-    }]));
+    const employeeMap = new Map(filteredEmployees.map(e => {
+      const deptId = e.org_department_id ? String(e.org_department_id) : null;
+      const inDeptSubtree = !allowedDeptIds || (deptId !== null && allowedDeptIds.has(deptId));
+      const isDirectOnly = !inDeptSubtree && directReportsSet.has(Number(e.id));
+      return [Number(e.id), {
+        full_name: e.full_name ?? null,
+        department_id: deptId,
+        is_direct_only: isDirectOnly,
+      }];
+    }));
 
     const deptIds = [...new Set([...employeeMap.values()]
+      .filter(e => !e.is_direct_only)
       .map(e => e.department_id)
       .filter((id): id is string => id !== null))];
     const deptNamesMap = new Map<string, string>();
@@ -711,16 +770,21 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
     const groups = new Map<string, IDepartmentGroup>();
     for (const adj of adjustments) {
       const empInfo = employeeMap.get(Number(adj.employee_id));
-      if (!empInfo || !empInfo.department_id) continue;
-      const deptId = empInfo.department_id;
+      if (!empInfo) continue;
+      const isDirectOnly = empInfo.is_direct_only === true;
+      const deptId = isDirectOnly ? DIRECT_REPORTS_GROUP_ID : empInfo.department_id;
+      if (!deptId) continue;
       let group = groups.get(deptId);
       if (!group) {
         group = {
           department_id: deptId,
-          department_name: deptNamesMap.get(deptId) ?? deptId,
+          department_name: isDirectOnly
+            ? DIRECT_REPORTS_GROUP_NAME
+            : (deptNamesMap.get(deptId) ?? deptId),
           pending_count: 0,
           employees_count: 0,
           items: [],
+          is_direct_reports: isDirectOnly,
         };
         groups.set(deptId, group);
       }
@@ -748,7 +812,11 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
       group.employees_count = new Set(group.items.map(i => i.employee_id)).size;
     }
 
-    const result = [...groups.values()].sort((a, b) => a.department_name.localeCompare(b.department_name, 'ru'));
+    const result = [...groups.values()].sort((a, b) => {
+      if (a.is_direct_reports && !b.is_direct_reports) return 1;
+      if (!a.is_direct_reports && b.is_direct_reports) return -1;
+      return a.department_name.localeCompare(b.department_name, 'ru');
+    });
     res.json({ success: true, data: result });
   } catch (err) {
     console.error('correction-approval.getHistoryByDepartment error:', err);

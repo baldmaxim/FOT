@@ -26,6 +26,8 @@ export interface ICorrectionDepartmentGroup {
   pending_count: number;
   employees_count: number;
   items: ICorrectionPendingItem[];
+  /** true для синтетической группы «Непосредственные подчинённые» (employee_direct_reports вне subtree). */
+  is_direct_reports?: boolean;
 }
 
 export interface IBulkResult {

@@ -41,6 +41,8 @@ const STATUS_ICONS: Record<LeaveRequestStatus, FC<{ size?: number }>> = {
 };
 const EMPTY_REQUESTS: ILeaveRequest[] = [];
 const NO_DEPARTMENT_KEY = 'Без отдела';
+const DIRECT_REPORTS_KEY = '__direct_reports__';
+const DIRECT_REPORTS_TITLE = 'Непосредственные подчинённые';
 
 interface IPreviewState {
   documentId: number;
@@ -76,18 +78,26 @@ export const LeaveRequestsManagePage: FC = () => {
   const grouped = useMemo(() => {
     const map = new Map<string, ILeaveRequest[]>();
     for (const r of filteredRequests) {
-      const key = r.department_name?.trim() || NO_DEPARTMENT_KEY;
+      // Непосредственные подчинённые (вне subtree отдела руководителя) — в
+      // отдельную псевдо-группу в конце списка.
+      const key = r.is_direct_subordinate
+        ? DIRECT_REPORTS_KEY
+        : (r.department_name?.trim() || NO_DEPARTMENT_KEY);
       const list = map.get(key) ?? [];
       list.push(r);
       map.set(key, list);
     }
     return Array.from(map.entries()).sort(([a], [b]) => {
+      if (a === DIRECT_REPORTS_KEY) return 1;
+      if (b === DIRECT_REPORTS_KEY) return -1;
       if (a === NO_DEPARTMENT_KEY) return 1;
       if (b === NO_DEPARTMENT_KEY) return -1;
       return a.localeCompare(b, 'ru');
     });
   }, [filteredRequests]);
 
+  // Заголовки групп показываем только если групп >1 (несколько отделов или
+  // «отдел + direct reports»). При единственной группе — плоский список.
   const showGroupHeaders = grouped.length > 1;
 
   useEffect(() => {
@@ -303,8 +313,13 @@ export const LeaveRequestsManagePage: FC = () => {
           <div className="lrm-list">
             {grouped.map(([department, items]) => {
               const isCollapsed = collapsedDepts.has(department);
+              const isDirectReports = department === DIRECT_REPORTS_KEY;
+              const label = isDirectReports ? DIRECT_REPORTS_TITLE : department;
               return (
-                <div key={department} className={`lrm-group${isCollapsed ? ' lrm-group--collapsed' : ''}`}>
+                <div
+                  key={department}
+                  className={`lrm-group${isCollapsed ? ' lrm-group--collapsed' : ''}${isDirectReports ? ' lrm-group--direct-reports' : ''}`}
+                >
                   {showGroupHeaders && (
                     <button
                       type="button"
@@ -313,7 +328,7 @@ export const LeaveRequestsManagePage: FC = () => {
                       aria-expanded={!isCollapsed}
                     >
                       {isCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
-                      <span className="lrm-group-name">{department}</span>
+                      <span className="lrm-group-name">{label}</span>
                       <span className="lrm-group-stats">
                         {items.length} · {totalEmployees(items)} чел
                       </span>

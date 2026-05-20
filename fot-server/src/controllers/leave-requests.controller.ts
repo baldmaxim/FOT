@@ -10,6 +10,7 @@ import {
   resolveManagedDepartmentIds,
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
+import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { upsertAttendanceAdjustment } from '../services/attendance.service.js';
 import type { TimeStatus } from '../types/index.js';
 
@@ -269,13 +270,17 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
 const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const departmentIds = await resolveManagedDepartmentIds(req);
-    if (departmentIds.length === 0) {
-      res.json({ success: true, data: [] });
-      return;
-    }
+    const directReportIds = req.user.employee_id
+      ? await listDirectSubordinates(req.user.employee_id)
+      : [];
 
-    const employees = await loadEmployeeIdsByDepartments(departmentIds);
-    const empIds = employees.map(e => e.id);
+    const departmentEmployees = await loadEmployeeIdsByDepartments(departmentIds);
+    const departmentEmpIds = new Set(departmentEmployees.map(e => e.id));
+    // Direct-reports считаем «непосредственными подчинёнными» только если они НЕ
+    // покрыты subtree отделов — иначе показываем их в группе отдела (без дублей).
+    const directOnlyIds = directReportIds.filter(id => !departmentEmpIds.has(id));
+
+    const empIds = [...new Set([...departmentEmpIds, ...directOnlyIds])];
     if (empIds.length === 0) {
       res.json({ success: true, data: [] });
       return;
@@ -291,6 +296,7 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
     const metaMap = await loadEmployeeMeta(empIds);
     const requestIds = data.map(r => Number(r.id)).filter(Number.isFinite);
     const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
+    const directOnlySet = new Set(directOnlyIds);
 
     const enriched = data.map(r => {
       const meta = metaMap.get(r.employee_id);
@@ -299,6 +305,7 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
         employee_name: meta?.full_name ?? null,
         department_name: meta?.department_name ?? null,
         position_name: meta?.position_name ?? null,
+        is_direct_subordinate: directOnlySet.has(Number(r.employee_id)),
         attachments: attachmentsMap.get(Number(r.id)) ?? [],
       };
     });
@@ -314,6 +321,9 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   try {
     const scopedDepartmentId = await resolveScopedDepartmentId(req, null);
     const managedDepartmentIds = await resolveManagedDepartmentIds(req);
+    const directReportIds = req.user.employee_id
+      ? await listDirectSubordinates(req.user.employee_id)
+      : [];
 
     const whereParts: string[] = [];
     const params: unknown[] = [];
@@ -327,11 +337,19 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       whereParts.push(`status = ${addParam(status)}`);
     }
 
-    if (managedDepartmentIds.length > 0) {
+    let directOnlySet = new Set<number>();
+    if (managedDepartmentIds.length > 0 || directReportIds.length > 0) {
       const employees = scopedDepartmentId
         ? await loadEmployeeIdsByDepartment(scopedDepartmentId)
         : await loadEmployeeIdsByDepartments(managedDepartmentIds);
-      const employeeIds = employees.map(employee => employee.id);
+      const departmentEmpIds = new Set(employees.map(e => e.id));
+      // При scopedDepartmentId (admin фильтрует один отдел) direct-reports не
+      // расширяют выборку — это явный фильтр пользователя на отдел.
+      const directOnlyIds = scopedDepartmentId
+        ? []
+        : directReportIds.filter(id => !departmentEmpIds.has(id));
+      directOnlySet = new Set(directOnlyIds);
+      const employeeIds = [...new Set([...departmentEmpIds, ...directOnlyIds])];
       if (employeeIds.length === 0) {
         res.json({ success: true, data: [] });
         return;
@@ -360,6 +378,7 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         employee_name: meta?.full_name ?? null,
         department_name: meta?.department_name ?? null,
         position_name: meta?.position_name ?? null,
+        is_direct_subordinate: directOnlySet.has(Number(r.employee_id)),
         attachments: attachmentsMap.get(Number(r.id)) ?? [],
       };
     });
@@ -383,7 +402,11 @@ const pendingCount = async (req: AuthenticatedRequest, res: Response): Promise<v
       return;
     }
 
-    if (accessible.length === 0) {
+    const directReportIds = req.user.employee_id
+      ? await listDirectSubordinates(req.user.employee_id)
+      : [];
+
+    if (accessible.length === 0 && directReportIds.length === 0) {
       res.json({ success: true, data: { count: 0 } });
       return;
     }
@@ -393,8 +416,11 @@ const pendingCount = async (req: AuthenticatedRequest, res: Response): Promise<v
          FROM leave_requests lr
          JOIN employees e ON e.id = lr.employee_id
         WHERE lr.status = 'pending'
-          AND e.org_department_id = ANY($1::uuid[])`,
-      [accessible],
+          AND (
+                e.org_department_id = ANY($1::uuid[])
+             OR lr.employee_id      = ANY($2::bigint[])
+              )`,
+      [accessible, directReportIds],
     );
     res.json({ success: true, data: { count: Number(row?.count ?? 0) } });
   } catch (err) {
