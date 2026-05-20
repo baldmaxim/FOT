@@ -1,15 +1,20 @@
 import { type FC, useMemo, useState } from 'react';
 import { useEmployeeTimesheetMonth } from '../../hooks/useEmployeeTimesheet';
 import { useAuth } from '../../contexts/AuthContext';
+import { useMyLeaveRequests } from '../../hooks/usePortalData';
 import { getFullDayThresholdHoursForDay, isScheduleDayOff } from '../../utils/scheduleUtils';
 import { getDayStatus, type DayStatus } from '../../utils/dayStatus';
+import {
+  REQUEST_TYPE_LABELS,
+  STATUS_LABELS,
+  type ILeaveRequest,
+  type LeaveRequestStatus,
+} from '../../services/leaveRequestService';
 import type { TimesheetEntry } from '../../types';
 import styles from './MyMonthTimesheet.module.css';
 
 const WEEKDAY_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
-// DayStatus → CSS-класс ячейки этого виджета (зеркалит STATUS_TO_GRID_CLASS
-// из dayStatus.ts, но на классы MyMonthTimesheet.module.css).
 const STATUS_TO_CSS: Record<DayStatus, string> = {
   present: 'cellWork',
   underwork: 'cellUnderwork',
@@ -25,8 +30,6 @@ const STATUS_TO_CSS: Record<DayStatus, string> = {
   empty: 'cellEmpty',
 };
 
-// Подписи статусов для tooltip. Сохраняем привычное слово «Неявка»
-// (в общем STATUS_LABEL_RU — «Прогул»), терминологию виджета не меняем.
 const STATUS_LABEL: Record<DayStatus, string> = {
   present: 'Работа',
   underwork: 'Недоработка',
@@ -42,28 +45,67 @@ const STATUS_LABEL: Record<DayStatus, string> = {
   empty: '—',
 };
 
+const REQ_STATUS_TO_CSS: Record<Exclude<LeaveRequestStatus, 'cancelled'>, string> = {
+  pending: 'reqPending',
+  approved: 'reqApproved',
+  rejected: 'reqRejected',
+};
+
+const REQ_STATUS_PRIORITY: Record<LeaveRequestStatus, number> = {
+  pending: 3,
+  approved: 2,
+  rejected: 1,
+  cancelled: 0,
+};
+
 const pad = (n: number) => String(n).padStart(2, '0');
 
 const buildIsoDate = (year: number, month: number, day: number) =>
   `${year}-${pad(month)}-${pad(day)}`;
 
+interface IRequestDayInfo {
+  status: LeaveRequestStatus;
+  request_type: ILeaveRequest['request_type'];
+  id: number;
+}
+
+const enumerateDates = (startIso: string, endIso: string): string[] => {
+  if (!startIso || !endIso) return [];
+  const out: string[] = [];
+  const start = new Date(startIso + 'T00:00:00');
+  const end = new Date(endIso + 'T00:00:00');
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return out;
+  const cur = new Date(start);
+  while (cur.getTime() <= end.getTime()) {
+    out.push(`${cur.getFullYear()}-${pad(cur.getMonth() + 1)}-${pad(cur.getDate())}`);
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
+};
+
 interface IMyMonthTimesheetProps {
   employeeId: number | null;
   activeDayIso?: string | null;
-  onDayActivate?: (date: string) => void;
+  onDayActivate?: (date: string, entry: TimesheetEntry | null) => void;
+  selectedDates?: Set<string>;
+  onDayToggle?: (date: string, entry: TimesheetEntry | null) => void;
   noCard?: boolean;
 }
 
-export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activeDayIso, onDayActivate, noCard }) => {
+export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
+  employeeId,
+  activeDayIso,
+  onDayActivate,
+  selectedDates,
+  onDayToggle,
+  noCard,
+}) => {
   const { showActualHours, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
   const today = useMemo(() => new Date(), []);
   const currentYear = today.getFullYear();
   const currentMonth = today.getMonth() + 1;
   const todayIso = useMemo(() => buildIsoDate(currentYear, currentMonth, today.getDate()), [currentYear, currentMonth, today]);
 
-  // Окно доступных месяцев берётся из роли (system_roles.timesheet_months_back /
-  // timesheet_months_forward, миграция 094). offset клампится в [minOffset, maxOffset]
-  // на случай сужения окна после смены роли.
   const minOffset = -timesheetMonthsBack;
   const maxOffset = timesheetMonthsForward;
   const [monthOffset, setMonthOffset] = useState<number>(0);
@@ -76,6 +118,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activ
 
   const monthKey = `${year}-${pad(month)}`;
   const timesheetQuery = useEmployeeTimesheetMonth(employeeId, monthKey, !!employeeId);
+  const leaveRequestsQuery = useMyLeaveRequests();
 
   const entriesByDay = useMemo(() => {
     const map = new Map<number, TimesheetEntry>();
@@ -87,6 +130,26 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activ
     }
     return map;
   }, [timesheetQuery.data, employeeId]);
+
+  const requestByIso = useMemo(() => {
+    const map = new Map<string, IRequestDayInfo>();
+    const list = leaveRequestsQuery.data || [];
+    for (const req of list) {
+      if (req.status === 'cancelled') continue;
+      const isoDates = req.request_type === 'time_correction'
+        ? (req.correction_date ? [req.correction_date] : [])
+        : enumerateDates(req.start_date, req.end_date);
+      for (const iso of isoDates) {
+        const prev = map.get(iso);
+        const incomingPriority = REQ_STATUS_PRIORITY[req.status];
+        const prevPriority = prev ? REQ_STATUS_PRIORITY[prev.status] : -1;
+        if (incomingPriority > prevPriority) {
+          map.set(iso, { status: req.status, request_type: req.request_type, id: req.id });
+        }
+      }
+    }
+    return map;
+  }, [leaveRequestsQuery.data]);
 
   const employeeSchedule = employeeId ? timesheetQuery.data?.schedules?.[employeeId] : undefined;
   const calendar = timesheetQuery.data?.calendar ?? null;
@@ -115,6 +178,17 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activ
 
   const monthLabel = new Date(year, month - 1, 1)
     .toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+
+  const isMultiMode = !!(selectedDates && onDayToggle);
+
+  const handleCellClick = (iso: string, entry: TimesheetEntry | null, ds: DayStatus) => {
+    if (ds === 'future') return;
+    if (isMultiMode) {
+      onDayToggle?.(iso, entry);
+    } else {
+      onDayActivate?.(iso, entry);
+    }
+  };
 
   return (
     <div className={`${styles.root}${noCard ? ` ${styles.rootNoCard}` : ''}`}>
@@ -147,31 +221,47 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activ
       <div className={styles.grid}>
         {cells.map((cell, idx) => {
           if (!cell) return <div key={`pad-${idx}`} className={styles.padCell} />;
-          const isActive = cell.iso === activeDayIso;
+          const isActive = !isMultiMode && cell.iso === activeDayIso;
+          const isSelected = isMultiMode && selectedDates?.has(cell.iso);
+          const reqInfo = requestByIso.get(cell.iso);
+          const reqBadgeCls = reqInfo && reqInfo.status !== 'cancelled'
+            ? styles[REQ_STATUS_TO_CSS[reqInfo.status as Exclude<LeaveRequestStatus, 'cancelled'>]]
+            : '';
           const cellCls = [
             styles.cell,
             cell.isToday ? styles.cellToday : '',
             styles[STATUS_TO_CSS[cell.ds]] || '',
             isActive ? styles.cellActive : '',
+            isSelected ? styles.cellSelected : '',
             cell.entry?.is_correction ? styles.cellCorrection : '',
           ].filter(Boolean).join(' ');
 
           const label = STATUS_LABEL[cell.ds];
-          const title = cell.entry
+          const baseTitle = cell.entry
             ? `${cell.day}: ${label}${cell.entry.hours_worked ? ` (${cell.entry.hours_worked}ч)` : ''}${cell.entry.is_correction ? ' • корр.' : ''}`
             : `${cell.day}${cell.ds === 'weekend' ? ' (выходной)' : ''}`;
+          const reqTitle = reqInfo
+            ? ` • ${REQUEST_TYPE_LABELS[reqInfo.request_type] || 'заявка'}: ${STATUS_LABELS[reqInfo.status]}`
+            : '';
+          const title = `${baseTitle}${reqTitle}`;
 
           return (
             <button
               key={cell.iso}
               type="button"
               className={cellCls}
-              onClick={() => onDayActivate?.(cell.iso)}
+              onClick={() => handleCellClick(cell.iso, cell.entry, cell.ds)}
               title={title}
             >
               <span className={styles.cellDay}>{cell.day}</span>
               {cell.entry?.hours_worked ? (
                 <span className={styles.cellHours}>{cell.entry.hours_worked}ч</span>
+              ) : null}
+              {reqInfo && reqInfo.status !== 'cancelled' ? (
+                <span
+                  className={`${styles.cellRequestBadge} ${reqBadgeCls}`}
+                  aria-label={`Заявка: ${STATUS_LABELS[reqInfo.status]}`}
+                />
               ) : null}
             </button>
           );
@@ -186,6 +276,9 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({ employeeId, activ
         <span><i className={`${styles.dot} ${styles.cellVacation}`}/>Отпуск</span>
         <span><i className={`${styles.dot} ${styles.cellWeekend}`}/>Выходной</span>
         <span><i className={`${styles.dot} ${styles.cellAbsent}`}/>Неявка</span>
+        <span><i className={`${styles.dotReq} ${styles.reqPending}`}/>Заявка на рассмотрении</span>
+        <span><i className={`${styles.dotReq} ${styles.reqApproved}`}/>Одобрено</span>
+        <span><i className={`${styles.dotReq} ${styles.reqRejected}`}/>Отклонено</span>
       </div>
     </div>
   );

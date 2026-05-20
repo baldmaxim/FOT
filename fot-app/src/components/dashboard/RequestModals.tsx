@@ -5,6 +5,8 @@ import { documentService } from '../../services/documentService';
 import { getMyLeaveRequestsQueryKey } from '../../hooks/usePortalData';
 import { useToast } from '../../contexts/ToastContext';
 import { useIsMobile } from '../../hooks/useIsMobile';
+import { MyMonthTimesheet } from './MyMonthTimesheet';
+import type { TimesheetEntry } from '../../types';
 import styles from '../../pages/employee/EmployeeDashboard.module.css';
 
 type RequestType = 'vacation' | 'sick' | 'remote' | 'docs';
@@ -294,9 +296,6 @@ export const RequestModal: FC<IRequestModalProps> = ({ activeModal, onClose, emp
   );
 };
 
-const WEEKDAY_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-const pad2 = (n: number) => String(n).padStart(2, '0');
-
 const UNIFIED_TYPES: { value: LeaveRequestType; label: string }[] = [
   { value: 'remote', label: 'Удалённая работа' },
   { value: 'vacation', label: 'Отпуск' },
@@ -317,11 +316,6 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
-  const todayIso = useMemo(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-  }, []);
-
   const [requestType, setRequestType] = useState<LeaveRequestType>('remote');
   const [selectedDates, setSelectedDates] = useState<Set<string>>(new Set());
   const [reason, setReason] = useState('');
@@ -333,53 +327,18 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
 
   const isCorrection = requestType === 'time_correction';
 
-  const todayDate = useMemo(() => new Date(), []);
-  const [calYear, setCalYear] = useState(todayDate.getFullYear());
-  const [calMonth, setCalMonth] = useState(todayDate.getMonth() + 1);
-
-  const minYear = todayDate.getMonth() === 0 ? todayDate.getFullYear() - 1 : todayDate.getFullYear();
-  const minMonth = todayDate.getMonth() === 0 ? 12 : todayDate.getMonth();
-  const canGoPrev = calYear > minYear || (calYear === minYear && calMonth > minMonth);
-  const canGoNext = !(calYear === todayDate.getFullYear() && calMonth === todayDate.getMonth() + 1);
-
-  const prevMonth = () => {
-    if (!canGoPrev) return;
-    if (calMonth === 1) { setCalMonth(12); setCalYear(y => y - 1); }
-    else setCalMonth(m => m - 1);
-  };
-  const nextMonth = () => {
-    if (!canGoNext) return;
-    if (calMonth === 12) { setCalMonth(1); setCalYear(y => y + 1); }
-    else setCalMonth(m => m + 1);
-  };
-
-  const daysInMonth = new Date(calYear, calMonth, 0).getDate();
-  const firstDow = (() => {
-    const d = new Date(calYear, calMonth - 1, 1).getDay();
-    return d === 0 ? 6 : d - 1;
-  })();
-
-  const cells = useMemo(() => {
-    const result: Array<{ day: number; iso: string; isWeekend: boolean; isFuture: boolean; isToday: boolean } | null> = [];
-    for (let i = 0; i < firstDow; i++) result.push(null);
-    for (let day = 1; day <= daysInMonth; day++) {
-      const iso = `${calYear}-${pad2(calMonth)}-${pad2(day)}`;
-      const dow = new Date(calYear, calMonth - 1, day).getDay();
-      result.push({ day, iso, isWeekend: dow === 0 || dow === 6, isFuture: iso > todayIso, isToday: iso === todayIso });
-    }
-    return result;
-  }, [calYear, calMonth, firstDow, daysInMonth, todayIso]);
-
-  const monthLabel = new Date(calYear, calMonth - 1, 1).toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
-
-  const toggleDay = (iso: string, isFuture: boolean) => {
-    if (isFuture) return;
+  const toggleDay = (iso: string) => {
     setSelectedDates(prev => {
       const next = new Set(prev);
       if (next.has(iso)) next.delete(iso);
       else next.add(iso);
       return next;
     });
+  };
+
+  const handleCorrectionPick = (iso: string, entry: TimesheetEntry | null) => {
+    setCorrectionDate(iso);
+    if (entry?.hours_worked != null) setCorrectionHours(entry.hours_worked);
   };
 
   const sortedDates = useMemo(() => [...selectedDates].sort(), [selectedDates]);
@@ -463,103 +422,73 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
             </select>
           </div>
 
-          {isCorrection ? (
-            <>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>Дата корректировки <span className={styles.required}>*</span></label>
-                <input
-                  type="date"
-                  className={styles.formInput}
-                  value={correctionDate}
-                  onChange={e => setCorrectionDate(e.target.value)}
-                />
-              </div>
-              <div className={styles.formRow}>
-                <div className={styles.formGroup}>
-                  <label className={styles.formLabel}>Статус <span className={styles.required}>*</span></label>
-                  <select
-                    className={styles.formSelect}
-                    value={correctionStatus}
-                    onChange={e => setCorrectionStatus(e.target.value)}
-                  >
-                    <option value="work">Присутствие</option>
-                    <option value="remote">Удалёнка</option>
-                    <option value="sick">Больничный</option>
-                    <option value="vacation">Отпуск</option>
-                  </select>
-                </div>
-                <div className={styles.formGroup}>
-                  <label className={styles.formLabel}>Часы <span className={styles.required}>*</span></label>
-                  <input
-                    type="number"
-                    className={styles.formInput}
-                    value={correctionHours}
-                    onChange={e => setCorrectionHours(parseFloat(e.target.value) || 0)}
-                    min={0}
-                    max={24}
-                    step={0.5}
-                  />
-                </div>
-              </div>
-            </>
-          ) : (
-          /* Calendar picker */
+          {/* Calendar (с часами и статусами заявок) */}
           <div className={styles.formGroup}>
             <label className={styles.formLabel}>
-              Выберите дни <span className={styles.required}>*</span>
-              {selectedDates.size > 0 && (
+              {isCorrection ? (
+                <>Выберите день <span className={styles.required}>*</span></>
+              ) : (
+                <>Выберите дни <span className={styles.required}>*</span></>
+              )}
+              {!isCorrection && selectedDates.size > 0 && (
                 <span className={styles.reqCalSelectedCount}> — выбрано: {selectedDates.size} дн.</span>
               )}
             </label>
-            <div className={styles.reqCalWrapper}>
-              <div className={styles.reqCalHeader}>
-                <button className={styles.reqCalNavBtn} onClick={prevMonth} disabled={!canGoPrev}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14"><polyline points="15 18 9 12 15 6"/></svg>
-                </button>
-                <span className={styles.reqCalMonth}>{monthLabel}</span>
-                <button className={styles.reqCalNavBtn} onClick={nextMonth} disabled={!canGoNext}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14"><polyline points="9 18 15 12 9 6"/></svg>
-                </button>
-              </div>
-              <div className={styles.reqCalWeekdays}>
-                {WEEKDAY_SHORT.map(d => <div key={d} className={styles.reqCalWd}>{d}</div>)}
-              </div>
-              <div className={styles.reqCalGrid}>
-                {cells.map((cell, idx) => {
-                  if (!cell) return <div key={`pad-${idx}`} className={styles.reqCalPad} />;
-                  const isSel = selectedDates.has(cell.iso);
-                  const cls = [
-                    styles.reqCalCell,
-                    cell.isWeekend && !isSel ? styles.reqCalCellWeekend : '',
-                    cell.isToday && !isSel ? styles.reqCalCellToday : '',
-                    isSel ? styles.reqCalCellSelected : '',
-                    cell.isFuture ? styles.reqCalCellFuture : '',
-                  ].filter(Boolean).join(' ');
-                  return (
-                    <button
-                      key={cell.iso}
-                      type="button"
-                      className={cls}
-                      onClick={() => toggleDay(cell.iso, cell.isFuture)}
-                      title={cell.isFuture ? 'Будущая дата' : cell.iso}
-                    >
-                      {cell.day}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            {selectedDates.size > 0 && (
+            {isCorrection ? (
+              <MyMonthTimesheet
+                employeeId={employeeId}
+                activeDayIso={correctionDate || null}
+                onDayActivate={handleCorrectionPick}
+                noCard
+              />
+            ) : (
+              <MyMonthTimesheet
+                employeeId={employeeId}
+                selectedDates={selectedDates}
+                onDayToggle={iso => toggleDay(iso)}
+                noCard
+              />
+            )}
+            {!isCorrection && selectedDates.size > 0 && (
               <div className={styles.reqCalChips}>
                 {sortedDates.map(d => (
                   <span key={d} className={styles.reqCalChip}>
                     {new Date(d + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
-                    <button type="button" className={styles.reqCalChipRemove} onClick={() => toggleDay(d, false)}>×</button>
+                    <button type="button" className={styles.reqCalChipRemove} onClick={() => toggleDay(d)}>×</button>
                   </span>
                 ))}
               </div>
             )}
           </div>
+
+          {isCorrection && (
+            <div className={styles.formRow}>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Статус <span className={styles.required}>*</span></label>
+                <select
+                  className={styles.formSelect}
+                  value={correctionStatus}
+                  onChange={e => setCorrectionStatus(e.target.value)}
+                >
+                  <option value="work">Присутствие</option>
+                  <option value="remote">Удалёнка</option>
+                  <option value="sick">Больничный</option>
+                  <option value="vacation">Отпуск</option>
+                </select>
+              </div>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Часы <span className={styles.required}>*</span></label>
+                <input
+                  type="number"
+                  className={styles.formInput}
+                  value={correctionHours}
+                  onChange={e => setCorrectionHours(parseFloat(e.target.value) || 0)}
+                  min={0}
+                  max={24}
+                  step={0.5}
+                />
+              </div>
+            </div>
           )}
 
           {/* Comment */}

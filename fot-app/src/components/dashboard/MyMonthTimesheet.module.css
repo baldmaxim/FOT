@@ -172,6 +172,13 @@
   box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15);
 }
 
+.cellSelected {
+  outline: 2px solid var(--accent-primary, #3b82f6);
+  outline-offset: -2px;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+  background: rgba(59, 130, 246, 0.18);
+}
+
 .cellCorrection::after {
   content: '✎';
   position: absolute;
@@ -179,6 +186,29 @@
   right: 4px;
   font-size: 9px;
   opacity: 0.7;
+}
+
+.cellRequestBadge {
+  position: absolute;
+  bottom: 3px;
+  right: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px var(--bg-tertiary);
+  pointer-events: none;
+}
+
+.reqPending {
+  background: var(--warning, #f59e0b);
+}
+
+.reqApproved {
+  background: var(--success, #22c55e);
+}
+
+.reqRejected {
+  background: var(--error, #ef4444);
 }
 
 .legend {
@@ -203,6 +233,13 @@
   width: 10px;
   height: 10px;
   border-radius: 3px;
+}
+
+.dotReq {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
 }
 
 
