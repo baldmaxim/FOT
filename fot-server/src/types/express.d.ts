@@ -18,6 +18,7 @@ declare global {
         two_factor_verified: boolean;
         company_scope?: { roots: 'all' | string[] };
         __company_subtree_ids?: string[];
+        __manager_subtree_ids?: string[];
       };
     }
   }

@@ -1014,7 +1014,8 @@
   border-radius: 9px;
   background: var(--bg-secondary);
   flex-wrap: wrap;
-  min-width: 190px;
+  width: max-content;
+  max-width: 100%;
 }
 
 .ts-approval-card--compact {
@@ -2163,6 +2164,36 @@
 .ts-approval-submit-error-reason {
   color: var(--text-secondary);
 }
+@media (max-width: 480px) {
+  .ts-approval-submit-error {
+    padding: 8px 10px;
+    font-size: 12px;
+    margin-top: 6px;
+  }
+  .ts-approval-submit-error-header {
+    gap: 6px;
+    align-items: flex-start;
+  }
+  .ts-approval-submit-error-header > svg {
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+}
+@media (max-width: 480px) {
+  .ts-approval-submit-error {
+    padding: 8px 10px;
+    font-size: 12px;
+    margin-top: 6px;
+  }
+  .ts-approval-submit-error-header {
+    gap: 6px;
+    align-items: flex-start;
+  }
+  .ts-approval-submit-error-header > svg {
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+}
 
 /* Split-button «Подать ▾» + popover служебной записки */
 .ts-approval-card-wrap {
@@ -2178,13 +2209,13 @@
 .ts-btn-split {
   display: inline-flex;
   align-items: stretch;
-  margin-left: auto;
+  align-self: flex-start;
   border-radius: 8px;
   overflow: hidden;
   isolation: isolate;
 }
 .ts-approval-card--compact .ts-btn-split {
-  margin-left: 0;
+  align-self: flex-start;
 }
 .ts-btn-split-main {
   border-top-right-radius: 0 !important;
@@ -4183,8 +4214,10 @@
 /* Compact status select (used in correction modal) */
 .ts-form-select {
   width: 100%;
-  padding: 8px 10px;
-  font-size: 13px;
+  padding: 12px 14px;
+  font-size: 14px;
+  min-height: 44px;
+  line-height: 1.3;
   font-family: inherit;
   border: 1px solid var(--border);
   border-radius: 6px;

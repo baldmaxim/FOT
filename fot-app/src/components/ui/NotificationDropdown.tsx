@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { FC } from 'react';
 import type { INotification } from '../../services/notificationService';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
@@ -89,25 +89,6 @@ interface INotificationItemProps {
 }
 
 const NotificationItem: FC<INotificationItemProps> = ({ notification, onClick }) => {
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [canExpand, setCanExpand] = useState(false);
-
-  // Шеврон нужен только если текст реально обрезан клампом. Измеряем
-  // лишь в свёрнутом состоянии: в развёрнутом кламп снят и
-  // scrollHeight≈clientHeight, иначе значение схлопнулось бы в false
-  // и пропала бы стрелка «свернуть».
-  useLayoutEffect(() => {
-    if (expanded) return;
-    const el = bodyRef.current;
-    if (!el) return;
-    const measure = () => setCanExpand(el.scrollHeight > el.clientHeight + 1);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [expanded, notification.body]);
-
   return (
     <div
       className={`${styles.item} ${!notification.is_read ? styles.itemUnread : ''}`}
@@ -116,32 +97,11 @@ const NotificationItem: FC<INotificationItemProps> = ({ notification, onClick })
       <TypeIcon type={notification.type} />
       <div className={styles.itemContent}>
         <div className={styles.itemTitle}>{notification.title}</div>
-        <div
-          ref={bodyRef}
-          className={`${styles.itemBody} ${expanded ? styles.itemBodyExpanded : ''}`}
-        >
-          {notification.body}
-        </div>
+        <div className={styles.itemBody}>{notification.body}</div>
         <div className={styles.itemTime}>{formatRelativeTime(notification.created_at)}</div>
       </div>
       <div className={styles.itemAside}>
         {!notification.is_read && <div className={styles.unreadDot} />}
-        {canExpand && (
-          <button
-            type="button"
-            className={`${styles.expandBtn} ${expanded ? styles.expandBtnOpen : ''}`}
-            aria-label={expanded ? 'Свернуть' : 'Развернуть'}
-            aria-expanded={expanded}
-            onClick={(e) => {
-              e.stopPropagation();
-              setExpanded(prev => !prev);
-            }}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
-        )}
       </div>
     </div>
   );

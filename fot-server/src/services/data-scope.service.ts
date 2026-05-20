@@ -170,7 +170,51 @@ export async function resolveAccessibleDepartmentIds(
   }
 
   const assigned = await listExplicitDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null);
-  return [...new Set(assigned)];
+  const explicit = [...new Set(assigned)];
+  if (explicit.length === 0) return explicit;
+
+  // Subtree-расширение для руководителя: явно назначенные отделы
+  // + все их потомки. Возвращает доступ к саб-бригадам, на которые у
+  // руководителя нет explicit-строки в employee_department_access
+  // (например, sub-departments, созданные после backfill миграции 107).
+  if (req.user.__manager_subtree_ids) return req.user.__manager_subtree_ids;
+
+  const cacheKey = `mgr:${explicit.slice().sort().join(',')}`;
+  const cached = subtreeCache.get(cacheKey);
+  if (cached && Date.now() <= cached.expiresAt) {
+    req.user.__manager_subtree_ids = cached.ids;
+    return cached.ids;
+  }
+
+  let rows: { id: string }[];
+  try {
+    rows = await withDbSlot('get_descendant_department_ids', async () => (
+      query<{ id: string }>(
+        'SELECT id FROM public.get_descendant_department_ids($1::uuid[])',
+        [explicit],
+      )
+    ));
+  } catch (error) {
+    Sentry.captureMessage('manager_subtree_rpc_failed', {
+      level: 'warning',
+      tags: { rpc: 'get_descendant_department_ids' },
+      extra: { error: error instanceof Error ? error.message : String(error), explicit },
+    });
+    // Падение RPC не должно отрубать руководителя от его явных отделов.
+    req.user.__manager_subtree_ids = explicit;
+    return explicit;
+  }
+
+  const subtreeIds = rows.map(r => r.id);
+  const merged = subtreeIds.length > 0
+    ? [...new Set([...explicit, ...subtreeIds])]
+    : explicit;
+
+  if (subtreeIds.length > 0) {
+    subtreeCache.set(cacheKey, { ids: merged, expiresAt: Date.now() + SCOPE_CACHE_TTL_MS });
+  }
+  req.user.__manager_subtree_ids = merged;
+  return merged;
 }
 
 export async function canAccessEmployeeInScope(

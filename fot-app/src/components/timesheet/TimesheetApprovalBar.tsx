@@ -116,39 +116,29 @@ const ActiveCard: FC<IActiveCardProps> = ({
       )}
 
       {canShowSubmit && (
-        <>
-          <div className="ts-btn-split">
+        <div className="ts-btn-split">
+          <button
+            className="ts-btn ts-btn-split-main"
+            onClick={onSubmit}
+            disabled={loading}
+            type="button"
+            title={periodSubmittable ? undefined : submitDisabledReason}
+          >
+            <Send size={14} /> {submitLabel}
+          </button>
+          {showMemoToggle && (
             <button
-              className="ts-btn ts-btn-split-main"
-              onClick={onSubmit}
-              disabled={loading || !periodSubmittable}
+              className={`ts-btn ts-btn-split-toggle${memoOpen ? ' ts-btn-split-toggle--open' : ''}`}
+              onClick={onToggleMemo}
               type="button"
-              title={periodSubmittable ? undefined : submitDisabledReason}
+              aria-label="Открыть служебную записку о работе в выходные"
+              aria-expanded={memoOpen}
+              title="Служебная записка о работе в выходные"
             >
-              <Send size={14} /> {submitLabel}
+              <ChevronDown size={14} />
             </button>
-            {showMemoToggle && (
-              <button
-                className={`ts-btn ts-btn-split-toggle${memoOpen ? ' ts-btn-split-toggle--open' : ''}`}
-                onClick={onToggleMemo}
-                type="button"
-                aria-label="Открыть служебную записку о работе в выходные"
-                aria-expanded={memoOpen}
-                title="Служебная записка о работе в выходные"
-              >
-                <ChevronDown size={14} />
-              </button>
-            )}
-          </div>
-          {!periodSubmittable && (
-            <div className="ts-approval-submit-error">
-              <div className="ts-approval-submit-error-header">
-                <AlertCircle size={14} />
-                <span>{submitDisabledReason}</span>
-              </div>
-            </div>
           )}
-        </>
+        </div>
       )}
 
       {canSubmitDepartment && status === 'submitted' && (
@@ -447,7 +437,13 @@ export const TimesheetApprovalBar: FC<IProps> = ({
           memoOpen={memoOpen}
           onApprove={handleApprove}
           onReject={handleReject}
-          onSubmit={() => setConfirmOpen(true)}
+          onSubmit={() => {
+            if (!periodSubmittable) {
+              setSubmitError(submitDisabledReason);
+              return;
+            }
+            setConfirmOpen(true);
+          }}
           onRecall={handleRecall}
           onToggleMemo={() => setMemoOpen(o => !o)}
           onCommentChange={setComment}
