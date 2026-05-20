@@ -462,65 +462,89 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     return `${names[0]} +${names.length - 1}`;
   }, [departmentMap]);
 
+  // Точечный патч пользователя во всех закешированных страницах ['admin-users','page',...].
+  // Не трогает count/slim/pending — те остаются валидны (изменение row-level полей
+  // на них не влияет). Серверный LRU-кеш `admin:users:list` инвалидируется
+  // write-through на самой мутации (admin.routes.ts).
+  const patchUserInPageCaches = useCallback((userId: string, patch: Partial<IUserFromApi>) => {
+    queryClient.setQueriesData<{ data: IUserFromApi[]; meta?: unknown } | undefined>(
+      { queryKey: ['admin-users', 'page'] },
+      (prev) => {
+        if (!prev?.data) return prev;
+        let changed = false;
+        const nextData = prev.data.map(u => {
+          if (u.id !== userId) return u;
+          changed = true;
+          return { ...u, ...patch };
+        });
+        if (!changed) return prev;
+        return { ...prev, data: nextData };
+      },
+    );
+  }, [queryClient]);
+
   const handleEmpLink = useCallback(async (userId: string, employeeId: number | null, empName?: string) => {
     try {
       await adminService.updateUserEmployee(userId, employeeId);
       toast.success(employeeId ? `Привязан: ${empName ?? ''}` : 'Сотрудник отвязан');
-      void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+      patchUserInPageCaches(userId, { employee_id: employeeId });
       void queryClient.invalidateQueries({ queryKey: ['admin-employees', 'department-access'] });
     } catch {
       toast.error('Ошибка привязки сотрудника');
     }
-  }, [queryClient, toast]);
+  }, [patchUserInPageCaches, queryClient, toast]);
 
   const handleNameSave = useCallback(async (userId: string, name: string) => {
     try {
       await adminService.updateUserName(userId, name);
       toast.success('ФИО обновлено');
-      await onReload();
+      patchUserInPageCaches(userId, { full_name: name });
     } catch {
       toast.error('Ошибка обновления ФИО');
     }
-  }, [onReload, toast]);
+  }, [patchUserInPageCaches, toast]);
 
   const handlePositionChange = useCallback(async (userId: string, positionType: EmployeePositionType) => {
     try {
       await adminService.updateUserPosition(userId, positionType);
       toast.success('Должность изменена');
-      await onReload();
+      // roleCounts зависит от роли — нужно перечитать страницу (но не slim/count/pending).
+      patchUserInPageCaches(userId, { position_type: positionType });
+      void queryClient.invalidateQueries({ queryKey: ['admin-users', 'page'] });
       if (profile?.id === userId) {
         await refreshProfile();
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка изменения должности');
     }
-  }, [onReload, profile, refreshProfile, toast]);
+  }, [patchUserInPageCaches, profile, queryClient, refreshProfile, toast]);
 
   const handleChatInboundModeChange = useCallback(async (userId: string, chatInboundMode: ChatInboundMode) => {
     try {
       await adminService.updateUserChatInboundMode(userId, chatInboundMode);
       toast.success('Режим входящих сообщений обновлён');
-      await onReload();
+      patchUserInPageCaches(userId, { chat_inbound_mode: chatInboundMode });
     } catch {
       toast.error('Ошибка обновления режима входящих сообщений');
     }
-  }, [onReload, toast]);
+  }, [patchUserInPageCaches, toast]);
 
   const handleSiteSupervisorToggle = useCallback(async (userId: string, value: boolean) => {
     try {
       await adminService.setSiteSupervisor(userId, value);
-      void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+      patchUserInPageCaches(userId, { is_site_supervisor: value });
       toast.success(value ? 'Назначен начальником участка' : 'Снят с роли начальника участка');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка изменения флага');
     }
-  }, [queryClient, toast]);
+  }, [patchUserInPageCaches, toast]);
 
   const handleDeleteUser = useCallback(async (userId: string) => {
     if (!confirm('Удалить пользователя из системы? Это действие необратимо.')) return;
     try {
       await adminService.deleteUser(userId);
       toast.success('Пользователь удалён');
+      // Структура страницы меняется — нужен полный refetch (page + count + slim + pending).
       await onReload();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка удаления пользователя');
@@ -533,33 +557,34 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
       const data = await adminService.generate2FA(userId);
       setTwoFactorModal(prev => ({ ...prev, data, loading: false }));
       toast.success('2FA успешно сгенерирован');
-      await onReload();
+      // two_factor_enabled станет true только после подтверждения кода юзером —
+      // тут флаг не патчим; pageQuery перечитает данные сам по staleTime.
     } catch {
       toast.error('Ошибка генерации 2FA');
       setTwoFactorModal(prev => ({ ...prev, visible: false }));
     }
-  }, [onReload, toast]);
+  }, [toast]);
 
   const handleDisable2FA = useCallback(async (userId: string) => {
     if (!confirm('Отключить 2FA для пользователя? Это снизит безопасность аккаунта.')) return;
     try {
       await adminService.disable2FA(userId);
       toast.warning('2FA отключен');
-      await onReload();
+      patchUserInPageCaches(userId, { two_factor_enabled: false });
     } catch {
       toast.error('Ошибка отключения 2FA');
     }
-  }, [onReload, toast]);
+  }, [patchUserInPageCaches, toast]);
 
   const handleConfirmEmail = useCallback(async (userId: string) => {
     try {
       await adminService.confirmUserEmail(userId);
       toast.success('Email подтверждён');
-      await onReload();
+      patchUserInPageCaches(userId, { email_confirmed: true });
     } catch {
       toast.error('Ошибка подтверждения email');
     }
-  }, [onReload, toast]);
+  }, [patchUserInPageCaches, toast]);
 
   const closeTwoFactorModal = () => {
     setTwoFactorModal({ visible: false, userId: '', userName: '', data: null, loading: false });

@@ -78,7 +78,9 @@ const usersListCache = registerCache(
     const userId = (req as AuthenticatedRequest).user?.id ?? 'anon';
     const q = req.query;
     let variant: string;
-    if (q.slim === '1') {
+    if (q.countOnly === '1') {
+      variant = 'count';
+    } else if (q.slim === '1') {
       variant = 'slim';
     } else if (q.page !== undefined) {
       const search = ((q.search as string) || '').trim().toLowerCase();

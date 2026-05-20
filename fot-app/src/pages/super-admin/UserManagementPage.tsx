@@ -27,16 +27,27 @@ export const UserManagementPage: React.FC = () => {
     queryFn: () => adminService.getPendingUsers(),
     staleTime: 30_000,
   });
+  // Лёгкий COUNT(*) для бейджа «Все пользователи (N)» — грузим всегда (≤ десятки мс).
+  const allUsersCountQuery = useQuery<number>({
+    queryKey: ['admin-users', 'count'],
+    queryFn: () => adminService.getAllUsersCount(),
+    staleTime: 60_000,
+  });
+  // Полный slim-список нужен только вкладкам assignments/import — лениво.
+  const needsSlim = activeTab === 'employee-access' || activeTab === 'import';
   const allUsersSlimQuery = useQuery<IUserSlim[]>({
     queryKey: ['admin-users', 'slim'],
     queryFn: () => adminService.getAllUsersSlim(),
     staleTime: 30_000,
+    enabled: needsSlim,
   });
   const pendingUsers = pendingUsersQuery.data || [];
   const allUsersSlim = allUsersSlimQuery.data || [];
+  const allUsersCount = allUsersCountQuery.data ?? 0;
   const pendingLoading = pendingUsersQuery.isPending;
-  const allLoading = allUsersSlimQuery.isPending;
-  const hasQueryError = pendingUsersQuery.isError || allUsersSlimQuery.isError;
+  const allCountLoading = allUsersCountQuery.isPending;
+  const allSlimLoading = needsSlim && allUsersSlimQuery.isPending;
+  const hasQueryError = pendingUsersQuery.isError || allUsersCountQuery.isError || allUsersSlimQuery.isError;
 
   const reloadUsers = async () => {
     try {
@@ -74,7 +85,7 @@ export const UserManagementPage: React.FC = () => {
           className={`${styles.tab} ${activeTab === 'all' ? styles.active : ''}`}
           onClick={() => setActiveTab('all')}
         >
-          Все пользователи ({allLoading ? '…' : allUsersSlim.length})
+          Все пользователи ({allCountLoading ? '…' : allUsersCount})
         </button>
         <button
           className={`${styles.tab} ${activeTab === 'employee-access' ? styles.active : ''}`}
@@ -111,7 +122,7 @@ export const UserManagementPage: React.FC = () => {
         <Suspense fallback={<div className={styles.loading}>Загрузка вкладки...</div>}>
           <EmployeeDepartmentAssignmentsTab
             allUsers={allUsersSlim}
-            allUsersLoading={allLoading}
+            allUsersLoading={allSlimLoading}
             onReload={reloadUsers}
           />
         </Suspense>

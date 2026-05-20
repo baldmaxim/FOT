@@ -301,6 +301,37 @@ async function upsertEmployeeDepartmentAccess(params: {
 }
 
 /**
+ * Лёгкий счётчик пользователей для бейджа в табе. Без выборки строк,
+ * только COUNT(*) с уважением company-scope.
+ */
+async function respondUsersCount(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const accessible = await resolveAccessibleDepartmentIds(req);
+    let row: { count: number } | null;
+    if (accessible === 'all') {
+      row = await queryOne<{ count: number }>(
+        'SELECT COUNT(*)::int AS count FROM user_profiles',
+      );
+    } else if (accessible.length === 0) {
+      row = { count: 0 };
+    } else {
+      row = await queryOne<{ count: number }>(
+        `SELECT COUNT(*)::int AS count
+           FROM user_profiles up
+          WHERE up.employee_id IN (
+            SELECT id FROM employees WHERE org_department_id = ANY($1::uuid[])
+          )`,
+        [accessible],
+      );
+    }
+    res.json({ success: true, count: row?.count ?? 0 });
+  } catch (err) {
+    logSupabaseError('GetUsersCount', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch users count' });
+  }
+}
+
+/**
  * Лёгкий список всех пользователей для cross-tab map'ов
  * (EmployeeDepartmentAssignmentsTab / DepartmentAccessImportTab им нужны
  * только id/full_name/email/employee_id). Без дорогих join'ов.
@@ -447,21 +478,15 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
   const userIds = usersSlice.map(u => u.id);
   const userEmployeePairs = usersSlice.map(u => ({ user_id: u.id, employee_id: u.employee_id }));
 
-  const [assignedDepartmentMap, assignedEmployeeMap, authUsersById] = await Promise.all([
+  // assigned_employee_ids/assigned_employees НЕ читаются AllUsersTab UI —
+  // не грузим их здесь, экономим 2 запроса (user_employee_access + employees).
+  const [assignedDepartmentMap, authUsersById] = await Promise.all([
     loadExplicitManagerAssignmentMap(userEmployeePairs),
-    loadAssignedEmployeeMap(userIds),
     localAuthService.getUsersByIds(userIds).catch((err: unknown) => {
       console.error('[GetUsers] Auth fetch error:', err);
       return new Map() as Awaited<ReturnType<typeof localAuthService.getUsersByIds>>;
     }),
   ]);
-
-  const allAssignedEmployeeIds = [...new Set(
-    Array.from(assignedEmployeeMap.values()).flat(),
-  )];
-  const assignedEmployeeNames = allAssignedEmployeeIds.length > 0
-    ? await loadEmployeeFullNamesMap(allAssignedEmployeeIds)
-    : new Map<number, string>();
 
   const authEmailMap: Record<string, { email: string; email_confirmed: boolean }> = {};
   for (const [userId, authUser] of authUsersById.entries()) {
@@ -473,11 +498,6 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
 
   const data = usersSlice.map((u: UserProfile) => {
     const assignedDepartmentIds = (assignedDepartmentMap.get(u.id) || []);
-    const assignedEmployeeIds = (assignedEmployeeMap.get(u.id) || []);
-    const assignedEmployees = assignedEmployeeIds.map(eid => ({
-      id: eid,
-      full_name: assignedEmployeeNames.get(eid) || '',
-    }));
     const authInfo = authEmailMap[u.id];
     return {
       id: u.id,
@@ -485,8 +505,6 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
       email_confirmed: authInfo?.email_confirmed ?? false,
       full_name: u.full_name,
       assigned_department_ids: assignedDepartmentIds,
-      assigned_employee_ids: assignedEmployeeIds,
-      assigned_employees: assignedEmployees,
       is_site_supervisor: Boolean(u.is_site_supervisor),
       position_type: roleCodeById.get(u.system_role_id) ?? '',
       imported_position: u.imported_position,
@@ -529,6 +547,10 @@ async function hardDeleteUserCascade(id: string): Promise<void> {
 export const adminUsersController = {
   async getAllUsers(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      if (req.query.countOnly === '1') {
+        await respondUsersCount(req, res);
+        return;
+      }
       if (req.query.slim === '1') {
         await respondSlimUsers(req, res);
         return;

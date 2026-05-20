@@ -12,11 +12,6 @@ interface UserFromApi {
   email_confirmed?: boolean;
   full_name: string | null;
   assigned_department_ids: string[];
-  assigned_employee_ids: number[];
-  assigned_employees: Array<{
-    id: number;
-    full_name: string;
-  }>;
   is_site_supervisor: boolean;
   position_type: EmployeePositionType;
   imported_position: string | null;
@@ -156,6 +151,13 @@ export const adminService = {
   async getAllUsersSlim(): Promise<IUserSlim[]> {
     const response = await apiClient.get<ApiResponse<IUserSlim[]>>('/admin/users?slim=1');
     return response.data || [];
+  },
+
+  async getAllUsersCount(): Promise<number> {
+    const response = await apiClient.get<{ success: boolean; count: number }>(
+      '/admin/users?countOnly=1',
+    );
+    return response.count ?? 0;
   },
 
   async getUsersPaginated(params: {
