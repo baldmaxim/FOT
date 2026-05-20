@@ -406,8 +406,11 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
   if (search) {
     baseParams.push(`%${escapeLike(search)}%`);
     const idx = baseParams.length;
+    // Некоррелированный IN — planner превращает в semi-join, для full_name
+    // и email отдельно используются GIN/trgm-индексы (миграция 110), потом
+    // объединение через PK. Коррелированный EXISTS такой план не давал.
     baseWhere.push(
-      `(up.full_name ILIKE $${idx} OR EXISTS (SELECT 1 FROM app_auth.users au WHERE au.id = up.id AND au.email ILIKE $${idx}))`,
+      `(up.full_name ILIKE $${idx} OR up.id IN (SELECT id FROM app_auth.users WHERE email ILIKE $${idx}))`,
     );
   }
 

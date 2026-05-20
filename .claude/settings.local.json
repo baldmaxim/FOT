@@ -65,7 +65,25 @@
       "PowerShell(npm --prefix C:\\\\Users\\\\Usrr\\\\VSCode\\\\Odintsov\\\\FOT\\\\fot-server test 2>&1)",
       "Bash(grep -E \"Sidebar\\\\.\\(tsx|ts\\)|^$\")",
       "Bash(npm test *)",
-      "PowerShell(Set-Location fot-app; npx tsc --noEmit 2>&1 | Select-Object -First 80; \"EXIT=$LASTEXITCODE\")"
+      "PowerShell(Set-Location fot-app; npx tsc --noEmit 2>&1 | Select-Object -First 80; \"EXIT=$LASTEXITCODE\")",
+      "Bash(NODE_TLS_REJECT_UNAUTHORIZED=0 npx tsx scripts/diag-manager-obj-brigades.ts 123@mail.ru)",
+      "PowerShell($env:DATABASE_SSL_CA_PATH='C:\\\\Users\\\\Usrr\\\\VSCode\\\\Odintsov\\\\FOT\\\\.migration\\\\yandex-ca.pem'; Set-Location fot-server; npx tsx scripts/diagnose-user-approval.ts shadrov.s.i@mstroy.pro)",
+      "Bash(git -C \"c:/Users/Usrr/VSCode/Odintsov/FOT\" status --short)",
+      "Bash(git -C \"c:/Users/Usrr/VSCode/Odintsov/FOT\" remote -v)",
+      "Bash(git -C \"c:/Users/Usrr/VSCode/Odintsov/FOT\" branch --show-current)",
+      "Bash(cat vitest.config.ts)",
+      "Bash(cat vitest.config.js)",
+      "PowerShell(npm --prefix fot-server run build)",
+      "Bash(rm \".claude/commands/deploy.md\" && echo \"deleted\")",
+      "Bash(xxd)",
+      "Bash(cd /c/Users/Usrr/VSCode/Odintsov/FOT && ls docs/migrations/ | grep -E '^10[4-9]|^11' ; echo \"---last---\"; ls docs/migrations/ | sort | tail -5)",
+      "Read(//c/c/Users/Usrr/VSCode/Odintsov/FOT/docs/**)",
+      "WebFetch(domain:archive.org)",
+      "WebFetch(domain:developers.mts.ru)",
+      "WebSearch"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\Usrr\\VSCode\\Odintsov\\FOT\\.claude\\commands"
     ]
   }
 }
