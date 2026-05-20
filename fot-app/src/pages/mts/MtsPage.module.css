@@ -6,23 +6,15 @@
   width: 100%;
 }
 
-/* Мини-карта при наведении (OSM embed iframe) */
+/* Мини-карта при наведении (OSM embed iframe). Рендерится через React Portal
+   в document.body, чтобы не обрезаться overflow родительского .tableWrap. */
 .coordCell {
-  position: relative;
   display: inline-block;
 }
 
-.coordCell:hover .miniMap,
-.coordCell:focus-within .miniMap {
-  display: block;
-}
-
 .miniMap {
-  display: none;
-  position: absolute;
-  z-index: 50;
-  top: calc(100% + 4px);
-  left: 0;
+  position: fixed;
+  z-index: 1000;
   width: 260px;
   height: 200px;
   border: 1px solid var(--color-border, #d1d5db);
@@ -378,6 +370,117 @@
   color: var(--color-text, #111);
 }
 
+/* Табы навигации внутри страницы. Горизонтальный скролл на мобилке. */
+.tabsBar {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--color-border, #e5e7eb);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 0;
+  margin-bottom: 4px;
+}
+
+.tabBtn {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 10px 14px;
+  font-size: 0.92rem;
+  font-weight: 500;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-secondary, #6b7280);
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: 8px 8px 0 0;
+}
+
+.tabBtn:hover:not(:disabled) {
+  color: var(--color-text, #111);
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.tabBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tabActive {
+  color: var(--color-primary, #2563eb);
+  border-bottom-color: var(--color-primary, #2563eb);
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.tabBadge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.08);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-secondary, #6b7280);
+}
+
+.tabActive .tabBadge {
+  background: rgba(37, 99, 235, 0.15);
+  color: var(--color-primary, #2563eb);
+}
+
+/* EmployeeFioPicker — input + dropdown поверх таблицы. */
+.fioPicker {
+  position: relative;
+  display: inline-block;
+  width: 220px;
+}
+
+.fioPickerInput {
+  width: 100%;
+  font-size: 16px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border, #d1d5db);
+  border-radius: 8px;
+  background: var(--color-bg, #fff);
+  color: var(--color-text, #111);
+}
+
+.fioPickerDropdown {
+  position: fixed;
+  z-index: 1100;
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  max-height: 320px;
+  overflow-y: auto;
+  min-width: 240px;
+}
+
+.fioPickerItem {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--color-border, #f1f5f9);
+  font-size: 0.9rem;
+  color: var(--color-text, #111);
+  white-space: normal;
+}
+
+.fioPickerItem:last-child {
+  border-bottom: none;
+}
+
+.fioPickerItem:hover {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.fioPickerHint {
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  color: var(--color-text-secondary, #6b7280);
+}
+
 @media (max-width: 768px) {
   .page {
     padding: 12px;
@@ -398,5 +501,9 @@
   .btn,
   .btnSecondary {
     flex: 1 1 auto;
+  }
+  .fioPicker {
+    width: 100%;
+    min-width: 0;
   }
 }

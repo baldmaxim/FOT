@@ -1,4 +1,4 @@
-import { type FC, useMemo, useState, lazy, Suspense } from 'react';
+import { type FC, useEffect, useMemo, useState, lazy, Suspense } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useMtsConnectionSettings,
@@ -28,7 +28,10 @@ import { ApiError } from '../../api/client';
 import { MtsRequestLocationModal } from './MtsRequestLocationModal';
 import { MtsHistoryModal } from './MtsHistoryModal';
 import { MtsTaskCreateModal } from './MtsTaskCreateModal';
+import { EmployeeFioPicker } from './EmployeeFioPicker';
 import styles from './MtsPage.module.css';
+
+type TabKey = 'linked' | 'subscribers' | 'tasks' | 'geo' | 'dictionaries' | 'connection';
 
 const errText = (e: unknown, fallback: string): string =>
   e instanceof ApiError ? e.message : fallback;
@@ -81,7 +84,7 @@ export const MtsPage: FC = () => {
   const [diag, setDiag] = useState<IMtsTestResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [editingConnection, setEditingConnection] = useState(false);
-  const [empInputs, setEmpInputs] = useState<Record<number, string>>({});
+  const [activeTab, setActiveTab] = useState<TabKey>('linked');
   const [requestSubscriber, setRequestSubscriber] = useState<IMtsSubscriber | null>(null);
   const [historySubscriber, setHistorySubscriber] = useState<IMtsSubscriber | null>(null);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
@@ -111,6 +114,11 @@ export const MtsPage: FC = () => {
     for (const r of mapData ?? []) m.set(r.subscriberId, r);
     return m;
   }, [mapData]);
+
+  // При отсутствии токена единственный доступный таб — «Подключение».
+  useEffect(() => {
+    if (!configured) setActiveTab('connection');
+  }, [configured]);
 
   const saveConnection = async () => {
     setBusy(true);
@@ -213,8 +221,35 @@ export const MtsPage: FC = () => {
     }
   };
 
+  const tabs: { key: TabKey; label: string; badge?: number }[] = [
+    { key: 'linked', label: 'Привязанные сотрудники', badge: linkedQuery.data?.data.length },
+    { key: 'subscribers', label: 'Абоненты МТС', badge: subsQuery.data?.length },
+    { key: 'tasks', label: 'Задачи МТС', badge: tasksQuery.data?.length },
+    { key: 'geo', label: 'Геоданные' },
+    { key: 'dictionaries', label: 'Справочники' },
+    { key: 'connection', label: 'Подключение' },
+  ];
+
   return (
     <div className={styles.page}>
+      <nav className={styles.tabsBar}>
+        {tabs.map(t => (
+          <button
+            key={t.key}
+            type="button"
+            className={`${styles.tabBtn} ${activeTab === t.key ? styles.tabActive : ''}`}
+            disabled={!configured && t.key !== 'connection'}
+            onClick={() => setActiveTab(t.key)}
+          >
+            {t.label}
+            {t.badge != null && t.badge > 0 && (
+              <span className={styles.tabBadge}>{t.badge}</span>
+            )}
+          </button>
+        ))}
+      </nav>
+
+      {activeTab === 'connection' && (
       <section className={styles.card}>
         <h2 className={styles.cardTitle}>Подключение МТС «Мобильные сотрудники»</h2>
 
@@ -324,8 +359,9 @@ export const MtsPage: FC = () => {
           </dl>
         )}
       </section>
+      )}
 
-      {configured && (
+      {configured && activeTab === 'linked' && (
         <section className={styles.card}>
           <div className={styles.tableHeader}>
             <h2 className={styles.cardTitle}>
@@ -447,11 +483,7 @@ export const MtsPage: FC = () => {
         />
       )}
 
-      {!configured ? (
-        <section className={styles.card}>
-          <p className={styles.hint}>Укажите токен, чтобы загрузить абонентов и геопозиции.</p>
-        </section>
-      ) : (
+      {configured && activeTab === 'subscribers' && (
         <section className={styles.card}>
           <div className={styles.tableHeader}>
             <h2 className={styles.cardTitle}>
@@ -558,25 +590,12 @@ export const MtsPage: FC = () => {
                       <td>{row?.employeeFullName || '—'}</td>
                       <td>
                         <div className={styles.mapCell}>
-                          <input
-                            className={styles.inputSm}
-                            type="number"
-                            placeholder="ID сотр."
-                            value={empInputs[s.subscriberID] ?? ''}
-                            onChange={e =>
-                              setEmpInputs(p => ({ ...p, [s.subscriberID]: e.target.value }))
-                            }
-                          />
-                          <button
-                            className={styles.btnSm}
-                            disabled={busy || !empInputs[s.subscriberID]}
-                            onClick={() =>
-                              applyMapping(s.subscriberID, Number(empInputs[s.subscriberID]))
-                            }
-                          >
-                            Привязать
-                          </button>
-                          {row?.employeeId != null && (
+                          {row?.employeeId == null ? (
+                            <EmployeeFioPicker
+                              disabled={busy}
+                              onSelect={(id) => applyMapping(s.subscriberID, id)}
+                            />
+                          ) : (
                             <button
                               className={styles.btnSm}
                               disabled={busy}
@@ -610,7 +629,7 @@ export const MtsPage: FC = () => {
         </section>
       )}
 
-      {configured && (
+      {configured && activeTab === 'tasks' && (
         <section className={styles.card}>
           <div className={styles.tableHeader}>
             <h2 className={styles.cardTitle}>
@@ -681,7 +700,7 @@ export const MtsPage: FC = () => {
         </section>
       )}
 
-      {configured && (
+      {configured && activeTab === 'dictionaries' && (
         <section className={styles.card}>
           <div className={styles.titleRow}>
             <h2 className={styles.cardTitle}>
@@ -731,7 +750,7 @@ export const MtsPage: FC = () => {
         </section>
       )}
 
-      {configured && (
+      {configured && activeTab === 'dictionaries' && (
         <section className={styles.card}>
           <div className={styles.titleRow}>
             <h2 className={styles.cardTitle}>
@@ -778,7 +797,7 @@ export const MtsPage: FC = () => {
         </section>
       )}
 
-      {configured && (
+      {configured && activeTab === 'geo' && (
         <section className={styles.card}>
           <div className={styles.titleRow}>
             <h2 className={styles.cardTitle}>
@@ -860,7 +879,7 @@ export const MtsPage: FC = () => {
         </section>
       )}
 
-      {configured && (
+      {configured && activeTab === 'geo' && (
         <section className={styles.card}>
           <div className={styles.titleRow}>
             <h2 className={styles.cardTitle}>
