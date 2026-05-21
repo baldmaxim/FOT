@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
 import { sigurAdminService } from '../services/sigurAdminService';
@@ -154,26 +154,6 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selected
           </span>
         </span>
       </td>
-      {canManage && (
-        <td className="sc-td-salary">
-          <span className="sc-cell-with-btn">
-            <button className="sc-inline-btn" title="Изменить оклад (договор)" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'salary_actual'); }}>
-              <Pencil size={12} />
-            </button>
-            {fmt(emp.salary_actual)}
-          </span>
-        </td>
-      )}
-      {canManage && (
-        <td className="sc-td-salary">
-          <span className="sc-cell-with-btn">
-            <button className="sc-inline-btn" title="Изменить оклад+премию" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'salary'); }}>
-              <Pencil size={12} />
-            </button>
-            {fmt(emp.salary_calculated)}
-          </span>
-        </td>
-      )}
       <td className="sc-td-hist" onClick={e => e.stopPropagation()}>
         {onReturn && emp.excluded_from_timesheet ? (
           <button className="sc-btn apply" style={{ fontSize: 11, padding: '2px 8px' }} title="Вернуть сотрудника в табель" onClick={() => onReturn(emp)}>
@@ -630,7 +610,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   onCancelDismissal,
   onReturn,
 }) => {
-  const totalCols = (canManage ? 8 : 6) + (selectionMode ? 1 : 0);
+  const totalCols = 6 + (selectionMode ? 1 : 0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -660,8 +640,6 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
             <th>Отдел</th>
             <th>Должность</th>
             <th>График</th>
-            {canManage && <th>Оклад (договор)</th>}
-            {canManage && <th>Оклад+премия</th>}
             <th className="sc-th-hist"></th>
           </tr>
         </thead>
@@ -810,18 +788,6 @@ const MobileCard: FC<{
           {scheduleView && <span className={`sc-schedule-badge ${scheduleView.source}`}>{SCHEDULE_SOURCE_LABELS[scheduleView.source]}</span>}
         </span>
       </div>
-      {canManage && (
-        <div className="sc-card-row">
-          <span className="sc-card-label">Оклад (дог.)</span>
-          <span>{fmt(emp.salary_actual)}</span>
-        </div>
-      )}
-      {canManage && (
-        <div className="sc-card-row">
-          <span className="sc-card-label">Оклад (прог.)</span>
-          <span>{fmt(emp.salary_calculated)}</span>
-        </div>
-      )}
       <div className="sc-card-actions">
         {onReturn && emp.excluded_from_timesheet ? (
           <button className="sc-btn apply" style={{ fontSize: 12, padding: '4px 10px' }} onClick={e => { e.stopPropagation(); onReturn(emp); }}>
@@ -870,11 +836,6 @@ const MobileCard: FC<{
             {canEditSch && (
               <button className="sc-btn-icon" title="Назначить график" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'schedule'); }}>
                 <Calendar size={14} />
-              </button>
-            )}
-            {canManage && (
-              <button className="sc-btn-icon" title="Изменить оклад" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'salary'); }}>
-                <TrendingUp size={14} />
               </button>
             )}
             {canEditDept && (
