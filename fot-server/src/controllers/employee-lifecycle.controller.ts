@@ -28,7 +28,7 @@ import {
   deactivateAllDepartmentAccessForEmployee,
 } from '../services/employee-department-access.service.js';
 
-const EMPLOYEE_LIFECYCLE_COLUMNS = 'id, full_name, last_name, first_name, middle_name, current_salary, salary_actual, salary_calculated, staff_units, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, created_at, updated_at';
+const EMPLOYEE_LIFECYCLE_COLUMNS = 'id, full_name, last_name, first_name, middle_name, current_salary, salary_actual, salary_calculated, staff_units, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, dismissal_date, excluded_from_timesheet, excluded_from_timesheet_date, created_at, updated_at';
 
 interface IHttpError extends Error {
   status?: number;
@@ -86,6 +86,164 @@ export async function loadEmployeeLifecycleRow(employeeId: number): Promise<Empl
     `SELECT ${EMPLOYEE_LIFECYCLE_COLUMNS} FROM employees WHERE id = $1`,
     [employeeId],
   );
+  return data;
+}
+
+function addDaysIso(iso: string, days: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
+function isIsoDate(value: unknown): value is string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+class DismissalSigurError extends Error {
+  status: number;
+  code: string;
+  movedToArchive: boolean;
+  blocked: boolean;
+  constructor(message: string, status: number, code: string, movedToArchive: boolean, blocked: boolean) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.movedToArchive = movedToArchive;
+    this.blocked = blocked;
+  }
+}
+
+interface IInsertDismissalHistoryOpts {
+  scheduled: boolean;
+  createdBy: string | null;
+  cancelled?: boolean;
+  rehired?: boolean;
+  appliedFromScheduled?: boolean;
+  prevDate?: string | null;
+  reason?: string | null;
+}
+
+export async function insertDismissalHistory(
+  employeeId: number,
+  dismissalDate: string,
+  opts: IInsertDismissalHistoryOpts,
+): Promise<void> {
+  await execute(
+    `INSERT INTO employee_dismissal_events
+       (employee_id, dismissal_date, scheduled, cancelled, rehired, applied_from_scheduled, prev_date, reason, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      employeeId,
+      dismissalDate,
+      opts.scheduled,
+      opts.cancelled === true,
+      opts.rehired === true,
+      opts.appliedFromScheduled === true,
+      opts.prevDate ?? null,
+      opts.reason ?? null,
+      opts.createdBy,
+    ],
+  );
+}
+
+/**
+ * Применяет полное увольнение немедленно: Sigur block + перевод в архивный отдел,
+ * закрытие assignments, флаги в employees. Используется как ветка fire(),
+ * так и dismissal-scheduler-ом для срабатывания отложенного увольнения.
+ *
+ * Бросает HttpError (createHttpError) или DismissalSigurError при ошибке Sigur.
+ */
+export async function applyDismissalImmediately(args: {
+  employeeId: number;
+  existing: EmployeeEncrypted;
+  dismissalDate: string;
+  userId: string | null;
+  connection?: 'external' | 'internal';
+}): Promise<EmployeeEncrypted> {
+  const { employeeId, existing, dismissalDate, userId, connection } = args;
+
+  let targetDepartmentId = existing.org_department_id || null;
+
+  if (existing.sigur_employee_id) {
+    if (!(await sigurService.isConfigured())) {
+      throw createHttpError(503, 'Sigur не настроен');
+    }
+
+    const archive = await ensureArchiveSigurDepartment(userId, connection);
+    let movedToArchive = false;
+    let blocked = false;
+
+    try {
+      await sigurService.updateEmployee(existing.sigur_employee_id, {
+        departmentId: archive.sigurDepartmentId,
+      }, connection);
+      movedToArchive = true;
+
+      await sigurService.blockEmployee(existing.sigur_employee_id, connection);
+      blocked = true;
+    } catch (error) {
+      throw new DismissalSigurError(
+        movedToArchive
+          ? 'Сотрудник уже перемещён в архивный отдел Sigur, но блокировка не выполнена. Локальный статус не изменён.'
+          : 'Не удалось выполнить увольнение сотрудника в Sigur',
+        movedToArchive ? 502 : 500,
+        movedToArchive ? 'SIGUR_PARTIAL_FAILURE' : 'SIGUR_WRITE_FAILED',
+        movedToArchive,
+        blocked,
+      );
+    }
+
+    const localArchive = await ensureLocalArchiveDepartment(userId, { connection });
+    targetDepartmentId = archive.localDepartmentId || localArchive.id;
+  } else {
+    const archive = await ensureLocalArchiveDepartment(userId, { connection });
+    targetDepartmentId = archive.id;
+  }
+
+  if (targetDepartmentId && existing.org_department_id !== targetDepartmentId) {
+    await employeeChangesService.changeDepartment(employeeId, targetDepartmentId, {
+      reason: 'Увольнение — перевод в папку "Уволенные"',
+      lockDepartment: false,
+      createdBy: userId,
+      effectiveDate: dismissalDate,
+    });
+  }
+
+  if (targetDepartmentId) {
+    await assignEmployeesToArchiveDepartment([employeeId], userId, {
+      connection,
+      effectiveDate: dismissalDate,
+    });
+  }
+
+  // День dismissalDate сам по себе остаётся рабочим, исключаем с D+1
+  const exclusionDate = addDaysIso(dismissalDate, 1);
+
+  const data = await queryOne<EmployeeEncrypted>(
+    `UPDATE employees
+        SET employment_status = 'fired',
+            org_department_id = $1,
+            department_locked = false,
+            dismissal_date = $2,
+            excluded_from_timesheet = true,
+            excluded_from_timesheet_date = $3
+      WHERE id = $4
+    RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
+    [targetDepartmentId, dismissalDate, exclusionDate, employeeId],
+  );
+
+  if (!data) {
+    throw createHttpError(500, 'Failed to update employee status');
+  }
+
+  await execute(
+    `UPDATE employee_assignments
+        SET effective_to = $1
+      WHERE employee_id = $2 AND effective_to IS NULL`,
+    [dismissalDate, employeeId],
+  );
+
   return data;
 }
 
@@ -323,116 +481,120 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
       return;
     }
 
+    const body = req.body as { dismissalDate?: string; connection?: 'external' | 'internal' };
+    const dismissalDate = typeof body.dismissalDate === 'string' ? body.dismissalDate.slice(0, 10) : '';
+    if (!isIsoDate(dismissalDate)) {
+      res.status(400).json({ success: false, error: 'dismissalDate обязательная (формат YYYY-MM-DD)' });
+      return;
+    }
+
     const existing = await loadEmployeeLifecycleRow(employeeId);
     if (!existing) {
       res.status(404).json({ success: false, error: 'Employee not found' });
       return;
     }
 
-    const today = new Date().toISOString().slice(0, 10);
-    const connection = (req.body.connection as 'external' | 'internal') || undefined;
-    let targetDepartmentId = existing.org_department_id || null;
+    if (existing.employment_status === 'fired') {
+      res.status(409).json({ success: false, error: 'Сотрудник уже уволен' });
+      return;
+    }
 
-    if (existing.sigur_employee_id) {
-      if (!(await sigurService.isConfigured())) {
-        res.status(503).json({ success: false, error: 'Sigur не настроен' });
+    if (existing.hire_date && dismissalDate < existing.hire_date) {
+      res.status(400).json({ success: false, error: 'Дата увольнения раньше даты найма' });
+      return;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const connection = body.connection || undefined;
+    const isFuture = dismissalDate > today;
+    const structureCache = await loadStructureCache();
+
+    if (isFuture) {
+      const data = await queryOne<EmployeeEncrypted>(
+        `UPDATE employees SET dismissal_date = $1 WHERE id = $2 RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
+        [dismissalDate, employeeId],
+      );
+      if (!data) {
+        res.status(500).json({ success: false, error: 'Failed to schedule dismissal' });
         return;
       }
+      employeeCache.invalidate(employeeId);
 
-      const archive = await ensureArchiveSigurDepartment(req.user.id, connection);
-      let movedToArchive = false;
-      let blocked = false;
+      await insertDismissalHistory(employeeId, dismissalDate, {
+        scheduled: true,
+        createdBy: req.user.id,
+      });
 
-      try {
-        await sigurService.updateEmployee(existing.sigur_employee_id, {
-          departmentId: archive.sigurDepartmentId,
-        }, connection);
-        movedToArchive = true;
+      await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE_SCHEDULED', {
+        entityType: 'employee',
+        entityId: id,
+        details: {
+          dismissal_date: dismissalDate,
+          source: existing.sigur_employee_id ? 'sigur' : 'portal',
+        },
+      });
 
-        await sigurService.blockEmployee(existing.sigur_employee_id, connection);
-        blocked = true;
-      } catch (error) {
+      res.json({ success: true, data: decryptEmployee(data, structureCache) });
+      return;
+    }
+
+    try {
+      const data = await applyDismissalImmediately({
+        employeeId,
+        existing,
+        dismissalDate,
+        userId: req.user.id,
+        connection,
+      });
+      employeeCache.invalidate(employeeId);
+
+      await insertDismissalHistory(employeeId, dismissalDate, {
+        scheduled: false,
+        createdBy: req.user.id,
+      });
+
+      await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE', {
+        entityType: 'employee',
+        entityId: id,
+        details: {
+          source: existing.sigur_employee_id ? 'sigur' : 'portal',
+          target_department_id: data.org_department_id,
+          dismissal_date: dismissalDate,
+        },
+      });
+
+      res.json({ success: true, data: decryptEmployee(data, structureCache) });
+    } catch (innerErr) {
+      if (innerErr instanceof DismissalSigurError) {
         await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE', {
           entityType: 'employee',
           entityId: id,
           details: {
             source: 'sigur',
             partial_failure: true,
-            movedToArchive,
-            blocked,
-            error: getErrorMessage(error, 'Unknown Sigur error'),
+            movedToArchive: innerErr.movedToArchive,
+            blocked: innerErr.blocked,
+            error: innerErr.message,
           },
         });
-
-        res.status(movedToArchive ? 502 : 500).json({
+        res.status(innerErr.status).json({
           success: false,
-          error: movedToArchive
-            ? 'Сотрудник уже перемещён в архивный отдел Sigur, но блокировка не выполнена. Локальный статус не изменён.'
-            : 'Не удалось выполнить увольнение сотрудника в Sigur',
-          code: movedToArchive ? 'SIGUR_PARTIAL_FAILURE' : 'SIGUR_WRITE_FAILED',
+          error: innerErr.message,
+          code: innerErr.code,
         });
         return;
       }
-
-      const localArchive = await ensureLocalArchiveDepartment(req.user.id, { connection });
-      targetDepartmentId = archive.localDepartmentId || localArchive.id;
-    } else {
-      const archive = await ensureLocalArchiveDepartment(req.user.id, { connection });
-      targetDepartmentId = archive.id;
+      const httpStatus = getHttpErrorStatus(innerErr);
+      if (httpStatus) {
+        res.status(httpStatus).json({
+          success: false,
+          error: getErrorMessage(innerErr, 'Failed to fire employee'),
+          ...(getHttpErrorCode(innerErr) ? { code: getHttpErrorCode(innerErr) } : {}),
+        });
+        return;
+      }
+      throw innerErr;
     }
-
-    if (targetDepartmentId && existing.org_department_id !== targetDepartmentId) {
-      await employeeChangesService.changeDepartment(employeeId, targetDepartmentId, {
-        reason: 'Увольнение — перевод в папку "Уволенные"',
-        lockDepartment: false,
-        createdBy: req.user.id,
-        effectiveDate: today,
-      });
-    }
-
-    if (targetDepartmentId) {
-      await assignEmployeesToArchiveDepartment([employeeId], req.user.id, {
-        connection,
-        effectiveDate: today,
-      });
-    }
-
-    const data = await queryOne<EmployeeEncrypted>(
-      `UPDATE employees
-          SET employment_status = 'fired',
-              org_department_id = $1,
-              department_locked = false
-        WHERE id = $2
-      RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
-      [targetDepartmentId, employeeId],
-    );
-
-    if (!data) {
-      res.status(500).json({ success: false, error: 'Failed to update employee status' });
-      return;
-    }
-
-    employeeCache.invalidate(employeeId);
-
-    await execute(
-      `UPDATE employee_assignments
-          SET effective_to = $1
-        WHERE employee_id = $2 AND effective_to IS NULL`,
-      [today, employeeId],
-    );
-
-    await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE', {
-      entityType: 'employee',
-      entityId: id,
-      details: {
-        source: existing.sigur_employee_id ? 'sigur' : 'portal',
-        target_department_id: targetDepartmentId,
-      },
-    });
-
-    const structureCache = await loadStructureCache();
-    const updatedEmployee = decryptEmployee(data as EmployeeEncrypted, structureCache);
-    res.json({ success: true, data: updatedEmployee });
   } catch (error) {
     if (isOverlappingAssignmentError(error)) {
       console.warn('[fire] overlapping assignment periods', { employeeId: req.params.id });
@@ -451,6 +613,74 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
     res.status(500).json({
       success: false,
       error: getErrorMessage(error, 'Failed to fire employee'),
+    });
+  }
+}
+
+export async function cancelDismissal(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { id } = req.params;
+    const employeeId = Number(id);
+    if (!(await canAccessEmployeeInScope(req, employeeId))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      return;
+    }
+
+    const existing = await loadEmployeeLifecycleRow(employeeId);
+    if (!existing) {
+      res.status(404).json({ success: false, error: 'Employee not found' });
+      return;
+    }
+
+    if (existing.employment_status !== 'active' || !existing.dismissal_date) {
+      res.status(409).json({ success: false, error: 'У сотрудника нет запланированного увольнения' });
+      return;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    if (existing.dismissal_date <= today) {
+      res.status(409).json({
+        success: false,
+        error: 'Дата увольнения уже наступила. Используйте «Восстановить» после применения увольнения.',
+      });
+      return;
+    }
+
+    const prevDate = existing.dismissal_date;
+    const data = await queryOne<EmployeeEncrypted>(
+      `UPDATE employees SET dismissal_date = NULL WHERE id = $1 RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
+      [employeeId],
+    );
+    if (!data) {
+      res.status(500).json({ success: false, error: 'Failed to cancel dismissal' });
+      return;
+    }
+    employeeCache.invalidate(employeeId);
+
+    await insertDismissalHistory(employeeId, prevDate, {
+      scheduled: true,
+      cancelled: true,
+      createdBy: req.user.id,
+      prevDate,
+    });
+
+    await auditService.logFromRequest(req, req.user.id, 'CANCEL_EMPLOYEE_DISMISSAL', {
+      entityType: 'employee',
+      entityId: id,
+      details: { prev_dismissal_date: prevDate },
+    });
+
+    const structureCache = await loadStructureCache();
+    res.json({ success: true, data: decryptEmployee(data, structureCache) });
+  } catch (error) {
+    console.error('Cancel dismissal error:', error);
+    Sentry.captureException(error, {
+      tags: { route: 'employees.cancelDismissal' },
+      extra: { employeeId: req.params.id },
+    });
+    res.status(500).json({
+      success: false,
+      error: getErrorMessage(error, 'Failed to cancel dismissal'),
     });
   }
 }
@@ -593,10 +823,16 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
         ? `employment_status = 'active',
              org_department_id = $1,
              department_locked = $2,
-             sigur_employee_id = NULL`
+             sigur_employee_id = NULL,
+             dismissal_date = NULL,
+             excluded_from_timesheet = false,
+             excluded_from_timesheet_date = NULL`
         : `employment_status = 'active',
              org_department_id = $1,
-             department_locked = $2`;
+             department_locked = $2,
+             dismissal_date = NULL,
+             excluded_from_timesheet = false,
+             excluded_from_timesheet_date = NULL`;
       data = await queryOne<EmployeeEncrypted>(
         `UPDATE employees
             SET ${updateFields}
@@ -618,6 +854,19 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
 
     employeeCache.invalidate(id);
 
+    if (existing.dismissal_date) {
+      try {
+        await insertDismissalHistory(employeeId, existing.dismissal_date, {
+          scheduled: false,
+          rehired: true,
+          createdBy: req.user.id,
+          prevDate: existing.dismissal_date,
+        });
+      } catch (historyErr) {
+        console.warn('[rehire] dismissal history insert failed (non-critical):', historyErr);
+      }
+    }
+
     try {
       await auditService.logFromRequest(req, req.user.id, 'REHIRE_EMPLOYEE', {
         entityType: 'employee',
@@ -627,6 +876,7 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
           target_department_id: targetDepartment.id,
           detached_from_sigur: sigurDetached,
           previous_sigur_employee_id: sigurDetached ? existing.sigur_employee_id : undefined,
+          prev_dismissal_date: existing.dismissal_date ?? null,
         },
       });
     } catch (auditErr) {
@@ -944,6 +1194,16 @@ export async function getHistory(req: AuthenticatedRequest, res: Response): Prom
           type: eventData.type,
           reason: eventData.reason,
           order_number: eventData.order_number,
+        };
+      } else if (row.event_type === 'dismissal') {
+        decryptedData = {
+          dismissal_date: eventData.dismissal_date ?? null,
+          scheduled: eventData.scheduled === true,
+          cancelled: eventData.cancelled === true,
+          rehired: eventData.rehired === true,
+          applied_from_scheduled: eventData.applied_from_scheduled === true,
+          prev_date: eventData.prev_date ?? null,
+          reason: eventData.reason ?? null,
         };
       }
 

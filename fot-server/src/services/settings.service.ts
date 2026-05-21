@@ -240,7 +240,7 @@ export const settingsService = {
     cache.set(key, value);
   },
 
-  async setMultiple(entries: { key: string; value: string | null; description?: string }[], userId: string): Promise<void> {
+  async setMultiple(entries: { key: string; value: string | null; description?: string }[], userId: string | null): Promise<void> {
     if (entries.length === 0) return;
     const updatedAt = new Date().toISOString();
     const params: unknown[] = [];
@@ -413,7 +413,7 @@ export const settingsService = {
       archiveDepartmentId?: number | null;
       archiveDepartmentName?: string | null;
     },
-    userId: string,
+    userId: string | null,
   ): Promise<ISigurConnectionSettings> {
     const entries: { key: string; value: string | null; description?: string }[] = [];
 

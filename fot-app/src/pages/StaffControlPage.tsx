@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, TrendingUp, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
 import { sigurAdminService } from '../services/sigurAdminService';
@@ -19,6 +19,7 @@ import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useStaffData } from '../hooks/useStaffData';
 import { useStructureTree } from '../hooks/useStructure';
 import { useManagedDepartments } from '../hooks/useManagedDepartments';
+import { useOverlayDismiss } from '../hooks/useOverlayDismiss';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { DepartmentTreeSelect } from '../components/staff/DepartmentTreeSelect';
@@ -74,10 +75,11 @@ interface IStaffRowProps {
   onOpenHistory: (emp: Employee) => void;
   onRehire?: (emp: Employee) => void;
   onFire?: (emp: Employee) => void;
+  onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
 }
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
 
@@ -181,6 +183,20 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selected
           <button className="sc-btn secondary" style={{ fontSize: 11, padding: '2px 8px' }} title="Восстановить сотрудника" onClick={() => onRehire(emp)}>
             Восстановить
           </button>
+        ) : onCancelDismissal && emp.employment_status === 'active' && emp.dismissal_date ? (
+          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <span title={`Уволится ${emp.dismissal_date}`} style={{ fontSize: 11, color: '#dc2626', whiteSpace: 'nowrap' }}>
+              <CalendarX size={12} style={{ verticalAlign: 'text-bottom', marginRight: 2 }} />
+              {emp.dismissal_date}
+            </span>
+            <button
+              className="sc-btn-icon"
+              title="Отменить запланированное увольнение"
+              onClick={() => onCancelDismissal(emp)}
+            >
+              <X size={14} />
+            </button>
+          </span>
         ) : (
           <span style={{ display: 'inline-flex', gap: 4 }}>
             {onFire && emp.employment_status !== 'fired' && (
@@ -587,6 +603,7 @@ interface IVirtualTableProps {
   onOpenHistory: (emp: Employee) => void;
   onRehire?: (emp: Employee) => void;
   onFire?: (emp: Employee) => void;
+  onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
 }
 
@@ -610,6 +627,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   onOpenHistory,
   onRehire,
   onFire,
+  onCancelDismissal,
   onReturn,
 }) => {
   const totalCols = (canManage ? 8 : 6) + (selectionMode ? 1 : 0);
@@ -677,6 +695,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     onOpenHistory={onOpenHistory}
                     onRehire={onRehire}
                     onFire={onFire}
+                    onCancelDismissal={onCancelDismissal}
                     onReturn={onReturn}
                   />
                 );
@@ -714,6 +733,7 @@ interface IVirtualCardsProps {
   onOpenHistory: (emp: Employee) => void;
   onRehire?: (emp: Employee) => void;
   onFire?: (emp: Employee) => void;
+  onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
 }
 
@@ -735,8 +755,9 @@ const MobileCard: FC<{
   onOpenHistory: (emp: Employee) => void;
   onRehire?: (emp: Employee) => void;
   onFire?: (emp: Employee) => void;
+  onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
-}> = memo(({ emp, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
+}> = memo(({ emp, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
   const handleAuxClick = (e: ReactMouseEvent) => {
@@ -810,6 +831,20 @@ const MobileCard: FC<{
           <button className="sc-btn secondary" style={{ fontSize: 12, padding: '4px 10px' }} onClick={e => { e.stopPropagation(); onRehire(emp); }}>
             Восстановить
           </button>
+        ) : onCancelDismissal && emp.employment_status === 'active' && emp.dismissal_date ? (
+          <>
+            <span style={{ fontSize: 12, color: '#dc2626', whiteSpace: 'nowrap' }}>
+              <CalendarX size={12} style={{ verticalAlign: 'text-bottom', marginRight: 2 }} />
+              Уволится {emp.dismissal_date}
+            </span>
+            <button
+              className="sc-btn-icon"
+              title="Отменить запланированное увольнение"
+              onClick={e => { e.stopPropagation(); onCancelDismissal(emp); }}
+            >
+              <X size={14} />
+            </button>
+          </>
         ) : (
           <>
             {onFire && emp.employment_status !== 'fired' && (
@@ -854,7 +889,7 @@ const MobileCard: FC<{
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onReturn }) => {
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -892,6 +927,7 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, se
                 onOpenHistory={onOpenHistory}
                 onRehire={onRehire}
                 onFire={onFire}
+                onCancelDismissal={onCancelDismissal}
                 onReturn={onReturn}
               />
             </div>
@@ -901,6 +937,76 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, se
     </div>
   );
 });
+
+
+/* ───────── Fire Employee Modal ───────── */
+
+interface IFireEmployeeModalProps {
+  emp: Employee;
+  date: string;
+  onChangeDate: (value: string) => void;
+  inFlight: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}
+
+const FireEmployeeModal: FC<IFireEmployeeModalProps> = ({ emp, date, onChangeDate, inFlight, onCancel, onConfirm }) => {
+  const overlayHandlers = useOverlayDismiss(onCancel);
+  const today = getLocalISODate();
+  const isFuture = date > today;
+  const minDate = emp.hire_date || undefined;
+
+  return (
+    <div className="sc-overlay" {...overlayHandlers}>
+      <div className="sc-modal" onClick={e => e.stopPropagation()}>
+        <div className="sc-modal-header">
+          <h3>
+            <UserRoundX size={16} style={{ verticalAlign: 'text-bottom', marginRight: 6, color: '#dc2626' }} />
+            Уволить сотрудника
+          </h3>
+          <button className="sc-modal-close" onClick={onCancel} disabled={inFlight}>&times;</button>
+        </div>
+        <div className="sc-modal-body">
+          <div className="sc-field">
+            <label>{emp.full_name}</label>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+              Последний рабочий день. Дни после этой даты не учитываются в табеле.
+            </div>
+            <input
+              type="date"
+              value={date}
+              min={minDate}
+              onChange={e => onChangeDate(e.target.value)}
+              disabled={inFlight}
+            />
+            {isFuture && (
+              <div style={{ fontSize: 12, color: '#b45309', marginTop: 8 }}>
+                Увольнение запланировано на {date}. До этого дня сотрудник остаётся активным
+                в Sigur и в табеле. Применится автоматически в день увольнения.
+              </div>
+            )}
+            {!isFuture && (
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
+                Сотрудник будет перемещён в папку «Уволенные» в Sigur, карты пропуска заблокированы.
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="sc-modal-footer">
+          <button className="sc-btn cancel" onClick={onCancel} disabled={inFlight}>Отмена</button>
+          <button
+            className="sc-btn apply"
+            style={{ background: '#dc2626' }}
+            onClick={onConfirm}
+            disabled={!date || inFlight}
+          >
+            {inFlight ? 'Увольняем...' : (isFuture ? 'Запланировать увольнение' : 'Уволить')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 
 /* ───────── Main Page ───────── */
@@ -1507,13 +1613,42 @@ export const StaffControlPage: FC = () => {
     }
   }, [rehireEmp, rehireDeptId, refresh, toast]);
 
-  const handleFire = useCallback(async (emp: Employee) => {
-    if (!confirm(`Уволить ${emp.full_name}? Сотрудник будет перемещён в папку «Уволенные» в Sigur, карты пропуска будут заблокированы.`)) return;
+  const [fireEmp, setFireEmp] = useState<Employee | null>(null);
+  const [fireDate, setFireDate] = useState<string>(() => getLocalISODate());
+  const [fireInFlight, setFireInFlight] = useState(false);
+
+  const handleFire = useCallback((emp: Employee) => {
+    setFireEmp(emp);
+    setFireDate(getLocalISODate());
+  }, []);
+
+  const closeFireModal = useCallback(() => {
+    if (fireInFlight) return;
+    setFireEmp(null);
+  }, [fireInFlight]);
+
+  const handleConfirmFire = useCallback(async () => {
+    if (!fireEmp || !fireDate) return;
+    setFireInFlight(true);
     try {
-      await employeeService.fire(emp.id);
+      await employeeService.fire(fireEmp.id, fireDate);
+      setFireEmp(null);
       refresh();
     } catch (err) {
       const msg = err instanceof Error && err.message ? err.message : 'Ошибка увольнения сотрудника';
+      toast.error(msg);
+    } finally {
+      setFireInFlight(false);
+    }
+  }, [fireEmp, fireDate, refresh, toast]);
+
+  const handleCancelDismissal = useCallback(async (emp: Employee) => {
+    if (!confirm(`Отменить запланированное увольнение ${emp.full_name} на ${emp.dismissal_date}?`)) return;
+    try {
+      await employeeService.cancelDismissal(emp.id);
+      refresh();
+    } catch (err) {
+      const msg = err instanceof Error && err.message ? err.message : 'Не удалось отменить запланированное увольнение';
       toast.error(msg);
     }
   }, [refresh, toast]);
@@ -1989,6 +2124,7 @@ export const StaffControlPage: FC = () => {
           onOpenHistory={openHistory}
           onRehire={statusFilter === 'fired' && isAdmin ? handleRehire : undefined}
           onFire={statusFilter === 'active' && isAdmin ? handleFire : undefined}
+          onCancelDismissal={statusFilter === 'active' && isAdmin ? handleCancelDismissal : undefined}
           onReturn={statusFilter === 'excluded' ? handleReturnToTimesheet : undefined}
         />
       ) : (
@@ -2010,6 +2146,7 @@ export const StaffControlPage: FC = () => {
           onOpenHistory={openHistory}
           onRehire={statusFilter === 'fired' && isAdmin ? handleRehire : undefined}
           onFire={statusFilter === 'active' && isAdmin ? handleFire : undefined}
+          onCancelDismissal={statusFilter === 'active' && isAdmin ? handleCancelDismissal : undefined}
           onReturn={statusFilter === 'excluded' ? handleReturnToTimesheet : undefined}
         />
       )}
@@ -2323,6 +2460,18 @@ export const StaffControlPage: FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ─── Fire Modal ─── */}
+      {fireEmp && (
+        <FireEmployeeModal
+          emp={fireEmp}
+          date={fireDate}
+          onChangeDate={setFireDate}
+          inFlight={fireInFlight}
+          onCancel={closeFireModal}
+          onConfirm={handleConfirmFire}
+        />
       )}
 
       {/* ─── Rehire Modal ─── */}

@@ -151,8 +151,11 @@ export const employeeService = {
     return response.data;
   },
 
-  async fire(id: number): Promise<Employee> {
-    const response = await apiClient.post<ApiResponse<Employee>>(`/employees/${id}/fire`);
+  async fire(id: number, dismissalDate: string): Promise<Employee> {
+    const response = await apiClient.post<ApiResponse<Employee>>(
+      `/employees/${id}/fire`,
+      { dismissalDate },
+    );
     return response.data;
   },
 
@@ -160,6 +163,13 @@ export const employeeService = {
     const response = await apiClient.post<ApiResponse<Employee>>(
       `/employees/${id}/rehire`,
       { org_department_id: orgDepartmentId },
+    );
+    return response.data;
+  },
+
+  async cancelDismissal(id: number): Promise<Employee> {
+    const response = await apiClient.post<ApiResponse<Employee>>(
+      `/employees/${id}/cancel-dismissal`,
     );
     return response.data;
   },

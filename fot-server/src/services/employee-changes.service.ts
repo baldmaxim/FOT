@@ -24,7 +24,7 @@ interface ChangeOpts {
   reason?: string;
   note?: string;
   effectiveDate?: string;
-  createdBy?: string;
+  createdBy?: string | null;
 }
 
 const today = () => new Date().toISOString().slice(0, 10);

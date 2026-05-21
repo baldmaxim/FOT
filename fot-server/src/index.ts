@@ -13,6 +13,7 @@ import { startSkudSummaryReconcileScheduler } from './services/skud-summary-reco
 import { startTimesheetReminderScheduler } from './services/timesheet-reminder.service.js';
 import { startPatentExpiryReminderScheduler } from './services/patent-expiry-reminder.service.js';
 import { startDailyTasksReminderScheduler } from './services/daily-tasks-reminder.service.js';
+import { startDismissalScheduler } from './services/dismissal-scheduler.service.js';
 import { startMtsLocationPoller } from './services/mts-location-poller.service.js';
 import { startMtsGeofenceMonitor } from './services/mts-geofence-monitor.service.js';
 import { aiReceiptRecognitionService } from './services/ai-receipt-recognition.service.js';
@@ -62,6 +63,7 @@ httpServer.listen(PORT, HOST, () => {
   startTimesheetReminderScheduler();
   startPatentExpiryReminderScheduler();
   startDailyTasksReminderScheduler();
+  startDismissalScheduler();
   startMtsLocationPoller();
   startMtsGeofenceMonitor();
   void aiReceiptRecognitionService.resumePendingRecognitions().then(count => {

@@ -273,7 +273,7 @@ export async function ensureSigurPosition(
 }
 
 export async function ensureArchiveSigurDepartment(
-  userId: string,
+  userId: string | null,
   connection?: ConnectionType,
 ): Promise<{ sigurDepartmentId: number; localDepartmentId: string | null; name: string }> {
   const settings = await settingsService.getSigurConnectionSettings();

@@ -37,7 +37,7 @@ const countsCache = new Map<string, { data: ICountsPayload; expiresAt: number }>
 const COUNTS_TTL_MS = 60_000;
 
 // Импорт методов из подконтроллеров
-import { archive, restore, fire, rehire, moveDepartment, batchMoveEmployees, getHistory, updateHistoryEvent, deleteHistoryEvent } from './employee-lifecycle.controller.js';
+import { archive, restore, fire, rehire, cancelDismissal, moveDepartment, batchMoveEmployees, getHistory, updateHistoryEvent, deleteHistoryEvent } from './employee-lifecycle.controller.js';
 import { deleteAll } from './employee-import.controller.js';
 
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -1220,6 +1220,7 @@ export const employeesController = {
   restore,
   fire,
   rehire,
+  cancelDismissal,
   moveDepartment,
   batchMoveEmployees,
   getHistory,

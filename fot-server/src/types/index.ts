@@ -146,10 +146,12 @@ export interface EmployeeEncrypted {
   department_locked: boolean;
   is_archived: boolean;
   archived_at: string | null;
+  dismissal_date?: string | null;
   created_at: string;
   updated_at: string;
   excluded_from_timesheet?: boolean | null;
   excluded_from_timesheet_at?: string | null;
+  excluded_from_timesheet_date?: string | null;
 }
 
 // Сотрудник для API
@@ -186,10 +188,12 @@ export interface Employee {
   department_locked: boolean;
   is_archived: boolean;
   archived_at: string | null;
+  dismissal_date?: string | null;
   created_at: string;
   updated_at: string;
   excluded_from_timesheet?: boolean;
   excluded_from_timesheet_at?: string | null;
+  excluded_from_timesheet_date?: string | null;
   site_name?: string | null;
   site_manager_full_name?: string | null;
 }

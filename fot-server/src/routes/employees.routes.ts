@@ -213,6 +213,13 @@ router.post(
   employeesController.rehire
 );
 
+// POST /api/employees/:id/cancel-dismissal - отменить запланированное увольнение (header+)
+router.post(
+  '/:id/cancel-dismissal',
+  requirePageAccess('/staff-control', 'edit'),
+  employeesController.cancelDismissal
+);
+
 // POST /api/employees/:id/move-department - переместить в отдел (header+)
 router.post(
   '/:id/move-department',

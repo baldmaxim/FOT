@@ -113,10 +113,12 @@ export function decryptEmployeeList(encrypted: EmployeeEncrypted, structureCache
     department_locked: encrypted.department_locked,
     is_archived: encrypted.is_archived,
     archived_at: encrypted.archived_at,
+    dismissal_date: encrypted.dismissal_date ?? null,
     created_at: encrypted.created_at,
     updated_at: encrypted.updated_at,
     excluded_from_timesheet: Boolean(encrypted.excluded_from_timesheet ?? false),
     excluded_from_timesheet_at: encrypted.excluded_from_timesheet_at ?? null,
+    excluded_from_timesheet_date: encrypted.excluded_from_timesheet_date ?? null,
   };
 }
 
@@ -157,7 +159,11 @@ export function decryptEmployee(encrypted: EmployeeEncrypted, structureCache: St
     department_locked: encrypted.department_locked,
     is_archived: encrypted.is_archived,
     archived_at: encrypted.archived_at,
+    dismissal_date: encrypted.dismissal_date ?? null,
     created_at: encrypted.created_at,
     updated_at: encrypted.updated_at,
+    excluded_from_timesheet: Boolean(encrypted.excluded_from_timesheet ?? false),
+    excluded_from_timesheet_at: encrypted.excluded_from_timesheet_at ?? null,
+    excluded_from_timesheet_date: encrypted.excluded_from_timesheet_date ?? null,
   };
 }
