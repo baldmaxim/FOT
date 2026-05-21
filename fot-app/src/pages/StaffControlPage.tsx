@@ -44,7 +44,6 @@ const EnrichPreviewModal = lazy(() => import('../components/employees/EnrichPrev
 import {
   EMPTY_EMPLOYEE_SCHEDULE_ASSIGNMENTS,
   EMPTY_SCHEDULE_TEMPLATES,
-  fmt,
   getLocalISODate,
   handleMiddleClickMouseDown,
   isActiveScheduleAssignment,
