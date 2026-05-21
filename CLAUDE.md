@@ -214,3 +214,5 @@ CSS media queries для всех целевых устройств.
 
 - Коммиты на русском, кратко (1-2 предложения)
 - Без приписок "Generated with Claude Code" и "Co-Authored-By"
+- Push только в `personal` (origin — чужой/устаревший форк)
+- Из SSH/Claude-сессии при ошибке `wincredman` сразу: `GCM_CREDENTIAL_STORE=dpapi git push personal main` (bash) или `$env:GCM_CREDENTIAL_STORE='dpapi'; git push personal main` (PowerShell). Не перебирать альтернативы.
