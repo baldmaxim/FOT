@@ -14,15 +14,16 @@ import { listDirectSubordinates } from '../services/employee-direct-reports.serv
 import { upsertAttendanceAdjustment } from '../services/attendance.service.js';
 import type { TimeStatus } from '../types/index.js';
 
-const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction'] as const;
+const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction', 'unpaid'] as const;
 const LEAVE_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск', sick_leave: 'Больничный', remote: 'Удалёнка',
-  certificate: 'Справка', time_correction: 'Корректировка',
+  certificate: 'Справка', time_correction: 'Корректировка', unpaid: 'За свой счёт',
 };
-const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote', TimeStatus> = {
+const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote' | 'unpaid', TimeStatus> = {
   vacation: 'vacation',
   sick_leave: 'sick',
   remote: 'remote',
+  unpaid: 'unpaid',
 };
 
 function isTimeStatus(value: unknown): value is TimeStatus {

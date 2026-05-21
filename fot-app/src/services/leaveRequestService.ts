@@ -1,6 +1,6 @@
 import { apiClient } from '../api/client';
 
-export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'certificate' | 'time_correction';
+export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'certificate' | 'time_correction' | 'unpaid';
 export type LeaveRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 
 export interface ILeaveRequestAttachment {
@@ -51,6 +51,7 @@ export const REQUEST_TYPE_LABELS: Record<string, string> = {
   remote: 'Удалёнка',
   certificate: 'Справка',
   time_correction: 'Корректировка табеля',
+  unpaid: 'За свой счёт',
 };
 
 export const STATUS_LABELS: Record<LeaveRequestStatus, string> = {

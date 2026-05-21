@@ -45,6 +45,7 @@ const LEAVE_TYPE_LABELS: Record<string, string> = {
   remote: 'Удалёнка',
   dayoff: 'Отгул',
   certificate: 'Справка',
+  unpaid: 'За свой счёт',
 };
 
 async function deleteStaleSubscriptionByEndpoint(endpoint: string): Promise<void> {
