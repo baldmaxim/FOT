@@ -21,10 +21,22 @@ export interface IRosterRow {
   submission_id: string | null;
 }
 
+export type ContractorPassStatus =
+  | 'in_pool'
+  | 'assigned'
+  | 'submitted'
+  | 'applied'
+  | 'blocked'
+  | 'revoked';
+
+export type ContractorPassApprovalStatus = 'not_submitted' | 'pending' | 'approved' | 'rejected';
+
 export interface IPassRow {
   id: string;
   pass_number: string;
-  status: 'issued' | 'assigned' | 'applied' | 'revoked';
+  status: ContractorPassStatus;
+  approval_status: ContractorPassApprovalStatus;
+  is_active: boolean;
   sigur_employee_id: number | null;
   card_uid: string | null;
   holder_name: string | null;
@@ -59,8 +71,121 @@ export interface ISubmissionDetailRow {
   pass_number: string;
   holder_name: string | null;
   card_uid: string | null;
-  pass_status: string;
+  pass_status: ContractorPassStatus;
+  approval_status: ContractorPassApprovalStatus;
+  is_active: boolean;
+  access_point_names: string[] | null;
   object_label: string;
+}
+
+export interface IPoolItem {
+  id: string;
+  pass_number: string;
+  card_uid: string | null;
+  sigur_employee_id: number | null;
+  created_at: string;
+}
+
+export interface ISigurDepartmentNode {
+  id: number;
+  name: string;
+  parent_id: number | null;
+}
+
+export interface IPoolSettings {
+  sigur_department_id: number | null;
+  name: string | null;
+}
+
+export interface ISentPassRow {
+  id: string;
+  pass_number: string;
+  status: ContractorPassStatus;
+  approval_status: ContractorPassApprovalStatus;
+  is_active: boolean;
+  sigur_employee_id: number | null;
+  card_uid: string | null;
+  holder_name: string | null;
+  org_department_id: string;
+  org_name: string;
+  submission_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IMonitorPassRow {
+  id: string;
+  pass_number: string;
+  status: ContractorPassStatus;
+  approval_status: ContractorPassApprovalStatus;
+  is_active: boolean;
+  sigur_employee_id: number | null;
+  card_uid: string | null;
+  holder_name: string | null;
+  expires_at: string | null;
+  access_point_names: string[] | null;
+  submission_id: string | null;
+  updated_at: string;
+  object_label: string;
+}
+
+export interface IHolderHistoryRow {
+  id: string;
+  holder_name: string;
+  valid_from: string;
+  valid_until: string | null;
+  changed_by_name: string | null;
+  submission_id: string | null;
+  approved_at: string | null;
+  approved_by_name: string | null;
+}
+
+export interface ISubmissionDecisionRow {
+  id: string;
+  submission_id: string;
+  decision: 'approved' | 'rejected';
+  decided_at: string;
+  reason: string | null;
+  access_point_names: string[] | null;
+  decided_by_name: string | null;
+}
+
+export interface IPassHistory {
+  holders: IHolderHistoryRow[];
+  decisions: ISubmissionDecisionRow[];
+}
+
+export interface IDecideItem {
+  pass_id: string;
+  decision: 'approved' | 'rejected';
+  reason?: string;
+  access_point_names?: string[];
+}
+
+export interface IDecideResult {
+  status: string;
+  applied: number;
+  rejected: number;
+  failed: number;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface IPoolIssueInput {
+  from: number;
+  to?: number;
+  cards: Array<{ uid: string; sequence: number }>;
+}
+
+export interface IPoolIssueResult {
+  created: string[];
+  failed: Array<{ pass_number: string; error: string }>;
+  warnings: string[];
+}
+
+export interface IPoolAssignResult {
+  assigned: string[];
+  failed: Array<{ pass_id: string; error: string }>;
 }
 
 export interface IContractorUser {
@@ -123,6 +248,17 @@ export const contractorService = {
   },
   async setPassHolder(passId: string, fullName: string | null): Promise<void> {
     await apiClient.post(`/contractor/passes/${passId}/holder`, { full_name: fullName });
+  },
+  async changeHolder(passId: string, newHolderName: string, validFrom: string): Promise<{ submission_id: string }> {
+    const r = await apiClient.post<ApiResponse<{ submission_id: string }>>(
+      `/contractor/passes/${passId}/change-holder`,
+      { new_holder_name: newHolderName, valid_from: validFrom },
+    );
+    return r.data;
+  },
+  async getPassHistory(passId: string): Promise<IPassHistory> {
+    const r = await apiClient.get<ApiResponse<IPassHistory>>(`/contractor/passes/${passId}/history`);
+    return r.data ?? { holders: [], decisions: [] };
   },
   async submit(): Promise<void> {
     await apiClient.post('/contractor/submit');
@@ -192,5 +328,62 @@ export const contractorAdminService = {
   },
   async rejectSubmission(id: string, comment?: string): Promise<void> {
     await apiClient.post(`/admin/contractor/submissions/${id}/reject`, { comment });
+  },
+  async decideSubmissionItems(id: string, decisions: IDecideItem[]): Promise<IDecideResult> {
+    const r = await apiClient.post<ApiResponse<IDecideResult>>(
+      `/admin/contractor/submissions/${id}/decide`,
+      { decisions },
+    );
+    return r.data;
+  },
+
+  // Общий пул
+  async getPoolSettings(): Promise<IPoolSettings> {
+    const r = await apiClient.get<ApiResponse<IPoolSettings>>('/admin/contractor/pool/settings');
+    return r.data ?? { sigur_department_id: null, name: null };
+  },
+  async setPoolSettings(sigurDepartmentId: number | null): Promise<void> {
+    await apiClient.put('/admin/contractor/pool/settings', { sigur_department_id: sigurDepartmentId });
+  },
+  async listSigurDepartments(): Promise<ISigurDepartmentNode[]> {
+    const r = await apiClient.get<ApiResponse<ISigurDepartmentNode[]>>('/admin/contractor/sigur-departments');
+    return r.data ?? [];
+  },
+  async listPool(search?: string): Promise<IPoolItem[]> {
+    const qs = search ? `?search=${encodeURIComponent(search)}` : '';
+    const r = await apiClient.get<ApiResponse<IPoolItem[]>>(`/admin/contractor/pool${qs}`);
+    return r.data ?? [];
+  },
+  async getPoolNextNumber(): Promise<number> {
+    const r = await apiClient.get<ApiResponse<{ next: number }>>('/admin/contractor/pool/next-number');
+    return r.data?.next ?? 1;
+  },
+  async addToPool(input: IPoolIssueInput): Promise<IPoolIssueResult> {
+    const r = await apiClient.post<ApiResponse<IPoolIssueResult>>('/admin/contractor/pool/issue', input);
+    return r.data;
+  },
+  async assignPool(passIds: string[], orgDepartmentId: string): Promise<IPoolAssignResult> {
+    const r = await apiClient.post<ApiResponse<IPoolAssignResult>>('/admin/contractor/pool/assign', {
+      pass_ids: passIds,
+      org_department_id: orgDepartmentId,
+    });
+    return r.data;
+  },
+
+  // Отправленные / мониторинг / история
+  async listSentPasses(orgDepartmentId?: string): Promise<ISentPassRow[]> {
+    const qs = orgDepartmentId ? `?org_department_id=${encodeURIComponent(orgDepartmentId)}` : '';
+    const r = await apiClient.get<ApiResponse<ISentPassRow[]>>(`/admin/contractor/passes/sent${qs}`);
+    return r.data ?? [];
+  },
+  async listMonitor(orgDepartmentId: string): Promise<IMonitorPassRow[]> {
+    const r = await apiClient.get<ApiResponse<IMonitorPassRow[]>>(
+      `/admin/contractor/passes/monitor?org_department_id=${encodeURIComponent(orgDepartmentId)}`,
+    );
+    return r.data ?? [];
+  },
+  async getPassHistoryAdmin(passId: string): Promise<IPassHistory> {
+    const r = await apiClient.get<ApiResponse<IPassHistory>>(`/admin/contractor/passes/${passId}/history`);
+    return r.data ?? { holders: [], decisions: [] };
   },
 };

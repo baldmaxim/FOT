@@ -10,6 +10,9 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import { resolveContractorOrgForUser } from '../services/contractor-scope.service.js';
 import { syncRosterFromSigur, getRoster, getPasses } from '../services/contractor-roster.service.js';
+import { sigurService } from '../services/sigur.service.js';
+import { isContractorSigurDryRun } from '../config/contractor.js';
+import { updateSigurEmployee } from '../services/sigur-live-employees-crud.service.js';
 
 /** Резолвит организацию подрядчика; при отсутствии — отвечает 403 и возвращает null. */
 const resolveOrgOr403 = async (
@@ -159,7 +162,13 @@ export const contractorController = {
     }
   },
 
-  /** Вписать ФИО держателя пропуска. Body: { full_name } (null/'' — очистить). */
+  /**
+   * Первичное вписание ФИО держателя пропуска. Body: { full_name } (null/'' — очистить).
+   * Доступно только для status='assigned' и submission_id IS NULL (пропуск ещё
+   * не в заявке). Параллельно создаёт/обновляет открытую строку истории владельцев
+   * (contractor_pass_holders, valid_until IS NULL). Для смены владельца уже
+   * применённого пропуска — отдельный эндпоинт changeHolder.
+   */
   async setPassHolder(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const orgId = await resolveOrgOr403(req, res);
@@ -168,18 +177,60 @@ export const contractorController = {
         full_name: z.string().trim().max(200).nullable(),
       }).parse(req.body);
       const holder = full_name && full_name.length >= 2 ? full_name : null;
+      const passId = req.params.id;
 
-      const affected = await execute(
-        `UPDATE contractor_passes
-            SET holder_name = $1, updated_at = now()
-          WHERE id = $2::uuid AND org_department_id = $3::uuid
-            AND status = 'issued' AND submission_id IS NULL`,
-        [holder, req.params.id, orgId],
+      const pass = await queryOne<{ id: string; status: string; submission_id: string | null }>(
+        `SELECT id, status, submission_id FROM contractor_passes
+          WHERE id = $1::uuid AND org_department_id = $2::uuid`,
+        [passId, orgId],
       );
-      if (affected === 0) {
+      if (!pass) {
+        res.status(404).json({ success: false, error: 'Пропуск не найден' });
+        return;
+      }
+      if (pass.status !== 'assigned' || pass.submission_id !== null) {
         res.status(409).json({ success: false, error: 'Пропуск недоступен для редактирования' });
         return;
       }
+
+      await withTransaction(async client => {
+        await client.query(
+          `UPDATE contractor_passes
+              SET holder_name = $1, approval_status = 'not_submitted', updated_at = now()
+            WHERE id = $2::uuid`,
+          [holder, passId],
+        );
+
+        // История: если был открытый владелец — обновляем его, иначе вставляем новый.
+        const existing = await client.query<{ id: string }>(
+          `SELECT id FROM contractor_pass_holders
+            WHERE pass_id = $1::uuid AND valid_until IS NULL`,
+          [passId],
+        );
+        if (holder) {
+          if (existing.rows[0]) {
+            await client.query(
+              `UPDATE contractor_pass_holders
+                  SET holder_name = $1, changed_by = $2::uuid
+                WHERE id = $3::uuid`,
+              [holder, req.user.id, existing.rows[0].id],
+            );
+          } else {
+            await client.query(
+              `INSERT INTO contractor_pass_holders (pass_id, holder_name, valid_from, changed_by)
+               VALUES ($1::uuid, $2, CURRENT_DATE, $3::uuid)`,
+              [passId, holder, req.user.id],
+            );
+          }
+        } else if (existing.rows[0]) {
+          // Очистка ФИО: удаляем открытую строку истории (ещё не подавалась).
+          await client.query(
+            `DELETE FROM contractor_pass_holders WHERE id = $1::uuid AND submission_id IS NULL`,
+            [existing.rows[0].id],
+          );
+        }
+      });
+
       res.json({ success: true });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -188,6 +239,166 @@ export const contractorController = {
       }
       console.error('Contractor setPassHolder error:', error);
       res.status(500).json({ success: false, error: 'Не удалось сохранить ФИО' });
+    }
+  },
+
+  /**
+   * Смена владельца уже применённого пропуска. Body: { new_holder_name, valid_from }.
+   * Закрывает текущую открытую строку истории (valid_until = valid_from - 1d) и
+   * создаёт новую. Меняет status пропуска на 'blocked', approval_status='pending'.
+   * В Sigur — блокируем профиль до повторного одобрения админом. Эндпоинт сам
+   * создаёт contractor_submissions (если нет открытой) или присоединяет к ней.
+   */
+  async changeHolder(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const orgId = await resolveOrgOr403(req, res);
+      if (!orgId) return;
+      const passId = req.params.id;
+      const { new_holder_name, valid_from } = z.object({
+        new_holder_name: z.string().trim().min(2).max(200),
+        valid_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      }).parse(req.body);
+
+      const pass = await queryOne<{
+        id: string; status: string; sigur_employee_id: number | null;
+      }>(
+        `SELECT id, status, sigur_employee_id FROM contractor_passes
+          WHERE id = $1::uuid AND org_department_id = $2::uuid`,
+        [passId, orgId],
+      );
+      if (!pass) {
+        res.status(404).json({ success: false, error: 'Пропуск не найден' });
+        return;
+      }
+      if (pass.status !== 'applied' && pass.status !== 'blocked' && pass.status !== 'assigned') {
+        res.status(409).json({ success: false, error: 'Смена владельца недоступна для этого пропуска' });
+        return;
+      }
+
+      const dryRun = isContractorSigurDryRun();
+      if (!dryRun && pass.sigur_employee_id) {
+        try {
+          const connection = await sigurService.getBackgroundConnectionType();
+          await updateSigurEmployee(pass.sigur_employee_id, { blocked: true }, connection);
+        } catch (sigurError) {
+          console.error('Contractor changeHolder Sigur block error:', sigurError);
+          // Не падаем: пропуск всё равно переходит в blocked в БД и попадёт в заявку.
+        }
+      }
+
+      const submissionId = await withTransaction(async client => {
+        // Закрываем текущую открытую строку владельца (valid_until = valid_from - 1 day).
+        await client.query(
+          `UPDATE contractor_pass_holders
+              SET valid_until = ($1::date - INTERVAL '1 day')::date
+            WHERE pass_id = $2::uuid AND valid_until IS NULL`,
+          [valid_from, passId],
+        );
+
+        // Создаём заявку (если нет открытой) или присоединяемся к существующей.
+        let sub = await client.query<{ id: string }>(
+          `SELECT id FROM contractor_submissions
+            WHERE org_department_id = $1::uuid AND status = 'pending' LIMIT 1`,
+          [orgId],
+        );
+        let subId: string;
+        if (sub.rows[0]) {
+          subId = sub.rows[0].id;
+        } else {
+          const created = await client.query<{ id: string }>(
+            `INSERT INTO contractor_submissions (org_department_id, submitted_by, status)
+             VALUES ($1::uuid, $2::uuid, 'pending') RETURNING id`,
+            [orgId, req.user.id],
+          );
+          subId = created.rows[0].id;
+        }
+
+        // Новая строка истории.
+        await client.query(
+          `INSERT INTO contractor_pass_holders
+             (pass_id, holder_name, valid_from, changed_by, submission_id)
+           VALUES ($1::uuid, $2, $3::date, $4::uuid, $5::uuid)`,
+          [passId, new_holder_name, valid_from, req.user.id, subId],
+        );
+
+        // Пропуск → blocked + pending, привязка к заявке, обновление denormalized holder_name.
+        await client.query(
+          `UPDATE contractor_passes
+              SET status = 'blocked',
+                  approval_status = 'pending',
+                  is_active = false,
+                  holder_name = $1,
+                  submission_id = $2::uuid,
+                  updated_at = now()
+            WHERE id = $3::uuid`,
+          [new_holder_name, subId, passId],
+        );
+
+        return subId;
+      });
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_PASS_HOLDER_CHANGED, {
+        entityType: 'contractor_pass',
+        entityId: passId,
+        details: { new_holder_name, valid_from, submission_id: submissionId },
+      });
+
+      res.json({ success: true, data: { submission_id: submissionId } });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Contractor changeHolder error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось сменить владельца' });
+    }
+  },
+
+  /** История ФИО и решений по пропуску (для timeline в ЛК). */
+  async getPassHistory(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const orgId = await resolveOrgOr403(req, res);
+      if (!orgId) return;
+      const passId = req.params.id;
+
+      // Проверка scope: пропуск принадлежит организации подрядчика.
+      const pass = await queryOne<{ id: string }>(
+        `SELECT id FROM contractor_passes
+          WHERE id = $1::uuid AND org_department_id = $2::uuid`,
+        [passId, orgId],
+      );
+      if (!pass) {
+        res.status(404).json({ success: false, error: 'Пропуск не найден' });
+        return;
+      }
+
+      const holders = await query(
+        `SELECT h.id, h.holder_name, h.valid_from, h.valid_until,
+                up.full_name AS changed_by_name,
+                h.submission_id, h.approved_at,
+                upa.full_name AS approved_by_name
+           FROM contractor_pass_holders h
+           LEFT JOIN user_profiles up  ON up.id = h.changed_by
+           LEFT JOIN user_profiles upa ON upa.id = h.approved_by
+          WHERE h.pass_id = $1::uuid
+          ORDER BY h.valid_from ASC, h.created_at ASC`,
+        [passId],
+      );
+
+      const decisions = await query(
+        `SELECT d.id, d.submission_id, d.decision, d.decided_at, d.reason, d.access_point_names,
+                up.full_name AS decided_by_name
+           FROM contractor_submission_decisions d
+           LEFT JOIN user_profiles up ON up.id = d.decided_by
+          WHERE d.pass_id = $1::uuid
+          ORDER BY d.decided_at DESC`,
+        [passId],
+      );
+
+      res.json({ success: true, data: { holders, decisions } });
+    } catch (error) {
+      console.error('Contractor getPassHistory error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить историю' });
     }
   },
 
@@ -238,8 +449,10 @@ export const contractorController = {
         );
         const prevPassId = prev.rows[0]?.assigned_pass_id ?? null;
         if (prevPassId && prevPassId !== passId) {
+          // Legacy: освобождение прежнего пропуска от ростер-человека. В новой
+          // модели статус-машина не меняется — связь хранится через assigned_pass_id.
           await client.query(
-            `UPDATE contractor_passes SET status = 'issued', updated_at = now()
+            `UPDATE contractor_passes SET updated_at = now()
               WHERE id = $1::uuid AND status = 'assigned'`,
             [prevPassId],
           );
@@ -279,7 +492,7 @@ export const contractorController = {
       const eligible = await queryOne<{ n: string }>(
         `SELECT COUNT(*)::text AS n FROM contractor_passes
           WHERE org_department_id = $1::uuid AND submission_id IS NULL
-            AND status = 'issued' AND holder_name IS NOT NULL`,
+            AND status = 'assigned' AND holder_name IS NOT NULL`,
         [orgId],
       );
       const passes = Number(eligible?.n ?? 0);
@@ -295,13 +508,27 @@ export const contractorController = {
           [orgId, req.user.id],
         );
         const subId = created.rows[0].id;
-        // Привязываем пропуска с вписанным ФИО к заявке.
+        // Привязываем пропуска с вписанным ФИО к заявке, status='submitted'.
         await client.query(
           `UPDATE contractor_passes
-              SET submission_id = $1::uuid, status = 'assigned', updated_at = now()
+              SET submission_id = $1::uuid,
+                  status = 'submitted',
+                  approval_status = 'pending',
+                  updated_at = now()
             WHERE org_department_id = $2::uuid AND submission_id IS NULL
-              AND status = 'issued' AND holder_name IS NOT NULL`,
+              AND status = 'assigned' AND holder_name IS NOT NULL`,
           [subId, orgId],
+        );
+        // Привязываем открытые строки истории владельцев к этой заявке.
+        await client.query(
+          `UPDATE contractor_pass_holders
+              SET submission_id = $1::uuid
+            WHERE valid_until IS NULL AND submission_id IS NULL
+              AND pass_id IN (
+                SELECT id FROM contractor_passes
+                 WHERE submission_id = $1::uuid
+              )`,
+          [subId],
         );
         return subId;
       });

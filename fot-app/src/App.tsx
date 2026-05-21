@@ -470,7 +470,7 @@ const AppRoutes = () => {
           <Route
             path="/admin/contractor-approvals"
             element={
-              <Layout title="Согласование подрядчиков" theme={theme} onToggleTheme={toggleTheme}>
+              <Layout title="Пропуск подрядчика" theme={theme} onToggleTheme={toggleTheme}>
                 <ContractorApprovalsPage />
               </Layout>
             }

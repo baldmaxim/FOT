@@ -22,10 +22,22 @@ export interface IContractorRosterRow {
   submission_id: string | null;
 }
 
+export type ContractorPassStatus =
+  | 'in_pool'
+  | 'assigned'
+  | 'submitted'
+  | 'applied'
+  | 'blocked'
+  | 'revoked';
+
+export type ContractorPassApprovalStatus = 'not_submitted' | 'pending' | 'approved' | 'rejected';
+
 export interface IContractorPassRow {
   id: string;
   pass_number: string;
-  status: 'issued' | 'assigned' | 'applied' | 'revoked';
+  status: ContractorPassStatus;
+  approval_status: ContractorPassApprovalStatus;
+  is_active: boolean;
   sigur_employee_id: number | null;
   card_uid: string | null;
   holder_name: string | null;
@@ -114,15 +126,21 @@ export const getRoster = async (orgDepartmentId: string): Promise<IContractorRos
     [orgDepartmentId],
   );
 
-/** Пропуска организации: номер, карта, объекты/точки, срок, вписанное ФИО. */
+/**
+ * Пропуска организации: номер, карта, объекты/точки, срок, текущее ФИО владельца.
+ * holder_name берётся из текущей открытой строки contractor_pass_holders
+ * (valid_until IS NULL); fallback на denormalized contractor_passes.holder_name.
+ */
 export const getPasses = async (orgDepartmentId: string): Promise<IContractorPassRow[]> =>
   query<IContractorPassRow>(
     `SELECT p.id,
             p.pass_number,
             p.status,
+            p.approval_status,
+            p.is_active,
             p.sigur_employee_id,
             p.card_uid,
-            p.holder_name,
+            COALESCE(h.holder_name, p.holder_name) AS holder_name,
             p.expires_at,
             p.submission_id,
             p.access_point_names,
@@ -131,6 +149,8 @@ export const getPasses = async (orgDepartmentId: string): Promise<IContractorPas
                  FROM skud_objects o WHERE o.id = ANY(p.object_ids)),
               '') AS object_label
        FROM contractor_passes p
+       LEFT JOIN contractor_pass_holders h
+         ON h.pass_id = p.id AND h.valid_until IS NULL
       WHERE p.org_department_id = $1::uuid AND p.status <> 'revoked'
       ORDER BY p.pass_number ASC`,
     [orgDepartmentId],

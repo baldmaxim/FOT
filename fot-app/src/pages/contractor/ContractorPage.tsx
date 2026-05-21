@@ -18,9 +18,20 @@ const stateBadge = (state: IRosterRow['state']): { cls: string; label: string } 
 const passBadge = (status: IPassRow['status']): { cls: string; label: string } => {
   switch (status) {
     case 'applied': return { cls: styles.badgeActive, label: 'выдан' };
-    case 'assigned': return { cls: styles.badgePending, label: 'на согласовании' };
+    case 'submitted': return { cls: styles.badgePending, label: 'на согласовании' };
+    case 'blocked': return { cls: styles.badgeRemove, label: 'заблокирован' };
     case 'revoked': return { cls: styles.badgeRemove, label: 'отозван' };
-    default: return { cls: styles.badgeAdd, label: 'свободен' };
+    case 'assigned': return { cls: styles.badgeAdd, label: 'ждёт ФИО' };
+    default: return { cls: styles.badgeAdd, label: status };
+  }
+};
+
+const approvalBadge = (status: IPassRow['approval_status']): { cls: string; label: string } | null => {
+  switch (status) {
+    case 'pending': return { cls: styles.badgePending, label: 'на рассмотрении' };
+    case 'approved': return { cls: styles.badgeActive, label: 'одобрено' };
+    case 'rejected': return { cls: styles.badgeRemove, label: 'не одобрено' };
+    default: return null;
   }
 };
 
@@ -37,8 +48,12 @@ export const ContractorPage: FC = () => {
   const [newName, setNewName] = useState('');
   const [busy, setBusy] = useState(false);
   const [edited, setEdited] = useState<Record<string, string>>({});
+  const [changeOwnerPass, setChangeOwnerPass] = useState<IPassRow | null>(null);
+  const [changeOwnerName, setChangeOwnerName] = useState('');
+  const [changeOwnerDate, setChangeOwnerDate] = useState(new Date().toISOString().slice(0, 10));
 
   const overlay = useOverlayDismiss(() => setAddOpen(false));
+  const changeOverlay = useOverlayDismiss(() => setChangeOwnerPass(null));
 
   const orgQuery = useQuery({ queryKey: ['contractor-org'], queryFn: contractorService.getMyOrg, staleTime: 5 * 60_000 });
   const rosterQuery = useQuery({ queryKey: ['contractor-roster'], queryFn: contractorService.getRoster, staleTime: 30_000 });
@@ -50,7 +65,7 @@ export const ContractorPage: FC = () => {
   const subs = subsQuery.data ?? [];
   const latest = subs[0];
   const hasPending = subs.some(s => s.status === 'pending');
-  const filledCount = passes.filter(p => p.status === 'issued' && !p.submission_id && (edited[p.id] ?? p.holder_name ?? '').trim().length >= 2).length;
+  const filledCount = passes.filter(p => p.status === 'assigned' && !p.submission_id && (edited[p.id] ?? p.holder_name ?? '').trim().length >= 2).length;
 
   const refresh = async () => {
     await Promise.all([
@@ -210,13 +225,15 @@ export const ContractorPage: FC = () => {
               <thead>
                 <tr>
                   <th>№ пропуска</th><th>UID</th><th>Организация</th><th>Доступ к объектам</th>
-                  <th>Срок</th><th>ФИО</th><th>Статус</th>
+                  <th>Срок</th><th>ФИО</th><th>Статус</th><th></th>
                 </tr>
               </thead>
               <tbody>
                 {passes.map(p => {
                   const b = passBadge(p.status);
-                  const editable = p.status === 'issued' && !p.submission_id;
+                  const ap = approvalBadge(p.approval_status);
+                  const editable = p.status === 'assigned' && !p.submission_id;
+                  const canChangeOwner = p.status === 'applied' || (p.status === 'blocked' && !p.submission_id);
                   const value = edited[p.id] ?? p.holder_name ?? '';
                   return (
                     <tr key={p.id}>
@@ -240,7 +257,25 @@ export const ContractorPage: FC = () => {
                           p.holder_name ?? '—'
                         )}
                       </td>
-                      <td><span className={`${styles.badge} ${b.cls}`}>{b.label}</span></td>
+                      <td>
+                        <span className={`${styles.badge} ${b.cls}`}>{b.label}</span>
+                        {ap && <>{' '}<span className={`${styles.badge} ${ap.cls}`}>{ap.label}</span></>}
+                      </td>
+                      <td>
+                        {canChangeOwner && (
+                          <button
+                            className="btn-secondary"
+                            disabled={busy}
+                            onClick={() => {
+                              setChangeOwnerPass(p);
+                              setChangeOwnerName('');
+                              setChangeOwnerDate(new Date().toISOString().slice(0, 10));
+                            }}
+                          >
+                            Сменить владельца
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -274,6 +309,70 @@ export const ContractorPage: FC = () => {
             <div className={styles.modalActions}>
               <button className="btn-secondary" onClick={() => setAddOpen(false)} disabled={busy}>Отмена</button>
               <button className="btn-primary" onClick={() => void handleAdd()} disabled={busy}>Добавить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {changeOwnerPass && (
+        <div
+          className={styles.overlay}
+          onMouseDown={changeOverlay.onMouseDown}
+          onMouseUp={changeOverlay.onMouseUp}
+          onMouseLeave={changeOverlay.onMouseLeave}
+          onTouchStart={changeOverlay.onTouchStart}
+          onTouchEnd={changeOverlay.onTouchEnd}
+        >
+          <div className={styles.modal}>
+            <h2 className={styles.modalTitle}>Смена владельца пропуска № {changeOwnerPass.pass_number}</h2>
+            <div className={styles.statusNote} style={{ marginBottom: 12 }}>
+              Текущий владелец: <b>{changeOwnerPass.holder_name ?? '—'}</b>
+              <br />
+              Пропуск будет заблокирован в Sigur до повторного одобрения админом.
+            </div>
+            <div className={styles.field}>
+              <span className={styles.label}>Новое ФИО</span>
+              <input
+                className={styles.input}
+                value={changeOwnerName}
+                autoFocus
+                placeholder="Фамилия Имя Отчество"
+                onChange={e => setChangeOwnerName(e.target.value)}
+              />
+            </div>
+            <div className={styles.field}>
+              <span className={styles.label}>Дата вступления</span>
+              <input
+                className={`${styles.input} ${styles.numInput}`}
+                type="date"
+                value={changeOwnerDate}
+                onChange={e => setChangeOwnerDate(e.target.value)}
+              />
+            </div>
+            <div className={styles.modalActions}>
+              <button
+                className="btn-secondary"
+                onClick={() => setChangeOwnerPass(null)}
+                disabled={busy}
+              >
+                Отмена
+              </button>
+              <button
+                className="btn-primary"
+                disabled={busy || changeOwnerName.trim().length < 2}
+                onClick={() => {
+                  const passId = changeOwnerPass.id;
+                  const name = changeOwnerName.trim();
+                  const date = changeOwnerDate;
+                  setChangeOwnerPass(null);
+                  void run(
+                    () => contractorService.changeHolder(passId, name, date).then(() => undefined),
+                    'Отправлено админу на согласование',
+                  );
+                }}
+              >
+                Сменить
+              </button>
             </div>
           </div>
         </div>

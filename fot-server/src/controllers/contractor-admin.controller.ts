@@ -180,7 +180,7 @@ export const contractorAdminController = {
             `INSERT INTO contractor_passes
                (org_department_id, pass_number, sigur_employee_id, card_uid,
                 object_ids, access_point_names, expires_at, status, created_by)
-             VALUES ($1::uuid, $2, $3, $4, $5::uuid[], $6::text[], $7::date, 'issued', $8::uuid)
+             VALUES ($1::uuid, $2, $3, $4, $5::uuid[], $6::text[], $7::date, 'assigned', $8::uuid)
              ON CONFLICT (org_department_id, pass_number) DO NOTHING`,
             [orgId, passNumber, sigurEmployeeId, cardUid,
              body.object_ids, body.access_point_names, expDate, req.user.id],
@@ -418,21 +418,26 @@ export const contractorAdminController = {
     }
   },
 
-  /** GET /submissions/:id — детали заявки (пропуска с вписанным ФИО). */
+  /** GET /submissions/:id — детали заявки (пропуска с вписанным ФИО и поштучным статусом). */
   async getSubmissionDetail(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!(await ensureSystemAdmin(req, res))) return;
       const rows = await query(
         `SELECT p.id,
                 p.pass_number,
-                p.holder_name,
+                COALESCE(h.holder_name, p.holder_name) AS holder_name,
                 p.card_uid,
                 p.status AS pass_status,
+                p.approval_status,
+                p.is_active,
+                p.access_point_names,
                 COALESCE(
                   (SELECT string_agg(o.name, ', ' ORDER BY o.name)
                      FROM skud_objects o WHERE o.id = ANY(p.object_ids)),
                   '') AS object_label
            FROM contractor_passes p
+           LEFT JOIN contractor_pass_holders h
+             ON h.pass_id = p.id AND h.valid_until IS NULL
           WHERE p.submission_id = $1::uuid
           ORDER BY p.pass_number ASC`,
         [req.params.id],
@@ -510,7 +515,8 @@ export const contractorAdminController = {
 
       // Шаг 2. Переименование нумерованных профилей → ФИО (вписано подрядчиком).
       // Точки доступа уже привязаны при выпуске; здесь — идемпотентный ре-бинд
-      // из access_point_names как страховка.
+      // из access_point_names как страховка. Берём пропуска со status='submitted'
+      // или 'blocked' (после change-holder) с заполненным ФИО.
       const toRename = await query<{
         pass_id: string; pass_status: string; pass_sigur_id: number | null;
         holder_name: string; access_point_names: string[] | null;
@@ -520,7 +526,7 @@ export const contractorAdminController = {
                 p.holder_name, p.access_point_names
            FROM contractor_passes p
           WHERE p.submission_id = $1::uuid
-            AND p.status = 'assigned'
+            AND p.status IN ('submitted', 'blocked')
             AND p.holder_name IS NOT NULL`,
         [submissionId],
       );
@@ -554,10 +560,30 @@ export const contractorAdminController = {
               }
             }
           }
-          await execute(
-            `UPDATE contractor_passes SET status = 'applied', updated_at = now() WHERE id = $1::uuid`,
-            [row.pass_id],
-          );
+          await withTransaction(async client => {
+            await client.query(
+              `UPDATE contractor_passes
+                  SET status = 'applied',
+                      approval_status = 'approved',
+                      is_active = true,
+                      updated_at = now()
+                WHERE id = $1::uuid`,
+              [row.pass_id],
+            );
+            await client.query(
+              `UPDATE contractor_pass_holders
+                  SET approved_by = $1::uuid, approved_at = now()
+                WHERE pass_id = $2::uuid AND valid_until IS NULL AND approved_at IS NULL`,
+              [req.user.id, row.pass_id],
+            );
+            await client.query(
+              `INSERT INTO contractor_submission_decisions
+                 (submission_id, pass_id, decision, decided_by, access_point_names)
+               VALUES ($1::uuid, $2::uuid, 'approved', $3::uuid, $4::text[])
+               ON CONFLICT DO NOTHING`,
+              [submissionId, row.pass_id, req.user.id, row.access_point_names],
+            );
+          });
           applied += 1;
         } catch (e) {
           failures.push(`pass ${row.pass_id}: ${e instanceof Error ? e.message : String(e)}`);
@@ -591,6 +617,353 @@ export const contractorAdminController = {
     }
   },
 
+  /**
+   * GET /passes/sent?org_department_id=? — пропуска, отправленные подрядчику и
+   * ещё не одобренные (assigned/submitted/blocked). Если org_department_id не
+   * передан — все подрядчики, сгруппировано на фронте.
+   */
+  async listSentPasses(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const orgFilter = typeof req.query.org_department_id === 'string'
+        ? req.query.org_department_id : null;
+
+      const rows = await query(
+        `SELECT p.id,
+                p.pass_number,
+                p.status,
+                p.approval_status,
+                p.is_active,
+                p.sigur_employee_id,
+                p.card_uid,
+                COALESCE(h.holder_name, p.holder_name) AS holder_name,
+                p.org_department_id,
+                d.name AS org_name,
+                p.submission_id,
+                p.created_at,
+                p.updated_at
+           FROM contractor_passes p
+           JOIN org_departments d ON d.id = p.org_department_id
+           LEFT JOIN contractor_pass_holders h
+             ON h.pass_id = p.id AND h.valid_until IS NULL
+          WHERE p.status IN ('assigned', 'submitted', 'blocked')
+            ${orgFilter ? 'AND p.org_department_id = $1::uuid' : ''}
+          ORDER BY d.name ASC, p.pass_number::int ASC`,
+        orgFilter ? [orgFilter] : [],
+      );
+      res.json({ success: true, data: rows });
+    } catch (error) {
+      console.error('Contractor listSentPasses error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить отправленные пропуска' });
+    }
+  },
+
+  /**
+   * GET /passes/monitor?org_department_id=? — все пропуска подрядчика (включая
+   * applied/blocked) с текущим ФИО для экрана мониторинга. revoked исключаются.
+   */
+  async monitorPasses(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const orgId = z.string().uuid().parse(req.query.org_department_id);
+
+      const rows = await query(
+        `SELECT p.id,
+                p.pass_number,
+                p.status,
+                p.approval_status,
+                p.is_active,
+                p.sigur_employee_id,
+                p.card_uid,
+                COALESCE(h.holder_name, p.holder_name) AS holder_name,
+                p.expires_at,
+                p.access_point_names,
+                p.submission_id,
+                p.updated_at,
+                COALESCE(
+                  (SELECT string_agg(o.name, ', ' ORDER BY o.name)
+                     FROM skud_objects o WHERE o.id = ANY(p.object_ids)),
+                  '') AS object_label
+           FROM contractor_passes p
+           LEFT JOIN contractor_pass_holders h
+             ON h.pass_id = p.id AND h.valid_until IS NULL
+          WHERE p.org_department_id = $1::uuid AND p.status <> 'revoked'
+          ORDER BY p.pass_number::int ASC`,
+        [orgId],
+      );
+      res.json({ success: true, data: rows });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Не указана организация' });
+        return;
+      }
+      console.error('Contractor monitorPasses error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить мониторинг' });
+    }
+  },
+
+  /**
+   * GET /passes/:id/history — история ФИО и решений по пропуску (для модалки
+   * timeline в админке).
+   */
+  async getPassHistoryAdmin(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const passId = req.params.id;
+      const holders = await query(
+        `SELECT h.id, h.holder_name, h.valid_from, h.valid_until,
+                up.full_name AS changed_by_name,
+                h.submission_id, h.approved_at,
+                upa.full_name AS approved_by_name
+           FROM contractor_pass_holders h
+           LEFT JOIN user_profiles up  ON up.id = h.changed_by
+           LEFT JOIN user_profiles upa ON upa.id = h.approved_by
+          WHERE h.pass_id = $1::uuid
+          ORDER BY h.valid_from ASC, h.created_at ASC`,
+        [passId],
+      );
+      const decisions = await query(
+        `SELECT d.id, d.submission_id, d.decision, d.decided_at, d.reason, d.access_point_names,
+                up.full_name AS decided_by_name
+           FROM contractor_submission_decisions d
+           LEFT JOIN user_profiles up ON up.id = d.decided_by
+          WHERE d.pass_id = $1::uuid
+          ORDER BY d.decided_at DESC`,
+        [passId],
+      );
+      res.json({ success: true, data: { holders, decisions } });
+    } catch (error) {
+      console.error('Contractor getPassHistoryAdmin error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить историю' });
+    }
+  },
+
+  /**
+   * POST /submissions/:id/decide — поштучные решения по заявке.
+   * Body: { decisions: [{ pass_id, decision: 'approved'|'rejected', reason?,
+   *                       access_point_names?[] }] }
+   * approved: rename в Sigur + unblock + access points + status='applied',
+   *           approval_status='approved', is_active=true, approved_at/by для holder.
+   * rejected: block в Sigur + status='blocked', approval_status='rejected'.
+   * Идемпотентно: повторные решения для уже обработанных пропусков игнорируются.
+   * По завершении переоценивает агрегатный статус заявки.
+   */
+  async decideSubmission(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const submissionId = req.params.id;
+      const body = z.object({
+        decisions: z.array(z.object({
+          pass_id: z.string().uuid(),
+          decision: z.enum(['approved', 'rejected']),
+          reason: z.string().trim().max(1000).optional(),
+          access_point_names: z.array(z.string().trim().min(1)).optional(),
+        })).min(1).max(500),
+      }).parse(req.body);
+
+      const sub = await queryOne<{ id: string; status: string; org_department_id: string }>(
+        'SELECT id, status, org_department_id FROM contractor_submissions WHERE id = $1::uuid',
+        [submissionId],
+      );
+      if (!sub) {
+        res.status(404).json({ success: false, error: 'Заявка не найдена' });
+        return;
+      }
+      if (sub.status !== 'pending' && sub.status !== 'partially_applied') {
+        res.status(409).json({ success: false, error: 'Заявка уже обработана' });
+        return;
+      }
+
+      const dryRun = isContractorSigurDryRun();
+      const connection = await sigurService.getBackgroundConnectionType();
+
+      const passes = await query<{
+        id: string; status: string; sigur_employee_id: number | null;
+        holder_name: string | null; submission_id: string | null;
+        access_point_names: string[] | null;
+      }>(
+        `SELECT id, status, sigur_employee_id, holder_name, submission_id, access_point_names
+           FROM contractor_passes
+          WHERE submission_id = $1::uuid AND id = ANY($2::uuid[])`,
+        [submissionId, body.decisions.map(d => d.pass_id)],
+      );
+      const byId = new Map(passes.map(p => [p.id, p]));
+
+      const applied: string[] = [];
+      const rejected: string[] = [];
+      const failures: string[] = [];
+      const warnings: string[] = [];
+
+      for (const dec of body.decisions) {
+        const pass = byId.get(dec.pass_id);
+        if (!pass) {
+          failures.push(`pass ${dec.pass_id}: не принадлежит заявке`);
+          continue;
+        }
+        // Идемпотентность: уже обработанные пропуска пропускаем.
+        if (pass.status === 'applied' || (pass.status === 'blocked' && (pass.submission_id !== submissionId))) {
+          continue;
+        }
+
+        if (dec.decision === 'approved') {
+          if (!pass.holder_name) {
+            failures.push(`pass ${pass.id}: нет ФИО`);
+            continue;
+          }
+          if (pass.sigur_employee_id == null) {
+            failures.push(`pass ${pass.id}: профиль не создан в Sigur`);
+            continue;
+          }
+          try {
+            // Резолв точек доступа (приоритет — из decision, иначе из пропуска).
+            const names = dec.access_point_names ?? pass.access_point_names ?? [];
+            let resolvedIds: number[] = [];
+            if (!dryRun && names.length > 0) {
+              const resolved = await resolveAccessPointNamesToIds(names, connection);
+              resolvedIds = resolved.accessPointIds;
+              if (resolved.unmatchedNames.length > 0) {
+                warnings.push(`pass ${pass.id}: точки не сопоставлены: ${resolved.unmatchedNames.join(', ')}`);
+              }
+            }
+
+            if (!dryRun) {
+              await updateSigurEmployee(
+                pass.sigur_employee_id,
+                { name: pass.holder_name, blocked: false },
+                connection,
+              );
+              if (resolvedIds.length > 0) {
+                await replaceSigurEmployeeAccessPoints(pass.sigur_employee_id, resolvedIds, connection);
+              }
+            }
+
+            await withTransaction(async client => {
+              await client.query(
+                `UPDATE contractor_passes
+                    SET status = 'applied',
+                        approval_status = 'approved',
+                        is_active = true,
+                        access_point_names = $1::text[],
+                        updated_at = now()
+                  WHERE id = $2::uuid`,
+                [names.length ? names : null, pass.id],
+              );
+              // Привязываем одобрение к открытой строке владельца.
+              await client.query(
+                `UPDATE contractor_pass_holders
+                    SET approved_by = $1::uuid, approved_at = now()
+                  WHERE pass_id = $2::uuid AND valid_until IS NULL AND approved_at IS NULL`,
+                [req.user.id, pass.id],
+              );
+              await client.query(
+                `INSERT INTO contractor_submission_decisions
+                   (submission_id, pass_id, decision, decided_by, reason, access_point_names)
+                 VALUES ($1::uuid, $2::uuid, 'approved', $3::uuid, $4, $5::text[])`,
+                [submissionId, pass.id, req.user.id, dec.reason ?? null, names.length ? names : null],
+              );
+            });
+            applied.push(pass.id);
+          } catch (e) {
+            failures.push(`pass ${pass.id}: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        } else {
+          // rejected
+          try {
+            if (!dryRun && pass.sigur_employee_id != null) {
+              try {
+                await updateSigurEmployee(pass.sigur_employee_id, { blocked: true }, connection);
+              } catch (sigurError) {
+                warnings.push(`pass ${pass.id} block: ${sigurError instanceof Error ? sigurError.message : String(sigurError)}`);
+              }
+            }
+            await withTransaction(async client => {
+              await client.query(
+                `UPDATE contractor_passes
+                    SET status = 'blocked',
+                        approval_status = 'rejected',
+                        is_active = false,
+                        updated_at = now()
+                  WHERE id = $1::uuid`,
+                [pass.id],
+              );
+              await client.query(
+                `INSERT INTO contractor_submission_decisions
+                   (submission_id, pass_id, decision, decided_by, reason)
+                 VALUES ($1::uuid, $2::uuid, 'rejected', $3::uuid, $4)`,
+                [submissionId, pass.id, req.user.id, dec.reason ?? null],
+              );
+            });
+            rejected.push(pass.id);
+          } catch (e) {
+            failures.push(`pass ${pass.id}: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+
+        await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_SUBMISSION_PASS_DECIDED, {
+          entityType: 'contractor_pass',
+          entityId: pass.id,
+          details: { decision: dec.decision, submission_id: submissionId },
+        });
+      }
+
+      // Переоценка агрегатного статуса заявки.
+      const counts = await queryOne<{
+        total: string; pending: string; approved: string; rejected: string;
+      }>(
+        `SELECT COUNT(*)::text AS total,
+                COUNT(*) FILTER (WHERE approval_status = 'pending')::text AS pending,
+                COUNT(*) FILTER (WHERE approval_status = 'approved')::text AS approved,
+                COUNT(*) FILTER (WHERE approval_status = 'rejected')::text AS rejected
+           FROM contractor_passes WHERE submission_id = $1::uuid`,
+        [submissionId],
+      );
+      const total = Number(counts?.total ?? 0);
+      const pending = Number(counts?.pending ?? 0);
+      const approvedCount = Number(counts?.approved ?? 0);
+      const rejectedCount = Number(counts?.rejected ?? 0);
+
+      let finalStatus = sub.status;
+      if (pending === 0) {
+        if (rejectedCount === 0) finalStatus = 'approved';
+        else if (approvedCount === 0) finalStatus = 'rejected';
+        else finalStatus = 'partially_applied';
+      } else if (approvedCount > 0 || rejectedCount > 0) {
+        finalStatus = 'partially_applied';
+      }
+
+      const applyError = [...failures, ...warnings];
+      await execute(
+        `UPDATE contractor_submissions
+            SET status = $1,
+                reviewed_by = $2::uuid,
+                reviewed_at = CASE WHEN $1 IN ('approved','rejected','partially_applied') THEN now() ELSE reviewed_at END,
+                apply_error = $3
+          WHERE id = $4::uuid`,
+        [finalStatus, req.user.id, applyError.length ? applyError.join('; ') : null, submissionId],
+      );
+
+      void total;
+      res.json({
+        success: true,
+        data: {
+          status: finalStatus,
+          applied: applied.length,
+          rejected: rejected.length,
+          failed: failures.length,
+          errors: failures,
+          warnings,
+        },
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Contractor decideSubmission error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось обработать решения' });
+    }
+  },
+
   /** POST /submissions/:id/reject — отклонение. Body: { comment }. Sigur не трогаем. */
   async rejectSubmission(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
@@ -614,12 +987,22 @@ export const contractorAdminController = {
       }
 
       await withTransaction(async client => {
-        // Возвращаем пропуска заявки в 'issued' (ФИО сохраняем — подрядчик
+        // Возвращаем пропуска заявки в 'assigned' (ФИО сохраняем — подрядчик
         // может поправить и переотправить); отвязываем от заявки.
         await client.query(
           `UPDATE contractor_passes
-              SET status = 'issued', submission_id = NULL, updated_at = now()
-            WHERE submission_id = $1::uuid AND status = 'assigned'`,
+              SET status = 'assigned',
+                  approval_status = 'not_submitted',
+                  submission_id = NULL,
+                  updated_at = now()
+            WHERE submission_id = $1::uuid AND status IN ('submitted', 'blocked')`,
+          [submissionId],
+        );
+        // Открытые строки истории владельца — отвязываем от заявки.
+        await client.query(
+          `UPDATE contractor_pass_holders
+              SET submission_id = NULL
+            WHERE submission_id = $1::uuid AND valid_until IS NULL`,
           [submissionId],
         );
         // Откат staged-строк ростера (legacy, пусто для нового потока).
