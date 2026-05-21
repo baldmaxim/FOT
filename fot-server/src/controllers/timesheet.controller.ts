@@ -130,6 +130,17 @@ const deleteObjectEntrySchema = z.object({
   object_key: z.string().trim().min(1).max(255),
 });
 
+// Возвращает человеко-читаемое сообщение о первой проблеме валидации zod.
+// Используется во всех catch (ZodError) контроллера, чтобы фронт показывал
+// конкретное поле в toast вместо абстрактной «Ошибка валидации».
+const formatZodErrorMessage = (err: z.ZodError): string => {
+  const first = err.errors[0];
+  if (!first) return 'Ошибка валидации';
+  const fieldPath = first.path?.join('.');
+  if (!fieldPath) return `Ошибка валидации: ${first.message}`;
+  return `Некорректное значение поля «${fieldPath}»: ${first.message}`;
+};
+
 
 /**
  * Согласование требуется, только если руководитель отмечает фактическую работу
@@ -1156,8 +1167,14 @@ export const timesheetController = {
           ?? null;
       }
 
-      const empWhere: string[] = [`employment_status = 'active'`, `is_archived = false`];
+      // Уволенные сотрудники с dismissal_date >= startDate должны попадать в табель,
+      // чтобы был виден их период работы до даты увольнения (cutoff применяется ниже).
       const empParams: unknown[] = [];
+      empParams.push(startDate);
+      const empWhere: string[] = [
+        `(employment_status = 'active' OR (employment_status = 'fired' AND dismissal_date IS NOT NULL AND dismissal_date >= $${empParams.length}::date))`,
+        `is_archived = false`,
+      ];
 
       if (shouldApplyDeptFilter) {
         const unionEmployeeIds = [...new Set([
@@ -1190,9 +1207,10 @@ export const timesheetController = {
         employment_status: string | null;
         excluded_from_timesheet: boolean;
         excluded_from_timesheet_date: string | null;
+        dismissal_date: string | null;
       }>(
         `SELECT id, full_name, position_id, org_department_id, employment_status,
-                excluded_from_timesheet, excluded_from_timesheet_date
+                excluded_from_timesheet, excluded_from_timesheet_date, dismissal_date
            FROM employees
            WHERE ${empWhere.join(' AND ')}
            ORDER BY full_name`,
@@ -1248,17 +1266,25 @@ export const timesheetController = {
       const startDay = Number.parseInt(startDate.slice(-2), 10);
       const endDay = Number.parseInt(endDate.slice(-2), 10);
 
-      // Дата выхода из табеля (включительно): min(excluded_from_timesheet_date, transferred_out_date).
-      // Дни >= cutoff не считаются в норму и не суммируются в факт — иначе у исключённого/переведённого
+      // Дата выхода из табеля (включительно): min(excluded_from_timesheet_date, transferred_out_date, dismissal_date + 1).
+      // Дни >= cutoff не считаются в норму и не суммируются в факт — иначе у исключённого/переведённого/уволенного
       // сотрудника весь хвост периода уходит в недоработку (план есть, факта нет).
+      const addOneIso = (iso: string): string => {
+        const [y, m, d] = iso.split('-').map(Number);
+        const dt = new Date(Date.UTC(y, m - 1, d));
+        dt.setUTCDate(dt.getUTCDate() + 1);
+        return dt.toISOString().slice(0, 10);
+      };
       const cutoffByEmployeeId = new Map<number, string | null>();
       for (const e of (employees || [])) {
         const empId = Number(e.id);
         const excluded = (e.excluded_from_timesheet_date as string | null) ?? null;
         const transferred = transferredOutByEmployeeId.get(empId) ?? null;
-        const cutoff = excluded && transferred
-          ? (excluded < transferred ? excluded : transferred)
-          : (excluded ?? transferred ?? null);
+        const dismissalCutoff = e.dismissal_date ? addOneIso(e.dismissal_date) : null;
+        const candidates = [excluded, transferred, dismissalCutoff].filter((v): v is string => !!v);
+        const cutoff = candidates.length > 0
+          ? candidates.reduce((min, v) => (v < min ? v : min))
+          : null;
         cutoffByEmployeeId.set(empId, cutoff);
       }
 
@@ -1587,7 +1613,7 @@ export const timesheetController = {
       res.json({ success: true, data });
     } catch (err) {
       if (err instanceof z.ZodError) {
-        return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+        return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
       }
       console.error('timesheet.create error:', err);
       res.status(500).json({ success: false, error: 'Ошибка создания записи' });
@@ -1700,7 +1726,7 @@ export const timesheetController = {
       res.json({ success: true, data });
     } catch (err) {
       if (err instanceof z.ZodError) {
-        return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+        return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
       }
       console.error('timesheet.update error:', err);
       const message = err instanceof Error ? err.message : '';
@@ -1834,7 +1860,7 @@ export const timesheetController = {
       });
     } catch (err) {
       if (err instanceof z.ZodError) {
-        return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+        return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
       }
       console.error('timesheet.bulkSave error:', err);
       res.status(500).json({ success: false, error: 'Ошибка массового обновления табеля' });
@@ -1918,7 +1944,7 @@ export const timesheetController = {
       });
     } catch (err) {
       if (err instanceof z.ZodError) {
-        return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+        return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
       }
       console.error('timesheet.upsertObjectEntry error:', err);
       res.status(500).json({ success: false, error: 'Ошибка сохранения корректировки по объекту' });
@@ -1971,7 +1997,7 @@ export const timesheetController = {
       res.json({ success: true, data: null });
     } catch (err) {
       if (err instanceof z.ZodError) {
-        return res.status(400).json({ success: false, error: 'Ошибка валидации', details: err.errors });
+        return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
       }
       console.error('timesheet.deleteObjectEntry error:', err);
       res.status(500).json({ success: false, error: 'Ошибка удаления корректировки по объекту' });

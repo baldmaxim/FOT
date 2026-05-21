@@ -119,6 +119,11 @@ export interface IAttendanceEntry {
   object_detail_message?: string | null;
   object_detail_count?: number;
   presence_covers_shift?: boolean;
+  // true, если за день у сотрудника в attendance_adjustments есть хотя бы одна
+  // запись с source_type='manual_object'. Такие записи нельзя удалить через
+  // DELETE /api/timesheet/:id (контроллер вернёт 409) — фронт по этому флагу
+  // прячет кнопку «Снять корректировку» в режиме «По сотрудникам».
+  has_object_adjustments?: boolean;
 }
 
 export interface IAttendanceBuildResult {
@@ -917,6 +922,23 @@ export async function buildAttendanceEntries(params: {
       entry.base_hours_worked = entry.display_hours_worked;
       entry.first_entry = null;
       entry.last_exit = null;
+    }
+  }
+
+  // Пометим дни, для которых в БД есть object-adjustments (source_type='manual_object').
+  // Используется фронтом, чтобы скрывать кнопку «Снять корректировку» в day-modal
+  // режима «По сотрудникам» — generic DELETE /api/timesheet/:id для таких записей вернёт 409.
+  const objectAdjustedDayKeys = new Set<string>();
+  for (const adjustment of adjustments) {
+    if (adjustment.source_type === OBJECT_ADJUSTMENT_SOURCE_TYPE) {
+      objectAdjustedDayKeys.add(`${adjustment.employee_id}_${adjustment.work_date}`);
+    }
+  }
+  if (objectAdjustedDayKeys.size > 0) {
+    for (const entry of entries) {
+      if (objectAdjustedDayKeys.has(`${entry.employee_id}_${entry.work_date}`)) {
+        entry.has_object_adjustments = true;
+      }
     }
   }
 

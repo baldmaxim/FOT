@@ -3763,6 +3763,15 @@
   font-size: 14px;
 }
 
+.ts-correction-info--notice {
+  background: rgba(245, 158, 11, 0.10);
+  border-color: rgba(245, 158, 11, 0.32);
+  color: var(--warning, #b45309);
+  align-items: flex-start;
+  line-height: 1.4;
+  margin-top: 8px;
+}
+
 /* Modal tabs */
 .ts-modal-tabs {
   display: flex;

@@ -41,6 +41,9 @@ interface ICorrectionModalProps {
   customContentFooterLabel?: string;
   timesheetEntry?: TimesheetEntry | null;
   maxHours?: number | null;
+  // Информационная плашка под шапкой (например, «часы заданы корректировкой по объекту»).
+  // Рендерится только в режиме корректировки и только если строка непустая.
+  infoBanner?: ReactNode;
   correctionInfo?: {
     is_correction: boolean;
     corrected_at?: string | null;
@@ -303,10 +306,24 @@ const CorrectionTab: FC<{
 }) => {
   const hasExistingCorrection = Boolean(correctionInfo?.is_correction);
   const [mode, setMode] = useState<'view' | 'edit'>(hasExistingCorrection ? 'view' : 'edit');
-  const [selectedStatus, setSelectedStatus] = useState<TimesheetStatus>(initialStatus);
+  const statusOptions = TYPE_OPTIONS.filter(option => !allowedStatuses || allowedStatuses.includes(option.status));
+  // initialStatus может прийти из display_status бэка (dayoff/holiday/manual) — таких опций
+  // в <select> нет, и без fallback state остаётся «невалидным»: визуально выбран первый
+  // option, но onChange не вызвался, и при сохранении уйдёт несовместимый со схемой статус.
+  // Fallback гарантирует, что selectedStatus всегда есть среди statusOptions.
+  const resolveValidStatus = (candidate: TimesheetStatus): TimesheetStatus => (
+    statusOptions.some(option => option.status === candidate)
+      ? candidate
+      : statusOptions[0]?.status ?? 'work'
+  );
+  const [selectedStatus, setSelectedStatus] = useState<TimesheetStatus>(() => resolveValidStatus(initialStatus));
+  useEffect(() => {
+    setSelectedStatus(prev => resolveValidStatus(prev));
+    // statusOptions пересчитывается каждый рендер из allowedStatuses — отслеживаем именно его.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allowedStatuses?.join('|')]);
   const [hours, setHours] = useState<number>(initialHours);
   const [notes, setNotes] = useState(initialNotes || '');
-  const statusOptions = TYPE_OPTIONS.filter(option => !allowedStatuses || allowedStatuses.includes(option.status));
   const showStatusPicker = statusOptions.length > 1;
 
   const trimmedNotes = notes.trim();
@@ -516,6 +533,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   deleteLabel,
   maxHours,
   dayStatusContext,
+  infoBanner,
 }) => {
   const showEventsTab = !hideSkudTab;
   const showCorrectionTab = !hideCorrectionTab;
@@ -599,6 +617,13 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
               {correctionInfo.approved_by_name && ` (${correctionInfo.approved_by_name})`}
             </>
           )}
+        </div>
+      )}
+
+      {infoBanner && (
+        <div className="ts-correction-info ts-correction-info--notice">
+          <span className="ts-correction-info-icon">ℹ</span>
+          <span>{infoBanner}</span>
         </div>
       )}
 

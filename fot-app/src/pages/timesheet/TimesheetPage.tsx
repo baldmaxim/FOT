@@ -1989,9 +1989,17 @@ export const TimesheetPage: FC = () => {
             onDelete={
               modalMode === 'object' && modalObjectEntry?.adjustment_id
                 ? handleDeleteObjectCorrection
-                : (modalMode === 'day' && modalEntry?.is_correction && modalEntry?.id)
+                : (modalMode === 'day'
+                    && modalEntry?.is_correction
+                    && modalEntry?.id
+                    && !modalEntry?.has_object_adjustments)
                   ? handleDeleteDayCorrection
                   : undefined
+            }
+            infoBanner={
+              modalMode === 'day' && modalEntry?.has_object_adjustments
+                ? 'Часы за этот день заданы корректировкой по объекту. Чтобы изменить или снять её, переключитесь в режим «По объектам».'
+                : null
             }
             initialStatus={
               modalMode === 'object' && modalObjectEntry?.adjustment_id
