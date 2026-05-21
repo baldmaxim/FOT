@@ -13,7 +13,7 @@ import { exportTimesheet } from './timesheet-export.controller.js';
 import { exportTimesheetMass } from './timesheet-mass-export.controller.js';
 import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned } from './timesheet-assigned-export.controller.js';
 import { generateWeekendMemo, getWeekendMemoPreview } from './timesheet-weekend-memo.controller.js';
-import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, computeCappedFactHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
+import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, getDayNormHours, computeCappedFactHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
 import {
   getSelfHistoryLimitForUser,
   isSelfEmployeeRequest,
@@ -800,7 +800,7 @@ function computeStatsFromTimesheetData(
       if (!schedule || !isWorkingDay(schedule, new Date(data.year, data.mon - 1, day), data.calendarMonth)) {
         continue;
       }
-      normHours += getScheduleForDate(schedule, new Date(data.year, data.mon - 1, day)).work_hours;
+      normHours += getDayNormHours(schedule, new Date(data.year, data.mon - 1, day), data.calendarMonth);
     }
   }
 
@@ -1323,7 +1323,7 @@ export const timesheetController = {
           if (nonWorkSet?.has(dateStr)) continue;
 
           empWorkDays++;
-          empNormHours += getScheduleForDate(sched, dateObj).work_hours;
+          empNormHours += getDayNormHours(sched, dateObj, calendarMonth);
         }
 
         normHours += empNormHours;
