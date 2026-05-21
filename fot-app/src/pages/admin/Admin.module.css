@@ -1652,7 +1652,8 @@
 
 .pendingInlineSearchWrap {
   position: relative;
-  flex: 1;
+  flex: 0 1 320px;
+  max-width: 320px;
   min-width: 220px;
 }
 
@@ -1663,6 +1664,134 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.pendingFioInput {
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  flex: 0 1 320px;
+  max-width: 320px;
+  min-width: 220px;
+  transition: border-color 0.15s;
+}
+
+.pendingFioInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.roleSelectWrap {
+  position: relative;
+  flex: 0 1 320px;
+  max-width: 320px;
+  min-width: 220px;
+}
+
+.roleSelectTrigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.roleSelectTrigger:hover {
+  border-color: var(--accent);
+}
+
+.roleSelectTrigger[aria-expanded="true"] {
+  border-color: var(--accent);
+}
+
+.roleSelectPlaceholder {
+  color: var(--text-tertiary);
+}
+
+.roleSelectChevron {
+  color: var(--text-tertiary);
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.roleSelectChevronOpen {
+  color: var(--accent);
+  transition: transform 0.15s;
+  transform: rotate(180deg);
+  flex-shrink: 0;
+}
+
+.roleSelectPanel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  z-index: 50;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.roleSelectOption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.1s;
+}
+
+.roleSelectOption:hover {
+  background: var(--bg-secondary);
+}
+
+.roleSelectOptionActive {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+}
+
+.roleSelectOptionActive:hover {
+  background: var(--bg-tertiary);
+}
+
+.roleSelectAdminBadge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
 }
 
 /* Name editing */

@@ -6,6 +6,7 @@ import { ApiError } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
 import type { EmployeePositionType } from '../../types';
+import { RoleSelect } from './RoleSelect';
 import styles from '../../pages/admin/Admin.module.css';
 
 // Сервер отдаёт причину отказа в ApiError.message (напр. «Подтверждение
@@ -26,6 +27,7 @@ export interface IPendingUser {
 
 interface IApprovalDraft {
   positionType: EmployeePositionType | '';
+  fullName: string;
   employeeId: number | null;
   employeeSearch: string;
   employeeResults: { id: number; full_name: string; org_department_id: string | null }[];
@@ -41,6 +43,7 @@ interface IPendingUsersTabProps {
 
 const EMPTY_DRAFT: IApprovalDraft = {
   positionType: '',
+  fullName: '',
   employeeId: null,
   employeeSearch: '',
   employeeResults: [],
@@ -98,7 +101,7 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
 
   const startApproval = (user: IPendingUser) => {
     setExpandedUserId(user.id);
-    setDraft({ ...EMPTY_DRAFT });
+    setDraft({ ...EMPTY_DRAFT, fullName: user.full_name || '' });
   };
 
   const cancelApproval = () => {
@@ -112,10 +115,19 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
       toast.error('Выберите роль перед одобрением');
       return;
     }
+    const trimmedName = draft.fullName.trim();
+    if (trimmedName.length < 2) {
+      toast.error('ФИО должно содержать минимум 2 символа');
+      return;
+    }
 
     try {
       const userId = expandedUserId;
+      const originalName = pendingUsers.find(u => u.id === userId)?.full_name || '';
       await cancelUserListQueries();
+      if (trimmedName !== originalName) {
+        await adminService.updateUserName(userId, trimmedName);
+      }
       await adminService.approveUser(userId, {
         position_type: draft.positionType,
         employee_id: draft.employeeId || undefined,
@@ -218,18 +230,24 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
             {isExpanded && (
               <div className={styles.pendingInline}>
                 <div className={styles.pendingInlineRow}>
+                  <label className={styles.pendingInlineLabel}>ФИО:</label>
+                  <input
+                    type="text"
+                    className={styles.pendingFioInput}
+                    value={draft.fullName}
+                    placeholder="Иванов Иван Иванович"
+                    onChange={(e) => setDraft(prev => ({ ...prev, fullName: e.target.value }))}
+                  />
+                </div>
+
+                <div className={styles.pendingInlineRow}>
                   <label className={styles.pendingInlineLabel}>Должность:</label>
-                  <select
+                  <RoleSelect
                     value={draft.positionType}
-                    onChange={(e) => setDraft(prev => ({ ...prev, positionType: e.target.value as EmployeePositionType }))}
-                  >
-                    <option value="">Выберите роль</option>
-                    {availableRoles.map(role => (
-                      <option key={role.code} value={role.code}>
-                        {role.name}
-                      </option>
-                    ))}
-                  </select>
+                    options={availableRoles.map(r => ({ code: r.code, name: r.name, is_admin: r.is_admin }))}
+                    onChange={(code) => setDraft(prev => ({ ...prev, positionType: code as EmployeePositionType }))}
+                    placeholder="Выберите роль"
+                  />
                 </div>
 
                 <div className={styles.pendingInlineRow}>
@@ -285,7 +303,7 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
                   <button
                     className={styles.approveBtn}
                     onClick={handleApproveConfirm}
-                    disabled={!draft.positionType}
+                    disabled={!draft.positionType || draft.fullName.trim().length < 2}
                   >
                     Подтвердить одобрение
                   </button>
