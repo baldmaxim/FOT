@@ -80,7 +80,9 @@
       "Read(//c/c/Users/Usrr/VSCode/Odintsov/FOT/docs/**)",
       "WebFetch(domain:archive.org)",
       "WebFetch(domain:developers.mts.ru)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(grep -A 2 \"mts\\\\\\\\|EmployeeFio\\\\\\\\|OsmCoord\")",
+      "PowerShell(git push personal main)"
     ],
     "additionalDirectories": [
       "c:\\Users\\Usrr\\VSCode\\Odintsov\\FOT\\.claude\\commands"
