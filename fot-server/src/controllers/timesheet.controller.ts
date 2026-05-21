@@ -292,16 +292,21 @@ async function resolveAdjustmentApprovalStatus(
   if (hoursOverride !== null && Number(hoursOverride) === 0) return 'auto_approved';
   if (!WORKED_STATUSES_FOR_APPROVAL.has(status)) return 'auto_approved';
 
-  let employee: { id: number | string } | null = null;
+  let employee: { id: number | string; kind: string | null } | null = null;
   try {
-    employee = await query<{ id: number | string }>(
-      `SELECT id FROM employees WHERE id = $1 LIMIT 1`,
+    employee = await query<{ id: number | string; kind: string | null }>(
+      `SELECT e.id, d.kind
+         FROM employees e
+         LEFT JOIN org_departments d ON d.id = e.org_department_id
+        WHERE e.id = $1 LIMIT 1`,
       [employeeId],
     ).then(rows => rows[0] ?? null);
   } catch {
     return 'auto_approved';
   }
   if (!employee) return 'auto_approved';
+  // Бригады: правило согласования выходов в нерабочий день к ним не применяется.
+  if (employee.kind === 'brigade') return 'auto_approved';
 
   const schedules = await resolveSchedulesForPeriod(
     [{ id: Number(employee.id) }],
@@ -354,8 +359,22 @@ async function reapproveAdjustmentsForRange(
   }>(sql, params);
   if (rows.length === 0) return 0;
 
-  const empList = [...new Set(rows.map(r => Number(r.employee_id)))].map(id => ({ id }));
+  const empIds = [...new Set(rows.map(r => Number(r.employee_id)))];
+  const empList = empIds.map(id => ({ id }));
   const schedules = await resolveSchedulesForPeriod(empList, startDate, endDate);
+
+  // Один запрос на весь диапазон: сотрудники бригад идут в auto_approved без проверок графика.
+  const kindMap = new Map<number, string | null>();
+  if (empIds.length > 0) {
+    const kindRows = await query<{ id: number | string; kind: string | null }>(
+      `SELECT e.id, d.kind
+         FROM employees e
+         LEFT JOIN org_departments d ON d.id = e.org_department_id
+        WHERE e.id = ANY($1::int[])`,
+      [empIds],
+    );
+    for (const r of kindRows) kindMap.set(Number(r.id), r.kind);
+  }
 
   // Производственный календарь грузим по месяцам диапазона один раз.
   const calendarCache = new Map<string, Awaited<ReturnType<typeof loadCalendarMonth>>>();
@@ -380,6 +399,8 @@ async function reapproveAdjustmentsForRange(
     if (hoursOverride !== null && hoursOverride === 0) {
       target = 'auto_approved';
     } else if (!WORKED_STATUSES_FOR_APPROVAL.has(status)) {
+      target = 'auto_approved';
+    } else if (kindMap.get(empId) === 'brigade') {
       target = 'auto_approved';
     } else {
       const schedule = schedules.get(empId)?.get(workDate);

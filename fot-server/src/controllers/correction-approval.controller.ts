@@ -88,15 +88,18 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
     }
 
     const employeeIds = [...new Set(adjustments.map(a => Number(a.employee_id)))];
-    const employees = await query<{ id: number; full_name: string | null; org_department_id: string | null }>(
-      `SELECT id, full_name, org_department_id
-         FROM employees
-        WHERE id = ANY($1::bigint[])`,
+    const employees = await query<{ id: number; full_name: string | null; org_department_id: string | null; kind: string | null }>(
+      `SELECT e.id, e.full_name, e.org_department_id, d.kind
+         FROM employees e
+         LEFT JOIN org_departments d ON d.id = e.org_department_id
+        WHERE e.id = ANY($1::bigint[])`,
       [employeeIds],
     );
 
     const allowedDeptIds = accessible === 'all' ? null : new Set(accessible);
     const filteredEmployees = employees.filter(e => {
+      // Бригады не участвуют в согласовании корректировок.
+      if (e.kind === 'brigade') return false;
       if (!allowedDeptIds) return true;
       const deptId = e.org_department_id ? String(e.org_department_id) : null;
       const inDeptSubtree = deptId !== null && allowedDeptIds.has(deptId);
@@ -708,13 +711,18 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
     }
 
     const employeeIds = [...new Set(adjustments.map(a => Number(a.employee_id)))];
-    const employees = await query<{ id: number; full_name: string | null; org_department_id: string | null }>(
-      `SELECT id, full_name, org_department_id FROM employees WHERE id = ANY($1::bigint[])`,
+    const employees = await query<{ id: number; full_name: string | null; org_department_id: string | null; kind: string | null }>(
+      `SELECT e.id, e.full_name, e.org_department_id, d.kind
+         FROM employees e
+         LEFT JOIN org_departments d ON d.id = e.org_department_id
+        WHERE e.id = ANY($1::bigint[])`,
       [employeeIds],
     );
 
     const allowedDeptIds = accessible === 'all' ? null : new Set(accessible);
     const filteredEmployees = employees.filter(e => {
+      // Бригады не участвуют в истории согласований корректировок.
+      if (e.kind === 'brigade') return false;
       if (!allowedDeptIds) return true;
       const deptId = e.org_department_id ? String(e.org_department_id) : null;
       const inDeptSubtree = deptId !== null && allowedDeptIds.has(deptId);
