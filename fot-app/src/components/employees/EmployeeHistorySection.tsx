@@ -3,6 +3,8 @@ import { TrendingUp, TrendingDown, Minus, Briefcase, Pencil, Trash2, Check, X, P
 import { employeeService } from '../../services/employeeService';
 import type { EmployeeHistoryEvent } from '../../types';
 
+type EditableHistoryEvent = EmployeeHistoryEvent & { event_type: 'salary' | 'assignment' };
+
 interface IEmployeeHistorySectionProps {
   employeeId: number;
   history: EmployeeHistoryEvent[];
@@ -62,7 +64,7 @@ export const EmployeeHistorySection: FC<IEmployeeHistorySectionProps> = ({ emplo
     return map;
   }, [salaryEvents]);
 
-  const startEdit = useCallback((ev: EmployeeHistoryEvent) => {
+  const startEdit = useCallback((ev: EditableHistoryEvent) => {
     const data = ev.event_data as Record<string, unknown>;
     setEditingId(ev.event_id);
     setEditDate(ev.event_date);
@@ -71,7 +73,7 @@ export const EmployeeHistorySection: FC<IEmployeeHistorySectionProps> = ({ emplo
     setAddMode(null);
   }, []);
 
-  const saveEdit = useCallback(async (ev: EmployeeHistoryEvent) => {
+  const saveEdit = useCallback(async (ev: EditableHistoryEvent) => {
     setSaving(true);
     try {
       const body: Record<string, unknown> = { effective_date: editDate, change_reason: editReason };
@@ -86,7 +88,7 @@ export const EmployeeHistorySection: FC<IEmployeeHistorySectionProps> = ({ emplo
     }
   }, [employeeId, editDate, editReason, editSalary, onRefresh]);
 
-  const handleDelete = useCallback(async (ev: EmployeeHistoryEvent) => {
+  const handleDelete = useCallback(async (ev: EditableHistoryEvent) => {
     if (!confirm('Удалить запись?')) return;
     try {
       await employeeService.deleteHistoryEvent(employeeId, ev.event_id, ev.event_type);
@@ -167,6 +169,7 @@ export const EmployeeHistorySection: FC<IEmployeeHistorySectionProps> = ({ emplo
             const isEditing = editingId === event.event_id;
 
             if (event.event_type === 'salary') {
+              const editableEvent = event as EditableHistoryEvent;
               const salary = data.salary as number | null;
               const delta = salaryDeltas.get(event.event_id);
               const isFirst = salaryEvents[0]?.event_id === event.event_id;
@@ -190,7 +193,7 @@ export const EmployeeHistorySection: FC<IEmployeeHistorySectionProps> = ({ emplo
                         </div>
                         <input value={editReason} onChange={e => setEditReason(e.target.value)} placeholder="Причина" />
                         <div className="ec-history-edit-actions">
-                          <button type="button" className="ec-history-edit-btn save" onClick={() => saveEdit(event)} disabled={saving}>
+                          <button type="button" className="ec-history-edit-btn save" onClick={() => saveEdit(editableEvent)} disabled={saving}>
                             <Check size={13} /> {saving ? '...' : 'OK'}
                           </button>
                           <button type="button" className="ec-history-edit-btn" onClick={() => setEditingId(null)}>
@@ -214,10 +217,10 @@ export const EmployeeHistorySection: FC<IEmployeeHistorySectionProps> = ({ emplo
                             </span>
                           )}
                           <span className="ec-history-actions">
-                            <button type="button" className="ec-history-act-btn" onClick={() => startEdit(event)} title="Редактировать">
+                            <button type="button" className="ec-history-act-btn" onClick={() => startEdit(editableEvent)} title="Редактировать">
                               <Pencil size={12} />
                             </button>
-                            <button type="button" className="ec-history-act-btn danger" onClick={() => handleDelete(event)} title="Удалить">
+                            <button type="button" className="ec-history-act-btn danger" onClick={() => handleDelete(editableEvent)} title="Удалить">
                               <Trash2 size={12} />
                             </button>
                           </span>
@@ -226,6 +229,62 @@ export const EmployeeHistorySection: FC<IEmployeeHistorySectionProps> = ({ emplo
                           {isHire ? 'Оклад при приёме' : isFirst ? 'Начальный оклад' : 'Изменение оклада'}
                           {reason && !isHire ? <span className="ec-history-reason"> · {reason}</span> : null}
                         </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
+            if (event.event_type === 'assignment') {
+              const editableEvent = event as EditableHistoryEvent;
+              return (
+                <div key={event.event_id} className={`ec-history-item ec-history-assignment ${isEditing ? 'editing' : ''}`}>
+                  <div className="ec-history-date-col">
+                    <span className="ec-history-date-text">{formatDate(event.event_date)}</span>
+                    {event.event_end_date && (
+                      <span className="ec-history-date-end">— {formatDate(event.event_end_date)}</span>
+                    )}
+                  </div>
+                  <div className="ec-history-line">
+                    <div className="ec-history-dot blue" />
+                  </div>
+                  <div className="ec-history-card">
+                    {isEditing ? (
+                      <div className="ec-history-edit-form">
+                        <div className="ec-history-add-row">
+                          <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)} />
+                        </div>
+                        <input value={editReason} onChange={e => setEditReason(e.target.value)} placeholder="Причина" />
+                        <div className="ec-history-edit-actions">
+                          <button type="button" className="ec-history-edit-btn save" onClick={() => saveEdit(editableEvent)} disabled={saving}>
+                            <Check size={13} /> {saving ? '...' : 'OK'}
+                          </button>
+                          <button type="button" className="ec-history-edit-btn" onClick={() => setEditingId(null)}>
+                            <X size={13} />
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="ec-history-card-top">
+                          <Briefcase size={14} className="ec-history-assign-icon" />
+                          <span className="ec-history-assign-title">{getAssignmentTitle(data)}</span>
+                          <span className="ec-history-actions">
+                            <button type="button" className="ec-history-act-btn" onClick={() => startEdit(editableEvent)} title="Редактировать">
+                              <Pencil size={12} />
+                            </button>
+                            <button type="button" className="ec-history-act-btn danger" onClick={() => handleDelete(editableEvent)} title="Удалить">
+                              <Trash2 size={12} />
+                            </button>
+                          </span>
+                        </div>
+                        {(data.position as string || data.department as string) && (
+                          <div className="ec-history-card-details">
+                            {data.position ? <span>{String(data.position)}</span> : null}
+                            {data.department ? <span className="ec-history-dept">{String(data.department)}</span> : null}
+                          </div>
+                        )}
                       </>
                     )}
                   </div>
@@ -245,42 +304,15 @@ export const EmployeeHistorySection: FC<IEmployeeHistorySectionProps> = ({ emplo
                   <div className="ec-history-dot blue" />
                 </div>
                 <div className="ec-history-card">
-                  {isEditing ? (
-                    <div className="ec-history-edit-form">
-                      <div className="ec-history-add-row">
-                        <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)} />
-                      </div>
-                      <input value={editReason} onChange={e => setEditReason(e.target.value)} placeholder="Причина" />
-                      <div className="ec-history-edit-actions">
-                        <button type="button" className="ec-history-edit-btn save" onClick={() => saveEdit(event)} disabled={saving}>
-                          <Check size={13} /> {saving ? '...' : 'OK'}
-                        </button>
-                        <button type="button" className="ec-history-edit-btn" onClick={() => setEditingId(null)}>
-                          <X size={13} />
-                        </button>
-                      </div>
+                  <div className="ec-history-card-top">
+                    <Briefcase size={14} className="ec-history-assign-icon" />
+                    <span className="ec-history-assign-title">Увольнение</span>
+                  </div>
+                  {Boolean(data.dismissal_date || data.reason) && (
+                    <div className="ec-history-card-details">
+                      {data.dismissal_date ? <span>{String(data.dismissal_date)}</span> : null}
+                      {data.reason ? <span className="ec-history-dept">{String(data.reason)}</span> : null}
                     </div>
-                  ) : (
-                    <>
-                      <div className="ec-history-card-top">
-                        <Briefcase size={14} className="ec-history-assign-icon" />
-                        <span className="ec-history-assign-title">{getAssignmentTitle(data)}</span>
-                        <span className="ec-history-actions">
-                          <button type="button" className="ec-history-act-btn" onClick={() => startEdit(event)} title="Редактировать">
-                            <Pencil size={12} />
-                          </button>
-                          <button type="button" className="ec-history-act-btn danger" onClick={() => handleDelete(event)} title="Удалить">
-                            <Trash2 size={12} />
-                          </button>
-                        </span>
-                      </div>
-                      {(data.position as string || data.department as string) && (
-                        <div className="ec-history-card-details">
-                          {data.position ? <span>{String(data.position)}</span> : null}
-                          {data.department ? <span className="ec-history-dept">{String(data.department)}</span> : null}
-                        </div>
-                      )}
-                    </>
                   )}
                 </div>
               </div>

@@ -4,6 +4,8 @@ import { employeeService } from '../../services/employeeService';
 import { useToast } from '../../contexts/ToastContext';
 import type { Employee, EmployeeHistoryEvent } from '../../types';
 
+type EditableHistoryEvent = EmployeeHistoryEvent & { event_type: 'salary' | 'assignment' };
+
 const fmt = (n: number | null | undefined) =>
   n ? n.toLocaleString('ru-RU') + ' ₽' : '—';
 
@@ -53,7 +55,7 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
     [history],
   );
 
-  const startEdit = useCallback((ev: EmployeeHistoryEvent) => {
+  const startEdit = useCallback((ev: EditableHistoryEvent) => {
     const data = ev.event_data as Record<string, unknown>;
     setEditingId(ev.event_id);
     setEditDate(ev.event_date);
@@ -62,7 +64,7 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
     setAddMode(null);
   }, []);
 
-  const saveEdit = useCallback(async (ev: EmployeeHistoryEvent) => {
+  const saveEdit = useCallback(async (ev: EditableHistoryEvent) => {
     setSaving(true);
     try {
       const body: Record<string, unknown> = { effective_date: editDate, change_reason: editReason };
@@ -78,7 +80,7 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
     }
   }, [employee.id, editDate, editReason, editSalary, onRefresh, onDataChanged, toast]);
 
-  const handleDelete = useCallback(async (ev: EmployeeHistoryEvent) => {
+  const handleDelete = useCallback(async (ev: EditableHistoryEvent) => {
     if (!confirm('Удалить запись?')) return;
     try {
       await employeeService.deleteHistoryEvent(employee.id, ev.event_id, ev.event_type);
@@ -168,6 +170,7 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
                 const isEditing = editingId === ev.event_id;
 
                 if (ev.event_type === 'salary') {
+                  const editableEvent = ev as EditableHistoryEvent;
                   const salary = data.salary as number | null;
                   const delta = salaryDeltas.get(ev.event_id);
                   const reason = String(data.reason || '');
@@ -189,7 +192,7 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
                             </div>
                             <input value={editReason} onChange={e => setEditReason(e.target.value)} placeholder="Причина" />
                             <div className="sc-panel-edit-actions">
-                              <button className="sc-panel-edit-btn save" onClick={() => saveEdit(ev)} disabled={saving}>
+                              <button className="sc-panel-edit-btn save" onClick={() => saveEdit(editableEvent)} disabled={saving}>
                                 <Check size={13} /> {saving ? '...' : 'OK'}
                               </button>
                               <button className="sc-panel-edit-btn" onClick={() => setEditingId(null)}>×</button>
@@ -208,8 +211,8 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
                             {reason && !isHire ? <span className="sc-panel-reason-sm">{reason}</span> : null}
                             {canEdit && (
                               <span className="sc-panel-item-btns">
-                                <button className="sc-panel-act-btn" onClick={() => startEdit(ev)}><Pencil size={11} /></button>
-                                <button className="sc-panel-act-btn danger" onClick={() => handleDelete(ev)}><Trash2 size={11} /></button>
+                                <button className="sc-panel-act-btn" onClick={() => startEdit(editableEvent)}><Pencil size={11} /></button>
+                                <button className="sc-panel-act-btn danger" onClick={() => handleDelete(editableEvent)}><Trash2 size={11} /></button>
                               </span>
                             )}
                           </div>
@@ -226,41 +229,62 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
                   return 'Назначение';
                 })();
 
+                if (ev.event_type === 'assignment') {
+                  const editableEvent = ev as EditableHistoryEvent;
+                  return (
+                    <div key={ev.event_id} className={`sc-panel-item ${isEditing ? 'editing' : ''}`}>
+                      <div className="sc-panel-dot-col">
+                        <div className="sc-panel-dot blue" />
+                        <div className="sc-panel-line" />
+                      </div>
+                      <div className="sc-panel-content">
+                        {isEditing ? (
+                          <div className="sc-panel-edit-form">
+                            <div className="sc-panel-edit-row">
+                              <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)} />
+                            </div>
+                            <input value={editReason} onChange={e => setEditReason(e.target.value)} placeholder="Причина" />
+                            <div className="sc-panel-edit-actions">
+                              <button className="sc-panel-edit-btn save" onClick={() => saveEdit(editableEvent)} disabled={saving}>
+                                <Check size={13} /> {saving ? '...' : 'OK'}
+                              </button>
+                              <button className="sc-panel-edit-btn" onClick={() => setEditingId(null)}>×</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="sc-panel-row-compact">
+                            <span className="sc-panel-date-sm">{fmtDate(ev.event_date)}</span>
+                            <Briefcase size={12} className="sc-panel-assign-icon" />
+                            <span className="sc-panel-assign-sm">{title}</span>
+                            {data.position ? <span className="sc-panel-pos-sm">{String(data.position)}</span> : null}
+                            {data.department ? <span className="sc-panel-reason-sm">{String(data.department)}</span> : null}
+                            {canEdit && (
+                              <span className="sc-panel-item-btns">
+                                <button className="sc-panel-act-btn" onClick={() => startEdit(editableEvent)}><Pencil size={11} /></button>
+                                <button className="sc-panel-act-btn danger" onClick={() => handleDelete(editableEvent)}><Trash2 size={11} /></button>
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+
                 return (
-                  <div key={ev.event_id} className={`sc-panel-item ${isEditing ? 'editing' : ''}`}>
+                  <div key={ev.event_id} className="sc-panel-item">
                     <div className="sc-panel-dot-col">
                       <div className="sc-panel-dot blue" />
                       <div className="sc-panel-line" />
                     </div>
                     <div className="sc-panel-content">
-                      {isEditing ? (
-                        <div className="sc-panel-edit-form">
-                          <div className="sc-panel-edit-row">
-                            <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)} />
-                          </div>
-                          <input value={editReason} onChange={e => setEditReason(e.target.value)} placeholder="Причина" />
-                          <div className="sc-panel-edit-actions">
-                            <button className="sc-panel-edit-btn save" onClick={() => saveEdit(ev)} disabled={saving}>
-                              <Check size={13} /> {saving ? '...' : 'OK'}
-                            </button>
-                            <button className="sc-panel-edit-btn" onClick={() => setEditingId(null)}>×</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="sc-panel-row-compact">
-                          <span className="sc-panel-date-sm">{fmtDate(ev.event_date)}</span>
-                          <Briefcase size={12} className="sc-panel-assign-icon" />
-                          <span className="sc-panel-assign-sm">{title}</span>
-                          {data.position ? <span className="sc-panel-pos-sm">{String(data.position)}</span> : null}
-                          {data.department ? <span className="sc-panel-reason-sm">{String(data.department)}</span> : null}
-                          {canEdit && (
-                            <span className="sc-panel-item-btns">
-                              <button className="sc-panel-act-btn" onClick={() => startEdit(ev)}><Pencil size={11} /></button>
-                              <button className="sc-panel-act-btn danger" onClick={() => handleDelete(ev)}><Trash2 size={11} /></button>
-                            </span>
-                          )}
-                        </div>
-                      )}
+                      <div className="sc-panel-row-compact">
+                        <span className="sc-panel-date-sm">{fmtDate(ev.event_date)}</span>
+                        <Briefcase size={12} className="sc-panel-assign-icon" />
+                        <span className="sc-panel-assign-sm">Увольнение</span>
+                        {data.dismissal_date ? <span className="sc-panel-pos-sm">{String(data.dismissal_date)}</span> : null}
+                        {data.reason ? <span className="sc-panel-reason-sm">{String(data.reason)}</span> : null}
+                      </div>
                     </div>
                   </div>
                 );
