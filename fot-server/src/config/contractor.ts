@@ -1,17 +1,18 @@
 /**
  * Конфиг подрядчиков. Корень дерева подрядных организаций в org_departments —
- * синтетический узел с этим именем (создаётся в Sigur, синхронизируется через
- * sigur-sync-structure). Поиск по имени — прецедент «Объект» в listCompanies.
+ * папка с этим именем (создаётся в Sigur, синхронизируется через
+ * sigur-sync-structure). Sigur sync вешает все свои верхние узлы на синтетический
+ * корень «Объект», поэтому ищем по имени без условия parent_id IS NULL.
  */
 import { queryOne } from './postgres.js';
 
 export const CONTRACTOR_ROOT_NAME = 'подрядные организации';
 
-/** id корневого узла «подрядные организации» или null, если не синхронизирован. */
+/** id узла «подрядные организации» или null, если не синхронизирован. */
 export const getContractorRootId = async (): Promise<string | null> => {
   const row = await queryOne<{ id: string }>(
     `SELECT id FROM org_departments
-      WHERE parent_id IS NULL AND name = $1
+      WHERE name = $1 AND is_active = true
       LIMIT 1`,
     [CONTRACTOR_ROOT_NAME],
   );
