@@ -641,6 +641,12 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
     staleTime: 30_000,
   });
 
+  const submittedQuery = useQuery({
+    queryKey: ['approval-submitted-employees', row.id],
+    queryFn: () => timesheetApprovalService.getSubmittedEmployees(row.id),
+    staleTime: 60_000,
+  });
+
   const outOfPeriodDates = useMemo(() => {
     const set = new Set<string>();
     if (!monthBounds) return set;
@@ -685,6 +691,35 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
 
   return (
     <div className="approvals-card-body">
+      <div className="approvals-submission-summary">
+        <div className="approvals-submission-row">
+          <span className="approvals-submission-label">Отдел:</span>
+          <span className="approvals-submission-value">{row.department_name ?? row.department_id}</span>
+        </div>
+        <div className="approvals-submission-row">
+          <span className="approvals-submission-label">Руководитель:</span>
+          <span className="approvals-submission-manager">{row.submitted_by_name ?? '—'}</span>
+        </div>
+        <div className="approvals-submission-row approvals-submission-row--employees">
+          <span className="approvals-submission-label">
+            Сотрудники{submittedQuery.data ? ` (${submittedQuery.data.employees.length})` : ''}:
+          </span>
+          {submittedQuery.isLoading ? (
+            <span className="approvals-submission-value">Загрузка…</span>
+          ) : submittedQuery.isError ? (
+            <span className="approvals-submission-value approvals-submission-error">не удалось загрузить состав</span>
+          ) : submittedQuery.data && submittedQuery.data.employees.length > 0 ? (
+            <ul className="approvals-submission-employees">
+              {submittedQuery.data.employees.map(e => (
+                <li key={e.employee_id}>{e.full_name}</li>
+              ))}
+            </ul>
+          ) : (
+            <span className="approvals-submission-value">—</span>
+          )}
+        </div>
+      </div>
+
       {hasPendingWeekend && (
         <div className="approvals-flags">
           <span className="approvals-flag approvals-flag--yellow">

@@ -23,6 +23,7 @@ router.get('/department', requirePageAccess('/timesheet', 'view'), timesheetAppr
 router.get('/pending', requirePageAccess('/timesheet-hr', 'view'), timesheetApprovalController.getPending);
 router.get('/list', requirePageAccess('/timesheet-hr', 'view'), timesheetApprovalController.getByStatus);
 router.get('/:id/history', requirePageAccess('/timesheet-hr', 'view'), timesheetApprovalController.getHistory);
+router.get('/:id/employees', requirePageAccess('/timesheet-hr', 'view'), timesheetApprovalController.getSubmittedEmployees);
 
 // Утверждение/отклонение/возврат — edit на /timesheet-hr.
 router.post('/:id/approve', requirePageAccess('/timesheet-hr', 'edit'), timesheetApprovalController.approve);

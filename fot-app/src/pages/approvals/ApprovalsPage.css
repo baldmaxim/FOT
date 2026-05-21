@@ -196,6 +196,63 @@
   gap: 12px;
   background: var(--bg-secondary);
 }
+.approvals-submission-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.approvals-submission-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+.approvals-submission-row--employees {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+}
+.approvals-submission-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.approvals-submission-value {
+  color: var(--text-primary);
+}
+.approvals-submission-error {
+  color: var(--error);
+}
+.approvals-submission-manager {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+.approvals-submission-employees {
+  list-style: disc inside;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  column-count: 2;
+  column-gap: 24px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.approvals-submission-employees li {
+  margin: 0;
+  padding: 2px 0;
+  break-inside: avoid;
+}
+@media (max-width: 600px) {
+  .approvals-submission-employees {
+    column-count: 1;
+  }
+}
 .approvals-flags {
   display: flex;
   flex-wrap: wrap;

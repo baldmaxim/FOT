@@ -252,4 +252,11 @@ export const timesheetApprovalService = {
     const res = await apiClient.get<ApiResponse<IApprovalReviewItem[]>>(`/timesheet-approvals/review-list?${qs.toString()}`);
     return res.data;
   },
+
+  getSubmittedEmployees: async (id: number) => {
+    const res = await apiClient.get<ApiResponse<{ employees: Array<{ employee_id: number; full_name: string }> }>>(
+      `/timesheet-approvals/${id}/employees`,
+    );
+    return res.data;
+  },
 };

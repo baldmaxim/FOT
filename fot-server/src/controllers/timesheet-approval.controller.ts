@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { query, queryOne } from '../config/postgres.js';
+import { query, queryOne, withTransaction } from '../config/postgres.js';
 import type {
   AuthenticatedRequest,
   TimesheetApproval,
@@ -37,6 +37,10 @@ import {
   listApprovalAttachments,
 } from '../services/timesheet-approval-attachments.service.js';
 import { r2Service } from '../services/r2.service.js';
+import {
+  listApprovalEmployees,
+  snapshotApprovalEmployees,
+} from '../services/timesheet-approval-employees-snapshot.service.js';
 import path from 'path';
 import { randomUUID } from 'crypto';
 
@@ -340,30 +344,39 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     let approval: TimesheetApproval | null = null;
 
     try {
-      if (existing) {
-        approval = await queryOne<TimesheetApproval>(
-          `UPDATE timesheet_approvals
-             SET status = 'submitted',
-                 submitted_by = $1,
-                 submitted_at = $2,
-                 reviewed_by = NULL,
-                 reviewed_at = NULL,
-                 review_comment = NULL,
-                 updated_at = $3
-             WHERE id = $4
-             RETURNING *`,
-          [req.user.id, now, now, existing.id],
-        );
-      } else {
-        approval = await queryOne<TimesheetApproval>(
-          `INSERT INTO timesheet_approvals
-             (department_id, start_date, end_date, status, submitted_by, submitted_at,
-              reviewed_by, reviewed_at, review_comment, updated_at)
-             VALUES ($1, $2, $3, 'submitted', $4, $5, NULL, NULL, NULL, $6)
-             RETURNING *`,
-          [deptId, range.startDate, range.endDate, req.user.id, now, now],
-        );
-      }
+      approval = await withTransaction(async client => {
+        let row: TimesheetApproval | null;
+        if (existing) {
+          const result = await client.query<TimesheetApproval>(
+            `UPDATE timesheet_approvals
+               SET status = 'submitted',
+                   submitted_by = $1,
+                   submitted_at = $2,
+                   reviewed_by = NULL,
+                   reviewed_at = NULL,
+                   review_comment = NULL,
+                   updated_at = $3
+               WHERE id = $4
+               RETURNING *`,
+            [req.user.id, now, now, existing.id],
+          );
+          row = result.rows[0] ?? null;
+        } else {
+          const result = await client.query<TimesheetApproval>(
+            `INSERT INTO timesheet_approvals
+               (department_id, start_date, end_date, status, submitted_by, submitted_at,
+                reviewed_by, reviewed_at, review_comment, updated_at)
+               VALUES ($1, $2, $3, 'submitted', $4, $5, NULL, NULL, NULL, $6)
+               RETURNING *`,
+            [deptId, range.startDate, range.endDate, req.user.id, now, now],
+          );
+          row = result.rows[0] ?? null;
+        }
+        if (row) {
+          await snapshotApprovalEmployees(client, row.id, deptId, range.startDate, range.endDate);
+        }
+        return row;
+      });
     } catch (dbErr) {
       const code = (dbErr as { code?: string } | null)?.code;
       if (code === '23P01') {
@@ -1387,6 +1400,27 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
   }
 };
 
+/** HR / руководитель в скоупе: состав сотрудников, поданных на согласование (снимок на момент submit). */
+const getSubmittedEmployees = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const approval = await loadApprovalById(id);
+    if (!approval) {
+      res.status(404).json({ success: false, error: 'Запись не найдена' });
+      return;
+    }
+    if (!(await ensureApprovalDepartmentAccess(req, approval.department_id))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к табелю этого отдела' });
+      return;
+    }
+    const employees = await listApprovalEmployees(approval.id);
+    res.json({ success: true, data: { employees } });
+  } catch (err) {
+    console.error('timesheet-approval.getSubmittedEmployees error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения состава табеля' });
+  }
+};
+
 export const timesheetApprovalController = {
   submit,
   recall,
@@ -1407,4 +1441,5 @@ export const timesheetApprovalController = {
   deleteAttachment,
   getAttachmentDownloadUrl,
   getReviewList,
+  getSubmittedEmployees,
 };
