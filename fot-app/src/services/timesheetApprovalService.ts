@@ -201,14 +201,21 @@ export const timesheetApprovalService = {
       file_name: file.name,
       content_type: file.type || 'application/octet-stream',
     });
-    const uploadResp = await fetch(urlRes.data.upload_url, {
-      method: 'PUT',
-      body: file,
-      headers: {
-        'Content-Type': file.type || 'application/octet-stream',
-        ...urlRes.data.upload_headers,
-      },
-    });
+    let uploadResp: Response;
+    try {
+      uploadResp = await fetch(urlRes.data.upload_url, {
+        method: 'PUT',
+        body: file,
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+          ...urlRes.data.upload_headers,
+        },
+      });
+    } catch {
+      // TypeError: Failed to fetch — обычно сбой CORS-preflight на бакете
+      // или сетевой блок (файрвол / прокси / mixed content).
+      throw new Error('Не удалось отправить файл в хранилище — обратитесь к администратору (CORS/сеть).');
+    }
     if (!uploadResp.ok) throw new Error(`Ошибка загрузки файла (${uploadResp.status})`);
     const confirmRes = await apiClient.post<ApiResponse<IApprovalAttachment>>(
       '/timesheet-approvals/attachments/confirm',
