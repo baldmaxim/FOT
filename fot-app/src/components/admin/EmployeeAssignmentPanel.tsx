@@ -141,14 +141,17 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const personCandidates = useMemo(() => {
     if (!employee) return [];
     const search = normalizeText(searchQuery);
-    return allEmployees
+    const filtered = allEmployees
       .filter(e => e.employee_id !== employee.employee_id)
       .filter(e => !search
         || normalizeText(e.full_name).includes(search)
         || normalizeText(e.position_name || '').includes(search)
-        || normalizeText(e.department_name || '').includes(search))
-      .slice(0, 60);
-  }, [employee, allEmployees, searchQuery]);
+        || normalizeText(e.department_name || '').includes(search));
+    const pinnedIds = new Set<number>([...initialDirectIds, ...draftDirectIds]);
+    const pinned = filtered.filter(e => pinnedIds.has(e.employee_id));
+    const rest = filtered.filter(e => !pinnedIds.has(e.employee_id));
+    return [...pinned, ...rest.slice(0, 60)];
+  }, [employee, allEmployees, searchQuery, initialDirectIds, draftDirectIds]);
 
   const hasDepartmentChanges = !arraysEqual(draftDepartmentIds, initialDepartmentIds);
   const hasDirectChanges = !numbersEqual(draftDirectIds, initialDirectIds);
