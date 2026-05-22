@@ -470,9 +470,16 @@ const AppRoutes = () => {
           <Route
             path="/admin/contractor-approvals"
             element={
-              <Layout title="Пропуск подрядчика" theme={theme} onToggleTheme={toggleTheme}>
-                <ContractorApprovalsPage />
-              </Layout>
+              <CardReaderAgentProvider>
+                <Layout
+                  title="Пропуск подрядчика"
+                  theme={theme}
+                  onToggleTheme={toggleTheme}
+                  titleAddon={<CardReaderHeaderBadge />}
+                >
+                  <ContractorApprovalsPage />
+                </Layout>
+              </CardReaderAgentProvider>
             }
           />
         </Route>
