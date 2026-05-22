@@ -95,6 +95,7 @@ interface IMyMonthTimesheetProps {
   selectedDates?: Set<string>;
   onDayToggle?: (date: string, entry: TimesheetEntry | null) => void;
   noCard?: boolean;
+  allowFuture?: boolean;
 }
 
 export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
@@ -104,6 +105,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
   selectedDates,
   onDayToggle,
   noCard,
+  allowFuture,
 }) => {
   const { showActualHours, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
   const today = useMemo(() => new Date(), []);
@@ -197,7 +199,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
   const isMultiMode = !!(selectedDates && onDayToggle);
 
   const handleCellClick = (iso: string, entry: TimesheetEntry | null, ds: DayStatus) => {
-    if (ds === 'future') return;
+    if (ds === 'future' && !allowFuture) return;
     if (isMultiMode) {
       onDayToggle?.(iso, entry);
     } else {

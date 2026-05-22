@@ -448,6 +448,7 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
                 selectedDates={selectedDates}
                 onDayToggle={iso => toggleDay(iso)}
                 noCard
+                allowFuture
               />
             )}
             {!isCorrection && selectedDates.size > 0 && (
