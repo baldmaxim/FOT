@@ -102,7 +102,13 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     || path === '/skud/dashboard-stats'
     || path === '/sigur/monitor/status'
     || path === '/sigur/monitor/checks'
-    || path === '/sigur/monitor/incidents';
+    || path === '/sigur/monitor/incidents'
+    // Списки согласований: после утверждения/отклонения refetch должен идти
+    // на сервер за свежими данными, иначе браузер 30 сек отдаёт устаревший
+    // список из HTTP-кэша (Cache-Control: max-age=30 на всех GET /api/*).
+    || path === '/correction-approvals/pending-by-department'
+    || path === '/correction-approvals/history-by-department'
+    || path === '/timesheet-approvals/review-list';
 };
 
 const refreshSession = async (): Promise<boolean> => {

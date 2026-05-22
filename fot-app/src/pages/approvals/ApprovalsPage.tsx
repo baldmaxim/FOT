@@ -135,6 +135,25 @@ const formatBulkToast = (verb: 'Утверждено' | 'Отклонено' | '
   return `${verb}: ${data.processed_count}`;
 };
 
+// Оптимистичное удаление обработанных записей из кэша списка: строки пропадают
+// с экрана сразу, не дожидаясь фонового refetch'а. Пустые группы выкидываются,
+// счётчики пересчитываются.
+const removeItemsByIds = (
+  groups: ICorrectionDepartmentGroup[] | undefined,
+  ids: number[],
+): ICorrectionDepartmentGroup[] | undefined => {
+  if (!groups) return groups;
+  const toRemove = new Set(ids);
+  return groups
+    .map(group => {
+      const items = group.items.filter(item => !toRemove.has(item.id));
+      if (items.length === group.items.length) return group;
+      const employees = new Set(items.map(it => it.employee_id));
+      return { ...group, items, pending_count: items.length, employees_count: employees.size };
+    })
+    .filter(group => group.items.length > 0);
+};
+
 interface ICorrectionsTabProps {
   period: ITimesheetDateRange;
 }
@@ -177,6 +196,13 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
     queryClient.invalidateQueries({ queryKey: ['timesheet-page'] }),
   ]);
 
+  const optimisticallyRemove = (ids: number[]) => {
+    queryClient.setQueryData<ICorrectionDepartmentGroup[]>(
+      ['correction-approvals', view, period.startDate, period.endDate],
+      (old) => removeItemsByIds(old, ids),
+    );
+  };
+
   const clearProcessedIds = (ids: number[]) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
@@ -188,6 +214,7 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
   const bulkApproveSelectedMutation = useMutation({
     mutationFn: (ids: number[]) => correctionApprovalService.bulkApproveByIds(ids),
     onSuccess: async (data, variables) => {
+      optimisticallyRemove(variables);
       await invalidate();
       toast.success?.(formatBulkToast('Утверждено', data));
       clearProcessedIds(variables);
@@ -198,6 +225,7 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
   const bulkRejectSelectedMutation = useMutation({
     mutationFn: (ids: number[]) => correctionApprovalService.bulkRejectByIds(ids),
     onSuccess: async (data, variables) => {
+      optimisticallyRemove(variables);
       await invalidate();
       toast.success?.(formatBulkToast('Отклонено', data));
       clearProcessedIds(variables);
@@ -208,6 +236,7 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
   const bulkRevertSelectedMutation = useMutation({
     mutationFn: (ids: number[]) => correctionApprovalService.bulkRevertByIds(ids),
     onSuccess: async (data, variables) => {
+      optimisticallyRemove(variables);
       await invalidate();
       toast.success?.(formatBulkToast('Возвращено', data));
       clearProcessedIds(variables);
