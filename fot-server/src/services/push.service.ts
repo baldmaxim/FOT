@@ -1,6 +1,6 @@
 import webpush from 'web-push';
 import * as Sentry from '@sentry/node';
-import { execute, query, queryOne } from '../config/postgres.js';
+import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import { env } from '../config/env.js';
 
 // Лимит зашифрованного web-push payload у большинства провайдеров ~4КБ.
@@ -20,6 +20,7 @@ interface IPushSubscription {
   endpoint: string;
   p256dh: string;
   auth: string;
+  device_id?: string;
 }
 
 interface IChatNotificationPayload {
@@ -105,13 +106,36 @@ async function dispatchToAll(
 
 export const pushService = {
   async saveSubscription(userId: string, subscription: IPushSubscription): Promise<void> {
+    const { endpoint, p256dh, auth, device_id } = subscription;
+
+    // С device_id: одна строка на (пользователь, браузер). При ротации endpoint
+    // удаляем прежнюю строку этого устройства (по device_id) и любую строку с
+    // тем же endpoint (legacy без device_id), затем вставляем актуальную — так
+    // подписки не накапливаются и push не дублируется.
+    if (device_id) {
+      await withTransaction(async (client) => {
+        await client.query(
+          `DELETE FROM push_subscriptions
+            WHERE user_id = $1::uuid AND (device_id = $2 OR endpoint = $3)`,
+          [userId, device_id, endpoint],
+        );
+        await client.query(
+          `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, device_id)
+           VALUES ($1::uuid, $2, $3, $4, $5)`,
+          [userId, endpoint, p256dh, auth, device_id],
+        );
+      });
+      return;
+    }
+
+    // Клиент старой версии без device_id — прежнее поведение: upsert по endpoint.
     await execute(
       `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
        VALUES ($1::uuid, $2, $3, $4)
        ON CONFLICT (user_id, endpoint) DO UPDATE SET
          p256dh = EXCLUDED.p256dh,
          auth = EXCLUDED.auth`,
-      [userId, subscription.endpoint, subscription.p256dh, subscription.auth],
+      [userId, endpoint, p256dh, auth],
     );
   },
 

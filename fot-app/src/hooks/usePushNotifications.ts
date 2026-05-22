@@ -22,6 +22,19 @@ interface IUsePushNotifications {
 }
 
 const OPT_OUT_KEY = 'push_opt_out';
+const DEVICE_ID_KEY = 'push_device_id';
+
+// Стабильный id браузера. Сервер по нему заменяет подписку при ротации
+// push-endpoint, а не плодит новые строки → один браузер = один push.
+// localStorage общий для всех окон/вкладок одного origin.
+const getDeviceId = (): string => {
+  let id = localStorage.getItem(DEVICE_ID_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(DEVICE_ID_KEY, id);
+  }
+  return id;
+};
 
 const urlBase64ToUint8Array = (base64String: string): Uint8Array => {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -51,6 +64,7 @@ const saveSubscriptionToServer = async (sub: PushSubscription): Promise<boolean>
       endpoint: json.endpoint,
       p256dh: json.keys.p256dh,
       auth: json.keys.auth,
+      device_id: getDeviceId(),
     });
     return true;
   } catch (err) {

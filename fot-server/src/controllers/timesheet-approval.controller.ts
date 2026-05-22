@@ -191,11 +191,18 @@ async function notifyHrAboutSubmittedApproval(
       path,
     },
   })));
+  // Контентный tag: SW схлопывает push с одинаковым tag в одно уведомление —
+  // страховка от случайного дубля; разные подачи друг друга не перетирают.
   await pushService.sendGenericNotification(
     recipients,
     title,
     body,
-    { path, start_date: range.startDate, end_date: range.endDate },
+    {
+      path,
+      start_date: range.startDate,
+      end_date: range.endDate,
+      tag: `timesheet-submitted:${departmentId}:${range.startDate}:${range.endDate}`,
+    },
   );
 }
 

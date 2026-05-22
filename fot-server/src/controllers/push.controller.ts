@@ -32,6 +32,10 @@ const subscribeSchema = z.object({
   // auth   — base64url 16-байтовый секрет (~22-24 символа).
   p256dh: z.string().min(80).max(140),
   auth: z.string().min(16).max(40),
+  // device_id — стабильный id браузера (localStorage). По нему сервер заменяет
+  // подписку при ротации endpoint, а не плодит новые строки. optional —
+  // на время выката возможны клиенты старой версии.
+  device_id: z.string().min(8).max(64).optional(),
 });
 
 export const pushController = {
