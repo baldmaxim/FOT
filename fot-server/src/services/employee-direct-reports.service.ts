@@ -70,6 +70,66 @@ export async function listDirectSubordinates(managerEmployeeId: number): Promise
 }
 
 /**
+ * Отделы (org_department_id) активных прямых подчинённых руководителя.
+ * Используется как доп. путь доступа к подаче/вложениям табеля: руководитель
+ * «по людям» (без employee_department_access) управляет отделами, в которых
+ * есть хотя бы один его прямой подчинённый.
+ */
+export async function listDirectReportDepartmentIds(managerEmployeeId: number): Promise<string[]> {
+  if (!Number.isInteger(managerEmployeeId) || managerEmployeeId <= 0) return [];
+  try {
+    const rows = await query<{ org_department_id: string | null }>(
+      `SELECT DISTINCT e.org_department_id
+         FROM employee_direct_reports dr
+         JOIN employees e ON e.id = dr.subordinate_employee_id
+        WHERE dr.manager_employee_id = $1 AND dr.is_active = true
+          AND e.org_department_id IS NOT NULL`,
+      [managerEmployeeId],
+    );
+    return [...new Set(
+      rows
+        .map(row => row.org_department_id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    )];
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      warnMissingTable();
+      return [];
+    }
+    throw err;
+  }
+}
+
+/**
+ * То же, что listDirectReportDepartmentIds, но с именами отделов — для селектора
+ * отдела в шапке табеля у руководителя «по людям».
+ */
+export async function listDirectReportDepartments(
+  managerEmployeeId: number,
+): Promise<Array<{ id: string; name: string }>> {
+  if (!Number.isInteger(managerEmployeeId) || managerEmployeeId <= 0) return [];
+  try {
+    const rows = await query<{ id: string; name: string | null }>(
+      `SELECT DISTINCT od.id, od.name
+         FROM employee_direct_reports dr
+         JOIN employees e ON e.id = dr.subordinate_employee_id
+         JOIN org_departments od ON od.id = e.org_department_id
+        WHERE dr.manager_employee_id = $1 AND dr.is_active = true
+          AND od.is_active = true
+        ORDER BY od.name`,
+      [managerEmployeeId],
+    );
+    return rows.map(row => ({ id: row.id, name: row.name ?? 'Отдел' }));
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      warnMissingTable();
+      return [];
+    }
+    throw err;
+  }
+}
+
+/**
  * Активный руководитель для подчинённого (или null, если не назначен).
  * Используется в UI для проверки эксклюзивности перед назначением.
  */

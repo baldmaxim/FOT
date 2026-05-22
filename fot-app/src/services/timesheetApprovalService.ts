@@ -77,6 +77,11 @@ export interface IApprovalAttachment {
   created_at: string;
 }
 
+export interface IDirectReportDepartment {
+  id: string;
+  name: string;
+}
+
 export interface IApprovalReviewItem extends ITimesheetApproval {
   department_name: string | null;
   submitted_by_name: string | null;
@@ -188,46 +193,25 @@ export const timesheetApprovalService = {
     end_date: string;
     file: File;
   }): Promise<IApprovalAttachment> => {
-    const { file } = params;
-    const urlRes = await apiClient.post<ApiResponse<{
-      upload_url: string;
-      upload_headers: Record<string, string>;
-      r2_key: string;
-      approval_id: number;
-    }>>('/timesheet-approvals/attachments/upload-url', {
-      department_id: params.department_id,
-      start_date: params.start_date,
-      end_date: params.end_date,
-      file_name: file.name,
-      content_type: file.type || 'application/octet-stream',
-    });
-    let uploadResp: Response;
-    try {
-      uploadResp = await fetch(urlRes.data.upload_url, {
-        method: 'PUT',
-        body: file,
-        headers: {
-          'Content-Type': file.type || 'application/octet-stream',
-          ...urlRes.data.upload_headers,
-        },
-      });
-    } catch {
-      // TypeError: Failed to fetch — обычно сбой CORS-preflight на бакете
-      // или сетевой блок (файрвол / прокси / mixed content).
-      throw new Error('Не удалось отправить файл в хранилище — обратитесь к администратору (CORS/сеть).');
-    }
-    if (!uploadResp.ok) throw new Error(`Ошибка загрузки файла (${uploadResp.status})`);
-    const confirmRes = await apiClient.post<ApiResponse<IApprovalAttachment>>(
-      '/timesheet-approvals/attachments/confirm',
-      {
-        approval_id: urlRes.data.approval_id,
-        r2_key: urlRes.data.r2_key,
-        file_name: file.name,
-        file_size: file.size,
-        mime_type: file.type || 'application/octet-stream',
-      },
+    // Серверная multipart-загрузка (как POST /api/documents/upload в Заявлениях):
+    // файл идёт в R2 через бэкенд — без браузерного PUT и CORS-проблем.
+    const form = new FormData();
+    form.append('file', params.file);
+    form.append('department_id', params.department_id);
+    form.append('start_date', params.start_date);
+    form.append('end_date', params.end_date);
+    const res = await apiClient.post<ApiResponse<IApprovalAttachment>>(
+      '/timesheet-approvals/attachments',
+      form,
     );
-    return confirmRes.data;
+    return res.data;
+  },
+
+  getDirectReportDepartments: async () => {
+    const res = await apiClient.get<ApiResponse<IDirectReportDepartment[]>>(
+      '/timesheet-approvals/direct-report-departments',
+    );
+    return res.data;
   },
 
   deleteAttachment: async (documentId: number) => {

@@ -1,8 +1,14 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { timesheetApprovalController } from '../controllers/timesheet-approval.controller.js';
 import { authenticate, requirePageAccess } from '../middleware/auth.js';
 
 const router = Router();
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 router.use(authenticate);
 
@@ -30,9 +36,12 @@ router.post('/:id/approve', requirePageAccess('/timesheet-hr', 'edit'), timeshee
 router.post('/:id/reject', requirePageAccess('/timesheet-hr', 'edit'), timesheetApprovalController.reject);
 router.post('/:id/return-to-rework', requirePageAccess('/timesheet-hr', 'edit'), timesheetApprovalController.returnToRework);
 
+// Отделы прямых подчинённых — для селектора отдела у руководителя «по людям».
+router.get('/direct-report-departments', requirePageAccess('/timesheet', 'view'), timesheetApprovalController.getDirectReportDepartments);
+
 // Вложения к подаче табеля (подтверждения работы в выходные).
-router.post('/attachments/upload-url', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.getAttachmentUploadUrl);
-router.post('/attachments/confirm', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.confirmAttachmentUpload);
+// Загрузка — multipart через бэкенд (файл идёт в R2 серверно, без браузерного PUT).
+router.post('/attachments', requirePageAccess('/timesheet', 'edit'), upload.single('file'), timesheetApprovalController.uploadAttachment);
 router.get('/attachments', requirePageAccess('/timesheet', 'view'), timesheetApprovalController.listAttachments);
 router.get('/attachments/:document_id/download', requirePageAccess('/timesheet', 'view'), timesheetApprovalController.getAttachmentDownloadUrl);
 router.delete('/attachments/:document_id', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.deleteAttachment);

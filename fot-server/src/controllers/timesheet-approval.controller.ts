@@ -30,7 +30,6 @@ import { validateCorrectionAttachments } from '../services/timesheet-approval-co
 import { getAllowedSubmissionRange, isRangeSubmittable } from '../services/timesheet-period.service.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import {
-  APPROVAL_ATTACHMENT_CATEGORY,
   createAttachmentRecord,
   deleteAttachmentRecord,
   findOrCreateDraftApproval,
@@ -41,8 +40,17 @@ import {
   listApprovalEmployees,
   snapshotApprovalEmployees,
 } from '../services/timesheet-approval-employees-snapshot.service.js';
+import {
+  listDirectReportDepartmentIds,
+  listDirectReportDepartments,
+} from '../services/employee-direct-reports.service.js';
+import { sanitizeFileName } from '../utils/file-validation.utils.js';
 import path from 'path';
 import { randomUUID } from 'crypto';
+
+interface MulterRequest extends AuthenticatedRequest {
+  file?: Express.Multer.File;
+}
 
 type ReviewStatus = 'approved' | 'rejected' | 'returned';
 
@@ -102,6 +110,34 @@ async function ensureApprovalDepartmentAccess(
 ): Promise<boolean> {
   const scopedDepartmentId = await resolveScopedDepartmentId(req, departmentId);
   return !!scopedDepartmentId && scopedDepartmentId === departmentId;
+}
+
+/**
+ * Доступ к подаче/вложениям табеля отдела. В отличие от строгого
+ * ensureApprovalDepartmentAccess (HR-эндпоинты), даёт доступ ещё и руководителю
+ * «по людям»: если у пользователя есть активный прямой подчинённый
+ * (employee_direct_reports) в этом отделе — он управляет его табелем, даже без
+ * employee_department_access. Использовать ТОЛЬКО для /timesheet-эндпоинтов.
+ */
+async function resolveTimesheetActionDepartmentId(
+  req: AuthenticatedRequest,
+  requestedDepartmentId: string | null,
+): Promise<string | null> {
+  const scoped = await resolveScopedDepartmentId(req, requestedDepartmentId);
+  if (scoped) return scoped;
+  if (requestedDepartmentId && req.user.employee_id) {
+    const drDepartmentIds = await listDirectReportDepartmentIds(req.user.employee_id);
+    if (drDepartmentIds.includes(requestedDepartmentId)) return requestedDepartmentId;
+  }
+  return null;
+}
+
+async function ensureTimesheetActionDepartmentAccess(
+  req: AuthenticatedRequest,
+  departmentId: string,
+): Promise<boolean> {
+  const resolved = await resolveTimesheetActionDepartmentId(req, departmentId);
+  return resolved === departmentId;
 }
 
 async function logApprovalAudit(
@@ -255,7 +291,7 @@ async function persistApprovalTransition(input: {
 const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id ? req.body.department_id : null;
-    const deptId = await resolveScopedDepartmentId(req, requestedDeptId);
+    const deptId = await resolveTimesheetActionDepartmentId(req, requestedDeptId);
     const range = parseRangeFromBody(req.body);
 
     if (requestedDeptId && !deptId) {
@@ -430,7 +466,7 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id ? req.body.department_id : null;
-    const deptId = await resolveScopedDepartmentId(req, requestedDeptId);
+    const deptId = await resolveTimesheetActionDepartmentId(req, requestedDeptId);
     const range = parseRangeFromBody(req.body);
 
     if (requestedDeptId && !deptId) {
@@ -503,7 +539,7 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
-    const department_id = await resolveScopedDepartmentId(req, requestedDepartmentId);
+    const department_id = await resolveTimesheetActionDepartmentId(req, requestedDepartmentId);
     const range = parseRangeFromQuery(req.query as Record<string, unknown>);
 
     // Раньше при недоступном отделе тихо возвращали data: null — клиент думал «согласования
@@ -538,7 +574,7 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
 const listDepartmentApprovals = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
-    const department_id = await resolveScopedDepartmentId(req, requestedDepartmentId);
+    const department_id = await resolveTimesheetActionDepartmentId(req, requestedDepartmentId);
 
     if (requestedDepartmentId && !department_id) {
       res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
@@ -936,12 +972,28 @@ const saveResponsibles = async (req: AuthenticatedRequest, res: Response): Promi
   }
 };
 
-/** Руководитель: получить presigned URL для загрузки вложения к подаче табеля. */
-const getAttachmentUploadUrl = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+/**
+ * Руководитель: загрузить вложение к подаче табеля. Multipart через бэкенд
+ * (как POST /api/documents/upload для Заявлений) — файл идёт в R2 серверно,
+ * без браузерного PUT и CORS-проблем.
+ */
+const uploadAttachment = async (req: MulterRequest, res: Response): Promise<void> => {
   try {
-    const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id ? req.body.department_id : null;
-    const deptId = await resolveScopedDepartmentId(req, requestedDeptId);
+    if (!(await r2Service.isEnabledAsync())) {
+      res.status(503).json({ success: false, error: 'Хранилище файлов не настроено' });
+      return;
+    }
+    if (!req.file) {
+      res.status(400).json({ success: false, error: 'Файл обязателен' });
+      return;
+    }
+
+    const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id
+      ? req.body.department_id
+      : null;
+    const deptId = await resolveTimesheetActionDepartmentId(req, requestedDeptId);
     const range = parseRangeFromBody(req.body);
+
     if (requestedDeptId && !deptId) {
       res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
       return;
@@ -952,18 +1004,6 @@ const getAttachmentUploadUrl = async (req: AuthenticatedRequest, res: Response):
     }
     if (!range) {
       res.status(400).json({ success: false, error: 'start_date и end_date обязательны' });
-      return;
-    }
-
-    const fileName = typeof req.body.file_name === 'string' ? req.body.file_name : null;
-    const contentType = typeof req.body.content_type === 'string' ? req.body.content_type : null;
-    if (!fileName || !contentType) {
-      res.status(400).json({ success: false, error: 'file_name и content_type обязательны' });
-      return;
-    }
-
-    if (!(await r2Service.isEnabledAsync())) {
-      res.status(503).json({ success: false, error: 'Хранилище файлов не настроено' });
       return;
     }
 
@@ -978,75 +1018,57 @@ const getAttachmentUploadUrl = async (req: AuthenticatedRequest, res: Response):
       return;
     }
 
-    const ext = path.extname(fileName) || '.bin';
-    const key = `documents/timesheet-approvals/${draft.id}/${randomUUID()}${ext}`;
-    const { url, headers } = await r2Service.generateUploadUrl(key, contentType);
+    const file = req.file;
+    const mimeType = file.mimetype || 'application/octet-stream';
+    const safeFileName = sanitizeFileName(file.originalname);
+    const ext = path.extname(safeFileName) || '.bin';
+    const r2Key = `documents/timesheet-approvals/${draft.id}/${randomUUID()}${ext}`;
 
-    res.json({
-      success: true,
-      data: {
-        upload_url: url,
-        upload_headers: headers,
-        r2_key: key,
-        approval_id: draft.id,
-        category: APPROVAL_ATTACHMENT_CATEGORY,
-      },
-    });
-  } catch (err) {
-    console.error('timesheet-approval.getAttachmentUploadUrl error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка подготовки загрузки файла' });
-  }
-};
+    await r2Service.uploadObject(r2Key, file.buffer, mimeType);
 
-/** Руководитель: подтвердить загрузку после PUT в R2. */
-const confirmAttachmentUpload = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    const approvalId = Number(req.body.approval_id);
-    const fileName = typeof req.body.file_name === 'string' ? req.body.file_name : null;
-    const fileSize = Number(req.body.file_size);
-    const mimeType = typeof req.body.mime_type === 'string' ? req.body.mime_type : null;
-    const r2Key = typeof req.body.r2_key === 'string' ? req.body.r2_key : null;
-
-    if (!approvalId || !fileName || !fileSize || !mimeType || !r2Key) {
-      res.status(400).json({ success: false, error: 'Некорректные параметры загрузки' });
-      return;
+    let created;
+    try {
+      created = await createAttachmentRecord({
+        approvalId: draft.id,
+        fileName: safeFileName,
+        fileSize: file.size,
+        mimeType,
+        r2Key,
+        uploadedBy: req.user.id,
+      });
+    } catch (err) {
+      try { await r2Service.deleteObject(r2Key); } catch { /* best-effort cleanup */ }
+      throw err;
     }
 
-    const approval = await loadApprovalById(String(approvalId));
-    if (!approval) {
-      res.status(404).json({ success: false, error: 'Подача табеля не найдена' });
-      return;
-    }
-    if (!(await ensureApprovalDepartmentAccess(req, approval.department_id))) {
-      res.status(403).json({ success: false, error: 'Нет доступа к отделу' });
-      return;
-    }
-    if (approval.status !== 'draft' && approval.status !== 'rejected' && approval.status !== 'returned') {
-      res.status(409).json({ success: false, error: 'Период уже на проверке или утверждён — загрузка недоступна' });
-      return;
-    }
-
-    const created = await createAttachmentRecord({
-      approvalId: approval.id,
-      fileName,
-      fileSize,
-      mimeType,
-      r2Key,
-      uploadedBy: req.user.id,
-    });
-
-    await logApprovalAudit(req, approval.id, 'TIMESHEET_APPROVAL_ATTACHMENT_UPLOADED', {
-      department_id: approval.department_id,
-      start_date: approval.start_date,
-      end_date: approval.end_date,
+    await logApprovalAudit(req, draft.id, 'TIMESHEET_APPROVAL_ATTACHMENT_UPLOADED', {
+      department_id: deptId,
+      start_date: range.startDate,
+      end_date: range.endDate,
       document_id: created.document_id,
       file_name: created.file_name,
     });
 
     res.json({ success: true, data: created });
   } catch (err) {
-    console.error('timesheet-approval.confirmAttachmentUpload error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка сохранения файла' });
+    console.error('timesheet-approval.uploadAttachment error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка загрузки файла' });
+  }
+};
+
+/**
+ * Руководитель «по людям»: отделы своих прямых подчинённых — для селектора
+ * отдела в шапке табеля (подача/служебка привязаны к одному отделу).
+ */
+const getDirectReportDepartments = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const data = req.user.employee_id
+      ? await listDirectReportDepartments(req.user.employee_id)
+      : [];
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('timesheet-approval.getDirectReportDepartments error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения отделов подчинённых' });
   }
 };
 
@@ -1059,7 +1081,7 @@ const listAttachments = async (req: AuthenticatedRequest, res: Response): Promis
       approvalId = Number(approvalIdRaw);
     } else {
       const deptIdRaw = typeof req.query.department_id === 'string' ? req.query.department_id : null;
-      const deptId = await resolveScopedDepartmentId(req, deptIdRaw);
+      const deptId = await resolveTimesheetActionDepartmentId(req, deptIdRaw);
       const range = parseRangeFromQuery(req.query as Record<string, unknown>);
       if (deptIdRaw && !deptId) {
         res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
@@ -1092,7 +1114,7 @@ const listAttachments = async (req: AuthenticatedRequest, res: Response): Promis
       res.json({ success: true, data: [] });
       return;
     }
-    if (!(await ensureApprovalDepartmentAccess(req, approval.department_id))) {
+    if (!(await ensureTimesheetActionDepartmentAccess(req, approval.department_id))) {
       res.status(403).json({ success: false, error: 'Нет доступа к отделу' });
       return;
     }
@@ -1133,7 +1155,7 @@ const deleteAttachment = async (req: AuthenticatedRequest, res: Response): Promi
       res.status(404).json({ success: false, error: 'Подача не найдена' });
       return;
     }
-    if (!(await ensureApprovalDepartmentAccess(req, approval.department_id))) {
+    if (!(await ensureTimesheetActionDepartmentAccess(req, approval.department_id))) {
       res.status(403).json({ success: false, error: 'Нет доступа к отделу' });
       return;
     }
@@ -1189,7 +1211,7 @@ const getAttachmentDownloadUrl = async (req: AuthenticatedRequest, res: Response
       res.status(404).json({ success: false, error: 'Подача не найдена' });
       return;
     }
-    if (!(await ensureApprovalDepartmentAccess(req, approval.department_id))) {
+    if (!(await ensureTimesheetActionDepartmentAccess(req, approval.department_id))) {
       res.status(403).json({ success: false, error: 'Нет доступа к отделу' });
       return;
     }
@@ -1435,11 +1457,11 @@ export const timesheetApprovalController = {
   getResponsibles,
   getResponsibleCandidates,
   saveResponsibles,
-  getAttachmentUploadUrl,
-  confirmAttachmentUpload,
+  uploadAttachment,
   listAttachments,
   deleteAttachment,
   getAttachmentDownloadUrl,
+  getDirectReportDepartments,
   getReviewList,
   getSubmittedEmployees,
 };
