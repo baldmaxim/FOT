@@ -2,7 +2,7 @@ import { useEffect, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
 import { contractorAdminService } from '../../services/contractorService';
-import styles from '../../pages/contractor/Contractor.module.css';
+import { ContractorOrgSelect } from '../contractor/ContractorOrgSelect';
 
 interface IProps {
   userId: string;
@@ -52,17 +52,14 @@ export const ContractorOrgAccessSection: FC<IProps> = ({ userId, onSaved }) => {
 
   return (
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-      <select
-        className={styles.select}
+      <ContractorOrgSelect
+        orgs={orgsQuery.data ?? []}
         value={value}
-        onChange={e => setValue(e.target.value)}
+        onChange={setValue}
+        emptyOptionLabel="— не привязан —"
         disabled={saving || loading}
-      >
-        <option value="">— не привязан —</option>
-        {(orgsQuery.data ?? []).map(o => (
-          <option key={o.id} value={o.id}>{o.name}</option>
-        ))}
-      </select>
+        loading={orgsQuery.isLoading}
+      />
       <button
         type="button"
         className="btn-primary"

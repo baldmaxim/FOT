@@ -2,6 +2,7 @@ import { useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { contractorAdminService, type IPassHistory } from '../../services/contractorService';
+import { ContractorOrgSelect } from './ContractorOrgSelect';
 import styles from '../../pages/contractor/Contractor.module.css';
 
 const PassHistoryModal: FC<{ passId: string; onClose: () => void }> = ({ passId, onClose }) => {
@@ -98,14 +99,13 @@ export const MonitorTab: FC = () => {
     <div>
       <div className={styles.field}>
         <span className={styles.label}>Подрядчик</span>
-        <select
-          className={styles.select}
+        <ContractorOrgSelect
+          orgs={orgs}
           value={orgId}
-          onChange={e => setOrgId(e.target.value)}
-        >
-          <option value="">— выбрать —</option>
-          {orgs.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-        </select>
+          onChange={setOrgId}
+          emptyOptionLabel="— выбрать —"
+          loading={orgsQuery.isLoading}
+        />
       </div>
 
       {!orgId && <div className={styles.empty}>Выберите подрядчика</div>}
