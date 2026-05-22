@@ -1222,7 +1222,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             .filter(Boolean)
                             .join(' • ')
                           : baseTitle;
-                        const isClickable = !future && !dayOff;
+                        const isClickable = !dayOff;
                         const isBlocked = row.isSynthetic;
                         const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold);
                         return (
@@ -1480,7 +1480,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             .filter(Boolean)
                             .join(' • ')
                           : baseTitle;
-                        const isClickable = !future && !dayOff;
+                        const isClickable = !dayOff;
                         const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold);
                         return (
                           <td

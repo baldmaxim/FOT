@@ -441,6 +441,7 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
                 activeDayIso={correctionDate || null}
                 onDayActivate={handleCorrectionPick}
                 noCard
+                allowFuture
               />
             ) : (
               <MyMonthTimesheet
