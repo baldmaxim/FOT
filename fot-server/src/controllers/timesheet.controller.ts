@@ -1592,8 +1592,10 @@ export const timesheetController = {
       }
       const plannedHours = (await resolvePlannedHoursByItems([{ employee_id: parsed.employee_id, work_date: parsed.work_date }]))
         .get(`${parsed.employee_id}_${parsed.work_date}`) ?? null;
+      // Для выходного дня график возвращает work_hours = 0, поэтому `|| 8`, а не `??`:
+      // иначе удалёнка в выходной сохраняется с 0 ч и авто-одобряется (минует согласование).
       const normalizedHours = parsed.status === 'remote'
-        ? (plannedHours ?? 8)
+        ? (plannedHours || 8)
         : (parsed.hours_worked ?? null);
 
       const approvalStatus = await resolveAdjustmentApprovalStatus(
@@ -1701,7 +1703,7 @@ export const timesheetController = {
           work_date: String(existing.work_date),
         }])).get(`${Number(existing.employee_id)}_${String(existing.work_date)}`) ?? null;
         const normalizedHours = nextStatus === 'remote'
-          ? (plannedHours ?? 8)
+          ? (plannedHours || 8)
           : parsed.hours_worked;
 
         const approvalStatus = await resolveAdjustmentApprovalStatus(
@@ -1821,7 +1823,7 @@ export const timesheetController = {
       const isWorkOrRemoteBulk = WORKED_STATUSES_FOR_APPROVAL.has(parsed.status);
       const buildUpsert = async (item: typeof uniqueItems[number]) => {
         const itemHoursOverride = parsed.status === 'remote'
-          ? (plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) ?? 8)
+          ? (plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) || 8)
           : (parsed.hours_worked ?? null);
         const approvalStatus = await resolveAdjustmentApprovalStatus(
           item.employee_id,
