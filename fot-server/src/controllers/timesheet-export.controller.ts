@@ -28,14 +28,17 @@ function resolveExportRangeArg(query: Record<string, unknown>): TimesheetExportR
   return half === 'H1' || half === 'H2' || half === 'FULL' ? half : 'FULL';
 }
 
-/** GET /api/timesheet/export?month=YYYY-MM&department_id=...&from=YYYY-MM-DD&to=YYYY-MM-DD&presentation=hr|manager */
+/** GET /api/timesheet/export?month=YYYY-MM&department_id=...&employee_id=...&from=YYYY-MM-DD&to=YYYY-MM-DD&presentation=hr|manager */
 export async function exportTimesheet(req: AuthenticatedRequest, res: Response) {
   try {
-    const { month, department_id, presentation } = req.query;
+    const { month, department_id, presentation, employee_id } = req.query;
 
     if (!month || typeof month !== 'string') {
       return res.status(400).json({ success: false, error: 'Параметр month обязателен' });
     }
+
+    const employeeIdRaw = typeof employee_id === 'string' ? Number.parseInt(employee_id, 10) : NaN;
+    const employeeId = Number.isInteger(employeeIdRaw) && employeeIdRaw > 0 ? employeeIdRaw : null;
 
     const rangeArg = resolveExportRangeArg(req.query as Record<string, unknown>);
     const requestedDepartmentId = department_id && typeof department_id === 'string' ? department_id : null;
@@ -68,8 +71,22 @@ export async function exportTimesheet(req: AuthenticatedRequest, res: Response) 
       displayMode === 'actual',
     );
 
+    // Выгрузка по одному сотруднику: оставляем в табеле только его строку.
+    // buildTimesheetSheet итерирует только data.employees, остальные мапы
+    // читаются по emp.id — лишние ключи безвредны.
+    let exportData = data;
+    let selectedEmployeeName: string | null = null;
+    if (employeeId !== null) {
+      const emp = data.employees.find(e => e.id === employeeId);
+      if (!emp) {
+        return res.status(404).json({ success: false, error: 'Сотрудник не найден в табеле бригады' });
+      }
+      exportData = { ...data, employees: [emp] };
+      selectedEmployeeName = emp.full_name;
+    }
+
     const wb = new ExcelJS.Workbook();
-    buildTimesheetSheet(wb, 'Табель', data);
+    buildTimesheetSheet(wb, 'Табель', exportData);
 
     const buf = await writeTimesheetWorkbookBuffer(wb);
     const isCustomRange = typeof rangeArg === 'object';
@@ -83,8 +100,10 @@ export async function exportTimesheet(req: AuthenticatedRequest, res: Response) 
     }
     const presentationSuffix = explicitPresentation === 'manager' ? '_Руководитель' : '';
 
-    const safeFileName = `${data.departmentName}_${MONTH_NAMES[data.mon]}_${data.year}${segmentSuffix}${presentationSuffix}.xlsx`
-      .replace(/[\/\\?%*:|"<>]/g, '_');
+    const rawFileName = selectedEmployeeName
+      ? `Табель_${selectedEmployeeName}_${MONTH_NAMES[data.mon]}_${data.year}${segmentSuffix}.xlsx`
+      : `${data.departmentName}_${MONTH_NAMES[data.mon]}_${data.year}${segmentSuffix}${presentationSuffix}.xlsx`;
+    const safeFileName = rawFileName.replace(/[\/\\?%*:|"<>]/g, '_');
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition',

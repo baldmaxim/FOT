@@ -481,12 +481,14 @@ const sanitizeFilePart = (value: string): string => value.replace(/[\\/:*?"<>|]+
 
 interface IApprovalCardExtrasProps {
   row: IApprovalReviewItem;
+  employees: TimesheetEmployee[];
 }
 
-const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row }) => {
+const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) => {
   const toast = useToast();
   const [openingId, setOpeningId] = useState<number | null>(null);
-  const [exporting, setExporting] = useState<'fact' | '1c' | null>(null);
+  const [exporting, setExporting] = useState<'fact' | '1c' | 'employee' | null>(null);
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<number | ''>('');
 
   const monthStr = useMemo(() => {
     const d = new Date(row.start_date + 'T00:00:00');
@@ -560,6 +562,28 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row }) => {
     }
   };
 
+  const handleExportEmployee = async () => {
+    if (selectedEmployeeId === '') return;
+    const emp = employees.find(e => e.id === selectedEmployeeId);
+    setExporting('employee');
+    try {
+      const blob = await timesheetService.export({
+        month: monthStr,
+        department_id: row.department_id,
+        from: row.start_date,
+        to: row.end_date,
+        presentation: 'hr',
+        employee_id: selectedEmployeeId,
+      });
+      const empLabel = sanitizeFilePart(emp?.full_name ?? String(selectedEmployeeId));
+      downloadBlob(blob, `Табель_${empLabel}_${row.start_date}_${row.end_date}.xlsx`);
+    } catch (err) {
+      toast.error?.(err instanceof Error ? err.message : 'Ошибка выгрузки табеля сотрудника');
+    } finally {
+      setExporting(null);
+    }
+  };
+
   return (
     <>
       {attachments.length > 0 && (
@@ -594,6 +618,27 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row }) => {
           disabled={exporting !== null}
         >
           <Download size={16} /> {exporting === '1c' ? 'Выгрузка…' : 'Выгрузка для 1С'}
+        </button>
+      </div>
+      <div className="approvals-export-employee">
+        <select
+          className="approvals-export-select"
+          value={selectedEmployeeId}
+          onChange={e => setSelectedEmployeeId(e.target.value ? Number(e.target.value) : '')}
+          disabled={employees.length === 0 || exporting !== null}
+        >
+          <option value="">Выберите сотрудника…</option>
+          {employees.map(emp => (
+            <option key={emp.id} value={emp.id}>{emp.full_name}</option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="approvals-export-btn"
+          onClick={handleExportEmployee}
+          disabled={selectedEmployeeId === '' || exporting !== null}
+        >
+          <Download size={16} /> {exporting === 'employee' ? 'Выгрузка…' : 'Выгрузка в Excel'}
         </button>
       </div>
     </>
@@ -776,7 +821,7 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
         />
       </Suspense>
 
-      <ApprovalCardExtras row={row} />
+      <ApprovalCardExtras row={row} employees={tsQuery.data?.employees ?? []} />
 
       {canReview && (
         <div className="approvals-actions">
