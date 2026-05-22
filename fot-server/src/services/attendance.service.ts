@@ -263,10 +263,13 @@ function computePresenceCoversShift(params: {
   const { firstEntry, lastExit, totalMinutes, shiftDurationHours, lunchMinutes, workDate, todayStr, nowHMS } = params;
   if (!firstEntry) return false;
   const firstSec = parseTimeToSeconds(firstEntry);
-  const lastSec = lastExit
+  let lastSec = lastExit
     ? parseTimeToSeconds(lastExit)
     : (workDate === todayStr ? parseTimeToSeconds(nowHMS) : null);
   if (lastSec === null) return false;
+  // Ночная смена: выход (08:00) раньше входа (20:00) по времени суток — значит
+  // смена перешла через полночь, добавляем сутки, иначе span отрицательный.
+  if (lastSec < firstSec) lastSec += 24 * 3600;
   const spanSec = Math.max(0, lastSec - firstSec);
   const workSec = totalMinutes * 60;
   const gapsSec = Math.max(0, spanSec - workSec);
